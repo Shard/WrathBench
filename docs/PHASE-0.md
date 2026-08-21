@@ -6,11 +6,11 @@ A harness any model can plug into. Small capable models create a character, comp
 
 ## Gate
 
-All of the following:
-1. The smoke script completes one quest end to end through the SDK: create character, accept, kill objectives, loot, turn in, gain a level.
-2. A model, via the MCP tools, does the same unaided at least once.
-3. A frontier model runs for an hour and its trajectory contains no errors attributable to the module, SDK, runner, or sandbox.
-4. Everything runs from `infra/compose.yml` on a fresh machine given only the extracted client data in `data/`.
+All of the following (status as of 2026-08-21, see docs/FOLLOW-UPS.md):
+1. The smoke script completes one quest end to end through the SDK: create character, accept, kill objectives, loot, turn in, gain a level. **PASSED** (two consecutive runs).
+2. A model, via the MCP tools, does the same unaided at least once. **Demonstrated across runs** (stealth/ox-alpha reached level 3 in 1h; every element shown unaided) — one canonical single-episode confirmation queued.
+3. A frontier model runs for an hour and its trajectory contains no errors attributable to the module, SDK, runner, or sandbox. **Near** — the hour ran; one harness-attributable defect found (sandbox restart notice lost) and queued; rerun after the fix.
+4. Everything runs from `infra/compose.yml` on a fresh machine given only the extracted client data in `data/`. **Rehearsal pending.**
 
 ## Fixed for this phase
 
@@ -34,14 +34,14 @@ Roughly in order. Each item is small enough to be a day or two; the module is th
 
 ### Module
 - [x] Session management: token to character mapping, login, logout, create character.
-- [ ] Action endpoint: HTTP, JSON in, ack out, errors as events. Opcodes per `docs/CONTRACTS.md` Phase 0 set. (session/chat/movement done; combat/quest/loot/vendor/inventory in progress)
+- [x] Action endpoint: HTTP, JSON in, ack out, errors as events. Opcodes per `docs/CONTRACTS.md` Phase 0 set.
 - [x] Event tap: filter outbound packets for the session to the observation contract, publish as JSON over WebSocket.
 - [x] Movement: resolve move-to into client movement packets along an mmaps path.
 - [x] Audit log to a file per session.
 
 ### SDK
 - [x] Typed client for the module: actions and an async event stream.
-- [ ] State cache built from events: self, target, nearby objects, quest log, inventory. (self/nearby done; quest log and inventory follow the combat protocol increment)
+- [x] State cache built from events: self, target, nearby objects, quest log, inventory.
 - [x] First composed helpers as the smoke script needs them. No speculative helpers.
 - [x] `bun test` coverage for the state cache and message schemas.
 
@@ -57,7 +57,7 @@ Roughly in order. Each item is small enough to be a day or two; the module is th
 - [x] Build a searchable bundle from a local dump. Plain text search is enough.
 
 ### Smoke
-- [ ] `infra/smoke/one-quest.ts`: the forty-line script that proves the loop.
+- [x] `infra/smoke/one-quest.ts`: the forty-line script that proves the loop. (125 lines incl. comments; two consecutive live passes 2026-08-21)
 
 ## The dev loop once the gate is close
 
