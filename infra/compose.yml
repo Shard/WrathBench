@@ -149,6 +149,18 @@ services:
       # SOAP stays off. The harness has no privileged control path into the
       # world by design (docs/CONTRACTS.md); actions go through the module.
       AC_SOAP_ENABLED: "0"
+      # mod-wrathbench control module (module/). Pinned here rather than in the
+      # module .conf: the stock docker entrypoint only materialises the main
+      # component .conf from its .dist, never module confs, so a fresh boot would
+      # otherwise leave the module disabled. AC_* env wins over the file either
+      # way (see the config note at the top of this compose). The port is not
+      # published to the host; the runner reaches it at worldserver:8086.
+      AC_WRATH_BENCH_ENABLE: "1"
+      AC_WRATH_BENCH_BIND_ADDRESS: "0.0.0.0"
+      AC_WRATH_BENCH_PORT: "8086"
+      AC_WRATH_BENCH_AUDIT_DIR: "/azerothcore/env/dist/logs/wrathbench"
+      AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
+      AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc
       - ../data/logs:/azerothcore/env/dist/logs
