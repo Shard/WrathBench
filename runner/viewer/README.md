@@ -54,11 +54,21 @@ snippet results with errors highlighted, harness notices called out, compact
 one-line state samples, and a termination or pause banner. A small level/XP
 sparkline comes from the `state` table.
 
-Snippets and model responses longer than three lines are folded by default with
-an `expand · N lines` toggle, so scrolling a long history stays fast. The
-top-bar **expand** dropdown sets the default for the whole feed — Minimal
-(default), Responses, Snippets, All expanded — and is remembered in
-`localStorage`. Individual blocks stay click-toggleable whatever the preset.
+Snippets, snippet results, and model responses longer than three lines are
+folded by default with an `expand · N lines` toggle, so scrolling a long
+history stays fast. The top-bar **expand** dropdown sets the default for the
+whole feed — Minimal (default), Responses, Snippets (snippets, their results,
+and responses), All expanded — and is remembered in `localStorage`. Individual
+blocks stay click-toggleable whatever the preset.
+
+While a run is live, an activity line sits at the foot of the feed with a
+pulsing dot, a plain-language guess at what the session is doing, and a seconds
+counter since the run last wrote anything. The guess comes from the type of the
+newest entry, since the loop writes a fixed cycle: a `request` means it is
+waiting on the model, a `snippet` with no result yet means the snippet is still
+running, `events_served` means the next turn is pending, and so on. Past two
+minutes of silence the line turns amber and says the run may have stopped. It
+disappears when a `termination` entry arrives, replaced by the usual banner.
 
 The last 200 entries load first; **load earlier** walks backwards a window at a
 time. On a live run the page follows the file over SSE and appends new entries as
