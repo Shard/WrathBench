@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TrajectoryTail, splitLines, summarize } from "../viewer/tail";
+import { platformOf } from "../viewer/runs";
+import { TrajectoryTail, splitLines, summarize, tokenTotals } from "../viewer/tail";
 
 function tempFile(): string {
   return join(mkdtempSync(join(tmpdir(), "wrathbench-viewer-")), "trajectory.jsonl");
@@ -153,10 +154,86 @@ describe("summarize", () => {
     expect((s["text"] as string).length).toBeLessThan(8200);
   });
 
+  test("counts the whole prompt of a request, tool calls included", () => {
+    const s = summarize(
+      {
+        t: "request",
+        ts: 1,
+        messages: [
+          { role: "system", content: "s".repeat(100) },
+          { role: "assistant", content: "", tool_calls: [{ function: { name: "run_snippet", arguments: "{}" } }] },
+        ],
+      },
+      0,
+      0,
+      10,
+    );
+    expect(s["promptChars"]).toBeGreaterThan(100);
+    expect(s["usage"]).toBeUndefined();
+  });
+
+  test("provider usage is carried through when a driver records it", () => {
+    const s = summarize(
+      { t: "request", ts: 1, messages: [], usage: { prompt_tokens: 900, completion_tokens: 40 } },
+      0,
+      0,
+      10,
+    );
+    expect(s["usage"]).toEqual({ prompt: 900, completion: 40 });
+  });
+
   test("unknown types fall through generically with long strings cut", () => {
     const s = summarize({ t: "watchdog", ts: 1, kind: "idle", detail: "d".repeat(5000) }, 0, 0, 10);
     expect(s["kind"]).toBe("idle");
     expect(s["clipped"]).toBe(true);
     expect((s["detail"] as string).length).toBeLessThan(2100);
+  });
+});
+
+describe("tokenTotals", () => {
+  const req = (i: number, chars: number) =>
+    summarize({ t: "request", ts: i, messages: [{ role: "user", content: "x".repeat(chars - 4) }] }, i, 0, 1);
+  const res = (i: number, chars: number) =>
+    summarize({ t: "response", ts: i, message: { role: "assistant", content: "y".repeat(chars - 9) } }, i, 0, 1);
+
+  test("estimates from characters when no usage is recorded, and says so", () => {
+    const t = tokenTotals([req(0, 4000), res(1, 400), req(2, 8000), res(3, 800)]);
+    expect(t.source).toBe("estimated");
+    expect(t.turns).toBe(2);
+    // Context is the latest prompt, not the sum of them.
+    expect(t.contextTokens).toBe(2000);
+    expect(t.promptTokens).toBe(3000);
+    expect(t.completionTokens).toBe(300);
+    expect(t.totalTokens).toBe(3300);
+  });
+
+  test("prefers reported usage and flags the source", () => {
+    const t = tokenTotals([
+      summarize({ t: "request", ts: 1, messages: [], usage: { prompt_tokens: 1200, completion_tokens: 0 } }, 0, 0, 1),
+      summarize({ t: "response", ts: 2, message: {}, usage: { completion_tokens: 250 } }, 1, 0, 1),
+    ]);
+    expect(t.source).toBe("reported");
+    expect(t.contextTokens).toBe(1200);
+    expect(t.completionTokens).toBe(250);
+    expect(t.totalTokens).toBe(1450);
+  });
+
+  test("an empty run totals to zero rather than NaN", () => {
+    expect(tokenTotals([])).toMatchObject({ source: "estimated", contextTokens: 0, totalTokens: 0, turns: 0 });
+  });
+});
+
+describe("platformOf", () => {
+  test("names the platform from the api base", () => {
+    expect(platformOf("https://openrouter.ai/api/v1", "openai")).toBe("openrouter");
+    expect(platformOf("https://api.anthropic.com", "openai")).toBe("anthropic");
+    expect(platformOf("https://api.openai.com/v1", "openai")).toBe("openai");
+    expect(platformOf("http://127.0.0.1:9999/v1", "openai")).toBe("local");
+    expect(platformOf("https://api.together.xyz/v1", "openai")).toBe("together.xyz");
+  });
+
+  test("falls back to the driver when there is no api base", () => {
+    expect(platformOf(null, "claude-subscription")).toBe("claude-subscription");
+    expect(platformOf(null, null)).toBeNull();
   });
 });

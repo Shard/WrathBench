@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { PAGE } from "./page";
 import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
-import { TrajectoryTail, type EntrySummary } from "./tail";
+import { TrajectoryTail, tokenTotals, type EntrySummary } from "./tail";
 
 const REQUIRED_HOST = "127.0.0.1";
 const host = process.env["WRATHBENCH_VIEWER_HOST"] ?? REQUIRED_HOST;
@@ -101,6 +101,7 @@ async function handle(req: Request): Promise<Response> {
       run: readRun(runsDir, runId),
       states: readStates(runsDir, runId),
       total: tail.entries.length,
+      tokens: tokenTotals(tail.entries),
     });
   }
 
@@ -143,7 +144,11 @@ async function handle(req: Request): Promise<Response> {
           void scan(runId, tail)
             .then((added) => {
               // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-              send(added.length > 0 ? { entries: added } : { tick: Date.now() });
+              send(
+                added.length > 0
+                  ? { entries: added, tokens: tokenTotals(tail.entries) }
+                  : { tick: Date.now() },
+              );
             })
             .catch(() => undefined);
         }, POLL_MS);

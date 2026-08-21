@@ -60,6 +60,15 @@ export const PAGE = String.raw`<!doctype html>
   .banner.term { border-color: var(--err); }
   svg.spark { vertical-align: middle; }
   label { color: var(--dim); }
+  select { font: inherit; background: var(--panel); color: var(--fg);
+           border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+  .collapsed { max-height: 4.6em; overflow: hidden; position: relative; }
+  .collapsed::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.6em;
+                      background: linear-gradient(transparent, var(--bg)); }
+  pre.collapsed::after { background: linear-gradient(transparent, var(--panel)); }
+  .metrics { display: inline-flex; gap: 14px; flex-wrap: wrap; }
+  #ctrl { display: inline-flex; gap: 14px; flex-wrap: wrap; margin-left: auto; }
+  .metrics b { font-weight: 600; color: var(--fg); }
 </style>
 </head>
 <body>
@@ -100,7 +109,7 @@ async function renderIndex() {
     if (r.shakeout) { c1.append(document.createTextNode(" ")); c1.append(el("span", "warn", "[" + r.shakeout + "]")); }
     tr.append(c1);
     tr.append(el("td", r.live ? "live" : "dim", r.live ? "● LIVE" : (r.pauseReason ? "paused" : (r.terminationReason ? "done" : "cold"))));
-    tr.append(el("td", "", r.model || "—"));
+    tr.append(el("td", "", (r.platform ? r.platform + " · " : "") + (r.model || "—")));
     tr.append(el("td", "", r.driver || "—"));
     tr.append(el("td", "", num(r.level)));
     tr.append(el("td", "", num(r.xp)));
@@ -136,6 +145,73 @@ function sparkline(states) {
   svg.append(p); return svg;
 }
 
+/* ---------- header metrics ---------- */
+const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const modelLabel = () => (RUN.platform ? RUN.platform + " · " : "") + (RUN.model || "?");
+
+/*
+ * Token counts. Nothing in the trajectory records provider usage today — the
+ * openai adapter keeps only choices[0].message — so these are character-based
+ * estimates and are labelled "est" wherever they appear. If a driver ever logs
+ * usage, the server reports source "reported" and the tilde disappears.
+ */
+function showMetrics(tok) {
+  const est = tok.source === "estimated";
+  const box = el("span", "metrics");
+  const item = (label, value, title) => {
+    const s = el("span", "dim");
+    s.append(document.createTextNode(label + " "), el("b", "", value));
+    if (title) s.title = title;
+    return s;
+  };
+  box.append(el("span", "", modelLabel()));
+  box.append(item("context", (est ? "~" : "") + fmtTokens(tok.contextTokens),
+    est ? "Estimated from prompt characters ÷ 4 — the harness does not record provider usage." : "Reported by the provider."));
+  box.append(item("total", (est ? "~" : "") + fmtTokens(tok.totalTokens) + (est ? " est" : ""),
+    "Prompt + completion summed over " + tok.turns + " turns, as billed."));
+  $("#hdr").textContent = "";
+  $("#hdr").append(box);
+}
+
+/* ---------- expansion presets ---------- */
+/* Which block kinds a preset expands. Individual blocks stay click-toggleable. */
+const PRESETS = {
+  all: ["snippet", "response"],
+  snippets: ["snippet", "response"],
+  responses: ["response"],
+  minimal: [],
+};
+const PRESET_LABELS = [["minimal", "Minimal"], ["responses", "Responses"],
+  ["snippets", "Snippets"], ["all", "All expanded"]];
+let preset = "minimal";
+try { preset = localStorage.getItem("wrathbench.viewer.expand") || "minimal"; } catch (_) {}
+if (!PRESETS[preset]) preset = "minimal";
+const wants = (kind) => PRESETS[preset].includes(kind);
+const blocks = [];
+
+/* Fold a block to ~3 lines with a toggle. Short blocks are left alone. */
+function collapsible(kind, node, text) {
+  const lines = String(text).split("\n").length;
+  if (lines <= 3 && text.length < 200) return null;
+  const btn = el("button", "", "");
+  let open = wants(kind);
+  const set = (v) => {
+    open = v;
+    node.classList.toggle("collapsed", !open);
+    btn.textContent = open ? "collapse" : "expand · " + lines + " lines";
+  };
+  btn.onclick = () => set(!open);
+  blocks.push({ kind, set });
+  set(open);
+  return btn;
+}
+
+function applyPreset(next) {
+  preset = next;
+  try { localStorage.setItem("wrathbench.viewer.expand", next); } catch (_) {}
+  for (const b of blocks) b.set(wants(b.kind));
+}
+
 function rawButton(i, label) {
   const b = el("button", "", label);
   let pre = null;
@@ -169,14 +245,24 @@ function renderEntry(e) {
       meta.append(el("span", "", e.messageCount + " messages · system " + (e.systemChars/1000).toFixed(1) + "k chars"));
       meta.append(rawButton(e.i, "show messages"));
       break;
-    case "response":
-      if (e.text) div.append(el("div", "text", e.text));
+    case "response": {
       if (e.tools && e.tools.length) meta.append(el("span", "", "→ " + e.tools.join(", ")));
+      if (e.text) {
+        const body = el("div", "text", e.text);
+        div.append(body);
+        const b = collapsible("response", body, e.text);
+        if (b) meta.append(b);
+      }
       if (e.clipped) meta.append(rawButton(e.i, "raw"));
       break;
-    case "snippet":
-      div.append(el("pre", "code", e.code));
+    }
+    case "snippet": {
+      const pre = el("pre", "code", e.code);
+      div.append(pre);
+      const b = collapsible("snippet", pre, e.code);
+      if (b) meta.append(b);
       break;
+    }
     case "snippet_result":
     case "tool_result": {
       if (e.isError) meta.append(el("span", "err tag", "error"));
@@ -255,9 +341,13 @@ async function renderRun(runId) {
 
   if (RUN.shakeout) main.append(el("div", "banner shakeout", RUN.shakeout.toUpperCase() + " — NOT A HARNESS RESULT"));
 
+  showMetrics(info.tokens);
+
   const hdr = el("div", "banner");
-  const line1 = [RUN.model || "?", RUN.driver || "?", "harness " + (RUN.harnessVersion || "?"),
-    "character " + (RUN.character || "?")].join(" · ");
+  // The driver only repeats itself when it stood in for an unknown platform.
+  const line1 = [modelLabel(), RUN.driver === RUN.platform ? null : RUN.driver,
+    "harness " + (RUN.harnessVersion || "?"), "character " + (RUN.character || "?")]
+    .filter(Boolean).join(" · ");
   hdr.append(el("div", "", line1));
   const dur = RUN.startedAt ? fmtDur((RUN.endedAt || RUN.mtime || Date.now()) - RUN.startedAt) : "?";
   hdr.append(el("div", "dim", "started " + fmtTs(RUN.startedAt) + " · " + dur + " · " + info.total + " entries"));
@@ -290,11 +380,20 @@ async function renderRun(runId) {
   append(entries, "bottom");
   window.scrollTo(0, document.body.scrollHeight);
 
+  const sel = el("select");
+  for (const [value, label] of PRESET_LABELS) {
+    const o = el("option", "", label); o.value = value;
+    if (value === preset) o.selected = true;
+    sel.append(o);
+  }
+  sel.onchange = () => applyPreset(sel.value);
+  const selBox = el("label", ""); selBox.append(document.createTextNode("expand "), sel);
+
   const followBox = el("label", "");
   const cb = el("input"); cb.type = "checkbox"; cb.checked = true;
   cb.onchange = () => { follow = cb.checked; };
   followBox.append(cb, document.createTextNode(" auto-scroll"));
-  $("#ctrl").textContent = ""; $("#ctrl").append(followBox);
+  $("#ctrl").textContent = ""; $("#ctrl").append(selBox, followBox);
 
   // A run that has already terminated will never grow: no point holding a stream open.
   if (RUN.terminationReason) return;
@@ -302,12 +401,17 @@ async function renderRun(runId) {
   es = new EventSource("/api/run/" + encodeURIComponent(runId) + "/stream");
   es.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
+    if (msg.tokens) showMetrics(msg.tokens);
     if (msg.entries && msg.entries.length) {
       append(msg.entries, "bottom");
       if (follow) window.scrollTo(0, document.body.scrollHeight);
     }
   };
-  es.onerror = () => { $("#hdr").textContent = "stream disconnected"; };
+  // Never clobber the metrics: the disconnect notice gets its own slot.
+  es.onerror = () => {
+    if (!$("#ctrl").querySelector(".err"))
+      $("#ctrl").append(el("span", "err", "stream disconnected"));
+  };
 }
 
 const path = decodeURIComponent(location.pathname);

@@ -85,6 +85,46 @@ function shrink(value: unknown, out: { clipped: boolean }, depth = 0): unknown {
   return value;
 }
 
+/**
+ * Rough token estimate. The openai adapter parses only `choices[0].message`
+ * out of the provider response, so the `usage` block never reaches the
+ * trajectory and there is no recorded token count to read. Four characters per
+ * token is the usual English approximation; everything derived from it is
+ * labelled as an estimate in the UI rather than presented as a measurement.
+ */
+export const CHARS_PER_TOKEN = 4;
+export function estimateTokens(chars: number): number {
+  return Math.round(chars / CHARS_PER_TOKEN);
+}
+
+/** Characters a chat message contributes to the context, tool calls included. */
+function messageChars(m: unknown): number {
+  if (m === null || typeof m !== "object") return 0;
+  const msg = m as Record<string, unknown>;
+  let n = typeof msg["role"] === "string" ? msg["role"].length : 0;
+  const content = msg["content"];
+  if (typeof content === "string") n += content.length;
+  else if (content !== undefined && content !== null) n += JSON.stringify(content).length;
+  const calls = msg["tool_calls"];
+  if (Array.isArray(calls)) n += JSON.stringify(calls).length;
+  return n;
+}
+
+/** Provider-reported usage, if a driver ever records it. Normalised to prompt/completion. */
+function reportedUsage(rec: Record<string, unknown>): { prompt: number; completion: number } | null {
+  const candidates = [rec["usage"], (rec["message"] as Record<string, unknown> | undefined)?.["usage"]];
+  for (const u of candidates) {
+    if (u === null || u === undefined || typeof u !== "object") continue;
+    const o = u as Record<string, unknown>;
+    const prompt = o["prompt_tokens"] ?? o["input_tokens"];
+    const completion = o["completion_tokens"] ?? o["output_tokens"];
+    if (typeof prompt === "number" || typeof completion === "number") {
+      return { prompt: typeof prompt === "number" ? prompt : 0, completion: typeof completion === "number" ? completion : 0 };
+    }
+  }
+  return null;
+}
+
 interface OpenAiToolCall {
   function?: { name?: unknown; arguments?: unknown };
   name?: unknown;
@@ -125,6 +165,10 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       base["adapter"] = rec["adapter"];
       base["messageCount"] = messages.length;
       base["systemChars"] = sysText.length;
+      // The whole prompt for this turn: what the model saw as context.
+      base["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
+      const usage = reportedUsage(rec);
+      if (usage !== null) base["usage"] = usage;
       base["clipped"] = messages.length > 0;
       return base;
     }
@@ -151,6 +195,9 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       const c = clip(content, 8000);
       base["text"] = c.text;
       base["tools"] = toolCallNames(msg);
+      base["outChars"] = messageChars(msg);
+      const usage = reportedUsage(rec);
+      if (usage !== null) base["usage"] = usage;
       base["clipped"] = c.clipped;
       return base;
     }
@@ -178,6 +225,50 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       return base;
     }
   }
+}
+
+export interface TokenTotals {
+  /** "reported" only when a driver actually logged provider usage. */
+  source: "reported" | "estimated";
+  /** Prompt size of the most recent turn: what the model is carrying right now. */
+  contextTokens: number;
+  promptTokens: number;
+  completionTokens: number;
+  /** Prompt + completion summed over every turn — cumulative, as billed. */
+  totalTokens: number;
+  turns: number;
+}
+
+/**
+ * Token accounting for a whole run. Prompt tokens are summed per turn, so the
+ * total is what a provider would bill, not the size of the final context.
+ */
+export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
+  let prompt = 0;
+  let completion = 0;
+  let context = 0;
+  let turns = 0;
+  let reported = false;
+  for (const e of entries) {
+    const usage = e["usage"] as { prompt: number; completion: number } | undefined;
+    if (e.t === "request") {
+      turns++;
+      const p = usage !== undefined ? ((reported = true), usage.prompt) : estimateTokens(Number(e["promptChars"] ?? 0));
+      prompt += p;
+      context = p;
+      completion += usage?.completion ?? 0;
+    } else if (e.t === "response") {
+      completion += usage !== undefined ? ((reported = true), usage.completion) : estimateTokens(Number(e["outChars"] ?? 0));
+    }
+  }
+  return {
+    source: reported ? "reported" : "estimated",
+    contextTokens: context,
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: prompt + completion,
+    turns,
+  };
 }
 
 /** A complete line that is not JSON must surface, never vanish. */

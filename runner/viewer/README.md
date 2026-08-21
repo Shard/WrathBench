@@ -36,10 +36,29 @@ ended. A run counts as **live** when it has no termination reason *and* its
 `trajectory.jsonl` was appended to within the last two minutes — "no termination
 reason" alone is not enough, because a killed process never writes one.
 
+The run page's top bar carries the platform and model slug (`openrouter ·
+stealth/ox-alpha`, platform derived from `config.apiBase`), the current context
+size, and the tokens the run has spent in total — prompt plus completion summed
+over every turn, as a provider would bill it.
+
+**These token numbers are estimates**, and the UI says so with a `~` and an
+`est` suffix. The openai adapter parses only `choices[0].message` out of the
+provider response, so `usage` never reaches the trajectory and there is nothing
+recorded to read; the viewer falls back to characters ÷ 4. If a driver starts
+logging `usage` on `request` or `response` entries, the viewer picks it up
+automatically and drops the estimate marker. Making that real is a runner
+change, not a viewer one.
+
 The run page is a turn-by-turn feed: model text, snippets as code blocks,
 snippet results with errors highlighted, harness notices called out, compact
 one-line state samples, and a termination or pause banner. A small level/XP
 sparkline comes from the `state` table.
+
+Snippets and model responses longer than three lines are folded by default with
+an `expand · N lines` toggle, so scrolling a long history stays fast. The
+top-bar **expand** dropdown sets the default for the whole feed — Minimal
+(default), Responses, Snippets, All expanded — and is remembered in
+`localStorage`. Individual blocks stay click-toggleable whatever the preset.
 
 The last 200 entries load first; **load earlier** walks backwards a window at a
 time. On a live run the page follows the file over SSE and appends new entries as
