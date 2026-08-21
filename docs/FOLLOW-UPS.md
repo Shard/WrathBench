@@ -342,6 +342,57 @@ priority. Items graduate out of this file into commits; the dev loop
     hint stays for snippet-conjured bigints (a `123n` literal) and the prompt
     now states the string contract.
 
+18. **Long-distance travel findings (`infra/smoke/travel.ts`, 2026-08-22)**.
+    A Dwarf walked Coldridge Valley → Coldridge Pass tunnel → Kharanos →
+    Ironforge gates → Tinker Town tram entrance (~1,900y, 18/18 waypoints,
+    7.7 min) on chained `move_to` hops, then tried to enter the Deeprun Tram.
+    - *What works*: per-hop mmaps pathing is excellent — the tunnel, the
+      switchback roads, and the long ascending IF entrance hall were all
+      wall-followed within single hops; waypoints taken from creature spawn
+      coordinates (things that provably stand on the mesh) arrived first try,
+      0.0–0.1y off, at ~7y/s. Zone/area transitions on map 0 (Coldridge →
+      Dun Morogh → Ironforge city) are seamless and invisible — no event,
+      no hiccup. Mobs aggroing en route (7 SMSG_ATTACKSTART) never
+      interrupted a move. No teleport ever fired on this route, so the
+      teleport-ack fix (item 14) was not load-bearing on the ground path;
+      it becomes load-bearing exactly where leg 3 dies (below).
+    - *`no_path` is three different failures wearing one name*, and the agent
+      cannot tell them apart: (a) target z off the mesh by more than a few
+      yards — interpolated z on the IF entrance ramp was 20y off and drew 5–6
+      rejections until a z-ladder retry (±4/10/20/40) landed; (b) path too
+      long/complex — the 143y Tinker Town → tram-portal hop returned
+      `no_path` at *every* z, yet the same route as two ~72y hops arrived
+      cleanly, i.e. PATHFIND_SHORT/INCOMPLETE folded into `no_path`
+      (WbManager.cpp:780–791); (c) a genuine mesh edge (the portal tunnel,
+      below). All rejections return in <20ms, so probing is cheap; the
+      recovery recipe that cleared every recoverable case is z-ladder then
+      midpoint subdivision, and an agent would have to invent it unprompted.
+      Splitting the status (or documenting the recipe in the prompt) is the
+      cheap fix.
+    - *The Deeprun Tram is a hard blocker, before the tram itself is ever
+      reached*: areatrigger teleports (trigger 2175 → map 369) fire on
+      client-sent CMSG_AREA_TRIGGER, which the module never sends and no
+      action can express (no raw-opcode escape hatch). Walking into the
+      portal does nothing, and the navmesh ends ~8y inside the tunnel
+      (y≈-1330: `arrived` at -1326.5, `no_path` at -1334.5, zero forward
+      progress) — the character stood at the mesh edge on map 0 for the
+      whole creep. The timed-platform/moving-transport question is therefore
+      unreachable and untested. Even if the trigger fired, the transfer
+      would be invisible today: SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD are
+      not served, and `state.self.position.map` only ever updates from
+      SMSG_LOGIN_VERIFY_WORLD — plus a far teleport needs the worldport ack
+      that only the rebuilt (item-14) image sends.
+    - *Surface a future run would need*, in order: (1) module sends
+      CMSG_AREA_TRIGGER when the player is standing in a teleport trigger's
+      volume — client parity, and it opens the tram, instance portals, and
+      inn/exit triggers in one move; (2) serve SMSG_TRANSFER_PENDING /
+      SMSG_NEW_WORLD and update self map from them; (3) split `no_path` into
+      distinguishable causes or teach the recovery recipe; (4) a coordinates
+      source — this probe hardcoded DB-derived waypoints, which the
+      observation contract denies an agent; the wiki bundle's wowwiki
+      coordinates are the contract-clean equivalent. Transport (boat/tram/
+      zeppelin) semantics stay unknown until (1) and (2) land.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
