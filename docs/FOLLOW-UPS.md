@@ -54,6 +54,21 @@ priority. Items graduate out of this file into commits; the dev loop
    now, but a `window-exhausted` pause still loses the CLI's accumulated
    context on resume (documented; acceptable for shakeout).
 
+8a. **Extractive digest — deferred behind an evidence gate** (2026-08-21
+   research verdict, three-agent pass). Dynamic context compaction is not
+   needed on current evidence: requests plateau at ~8–12k tokens under the
+   fixed policy regardless of episode length. If either signal appears —
+   (a) genuine context-size exhaustion in a run, or (b) trajectories showing
+   a model re-querying facts it lost to a window trim — build the extractive
+   digest: trimmed messages replaced by a deterministic one-line record
+   (tool, truncated args, error flag) in a capped ring buffer inside the
+   regenerated context message. No model summarization ever (measured-model
+   summarizing conflates constructs and breaks replay; a harness summarizer
+   is an unversioned model dependency, both rejected); no per-model context
+   scaling ever (it makes scores "harness vX(model)" — an ADR-0004
+   violation, and provider-declared context sizes drift for the same model
+   id).
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
