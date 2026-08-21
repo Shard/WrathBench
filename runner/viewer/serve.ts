@@ -13,11 +13,17 @@
  * run.sqlite is opened readonly so a live writer is untouched.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PAGE } from "./page";
 import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
-import { TrajectoryTail, tokenTotals, type EntrySummary } from "./tail";
+import {
+  TrajectoryTail,
+  scanRunTotals,
+  tokenTotals,
+  type EntrySummary,
+  type RunTotals,
+} from "./tail";
 
 const REQUIRED_HOST = "127.0.0.1";
 const host = process.env["WRATHBENCH_VIEWER_HOST"] ?? REQUIRED_HOST;
@@ -63,6 +69,48 @@ function scan(runId: string, tail: TrajectoryTail): Promise<EntrySummary[]> {
   return next;
 }
 
+/**
+ * Per-run totals for the listing, memoised on (size, mtime).
+ *
+ * The listing wants tokens and a wall clock for every run, which means reading
+ * every trajectory. A finished run's file never changes, so it is read once per
+ * process; a live run is re-read only as it grows. The full-fidelity scan lives
+ * in `scanRunTotals` and keeps nothing per entry, so this stays a few numbers
+ * per run rather than a second copy of every feed.
+ */
+const totalsCache = new Map<string, { size: number; mtime: number; totals: RunTotals }>();
+
+async function runTotals(runId: string, dir: string): Promise<RunTotals | null> {
+  const path = join(dir, "trajectory.jsonl");
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(path);
+  } catch {
+    return null;
+  }
+  const hit = totalsCache.get(runId);
+  if (hit !== undefined && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.totals;
+  const totals = await scanRunTotals(path);
+  totalsCache.set(runId, { size: st.size, mtime: st.mtimeMs, totals });
+  return totals;
+}
+
+async function listWithTotals(): Promise<unknown[]> {
+  const rows = listRuns(runsDir);
+  const out: unknown[] = [];
+  for (const row of rows) {
+    const dir = runDir(runsDir, row.runId);
+    const totals = dir === null ? null : await runTotals(row.runId, dir);
+    out.push({
+      ...row,
+      tokens: totals?.tokens ?? null,
+      firstTs: totals?.firstTs ?? null,
+      lastTs: totals?.lastTs ?? null,
+    });
+  }
+  return out;
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -85,7 +133,7 @@ async function handle(req: Request): Promise<Response> {
   const path = decodeURIComponent(url.pathname);
 
   if (path === "/" || path.startsWith("/run/")) return html();
-  if (path === "/api/runs") return json({ runs: listRuns(runsDir) });
+  if (path === "/api/runs") return json({ runs: await listWithTotals() });
 
   const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
   if (m === null) return notFound("no such path");

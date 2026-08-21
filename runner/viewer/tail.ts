@@ -86,11 +86,11 @@ function shrink(value: unknown, out: { clipped: boolean }, depth = 0): unknown {
 }
 
 /**
- * Rough token estimate. The openai adapter parses only `choices[0].message`
- * out of the provider response, so the `usage` block never reaches the
- * trajectory and there is no recorded token count to read. Four characters per
- * token is the usual English approximation; everything derived from it is
- * labelled as an estimate in the UI rather than presented as a measurement.
+ * Rough token estimate, for runs where nobody counted. Drivers log a `usage`
+ * block when the provider returns one, but plenty of endpoints return none, and
+ * older trajectories predate the logging entirely. Four characters per token is
+ * the usual English approximation; everything derived from it is labelled as an
+ * estimate in the UI rather than presented as a measurement.
  */
 export const CHARS_PER_TOKEN = 4;
 export function estimateTokens(chars: number): number {
@@ -110,8 +110,25 @@ function messageChars(m: unknown): number {
   return n;
 }
 
-/** Provider-reported usage, if a driver ever records it. Normalised to prompt/completion. */
-function reportedUsage(rec: Record<string, unknown>): { prompt: number; completion: number } | null {
+/**
+ * Provider-reported usage, if a driver records it. Normalised to
+ * prompt/completion, with the two cache figures kept separate.
+ *
+ * `cachedRead` and `cacheWrite` are absent rather than zero when the provider
+ * says nothing about them: OpenAI-compatible endpoints report cache reads as
+ * `cached_tokens` and never mention cache writes at all, and a run that cannot
+ * know a number must not display one. Cache reads are a *subset* of the prompt
+ * on both the OpenAI-compat shape and the claude CLI shape the runner
+ * normalises to, so prompt is always the whole input for the turn.
+ */
+export interface ReportedUsage {
+  prompt: number;
+  completion: number;
+  cachedRead?: number;
+  cacheWrite?: number;
+}
+
+function reportedUsage(rec: Record<string, unknown>): ReportedUsage | null {
   const candidates = [rec["usage"], (rec["message"] as Record<string, unknown> | undefined)?.["usage"]];
   for (const u of candidates) {
     if (u === null || u === undefined || typeof u !== "object") continue;
@@ -119,7 +136,15 @@ function reportedUsage(rec: Record<string, unknown>): { prompt: number; completi
     const prompt = o["prompt_tokens"] ?? o["input_tokens"];
     const completion = o["completion_tokens"] ?? o["output_tokens"];
     if (typeof prompt === "number" || typeof completion === "number") {
-      return { prompt: typeof prompt === "number" ? prompt : 0, completion: typeof completion === "number" ? completion : 0 };
+      const out: ReportedUsage = {
+        prompt: typeof prompt === "number" ? prompt : 0,
+        completion: typeof completion === "number" ? completion : 0,
+      };
+      const read = o["cached_tokens"] ?? o["cache_read_input_tokens"];
+      const write = o["cache_write_tokens"] ?? o["cache_creation_input_tokens"];
+      if (typeof read === "number") out.cachedRead = read;
+      if (typeof write === "number") out.cacheWrite = write;
+      return out;
     }
   }
   return null;
@@ -232,10 +257,18 @@ export interface TokenTotals {
   source: "reported" | "estimated";
   /** Prompt size of the most recent turn: what the model is carrying right now. */
   contextTokens: number;
+  /** The whole input, cached part included — the openai-compat `prompt_tokens`. */
   promptTokens: number;
   completionTokens: number;
   /** Prompt + completion summed over every turn — cumulative, as billed. */
   totalTokens: number;
+  /**
+   * Cache reads and writes, `null` when the provider never said. A compat
+   * endpoint reports `cached_tokens` and nothing about writes, so writes stay
+   * unknown there — which is not the same as none, and must not show as 0.
+   */
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
   turns: number;
 }
 
@@ -249,12 +282,18 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   let context = 0;
   let turns = 0;
   let reported = false;
+  let cacheRead: number | null = null;
+  let cacheWrite: number | null = null;
   // The provider reports a turn's prompt size on the *response*, so a request's
   // estimate is held until the response either confirms or replaces it.
   let pending: number | null = null;
 
   for (const e of entries) {
-    const usage = e["usage"] as { prompt: number; completion: number } | undefined;
+    const usage = e["usage"] as ReportedUsage | undefined;
+    if (usage !== undefined && (e.t === "request" || e.t === "response")) {
+      if (usage.cachedRead !== undefined) cacheRead = (cacheRead ?? 0) + usage.cachedRead;
+      if (usage.cacheWrite !== undefined) cacheWrite = (cacheWrite ?? 0) + usage.cacheWrite;
+    }
     if (e.t === "request") {
       if (pending !== null) prompt += pending; // a turn that never got a response
       turns++;
@@ -295,8 +334,80 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
     promptTokens: prompt,
     completionTokens: completion,
     totalTokens: prompt + completion,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
     turns,
   };
+}
+
+/** What a run costs to list: token totals plus the wall clock the file spans. */
+export interface RunTotals {
+  tokens: TokenTotals;
+  /** Timestamp of the first and last trajectory entry; null on an empty file. */
+  firstTs: number | null;
+  lastTs: number | null;
+  entries: number;
+}
+
+/**
+ * Token totals for a whole run without keeping the run in memory.
+ *
+ * The listing wants one number per run, and holding an `EntrySummary` for every
+ * entry of every run — the shape `TrajectoryTail` keeps for the feed — would
+ * cost far more than the answer is worth. This streams the file, projects each
+ * line down to the handful of fields token accounting reads, and drops the
+ * rest. Callers are expected to memoise on (size, mtime): the work is linear in
+ * bytes and a finished run never changes.
+ */
+export async function scanRunTotals(path: string): Promise<RunTotals> {
+  const projections: EntrySummary[] = [];
+  let firstTs: number | null = null;
+  let lastTs: number | null = null;
+  let entries = 0;
+
+  const decoder = new TextDecoder();
+  let carry = new Uint8Array(0);
+  const take = (line: Uint8Array): void => {
+    if (line.length === 0) return;
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(decoder.decode(line)) as Record<string, unknown>;
+    } catch {
+      return; // a half-written or corrupt line costs its own tokens, nothing else
+    }
+    entries++;
+    const t = typeof rec["t"] === "string" ? (rec["t"] as string) : "unknown";
+    const ts = typeof rec["ts"] === "number" ? (rec["ts"] as number) : 0;
+    if (ts > 0) {
+      if (firstTs === null) firstTs = ts;
+      lastTs = ts;
+    }
+    if (t !== "request" && t !== "response") return;
+    const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
+    if (t === "request") {
+      const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
+      p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
+    } else {
+      p["outChars"] = messageChars(rec["message"]);
+    }
+    const usage = reportedUsage(rec);
+    if (usage !== null) p["usage"] = usage;
+    projections.push(p);
+  };
+
+  try {
+    for await (const chunk of Bun.file(path).stream()) {
+      const buf = carry.length === 0 ? chunk : concat(carry, chunk);
+      const { lines, rest } = splitLines(buf);
+      for (const line of lines) take(line);
+      carry = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
+    }
+  } catch {
+    /* an unreadable trajectory degrades one row, never the listing */
+  }
+  take(carry);
+
+  return { tokens: tokenTotals(projections), firstTs, lastTs, entries };
 }
 
 /** A complete line that is not JSON must surface, never vanish. */
