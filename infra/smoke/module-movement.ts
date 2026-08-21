@@ -151,6 +151,22 @@ async function main() {
     { x: -8949.95, y: -132.49, z: 83.53 }, // human start
     { x: -8913.2, y: -137.6, z: 80.9 },    // abbey courtyard
   ];
+  // A reused character may have been left anywhere by another probe run; walk
+  // it home first so the fixed 30-60m leg below is meaningful.
+  if (WAYPOINTS.every((wp) => dist2d(spawn, wp) > 60)) {
+    const home = await req("POST", "/action", { token: TOKEN, action: "move_to", ...WAYPOINTS[0] });
+    if (home.status !== 200 || !home.json?.ok) fail(`walk-home move_to failed: ${JSON.stringify(home.json)}`);
+    const homeRes = await waitFor(
+      (e) => e.opcode === "WB_MOVE_RESULT" && e.data?.moveId === home.json.moveId,
+      120000,
+      "walk-home WB_MOVE_RESULT",
+    );
+    if (homeRes.data.status !== "arrived") fail(`walk-home result ${JSON.stringify(homeRes.data)}`);
+    spawn.x = homeRes.data.pos.x;
+    spawn.y = homeRes.data.pos.y;
+    spawn.z = homeRes.data.pos.z;
+    log(`walked home to (${spawn.x.toFixed(1)}, ${spawn.y.toFixed(1)})`);
+  }
   const target = WAYPOINTS.reduce((a, b) => (dist2d(spawn, a) >= dist2d(spawn, b) ? a : b));
   const wantDist = dist2d(spawn, target);
   if (wantDist < 30 || wantDist > 60) fail(`test target ${wantDist.toFixed(1)}m from spawn, want 30-60m`);
