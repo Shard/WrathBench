@@ -11,7 +11,11 @@ export type {
   ConnectOptions,
   ErrorCode,
   KnownErrorCode,
+  MovePoint,
+  MoveResult,
+  MoveToOptions,
   WaitForChatOptions,
+  WaitForNearbyOptions,
 } from "./client";
 
 export {
@@ -33,8 +37,10 @@ export type {
 
 export { StateCache } from "./state";
 export type {
+  Anomaly,
   ChatEntry,
   CharacterSummary,
+  CreatureInfo,
   GapRecord,
   Gauge,
   NearbyObject,
@@ -44,6 +50,8 @@ export type {
   StateCacheOptions,
   StateSeed,
   StateSnapshot,
+  UnitFieldsState,
+  UnitPosition,
   WorldPosition,
 } from "./state";
 
@@ -52,23 +60,44 @@ export {
   isDecodeError,
   isEvent,
   isKnownOpcode,
+  isMoveOpcode,
   KNOWN_OPCODES,
+  MOVE_OPCODES,
+  MOVE_STATUSES,
   parseEventFrame,
   PROTOCOL_REVISION,
 } from "./protocol";
 export type {
   ActionRequest,
   ActionResponse,
+  CreateBlock,
   CreateSessionRequest,
+  CreatureQueryResponseData,
   DecodeErrorData,
   DeleteSessionRequest,
   DeleteSessionResponse,
+  DestroyObjectData,
   ErrorBody,
+  FaceResponse,
   GameEvent,
   GuidKey,
+  GuidListBlock,
   HealthResponse,
   KnownEvent,
+  KnownMoveStatus,
   KnownOpcode,
+  MoveOpcode,
+  MoveProgressData,
+  MoveResultData,
+  MoveStatus,
+  MoveToResponse,
+  MoveUpdateData,
+  MovementBlock,
+  PositionData,
   SessionResponse,
   UnknownEvent,
+  UpdateBlock,
+  UpdateFields,
+  UpdateObjectData,
+  ValuesBlock,
 } from "./protocol";

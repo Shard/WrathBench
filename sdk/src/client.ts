@@ -27,20 +27,27 @@ import {
   actionResponseSchema,
   deleteSessionResponseSchema,
   errorBodySchema,
+  faceResponseSchema,
   guidKey,
   healthResponseSchema,
   isDecodeError,
   isEvent,
+  moveToResponseSchema,
   sessionResponseSchema,
   type ActionResponse,
   type CreateSessionRequest,
   type DeleteSessionResponse,
   type ErrorBody,
+  type FaceResponse,
   type HealthResponse,
+  type KnownMoveStatus,
+  type MoveResultData,
+  type MoveStatus,
+  type MoveToResponse,
   type SessionResponse,
 } from "./protocol";
 import { EventStream, type EventStreamOptions, type StreamEvent } from "./events";
-import { StateCache, type ChatEntry } from "./state";
+import { StateCache, type ChatEntry, type NearbyObject, type UnitPosition } from "./state";
 import type { z } from "zod";
 
 /**
@@ -60,7 +67,12 @@ export type KnownErrorCode =
   | "unsupported_action"
   | "no_session"
   | "not_in_world"
-  | "no_player";
+  | "no_player"
+  | "session_gone"
+  // movement extension
+  | "missing_position"
+  | "missing_face_target"
+  | "moving";
 
 export type ErrorCode = KnownErrorCode | (string & {});
 
@@ -124,6 +136,60 @@ export interface WaitForChatOptions {
   timeout?: number;
   sinceSeq?: number;
   includeBuffered?: boolean;
+}
+
+/** A point to walk to. `o` is ignored: `move_to` takes no orientation. */
+export interface MovePoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface MoveToOptions {
+  /**
+   * How long to wait for the terminal `WB_MOVE_RESULT`. Default 90000: the
+   * single-move cap is ~250yd, which is ~36s at a base run speed of 7yd/s,
+   * plus the module's 3s server-confirmation deadline and slack for a path
+   * that is longer than the straight line.
+   */
+  timeout?: number;
+}
+
+/**
+ * The outcome of a `move_to`, as the server decided it.
+ *
+ * A *returned* discriminated union rather than a thrown error, and deliberately
+ * so: PROTOCOL.md splits transport/request errors (HTTP non-2xx) from
+ * game-level outcomes (events), and `no_path` / `too_far` / `interrupted` are
+ * squarely the second kind — the game answering the question that was asked,
+ * not the call being wrong. Modelling them as exceptions would put a normal
+ * answer ("there is no path there") on the same channel as `not_in_world`, and
+ * a snippet that forgot a `try` would abort a run over it. `if (!result.ok)` is
+ * hard to forget and hard to get wrong.
+ *
+ * `position` is the server-confirmed position the character actually ended at,
+ * whatever the status — which is exactly what the next decision needs.
+ */
+export type MoveResult =
+  | {
+      readonly ok: true;
+      readonly status: "arrived";
+      readonly moveId: number;
+      readonly position: UnitPosition;
+      readonly seq: number;
+      readonly ts: number;
+    }
+  | {
+      readonly ok: false;
+      readonly status: Exclude<KnownMoveStatus, "arrived"> | (string & {});
+      readonly moveId: number;
+      readonly position: UnitPosition;
+      readonly seq: number;
+      readonly ts: number;
+    };
+
+export interface WaitForNearbyOptions {
+  timeout?: number;
 }
 
 /**
@@ -201,6 +267,51 @@ export class WrathClient {
     );
   }
 
+  /**
+   * POST /action with `action: "move_to"`. Acks "queued and pathing"; the
+   * outcome is a `WB_MOVE_RESULT` event. Prefer `moveTo`, which waits for it.
+   */
+  moveToAsync(point: MovePoint): Promise<MoveToResponse> {
+    return this.request(
+      "POST",
+      "/action",
+      { token: this.token, action: "move_to", x: point.x, y: point.y, z: point.z },
+      moveToResponseSchema,
+    );
+  }
+
+  /**
+   * POST /action with `action: "stop"`. Returns as soon as the module has
+   * queued the `MSG_MOVE_STOP` — it does not wait for the character to halt.
+   * The in-flight `moveTo` is what resolves, with `status: "stopped"`, and its
+   * result carries where the character actually came to rest.
+   */
+  stop(): Promise<ActionResponse> {
+    return this.request(
+      "POST",
+      "/action",
+      { token: this.token, action: "stop" },
+      actionResponseSchema,
+    );
+  }
+
+  /**
+   * POST /action with `action: "face"` — turn in place.
+   *
+   * Takes either an absolute orientation in radians (0 = east/+x,
+   * counter-clockwise) or a point to turn toward; the module resolves a point
+   * into an orientation and echoes the one it used. Rejects with
+   * `WrathRequestError` code `moving` while a move is running — stop first, or
+   * supersede with `moveTo`.
+   */
+  face(orientationOrPoint: number | { x: number; y: number }): Promise<FaceResponse> {
+    const body =
+      typeof orientationOrPoint === "number"
+        ? { token: this.token, action: "face", orientation: orientationOrPoint }
+        : { token: this.token, action: "face", x: orientationOrPoint.x, y: orientationOrPoint.y };
+    return this.request("POST", "/action", body, faceResponseSchema);
+  }
+
   /** DELETE /session — log the character out (a real client-style disconnect). */
   deleteSession(): Promise<DeleteSessionResponse> {
     return this.request(
@@ -241,6 +352,96 @@ export class WrathClient {
       return predicate(toChatEntry(e.seq, e.ts, e.data));
     }, options);
     return toChatEntry(event.seq, event.ts, event.data as ChatFields);
+  }
+
+  /**
+   * Walk to a world position and wait for the server's verdict.
+   *
+   * Issues `move_to`, then resolves on the `WB_MOVE_RESULT` carrying the same
+   * `moveId`. The result is *returned*, not thrown, for every outcome the game
+   * decides — see `MoveResult` for why. Still thrown:
+   *
+   *   - `WrathRequestError` — the request was refused before anything moved
+   *     (`missing_position`, `not_in_world`, `no_session`, …).
+   *   - `EventTimeoutError` — no result arrived within `timeout`. That is not
+   *     an outcome, it is the *absence* of one: the character may well still be
+   *     walking, and pretending otherwise (a synthetic `status: "timeout"`)
+   *     would put an SDK invention in a field that otherwise only ever holds
+   *     the module's own words.
+   *
+   * A `moveTo` issued while another is running supersedes it; the older call
+   * resolves with `status: "superseded"`.
+   */
+  async moveTo(point: MovePoint, options: MoveToOptions = {}): Promise<MoveResult> {
+    const ack = await this.moveToAsync(point);
+    // The match is the moveId alone, and the buffer is searched: a result can
+    // land while the POST response is still in flight (an immediate `no_path`
+    // does exactly that). No `sinceSeq` bound — `seq` restarts when a token's
+    // session is recreated, so any seq-based floor can outrun the very event it
+    // is meant to admit, while `moveId` is unique per session and issued by the
+    // ack we are holding.
+    const event = await this.events.waitFor(
+      (e) =>
+        isEvent(e, "WB_MOVE_RESULT") &&
+        !isDecodeError(e.data) &&
+        (e.data as MoveResultData).moveId === ack.moveId,
+      { timeout: options.timeout ?? 90_000 },
+    );
+    const data = event.data as MoveResultData;
+    const status: MoveStatus = data.status;
+    const position: UnitPosition = {
+      x: data.pos.x,
+      y: data.pos.y,
+      z: data.pos.z,
+      o: data.pos.o,
+    };
+    const common = { moveId: data.moveId, position, seq: event.seq, ts: event.ts } as const;
+    return status === "arrived"
+      ? { ok: true, status: "arrived", ...common }
+      : { ok: false, status, ...common };
+  }
+
+  /**
+   * Wait until an object in view satisfies `predicate`.
+   *
+   * Reads the state cache, not the raw stream: what puts an object in view is
+   * a whole `SMSG_UPDATE_OBJECT` fold plus, usually, a later query response
+   * that gives it a name — no single event answers "is there a named creature
+   * nearby". The cache is updated before waiters run, so re-checking it on
+   * every event is exact.
+   *
+   * Returns the live cache entry (as every `state` query does); take
+   * `state.snapshot()` if you need it frozen.
+   */
+  async waitForNearby(
+    predicate: (obj: NearbyObject) => boolean,
+    options: WaitForNearbyOptions = {},
+  ): Promise<NearbyObject> {
+    const scan = (): NearbyObject | undefined => {
+      for (const obj of this.state.nearby.values()) {
+        try {
+          if (predicate(obj)) return obj;
+        } catch {
+          /* a throwing predicate is not a match */
+        }
+      }
+      return undefined;
+    };
+    const already = scan();
+    if (already) return already;
+
+    let hit: NearbyObject | undefined;
+    await this.events.waitFor(
+      () => {
+        hit = scan();
+        return hit !== undefined;
+      },
+      // The buffer is not re-scanned: those events are already folded into the
+      // cache, and `scan()` above has just looked at the result.
+      { timeout: options.timeout ?? 10_000, includeBuffered: false },
+    );
+    // `waitFor` only resolves when `scan()` found something.
+    return hit as NearbyObject;
   }
 
   /** Our own guid as a map key, once the session response has seeded it. */

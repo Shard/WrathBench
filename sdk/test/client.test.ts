@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 
 import { connect, WrathRequestError, WrathTransportError } from "../src/client";
 import { EventTimeoutError } from "../src/events";
-import { chatEcho, frames, loginSequence } from "./fixtures";
+import {
+  chatEcho,
+  creatureCreate,
+  creatureQuery,
+  frames,
+  loginSequence,
+  moveResult,
+} from "./fixtures";
 import { startStub } from "./server";
 
 function json(body: unknown, status: number): Response {
@@ -67,6 +74,120 @@ describe("client: the happy path through the slice", () => {
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", subscribeEvents: false });
     expect((await client.health()).ok).toBe(true);
     expect(client.events.connected).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: movement", () => {
+  test("moveTo resolves on the WB_MOVE_RESULT carrying its own moveId", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const pending = client.moveTo({ x: -1205, y: 981, z: 42 }, { timeout: 2000 });
+    // A result for a *different* move must not settle this one.
+    stub.push(JSON.stringify(moveResult("arrived", 99, 30)));
+    stub.push(JSON.stringify(moveResult("arrived", 1, 31)));
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("arrived");
+    expect(result.moveId).toBe(1);
+    expect(result.seq).toBe(31);
+    expect(result.position).toEqual({ x: -1205, y: 981, z: 42, o: 1.2 });
+    // The server-confirmed position is on the cache too, with its provenance.
+    expect(client.state.self.position?.value.x).toBe(-1205);
+    expect(client.state.self.position?.seq).toBe(31);
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a game-level failure comes back as a result, not an exception", async () => {
+    for (const status of ["no_path", "too_far", "interrupted", "stopped", "superseded"] as const) {
+      const stub = startStub({ onConnect: () => frames(loginSequence) });
+      const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+      await client.createSession({ character: "Fenwick" });
+
+      const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+      stub.push(JSON.stringify(moveResult(status, 1, 30)));
+      const result = await pending;
+
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(status);
+      // Where the character actually ended up — what the next decision needs.
+      expect(result.position.x).toBe(-1205);
+      client.close();
+      await stub.stop();
+    }
+  });
+
+  test("a request the module refuses still throws; a missing result times out", async () => {
+    const refusing = startStub({
+      routes: { action: () => json({ ok: false, error: "missing_position" }, 400) },
+    });
+    const a = await connect({ baseUrl: refusing.baseUrl, token: "t", subscribeEvents: false });
+    const err = (await a.moveTo({ x: 1, y: 2, z: 3 }).catch((e) => e)) as WrathRequestError;
+    expect(err).toBeInstanceOf(WrathRequestError);
+    expect(err.code).toBe("missing_position");
+    expect(err.kind).toBe("request");
+    await refusing.stop();
+
+    // No result event: the absence of an outcome is not an outcome.
+    const silent = startStub();
+    const b = await connect({ baseUrl: silent.baseUrl, token: "t", events: { reconnect: false } });
+    await expect(b.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 50 })).rejects.toBeInstanceOf(
+      EventTimeoutError,
+    );
+    b.close();
+    await silent.stop();
+  });
+
+  test("stop and face ack their own shapes", async () => {
+    const stub = startStub();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    expect((await client.stop()).action).toBe("stop");
+    expect((await client.face(1.57)).orientation).toBe(1.57);
+    expect((await client.face({ x: 1, y: 2 })).action).toBe("face");
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: waiting on the world", () => {
+  test("waitForNearby resolves once the cache — not one event — satisfies it", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    // A named creature needs two events: the create block and the query answer.
+    const pending = client.waitForNearby(
+      (o) => o.objectType?.value === "unit" && o.name !== undefined,
+      { timeout: 2000 },
+    );
+    stub.push(JSON.stringify(creatureCreate));
+    stub.push(JSON.stringify(creatureQuery));
+    const obj = await pending;
+
+    expect(obj.name?.value).toBe("Thistlebore");
+    expect(obj.level?.value).toBe(4);
+    expect(client.state.closest()?.guid).toBe(obj.guid);
+
+    // Already satisfied: resolves from the cache without another event.
+    expect((await client.waitForNearby((o) => o.guid === obj.guid, { timeout: 50 })).guid).toBe(
+      obj.guid,
+    );
+    client.close();
+    await stub.stop();
+  });
+
+  test("waitForNearby times out rather than inventing an object", async () => {
+    const stub = startStub();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await expect(client.waitForNearby(() => true, { timeout: 30 })).rejects.toBeInstanceOf(
+      EventTimeoutError,
+    );
     client.close();
     await stub.stop();
   });
