@@ -259,14 +259,22 @@ export class SandboxHost {
         return { ok: false, error: String(err), logs: [], durationMs: this.opts.snippetTimeoutMs };
       }
       // Timed out. Abandon this eval's eventual result, then check liveness.
+      // The ping doubles as a log drain: the pong carries whatever the
+      // abandoned snippet printed so far, so the model is not shown `logs: []`
+      // for code that was in fact talking.
       this.abandonedEvals.add(id);
-      const alive = await this.pingAlive();
-      if (alive) {
+      const ping = await this.pingAlive();
+      if (ping.alive) {
         return {
           ok: false,
           timedOut: true,
-          error: `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned; the runtime (bindings, routines, session) is still alive`,
-          logs: [],
+          error:
+            `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned; ` +
+            `the runtime (bindings, routines, session) is still alive. ` +
+            `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
+            `routine (launch it without awaiting, or use setInterval, and poll it from a later snippet); ` +
+            `the abandoned code may still be running, so check state/events before assuming it failed.`,
+          logs: ping.logs,
           durationMs: this.opts.snippetTimeoutMs,
         };
       }
@@ -277,21 +285,23 @@ export class SandboxHost {
         restarted: true,
         error:
           `snippet blocked the sandbox event loop past ${this.opts.snippetTimeoutMs}ms; ` +
-          `the sandbox process was killed and restarted — all top-level bindings, running ` +
-          `routines, and the in-process SDK connection were lost`,
+          `the sandbox process was killed and restarted — ${STATE_LOSS_RECOVERY}`,
         logs: [],
         durationMs: this.opts.snippetTimeoutMs,
       };
     }
   }
 
-  private async pingAlive(): Promise<boolean> {
+  private async pingAlive(): Promise<{ alive: boolean; logs: LogEntry[] }> {
     const id = this.nextId++;
     try {
-      await this.request<{ t: "pong"; id: number }>({ t: "ping", id }, this.opts.pingGraceMs);
-      return true;
+      const pong = await this.request<{ t: "pong"; id: number; logs?: LogEntry[] }>(
+        { t: "ping", id },
+        this.opts.pingGraceMs,
+      );
+      return { alive: true, logs: pong.logs ?? [] };
     } catch {
-      return false;
+      return { alive: false, logs: [] };
     }
   }
 
