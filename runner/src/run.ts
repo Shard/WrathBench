@@ -67,7 +67,22 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     const c = loadRunConfig(meta.config);
-    config = { ...c, runId: resumeId, token: c.token ?? resumeId };
+    // Explicit limit/watchdog flags override the stored config: resuming a
+    // runaway with a tighter leash is the whole point of passing them here.
+    // Identity (character, token, driver, model) stays as stored.
+    const overrides = {
+      ...(num(args["max-turns"]) !== undefined ? { maxTurns: num(args["max-turns"])! } : {}),
+      ...(num(args["max-tool-calls"]) !== undefined
+        ? { maxToolCallsPerEpisode: num(args["max-tool-calls"])! }
+        : {}),
+      watchdogs: {
+        ...c.watchdogs,
+        ...(num(args["idle-ms"]) !== undefined ? { idleMs: num(args["idle-ms"])! } : {}),
+        ...(num(args["no-xp-ms"]) !== undefined ? { noXpMs: num(args["no-xp-ms"])! } : {}),
+        ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"])! } : {}),
+      },
+    };
+    config = { ...c, ...overrides, runId: resumeId, token: c.token ?? resumeId };
     resumed = true;
   } else {
     const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
