@@ -201,3 +201,57 @@ describe("sandbox evaluation", () => {
     expect(snap["eventCount"]).toBe(0);
   });
 });
+
+describe("error rendering (2026-08 audit fixes)", () => {
+  test("multi-error parse failure flattens sub-errors with wrapper-corrected line numbers", async () => {
+    const host = makeHost();
+    // Two parse errors; the first sits on user line 2, which the transpiler
+    // reports as line 3 because of the one-line compile wrapper.
+    const res = await host.evalSnippet("const ok = 1;\nconst x = {;\nlet y ==== 4;");
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("AggregateError");
+    // Not the bare "AggregateError: Parse error" the models used to get:
+    expect(res.error).toContain('Expected identifier but found ";"');
+    expect(res.error).toContain("at line 2");
+    expect(res.error).toContain("const x = {;");
+  });
+
+  test("a single parse error (BuildMessage) renders its position too", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet("const a = 1;\nconst b = ;");
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("Unexpected ;");
+    expect(res.error).toContain("at line 2");
+    expect(res.error).toContain("const b = ;");
+  });
+
+  test("JSON.stringify on a bigint names the fix", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet("JSON.stringify({ guid: 123n })");
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("BigInt");
+    expect(res.error).toContain("String(guid)");
+  });
+
+  test("timed-out snippet returns its buffered console logs and background-routine guidance", async () => {
+    const host = makeHost({ snippetTimeoutMs: 300 });
+    const res = await host.evalSnippet('console.log("before the wall"); await sleep(5_000);');
+    expect(res.ok).toBe(false);
+    expect(res.timedOut).toBe(true);
+    // The abandoned snippet's logs come back via the liveness ping's drain.
+    expect(res.logs.map((l) => l.text).join("\n")).toContain("before the wall");
+    expect(res.error).toContain("background");
+    expect(res.error).toContain("may still be running");
+    // ...and were consumed: they do not repeat on the next snippet.
+    const next = await host.evalSnippet("1 + 1");
+    expect(next.logs).toEqual([]);
+  });
+
+  test("event-loop-kill message carries the state-loss recovery guidance", async () => {
+    const host = makeHost({ snippetTimeoutMs: 300, pingGraceMs: 300 });
+    const res = await host.evalSnippet("for (;;) {}");
+    expect(res.restarted).toBe(true);
+    expect(res.error).toContain("token_in_use");
+    expect(res.error).toContain("await connect()");
+  }, 15_000);
+});

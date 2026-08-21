@@ -150,6 +150,63 @@ const AsyncFunction = (async () => {}).constructor as new (...args: string[]) =>
   ...fnArgs: unknown[]
 ) => Promise<unknown>;
 
+/**
+ * The one-line wrapper `compileSnippet` puts above the user's source
+ * (`const __wrathbench_snippet__ = async () => {\n`), so a transpiler
+ * position's 1-based line N is the user's line N-1.
+ */
+const WRAPPER_LINE_OFFSET = 1;
+
+interface BuildPosition {
+  line?: number;
+  column?: number;
+  lineText?: string;
+}
+
+/** One transpiler diagnostic as a line the model can act on. */
+function renderBuildMessage(err: { message?: string; position?: BuildPosition | null }): string {
+  const msg = err.message ?? "parse error";
+  const pos = err.position;
+  if (pos == null || typeof pos.line !== "number") return msg;
+  const line = Math.max(1, pos.line - WRAPPER_LINE_OFFSET);
+  const col = typeof pos.column === "number" ? `:${pos.column}` : "";
+  const text = typeof pos.lineText === "string" && pos.lineText.length > 0 ? ` — ${pos.lineText}` : "";
+  return `${msg} at line ${line}${col}${text}`;
+}
+
+const BIGINT_STRINGIFY_RE = /serialize\s+(a\s+)?BigInt/i;
+
+/**
+ * Render a caught error for the model. Three cases earn special handling,
+ * all observed misrendering in live runs:
+ *   - Bun transpiler failures: an AggregateError whose message is literally
+ *     "Parse error" — flatten the sub-errors with their positions instead
+ *     (line numbers corrected for the compile wrapper).
+ *   - a single BuildMessage (one parse error) — same, without the wrapper.
+ *   - JSON.stringify on a bigint — keep the TypeError but name the fix.
+ */
+export function renderError(err: unknown): string {
+  if (err instanceof AggregateError && Array.isArray(err.errors) && err.errors.length > 0) {
+    const subs = err.errors.map((e) => renderBuildMessage(e as { message?: string; position?: BuildPosition }));
+    return `${err.name}: ${err.message}\n${subs.map((s) => `  ${s}`).join("\n")}`;
+  }
+  if (err instanceof Error) {
+    // A lone Bun BuildMessage (one parse error) carries a `position` too.
+    const pos = (err as { position?: BuildPosition | null }).position;
+    if (pos != null && typeof pos.line === "number") {
+      return `${err.name}: ${renderBuildMessage(err as { message?: string; position?: BuildPosition })}`;
+    }
+    if (err instanceof TypeError && BIGINT_STRINGIFY_RE.test(err.message)) {
+      return (
+        `${err.name}: ${err.message} — guids are bigints and JSON.stringify throws on them; ` +
+        `use String(guid), template literals, or console.log directly`
+      );
+    }
+    return `${err.name}: ${err.message}`;
+  }
+  return Bun.inspect(err).slice(0, 1_000);
+}
+
 // A timed-out evaluation's late result is discarded host-side (the host
 // abandons the id), so the child always reports and never tracks abandonment.
 async function evaluate(id: number, code: string): Promise<void> {
@@ -181,7 +238,7 @@ async function evaluate(id: number, code: string): Promise<void> {
       t: "result",
       id,
       ok: false,
-      error: err instanceof Error ? `${err.name}: ${err.message}` : Bun.inspect(err).slice(0, 1_000),
+      error: renderError(err),
       logs: drainLogs(),
       durationMs: Date.now() - started,
     });
@@ -207,7 +264,10 @@ function handle(msg: HostToChild | HostcallResult): void {
       void evaluate(msg.id, msg.code);
       return;
     case "ping":
-      send({ t: "pong", id: msg.id });
+      // Pings carry any buffered console output home: the host pings after a
+      // snippet times out, and this is how the abandoned snippet's logs reach
+      // the model instead of `logs: []`.
+      send({ t: "pong", id: msg.id, logs: drainLogs() });
       return;
     case "rpc": {
       try {
@@ -257,10 +317,7 @@ process.on("disconnect", () => process.exit(0));
 // the host surfaces to the model.
 
 function reportBackgroundError(kind: string, reason: unknown): void {
-  const text =
-    reason instanceof Error
-      ? `${reason.name}: ${reason.message}`
-      : Bun.inspect(reason, { depth: 4 }).slice(0, 1_000);
+  const text = reason instanceof Error ? renderError(reason) : Bun.inspect(reason, { depth: 4 }).slice(0, 1_000);
   logBuf.push({ level: "error", ts: Date.now(), text: `[${kind}] ${text}`.slice(0, LOG_MAX_CHARS) });
   if (logBuf.length > 500) logBuf.splice(0, logBuf.length - 500);
   realConsole.error?.(`[sandbox] ${kind}:`, text);
