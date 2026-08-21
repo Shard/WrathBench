@@ -99,6 +99,33 @@ describe("sandbox evaluation", () => {
     expect(after.value).toBe(JSON.stringify("undefined"));
   }, 15_000);
 
+  test("child dying mid-snippet surfaces state loss and a notice (gate2-ox-3 bug)", async () => {
+    const host = makeHost();
+    await host.evalSnippet("let precious = 'state';");
+    const res = await host.evalSnippet("process.exit(7)");
+    expect(res.ok).toBe(false);
+    expect(res.restarted).toBe(true);
+    expect(res.error).toContain("exited");
+    expect(res.error).toContain("bindings");
+    expect(host.totalRestarts).toBe(1);
+    const notices = host.drainNotices();
+    expect(notices.some((n) => n.kind === "sandbox_restarted" && n.text.includes("unexpectedly"))).toBe(true);
+    // lazy respawn: the next snippet gets a fresh, working runtime
+    const after = await host.evalSnippet("typeof precious");
+    expect(after.value).toBe(JSON.stringify("undefined"));
+  }, 15_000);
+
+  test("child dying between snippets still produces the notice before the next eval", async () => {
+    const host = makeHost();
+    await host.evalSnippet("setTimeout(() => process.exit(3), 50);");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(host.totalRestarts).toBe(1);
+    expect(host.drainNotices().some((n) => n.kind === "sandbox_restarted")).toBe(true);
+    const res = await host.evalSnippet("1 + 1");
+    expect(res.ok).toBe(true);
+    expect(res.value).toBe("2");
+  }, 15_000);
+
   test("scratchpad helpers bridge to the host-owned file", async () => {
     const host = makeHost();
     const write = await host.evalSnippet('await scratchpad.write("# notes\\nline one")');

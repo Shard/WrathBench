@@ -581,7 +581,11 @@ export class StateCache {
   /** Fold one event in. Unknown opcodes advance `lastSeq` and change nothing else. */
   apply(event: StreamEvent): void {
     this.eventCount++;
-    if (event.opcode !== STREAM_GAP && event.seq > this.lastSeq) this.lastSeq = event.seq;
+    // Assigned, not max'd: seq restarts when a session is recreated (retry
+    // churn), and holding the old max made `lastSeq` drift from the live
+    // stream position for the rest of the run (seen in gate2-ox-2, +3).
+    // `eventCount` stays a lifetime counter across sessions by design.
+    if (event.opcode !== STREAM_GAP) this.lastSeq = event.seq;
 
     if (event.opcode === STREAM_GAP) {
       const d = event.data as GapRecord;

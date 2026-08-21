@@ -51,8 +51,16 @@ interface Pending {
   reject: (e: Error) => void;
 }
 
+/** Appended to every state-loss notice so the model knows the recovery steps. */
+const STATE_LOSS_RECOVERY =
+  "All top-level bindings and routines were lost. " +
+  "The game session may still exist server-side under the same token: run " +
+  "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
+  "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
+
 export class SandboxHost {
   private proc: Subprocess | null = null;
+  private markReady: () => void = () => {};
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly abandonedEvals = new Set<number>();
@@ -82,10 +90,10 @@ export class SandboxHost {
 
   async start(): Promise<void> {
     if (this.proc !== null) return;
-    let markReady: () => void = () => {};
     this.ready = new Promise((r) => {
-      markReady = r;
+      this.markReady = r;
     });
+    const markReady = this.markReady;
     this.proc = Bun.spawn(["bun", this.entryPath], {
       env: {
         ...process.env,
@@ -97,10 +105,22 @@ export class SandboxHost {
       ipc: (message) => {
         this.onMessage(message as ChildToHost, markReady);
       },
-      onExit: () => {
-        // Reject anything still pending; a restart decides what happens next.
-        for (const [, p] of this.pending) p.reject(new Error("sandbox process exited"));
+      onExit: (sub) => {
+        // Deliberate kills (restart/stop) null `this.proc` before killing, so a
+        // match here means the child died on its own — crash, OOM, exit(). The
+        // state loss must reach the model as a notice (it did not in gate2-ox-3)
+        // and count toward the snippet-runaway watchdog; the next evalSnippet's
+        // start() respawns lazily.
+        if (sub === this.proc) {
+          this.proc = null;
+          this.consecutiveRestarts++;
+          this.totalRestarts++;
+          this.notice("sandbox_restarted", `sandbox process exited unexpectedly. ${STATE_LOSS_RECOVERY}`);
+          this.markReady(); // never leave a start() awaiting a dead child
+        }
+        for (const [, p] of this.pending) p.reject(new SandboxExitedError());
         this.pending.clear();
+        this.abandonedEvals.clear();
       },
     });
     await this.ready;
@@ -192,6 +212,15 @@ export class SandboxHost {
         durationMs: res.durationMs,
       };
     } catch (err) {
+      if (err instanceof SandboxExitedError) {
+        return {
+          ok: false,
+          restarted: true,
+          error: `the sandbox process exited while this snippet was running — ${STATE_LOSS_RECOVERY}`,
+          logs: [],
+          durationMs: 0,
+        };
+      }
       if (!(err instanceof SandboxTimeoutError)) {
         return { ok: false, error: String(err), logs: [], durationMs: this.opts.snippetTimeoutMs };
       }
@@ -246,13 +275,7 @@ export class SandboxHost {
       }
     }
     await this.start();
-    this.notice(
-      "sandbox_restarted",
-      `sandbox restarted (${reason}). All top-level bindings and routines were lost. ` +
-        `The game session may still exist server-side under the same token: run ` +
-        `\`await connect()\` to resubscribe to events, then \`await sdk.createSession({...})\` ` +
-        `— a \`token_in_use\` error means the session is still alive and \`sdk\` works as-is.`,
-    );
+    this.notice("sandbox_restarted", `sandbox restarted (${reason}). ${STATE_LOSS_RECOVERY}`);
   }
 
   /** Recent events as JSON-safe summaries, via the child's SDK event buffer. */
@@ -295,6 +318,12 @@ export class SandboxHost {
     } catch {
       // already gone
     }
+  }
+}
+
+class SandboxExitedError extends Error {
+  constructor() {
+    super("sandbox process exited");
   }
 }
 
