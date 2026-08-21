@@ -211,7 +211,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
             }
           : {}),
       };
-      trajectory.append({ t: "response", turn, message: assistant });
+      trajectory.append({
+        t: "response",
+        turn,
+        message: assistant,
+        // Only when the provider reported it; absent otherwise, so the viewer
+        // keeps falling back to its estimate rather than reading a zero.
+        ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
+      });
       history.push(assistant);
 
       // 5. execute tool calls in order
