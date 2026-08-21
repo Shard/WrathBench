@@ -110,9 +110,15 @@ The login flow the module performs internally, all through the real handlers:
 ### POST /action
 
 Dispatch one action. Supported: `say`, `move_to`, `stop`, `face` (`move_to`,
-`stop`, `face` added in the movement extension, 2026-08; additive). Acks that
-the opcode was synthesized and queued; the game result (the chat echo, an
-arrival, or an error) arrives on the WebSocket.
+`stop`, `face` added in the movement extension, 2026-08; additive), and the
+quest/combat extension set (2026-08, additive): `set_target`, `clear_target`,
+`attack_start`, `attack_stop`, `cast_spell`, `cancel_cast`, `interact`,
+`gossip_hello`, `gossip_select`, `quest_list`, `quest_details`, `quest_accept`,
+`quest_complete`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
+`loot_money`, `loot_release`, `loot_all`, `vendor_list`, `buy_item`,
+`sell_item`, `repair_all`, `equip_item`, `use_item`, `destroy_item`, `repop`,
+`reclaim_corpse`. Acks that the opcode was synthesized and queued; the game
+result (the chat echo, an arrival, or an error) arrives on the WebSocket.
 
 Common errors for every action:
 - `400 {"ok":false,"error":"missing_token"}`
@@ -184,6 +190,79 @@ or `{ "token": "run-abc123", "action": "face", "x": -8900.0, "y": -130.0 }`
 Success `200`: `{ "ok": true, "action": "face", "token": ..., "orientation": 1.57 }`
 Additional errors: `400 {"ok":false,"error":"missing_face_target"}`,
 `409 {"ok":false,"error":"moving"}` (stop first, or supersede with `move_to`).
+
+#### Single-opcode actions (quest/combat extension, 2026-08)
+
+Every action below synthesizes exactly one client opcode into the stock
+handler (plus, for `loot_all`, the follow-up opcodes a real auto-loot client
+sends). The `200` ack means "queued"; game outcomes — cast failures, gossip
+menus, loot windows, inventory errors — arrive as the whitelisted events
+listed further down, never as HTTP errors. All `guid`/`targetGuid`/`itemGuid`
+request fields are decimal strings (u64 note above). Success shape for all of
+them: `{ "ok": true, "action": "<name>", "token": ... }`.
+
+| action | request fields (beyond `token`, `action`) | opcode sent | notes |
+|---|---|---|---|
+| `set_target` | `guid` | `CMSG_SET_SELECTION` | |
+| `clear_target` | — | `CMSG_SET_SELECTION` | guid 0 |
+| `attack_start` | `guid` | `CMSG_ATTACKSWING` | melee auto-attack; server swings while in range |
+| `attack_stop` | — | `CMSG_ATTACKSTOP` | |
+| `cast_spell` | `spellId`, `targetGuid?` | `CMSG_CAST_SPELL` | no `targetGuid` = self/auto target (mask 0); with it, TARGET_FLAG_UNIT + packed guid |
+| `cancel_cast` | `spellId` | `CMSG_CANCEL_CAST` | |
+| `interact` | `guid` | `CMSG_GAMEOBJ_USE` | game objects (chests, doors, quest objects) |
+| `gossip_hello` | `guid` | `CMSG_GOSSIP_HELLO` | opens the NPC gossip menu (`SMSG_GOSSIP_MESSAGE`) |
+| `gossip_select` | `guid`, `menuId`, `optionId` | `CMSG_GOSSIP_SELECT_OPTION` | ids from `SMSG_GOSSIP_MESSAGE` (`menuId`, `options[].optionId`) |
+| `quest_list` | `guid` | `CMSG_QUESTGIVER_HELLO` | `SMSG_QUESTGIVER_QUEST_LIST` or a gossip menu follows |
+| `quest_details` | `guid`, `questId` | `CMSG_QUESTGIVER_QUERY_QUEST` | quest text via `SMSG_QUESTGIVER_QUEST_DETAILS` |
+| `quest_accept` | `guid`, `questId` | `CMSG_QUESTGIVER_ACCEPT_QUEST` | |
+| `quest_complete` | `guid`, `questId` | `CMSG_QUESTGIVER_COMPLETE_QUEST` | server answers REQUEST_ITEMS or OFFER_REWARD |
+| `quest_choose_reward` | `guid`, `questId`, `rewardIndex` | `CMSG_QUESTGIVER_CHOOSE_REWARD` | `rewardIndex` 0-based into `choiceRewards`; 0 when there is no choice |
+| `quest_abandon` | `questId` | `CMSG_QUESTLOG_REMOVE_QUEST` | module maps quest id -> log slot (client-visible via quest-log fields); `400 quest_not_in_log` |
+| `loot` | `guid` | `CMSG_LOOT` | opens the loot window (`SMSG_LOOT_RESPONSE`) |
+| `loot_item` | `slot` | `CMSG_AUTOSTORE_LOOT_ITEM` | `slot` from `SMSG_LOOT_RESPONSE.items[]` |
+| `loot_money` | — | `CMSG_LOOT_MONEY` | |
+| `loot_release` | `guid` | `CMSG_LOOT_RELEASE` | closes the loot window |
+| `loot_all` | `guid` | `CMSG_LOOT` + sequence | on the next `SMSG_LOOT_RESPONSE` the module sends the auto-loot client sequence: AUTOSTORE per allow-loot slot, LOOT_MONEY if gold, LOOT_RELEASE |
+| `vendor_list` | `guid` | `CMSG_LIST_INVENTORY` | `SMSG_LIST_INVENTORY` follows |
+| `buy_item` | `guid`, `itemId`, `slot`, `count?` | `CMSG_BUY_ITEM` | `slot` is the 1-based vendor slot from `SMSG_LIST_INVENTORY`; `count` default 1 |
+| `sell_item` | `guid`, `itemGuid`, `count?` | `CMSG_SELL_ITEM` | `count` 0/omitted = whole stack |
+| `repair_all` | `guid` | `CMSG_REPAIR_ITEM` | item guid 0 = repair everything |
+| `equip_item` | `bag`, `slot` | `CMSG_AUTOEQUIP_ITEM` | `bag` 255 = backpack/equipment container, `slot` 23-38 = backpack slots |
+| `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM` | module fills item guid + on-use spell id from the item (client-cache knowledge); `400 no_item_at_slot`, `400 item_not_usable` |
+| `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
+| `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
+| `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional |
+
+Validation errors (all `400`): `missing_guid`, `missing_option`,
+`missing_quest_id`, `missing_reward_index`, `missing_spell_id`,
+`missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`.
+
+### POST /character-delete
+
+Delete a character by name through the real `CMSG_CHAR_DELETE` path (added in
+the quest/combat extension, 2026-08). Needed because per-episode fresh
+characters (ADR-0006) accumulate against the realm's 10-characters-per-account
+cap. The module stands up a short-lived parked session, authenticates, walks
+the character list, sends `CMSG_CHAR_DELETE` for the matching name, and tears
+the session down. Cannot run while another session is live on the same account
+(`account_in_use`). The character must be fully released by the core: for up to
+~a minute after logout the core still tracks an offline session for the
+character and `CMSG_CHAR_DELETE` is silently ignored (no response packet), which
+surfaces here as `504 timeout` — callers should retry until `deleted` comes
+back (the module-quest probe shows the pattern).
+
+Request:
+```json
+{ "token": "del-abc123", "account": "RUNNER", "character": "Benchy" }
+```
+(`token` is a fresh throwaway token for this operation's audit log/event
+stream; `account` optional as in `POST /session`.)
+
+Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
+Errors: `400 missing_token`, `400 missing_character`, `409 token_in_use`,
+`400 unknown_account`, `400 account_in_use`, `400 character_not_found`,
+`502 char_delete_failed_code_<N>` (N is the `SMSG_CHAR_DELETE` result code,
+e.g. guild leader / arena captain refusals), `504 timeout`.
 
 ### DELETE /session
 
@@ -268,14 +347,21 @@ Additional whitelisted opcodes:
 |---|---|---|
 | `SMSG_UPDATE_OBJECT` | 0x0A9 | `{ "blocks": <u32>, "objects": [ ... ] }` (shapes below) |
 | `SMSG_DESTROY_OBJECT` | 0x0AA | `{ "guid": <guid-string>, "onDeath": <bool> }` |
-| `SMSG_CREATURE_QUERY_RESPONSE` | 0x061 | `{ "entry": <u32>, "found": <bool>, "name": <str?>, "subname": <str?>, "type": <u32?>, "rank": <u32?> }` |
+| `SMSG_CREATURE_QUERY_RESPONSE` | 0x061 | `{ "entry": <u32>, "found": <bool>, "name": <str?>, "subname": <str>, "type": <u32?>, "rank": <u32?> }` — on a found creature `subname` is always present, `""` when the creature has none |
 | `MSG_MOVE_*` (observed) | various | `{ "guid": <guid-string>, "flags": <u32>, "pos": { "x", "y", "z", "o" } }` |
 
 `MSG_MOVE_*` covers movement of *other* nearby units/players relayed by the
-server (START_FORWARD/BACKWARD, STOP, STRAFE, JUMP, TURN, SET_FACING, HEARTBEAT,
-FALL_LAND, SWIM, RUN/WALK_MODE). The bench character's own synthesized movement
-is not echoed by the server; own position comes from `WB_MOVE_PROGRESS` /
-`WB_MOVE_RESULT` below and from the self `SMSG_UPDATE_OBJECT` create block.
+server. The exact `opcode` strings emitted are: `MSG_MOVE_START_FORWARD`,
+`MSG_MOVE_START_BACKWARD`, `MSG_MOVE_STOP`, `MSG_MOVE_START_STRAFE_LEFT`,
+`MSG_MOVE_START_STRAFE_RIGHT`, `MSG_MOVE_STOP_STRAFE`, `MSG_MOVE_JUMP`,
+`MSG_MOVE_START_TURN_LEFT`, `MSG_MOVE_START_TURN_RIGHT`, `MSG_MOVE_STOP_TURN`,
+`MSG_MOVE_SET_FACING`, `MSG_MOVE_HEARTBEAT`, `MSG_MOVE_FALL_LAND`,
+`MSG_MOVE_START_SWIM`, `MSG_MOVE_STOP_SWIM`, `MSG_MOVE_SET_RUN_MODE`,
+`MSG_MOVE_SET_WALK_MODE`; any other movement opcode in the observed set is
+emitted with the bare fallback name `MSG_MOVE`. The bench character's own
+synthesized movement is not echoed by the server; own position comes from
+`WB_MOVE_PROGRESS` / `WB_MOVE_RESULT` below and from the self
+`SMSG_UPDATE_OBJECT` create block.
 
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
@@ -292,18 +378,29 @@ one of:
 {
   "update": "create",
   "guid": "12345",
-  "objectType": "unit",        // object|item|container|unit|player|gameObject|dynamicObject|corpse
+  "objectType": "unit",        // object|item|container|unit|player|gameObject|dynamicObject|corpse|unknown
   "self": true,                 // present only on the bench character's own block
   "moveFlags": 0,               // living objects only
   "runSpeed": 7.0,              // living objects only
-  "pos": { "x": -8949.9, "y": -132.5, "z": 83.5, "o": 5.2 },
+  "pos": { "x": -8949.9, "y": -132.5, "z": 83.5, "o": 5.2 },  // conditional, see below
   "targetGuid": "0",            // present when the block carries a target
-  "fields": { ... }             // whitelisted update fields, see below
+  "fields": { ... }             // whitelisted update fields, see below; may be {}
 }
 ```
+  Every field beyond `update`/`guid`/`objectType` is conditional on the block's
+  update flags. `pos` appears only when the block carries UPDATEFLAG_LIVING,
+  UPDATEFLAG_POSITION, or UPDATEFLAG_STATIONARY_POSITION — an item or container
+  create has no `pos`. `moveFlags`/`runSpeed` appear only on living blocks.
+  `fields` is always present but may be `{}` when the mask carried no
+  whitelisted field. `objectType` is `"unknown"` for a type id outside the
+  known enum (forward compatibility, not an expected case).
 - Field delta: `{ "update": "values", "guid": <guid-string>, "fields": { ... } }`
 - Left update range: `{ "update": "outOfRange", "guids": [ <guid-string>, ... ] }`
-  (also `"near"` for the rare NEAR_OBJECTS block, same shape)
+- Near objects: `{ "update": "near", "guids": [ <guid-string>, ... ] }` — same
+  *shape* as `outOfRange` but opposite *semantics*: NEAR_OBJECTS is not a
+  removal. Only `outOfRange` means the objects left update range (and it is the
+  only one of the two on which the module erases its own guid/type cache);
+  consumers must not prune state on `near`.
 - Movement-only block: `{ "update": "movement", "guid": <guid-string>, ...pos/moveFlags }`
 
 `fields` carries only the whitelisted update fields present in the packet's
@@ -323,7 +420,8 @@ not need it, docs/CONTRACTS.md):
 Values are the raw client-visible integers from the update stream (health is
 whatever the server sends a client — no extra precision is added). A `values`
 delta for an object never seen in a `create` decodes with no named fields
-(the module, like a client, cannot type it).
+(the module, like a client, cannot type it); the entry is still emitted, with
+`"fields": {}` present-and-empty rather than absent.
 
 Name resolution: on first sight of a creature (by entry) or player (by guid)
 the module issues the `CMSG_CREATURE_QUERY` / `CMSG_NAME_QUERY` a real client
@@ -338,8 +436,12 @@ locally while running). Their `opcodeId`s are outside the real opcode range.
 
 | opcode | id | `data` fields |
 |---|---|---|
-| `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <u64>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
-| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <u64>, "status": <str>, "pos": { "x","y","z","o" } }` |
+| `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
+| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" } }` |
+
+`moveId` is a plain JSON number: it is a per-session counter that cannot exceed
+2^53, so it falls under the counter exemption to the u64-as-string rule stated
+at the top of this document.
 
 `WB_MOVE_RESULT.status` is one of:
 - `arrived` — the server-side character reached the destination; `pos` is the
@@ -355,6 +457,120 @@ locally while running). Their `opcodeId`s are outside the real opcode range.
 `WB_MOVE_PROGRESS.pos` is the engine's interpolated position (what a client
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an
 `arrived` result is proof the server accepted the synthesized movement.
+
+### Quest/combat extension whitelist (2026-08, additive)
+
+Additional whitelisted opcodes. As everywhere: decoded per the server-side
+builders at the pinned commit, compacted where the full packet would overserve
+(noted per row), and anything ambiguous against docs/CONTRACTS.md is dropped,
+not served.
+
+Combat:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_ATTACKSTART` | 0x143 | `{ "attackerGuid", "victimGuid" }` |
+| `SMSG_ATTACKSTOP` | 0x144 | `{ "attackerGuid", "victimGuid", "attackerDead": <bool> }` |
+| `SMSG_ATTACKERSTATEUPDATE` | 0x14A | compact: `{ "attackerGuid", "victimGuid", "hitInfo": <u32>, "damage", "overkill", "absorb", "resist", "blocked", "victimState": <u8>, "miss": <bool>, "crit": <bool> }` — per-school sub-damages are summed, not itemized |
+| `SMSG_SPELL_START` | 0x131 | compact: `{ "casterGuid", "spellId", "castTimeMs", "targetGuid"? }` |
+| `SMSG_SPELL_GO` | 0x132 | compact: `{ "casterGuid", "spellId", "hitGuids": [<guid-string>], "misses": [{ "guid", "reason": <u8> }] }` |
+| `SMSG_CAST_FAILED` | 0x130 | `{ "spellId", "result": <u8> }` (SpellCastResult code) |
+| `SMSG_SPELL_FAILURE` | 0x133 | `{ "casterGuid", "spellId", "result": <u8> }` |
+| `SMSG_PERIODICAURALOG` | 0x24E | compact: `{ "targetGuid", "casterGuid", "spellId", "auraType": <u32>, "amount" }` |
+| `SMSG_AURA_UPDATE` | 0x496 | `{ "targetGuid", "auras": [<aura>] }` |
+| `SMSG_AURA_UPDATE_ALL` | 0x495 | same shape, full visible-aura list |
+
+`<aura>` is `{ "slot": <u8>, "spellId": <u32>, "flags"?, "level"?, "stacks"?,
+"casterGuid"?, "maxDuration"?, "duration"? }`; `spellId` 0 means the slot was
+cleared and the entry carries `"removed": true` instead of the optional fields.
+Durations are in ms and present only when the aura shows one (`flags & 0x20`).
+
+Progress:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_LOG_XPGAIN` | 0x1D0 | `{ "victimGuid" ("0" for non-kill), "amount", "fromKill": <bool> }` |
+| `SMSG_LEVELUP_INFO` | 0x1D4 | `{ "level", "healthGained" }` |
+| `SMSG_ITEM_PUSH_RESULT` | 0x166 | `{ "playerGuid", "itemId", "count", "totalCount", "bagSlot", "itemSlot", "looted": <bool>, "created": <bool> }` |
+
+Quests and gossip (quest/gossip text served as the client would show it):
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_QUESTGIVER_STATUS` | 0x183 | `{ "guid", "status": <u8> }` |
+| `SMSG_QUESTGIVER_QUEST_LIST` | 0x185 | `{ "guid", "greeting", "quests": [{ "questId", "icon", "level", "repeatable", "title" }] }` |
+| `SMSG_QUESTGIVER_QUEST_DETAILS` | 0x188 | `{ "guid", "questId", "title", "details", "objectives", "choiceRewards": [{ "itemId", "count" }], "rewards": [...], "money", "xp" }` |
+| `SMSG_QUESTGIVER_REQUEST_ITEMS` | 0x18B | `{ "guid", "questId", "title", "text", "requiredMoney", "requiredItems": [{ "itemId", "count" }], "completable": <bool> }` |
+| `SMSG_QUESTGIVER_OFFER_REWARD` | 0x18D | `{ "guid", "questId", "title", "text", "choiceRewards": [...], "rewards": [...], "money", "xp" }` |
+| `SMSG_QUESTGIVER_QUEST_COMPLETE` | 0x191 | `{ "questId", "xp", "money" }` |
+| `SMSG_QUESTGIVER_QUEST_FAILED` | 0x192 | `{ "questId", "reason" }` |
+| `SMSG_QUESTUPDATE_ADD_KILL` | 0x199 | `{ "questId", "entry", "current", "required", "guid" }` (gameobject credit arrives with `entry | 0x80000000`) |
+| `SMSG_QUESTUPDATE_ADD_ITEM` | 0x19A | `{}` — the core sends it empty; item progress is in the quest-log update fields |
+| `SMSG_QUESTUPDATE_COMPLETE` | 0x198 | `{ "questId" }` |
+| `SMSG_QUESTUPDATE_FAILED` | 0x196 | `{ "questId" }` |
+| `SMSG_GOSSIP_MESSAGE` | 0x17D | `{ "guid", "menuId", "textId", "options": [{ "optionId", "icon", "text" }], "quests": [{ "questId", "icon", "level", "title" }] }` |
+| `SMSG_GOSSIP_COMPLETE` | 0x17E | `{}` |
+
+Loot, vendor, inventory:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_LOOT_RESPONSE` | 0x160 | `{ "guid", "lootType": <u8>, "gold", "items": [{ "slot", "itemId", "count", "slotType": <u8> }] }` (slotType 0 = free to loot) |
+| `SMSG_LOOT_REMOVED` | 0x162 | `{ "slot" }` |
+| `SMSG_LOOT_MONEY_NOTIFY` | 0x163 | `{ "money" }` (copper) |
+| `SMSG_LOOT_CLEAR_MONEY` | 0x165 | `{}` |
+| `SMSG_LOOT_RELEASE_RESPONSE` | 0x161 | `{ "guid" }` |
+| `SMSG_LIST_INVENTORY` | 0x19F | `{ "vendorGuid", "items": [{ "slot" (1-based), "itemId", "price" (copper, discounted), "buyCount", "leftInStock" (-1 = unlimited), "extendedCost" }], "emptyReason"? }` |
+| `SMSG_BUY_ITEM` | 0x1A4 | `{ "vendorGuid", "slot", "count" }` |
+| `SMSG_BUY_FAILED` | 0x1A5 | `{ "vendorGuid", "itemId", "result": <u8> }` |
+| `SMSG_SELL_ITEM` | 0x1A1 | `{ "vendorGuid", "itemGuid", "result": <u8> }` (0 = success) |
+| `SMSG_INVENTORY_CHANGE_FAILURE` | 0x112 | `{ "result": <u8>, "itemGuid"?, "itemGuid2"?, "requiredLevel"? }` (InventoryResult code) |
+| `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"? }` |
+
+Item name resolution mirrors creature/name queries: on first sight of an item
+entry (item create block, loot window, vendor list, item push, quest reward
+list) the module issues the `CMSG_ITEM_QUERY_SINGLE` a client cache miss would,
+and the answer arrives as `SMSG_ITEM_QUERY_SINGLE_RESPONSE`. Joining ids to
+names is the SDK's job.
+
+Death:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_DEATH_RELEASE_LOC` | 0x378 | `{ "map" (-1 = clear marker), "x", "y", "z" }` |
+| `SMSG_CORPSE_RECLAIM_DELAY` | 0x269 | `{ "delayMs" }` |
+| `SMSG_DURABILITY_DAMAGE_DEATH` | 0x2BD | `{}` |
+
+Session:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_CHAR_DELETE` | 0x03C | `{ "result": <u8> }` (0x47 = success) |
+
+Creature movement:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_MONSTER_MOVE` | 0x0DD | `{ "guid", "pos": {x,y,z}, "destination": {x,y,z}, "durationMs" }` or `{ "guid", "pos", "stopped": true }` |
+
+`SMSG_MONSTER_MOVE` is deliberately reduced to destination + duration: the
+spline path points the client receives are consumed and dropped, because
+serving them would hand the agent the server's route in machine-readable form
+(ADR-0010). A client player only sees the animation.
+
+#### Update-field whitelist additions (quest/combat extension)
+
+Served in `SMSG_UPDATE_OBJECT` `fields` alongside the existing set:
+
+- players (self only; the server marks these PRIVATE): `money` (copper),
+  `xp`, `nextLevelXp`; quest log as raw fields `quest<slot><Off>` with slot
+  0-24 and Off one of `Id`, `State`, `CountsLo`, `CountsHi`, `Time` (the
+  3.3.5 layout: two u32s of packed u16 objective counters); inventory as
+  `invSlot<n>Lo`/`invSlot<n>Hi` u32 guid halves, n 0-22 = equipment + bag
+  slots, 23-38 = backpack slots. The SDK reassembles guids and joins them to
+  item create blocks.
+- items and containers: `stackCount`, `durability`, `maxDurability`,
+  `itemFlags`, `ownerLo`/`ownerHi`, `containedLo`/`containedHi`.
 
 ## Audit log
 

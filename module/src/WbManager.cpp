@@ -22,7 +22,10 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Log.h"
+#include "QuestDef.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
 #include "PathGenerator.h"
@@ -187,6 +190,8 @@ namespace WrathBench
                 return HttpAction(body);
             if (method == "DELETE" && target == "/session")
                 return HttpDeleteSession(body);
+            if (method == "POST" && target == "/character-delete")
+                return HttpCharacterDelete(body);
 
             return {404, Json::Writer().Add("ok", false).Add("error", "not_found").Str()};
         }
@@ -291,7 +296,55 @@ namespace WrathBench
             PushTask([this, token, hasO, o, hasXY, x, y, ack]() { DoFace(token, hasO, o, hasXY, x, y, ack); });
         }
         else
-            return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
+        {
+            // Single-opcode actions (2026-08 quest/combat extension). Validate
+            // required params here on the io thread; synthesis happens on the
+            // world thread in DoGameAction.
+            static char const* kNeedsGuid[] = {
+                "set_target", "attack_start", "interact", "gossip_hello", "gossip_select",
+                "quest_list", "quest_details", "quest_accept", "quest_complete",
+                "quest_choose_reward", "loot", "loot_all", "loot_release",
+                "vendor_list", "buy_item", "sell_item", "repair_all", nullptr };
+            static char const* kNoParams[] = {
+                "clear_target", "attack_stop", "loot_money", "repop", "reclaim_corpse", nullptr };
+
+            bool known = false;
+            bool needsGuid = false;
+            for (char const** a = kNeedsGuid; *a; ++a)
+                if (action == *a) { known = true; needsGuid = true; break; }
+            if (!known)
+                for (char const** a = kNoParams; *a; ++a)
+                    if (action == *a) { known = true; break; }
+            if (!known)
+                known = action == "cast_spell" || action == "cancel_cast" || action == "quest_abandon"
+                     || action == "loot_item" || action == "equip_item" || action == "use_item"
+                     || action == "destroy_item";
+            if (!known)
+                return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
+
+            if (needsGuid && req.GetString("guid").empty())
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_guid").Str()};
+            if (action == "gossip_select" && (!req.Has("menuId") || !req.Has("optionId")))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_option").Str()};
+            if ((action == "quest_details" || action == "quest_accept" || action == "quest_complete"
+                 || action == "quest_choose_reward" || action == "quest_abandon") && !req.Has("questId"))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_quest_id").Str()};
+            if (action == "quest_choose_reward" && !req.Has("rewardIndex"))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_reward_index").Str()};
+            if ((action == "cast_spell" || action == "cancel_cast") && !req.Has("spellId"))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_spell_id").Str()};
+            if (action == "loot_item" && !req.Has("slot"))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_slot").Str()};
+            if (action == "buy_item" && (!req.Has("itemId") || !req.Has("slot")))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_item").Str()};
+            if (action == "sell_item" && req.GetString("itemGuid").empty())
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_item_guid").Str()};
+            if ((action == "equip_item" || action == "use_item" || action == "destroy_item")
+                && (!req.Has("bag") || !req.Has("slot")))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_bag_slot").Str()};
+
+            PushTask([this, token, action, body, ack]() { DoGameAction(token, action, body, ack); });
+        }
 
         if (fut.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
             return {504, Json::Writer().Add("ok", false).Add("error", "timeout").Str()};
@@ -311,6 +364,40 @@ namespace WrathBench
 
         if (fut.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
             return {504, Json::Writer().Add("ok", false).Add("error", "timeout").Str()};
+        return fut.get();
+    }
+
+    // POST /character-delete: a short-lived utility session that parks at the
+    // character-select stage and sends the real CMSG_CHAR_DELETE (STATUS_AUTHED,
+    // so it must not be in world). Needed because episode resets (ADR-0006)
+    // accumulate characters against the realm's per-account cap.
+    HttpReply Manager::HttpCharacterDelete(std::string const& body)
+    {
+        Json::Value req = Json::Parse(body);
+        std::string token = req.GetString("token");
+        if (token.empty())
+            return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
+        if (req.GetString("character").empty())
+            return {400, Json::Writer().Add("ok", false).Add("error", "missing_character").Str()};
+        if (FindByToken(token))
+            return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
+
+        auto s = std::make_shared<BenchSession>();
+        s->token = token;
+        s->account = req.GetString("account", _account);
+        s->charName = req.GetString("character");
+        s->deleteMode = true;
+
+        auto ack = std::make_shared<std::promise<HttpReply>>();
+        s->ack = ack;
+        auto fut = ack->get_future();
+        PushTask([this, s, ack]() { DoCreateSession(s, ack); });
+
+        if (fut.wait_for(std::chrono::seconds(20)) != std::future_status::ready)
+        {
+            PushTask([this, token]() { TeardownByToken(token); });
+            return {504, Json::Writer().Add("ok", false).Add("error", "timeout").Add("token", token).Str()};
+        }
         return fut.get();
     }
 
@@ -388,8 +475,9 @@ namespace WrathBench
             _byWs[ws] = s;
         }
 
-        Audit(*s, "action", Json::Writer().Add("op", "session_create").Add("account", s->account)
-            .Add("character", s->charName).Add("race", (uint32)s->charRace).Add("class", (uint32)s->charClass).Str());
+        Audit(*s, "action", Json::Writer().Add("op", s->deleteMode ? "character_delete" : "session_create")
+            .Add("account", s->account).Add("character", s->charName)
+            .Add("race", (uint32)s->charRace).Add("class", (uint32)s->charClass).Str());
 
         s->phase.store(BenchSession::P_AUTH);
         sWorldSessionMgr->AddSession(ws);
@@ -611,6 +699,267 @@ namespace WrathBench
             .Add("token", token).Add("orientation", (double)target).Str()});
     }
 
+    // Parse a guid request field (decimal string, see PROTOCOL.md u64 note).
+    static uint64_t ParseGuid(Json::Value const& req, char const* key)
+    {
+        std::string v = req.GetString(key);
+        if (v.empty())
+            return 0;
+        try { return std::stoull(v); } catch (...) { return 0; }
+    }
+
+    // Every action that is one synthesized client opcode through the stock
+    // handlers (docs/CONTRACTS.md action contract). The ack means "opcode
+    // queued"; the game outcome arrives as whitelisted events.
+    void Manager::DoGameAction(std::string token, std::string action, std::string body,
+        std::shared_ptr<std::promise<HttpReply>> ack)
+    {
+        auto s = FindByToken(token);
+        Player* player = CheckActionSession(s, ack);
+        if (!player)
+            return;
+
+        Json::Value req = Json::Parse(body);
+        uint64_t guid = ParseGuid(req, "guid");
+
+        auto err = [&](int status, char const* code) {
+            ack->set_value({status, Json::Writer().Add("ok", false).Add("error", code).Str()});
+        };
+
+        Json::Writer auditW;
+        auditW.Add("op", action);
+        if (!req.GetString("guid").empty())
+            auditW.AddGuid("guid", guid);
+
+        WorldPacket* p = nullptr;
+
+        if (action == "set_target" || action == "clear_target")
+        {
+            p = new WorldPacket(CMSG_SET_SELECTION, 8);
+            *p << uint64(action == "set_target" ? guid : 0);
+        }
+        else if (action == "attack_start")
+        {
+            p = new WorldPacket(CMSG_ATTACKSWING, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "attack_stop")
+            p = new WorldPacket(CMSG_ATTACKSTOP, 0);
+        else if (action == "cast_spell")
+        {
+            uint32 spellId = static_cast<uint32>(req.GetInt("spellId"));
+            uint64_t target = ParseGuid(req, "targetGuid");
+            p = new WorldPacket(CMSG_CAST_SPELL, 1 + 4 + 1 + 4 + 9);
+            *p << uint8(0) << uint32(spellId) << uint8(0);   // castCount, spellId, castFlags
+            if (target)
+            {
+                *p << uint32(0x0002);                        // TARGET_FLAG_UNIT
+                p->appendPackGUID(target);
+            }
+            else
+                *p << uint32(0);                             // TARGET_FLAG_NONE (self/auto target)
+            auditW.Add("spellId", spellId);
+            if (target)
+                auditW.AddGuid("targetGuid", target);
+        }
+        else if (action == "cancel_cast")
+        {
+            uint32 spellId = static_cast<uint32>(req.GetInt("spellId"));
+            p = new WorldPacket(CMSG_CANCEL_CAST, 5);
+            *p << uint8(0) << uint32(spellId);
+            auditW.Add("spellId", spellId);
+        }
+        else if (action == "interact")
+        {
+            p = new WorldPacket(CMSG_GAMEOBJ_USE, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "gossip_hello")
+        {
+            p = new WorldPacket(CMSG_GOSSIP_HELLO, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "gossip_select")
+        {
+            uint32 menuId = static_cast<uint32>(req.GetInt("menuId"));
+            uint32 optionId = static_cast<uint32>(req.GetInt("optionId"));
+            p = new WorldPacket(CMSG_GOSSIP_SELECT_OPTION, 16);
+            *p << uint64(guid) << uint32(menuId) << uint32(optionId);
+            auditW.Add("menuId", menuId).Add("optionId", optionId);
+        }
+        else if (action == "quest_list")
+        {
+            p = new WorldPacket(CMSG_QUESTGIVER_HELLO, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "quest_details")
+        {
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            p = new WorldPacket(CMSG_QUESTGIVER_QUERY_QUEST, 13);
+            *p << uint64(guid) << uint32(questId) << uint8(0);
+            auditW.Add("questId", questId);
+        }
+        else if (action == "quest_accept")
+        {
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            p = new WorldPacket(CMSG_QUESTGIVER_ACCEPT_QUEST, 16);
+            *p << uint64(guid) << uint32(questId) << uint32(0);
+            auditW.Add("questId", questId);
+        }
+        else if (action == "quest_complete")
+        {
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            p = new WorldPacket(CMSG_QUESTGIVER_COMPLETE_QUEST, 12);
+            *p << uint64(guid) << uint32(questId);
+            auditW.Add("questId", questId);
+        }
+        else if (action == "quest_choose_reward")
+        {
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            uint32 rewardIndex = static_cast<uint32>(req.GetInt("rewardIndex"));
+            p = new WorldPacket(CMSG_QUESTGIVER_CHOOSE_REWARD, 16);
+            *p << uint64(guid) << uint32(questId) << uint32(rewardIndex);
+            auditW.Add("questId", questId).Add("rewardIndex", rewardIndex);
+        }
+        else if (action == "quest_abandon")
+        {
+            // The client sends the quest-log slot; the module resolves it from
+            // the quest id the same way a client resolves it from its own
+            // (served) PLAYER_QUEST_LOG update fields.
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            uint16 slot = player->FindQuestSlot(questId);
+            if (slot >= MAX_QUEST_LOG_SIZE)
+                return err(400, "quest_not_in_log");
+            p = new WorldPacket(CMSG_QUESTLOG_REMOVE_QUEST, 1);
+            *p << uint8(slot);
+            auditW.Add("questId", questId).Add("slot", (uint32)slot);
+        }
+        else if (action == "loot" || action == "loot_all")
+        {
+            if (action == "loot_all")
+            {
+                std::lock_guard<std::mutex> lock(s->objMutex);
+                s->autoLootPending = true;
+            }
+            p = new WorldPacket(CMSG_LOOT, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "loot_item")
+        {
+            uint8 slot = static_cast<uint8>(req.GetInt("slot"));
+            p = new WorldPacket(CMSG_AUTOSTORE_LOOT_ITEM, 1);
+            *p << uint8(slot);
+            auditW.Add("slot", (uint32)slot);
+        }
+        else if (action == "loot_money")
+            p = new WorldPacket(CMSG_LOOT_MONEY, 0);
+        else if (action == "loot_release")
+        {
+            {
+                std::lock_guard<std::mutex> lock(s->objMutex);
+                s->autoLootPending = false;
+            }
+            p = new WorldPacket(CMSG_LOOT_RELEASE, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "vendor_list")
+        {
+            p = new WorldPacket(CMSG_LIST_INVENTORY, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "buy_item")
+        {
+            uint32 itemId = static_cast<uint32>(req.GetInt("itemId"));
+            uint32 slot = static_cast<uint32>(req.GetInt("slot"));       // 1-based, from SMSG_LIST_INVENTORY
+            uint32 count = static_cast<uint32>(req.GetInt("count", 1));
+            p = new WorldPacket(CMSG_BUY_ITEM, 8 + 4 + 4 + 4 + 1);
+            *p << uint64(guid) << uint32(itemId) << uint32(slot) << uint32(count) << uint8(0);
+            auditW.Add("itemId", itemId).Add("slot", slot).Add("count", count);
+        }
+        else if (action == "sell_item")
+        {
+            uint64_t itemGuid = ParseGuid(req, "itemGuid");
+            uint32 count = static_cast<uint32>(req.GetInt("count", 0)); // 0 = whole stack
+            p = new WorldPacket(CMSG_SELL_ITEM, 8 + 8 + 4);
+            *p << uint64(guid) << uint64(itemGuid) << uint32(count);
+            auditW.AddGuid("itemGuid", itemGuid).Add("count", count);
+        }
+        else if (action == "repair_all")
+        {
+            p = new WorldPacket(CMSG_REPAIR_ITEM, 8 + 8 + 1);
+            *p << uint64(guid) << uint64(0) << uint8(0);     // item guid 0 = repair all
+        }
+        else if (action == "equip_item")
+        {
+            uint8 bag = static_cast<uint8>(req.GetInt("bag"));
+            uint8 slot = static_cast<uint8>(req.GetInt("slot"));
+            p = new WorldPacket(CMSG_AUTOEQUIP_ITEM, 2);
+            *p << uint8(bag) << uint8(slot);
+            auditW.Add("bag", (uint32)bag).Add("slot", (uint32)slot);
+        }
+        else if (action == "use_item")
+        {
+            uint8 bag = static_cast<uint8>(req.GetInt("bag"));
+            uint8 slot = static_cast<uint8>(req.GetInt("slot"));
+            uint64_t target = ParseGuid(req, "targetGuid");
+            // The client fills the item guid and on-use spell id from its own
+            // inventory + item cache; the module reads the same client-visible
+            // state from the live item.
+            Item* item = player->GetItemByPos(bag, slot);
+            if (!item)
+                return err(400, "no_item_at_slot");
+            ItemTemplate const* proto = item->GetTemplate();
+            uint32 spellId = 0;
+            if (proto)
+                for (auto const& spell : proto->Spells)
+                    if (spell.SpellId > 0 && spell.SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                    {
+                        spellId = spell.SpellId;
+                        break;
+                    }
+            if (!spellId)
+                return err(400, "item_not_usable");
+            p = new WorldPacket(CMSG_USE_ITEM, 1 + 1 + 1 + 4 + 8 + 4 + 1 + 4 + 9);
+            *p << uint8(bag) << uint8(slot) << uint8(0) << uint32(spellId);
+            *p << uint64(item->GetGUID().GetRawValue()) << uint32(0) << uint8(0);
+            if (target)
+            {
+                *p << uint32(0x0002);                        // TARGET_FLAG_UNIT
+                p->appendPackGUID(target);
+            }
+            else
+                *p << uint32(0);
+            auditW.Add("bag", (uint32)bag).Add("slot", (uint32)slot).Add("spellId", spellId);
+        }
+        else if (action == "destroy_item")
+        {
+            uint8 bag = static_cast<uint8>(req.GetInt("bag"));
+            uint8 slot = static_cast<uint8>(req.GetInt("slot"));
+            uint8 count = static_cast<uint8>(req.GetInt("count", 0));   // 0 = whole stack
+            p = new WorldPacket(CMSG_DESTROYITEM, 6);
+            *p << uint8(bag) << uint8(slot) << uint8(count) << uint8(0) << uint8(0) << uint8(0);
+            auditW.Add("bag", (uint32)bag).Add("slot", (uint32)slot).Add("count", (uint32)count);
+        }
+        else if (action == "repop")
+        {
+            p = new WorldPacket(CMSG_REPOP_REQUEST, 1);
+            *p << uint8(0);
+        }
+        else if (action == "reclaim_corpse")
+        {
+            // Handler resolves the player's own corpse; the guid payload is the
+            // corpse guid a real client echoes (optional here).
+            p = new WorldPacket(CMSG_RECLAIM_CORPSE, 8);
+            *p << uint64(guid);
+        }
+        else
+            return err(400, "unsupported_action");
+
+        s->ws->QueuePacket(p);
+        Audit(*s, "action", auditW.Str());
+        ack->set_value({200, Json::Writer().Add("ok", true).Add("action", action).Add("token", token).Str()});
+    }
+
     void Manager::TickMovers(int64_t nowMs)
     {
         std::vector<std::shared_ptr<BenchSession>> sessions;
@@ -770,10 +1119,6 @@ namespace WrathBench
     }
 
     // --------------------------------------------------------------- tap
-    // Reads whitelisted SMSG_* into JSON. Returns true if the opcode is on the
-    // whitelist (dataJson filled), false otherwise (caller counts a drop).
-    static bool DecodeEvent(uint16 opcode, WorldPacket const& packet, std::string& name, std::string& dataJson);
-
     // Walk an SMSG_CHAR_ENUM and return the GUID of the character whose name
     // matches (case-insensitive), or 0. Selecting by name, not list position, is
     // required: the account accumulates characters across episodes, so the one we
@@ -802,7 +1147,7 @@ namespace WrathBench
             whitelisted = true;
         }
         else
-            whitelisted = DecodeEvent(opcode, packet, name, dataJson);
+            whitelisted = DecodeEvent(*s, ws, opcode, packet, name, dataJson);
 
         // Answer time sync like a client whose clock is the server clock, so the
         // session's clock delta stays ~0 and synthesized movement timestamps are
@@ -845,6 +1190,24 @@ namespace WrathBench
             }
             case SMSG_CHAR_ENUM:
             {
+                if (s->deleteMode)
+                {
+                    if (phase == BenchSession::P_ENUM)
+                    {
+                        uint64_t matchGuid = FindCharInEnum(packet, s->charName);
+                        if (matchGuid == 0)
+                            FailAck(*s, "character_not_found");
+                        else
+                        {
+                            s->targetGuidRaw = matchGuid;
+                            WorldPacket* p = new WorldPacket(CMSG_CHAR_DELETE, 8);
+                            *p << uint64(matchGuid);
+                            ws->QueuePacket(p);
+                            s->phase.store(BenchSession::P_DELETE);
+                        }
+                    }
+                    break;
+                }
                 if (phase == BenchSession::P_ENUM || phase == BenchSession::P_ENUM2)
                 {
                     uint64_t matchGuid = FindCharInEnum(packet, s->charName);
@@ -889,6 +1252,37 @@ namespace WrathBench
                     {
                         FailAck(*s, "char_create_failed_code_" + std::to_string(result));
                     }
+                }
+                break;
+            }
+            case SMSG_CHAR_DELETE:
+            {
+                WorldPacket copy(packet);
+                uint8 result = 0;
+                if (copy.size() >= 1) copy >> result;
+                if (phase == BenchSession::P_DELETE)
+                {
+                    if (result == CHAR_DELETE_SUCCESS)
+                    {
+                        if (!s->ackFired.exchange(true) && s->ack)
+                            s->ack->set_value({200, Json::Writer().Add("ok", true).Add("token", s->token)
+                                .Add("character", s->charName).Add("deleted", true).Str()});
+                        // The utility session's job is done: discard it the same
+                        // way a failed login discards its session.
+                        if (!s->tearingDown.exchange(true))
+                        {
+                            {
+                                std::lock_guard<std::mutex> lock(_sessMutex);
+                                _byToken.erase(s->token);
+                                if (s->ws)
+                                    _byWs.erase(s->ws);
+                            }
+                            if (s->socket)
+                                s->socket->CloseSocket();
+                        }
+                    }
+                    else
+                        FailAck(*s, "char_delete_failed_code_" + std::to_string(result));
                 }
                 break;
             }
@@ -1156,11 +1550,46 @@ namespace WrathBench
                 f.Add("maxPower" + std::to_string(index - UNIT_FIELD_MAXPOWER1 + 1), v);
                 return true;
             }
-            if (typeId == TYPEID_PLAYER && index == PLAYER_FLAGS)
+            if (typeId == TYPEID_PLAYER)
             {
-                f.Add("playerFlags", v);
-                return true;
+                if (index == PLAYER_FLAGS)          { f.Add("playerFlags", v); return true; }
+                if (index == PLAYER_FIELD_COINAGE)  { f.Add("money", v); return true; }
+                if (index == PLAYER_XP)             { f.Add("xp", v); return true; }
+                if (index == PLAYER_NEXT_LEVEL_XP)  { f.Add("nextLevelXp", v); return true; }
+                // Quest log: 25 slots x 5 fields (id, state, counts lo/hi, time).
+                // Served raw; the SDK reassembles its quest-log view from them.
+                if (index >= PLAYER_QUEST_LOG_1_1 && index < PLAYER_QUEST_LOG_25_1 + 5)
+                {
+                    uint32 rel = index - PLAYER_QUEST_LOG_1_1;
+                    static char const* offName[5] = { "Id", "State", "CountsLo", "CountsHi", "Time" };
+                    f.Add("quest" + std::to_string(rel / 5) + offName[rel % 5], v);
+                    return true;
+                }
+                // Equipment/bag/backpack item guids as lo/hi u32 halves keyed by
+                // inventory slot (0-22 equipment+bags, 23-38 backpack). Halves
+                // stay u32 JSON numbers; the SDK joins them into guids.
+                if (index >= PLAYER_FIELD_INV_SLOT_HEAD && index < PLAYER_FIELD_PACK_SLOT_1 + 32)
+                {
+                    uint32 rel = index - PLAYER_FIELD_INV_SLOT_HEAD;
+                    f.Add("invSlot" + std::to_string(rel / 2) + (rel % 2 ? "Hi" : "Lo"), v);
+                    return true;
+                }
             }
+        }
+        else if (typeId == TYPEID_ITEM || typeId == TYPEID_CONTAINER)
+        {
+            switch (index)
+            {
+                case ITEM_FIELD_STACK_COUNT:   f.Add("stackCount", v); return true;
+                case ITEM_FIELD_DURABILITY:    f.Add("durability", v); return true;
+                case ITEM_FIELD_MAXDURABILITY: f.Add("maxDurability", v); return true;
+                case ITEM_FIELD_FLAGS:         f.Add("itemFlags", v); return true;
+                default: break;
+            }
+            if (index == ITEM_FIELD_OWNER)         { f.Add("ownerLo", v); return true; }
+            if (index == ITEM_FIELD_OWNER + 1)     { f.Add("ownerHi", v); return true; }
+            if (index == ITEM_FIELD_CONTAINED)     { f.Add("containedLo", v); return true; }
+            if (index == ITEM_FIELD_CONTAINED + 1) { f.Add("containedHi", v); return true; }
         }
         else if (typeId == TYPEID_GAMEOBJECT)
         {
@@ -1213,6 +1642,7 @@ namespace WrathBench
         // after the parse so a decode error doesn't send half-baked queries.
         std::vector<std::pair<uint32, uint64_t>> creatureQueries;
         std::vector<uint64_t> nameQueries;
+        std::vector<uint32_t> itemQueries;
 
         Json::Writer top;
         std::string objects = "[";
@@ -1267,6 +1697,9 @@ namespace WrathBench
                                 creatureQueries.emplace_back(entry, guid);
                             if (typeId == TYPEID_PLAYER && s.queriedNames.insert(guid).second)
                                 nameQueries.push_back(guid);
+                            if ((typeId == TYPEID_ITEM || typeId == TYPEID_CONTAINER)
+                                && entry && s.queriedItems.insert(entry).second)
+                                itemQueries.push_back(entry);
                         }
                         break;
                     }
@@ -1319,6 +1752,12 @@ namespace WrathBench
             *q << uint64(guid);
             ws->QueuePacket(q);
         }
+        for (uint32_t entry : itemQueries)
+        {
+            WorldPacket* q = new WorldPacket(CMSG_ITEM_QUERY_SINGLE, 4);
+            *q << uint32(entry);
+            ws->QueuePacket(q);
+        }
         return top.Str();
     }
 
@@ -1348,14 +1787,76 @@ namespace WrathBench
         }
     }
 
+    // One AuraApplication::BuildUpdatePacket block (SMSG_AURA_UPDATE[_ALL]).
+    static std::string ReadAuraBlock(WorldPacket& p)
+    {
+        uint8 slot; p >> slot;
+        uint32 spellId; p >> spellId;
+        Json::Writer a;
+        a.Add("slot", (uint32)slot).Add("spellId", spellId);
+        if (spellId)
+        {
+            uint8 flags, level, stacks;
+            p >> flags >> level >> stacks;
+            a.Add("flags", (uint32)flags).Add("level", (uint32)level).Add("stacks", (uint32)stacks);
+            if (!(flags & 0x08))                            // !AFLAG_CASTER: caster guid follows
+            {
+                uint64 caster = 0; p.readPackGUID(caster);
+                a.AddGuid("casterGuid", (uint64_t)caster);
+            }
+            if (flags & 0x20)                               // AFLAG_DURATION
+            {
+                uint32 maxDur, dur; p >> maxDur >> dur;
+                a.Add("maxDuration", maxDur).Add("duration", dur);
+            }
+        }
+        else
+            a.Add("removed", true);
+        return a.Str();
+    }
+
+    // Read a SpellCastTargets::Write block far enough to name the object
+    // target; everything else is consumed by position in the packet copy only.
+    static void ReadSpellTargets(WorldPacket& p, Json::Writer& w)
+    {
+        uint32 mask; p >> mask;
+        // unit | minipet | gameobject | corpse_enemy | corpse_ally
+        if (mask & (0x0002 | 0x00010000 | 0x0800 | 0x0200 | 0x8000))
+        {
+            uint64 tg = 0; p.readPackGUID(tg);
+            w.AddGuid("targetGuid", (uint64_t)tg);
+        }
+    }
+
+    void Manager::QueryItems(BenchSession& s, WorldSession* ws, std::vector<uint32_t> const& entries)
+    {
+        std::vector<uint32_t> toQuery;
+        {
+            std::lock_guard<std::mutex> lock(s.objMutex);
+            for (uint32_t e : entries)
+                if (e && s.queriedItems.insert(e).second)
+                    toQuery.push_back(e);
+        }
+        for (uint32_t e : toQuery)
+        {
+            WorldPacket* q = new WorldPacket(CMSG_ITEM_QUERY_SINGLE, 4);
+            *q << uint32(e);
+            ws->QueuePacket(q);
+        }
+    }
+
     // =================================================================
     // Whitelisted SMSG decoders. Field layouts mirror the server-side
     // builders in AzerothCore at the pinned commit; see module/PROTOCOL.md.
     // =================================================================
-    static bool DecodeEvent(uint16 opcode, WorldPacket const& packet, std::string& name, std::string& dataJson)
+    bool Manager::DecodeEvent(BenchSession& s, WorldSession* ws, uint16_t opcode,
+        WorldPacket const& packet, std::string& name, std::string& dataJson)
     {
         WorldPacket p(packet); // copy so reads don't disturb the live packet
         Json::Writer w;
+        // Item entries seen in this packet; queried like a client cache miss
+        // after a clean parse.
+        std::vector<uint32_t> itemEntries;
         try
         {
             switch (opcode)
@@ -1523,6 +2024,670 @@ namespace WrathBench
                     w.AddGuid("guid", (uint64_t)guid).Add("flags", mflags).Raw("pos", PosJson(x, y, z, o));
                     break;
                 }
+                // ---------------------------------------------------- combat
+                case SMSG_ATTACKSTART:
+                {
+                    name = "SMSG_ATTACKSTART";
+                    uint64 attacker, victim; p >> attacker >> victim;
+                    w.AddGuid("attackerGuid", (uint64_t)attacker).AddGuid("victimGuid", (uint64_t)victim);
+                    break;
+                }
+                case SMSG_ATTACKSTOP:
+                {
+                    name = "SMSG_ATTACKSTOP";
+                    uint64 attacker = 0, victim = 0;
+                    p.readPackGUID(attacker);
+                    p.readPackGUID(victim);
+                    uint32 nowDead = 0; p >> nowDead;
+                    w.AddGuid("attackerGuid", (uint64_t)attacker).AddGuid("victimGuid", (uint64_t)victim)
+                     .Add("attackerDead", nowDead != 0);
+                    break;
+                }
+                case SMSG_ATTACKERSTATEUPDATE:
+                {
+                    // Compact summary of Unit::SendAttackStateUpdate: totals only,
+                    // not every sub-damage field.
+                    name = "SMSG_ATTACKERSTATEUPDATE";
+                    uint32 hitInfo; p >> hitInfo;
+                    uint64 attacker = 0, victim = 0;
+                    p.readPackGUID(attacker);
+                    p.readPackGUID(victim);
+                    uint32 damage, overkill; p >> damage >> overkill;
+                    uint8 subCount; p >> subCount;
+                    for (uint8 i = 0; i < subCount; ++i)
+                        { uint32 school; float fdmg; uint32 idmg; p >> school >> fdmg >> idmg; }
+                    uint32 absorb = 0, resist = 0;
+                    if (hitInfo & (HITINFO_FULL_ABSORB | HITINFO_PARTIAL_ABSORB))
+                        for (uint8 i = 0; i < subCount; ++i) { uint32 a; p >> a; absorb += a; }
+                    if (hitInfo & (HITINFO_FULL_RESIST | HITINFO_PARTIAL_RESIST))
+                        for (uint8 i = 0; i < subCount; ++i) { uint32 r; p >> r; resist += r; }
+                    uint8 victimState; p >> victimState;
+                    uint32 unkState, meleeSpellId; p >> unkState >> meleeSpellId;
+                    uint32 blocked = 0;
+                    if (hitInfo & HITINFO_BLOCK)
+                        p >> blocked;
+                    w.AddGuid("attackerGuid", (uint64_t)attacker).AddGuid("victimGuid", (uint64_t)victim)
+                     .Add("hitInfo", hitInfo).Add("damage", damage).Add("overkill", overkill)
+                     .Add("absorb", absorb).Add("resist", resist).Add("blocked", blocked)
+                     .Add("victimState", (uint32)victimState)
+                     .Add("miss", (hitInfo & HITINFO_MISS) != 0)
+                     .Add("crit", (hitInfo & HITINFO_CRITICALHIT) != 0);
+                    break;
+                }
+                case SMSG_SPELL_START:
+                {
+                    name = "SMSG_SPELL_START";
+                    uint64 castSource = 0, caster = 0;
+                    p.readPackGUID(castSource); // cast item or caster
+                    p.readPackGUID(caster);
+                    uint8 castCount; uint32 spellId, castFlags; int32 timer;
+                    p >> castCount >> spellId >> castFlags >> timer;
+                    w.AddGuid("casterGuid", (uint64_t)caster).Add("spellId", spellId)
+                     .Add("castTimeMs", timer);
+                    ReadSpellTargets(p, w);
+                    break;
+                }
+                case SMSG_SPELL_GO:
+                {
+                    name = "SMSG_SPELL_GO";
+                    uint64 castSource = 0, caster = 0;
+                    p.readPackGUID(castSource);
+                    p.readPackGUID(caster);
+                    uint8 castCount; uint32 spellId, castFlags, timestamp;
+                    p >> castCount >> spellId >> castFlags >> timestamp;
+                    uint8 hitCount; p >> hitCount;
+                    std::string hits = "[";
+                    for (uint8 i = 0; i < hitCount; ++i)
+                    {
+                        uint64 hg; p >> hg;
+                        if (i) hits += ',';
+                        hits += '"' + std::to_string(hg) + '"';
+                    }
+                    hits += "]";
+                    uint8 missCount; p >> missCount;
+                    std::string misses = "[";
+                    for (uint8 i = 0; i < missCount; ++i)
+                    {
+                        uint64 mg; uint8 cond;
+                        p >> mg >> cond;
+                        if (cond == SPELL_MISS_REFLECT) { uint8 r; p >> r; }
+                        if (i) misses += ',';
+                        misses += Json::Writer().AddGuid("guid", (uint64_t)mg).Add("reason", (uint32)cond).Str();
+                    }
+                    misses += "]";
+                    w.AddGuid("casterGuid", (uint64_t)caster).Add("spellId", spellId);
+                    w.Raw("hitGuids", hits).Raw("misses", misses);
+                    break;
+                }
+                case SMSG_CAST_FAILED:
+                {
+                    name = "SMSG_CAST_FAILED";
+                    uint8 castCount; uint32 spellId; uint8 result;
+                    p >> castCount >> spellId >> result;
+                    w.Add("spellId", spellId).Add("result", (uint32)result);
+                    break;
+                }
+                case SMSG_SPELL_FAILURE:
+                {
+                    name = "SMSG_SPELL_FAILURE";
+                    uint64 caster = 0; p.readPackGUID(caster);
+                    uint8 castCount; uint32 spellId; uint8 result;
+                    p >> castCount >> spellId >> result;
+                    w.AddGuid("casterGuid", (uint64_t)caster).Add("spellId", spellId).Add("result", (uint32)result);
+                    break;
+                }
+                case SMSG_PERIODICAURALOG:
+                {
+                    name = "SMSG_PERIODICAURALOG";
+                    uint64 target = 0, caster = 0;
+                    p.readPackGUID(target);
+                    p.readPackGUID(caster);
+                    uint32 spellId, count, auraType;
+                    p >> spellId >> count >> auraType;
+                    uint32 amount = 0;
+                    switch (auraType)
+                    {
+                        case 3: case 89:            // periodic damage (percent)
+                        {
+                            uint32 over, school, absorb, resist; uint8 crit;
+                            p >> amount >> over >> school >> absorb >> resist >> crit;
+                            break;
+                        }
+                        case 8: case 20:            // periodic heal / obs mod health
+                        {
+                            uint32 over, absorb; uint8 crit;
+                            p >> amount >> over >> absorb >> crit;
+                            break;
+                        }
+                        case 21: case 24:           // obs mod power / energize
+                        {
+                            uint32 ptype; p >> ptype >> amount;
+                            break;
+                        }
+                        case 64:                    // mana leech
+                        {
+                            uint32 ptype; float mult; p >> ptype >> amount >> mult;
+                            break;
+                        }
+                        default: break;
+                    }
+                    w.AddGuid("targetGuid", (uint64_t)target).AddGuid("casterGuid", (uint64_t)caster)
+                     .Add("spellId", spellId).Add("auraType", auraType).Add("amount", amount);
+                    break;
+                }
+                case SMSG_AURA_UPDATE:
+                case SMSG_AURA_UPDATE_ALL:
+                {
+                    name = opcode == SMSG_AURA_UPDATE ? "SMSG_AURA_UPDATE" : "SMSG_AURA_UPDATE_ALL";
+                    uint64 target = 0; p.readPackGUID(target);
+                    std::string auras = "[";
+                    bool firstAura = true;
+                    while (p.rpos() < p.size())
+                    {
+                        if (!firstAura) auras += ',';
+                        auras += ReadAuraBlock(p);
+                        firstAura = false;
+                    }
+                    auras += "]";
+                    w.AddGuid("targetGuid", (uint64_t)target).Raw("auras", auras);
+                    break;
+                }
+                // -------------------------------------------------- progress
+                case SMSG_LOG_XPGAIN:
+                {
+                    name = "SMSG_LOG_XPGAIN";
+                    uint64 victim; p >> victim;
+                    uint32 amount; uint8 type;
+                    p >> amount >> type;
+                    w.AddGuid("victimGuid", (uint64_t)victim).Add("amount", amount)
+                     .Add("fromKill", type == 0);
+                    break;
+                }
+                case SMSG_LEVELUP_INFO:
+                {
+                    name = "SMSG_LEVELUP_INFO";
+                    uint32 level, healthGained;
+                    p >> level >> healthGained;
+                    w.Add("level", level).Add("healthGained", healthGained);
+                    break;
+                }
+                case SMSG_ITEM_PUSH_RESULT:
+                {
+                    name = "SMSG_ITEM_PUSH_RESULT";
+                    uint64 player; p >> player;
+                    uint32 received, created, chat; uint8 bagSlot; uint32 itemSlot, itemId, suffix; int32 randProp;
+                    uint32 count, totalCount;
+                    p >> received >> created >> chat >> bagSlot >> itemSlot >> itemId >> suffix >> randProp
+                      >> count >> totalCount;
+                    w.AddGuid("playerGuid", (uint64_t)player).Add("itemId", itemId).Add("count", count)
+                     .Add("totalCount", totalCount).Add("bagSlot", (uint32)bagSlot).Add("itemSlot", itemSlot)
+                     .Add("looted", received == 0).Add("created", created != 0);
+                    itemEntries.push_back(itemId);
+                    break;
+                }
+                // ---------------------------------------------------- quests
+                case SMSG_QUESTGIVER_STATUS:
+                {
+                    name = "SMSG_QUESTGIVER_STATUS";
+                    uint64 guid; p >> guid;
+                    uint8 status; p >> status;
+                    w.AddGuid("guid", (uint64_t)guid).Add("status", (uint32)status);
+                    break;
+                }
+                case SMSG_QUESTGIVER_QUEST_LIST:
+                {
+                    name = "SMSG_QUESTGIVER_QUEST_LIST";
+                    uint64 guid; p >> guid;
+                    std::string greeting; p >> greeting;
+                    uint32 emoteDelay, emote; p >> emoteDelay >> emote;
+                    uint8 count; p >> count;
+                    std::string quests = "[";
+                    for (uint8 i = 0; i < count; ++i)
+                    {
+                        uint32 questId, icon; int32 level; uint32 flags; uint8 repeatable;
+                        p >> questId >> icon >> level >> flags >> repeatable;
+                        std::string title; p >> title;
+                        if (i) quests += ',';
+                        quests += Json::Writer().Add("questId", questId).Add("icon", icon)
+                            .Add("level", level).Add("repeatable", repeatable != 0).Add("title", title).Str();
+                    }
+                    quests += "]";
+                    w.AddGuid("guid", (uint64_t)guid).Add("greeting", greeting).Raw("quests", quests);
+                    break;
+                }
+                case SMSG_QUESTGIVER_QUEST_DETAILS:
+                {
+                    name = "SMSG_QUESTGIVER_QUEST_DETAILS";
+                    uint64 guid, divider; p >> guid >> divider;
+                    uint32 questId; p >> questId;
+                    std::string title, details, objectives;
+                    p >> title >> details >> objectives;
+                    uint8 autoFinish; uint32 flags, suggested; uint8 unk;
+                    p >> autoFinish >> flags >> suggested >> unk;
+                    uint32 choiceCount; p >> choiceCount;
+                    std::string choices = "[";
+                    for (uint32 i = 0; i < choiceCount && i < 6; ++i)
+                    {
+                        uint32 id, cnt, disp; p >> id >> cnt >> disp;
+                        if (i) choices += ',';
+                        choices += Json::Writer().Add("itemId", id).Add("count", cnt).Str();
+                        itemEntries.push_back(id);
+                    }
+                    choices += "]";
+                    uint32 itemCount; p >> itemCount;
+                    std::string rewards = "[";
+                    for (uint32 i = 0; i < itemCount && i < 4; ++i)
+                    {
+                        uint32 id, cnt, disp; p >> id >> cnt >> disp;
+                        if (i) rewards += ',';
+                        rewards += Json::Writer().Add("itemId", id).Add("count", cnt).Str();
+                        itemEntries.push_back(id);
+                    }
+                    rewards += "]";
+                    uint32 money, xp; p >> money >> xp;
+                    w.AddGuid("guid", (uint64_t)guid).Add("questId", questId).Add("title", title)
+                     .Add("details", details).Add("objectives", objectives)
+                     .Raw("choiceRewards", choices).Raw("rewards", rewards)
+                     .Add("money", money).Add("xp", xp);
+                    break;
+                }
+                case SMSG_QUESTGIVER_REQUEST_ITEMS:
+                {
+                    name = "SMSG_QUESTGIVER_REQUEST_ITEMS";
+                    uint64 guid; p >> guid;
+                    uint32 questId; p >> questId;
+                    std::string title, text; p >> title >> text;
+                    uint32 unk, emote, closeOnCancel, flags, suggested, reqMoney;
+                    p >> unk >> emote >> closeOnCancel >> flags >> suggested >> reqMoney;
+                    uint32 itemCount; p >> itemCount;
+                    std::string items = "[";
+                    for (uint32 i = 0; i < itemCount && i < 6; ++i)
+                    {
+                        uint32 id, cnt, disp; p >> id >> cnt >> disp;
+                        if (i) items += ',';
+                        items += Json::Writer().Add("itemId", id).Add("count", cnt).Str();
+                        itemEntries.push_back(id);
+                    }
+                    items += "]";
+                    uint32 canComplete; p >> canComplete;
+                    w.AddGuid("guid", (uint64_t)guid).Add("questId", questId).Add("title", title)
+                     .Add("text", text).Add("requiredMoney", reqMoney).Raw("requiredItems", items)
+                     .Add("completable", canComplete != 0);
+                    break;
+                }
+                case SMSG_QUESTGIVER_OFFER_REWARD:
+                {
+                    name = "SMSG_QUESTGIVER_OFFER_REWARD";
+                    uint64 guid; p >> guid;
+                    uint32 questId; p >> questId;
+                    std::string title, text; p >> title >> text;
+                    uint8 autoFinish; uint32 flags, suggested;
+                    p >> autoFinish >> flags >> suggested;
+                    uint32 emoteCount; p >> emoteCount;
+                    for (uint32 i = 0; i < emoteCount && i < 4; ++i)
+                        { uint32 d, e; p >> d >> e; }
+                    uint32 choiceCount; p >> choiceCount;
+                    std::string choices = "[";
+                    for (uint32 i = 0; i < choiceCount && i < 6; ++i)
+                    {
+                        uint32 id, cnt, disp; p >> id >> cnt >> disp;
+                        if (i) choices += ',';
+                        choices += Json::Writer().Add("itemId", id).Add("count", cnt).Str();
+                        itemEntries.push_back(id);
+                    }
+                    choices += "]";
+                    uint32 itemCount; p >> itemCount;
+                    std::string rewards = "[";
+                    for (uint32 i = 0; i < itemCount && i < 4; ++i)
+                    {
+                        uint32 id, cnt, disp; p >> id >> cnt >> disp;
+                        if (i) rewards += ',';
+                        rewards += Json::Writer().Add("itemId", id).Add("count", cnt).Str();
+                        itemEntries.push_back(id);
+                    }
+                    rewards += "]";
+                    uint32 money, xp; p >> money >> xp;
+                    w.AddGuid("guid", (uint64_t)guid).Add("questId", questId).Add("title", title)
+                     .Add("text", text).Raw("choiceRewards", choices).Raw("rewards", rewards)
+                     .Add("money", money).Add("xp", xp);
+                    break;
+                }
+                case SMSG_QUESTGIVER_QUEST_COMPLETE:
+                {
+                    name = "SMSG_QUESTGIVER_QUEST_COMPLETE";
+                    uint32 questId, xp, money, honor, talents, arena;
+                    p >> questId >> xp >> money >> honor >> talents >> arena;
+                    w.Add("questId", questId).Add("xp", xp).Add("money", money);
+                    break;
+                }
+                case SMSG_QUESTGIVER_QUEST_FAILED:
+                {
+                    name = "SMSG_QUESTGIVER_QUEST_FAILED";
+                    uint32 questId, reason; p >> questId >> reason;
+                    w.Add("questId", questId).Add("reason", reason);
+                    break;
+                }
+                case SMSG_QUESTUPDATE_ADD_KILL:
+                {
+                    name = "SMSG_QUESTUPDATE_ADD_KILL";
+                    uint32 questId, entry, current, required; uint64 guid;
+                    p >> questId >> entry >> current >> required >> guid;
+                    w.Add("questId", questId).Add("entry", entry).Add("current", current)
+                     .Add("required", required).AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_QUESTUPDATE_ADD_ITEM:
+                {
+                    // Sent intentionally empty by the core; the client updates its
+                    // quest log from the PLAYER_QUEST_LOG fields instead.
+                    name = "SMSG_QUESTUPDATE_ADD_ITEM";
+                    break;
+                }
+                case SMSG_QUESTUPDATE_COMPLETE:
+                {
+                    name = "SMSG_QUESTUPDATE_COMPLETE";
+                    uint32 questId; p >> questId;
+                    w.Add("questId", questId);
+                    break;
+                }
+                case SMSG_QUESTUPDATE_FAILED:
+                {
+                    name = "SMSG_QUESTUPDATE_FAILED";
+                    uint32 questId; p >> questId;
+                    w.Add("questId", questId);
+                    break;
+                }
+                // ---------------------------------------------------- gossip
+                case SMSG_GOSSIP_MESSAGE:
+                {
+                    name = "SMSG_GOSSIP_MESSAGE";
+                    uint64 guid; p >> guid;
+                    uint32 menuId, textId, optionCount;
+                    p >> menuId >> textId >> optionCount;
+                    std::string options = "[";
+                    for (uint32 i = 0; i < optionCount && i < 32; ++i)
+                    {
+                        uint32 index; uint8 icon, coded; uint32 boxMoney;
+                        p >> index >> icon >> coded >> boxMoney;
+                        std::string text, boxText; p >> text >> boxText;
+                        if (i) options += ',';
+                        options += Json::Writer().Add("optionId", index).Add("icon", (uint32)icon)
+                            .Add("text", text).Str();
+                    }
+                    options += "]";
+                    uint32 questCount; p >> questCount;
+                    std::string quests = "[";
+                    for (uint32 i = 0; i < questCount && i < 32; ++i)
+                    {
+                        uint32 questId, icon; int32 level; uint32 flags; uint8 repeatable;
+                        p >> questId >> icon >> level >> flags >> repeatable;
+                        std::string title; p >> title;
+                        if (i) quests += ',';
+                        quests += Json::Writer().Add("questId", questId).Add("icon", icon)
+                            .Add("level", level).Add("title", title).Str();
+                    }
+                    quests += "]";
+                    w.AddGuid("guid", (uint64_t)guid).Add("menuId", menuId).Add("textId", textId);
+                    w.Raw("options", options).Raw("quests", quests);
+                    break;
+                }
+                case SMSG_GOSSIP_COMPLETE:
+                    name = "SMSG_GOSSIP_COMPLETE";
+                    break;
+                // ------------------------------------------------------ loot
+                case SMSG_LOOT_RESPONSE:
+                {
+                    name = "SMSG_LOOT_RESPONSE";
+                    uint64 guid; p >> guid;
+                    uint8 lootType; p >> lootType;
+                    uint32 gold; p >> gold;
+                    uint8 count; p >> count;
+                    std::vector<uint8_t> slots;
+                    std::string items = "[";
+                    for (uint8 i = 0; i < count; ++i)
+                    {
+                        uint8 slot; uint32 itemId, cnt, disp, suffix; int32 randProp; uint8 slotType;
+                        p >> slot >> itemId >> cnt >> disp >> suffix >> randProp >> slotType;
+                        if (i) items += ',';
+                        items += Json::Writer().Add("slot", (uint32)slot).Add("itemId", itemId)
+                            .Add("count", cnt).Add("slotType", (uint32)slotType).Str();
+                        itemEntries.push_back(itemId);
+                        if (slotType == 0)              // LOOT_SLOT_TYPE_ALLOW_LOOT
+                            slots.push_back(slot);
+                    }
+                    items += "]";
+                    w.AddGuid("guid", (uint64_t)guid).Add("lootType", (uint32)lootType)
+                     .Add("gold", gold).Raw("items", items);
+
+                    // loot_all: replay the auto-loot client sequence now that the
+                    // window contents are known.
+                    bool doAuto = false;
+                    {
+                        std::lock_guard<std::mutex> lock(s.objMutex);
+                        if (s.autoLootPending)
+                        {
+                            s.autoLootPending = false;
+                            doAuto = true;
+                        }
+                    }
+                    if (doAuto)
+                    {
+                        for (uint8_t slot : slots)
+                        {
+                            WorldPacket* q = new WorldPacket(CMSG_AUTOSTORE_LOOT_ITEM, 1);
+                            *q << uint8(slot);
+                            ws->QueuePacket(q);
+                        }
+                        if (gold)
+                            ws->QueuePacket(new WorldPacket(CMSG_LOOT_MONEY, 0));
+                        WorldPacket* rel = new WorldPacket(CMSG_LOOT_RELEASE, 8);
+                        *rel << uint64(guid);
+                        ws->QueuePacket(rel);
+                    }
+                    break;
+                }
+                case SMSG_LOOT_REMOVED:
+                {
+                    name = "SMSG_LOOT_REMOVED";
+                    uint8 slot; p >> slot;
+                    w.Add("slot", (uint32)slot);
+                    break;
+                }
+                case SMSG_LOOT_MONEY_NOTIFY:
+                {
+                    name = "SMSG_LOOT_MONEY_NOTIFY";
+                    uint32 money; p >> money;
+                    w.Add("money", money);
+                    break;
+                }
+                case SMSG_LOOT_CLEAR_MONEY:
+                    name = "SMSG_LOOT_CLEAR_MONEY";
+                    break;
+                case SMSG_LOOT_RELEASE_RESPONSE:
+                {
+                    name = "SMSG_LOOT_RELEASE_RESPONSE";
+                    uint64 guid; p >> guid;
+                    w.AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                // ---------------------------------------------------- vendor
+                case SMSG_LIST_INVENTORY:
+                {
+                    name = "SMSG_LIST_INVENTORY";
+                    uint64 guid; p >> guid;
+                    uint8 count; p >> count;
+                    std::string items = "[";
+                    for (uint8 i = 0; i < count; ++i)
+                    {
+                        uint32 slot, itemId, disp; int32 leftInStock; uint32 price, maxDur, buyCount, extCost;
+                        p >> slot >> itemId >> disp >> leftInStock >> price >> maxDur >> buyCount >> extCost;
+                        if (i) items += ',';
+                        items += Json::Writer().Add("slot", slot).Add("itemId", itemId)
+                            .Add("price", price).Add("buyCount", buyCount)
+                            .Add("leftInStock", leftInStock).Add("extendedCost", extCost).Str();
+                        itemEntries.push_back(itemId);
+                    }
+                    items += "]";
+                    w.AddGuid("vendorGuid", (uint64_t)guid).Raw("items", items);
+                    if (count == 0 && p.rpos() < p.size())
+                    {
+                        uint8 errCode; p >> errCode;
+                        w.Add("emptyReason", (uint32)errCode);
+                    }
+                    break;
+                }
+                case SMSG_BUY_ITEM:
+                {
+                    name = "SMSG_BUY_ITEM";
+                    uint64 guid; p >> guid;
+                    uint32 slot; int32 newCount; uint32 count;
+                    p >> slot >> newCount >> count;
+                    w.AddGuid("vendorGuid", (uint64_t)guid).Add("slot", slot).Add("count", count);
+                    break;
+                }
+                case SMSG_BUY_FAILED:
+                {
+                    name = "SMSG_BUY_FAILED";
+                    uint64 guid; p >> guid;
+                    uint32 itemId; p >> itemId;
+                    if (p.size() - p.rpos() > 1)            // optional u32 param before the code
+                        { uint32 param; p >> param; }
+                    uint8 result; p >> result;
+                    w.AddGuid("vendorGuid", (uint64_t)guid).Add("itemId", itemId).Add("result", (uint32)result);
+                    break;
+                }
+                case SMSG_SELL_ITEM:
+                {
+                    name = "SMSG_SELL_ITEM";
+                    uint64 vendor, item; p >> vendor >> item;
+                    if (p.size() - p.rpos() > 1)            // optional u32 param before the code
+                        { uint32 param; p >> param; }
+                    uint8 result; p >> result;
+                    w.AddGuid("vendorGuid", (uint64_t)vendor).AddGuid("itemGuid", (uint64_t)item)
+                     .Add("result", (uint32)result);
+                    break;
+                }
+                case SMSG_INVENTORY_CHANGE_FAILURE:
+                {
+                    name = "SMSG_INVENTORY_CHANGE_FAILURE";
+                    uint8 result; p >> result;
+                    w.Add("result", (uint32)result);
+                    if (result != 0 && p.rpos() + 17 <= p.size())
+                    {
+                        uint64 item1, item2; uint8 bagResult;
+                        p >> item1 >> item2 >> bagResult;
+                        w.AddGuid("itemGuid", (uint64_t)item1).AddGuid("itemGuid2", (uint64_t)item2);
+                        if (p.rpos() + 4 <= p.size())       // EQUIP_ERR_CANT_EQUIP_LEVEL_I etc.
+                        {
+                            uint32 level; p >> level;
+                            w.Add("requiredLevel", level);
+                        }
+                    }
+                    break;
+                }
+                case SMSG_ITEM_QUERY_SINGLE_RESPONSE:
+                {
+                    name = "SMSG_ITEM_QUERY_SINGLE_RESPONSE";
+                    uint32 itemId; p >> itemId;
+                    if (itemId & 0x80000000)
+                    {
+                        w.Add("itemId", itemId & 0x7FFFFFFF).Add("found", false);
+                        break;
+                    }
+                    uint32 itemClass, subClass; int32 soundOverride;
+                    p >> itemClass >> subClass >> soundOverride;
+                    std::string iname; p >> iname;
+                    std::string n2, n3, n4; p >> n2 >> n3 >> n4;   // empty
+                    uint32 display, quality, flags, flags2, buyPrice, sellPrice, invType;
+                    p >> display >> quality >> flags >> flags2 >> buyPrice >> sellPrice >> invType;
+                    uint32 allowClass, allowRace, itemLevel, reqLevel;
+                    p >> allowClass >> allowRace >> itemLevel >> reqLevel;
+                    w.Add("itemId", itemId).Add("found", true).Add("name", iname)
+                     .Add("quality", quality).Add("inventoryType", invType)
+                     .Add("buyPrice", buyPrice).Add("sellPrice", sellPrice)
+                     .Add("itemLevel", itemLevel).Add("requiredLevel", reqLevel)
+                     .Add("class", itemClass).Add("subClass", subClass);
+                    break;
+                }
+                // ----------------------------------------------------- death
+                case SMSG_DEATH_RELEASE_LOC:
+                {
+                    name = "SMSG_DEATH_RELEASE_LOC";
+                    int32 map; float x, y, z;
+                    p >> map >> x >> y >> z;
+                    w.Add("map", map).Add("x", (double)x).Add("y", (double)y).Add("z", (double)z);
+                    break;
+                }
+                case SMSG_CORPSE_RECLAIM_DELAY:
+                {
+                    name = "SMSG_CORPSE_RECLAIM_DELAY";
+                    uint32 delayMs; p >> delayMs;
+                    w.Add("delayMs", delayMs);
+                    break;
+                }
+                case SMSG_DURABILITY_DAMAGE_DEATH:
+                    name = "SMSG_DURABILITY_DAMAGE_DEATH";
+                    break;
+                // --------------------------------------------------- session
+                case SMSG_CHAR_DELETE:
+                {
+                    name = "SMSG_CHAR_DELETE";
+                    uint8 result = 0; if (p.size() >= 1) p >> result;
+                    w.Add("result", (uint32)result);
+                    break;
+                }
+                // ---------------------------------------- creature movement
+                case SMSG_MONSTER_MOVE:
+                {
+                    // Destination and duration ONLY. The spline path points are
+                    // consumed and dropped: serving them would leak the server's
+                    // route (ADR-0010 watch-out).
+                    name = "SMSG_MONSTER_MOVE";
+                    uint64 guid = 0; p.readPackGUID(guid);
+                    uint8 toggle; p >> toggle;
+                    float sx, sy, sz; p >> sx >> sy >> sz;
+                    uint32 splineId; p >> splineId;
+                    uint8 type; p >> type;
+                    w.AddGuid("guid", (uint64_t)guid);
+                    w.Raw("pos", Json::Writer().Add("x", (double)sx).Add("y", (double)sy).Add("z", (double)sz).Str());
+                    if (type == 1)                          // MonsterMoveStop
+                    {
+                        w.Add("stopped", true);
+                        break;
+                    }
+                    switch (type)
+                    {
+                        case 2: { float fx, fy, fz; p >> fx >> fy >> fz; break; } // facing spot
+                        case 3: { uint64 t; p >> t; break; }                     // facing target
+                        case 4: { float a; p >> a; break; }                      // facing angle
+                        default: break;
+                    }
+                    uint32 splineFlags; p >> splineFlags;
+                    if (splineFlags & 0x00200000)           // animation
+                        { uint8 animId; uint32 startTime; p >> animId >> startTime; }
+                    uint32 duration; p >> duration;
+                    if (splineFlags & 0x00000800)           // parabolic
+                        { float accel; uint32 startTime; p >> accel >> startTime; }
+                    uint32 pointCount; p >> pointCount;
+                    float dx = sx, dy = sy, dz = sz;
+                    if (splineFlags & (0x00002000 | 0x00040000)) // catmullrom/flying: full points
+                    {
+                        for (uint32 i = 0; i < pointCount; ++i)
+                        {
+                            float px, py, pz; p >> px >> py >> pz;
+                            dx = px; dy = py; dz = pz;      // keep only the last (the destination)
+                        }
+                    }
+                    else                                    // linear: destination + packed offsets
+                    {
+                        p >> dx >> dy >> dz;
+                        if (pointCount > 1)
+                            p.rpos(p.rpos() + size_t(pointCount - 1) * 4);
+                    }
+                    w.Raw("destination", Json::Writer().Add("x", (double)dx).Add("y", (double)dy).Add("z", (double)dz).Str());
+                    w.Add("durationMs", duration);
+                    break;
+                }
                 default:
                     return false; // not whitelisted
             }
@@ -1533,6 +2698,7 @@ namespace WrathBench
             dataJson = Json::Writer().Add("decodeError", true).Str();
             return true;
         }
+        QueryItems(s, ws, itemEntries);
         dataJson = w.Str();
         return true;
     }

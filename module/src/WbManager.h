@@ -89,8 +89,12 @@ namespace WrathBench
         uint8 charClass{0};
         uint8 charGender{0};
 
+        // Character-delete utility session (POST /character-delete): parks at
+        // the character-select stage, sends CMSG_CHAR_DELETE, never logs in.
+        bool deleteMode{false};
+
         // Login state machine, driven by the outbound packet tap.
-        enum Phase { P_AUTH, P_ENUM, P_CREATE, P_ENUM2, P_LOGIN, P_INWORLD, P_DONE };
+        enum Phase { P_AUTH, P_ENUM, P_CREATE, P_ENUM2, P_LOGIN, P_INWORLD, P_DONE, P_DELETE };
         std::atomic<int> phase{P_AUTH};
         uint64_t targetGuidRaw{0};
 
@@ -116,6 +120,12 @@ namespace WrathBench
         std::unordered_map<uint64_t, uint8_t> knownObjects;      // guid -> TypeID
         std::unordered_set<uint32_t> queriedCreatures;           // creature entries
         std::unordered_set<uint64_t> queriedNames;               // player guids
+        std::unordered_set<uint32_t> queriedItems;               // item entries
+
+        // loot_all: on the next SMSG_LOOT_RESPONSE the tap replays the client's
+        // auto-loot sequence (AUTOSTORE per slot, LOOT_MONEY, LOOT_RELEASE).
+        // Guarded by objMutex (set on world thread, consumed on tap threads).
+        bool autoLootPending{false};
 
         std::ofstream audit;
         std::mutex auditMutex;
@@ -157,10 +167,17 @@ namespace WrathBench
         HttpReply HttpCreateSession(std::string const& body);
         HttpReply HttpAction(std::string const& body);
         HttpReply HttpDeleteSession(std::string const& body);
+        HttpReply HttpCharacterDelete(std::string const& body);
         HttpReply HttpHealth();
 
         void DoCreateSession(std::shared_ptr<BenchSession> s, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoSay(std::string token, std::string text, std::shared_ptr<std::promise<HttpReply>> ack);
+        // One handler for every action that is a single synthesized client
+        // opcode (targeting, combat, interaction, quests, loot, vendor,
+        // inventory, death). body is the raw request JSON, reparsed on the
+        // world thread.
+        void DoGameAction(std::string token, std::string action, std::string body,
+            std::shared_ptr<std::promise<HttpReply>> ack);
         void DoDeleteSession(std::string token, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoMoveTo(std::string token, float x, float y, float z, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoStop(std::string token, std::shared_ptr<std::promise<HttpReply>> ack);
@@ -179,6 +196,15 @@ namespace WrathBench
         // Update-object decoding (tap threads). Returns the event data JSON and
         // issues the creature/name queries a client cache miss would.
         std::string DecodeUpdateObject(BenchSession& s, WorldSession* ws, WorldPacket const& packet);
+
+        // Whitelisted SMSG decoding (tap threads). Needs the session for
+        // client-style item-query cache misses and the loot_all auto sequence.
+        bool DecodeEvent(BenchSession& s, WorldSession* ws, uint16_t opcode,
+            WorldPacket const& packet, std::string& name, std::string& dataJson);
+
+        // Issue CMSG_ITEM_QUERY_SINGLE for entries this "client" has not cached
+        // yet (mirrors the creature/name query behaviour). Tap threads.
+        void QueryItems(BenchSession& s, WorldSession* ws, std::vector<uint32_t> const& entries);
 
         // Remove a session from the maps and close its parked socket (a client
         // disconnect at the WorldSession level). World thread only. Returns the

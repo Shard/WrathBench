@@ -13,3 +13,5 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0009: Headless WorldSession on a parked loopback socket
 - ADR-0010: Synthesized client movement and update-object decoding
 - ADR-0011: Game outcomes are return values, not exceptions
+- ADR-0012: Runner context policy
+- ADR-0013: Quest/combat action and observation surface

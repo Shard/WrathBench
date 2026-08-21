@@ -70,6 +70,15 @@ It does two things, idempotently:
    columns via `UNHEX()`. It reads the row back and recomputes the verifier
    from the stored salt as a round-trip check.
 
+The smoke probes that hold a session for minutes (`infra/smoke/module-quest.ts`)
+use a second account `PROBE` so they never contend with `RUNNER` for the
+one-live-session-per-account limit. On a fresh machine create it once with:
+
+    docker compose -f infra/compose.yml run --rm \
+      -e WRATHBENCH_ACCOUNT_USER=PROBE -e WRATHBENCH_ACCOUNT_PASSWORD=PROBE \
+      bootstrap
+
+
 It writes SQL directly rather than using SOAP or the worldserver console. SOAP
 cannot create the *first* account — `ACSoap.cpp` requires the caller to be
 `SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and it
