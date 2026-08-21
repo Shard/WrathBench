@@ -93,15 +93,45 @@ globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
 // ------------------------------------------------------------- console tap
 
 const logBuf: LogEntry[] = [];
+let lastEntry: LogEntry | null = null;
+let lastEntryBase = "";
+let lastEntryRepeats = 1;
+
+/**
+ * Append to the log buffer, collapsing consecutive identical lines into one
+ * entry suffixed "×N". A background routine faulting in a tight loop used to
+ * fill a snippet result with thousands of repeated lines (morning-laguna-2);
+ * the collapse keeps the information and drops the bulk. A drain resets the
+ * run (the collapsed entry is no longer in the buffer), so counts never span
+ * two snippet results.
+ */
+function pushLog(level: LogEntry["level"], text: string): void {
+  const t = text.slice(0, LOG_MAX_CHARS);
+  if (
+    lastEntry !== null &&
+    logBuf[logBuf.length - 1] === lastEntry &&
+    lastEntry.level === level &&
+    lastEntryBase === t
+  ) {
+    lastEntryRepeats++;
+    lastEntry.ts = Date.now();
+    lastEntry.text = `${t} ×${lastEntryRepeats}`.slice(0, LOG_MAX_CHARS);
+    return;
+  }
+  lastEntry = { level, ts: Date.now(), text: t };
+  lastEntryBase = t;
+  lastEntryRepeats = 1;
+  logBuf.push(lastEntry);
+  if (logBuf.length > 500) logBuf.splice(0, logBuf.length - 500);
+}
+
 const realConsole = { ...console };
 for (const level of ["log", "info", "warn", "error", "debug"] as const) {
   console[level] = (...args: unknown[]): void => {
     const text = args
       .map((a) => (typeof a === "string" ? a : Bun.inspect(a, { depth: 4 })))
-      .join(" ")
-      .slice(0, LOG_MAX_CHARS);
-    logBuf.push({ level, ts: Date.now(), text });
-    if (logBuf.length > 500) logBuf.splice(0, logBuf.length - 500);
+      .join(" ");
+    pushLog(level, text);
     realConsole[level]?.(...args);
   };
 }
@@ -318,13 +348,95 @@ process.on("disconnect", () => process.exit(0));
 // its bindings and routines, died for it. Report instead: the error lands in
 // the log buffer (so the next snippet result shows it) and as a fatal notice
 // the host surfaces to the model.
+//
+// Storm control (morning-laguna-2: a routine throwing in a tight loop pushed
+// 4,125 identical session notes — 12MB — into one trajectory): the first
+// occurrence of a fault signature reports immediately; repeats aggregate into
+// a rollup notice gated to at most one per FAULT_ROLLUP_INTERVAL_MS across
+// all signatures; a signature that keeps faulting past
+// FAULT_ESCALATION_THRESHOLD inside its window gets one distinct escalation
+// notice telling the model its routine is broken and how to stop it. The
+// sandbox is never killed for this — bindings are healthy; the model acts.
+
+const FAULT_WINDOW_MS = Number(process.env["WRATHBENCH_FAULT_WINDOW_MS"] ?? 60_000);
+const FAULT_ROLLUP_INTERVAL_MS = Number(process.env["WRATHBENCH_FAULT_ROLLUP_MS"] ?? 30_000);
+const FAULT_ESCALATION_THRESHOLD = Number(process.env["WRATHBENCH_FAULT_ESCALATION_THRESHOLD"] ?? 50);
+
+interface FaultStat {
+  count: number;
+  windowStart: number;
+  escalated: boolean;
+}
+const faultStats = new Map<string, FaultStat>();
+/** Faults per signature not yet covered by a notice, for the next rollup. */
+const rollupPending = new Map<string, number>();
+/** When the last background-fault notice of any kind was sent. Gates rollups. */
+let lastFaultNoticeAt = 0;
+
+/**
+ * What makes two faults "the same": kind, error name, and the first stack
+ * frame — not the message, which a loop can vary per iteration.
+ */
+function faultSignature(kind: string, reason: unknown): string {
+  if (reason instanceof Error) {
+    const stackLine =
+      reason.stack
+        ?.split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.startsWith("at ")) ?? "";
+    return `${kind}: ${reason.name}${stackLine.length > 0 ? ` (${stackLine})` : ""}`;
+  }
+  return `${kind}: ${Bun.inspect(reason).slice(0, 120)}`;
+}
 
 function reportBackgroundError(kind: string, reason: unknown): void {
+  const now = Date.now();
   const text = reason instanceof Error ? renderError(reason) : Bun.inspect(reason, { depth: 4 }).slice(0, 1_000);
-  logBuf.push({ level: "error", ts: Date.now(), text: `[${kind}] ${text}`.slice(0, LOG_MAX_CHARS) });
-  if (logBuf.length > 500) logBuf.splice(0, logBuf.length - 500);
-  realConsole.error?.(`[sandbox] ${kind}:`, text);
-  send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
+  pushLog("error", `[${kind}] ${text}`);
+
+  const signature = faultSignature(kind, reason);
+  let stat = faultStats.get(signature);
+  if (stat === undefined || now - stat.windowStart > FAULT_WINDOW_MS) {
+    stat = { count: 0, windowStart: now, escalated: false };
+    faultStats.set(signature, stat);
+  }
+  stat.count++;
+
+  // First occurrence of this signature (per window): report immediately.
+  if (stat.count === 1) {
+    realConsole.error?.(`[sandbox] ${kind}:`, text);
+    send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
+    lastFaultNoticeAt = now;
+    return;
+  }
+
+  // Continuous faulting: one distinct escalation notice per signature.
+  if (!stat.escalated && stat.count > FAULT_ESCALATION_THRESHOLD) {
+    stat.escalated = true;
+    rollupPending.delete(signature); // the escalation covers the backlog
+    const secs = Math.max(1, Math.round((now - stat.windowStart) / 1000));
+    const escalation =
+      `background routine broken: ${signature} has faulted ${stat.count} times in the last ${secs}s. ` +
+      `The sandbox is alive and your bindings are intact, but a background routine is failing in a tight ` +
+      `loop — from your next snippet, stop it: clearInterval any timers you started, set the flags your ` +
+      `loops check so they exit, then restart the routine with a try/catch inside it. ` +
+      `Further identical faults will only be reported as periodic rollups.`;
+    realConsole.error?.(`[sandbox] ${escalation}`);
+    send({ t: "fatal", error: escalation });
+    lastFaultNoticeAt = now;
+    return;
+  }
+
+  // A repeat: aggregate, and roll up at most once per interval overall.
+  rollupPending.set(signature, (rollupPending.get(signature) ?? 0) + 1);
+  if (now - lastFaultNoticeAt >= FAULT_ROLLUP_INTERVAL_MS) {
+    const summary = [...rollupPending.entries()].map(([sig, n]) => `${sig} ×${n}`).join("; ");
+    rollupPending.clear();
+    const rollup = `background faults continuing (aggregated; sandbox alive): ${summary} since the last report`;
+    realConsole.error?.(`[sandbox] ${rollup}`);
+    send({ t: "fatal", error: rollup });
+    lastFaultNoticeAt = now;
+  }
 }
 
 process.on("unhandledRejection", (reason) => {
