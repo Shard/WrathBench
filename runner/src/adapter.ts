@@ -202,6 +202,25 @@ export class OpenAiChatAdapter implements ChatAdapter {
         }
         const parsed = completionSchema.safeParse(json);
         if (!parsed.success) {
+          // Free-tier providers return 200 with an error object and no
+          // `choices` (observed: OpenRouter upstream, night-nemotron-1, which
+          // this used to terminate as adapter-error). Read it like the
+          // HTTP-status path: budget-shaped errors pause, the rest retry.
+          const errObj = (json as { error?: unknown }).error;
+          if (errObj !== undefined && errObj !== null) {
+            lastError = `provider error in 2xx body: ${JSON.stringify(errObj).slice(0, 500)}`;
+            const code = (errObj as { code?: unknown; status?: unknown }).code ??
+              (errObj as { status?: unknown }).status;
+            const numCode = typeof code === "number" ? code : undefined;
+            lastStatus = numCode;
+            if (numCode === 429 || numCode === 402 || EXHAUSTION_HINTS.test(lastError)) {
+              const quota = numCode === 402 || EXHAUSTION_HINTS.test(lastError);
+              if (budget === null || (quota && budget.reason === "rate-limited")) {
+                budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
+              }
+            }
+            continue;
+          }
           throw new AdapterError(`model API response did not match schema: ${parsed.error.message}`);
         }
         const msg = parsed.data.choices[0]!.message;

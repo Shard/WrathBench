@@ -99,6 +99,35 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("429");
   });
 
+  test("a 2xx body carrying an error object with code 429 pauses instead of adapter-erroring", async () => {
+    // The night-nemotron-1 shape: free-tier upstream returns HTTP 200 with
+    // {"error": ...} and no choices; this used to terminate as a schema error.
+    const errBody = JSON.stringify({ error: { message: "Provider returned error", code: 429 } });
+    const out = await adapterPlaying([
+      status(200, errBody),
+      status(200, errBody),
+    ]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+    expect(out.kind === "pause" && out.detail).toContain("2xx body");
+  });
+
+  test("a 2xx error body without budget shape retries and then hard-errors", async () => {
+    const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
+    await expect(
+      adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req),
+    ).rejects.toThrow(/after 2 attempts/);
+  });
+
+  test("a 2xx error body followed by a good response succeeds", async () => {
+    const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
+    const out = await adapterPlaying([
+      status(200, errBody),
+      status(200, JSON.stringify({ choices })),
+    ]).complete(req);
+    expect(out.kind).toBe("ok");
+  });
+
   test("quota wins over a later plain rate limit", async () => {
     const out = await adapterPlaying([
       status(429, "quota exceeded for this key"),
