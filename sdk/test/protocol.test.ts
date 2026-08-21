@@ -95,6 +95,7 @@ describe("event frames", () => {
       "SMSG_DESTROY_OBJECT",
       "SMSG_CREATURE_QUERY_RESPONSE",
       "WB_MOVE_PROGRESS",
+    "WB_SESSION_STATE",
       "WB_MOVE_RESULT",
       ...MOVE_OPCODES,
       // quest/combat extension, in PROTOCOL.md's table order

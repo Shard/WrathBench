@@ -611,3 +611,44 @@ function jsonSafe(_key: string, value: unknown): unknown {
   if (value instanceof Map) return [...value.entries()];
   return value;
 }
+
+describe("WB_SESSION_STATE (reattach)", () => {
+  const frame = (guid: string, seq = 1) => ({
+      seq,
+      opcode: "WB_SESSION_STATE",
+      opcodeId: 0xff03,
+      ts: 1000,
+      data: {
+        character: "Fenwick",
+        guid,
+        inWorld: true,
+        map: 0,
+        x: -8949.9,
+        y: -132.4,
+        z: 83.5,
+        o: 1.5,
+        level: 3,
+      },
+    });
+
+  test("populates self on an unseeded cache (resume into live session)", () => {
+    const cache = StateCache.replay(toEvents([frame("7")]));
+    expect(cache.seed?.guid).toBe(7n);
+    expect(cache.self.position?.value.map).toBe(0);
+    expect(cache.self.position?.value.x).toBeCloseTo(-8949.9);
+    expect(cache.self.level?.value).toBe(3);
+  });
+
+  test("matches a seeded cache and updates position/level", () => {
+    const cache = StateCache.replay(toEvents([frame("7")]), { seed: SEED });
+    expect(cache.self.level?.value).toBe(3);
+    expect(cache.anomalies.length).toBe(0);
+  });
+
+  test("contradicting guid records an anomaly, never overwrites", () => {
+    const cache = StateCache.replay(toEvents([frame("999")]), { seed: SEED });
+    expect(cache.self.level?.value).toBeUndefined();
+    expect(cache.anomalies.length).toBe(1);
+    expect(cache.anomalies[0]!.kind).toBe("session_state_guid_mismatch");
+  });
+});

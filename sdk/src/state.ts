@@ -616,6 +616,34 @@ export class StateCache {
         this.adoptOwnCharacter();
         return;
       }
+      case "WB_SESSION_STATE": {
+        // Reattach snapshot for a live session: the login-verify equivalent the
+        // stream cannot re-emit. Reconcile identity like the seed does; a
+        // contradicting guid is an anomaly, never an overwrite.
+        const d = event.data as {
+          character: string; guid: bigint; map: number; x: number; y: number;
+          z: number; o: number; level: number;
+        };
+        const key = guidKey(d.guid);
+        if (this.seed.guid !== undefined && guidKey(this.seed.guid) !== key) {
+          this.anomalyBuf.push({
+            seq: event.seq,
+            ts: event.ts,
+            kind: "session_state_guid_mismatch",
+            detail: `WB_SESSION_STATE guid ${key} != seeded ${guidKey(this.seed.guid)}`,
+          });
+          return;
+        }
+        if (this.seed.guid === undefined) this.seedSelf({ guid: d.guid, name: d.character });
+        this.selfMap = d.map;
+        this.self.position = {
+          value: { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o },
+          seq: event.seq,
+          ts: event.ts,
+        };
+        this.self.level = { value: d.level, seq: event.seq, ts: event.ts };
+        return;
+      }
       case "SMSG_LOGIN_VERIFY_WORLD": {
         const d = event.data as WorldPosition;
         this.selfMap = d.map;

@@ -280,6 +280,25 @@ export const loginVerifyWorldDataSchema = z.looseObject({
 });
 export type LoginVerifyWorldData = z.infer<typeof loginVerifyWorldDataSchema>;
 
+/**
+ * Synthetic module event: emitted as the first frame when a WebSocket attaches
+ * to a session whose character is already in world (reattach after a dropped
+ * socket). Carries only what SMSG_LOGIN_VERIFY_WORLD plus the session response
+ * would have carried at real login.
+ */
+export const sessionStateDataSchema = z.looseObject({
+  character: z.string(),
+  guid: guidSchema,
+  inWorld: z.boolean(),
+  map: z.number(),
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+  o: z.number(),
+  level: z.number(),
+});
+export type SessionStateData = z.infer<typeof sessionStateDataSchema>;
+
 export const motdDataSchema = z.looseObject({
   lineCount: z.number(),
   lines: z.array(z.string()),
@@ -918,6 +937,7 @@ export const eventDataSchemas = {
   SMSG_DESTROY_OBJECT: destroyObjectDataSchema,
   SMSG_CREATURE_QUERY_RESPONSE: creatureQueryResponseDataSchema,
   WB_MOVE_PROGRESS: moveProgressDataSchema,
+  WB_SESSION_STATE: sessionStateDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
   ...moveOpcodeSchemas,
   // quest/combat extension — combat
