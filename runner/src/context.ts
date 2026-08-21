@@ -5,15 +5,24 @@
  * Per model request the conversation is rebuilt as:
  *
  *   [ system prompt ]
- *   [ up to MESSAGE_WINDOW most recent assistant / tool messages, verbatim,
- *     trimmed at assistant boundaries so tool-call pairs stay intact ]
+ *   [ the message window: recent assistant / tool messages, verbatim, cut at
+ *     assistant boundaries so tool-call pairs stay intact ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       goal line, harness notices, state summary, last EVENT_WINDOW events,
  *       scratchpad ]
  *
+ * The window grows to MESSAGE_WINDOW_MAX and is then cut back by one block of
+ * MESSAGE_WINDOW_TRIM messages, rather than sliding one message per turn. The
+ * point is prompt caching: providers cache by longest byte-identical prefix, so
+ * a per-turn slide diverges the prefix right after the system prompt on every
+ * turn and pays a full recompute each call. Block trimming keeps the prefix
+ * byte-stable for a whole block and pays one deliberate miss per block.
+ *
  * Older per-turn user context messages are dropped entirely — they are
  * regenerated, never accumulated. Determinism: `assembleContext` is a pure
- * function of its inputs and the tests require byte-identical output.
+ * function of its inputs and the tests require byte-identical output;
+ * `messageWindow` is a pure function of the *whole* stored history, so a
+ * rebuilt history reproduces the same boundaries as an in-memory one.
  */
 
 import { compactJson } from "./jsonsafe";
@@ -25,8 +34,15 @@ export const CONTEXT_POLICY = {
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,
-  /** Recent assistant/tool messages kept verbatim (counted in messages). */
-  MESSAGE_WINDOW: 24,
+  /**
+   * The message window is hysteretic: it grows to MESSAGE_WINDOW_MAX, then a
+   * single block of MESSAGE_WINDOW_TRIM oldest messages is dropped, cutting it
+   * back to MESSAGE_WINDOW_MAX - MESSAGE_WINDOW_TRIM. The floor is the old
+   * fixed window (24 messages ≈ 8–12 tool exchanges, ADR-0012); the ceiling
+   * buys a byte-stable prefix for a full block of turns.
+   */
+  MESSAGE_WINDOW_MAX: 48,
+  MESSAGE_WINDOW_TRIM: 24,
   /** Chat / notification tail lengths inside the state summary. */
   CHAT_TAIL: 10,
   NOTIFICATION_TAIL: 5,
@@ -176,14 +192,35 @@ export interface ChatMessage {
 }
 
 /**
- * Trim the rolling window to MESSAGE_WINDOW messages without ever splitting an
- * assistant tool-call from its tool results: trimming only starts at an
- * assistant message boundary.
+ * The index into the full history at which the model-visible window starts.
+ *
+ * Pure in `history.length` and the message roles, and monotone non-decreasing
+ * as history grows — that is what makes the sent prefix byte-stable within a
+ * block. The raw cut moves in whole blocks of MESSAGE_WINDOW_TRIM, only once
+ * the window would exceed MESSAGE_WINDOW_MAX (a `while`, not an `if`: one turn
+ * appends an assistant message plus all of its tool results at once, so the
+ * length can jump past several blocks on resume-shaped histories).
+ *
+ * The cut is then snapped *forward* to the next assistant message so an
+ * assistant tool-call is never separated from its tool results. Snapping only
+ * ever shortens the window, so the cap still holds; and because the raw cut is
+ * constant within a block, the snapped cut is too.
+ *
+ * Computed over the whole stored history rather than over the previously
+ * trimmed window on purpose: snapping shortens the window, which would delay
+ * the next trim and drift the boundaries away from the block grid, so an
+ * incrementally trimmed window and a rebuilt one would disagree.
  */
-export function trimMessageWindow(messages: ChatMessage[]): ChatMessage[] {
-  const max = CONTEXT_POLICY.MESSAGE_WINDOW;
-  if (messages.length <= max) return messages;
-  let start = messages.length - max;
-  while (start < messages.length && messages[start]!.role !== "assistant") start++;
-  return messages.slice(start);
+export function messageWindowCut(history: ChatMessage[]): number {
+  const { MESSAGE_WINDOW_MAX, MESSAGE_WINDOW_TRIM } = CONTEXT_POLICY;
+  let cut = 0;
+  while (history.length - cut > MESSAGE_WINDOW_MAX) cut += MESSAGE_WINDOW_TRIM;
+  while (cut < history.length && history[cut]!.role !== "assistant") cut++;
+  return cut;
+}
+
+/** The model-visible message window for a full history. Pure. */
+export function messageWindow(history: ChatMessage[]): ChatMessage[] {
+  const cut = messageWindowCut(history);
+  return cut === 0 ? history : history.slice(cut);
 }
