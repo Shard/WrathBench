@@ -237,6 +237,28 @@ priority. Items graduate out of this file into commits; the dev loop
      token-to-character binding plus a shared secret on the port is the
      obvious floor before anything runs on a non-loopback bind.
 
+15. **Un-awaited SDK call killed the sandbox — Bun's default unhandled-rejection
+    policy was fatal to the child (night-laguna-oc-1, 2026-08-22)**. Three
+    `sandbox_restarted` events (turns 33/35/40), each 4–100ms after a snippet
+    that returned ok. The common shape:
+    `console.log("Quest list:", JSON.stringify(sdk.questList()))` — no await, no
+    guid. `questList()` returns a promise (stringifies as `{}`), the module
+    rejects the malformed action after the HTTP round trip, and the rejection
+    has no holder. Bun 1.4 exits the process on an unhandled rejection, so the
+    whole runtime — bindings, routines, event connection — died for a routine
+    error the try/catch around the eval could never see. Turns 34/39 ran the
+    same nearbyUnits loop *without* the fire-and-forget call and survived, which
+    is the controlled diff. Reproduced offline with the exact snippet.
+    Compounding it, the host was blind: stderr was `inherit` and `onExit`
+    ignored the exit code, so the notice said only "exited unexpectedly".
+    Fixed 2026-08-22: the child installs `unhandledRejection` /
+    `uncaughtException` handlers that report (log-buffer entry the next snippet
+    result carries, plus a `fatal` → session_note notice) instead of dying; the
+    host pipes child stderr, keeps a tail, and stamps exit code, signal, and
+    last stderr into the `sandbox_restarted` notice. Regression tests in
+    `runner/test/sandbox.test.ts`. Live episodes launched before the fix run
+    the old loaded code and remain exposed until relaunch; no module change.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
