@@ -34,9 +34,22 @@ export interface ToolCall {
   arguments: string;
 }
 
+/**
+ * Provider-reported token usage, when the provider reports it. Optional
+ * end to end: an upstream that omits `usage` changes nothing downstream.
+ * Worth logging because it is the only honest measure of prompt-cache
+ * effectiveness (ADR-0012 addendum) — estimates cannot see a cache hit.
+ */
+export interface TokenUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 export interface AssistantTurn {
   content: string | null;
   toolCalls: ToolCall[];
+  usage?: TokenUsage;
   raw?: unknown;
 }
 
@@ -80,7 +93,26 @@ const completionSchema = z.looseObject({
       }),
     )
     .min(1),
+  // Loose + all-optional: providers vary in which counters they send, and one
+  // that sends none must still parse.
+  usage: z
+    .looseObject({
+      prompt_tokens: z.number().nullish(),
+      completion_tokens: z.number().nullish(),
+      total_tokens: z.number().nullish(),
+    })
+    .nullish(),
 });
+
+/** Drop null/absent counters so an omitted field never logs as `null`. */
+function toUsage(u: z.infer<typeof completionSchema>["usage"]): TokenUsage | undefined {
+  if (u === undefined || u === null) return undefined;
+  const usage: TokenUsage = {};
+  if (typeof u.prompt_tokens === "number") usage.prompt_tokens = u.prompt_tokens;
+  if (typeof u.completion_tokens === "number") usage.completion_tokens = u.completion_tokens;
+  if (typeof u.total_tokens === "number") usage.total_tokens = u.total_tokens;
+  return Object.keys(usage).length === 0 ? undefined : usage;
+}
 
 export interface OpenAiAdapterOptions {
   baseUrl: string;
@@ -166,6 +198,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
           throw new AdapterError(`model API response did not match schema: ${parsed.error.message}`);
         }
         const msg = parsed.data.choices[0]!.message;
+        const usage = toUsage(parsed.data.usage);
         return {
           kind: "ok",
           turn: {
@@ -175,6 +208,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
               name: tc.function.name,
               arguments: tc.function.arguments,
             })),
+            ...(usage !== undefined ? { usage } : {}),
             raw: json,
           },
         };

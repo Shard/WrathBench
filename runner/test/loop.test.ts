@@ -112,6 +112,39 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("provider-reported usage lands on the response record; absence stays absent", async () => {
+    let call = 0;
+    const withUsage: ChatAdapter = {
+      label: "usage",
+      complete: (): Promise<AdapterOutcome> => {
+        call++;
+        if (call > 2) return Promise.resolve({ kind: "stub-complete" });
+        return Promise.resolve({
+          kind: "ok",
+          turn: {
+            content: "ok",
+            toolCalls: [],
+            // second turn: a provider that reports nothing
+            ...(call === 1
+              ? { usage: { prompt_tokens: 1200, completion_tokens: 34, total_tokens: 1234 } }
+              : {}),
+          },
+        });
+      },
+    };
+    const { dir, options } = setup(withUsage);
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses).toHaveLength(2);
+    expect(responses[0]!["usage"]).toEqual({
+      prompt_tokens: 1200,
+      completion_tokens: 34,
+      total_tokens: 1234,
+    });
+    expect("usage" in responses[1]!).toBe(false);
+    options.trajectory.close();
+  });
+
   test("every request contains the system prompt plus a fresh context message", async () => {
     const seen: ChatRequest[] = [];
     const recording: ChatAdapter = {
