@@ -192,6 +192,40 @@ describe("messageWindow", () => {
     expect(pairsIntact(w)).toBe(true);
   });
 
+  test("caps an oversized message content, and leaves the rest alone", () => {
+    const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
+    const big: ChatMessage = { role: "tool", content: "x".repeat(cap + 137), tool_call_id: "t0.0" };
+    const h = [assistant(0), big, assistant(1), tool(1)];
+    const w = messageWindow(h);
+    expect(w[1]!.content).toBe(`${"x".repeat(cap)}\n…[truncated 137 chars]`);
+    expect(w[0]).toEqual(h[0]!); // untouched messages are passed through
+    expect(w[3]).toEqual(h[3]!);
+    expect(h[1]!.content!.length).toBe(cap + 137); // the stored history is not mutated
+  });
+
+  test("the cap boundary is exact", () => {
+    const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
+    const at: ChatMessage = { role: "tool", content: "y".repeat(cap), tool_call_id: "t0.0" };
+    const over: ChatMessage = { role: "tool", content: "y".repeat(cap + 1), tool_call_id: "t0.0" };
+    expect(messageWindow([assistant(0), at])[1]!.content).toBe("y".repeat(cap));
+    expect(messageWindow([assistant(0), over])[1]!.content).toBe(
+      `${"y".repeat(cap)}\n…[truncated 1 chars]`,
+    );
+  });
+
+  test("capping is deterministic and carries nothing turn-dependent", () => {
+    const big: ChatMessage = {
+      role: "tool",
+      content: "z".repeat(CONTEXT_POLICY.WINDOW_MESSAGE_CHARS * 3),
+      tool_call_id: "t0.0",
+    };
+    const h = [assistant(0), big];
+    expect(JSON.stringify(messageWindow(h))).toBe(JSON.stringify(messageWindow(h)));
+    // and identical however many messages precede it in the window
+    const later = messageWindow([...pairs(20), assistant(50), big]);
+    expect(later[later.length - 1]!.content).toBe(messageWindow(h)[1]!.content);
+  });
+
   test("deterministic: same history, byte-identical window", () => {
     const h = pairs(3 * MESSAGE_WINDOW_MAX + 7);
     expect(JSON.stringify(messageWindow(h))).toBe(JSON.stringify(messageWindow(h.slice())));
