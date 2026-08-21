@@ -256,3 +256,95 @@ describe("error rendering (2026-08 audit fixes)", () => {
     expect(res.error).toContain("await connect()");
   }, 15_000);
 });
+
+describe("background fault storm control (morning-laguna-2)", () => {
+  const setEnv = (vars: Record<string, string>): (() => void) => {
+    const prev = new Map<string, string | undefined>();
+    for (const [k, v] of Object.entries(vars)) {
+      prev.set(k, process.env[k]);
+      process.env[k] = v;
+    }
+    return () => {
+      for (const [k, v] of prev) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    };
+  };
+
+  test("rapid-fire identical faults produce bounded notices: first report + one escalation", async () => {
+    const restore = setEnv({
+      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "10",
+      WRATHBENCH_FAULT_ROLLUP_MS: "60000",
+    });
+    try {
+      const host = makeHost();
+      const res = await host.evalSnippet(
+        "for (let i = 0; i < 40; i++) Promise.reject(new Error('storm')); await sleep(300);",
+      );
+      expect(res.ok).toBe(true);
+      const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+      expect(notes.length).toBe(2); // not 40
+      expect(notes[0]!.text).toContain("unhandled promise rejection");
+      expect(notes[0]!.text).toContain("storm");
+      expect(notes[1]!.text).toContain("background routine broken");
+      expect(notes[1]!.text).toContain("clearInterval");
+      // ...and the log buffer collapsed the repeats rather than holding 40 lines
+      const stormLines = res.logs.filter((l) => l.text.includes("storm"));
+      expect(stormLines.length).toBe(1);
+      expect(stormLines[0]!.text).toMatch(/×40$/);
+    } finally {
+      restore();
+    }
+  });
+
+  test("distinct fault signatures each get their first report", async () => {
+    const host = makeHost();
+    await host.evalSnippet(
+      "const a = new Error('alpha'); a.name = 'AlphaFault';\n" +
+        "const b = new Error('beta'); b.name = 'BetaFault';\n" +
+        "Promise.reject(a); Promise.reject(b);\n" +
+        "await sleep(200);",
+    );
+    const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+    expect(notes.some((n) => n.text.includes("AlphaFault"))).toBe(true);
+    expect(notes.some((n) => n.text.includes("BetaFault"))).toBe(true);
+  });
+
+  test("continuing repeats aggregate into a single ×N rollup notice", async () => {
+    const restore = setEnv({
+      WRATHBENCH_FAULT_ROLLUP_MS: "150",
+      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "1000",
+    });
+    try {
+      const host = makeHost();
+      // One shared thrower: the signature is name + first stack line, so both
+      // batches must fault from the same source line to count as one storm.
+      await host.evalSnippet(
+        "const drip = () => Promise.reject(new Error('drip'));\n" +
+          "for (let i = 0; i < 5; i++) drip();\n" +
+          "await sleep(300);\n" +
+          "for (let i = 0; i < 5; i++) drip();\n" +
+          "await sleep(200);",
+      );
+      const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+      expect(notes.length).toBe(2); // first report + exactly one rollup
+      expect(notes[1]!.text).toContain("aggregated");
+      expect(notes[1]!.text).toMatch(/×\d+/);
+      expect(notes[1]!.text).toContain("unhandled promise rejection");
+    } finally {
+      restore();
+    }
+  });
+
+  test("repeated identical console lines collapse to one ×N entry", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet(
+      'for (let i = 0; i < 25; i++) console.log("same line");\nconsole.log("different");',
+    );
+    expect(res.ok).toBe(true);
+    expect(res.logs.length).toBe(2);
+    expect(res.logs[0]!.text).toBe("same line ×25");
+    expect(res.logs[1]!.text).toBe("different");
+  });
+});
