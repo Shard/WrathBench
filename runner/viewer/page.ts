@@ -29,7 +29,7 @@ export const PAGE = String.raw`<!doctype html>
   header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line);
            padding: 10px 16px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; z-index: 5; }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  main { padding: 12px 16px 60vh; max-width: 1100px; }
+  main { padding: 12px 16px 32px; max-width: 1100px; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--line);
            vertical-align: top; white-space: nowrap; }
@@ -43,6 +43,7 @@ export const PAGE = String.raw`<!doctype html>
   .entry.response { border-color: #5f6b7f; }
   .entry.error { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
   .entry.harness { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .entry.termination, .entry.pause { border-color: var(--err); }
   .entry.state { border-color: transparent; padding-top: 0; padding-bottom: 0; margin: 2px 0; }
   .meta { color: var(--dim); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
   .tag { text-transform: uppercase; letter-spacing: .06em; font-size: 11px; font-weight: 700; }
@@ -137,13 +138,16 @@ function sparkline(states) {
 
 function rawButton(i, label) {
   const b = el("button", "", label);
+  let pre = null;
   b.onclick = async () => {
-    if (b.dataset.open === "1") { b.nextSibling.remove(); b.dataset.open = "0"; b.textContent = label; return; }
+    // The button lives in the flex .meta row; the panel belongs to the entry itself.
+    if (pre) { pre.remove(); pre = null; b.textContent = label; return; }
     const txt = await (await fetch("/api/run/" + encodeURIComponent(RUN.runId) + "/raw/" + i)).text();
     let pretty = txt;
     try { pretty = JSON.stringify(JSON.parse(txt), null, 2); } catch (_) {}
-    const pre = el("pre", "", pretty.length > 400000 ? pretty.slice(0, 400000) + "\n… truncated" : pretty);
-    b.after(pre); b.dataset.open = "1"; b.textContent = "hide";
+    pre = el("pre", "", pretty.length > 400000 ? pretty.slice(0, 400000) + "\n… truncated" : pretty);
+    (b.closest(".entry") || b.parentNode).append(pre);
+    b.textContent = "hide";
   };
   return b;
 }
@@ -197,9 +201,22 @@ function renderEntry(e) {
       break;
     }
     case "harness":
-    case "watchdog":
+    case "watchdog": {
+      if (e.kind) meta.append(el("span", "warn tag", String(e.kind)));
+      const words = ["text", "detail", "reason", "message"].map((k) => e[k]).filter(Boolean);
+      const extra = Object.keys(e).filter((k) =>
+        !["i","t","ts","turn","start","end","clipped","kind","text","detail","reason","message"].includes(k));
+      div.append(el("div", "text", words.join(" — ") ||
+        extra.map((k) => k + " " + JSON.stringify(e[k])).join("  ")));
+      if (e.clipped) meta.append(rawButton(e.i, "raw"));
+      break;
+    }
     case "termination":
-    case "pause":
+    case "pause": {
+      div.append(el("div", "text err",
+        (e.t === "pause" ? "paused: " : "terminated: ") + e.reason + (e.detail ? " — " + e.detail : "")));
+      break;
+    }
     case "meta":
     default: {
       const rest = {};
@@ -278,6 +295,9 @@ async function renderRun(runId) {
   cb.onchange = () => { follow = cb.checked; };
   followBox.append(cb, document.createTextNode(" auto-scroll"));
   $("#ctrl").textContent = ""; $("#ctrl").append(followBox);
+
+  // A run that has already terminated will never grow: no point holding a stream open.
+  if (RUN.terminationReason) return;
 
   es = new EventSource("/api/run/" + encodeURIComponent(runId) + "/stream");
   es.onmessage = (ev) => {
