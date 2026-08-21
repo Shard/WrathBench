@@ -41,13 +41,13 @@ stealth/ox-alpha`, platform derived from `config.apiBase`), the current context
 size, and the tokens the run has spent in total — prompt plus completion summed
 over every turn, as a provider would bill it.
 
-**These token numbers are estimates**, and the UI says so with a `~` and an
-`est` suffix. The openai adapter parses only `choices[0].message` out of the
-provider response, so `usage` never reaches the trajectory and there is nothing
-recorded to read; the viewer falls back to characters ÷ 4. If a driver starts
-logging `usage` on `request` or `response` entries, the viewer picks it up
-automatically and drops the estimate marker. Making that real is a runner
-change, not a viewer one.
+The runner records a provider `usage` block on `response` entries whenever the
+provider returns one, so those counts are measured. **Runs recorded before usage
+logging landed show estimates instead** — characters ÷ 4, marked with a `~` and
+an `est` suffix — and newer runs show provider-reported counts automatically;
+the viewer decides per run by whether it finds any usage in the file. A turn's
+reported prompt size replaces the estimate for that turn, so the two never
+double-count.
 
 The run page is a turn-by-turn feed: model text, snippets as code blocks,
 snippet results with errors highlighted, harness notices called out, compact

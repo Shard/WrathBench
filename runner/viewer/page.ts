@@ -163,10 +163,11 @@ const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1000 ? (n 
 const modelLabel = () => (RUN.platform ? RUN.platform + " · " : "") + (RUN.model || "?");
 
 /*
- * Token counts. Nothing in the trajectory records provider usage today — the
- * openai adapter keeps only choices[0].message — so these are character-based
- * estimates and are labelled "est" wherever they appear. If a driver ever logs
- * usage, the server reports source "reported" and the tilde disappears.
+ * Token counts. The runner logs a provider "usage" block on response entries
+ * when the provider returns one, so newer runs show measured counts. Runs
+ * recorded before usage logging landed fall back to characters ÷ 4 and are
+ * marked with a tilde and an "est" suffix; the server decides which by whether
+ * it found any usage in the file.
  */
 function showMetrics(tok) {
   const est = tok.source === "estimated";
@@ -179,7 +180,8 @@ function showMetrics(tok) {
   };
   box.append(el("span", "", modelLabel()));
   box.append(item("context", (est ? "~" : "") + fmtTokens(tok.contextTokens),
-    est ? "Estimated from prompt characters ÷ 4 — the harness does not record provider usage." : "Reported by the provider."));
+    est ? "Estimated from prompt characters ÷ 4 — this run predates provider usage logging."
+        : "Reported by the provider."));
   box.append(item("total", (est ? "~" : "") + fmtTokens(tok.totalTokens) + (est ? " est" : ""),
     "Prompt + completion summed over " + tok.turns + " turns, as billed."));
   $("#hdr").textContent = "";

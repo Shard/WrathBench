@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, truncateSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { appendFileSync, mkdirSync, mkdtempSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { platformOf } from "../viewer/runs";
+import { platformOf, readRun } from "../viewer/runs";
 import { TrajectoryTail, splitLines, summarize, tokenTotals } from "../viewer/tail";
 
 function tempFile(): string {
@@ -207,7 +208,38 @@ describe("tokenTotals", () => {
     expect(t.totalTokens).toBe(3300);
   });
 
-  test("prefers reported usage and flags the source", () => {
+  test("a response's reported usage replaces its turn's estimate", () => {
+    // The runner logs usage on the response; the prompt it reports belongs to
+    // the request just before it, which must not also be counted as an estimate.
+    const t = tokenTotals([
+      req(0, 40000),
+      summarize(
+        { t: "response", ts: 1, message: { role: "assistant", content: "hi" }, usage: { prompt_tokens: 1200, completion_tokens: 250 } },
+        1,
+        0,
+        1,
+      ),
+    ]);
+    expect(t.source).toBe("reported");
+    expect(t.contextTokens).toBe(1200);
+    expect(t.promptTokens).toBe(1200);
+    expect(t.completionTokens).toBe(250);
+    expect(t.totalTokens).toBe(1450);
+  });
+
+  test("a turn still awaiting its response keeps the estimated prompt", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize({ t: "response", ts: 1, message: {}, usage: { prompt_tokens: 900, completion_tokens: 30 } }, 1, 0, 1),
+      req(2, 8000),
+    ]);
+    expect(t.turns).toBe(2);
+    expect(t.contextTokens).toBe(2000);
+    expect(t.promptTokens).toBe(900 + 2000);
+    expect(t.completionTokens).toBe(30);
+  });
+
+  test("usage on a request is still honoured if a driver logs it there", () => {
     const t = tokenTotals([
       summarize({ t: "request", ts: 1, messages: [], usage: { prompt_tokens: 1200, completion_tokens: 0 } }, 0, 0, 1),
       summarize({ t: "response", ts: 2, message: {}, usage: { completion_tokens: 250 } }, 1, 0, 1),
@@ -235,5 +267,27 @@ describe("platformOf", () => {
   test("falls back to the driver when there is no api base", () => {
     expect(platformOf(null, "claude-subscription")).toBe("claude-subscription");
     expect(platformOf(null, null)).toBeNull();
+  });
+});
+
+describe("readRun", () => {
+  test("renders a pre-rename pause reason in the current vocabulary", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-runs-"));
+    const dir = join(runsDir, "paused-run");
+    mkdirSync(dir);
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
+      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT);
+      CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
+      x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER);`);
+    db.query(`INSERT INTO run (run_id, pause_reason, config_json) VALUES (?, ?, ?)`).run(
+      "paused-run",
+      "window-exhausted",
+      "{}",
+    );
+    db.close();
+
+    expect(readRun(runsDir, "paused-run").pauseReason).toBe("quota-exhausted");
   });
 });
