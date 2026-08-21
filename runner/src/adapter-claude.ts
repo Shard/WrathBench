@@ -183,6 +183,55 @@ function assistantBlocks(msg: Record<string, unknown>): AssistantBlock[] {
   return content as AssistantBlock[];
 }
 
+/**
+ * The CLI's token accounting, translated into the one shape the rest of the
+ * harness reads.
+ *
+ * Every stream-json `assistant` envelope carries the usage of the API call that
+ * produced it (`message.usage`), and the closing `result` envelope carries the
+ * session total (`usage`). Anthropic reports `input_tokens` *excluding* what
+ * came from or went into the cache, while the OpenAI-compatible `prompt_tokens`
+ * the runner normalises to is the whole input with the cached part as a subset.
+ * Summing the three keeps that invariant true across drivers, so a viewer can
+ * do the same arithmetic either way. `cache_write_tokens` is the one field with
+ * no OpenAI-compat counterpart: it is present only when the provider says so,
+ * because "unknown" and "zero" must not render alike.
+ */
+export interface ClaudeUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+}
+
+export function normalizeClaudeUsage(raw: unknown): ClaudeUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+  const n = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const input = n(u["input_tokens"]);
+  const output = n(u["output_tokens"]);
+  const read = n(u["cache_read_input_tokens"]);
+  const write = n(u["cache_creation_input_tokens"]);
+  if (input === undefined && output === undefined && read === undefined && write === undefined) return undefined;
+  const prompt = (input ?? 0) + (read ?? 0) + (write ?? 0);
+  const completion = output ?? 0;
+  const usage: ClaudeUsage = {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
+  };
+  if (read !== undefined) usage.cached_tokens = read;
+  if (write !== undefined) usage.cache_write_tokens = write;
+  return usage;
+}
+
+/** Usage off an `assistant` envelope, which nests it under `message`. */
+function assistantUsage(msg: Record<string, unknown>): ClaudeUsage | undefined {
+  const message = msg["message"] as { usage?: unknown } | undefined;
+  return normalizeClaudeUsage(message?.usage);
+}
+
 /** A tiny async queue: the stdout reader pushes, the turn loop pulls. */
 class MessageQueue {
   private readonly items: Record<string, unknown>[] = [];
@@ -696,6 +745,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             if (text.length > 0 || toolUses.length > 0) {
               sawOutput = true;
               watchdogs.noteModelOutput();
+              // One `assistant` envelope is one API call, so its usage belongs
+              // to this response entry — the `result` envelope's session total
+              // only lands at the end of an episode, which a run cut short by
+              // the wall clock never reaches.
+              const usage = assistantUsage(msg);
               trajectory.append({
                 t: "response",
                 turn,
@@ -704,6 +758,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                   content: text.length > 0 ? text : null,
                   ...(toolUses.length > 0 ? { tool_uses: toolUses } : {}),
                 },
+                ...(usage !== undefined ? { usage } : {}),
               });
             }
             break;
@@ -719,7 +774,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               numTurns: msg["num_turns"],
               durationMs: msg["duration_ms"],
               costUsd: msg["total_cost_usd"],
-              usage: msg["usage"],
+              // Raw for fidelity; normalised so a reader never has to know two
+              // token vocabularies. This is a session total, not a per-turn
+              // figure, so nothing sums it — the response entries carry that.
+              usageRaw: msg["usage"],
+              usage: normalizeClaudeUsage(msg["usage"]),
               text: resultText.slice(0, 2_000),
             });
             // Gated on is_error: a successful turn's text is model output.

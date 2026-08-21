@@ -145,6 +145,22 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("the CLI's per-message usage lands on the response entry, in the shared shape", async () => {
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
+    await runClaudeEpisode(options);
+    const response = readTrajectory(runDir).find((r) => r.t === "response");
+    // input_tokens excludes both cache figures upstream; prompt_tokens includes
+    // them, so a reader can subtract instead of guessing which convention it is.
+    expect(response?.["usage"]).toEqual({
+      prompt_tokens: 115,
+      completion_tokens: 7,
+      total_tokens: 122,
+      cached_tokens: 100,
+      cache_write_tokens: 3,
+    });
+    trajectory.close();
+  }, 20_000);
+
   test("the spawned CLI never sees API-key credentials", async () => {
     const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     await runClaudeEpisode(options);

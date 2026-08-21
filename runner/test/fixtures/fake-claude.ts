@@ -219,7 +219,19 @@ for await (const chunk of Bun.stdin.stream()) {
 
     emit({
       type: "assistant",
-      message: { role: "assistant", content: [{ type: "text", text: `turn ${turn}: acting` }] },
+      // The real CLI hangs the usage of the API call that produced this message
+      // off `message.usage`, in Anthropic's vocabulary: `input_tokens` counts
+      // only what was neither read from nor written to the cache.
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `turn ${turn}: acting` }],
+        usage: {
+          input_tokens: 12,
+          output_tokens: 7,
+          cache_creation_input_tokens: 3,
+          cache_read_input_tokens: 100,
+        },
+      },
       session_id: "fake-session",
     });
 
