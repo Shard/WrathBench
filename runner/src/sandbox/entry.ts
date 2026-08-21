@@ -246,4 +246,33 @@ process.on("message", (msg) => {
 
 process.on("disconnect", () => process.exit(0));
 
+// ------------------------------------------------- survive background errors
+//
+// Bun's default policy kills the process on an unhandled rejection or uncaught
+// exception. A snippet that fires an SDK call without awaiting it (seen in
+// night-laguna-oc-1: `JSON.stringify(sdk.questList())`) turns a routine module
+// error into a rejected promise nobody holds — and the whole runtime, with all
+// its bindings and routines, died for it. Report instead: the error lands in
+// the log buffer (so the next snippet result shows it) and as a fatal notice
+// the host surfaces to the model.
+
+function reportBackgroundError(kind: string, reason: unknown): void {
+  const text =
+    reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : Bun.inspect(reason, { depth: 4 }).slice(0, 1_000);
+  logBuf.push({ level: "error", ts: Date.now(), text: `[${kind}] ${text}`.slice(0, LOG_MAX_CHARS) });
+  if (logBuf.length > 500) logBuf.splice(0, logBuf.length - 500);
+  realConsole.error?.(`[sandbox] ${kind}:`, text);
+  send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
+}
+
+process.on("unhandledRejection", (reason) => {
+  reportBackgroundError("unhandled promise rejection", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  reportBackgroundError("uncaught exception", err);
+});
+
 send({ t: "ready" });
