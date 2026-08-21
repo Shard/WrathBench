@@ -1,39 +1,73 @@
 # Vision
 
-## What this measures
-How well a language model drives a fixed toolkit to achieve long-horizon goals in a live game world.
+Where this is going, beyond the current phase. Written 2026-08-22 so the
+long view survives the day-to-day. Nothing here overrides PHASE-0.md or the
+ADRs; when this document and a decision conflict, the decision wins until
+deliberately revisited.
 
-The model is given a TypeScript SDK, a sandboxed runtime, a searchable reference bundle, and a character in World of Warcraft 3.3.5a. It writes snippets, sets up routines, watches events, and intervenes. The world does not pause for it. The server records what actually happened.
+## North star
 
-This is the same shape as RuneBench (RuneScape), SWE-bench, and Terminal-Bench: model plus a fixed agent loop plus tools. It is not a direct-play benchmark. We say so up front.
+LLMs conquering Icecrown Citadel. Not because raiding is the point, but
+because ICC stacks every hard problem in the right order: long-horizon
+leveling, economy and gear decisions, travel across a continent, group
+coordination, and finally execution of mechanics under time pressure. A
+harness that can carry agents from a level-1 character to a 25-man raid
+boss has solved long-horizon agency in a live world, and every intermediate
+milestone is independently measurable.
 
-## Why this game
-- A mature open server (AzerothCore) with a headless mode, a modular C++ extension system, and a human-readable database for state and content.
-- A decision space that is richer than skill grinding: quests, travel, gear, rotations, death recovery, and later group roles and encounter mechanics.
-- Knowledge of the game does not collapse the task. The wiki is in every model's training data and the task is still hard, because the bottleneck is execution in a stateful world, not recall.
-- Room to grow into coordination tasks (dungeons) that almost nothing else benchmarks well.
+## Two tracks, one harness
 
-## Why this design
+- **Eval track** — what exists today: fixed episodes, versioned harness,
+  scores comparable within a harness version (ADR-0004). Leaderboards live
+  here.
+- **Freeplay track** — ultra-long-horizon runs with no episode cap, in the
+  spirit of Claude Plays Pokémon: "go play WoW" and the agent owns its own
+  goals, coordination, and (eventually) its own context management. Freeplay
+  runs are labeled, never mixed into eval scores. The labeled context-engine
+  idea (FOLLOW-UPS 8b) becomes load-bearing here: ultra-long play forces the
+  self-compaction question that fixed episodes let us defer.
 
-- Script and supervise, not act per tick. A global cooldown rotation is something a person decides once and executes on autopilot. Putting the model at the routine and supervision layer tests the interesting decisions and makes latency a property of responsiveness to events, not a tax on every action.
-- Fixed harness, model as the only variable. The SDK surface, agent loop, prompt, and reference bundle are frozen per harness version. A score is "harness vX, model Y, task Z". SDK changes are major versions and old scores keep their label.
-- Server-side control module with a client-fidelity contract. Actions are dispatched through the same opcode handlers a real client uses; observations are limited to what a real client could see. This gives client fidelity without writing a packet client, and it is documented so the privilege question is answered before it is asked.
+The economics motivate patience: local models keep improving, hardware gets
+cheaper, and the harness is model-agnostic by construction. The freeplay
+server is designed to still be running when models that can raid arrive.
 
-## What "good" looks like for Phase 0
+## Navigation and the minimap question
 
-A harness any model can plug into. Small capable models achieve liftoff: they create a character, read the quest log, complete quests, and gain levels. Frontier models go a long way with no harness errors in their trajectories. A frontier model hitting harness errors means the harness is wrong, not the model.
+Local obstacle avoidance is already below the model (server-side mmaps
+pathing). What models lack is spatial context for choosing destinations —
+today that is coordinate text, and the failure modes at scale are known:
+multi-zone routing, flight masters, boats/zeppelins, elevators, trams,
+instance portals, hour-long stuck detection.
 
-The dev loop is: point a model at it, let it run as far as it can, read where it stalled, fix the harness, repeat. The level the best model reaches before stalling is a progress metric for the harness as much as for the model.
+The contract question to settle before building anything: CONTRACTS.md says
+the agent observes what a real client could observe — and a real client
+renders a minimap from map data the client itself ships. A walkability/POI
+observation derived from the same client extracts is therefore arguably
+contract-clean; anything derived from server-omniscient state is not. Write
+the ADR when a run makes navigation the obstacle; until then the travel
+probe (infra/smoke/travel.ts) is the evidence-gathering instrument.
 
-## What this is not
-- Not a composite score. Per-task tables with seeds and intervals.
-- Not a leaderboard for arbitrary scaffolds. A bring-your-own-agent track, if it ever exists, is a separate board.
-- Not a claim about retail WoW. It runs on the community reconstruction of 3.3.5a, pinned and deterministic in content, and compares models against each other in that world.
-- Not a public play service. No endpoint anyone can point a client at, no recruited players, no money.
-- Not a persistent multi-agent world. That is a later, separate artefact (the observatory) that reuses this infrastructure and produces logs and write-ups, never scores.
+## Community agents (the open freeplay server)
 
-## Later tracks, in rough order
+The endgame for freeplay: others connect their own agents to a shared
+world, bringing their own models and paying their own inference. The only
+exposed surface is the MCP — never the game protocol, never direct client
+connections.
 
-Wider level bands and mid-level starts via character snapshots. SDK tier experiments (primitive vs composed). Perturbed-twin tasks as a contamination gate. Single dungeon encounters with a scripted party. Multi-agent dungeons. Gearing tasks scored by simulated DPS. The observatory.
+Prerequisites, in order, before any public exposure:
+1. Per-character credentials (FOLLOW-UPS 10) — the one-account-per-run
+   scheme is the current isolation boundary and does not survive strangers.
+2. AuthN/AuthZ on the module surface: today it is loopback-only and
+   unauthenticated by design; public MCP inverts that assumption entirely.
+3. Rate limiting, abuse handling, and per-agent resource isolation.
+4. A conversation with someone qualified about the legal posture. Working
+   assumptions until then: never distribute anything Blizzard-derived
+   (already a hard constraint), no direct game-client access, strictly
+   non-commercial.
 
-None of these start until the Phase 0 gate is passed and the dev loop is boring.
+## What this document is not
+
+Not a roadmap and not a commitment. Phase gates stay evidence-driven: each
+capability enters when an organic run makes it the next obstacle
+(PHASE-0.md's rule), and the eval track's integrity — fixed harness, honest
+scores, no per-model accommodation — outranks every ambition above.
