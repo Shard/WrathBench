@@ -1,0 +1,20 @@
+[
+  {
+    "model": "opus",
+    "driver": "claude-subscription",
+    "account": "SHAKEOUT",
+    "character": "Burnopus",
+    "race": 3,
+    "class": 2,
+    "episodeMs": 5400000
+  },
+  {
+    "model": "sonnet",
+    "driver": "claude-subscription",
+    "account": "SHAKEOUT",
+    "character": "Burnsonn",
+    "race": 3,
+    "class": 2,
+    "episodeMs": 5400000
+  }
+]
