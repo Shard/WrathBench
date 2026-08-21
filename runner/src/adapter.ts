@@ -46,6 +46,10 @@ export interface TokenUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  /** Prompt tokens served from the provider's prompt cache, flattened from
+   * `prompt_tokens_details.cached_tokens` (OpenAI-compat) or a top-level
+   * `cached_tokens`. Absent when the provider reports nothing. */
+  cached_tokens?: number;
 }
 
 export interface AssistantTurn {
@@ -102,6 +106,8 @@ const completionSchema = z.looseObject({
       prompt_tokens: z.number().nullish(),
       completion_tokens: z.number().nullish(),
       total_tokens: z.number().nullish(),
+      cached_tokens: z.number().nullish(),
+      prompt_tokens_details: z.looseObject({ cached_tokens: z.number().nullish() }).nullish(),
     })
     .nullish(),
 });
@@ -113,6 +119,8 @@ function toUsage(u: z.infer<typeof completionSchema>["usage"]): TokenUsage | und
   if (typeof u.prompt_tokens === "number") usage.prompt_tokens = u.prompt_tokens;
   if (typeof u.completion_tokens === "number") usage.completion_tokens = u.completion_tokens;
   if (typeof u.total_tokens === "number") usage.total_tokens = u.total_tokens;
+  const cached = typeof u.cached_tokens === "number" ? u.cached_tokens : u.prompt_tokens_details?.cached_tokens;
+  if (typeof cached === "number") usage.cached_tokens = cached;
   return Object.keys(usage).length === 0 ? undefined : usage;
 }
 
@@ -152,6 +160,10 @@ export class OpenAiChatAdapter implements ChatAdapter {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
       })),
+      // OpenRouter-only accounting opt-in: returns cache and cost detail in
+      // `usage`. Observability, not behavior — but gated to the one host that
+      // documents it, since a strict OpenAI-compat server may 400 on unknowns.
+      ...(this.opts.baseUrl.includes("openrouter.ai") ? { usage: { include: true } } : {}),
     });
 
     let lastError = "";

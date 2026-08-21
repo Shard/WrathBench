@@ -60,6 +60,22 @@ describe("OpenAiChatAdapter usage", () => {
     expect(out.kind === "ok" && out.turn.usage).toBeUndefined();
   });
 
+  test("cached_tokens is flattened from prompt_tokens_details", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 80 } },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({ prompt_tokens: 100, cached_tokens: 80 });
+  });
+
+  test("a top-level cached_tokens wins and details are the fallback", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { cached_tokens: 40, prompt_tokens_details: { cached_tokens: 9 } },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({ cached_tokens: 40 });
+  });
+
   test("partial usage keeps the counters it has and drops the rest", async () => {
     const out = await adapterReturning({
       choices,
