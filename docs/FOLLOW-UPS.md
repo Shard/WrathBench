@@ -265,6 +265,73 @@ priority. Items graduate out of this file into commits; the dev loop
     `runner/test/sandbox.test.ts`. Live episodes launched before the fix run
     the old loaded code and remain exposed until relaunch; no module change.
 
+16. **"Quest-giver flicker" hypothesis killed — the churn was real visibility
+    edges plus hallucinated creature entries (night-laguna-oc-2, analyzed
+    2026-08-22)**. The prior read ("fast spawn/despawn NPCs, interacts landing
+    a beat too late") is wrong on both counts. From the served event stream:
+    Conservator Ilthalaine (entry 2079, guid …6902581540) and Tarindrella
+    (entry 1992, guid …5442963864) were created at t+0 (Ilthalaine at 3.8y)
+    and every subsequent DESTROY/OUT_OF_RANGE for either guid happened with
+    the character 64–104y away — never within 30y, let alone interact range.
+    The create/destroy churn at ~100y is the server's visibility boundary
+    (Tarindrella wanders a few yards across it); night-xpreview-1 and
+    night-hy3-1 show the identical far-edge events in the same zone and
+    quested fine. The actual failure: laguna hallucinated wowhead-style
+    entries (1984 = "Ilthalaine", 1988/1992 = "Tarindrella", 2031 =
+    "Melithar") when the live queries say 1984 = Young Thistle Boar, 1988 =
+    Grell, 2031 = Young Nightsaber — so its entry-filtered scans matched
+    nothing, it chased respawning critters as "cycling quest NPCs" for ~40
+    minutes, and it never once referenced Ilthalaine's real guid (0 snippets).
+    Its two clean gossips (seq 1499, 7186) hit Tarindrella, whose empty
+    quest menu is correct game behavior without the Melithar pre-quest.
+    Module destroy/OOR forwarding and StateCache (prunes only on
+    destroy/outOfRange, no distance/staleness eviction) are both clean.
+    Classification: model, not harness. Secondary tallies: laguna-oc-2
+    122 snippets / 91 interact-ish / 18 errors (7 BigInt-stringify, the rest
+    misuse: `u.fields?.value?.entry` on a Map, missing_guid/position);
+    roster-nemotron-nano 81 snippets, 33 "AggregateError: Parse error"
+    (invalid TS), 0 interact calls, stalled at 359 xp. The weak-model
+    bottleneck is knowledge/API discipline (invented entries, unread wire
+    truth), not observation flicker or action plumbing. No code change.
+
+17. **Failure-surface audit — Tier 1 + Tier 2 shipped 2026-08-22**. An audit
+    of 2,680 tool results across the overnight runs (229 errors) mapped every
+    failure surface; the deterministic, model-agnostic fixes landed:
+    - *Parse errors carry positions* (43/229 were a bare "AggregateError:
+      Parse error"): the sandbox flattens Bun transpiler AggregateErrors (and
+      lone BuildMessages) into per-error message + line:column + lineText,
+      line numbers corrected for the compile wrapper (`entry.ts`).
+    - *Guid/position validation client-side*: `guidArg`/`toBigInt` reject
+      `undefined`/`null` (naming the method and where guids come from) and
+      `number` (precision-truncated guids silently target nothing); `moveTo`
+      validates x/y/z as finite numbers, naming the bad axis.
+    - *`selfKey` prototype-safe* and the prompt's SDK-inspection idiom is now
+      descriptor-based (never invokes getters).
+    - *Tool arg contract matches the advertised schema*: `z.strictObject`, so
+      unknown keys error naming them and the valid keys; alias normalization
+      (cmd/snippet/source/script/ts→code, text/markdown→content, q→query)
+      runs before validation; argument strings get JSON→fence-strip→
+      trailing-comma-repair leniency; recent_events `limit` coerces + clamps;
+      final failures echo ~200 chars received and restate params in prose;
+      unknown tool names list the six tools with a Levenshtein/substring
+      "did you mean".
+    - *Module missing-param replies echo `action` + `param`*; unparseable
+      guid fields are `400 invalid_guid` (echoing the value) instead of
+      silently coercing to guid 0. PROTOCOL.md updated; image rebuilt, not
+      deployed (live runs).
+    - *Hints for all known error codes* rendered into `WrathRequestError`
+      messages (the CHAR_RESPONSE_HINTS pattern generalized).
+    - *Timeout ergonomics*: abandoned-eval message points at background
+      routines and warns the code may still be running; the timed-out
+      snippet's buffered console logs come back via the liveness ping's
+      drain (pong carries `logs`); the event-loop-kill message carries the
+      state-loss recovery guidance; BigInt-stringify TypeErrors name the fix,
+      and the prompt states guids are bigints.
+    - *`EventTimeoutError` says what it was waiting for* (`description`
+      threaded through `waitFor`; SDK helpers label their waits).
+    Parked pending ADRs (deliberately not shipped): BigInt.prototype.toJSON,
+    sdk.wait/events.off aliases, machine-readable error class taxonomy.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
