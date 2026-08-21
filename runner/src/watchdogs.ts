@@ -1,0 +1,95 @@
+/**
+ * Watchdogs: the named ways a run ends without the model choosing to stop.
+ * Thresholds live in config.ts (one place); the semantics live here:
+ *
+ *   idle            no successful model response for idleMs. Guards against a
+ *                   dead adapter or a model that stops producing output.
+ *   no-xp           no increase in (level, xp) for noXpMs, measured from the
+ *                   first observed progress value — a session that never forms
+ *                   is `idle`'s problem, not this one's.
+ *   episode-limit   wall clock since episode start exceeds episodeMs.
+ *   snippet-runaway maxSandboxRestarts consecutive sandbox kills without an
+ *                   intervening successful snippet.
+ *
+ * `environment-defect` is deliberately not detected here: it is a human
+ * classification applied after reading a trajectory (classify.ts), because a
+ * broken quest looks exactly like a stuck model until someone checks.
+ *
+ * Everything takes an injectable clock so the tests run in fake time.
+ */
+
+import type { TerminationReason, WatchdogConfig } from "./config";
+
+export interface WatchdogVerdict {
+  reason: TerminationReason;
+  detail: string;
+}
+
+export class Watchdogs {
+  private readonly startedAt: number;
+  private lastModelOutputAt: number;
+  private lastProgressAt: number | null = null;
+  private lastProgress: { level: number; xp: number } | null = null;
+  private sandboxRestarts = 0;
+
+  constructor(
+    private readonly cfg: WatchdogConfig,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.startedAt = this.now();
+    this.lastModelOutputAt = this.startedAt;
+  }
+
+  /** A model response arrived. */
+  noteModelOutput(): void {
+    this.lastModelOutputAt = this.now();
+  }
+
+  /** A state observation arrived. Progress = lexicographic (level, xp). */
+  noteProgress(level: number | undefined, xp: number | undefined): void {
+    if (level === undefined && xp === undefined) return;
+    const current = { level: level ?? 0, xp: xp ?? 0 };
+    if (
+      this.lastProgress === null ||
+      current.level > this.lastProgress.level ||
+      (current.level === this.lastProgress.level && current.xp > this.lastProgress.xp)
+    ) {
+      this.lastProgress = current;
+      this.lastProgressAt = this.now();
+    } else if (this.lastProgressAt === null) {
+      this.lastProgressAt = this.now();
+    }
+  }
+
+  noteSandboxRestart(): void {
+    this.sandboxRestarts++;
+  }
+
+  noteSnippetSuccess(): void {
+    this.sandboxRestarts = 0;
+  }
+
+  /** Evaluate all watchdogs. First tripped wins, in severity order. */
+  check(): WatchdogVerdict | null {
+    const t = this.now();
+    if (this.sandboxRestarts >= this.cfg.maxSandboxRestarts) {
+      return {
+        reason: "snippet-runaway",
+        detail: `${this.sandboxRestarts} consecutive sandbox restarts`,
+      };
+    }
+    if (t - this.startedAt >= this.cfg.episodeMs) {
+      return { reason: "episode-limit", detail: `episode wall clock ${t - this.startedAt}ms` };
+    }
+    if (t - this.lastModelOutputAt >= this.cfg.idleMs) {
+      return { reason: "idle", detail: `no model output for ${t - this.lastModelOutputAt}ms` };
+    }
+    if (this.lastProgressAt !== null && t - this.lastProgressAt >= this.cfg.noXpMs) {
+      return {
+        reason: "no-xp",
+        detail: `no level/XP progress for ${t - this.lastProgressAt}ms (last: level ${this.lastProgress?.level ?? "?"}, xp ${this.lastProgress?.xp ?? "?"})`,
+      };
+    }
+    return null;
+  }
+}

@@ -1,0 +1,138 @@
+/**
+ * Agent loop against the stub adapter and a fake sandbox: termination reasons,
+ * trajectory records, message-window mechanics. No live stack, no real model.
+ */
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } from "../src/adapter";
+import { loadRunConfig } from "../src/config";
+import { runLoop } from "../src/loop";
+import { Scratchpad } from "../src/scratchpad";
+import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { Trajectory, readTrajectory } from "../src/trajectory";
+import { Watchdogs } from "../src/watchdogs";
+
+function fakeSandbox(): SandboxHost {
+  const fake = {
+    evalSnippet: (code: string): Promise<SnippetResult> =>
+      Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 }),
+    recentEvents: () => Promise.resolve([]),
+    stateSnapshot: () => Promise.resolve({ self: {}, lastSeq: -1, eventCount: 0 }),
+    totalRestarts: 0,
+    consecutiveRestarts: 0,
+    drainNotices: () => [],
+    stop: () => Promise.resolve(),
+  };
+  return fake as unknown as SandboxHost;
+}
+
+function setup(adapter: ChatAdapter, extraConfig: Record<string, unknown> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
+  const config = {
+    ...loadRunConfig({ adapter: "stub", stepIntervalMs: 0, stateIntervalMs: 1, ...extraConfig }),
+    runId: "run-test",
+    token: "run-test",
+  };
+  const trajectory = new Trajectory(dir);
+  trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
+  return {
+    dir,
+    options: {
+      config,
+      adapter,
+      sandbox: fakeSandbox(),
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+    },
+  };
+}
+
+describe("runLoop", () => {
+  test("stub script runs tool calls, then terminates stub-complete", async () => {
+    const adapter = new StubAdapter([
+      { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] },
+      { content: null, toolCalls: [{ name: "write_scratchpad", arguments: { content: "# hi" } }] },
+    ]);
+    const { dir, options } = setup(adapter);
+    const outcome = await runLoop(options);
+    expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
+    const records = readTrajectory(dir);
+    const types = records.map((r) => r.t);
+    expect(types.filter((t) => t === "request")).toHaveLength(3);
+    expect(types).toContain("snippet");
+    expect(types).toContain("snippet_result");
+    expect(types).toContain("tool_call");
+    expect(types).toContain("termination");
+    const snippetResult = records.find((r) => r.t === "snippet_result");
+    expect(snippetResult?.["text"]).toContain("ran:1+1");
+    expect(options.scratchpad.read()).toBe("# hi");
+    const row = options.trajectory.runRow("run-test");
+    expect(row?.["termination_reason"]).toBe("stub-complete");
+    options.trajectory.close();
+  });
+
+  test("maxTurns terminates as turn-limit", async () => {
+    const adapter = new StubAdapter(
+      Array.from({ length: 10 }, () => ({ content: "thinking", toolCalls: [] })),
+    );
+    const { options } = setup(adapter, { maxTurns: 2 });
+    const outcome = await runLoop(options);
+    expect(outcome.kind).toBe("terminated");
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("turn-limit");
+    options.trajectory.close();
+  });
+
+  test("a pause outcome suspends the run resumably", async () => {
+    const pausing: ChatAdapter = {
+      label: "pausing",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
+        Promise.resolve({ kind: "pause", reason: "window-exhausted", detail: "429 quota" }),
+    };
+    const { options } = setup(pausing);
+    const outcome = await runLoop(options);
+    expect(outcome).toEqual({ kind: "paused", reason: "window-exhausted", detail: "429 quota" });
+    expect(options.trajectory.runRow("run-test")?.["pause_reason"]).toBe("window-exhausted");
+    expect(options.trajectory.runRow("run-test")?.["termination_reason"]).toBeNull();
+    options.trajectory.close();
+  });
+
+  test("an adapter throwing mid-run terminates as adapter-error", async () => {
+    const { AdapterError } = await import("../src/adapter");
+    const broken: ChatAdapter = {
+      label: "broken",
+      complete: () => Promise.reject(new AdapterError("HTTP 400: bad request", 400)),
+    };
+    const { options } = setup(broken);
+    const outcome = await runLoop(options);
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("adapter-error");
+    options.trajectory.close();
+  });
+
+  test("every request contains the system prompt plus a fresh context message", async () => {
+    const seen: ChatRequest[] = [];
+    const recording: ChatAdapter = {
+      label: "recording",
+      complete: (req): Promise<AdapterOutcome> => {
+        seen.push(structuredClone(req));
+        return Promise.resolve(
+          seen.length >= 3 ? { kind: "stub-complete" } : { kind: "ok", turn: { content: "ok", toolCalls: [] } },
+        );
+      },
+    };
+    const { options } = setup(recording);
+    await runLoop(options);
+    expect(seen).toHaveLength(3);
+    for (const [i, req] of seen.entries()) {
+      expect(req.messages[0]!.role).toBe("system");
+      const users = req.messages.filter((m) => m.role === "user");
+      expect(users).toHaveLength(1); // old context messages are dropped, never accumulated
+      expect(users[0]!.content).toContain(`[turn ${i + 1}]`);
+      expect(req.tools.map((t) => t.name)).toContain("run_snippet");
+    }
+    options.trajectory.close();
+  });
+});

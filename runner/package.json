@@ -4,5 +4,14 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "module": "src/index.ts"
+  "module": "src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@wrathbench/sdk": "workspace:*",
+    "@wrathbench/wiki": "workspace:*",
+    "zod": "4.4.3"
+  }
 }
