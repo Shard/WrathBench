@@ -293,6 +293,19 @@ export function forCycle(spec: Resolved, cycle: number): Resolved {
   return cycle <= 1 ? spec : { ...spec, runId: `${spec.runId}-c${cycle}` };
 }
 
+/**
+ * Cycle numbering restarts at 1 with the roster process, so a relaunch after a
+ * ctrl-C would hand cycle 2 the run id an earlier process already used —
+ * appending to its trajectory and overwriting the row classify() reads. Skip
+ * forward past any cycle id that already exists on disk.
+ */
+function freeCycle(specs: Resolved[], cycle: number): number {
+  for (let c = cycle; c < cycle + 100; c++) {
+    if (specs.every((s) => !existsSync(runDir(forCycle(s, c).runId)))) return c;
+  }
+  return cycle;
+}
+
 // ------------------------------------------------------------------- run state
 
 interface RunRow {
@@ -392,10 +405,9 @@ function turnsSince(runId: string, sinceTs: number): number {
  * or resume — never someone else's. Freeing another run's session would kick a
  * *running* process out of the world. So the guard only reads, and waits.
  *
- * "Live" is inferred from the run's own files: no termination row, and either
- * a pause row (a paused run holds its session deliberately) or a write in the
- * last few minutes. A crashed run — no termination row, no pause row, cold
- * files — is not live and is not waited on. Deliberately no process scan: the
+ * "Live" is inferred from the run's own files: no termination row and a write
+ * in the last few minutes. A crashed run — no termination row, cold files — is
+ * not live and is not waited on. Deliberately no process scan: the
  * only pattern available for one (`*run.ts*<runId>*`, as in signalInContainer)
  * is a substring match, and `roster-x-<date>` is a prefix of the loop's
  * `roster-x-<date>-c2`, so cycle 2 would see cycle 1 as forever alive.
@@ -442,10 +454,10 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
     if (acct === undefined || acct.toUpperCase() !== want) continue;
     const row = readRunRow(id);
     if (row !== undefined && row.termination_reason !== null && row.termination_reason !== "") continue;
-    // A PAUSED run keeps its module session alive on purpose (that is what
-    // --resume reattaches to), so it holds the account however cold its files
-    // have gone. Anything else is judged by recent writes.
-    if (row !== undefined && row.pause_reason !== null && row.pause_reason !== "") return id;
+    // Deliberately NOT "has a pause row": every path in attemptSpec that leaves
+    // a paused run behind frees its session first, and pause_reason is only
+    // cleared by --resume. Treating a pause row as a held account would park
+    // the rest of the roster behind a run whose session is already gone.
     const age = activityAgeMs(id);
     if (age !== undefined && age < LIVE_TRAJECTORY_MS) return id;
   }
@@ -921,7 +933,7 @@ async function main(): Promise<void> {
     }
     console.log(
       `\nguard:  an entry waits (poll ${ACCOUNT_WAIT_POLL_MS / 60_000}m, give up after ${ACCOUNT_WAIT_MAX_MS / 60_000}m)` +
-        ` while another run holds its account — no termination row,\n        and either a pause row or a write in the last` +
+        ` while another run holds its account — no termination row\n        and a write in the last` +
         ` ${LIVE_TRAJECTORY_MS / 60_000}m. Never frees another run's session.` +
         `\n        accounts in this roster: ${[...new Set(pending.map((a) => a.spec.account ?? "RUNNER (default)"))].join(", ")}`,
     );
@@ -951,8 +963,9 @@ async function main(): Promise<void> {
     // classify() reads. Characters are deliberately reused — a fresh episode
     // wipes the account's characters first, so cycle N starts at level 1 either
     // way. Loop mode burns tokens; it does not accumulate progress.
-    const attempts = cycle === 1 ? pending : pending.map((a) => ({ spec: forCycle(a.spec, cycle), resume: false }));
-    if (cycle > 1) say(`loop cycle ${cycle}: restarting the roster (${attempts.length} episode(s))`);
+    const n = cycle === 1 ? 1 : freeCycle(pending.map((a) => a.spec), cycle);
+    const attempts = cycle === 1 ? pending : pending.map((a) => ({ spec: forCycle(a.spec, n), resume: false }));
+    if (cycle > 1) say(`loop cycle ${n}: restarting the roster (${attempts.length} episode(s))`);
     for (const a of attempts) {
       if (stopping) break;
       if (deadline !== undefined && Date.now() >= deadline) {
