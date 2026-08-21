@@ -30,24 +30,45 @@ directory never gains a schema it did not have.
 
 ## What it shows
 
-The index lists every directory under `data/runs`, newest first: model, driver,
-shakeout flag, latest level and XP from the `state` table, start time, and how it
-ended. A run counts as **live** when it has no termination reason *and* its
+The index lists every directory under `data/runs`, newest first: model,
+shakeout flag, latest level and XP from the `state` table, when it started,
+playtime, total tokens, and how it ended. Start times are relative ("2h ago",
+"yesterday") with the exact stamp on hover. Playtime is the wall clock the
+trajectory spans, first entry to last; a live run's cell keeps counting. A run
+counts as **live** when it has no termination reason *and* its
 `trajectory.jsonl` was appended to within the last two minutes — "no termination
 reason" alone is not enough, because a killed process never writes one.
+
+Getting a token total per run means reading every trajectory, so the server
+memoises each run's totals on the file's size and mtime: a finished run is read
+once per process, a live one only as it grows, and the scan keeps a few numbers
+rather than a summary per entry.
 
 The run page's top bar carries the platform and model slug (`openrouter ·
 stealth/ox-alpha`, platform derived from `config.apiBase`), the current context
 size, and the tokens the run has spent in total — prompt plus completion summed
-over every turn, as a provider would bill it.
+over every turn, as a provider would bill it. Below the header banner a small
+panel breaks that down: input (cached included), output, cache reads, cache
+writes, and an estimated cost. **The pricing table lives in `page.ts`** as a
+commented `PRICING` constant — dollars per million tokens for the models we run
+against a metered API; edit it there when prices move.
 
 The runner records a provider `usage` block on `response` entries whenever the
-provider returns one, so those counts are measured. **Runs recorded before usage
-logging landed show estimates instead** — characters ÷ 4, marked with a `~` and
-an `est` suffix — and newer runs show provider-reported counts automatically;
-the viewer decides per run by whether it finds any usage in the file. A turn's
-reported prompt size replaces the estimate for that turn, so the two never
-double-count.
+provider returns one, so those counts are measured. Cache figures a provider
+never mentions render as `—`, never `0`: an OpenAI-compatible endpoint reports
+cache reads as `cached_tokens` and says nothing at all about writes, and
+"unknown" is not "none". **Runs recorded before usage logging landed show
+estimates instead** — characters ÷ 4, marked with a `~` and an `est` suffix —
+and newer runs show provider-reported counts automatically; the viewer decides
+per run by whether it finds any usage in the file. A turn's reported prompt size
+replaces the estimate for that turn, so the two never double-count.
+
+The one exception is the claude-sdk lane (driver id `claude-subscription`, shown
+as `claude-sdk`). Its driver discarded the CLI's usage objects until 2026-08-22,
+and a characters ÷ 4 estimate over a session that reuses an enormous cached
+prefix is off by orders of magnitude — so those runs show "usage not recorded"
+rather than a number that would mislead. Runs recorded after the fix carry real
+counts, cache writes included.
 
 The run page is a turn-by-turn feed: model text, snippets as code blocks,
 snippet results with errors highlighted, harness notices called out, compact
