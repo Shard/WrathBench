@@ -89,6 +89,13 @@ export interface WaitForOptions {
   timeout?: number;
   /** Only consider events with `seq >= sinceSeq`. Default: consider all. */
   sinceSeq?: number;
+  /**
+   * Only consider events ingested at or after this session epoch (see
+   * `EventStream.epoch`). The guard for per-session correlation ids (`moveId`,
+   * `seq`) that restart when the module recreates the session: a stale buffered
+   * event from a previous session can carry the same id as a fresh request.
+   */
+  sinceEpoch?: number;
   /** Search the retained buffer before waiting. Default true. */
   includeBuffered?: boolean;
   signal?: AbortSignal;
@@ -141,6 +148,8 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   private attempt = 0;
 
   private readonly buffer: StreamEvent[] = [];
+  /** Ingest epoch of each buffered event, in lockstep with `buffer`. */
+  private readonly bufferEpochs: number[] = [];
   private readonly opcodeHandlers = new Map<string, Set<AnyHandler>>();
   private readonly anyHandlers = new Set<AnyHandler>();
   private readonly waiters = new Set<Waiter>();
@@ -150,6 +159,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   private expectedSeq: number;
   private sawAnyEvent = false;
   private gapCount = 0;
+  private epochCounter = 0;
 
   constructor(options: EventStreamOptions) {
     this.token = options.token;
@@ -179,6 +189,27 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   /** Number of `stream_gap` events emitted so far. */
   get gaps(): number {
     return this.gapCount;
+  }
+
+  /**
+   * The current session epoch. Advances whenever the stream detects a session
+   * boundary (the module's `seq` restarting) and whenever `advanceEpoch()`
+   * marks one explicitly. Capture it before issuing a request and pass it as
+   * `waitFor`'s `sinceEpoch` to keep a per-session correlation id (`moveId`)
+   * from matching a stale buffered event of an earlier session.
+   */
+  get epoch(): number {
+    return this.epochCounter;
+  }
+
+  /**
+   * Mark a session boundary explicitly. Called by the client before
+   * `POST /session`, so the boundary exists even if the recreated session's
+   * first events never reach this stream (a dropped socket would otherwise
+   * delay the seq-restart detection past the next request).
+   */
+  advanceEpoch(): void {
+    this.epochCounter++;
   }
 
   close(): void {
@@ -286,8 +317,10 @@ export class EventStream implements AsyncIterable<StreamEvent> {
       this.expectedSeq = event.seq + 1;
     } else {
       // seq went backwards: the session was torn down and recreated under the
-      // same token, so the counter restarted. Not a gap; re-baseline.
+      // same token, so the counter restarted. Not a gap; re-baseline, and mark
+      // the session boundary so per-session correlation ids cannot leak across.
       this.expectedSeq = event.seq + 1;
+      this.epochCounter++;
     }
     this.sawAnyEvent = true;
     this.emit(event);
@@ -295,7 +328,12 @@ export class EventStream implements AsyncIterable<StreamEvent> {
 
   private emit(event: StreamEvent): void {
     this.buffer.push(event);
-    if (this.buffer.length > this.bufferSize) this.buffer.splice(0, this.buffer.length - this.bufferSize);
+    this.bufferEpochs.push(this.epochCounter);
+    if (this.buffer.length > this.bufferSize) {
+      const drop = this.buffer.length - this.bufferSize;
+      this.buffer.splice(0, drop);
+      this.bufferEpochs.splice(0, drop);
+    }
 
     for (const h of this.anyHandlers) h(event);
     const set = this.opcodeHandlers.get(event.opcode);
@@ -371,13 +409,23 @@ export class EventStream implements AsyncIterable<StreamEvent> {
    * the login events that arrived during the call.
    */
   waitFor(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
-    const { timeout = 10_000, sinceSeq, includeBuffered = true, signal } = options;
+    const { timeout = 10_000, sinceSeq, sinceEpoch, includeBuffered = true, signal } = options;
+    // A live event is always tested at its own epoch: `emit` runs synchronously
+    // inside `ingest`, after any epoch bump, so `epochCounter` is exact here.
     const matches = (e: StreamEvent): boolean =>
-      (sinceSeq === undefined || e.seq >= sinceSeq) && predicate(e);
+      (sinceSeq === undefined || e.seq >= sinceSeq) &&
+      (sinceEpoch === undefined || this.epochCounter >= sinceEpoch) &&
+      predicate(e);
 
     if (includeBuffered) {
-      const hit = this.buffer.find(matches);
-      if (hit) return Promise.resolve(hit);
+      // Buffered events were ingested at earlier epochs; test the recorded one.
+      const idx = this.buffer.findIndex(
+        (e, i) =>
+          (sinceEpoch === undefined || (this.bufferEpochs[i] ?? this.epochCounter) >= sinceEpoch) &&
+          (sinceSeq === undefined || e.seq >= sinceSeq) &&
+          predicate(e),
+      );
+      if (idx >= 0) return Promise.resolve(this.buffer[idx] as StreamEvent);
     }
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
 
