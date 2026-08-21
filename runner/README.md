@@ -209,8 +209,9 @@ observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).
 `environment-defect` is never auto-detected — it is applied by a human via
 `classify.ts` after reading the trajectory. Model-API quota exhaustion is a
-*pause* (`quota-exhausted`), not a termination: the run resumes when the
-window does.
+*pause* (`quota-exhausted`), not a termination: the run resumes when the budget
+does. So is any HTTP 429 that survives the retries (`rate-limited`), whatever
+the response body says.
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
 them once per turn, which is once per tool batch. The claude-subscription
