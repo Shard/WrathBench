@@ -745,6 +745,15 @@ export class WrathClient {
   }
 
   /**
+   * `CMSG_SPIRIT_HEALER_ACTIVATE` — resurrect at the graveyard's spirit healer
+   * when the corpse is unreachable. Costs durability and applies resurrection
+   * sickness; the outcome arrives through ordinary events (health, auras).
+   */
+  spiritHealerActivate(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "spirit_healer_activate", guid: guidArg(guid) });
+  }
+
+  /**
    * POST /character-delete — delete a character by name through the real
    * `CMSG_CHAR_DELETE` path. Not the session token: the module stands up its
    * own parked session, so this takes (and defaults) a throwaway one per

@@ -146,9 +146,15 @@ namespace WrathBench
         for (auto& t : tasks)
             t();
 
+        int64_t const nowMs = NowMs();
+
         // Drive synthesized movement (ADR-0010). World thread: maps are not
         // mid-update here, so reading player state and QueuePacket are both safe.
-        TickMovers(NowMs());
+        TickMovers(nowMs);
+
+        // Answer pending teleports; without this every teleport (repop's
+        // graveyard port included) freezes movement forever.
+        TickTeleportAcks(nowMs);
 
         // Keep parked sockets from being reaped by the idle-connection check in
         // WorldSession::Update (it calls CloseSocket once m_timeOutTime hits 0).
@@ -340,7 +346,8 @@ namespace WrathBench
                 "set_target", "attack_start", "interact", "gossip_hello", "gossip_select",
                 "quest_list", "quest_details", "quest_accept", "quest_complete",
                 "quest_choose_reward", "loot", "loot_all", "loot_release",
-                "vendor_list", "buy_item", "sell_item", "repair_all", nullptr };
+                "vendor_list", "buy_item", "sell_item", "repair_all",
+                "spirit_healer_activate", nullptr };
             static char const* kNoParams[] = {
                 "clear_target", "attack_stop", "loot_money", "repop", "reclaim_corpse", nullptr };
 
@@ -1008,6 +1015,16 @@ namespace WrathBench
             p = new WorldPacket(CMSG_REPOP_REQUEST, 1);
             *p << uint8(0);
         }
+        else if (action == "spirit_healer_activate")
+        {
+            // Graveyard fallback when the corpse is unreachable. No dedicated
+            // response opcode: the client observes the resurrection through
+            // already-served events (health/update fields, res-sickness aura,
+            // and — if the corpse graveyard differs — a teleport, acked by
+            // TickTeleportAcks).
+            p = new WorldPacket(CMSG_SPIRIT_HEALER_ACTIVATE, 8);
+            *p << uint64(guid);
+        }
         else if (action == "reclaim_corpse")
         {
             // Handler resolves the player's own corpse; the guid payload is the
@@ -1067,7 +1084,11 @@ namespace WrathBench
             return;
         }
 
-        if (!player->IsAlive())
+        // Dying mid-run stops the move — but only while the body is still on
+        // the ground. A released spirit (ghost flag) can and must move: the
+        // corpse run is the normal 3.3.5a death recovery. Conflating the two
+        // death states made every corpse run impossible (FOLLOW-UPS item 14).
+        if (!player->IsAlive() && !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
         {
             SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
                 player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
@@ -1145,6 +1166,64 @@ namespace WrathBench
             w.Add("moveId", m.moveId);
             w.Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO));
             EmitEvent(s, "WB_MOVE_PROGRESS", 0xFF02, w.Str());
+        }
+    }
+
+    // A real client answers every teleport once its loading screen is done:
+    // MSG_MOVE_TELEPORT_ACK for a same-map teleport, MSG_MOVE_WORLDPORT_ACK for
+    // a map transfer. Until that ack arrives the core discards all movement
+    // opcodes (HandleMovementOpcodes: IsBeingTeleported -> ignore) and the
+    // destination is never applied, so a session that never acks is wedged at
+    // its pre-teleport position forever — repop's graveyard teleport was the
+    // observed case (docs/FOLLOW-UPS.md item 14). The parked client has no
+    // loading screen, so the module acks on the next world tick, through the
+    // same handlers a real client's packets would hit. Like the
+    // CMSG_TIME_SYNC_RESP answer in the tap, this is module-internal client
+    // behaviour: the semaphore state is never served to the agent, and the
+    // agent never needs to know teleports exist.
+    void Manager::TickTeleportAcks(int64_t nowMs)
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load() && s->phase.load() == BenchSession::P_INWORLD)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            Player* player = s->ws->GetPlayer();
+            if (!player || !player->IsBeingTeleported())
+            {
+                s->teleportAckQueuedMs = 0;
+                continue;
+            }
+            // Pace re-sends: the queued ack is consumed on the session's next
+            // update, so retry only if the semaphore is still set well after.
+            if (s->teleportAckQueuedMs && nowMs - s->teleportAckQueuedMs < 1000)
+                continue;
+            s->teleportAckQueuedMs = nowMs;
+
+            char const* opcodeName;
+            if (player->IsBeingTeleportedNear())
+            {
+                // Mirror of the client's echo of Player::SendTeleportAckPacket.
+                // HandleMoveTeleportAck reads counter and time but uses neither.
+                WorldPacket* p = new WorldPacket(MSG_MOVE_TELEPORT_ACK, 8 + 4 + 4);
+                *p << player->GetPackGUID();
+                *p << uint32(0);            // movement order counter echo
+                *p << uint32(getMSTime());
+                s->ws->QueuePacket(p);
+                opcodeName = "MSG_MOVE_TELEPORT_ACK";
+            }
+            else
+            {
+                s->ws->QueuePacket(new WorldPacket(MSG_MOVE_WORLDPORT_ACK, 0));
+                opcodeName = "MSG_MOVE_WORLDPORT_ACK";
+            }
+            Audit(*s, "action", Json::Writer().Add("op", "teleport_ack").Add("opcode", opcodeName).Str());
         }
     }
 

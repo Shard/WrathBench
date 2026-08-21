@@ -136,7 +136,8 @@ quest/combat extension set (2026-08, additive): `set_target`, `clear_target`,
 `quest_complete`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
 `loot_money`, `loot_release`, `loot_all`, `vendor_list`, `buy_item`,
 `sell_item`, `repair_all`, `equip_item`, `use_item`, `destroy_item`, `repop`,
-`reclaim_corpse`. Acks that the opcode was synthesized and queued; the game
+`reclaim_corpse`, `spirit_healer_activate` (2026-08, additive). Acks that the
+opcode was synthesized and queued; the game
 result (the chat echo, an arrival, or an error) arrives on the WebSocket.
 
 Common errors for every action:
@@ -251,6 +252,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
 | `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
 | `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional |
+| `spirit_healer_activate` | `guid` | `CMSG_SPIRIT_HEALER_ACTIVATE` | graveyard resurrection fallback; no dedicated response opcode — the outcome arrives through already-served events (health update fields, res-sickness aura) |
 
 Validation errors (all `400`): `missing_guid`, `missing_option`,
 `missing_quest_id`, `missing_reward_index`, `missing_spell_id`,

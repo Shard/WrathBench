@@ -38,6 +38,7 @@ Phase 0 action set:
 - Vendor: list, buy, sell, repair.
 - Inventory: equip item, use item, destroy item.
 - Chat: say, whisper (for later multi-agent use; harmless now).
+- Death: release spirit, reclaim corpse, spirit healer resurrection (added 2026-08 as the graveyard fallback when the corpse is unreachable).
 
 Deferred: trainers, flight paths, mail, bank, group invites, trade, talents.
 

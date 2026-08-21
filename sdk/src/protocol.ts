@@ -219,7 +219,8 @@ export type ActionRequest =
   | { token: string; action: "use_item"; bag: number; slot: number; targetGuid?: string }
   | { token: string; action: "destroy_item"; bag: number; slot: number; count?: number }
   | { token: string; action: "repop" }
-  | { token: string; action: "reclaim_corpse"; guid?: string };
+  | { token: string; action: "reclaim_corpse"; guid?: string }
+  | { token: string; action: "spirit_healer_activate"; guid: string };
 
 /**
  * POST /character-delete body. Not session-scoped: the module stands up its own
