@@ -81,31 +81,43 @@ export class ContextBuilder {
   }
 
   /**
+   * Snapshot, and record the periodic state line if `stateIntervalMs` has
+   * elapsed. Separate from `build` because a driver whose turns are long (the
+   * claude-subscription driver: one turn can run for tens of minutes) must
+   * sample the world on the clock, not once per turn, or the timeline has no
+   * data mid-turn and `no-xp` has nothing to measure.
+   */
+  async sampleState(): Promise<SnapshotLike | null> {
+    const { config, trajectory, watchdogs } = this.o;
+    const snap = await this.snapshot();
+    if (snap === null || this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
+    this.lastStateAt = this.now();
+    const pos = snap.self?.position?.value as
+      | { map?: number; x?: number; y?: number; z?: number }
+      | undefined;
+    const level = snap.self?.level?.value as number | undefined;
+    const xp = snap.xp?.value as number | undefined;
+    trajectory.recordState(config.runId, {
+      level,
+      xp,
+      map: pos?.map,
+      x: pos?.x,
+      y: pos?.y,
+      z: pos?.z,
+      eventCount: snap.eventCount,
+      lastSeq: snap.lastSeq,
+    });
+    if (this.live) watchdogs.noteProgress(level, xp);
+    return snap;
+  }
+
+  /**
    * One turn's user context message. Records the periodic state line and the
    * `events_served` trajectory record as a side effect, exactly as the loop
    * did before this was extracted.
    */
   async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
-    const { config, trajectory, watchdogs } = this.o;
-    const snap = await this.snapshot();
-    if (snap !== null && this.now() - this.lastStateAt >= config.stateIntervalMs) {
-      this.lastStateAt = this.now();
-      const pos = snap.self?.position?.value as
-        | { map?: number; x?: number; y?: number; z?: number }
-        | undefined;
-      const level = snap.self?.level?.value as number | undefined;
-      trajectory.recordState(config.runId, {
-        level,
-        map: pos?.map,
-        x: pos?.x,
-        y: pos?.y,
-        z: pos?.z,
-        eventCount: snap.eventCount,
-        lastSeq: snap.lastSeq,
-      });
-      if (this.live) watchdogs.noteProgress(level, undefined);
-    }
-
+    const snap = await this.sampleState();
     pendingNotices.push(...this.o.sandbox.drainNotices());
     let events: Parameters<typeof assembleContext>[0]["events"] = [];
     try {
@@ -120,7 +132,7 @@ export class ContextBuilder {
       notices: pendingNotices.splice(0, pendingNotices.length),
       turn,
     });
-    trajectory.append({ t: "events_served", via: "context", count: events.length, events });
+    this.o.trajectory.append({ t: "events_served", via: "context", count: events.length, events });
     return contextText;
   }
 }

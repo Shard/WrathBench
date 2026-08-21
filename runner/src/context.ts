@@ -49,6 +49,8 @@ export interface SnapshotLike {
     health?: ObservedLike;
     power?: ObservedLike;
   };
+  /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
+  xp?: ObservedLike;
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
   chat?: { senderGuid?: unknown; message?: unknown }[];

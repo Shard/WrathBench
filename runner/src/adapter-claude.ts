@@ -47,8 +47,12 @@
  *     current date, and whatever else the CLI decides to inject).
  *  4. Skills and subagents are still registered as slash commands even though
  *     no built-in tool is exposed.
- *  5. There is no `--max-turns` in this CLI version, so the CLI's *inner* tool
- *     loop is bounded only by the watchdogs; `maxTurns` bounds driver turns.
+ *  5. There is no `--max-turns` in this CLI version, so `maxTurns` bounds only
+ *     driver turns. The first real subscription run spent 40 minutes and 168
+ *     tool calls inside ONE driver turn, which is why control is enforced at
+ *     the MCP boundary instead: every tool dispatch re-checks the watchdogs
+ *     and the `maxToolCallsPerEpisode` ceiling, and a coarse timer covers a
+ *     turn that makes no tool calls at all.
  *
  * That list is why the run is stamped `shakeout-only (external scaffold)`.
  */
@@ -274,8 +278,16 @@ export interface ClaudeEpisodeOptions {
   extraEnv?: Record<string, string>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /** How often watchdogs are evaluated while a turn is in flight. */
+  /** How often watchdogs are evaluated and the world sampled while a turn is in flight. */
   watchdogTickMs?: number;
+  /** Grace between SIGTERM and SIGKILL when tearing the CLI down. */
+  killGraceMs?: number;
+  /**
+   * Aborting ends the episode as `manual` — the runner's own SIGINT/SIGTERM
+   * handler, so an externally killed run still finalises its termination
+   * record instead of leaving the trajectory open.
+   */
+  signal?: AbortSignal;
 }
 
 export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOutcome> {
@@ -283,11 +295,43 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
 
-  const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
+  /**
+   * The single end-of-episode seam.
+   *
+   * A watchdog, the tool-call ceiling or a signal can fire while the CLI is
+   * deep inside its own tool loop, so ending cannot wait for the turn to come
+   * back. The termination record is written FIRST and exactly once, then the
+   * CLI is torn down; everything that unwinds afterwards reports the reason
+   * already recorded.
+   */
+  let ended: { reason: TerminationReason; detail?: string } | null = null;
+  let killClaude: () => void = () => undefined;
+  const endEpisode = (
+    reason: TerminationReason,
+    detail?: string,
+    record?: Record<string, unknown> & { t: string },
+  ): void => {
+    if (ended !== null) return;
+    ended = { reason, detail };
+    if (record !== undefined) trajectory.append(record);
     trajectory.setTermination(runId, reason, detail);
-    return { kind: "terminated", reason, detail };
+    killClaude();
+  };
+  const finish = (): LoopOutcome => {
+    const e = ended as { reason: TerminationReason; detail?: string } | null;
+    if (e === null) return { kind: "terminated", reason: "harness-error", detail: "ended without a reason" };
+    return e.detail === undefined
+      ? { kind: "terminated", reason: e.reason }
+      : { kind: "terminated", reason: e.reason, detail: e.detail };
+  };
+
+  const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
+    if (ended !== null) return finish();
+    endEpisode(reason, detail);
+    return finish();
   };
   const pause = (reason: PauseReason, detail: string): LoopOutcome => {
+    if (ended !== null) return finish(); // a recorded termination wins over a late pause
     trajectory.setPause(runId, reason, detail);
     return { kind: "paused", reason, detail };
   };
@@ -312,6 +356,32 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   };
   let turn = 0;
   let restartsBefore = 0;
+  let toolCalls = 0;
+
+  /**
+   * Evaluated at every tool dispatch, which for this driver is the only place
+   * control reliably passes back to the runner: one driver turn was observed
+   * running 168 tool calls over 40 minutes, so a check that only happens
+   * between turns is not a control at all.
+   */
+  const enforceLimits = (): boolean => {
+    if (ended !== null) return false;
+    const verdict = watchdogs.check();
+    if (verdict !== null) {
+      endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+      return false;
+    }
+    if (toolCalls >= config.maxToolCallsPerEpisode) {
+      endEpisode(
+        "tool-call-limit",
+        `${toolCalls} tool calls (cap ${config.maxToolCallsPerEpisode})`,
+        { t: "limit", kind: "tool-call-limit", toolCalls, cap: config.maxToolCallsPerEpisode },
+      );
+      return false;
+    }
+    return true;
+  };
+
   const server = new McpServer(toolCtx, {
     onToolCall: (name, args, result) => {
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "");
@@ -348,9 +418,46 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
           if (line.trim().length === 0) continue;
           // Serialised: one sandbox, one snippet at a time.
           conn.chain = conn.chain.then(async () => {
+            let method: string | undefined;
+            let id: unknown;
+            try {
+              const m = JSON.parse(line) as { method?: string; id?: unknown };
+              method = m.method;
+              id = m.id;
+            } catch {
+              // handleLine answers with a parse error
+            }
+            if (method === "tools/call") {
+              if (!enforceLimits()) {
+                // Refuse rather than run: the episode is over, and a refused
+                // call is honest about why. The CLI is being killed anyway.
+                if (id !== undefined) {
+                  socket.write(
+                    `${JSON.stringify({
+                      jsonrpc: "2.0",
+                      id,
+                      result: {
+                        content: [
+                          { type: "text", text: `run terminated by the harness: ${ended?.reason ?? "?"}` },
+                        ],
+                        isError: true,
+                      },
+                    })}\n`,
+                  );
+                }
+                return;
+              }
+              toolCalls++;
+              // A tool call IS model output. Without this the `idle` watchdog
+              // would fire mid-turn on a model that is demonstrably working:
+              // assistant text can be minutes apart while tool calls stream.
+              watchdogs.noteModelOutput();
+            }
             restartsBefore = o.sandbox.totalRestarts;
             const response = await server.handleLine(line);
             if (response !== null) socket.write(`${response}\n`);
+            // A snippet can burn minutes; re-check before the next one arrives.
+            if (method === "tools/call") enforceLimits();
           });
         }
       },
@@ -416,6 +523,35 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     stderr: "pipe",
   });
 
+  // SIGTERM first so the CLI can flush its session, SIGKILL if it will not go.
+  let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+  killClaude = (): void => {
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // already gone
+    }
+    sigkillTimer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+    }, o.killGraceMs ?? 5_000);
+    sigkillTimer.unref?.();
+  };
+
+  // An externally killed runner must still finalise: run.ts aborts this on
+  // SIGINT/SIGTERM and the episode ends as `manual`.
+  if (o.signal !== undefined) {
+    const onAbort = (): void => {
+      const reason = o.signal?.reason;
+      endEpisode("manual", typeof reason === "string" ? reason : "aborted");
+    };
+    if (o.signal.aborted) onAbort();
+    else o.signal.addEventListener("abort", onAbort, { once: true });
+  }
+
   const queue = new MessageQueue();
   const stderrChunks: string[] = [];
   let limit: { reason: PauseReason; detail: string } | null = null;
@@ -447,17 +583,27 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   })();
 
   const stdin = proc.stdin;
-  let watchdogVerdict: { reason: TerminationReason; detail: string } | null = null;
+  // Coarse timer alongside the per-tool-call check: it samples the world on
+  // `stateIntervalMs` so a long turn still produces state rows (and so `no-xp`
+  // has data), and it catches a wall-clock watchdog during a turn that is
+  // making no tool calls at all.
+  let ticking = false;
   const ticker = setInterval(() => {
-    const verdict = watchdogs.check();
-    if (verdict === null || watchdogVerdict !== null) return;
-    watchdogVerdict = verdict;
-    // Unblock the turn that is waiting on the CLI.
-    proc.kill();
+    if (ended !== null || ticking) return;
+    ticking = true;
+    void builder
+      .sampleState()
+      .catch(() => null)
+      .finally(() => {
+        ticking = false;
+        const verdict = watchdogs.check();
+        if (verdict !== null) endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+      });
   }, o.watchdogTickMs ?? 5_000);
 
   const shutdown = async (): Promise<void> => {
     clearInterval(ticker);
+    if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
       stdin.end();
     } catch {
@@ -478,10 +624,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
   try {
     for (;;) {
-      const verdict = watchdogVerdict ?? watchdogs.check();
+      if (ended !== null) return finish();
+      const verdict = watchdogs.check();
       if (verdict !== null) {
-        trajectory.append({ t: "watchdog", ...verdict });
-        return terminate(verdict.reason, verdict.detail);
+        endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+        return finish();
       }
 
       turn++;
@@ -588,21 +735,18 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             // already records tool calls and results authoritatively.
             break;
         }
-        if (limit !== null) break;
+        if (limit !== null || ended !== null) break;
       }
 
+      // A recorded termination wins: the reason is already in the trajectory.
+      if (ended !== null) return finish();
       if (limit !== null) return pause(limit.reason, limit.detail);
 
       if (!turnEnded) {
-        // The process died. A watchdog kill wins; otherwise it is an error,
-        // unless the CLI told us the window is spent.
+        // The process died. Window exhaustion is a pause; anything else while
+        // nothing has ended the episode is an adapter error.
         const detected = detectLimit(stderrChunks.join("\n"));
         if (detected !== null) return pause(detected.reason, detected.detail);
-        if (watchdogVerdict !== null) {
-          trajectory.append({ t: "watchdog", ...(watchdogVerdict as object) });
-          const v = watchdogVerdict as { reason: TerminationReason; detail: string };
-          return terminate(v.reason, v.detail);
-        }
         const code = await proc.exited;
         return terminate(
           "adapter-error",
