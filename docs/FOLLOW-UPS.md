@@ -62,12 +62,28 @@ priority. Items graduate out of this file into commits; the dev loop
    a model re-querying facts it lost to a window trim — build the extractive
    digest: trimmed messages replaced by a deterministic one-line record
    (tool, truncated args, error flag) in a capped ring buffer inside the
-   regenerated context message. No model summarization ever (measured-model
-   summarizing conflates constructs and breaks replay; a harness summarizer
-   is an unversioned model dependency, both rejected); no per-model context
-   scaling ever (it makes scores "harness vX(model)" — an ADR-0004
-   violation, and provider-declared context sizes drift for the same model
+   regenerated context message. Within the current harness version: no model
+   summarization (conflates constructs, breaks replay) and no per-model
+   context scaling (provider-declared context sizes drift for the same model
    id).
+
+8b. **Context engine as a labeled run condition — operator direction,
+   deliberately parked** (2026-08-21). When this is picked back up, the
+   proposal to draft is: (a) stretch the window well beyond 24–48 in a
+   future harness version — observed steady state is ~8–12k tokens against
+   131k–200k model contexts, so a much longer stable prefix is nearly free
+   under prompt caching and more compute/cost-efficient per run; (b) offer
+   threshold-triggered model self-compaction ("grow to X% of budget, then
+   the model compacts its own history") as a versioned **context engine**
+   recorded in run metadata, the way shakeout runs are stamped — scores
+   comparable within an engine, never silently across engines. Rationale:
+   the harness is already opinionated in many ways; for end-user-relevant
+   evaluation, grow-then-self-compact is the de-facto standard agents run
+   under, and context management for games is a fraught problem where
+   pinning one tweak of the current policy forever is unlikely to be the
+   long-term answer. This supersedes the flat "no model summarization ever"
+   phrasing of 8a: that verdict holds for unlabeled changes to the current
+   engine, not for a future labeled one.
 
 ## Surface candidates (add when a run makes them the obstacle)
 
