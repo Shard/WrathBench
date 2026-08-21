@@ -52,11 +52,11 @@ describe("client: the happy path through the slice", () => {
 
     const session = await client.createSession({ character: "Fenwick", race: 1, class: 1, gender: 0 });
     expect(session.inWorld).toBe(true);
-    expect(session.guid).toBe(7n);
+    expect(session.guid).toBe("7");
 
     // The login events arrived while the POST was in flight; the cache has them.
     await client.events.waitForOpcode("SMSG_LOGIN_VERIFY_WORLD", { timeout: 2000 });
-    expect(client.state.self.guid).toBe(7n);
+    expect(client.state.self.guid).toBe("7");
     expect(client.state.self.name).toBe("Fenwick");
     expect(client.state.self.level?.value).toBe(3);
     expect(client.state.self.position?.value.map).toBe(0);
@@ -67,7 +67,7 @@ describe("client: the happy path through the slice", () => {
     stub.push(JSON.stringify(chatEcho));
 
     const entry = await client.waitForChat("ping from the fixture", { timeout: 2000 });
-    expect(entry.senderGuid).toBe(7n);
+    expect(entry.senderGuid).toBe("7");
     expect(entry.seq).toBe(4);
     expect(client.state.chat.at(-1)?.message).toBe("ping from the fixture");
 
@@ -387,7 +387,7 @@ describe("client: killTarget", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "killed",
-      guid: BigInt(CREATURE_GUID),
+      guid: CREATURE_GUID,
       swings: 0,
       attacking: false,
     });
@@ -867,6 +867,37 @@ describe("client: deleteCharacter", () => {
     expect(err).toBeInstanceOf(WrathTransportError);
     expect(err.message).toContain("Fenwick");
     expect(stub.characterDeletes).toHaveLength(3);
+    await stub.stop();
+  });
+});
+
+describe("ADR-0017: guid arguments at the client surface", () => {
+  test("a model-conjured bigint is repaired to the wire's decimal string", async () => {
+    const stub = startStub();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", subscribeEvents: false });
+    await client.setTarget(BigInt(CREATURE_GUID) as unknown as string);
+    expect(stub.actions[0]).toMatchObject({ action: "set_target", guid: CREATURE_GUID });
+    expect(typeof stub.actions[0]?.guid).toBe("string");
+    await stub.stop();
+  });
+
+  test("killTarget returns its guid as the same opaque string, JSON-serialisable", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      reapproachIntervalMs: 60_000,
+      meleeRange: 100,
+    });
+    await untilAction(stub, "attack_start");
+    stub.push(JSON.stringify(creatureHealth(0, 61)));
+    const result = await fight;
+    expect(result.status).toBe("killed");
+    expect(result.guid).toBe(CREATURE_GUID);
+    expect(typeof result.guid).toBe("string");
+    expect(() => JSON.stringify(result)).not.toThrow();
+    client.close();
     await stub.stop();
   });
 });

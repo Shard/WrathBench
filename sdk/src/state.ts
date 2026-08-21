@@ -33,7 +33,7 @@
  */
 
 import {
-  guidKey,
+  formatGuid,
   isDecodeError,
   isMoveOpcode,
   type AuraData,
@@ -105,7 +105,7 @@ export interface Gauge {
 
 /** One row of `SMSG_CHAR_ENUM`. */
 export interface CharacterSummary {
-  readonly guid: bigint;
+  readonly guid: GuidKey;
   readonly name: string;
   readonly race: number;
   readonly class: number;
@@ -118,7 +118,7 @@ export interface ChatEntry {
   readonly ts: number;
   readonly type: number;
   readonly language: number;
-  readonly senderGuid: bigint;
+  readonly senderGuid: GuidKey;
   readonly message: string;
   readonly chatTag: number;
 }
@@ -154,11 +154,11 @@ export interface UnitFieldsState {
 }
 
 export interface SelfState extends UnitFieldsState {
-  guid: bigint | undefined;
+  guid: GuidKey | undefined;
   name: string | undefined;
   position: Observed<WorldPosition> | undefined;
   /** `UNIT_FIELD_TARGET` on our own block: what the client shows as selected. */
-  targetGuid: Observed<bigint> | undefined;
+  targetGuid: Observed<GuidKey> | undefined;
 }
 
 /**
@@ -199,7 +199,7 @@ export interface QuestLogEntry {
  */
 export interface InventoryItem {
   readonly slot: number;
-  readonly guid: bigint;
+  readonly guid: GuidKey;
   readonly itemId: number | undefined;
   readonly name: string | undefined;
   readonly stackCount: number | undefined;
@@ -230,7 +230,7 @@ export interface AuraEntry {
   readonly flags: number | undefined;
   readonly level: number | undefined;
   readonly stacks: number | undefined;
-  readonly casterGuid: bigint | undefined;
+  readonly casterGuid: GuidKey | undefined;
   readonly maxDuration: number | undefined;
   readonly duration: number | undefined;
   readonly seq: number;
@@ -252,7 +252,7 @@ export interface CreatureInfo {
  * an `outOfRange` list or `SMSG_DESTROY_OBJECT`.
  */
 export interface NearbyObject extends UnitFieldsState {
-  readonly guid: bigint;
+  readonly guid: GuidKey;
   /** `unit`, `player`, `gameObject`, … Only a `create` block carries it. */
   objectType: Observed<string> | undefined;
   /** Creature/gameobject template id, from `OBJECT_FIELD_ENTRY`. */
@@ -262,7 +262,7 @@ export interface NearbyObject extends UnitFieldsState {
   position: Observed<UnitPosition> | undefined;
   /** From `SMSG_MONSTER_MOVE`: creatures move by spline, not by `MSG_MOVE_*`. */
   motion: Observed<Motion> | undefined;
-  targetGuid: Observed<bigint> | undefined;
+  targetGuid: Observed<GuidKey> | undefined;
   /** Seq of the event that first put this object in view. */
   firstSeq: number;
   /** Seq of the most recent event that touched this object. */
@@ -290,7 +290,8 @@ export interface GapRecord {
 }
 
 export interface StateSeed {
-  guid?: bigint;
+  /** Opaque decimal-string guid, as `POST /session` returned it. */
+  guid?: GuidKey;
   name?: string;
 }
 
@@ -514,9 +515,11 @@ export class StateCache {
       const lo = this.self.fields.get(`invSlot${slot}Lo`);
       const hi = this.self.fields.get(`invSlot${slot}Hi`);
       if (!lo && !hi) continue;
-      const guid = (BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0);
-      if (guid === 0n) continue;
-      const item = this.nearby.get(guidKey(guid));
+      // The one internal bigint use: packing the two u32 wire halves back into
+      // the u64 the item's own create block carries. formatGuid is the seam.
+      const guid = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
+      if (guid === "0") continue;
+      const item = this.nearby.get(guid);
       const itemId = item?.entry?.value;
       out.push({
         slot,
@@ -534,21 +537,21 @@ export class StateCache {
   /** The object our own `targetGuid` points at, when it is also in view. */
   get target(): NearbyObject | undefined {
     const guid = this.self.targetGuid?.value;
-    if (guid === undefined || guid === 0n) return undefined;
-    return this.nearby.get(guidKey(guid));
+    if (guid === undefined || guid === "0") return undefined;
+    return this.nearby.get(guid);
   }
 
   /** Visible auras on a unit, by slot. Empty when none have been observed. */
-  aurasOf(guid: bigint): AuraEntry[] {
-    const slots = this.auraSlots.get(guidKey(guid));
+  aurasOf(guid: GuidKey): AuraEntry[] {
+    const slots = this.auraSlots.get(guid);
     if (!slots) return [];
     return [...slots.values()].sort((a, b) => a.slot - b.slot);
   }
 
   /** Name for a guid, if a name query ever returned one. Never guessed. */
-  nameOf(guid: bigint): string | undefined {
+  nameOf(guid: GuidKey): string | undefined {
     if (this.self.guid !== undefined && guid === this.self.guid) return this.self.name;
-    return this.names.get(guidKey(guid))?.value;
+    return this.names.get(guid)?.value;
   }
 
   snapshot(): StateSnapshot {
@@ -625,16 +628,15 @@ export class StateCache {
         // stream cannot re-emit. Reconcile identity like the seed does; a
         // contradicting guid is an anomaly, never an overwrite.
         const d = event.data as {
-          character: string; guid: bigint; map: number; x: number; y: number;
+          character: string; guid: GuidKey; map: number; x: number; y: number;
           z: number; o: number; level: number;
         };
-        const key = guidKey(d.guid);
-        if (this.seed.guid !== undefined && guidKey(this.seed.guid) !== key) {
+        if (this.seed.guid !== undefined && this.seed.guid !== d.guid) {
           this.anomalyBuf.push({
             seq: event.seq,
             ts: event.ts,
             kind: "session_state_guid_mismatch",
-            detail: `WB_SESSION_STATE guid ${key} != seeded ${guidKey(this.seed.guid)}`,
+            detail: `WB_SESSION_STATE guid ${d.guid} != seeded ${this.seed.guid}`,
           });
           return;
         }
@@ -659,11 +661,10 @@ export class StateCache {
         return;
       }
       case "SMSG_NAME_QUERY_RESPONSE": {
-        const d = event.data as { guid: bigint; found: boolean; name?: string };
+        const d = event.data as { guid: GuidKey; found: boolean; name?: string };
         if (d.found && d.name !== undefined) {
-          const key = guidKey(d.guid);
-          this.names.set(key, { value: d.name, seq: event.seq, ts: event.ts });
-          const obj = this.nearby.get(key);
+          this.names.set(d.guid, { value: d.name, seq: event.seq, ts: event.ts });
+          const obj = this.nearby.get(d.guid);
           if (obj) this.joinName(obj);
         }
         return;
@@ -721,7 +722,7 @@ export class StateCache {
       case "SMSG_AURA_UPDATE":
       case "SMSG_AURA_UPDATE_ALL": {
         const d = event.data as AuraUpdateData;
-        const key = guidKey(d.targetGuid);
+        const key = d.targetGuid;
         // UPDATE_ALL is the full visible list, so it replaces; UPDATE names
         // only the slots that changed and merges into what is already there.
         const slots =
@@ -776,7 +777,7 @@ export class StateCache {
         return;
       }
       case "SMSG_DESTROY_OBJECT": {
-        const d = event.data as { guid: bigint };
+        const d = event.data as { guid: GuidKey };
         this.forget(d.guid);
         return;
       }
@@ -895,7 +896,7 @@ export class StateCache {
         this.applyCreate(block as CreateBlock, seq, ts);
         return;
       case "values": {
-        const b = block as { guid: bigint; fields?: UpdateFields };
+        const b = block as { guid: GuidKey; fields?: UpdateFields };
         if (this.isSelfGuid(b.guid)) {
           this.mergeFields(this.self, b.fields, seq, ts);
           return;
@@ -910,7 +911,7 @@ export class StateCache {
         return;
       }
       case "movement": {
-        const b = block as { guid: bigint; pos?: PositionData; moveFlags?: number };
+        const b = block as { guid: GuidKey; pos?: PositionData; moveFlags?: number };
         if (this.isSelfGuid(b.guid)) {
           if (b.pos) this.applySelfPosition(b.pos, seq, ts);
           return;
@@ -922,7 +923,7 @@ export class StateCache {
         return;
       }
       case "outOfRange": {
-        const b = block as { guids: bigint[] };
+        const b = block as { guids: GuidKey[] };
         for (const g of b.guids) this.forget(g);
         return;
       }
@@ -949,7 +950,7 @@ export class StateCache {
         seq,
         ts,
         kind: "self_guid_mismatch",
-        detail: `create block flagged self carries guid ${guidKey(block.guid)}, seeded self is ${guidKey(this.self.guid)}`,
+        detail: `create block flagged self carries guid ${block.guid}, seeded self is ${this.self.guid}`,
       });
     } else if (flaggedSelf || this.isSelfGuid(block.guid)) {
       if (this.self.guid === undefined) this.self.guid = block.guid;
@@ -980,13 +981,12 @@ export class StateCache {
    * with it: a client stops showing the buff bar of a unit it cannot see, and
    * keeping them would let a stale aura outlive its unit.
    */
-  private forget(guid: bigint): void {
-    const key = guidKey(guid);
-    this.nearby.delete(key);
-    this.auraSlots.delete(key);
+  private forget(guid: GuidKey): void {
+    this.nearby.delete(guid);
+    this.auraSlots.delete(guid);
   }
 
-  private isSelfGuid(guid: bigint): boolean {
+  private isSelfGuid(guid: GuidKey): boolean {
     return this.self.guid !== undefined && guid === this.self.guid;
   }
 
@@ -1018,7 +1018,7 @@ export class StateCache {
    */
   private mergeFields(
     target: UnitFieldsState & {
-      targetGuid?: Observed<bigint> | undefined;
+      targetGuid?: Observed<GuidKey> | undefined;
       entry?: Observed<number> | undefined;
     },
     fields: UpdateFields | undefined,
@@ -1028,7 +1028,7 @@ export class StateCache {
     if (!fields) return;
     for (const [key, raw] of Object.entries(fields)) {
       if (key === "targetGuid") {
-        if (typeof raw === "bigint" && "targetGuid" in target) {
+        if (typeof raw === "string" && "targetGuid" in target) {
           target.targetGuid = { value: raw, seq, ts };
         }
         continue;
@@ -1098,7 +1098,7 @@ export class StateCache {
         return;
       }
     }
-    const byGuid = this.names.get(guidKey(obj.guid));
+    const byGuid = this.names.get(obj.guid);
     if (byGuid) obj.name = byGuid;
   }
 
@@ -1123,8 +1123,8 @@ export class StateCache {
    * Create-or-update an object in `nearby`. Every update-object and MSG_MOVE_*
    * write goes through this one seam.
    */
-  protected upsertNearby(guid: bigint, seq: number, mutate: (obj: NearbyObject) => void): NearbyObject {
-    const key = guidKey(guid);
+  protected upsertNearby(guid: GuidKey, seq: number, mutate: (obj: NearbyObject) => void): NearbyObject {
+    const key = guid;
     let obj = this.nearby.get(key);
     if (!obj) {
       obj = {

@@ -73,8 +73,11 @@ import {
 } from "./state";
 import type { z } from "zod";
 
-/** Anything a caller can hand us as a guid. The wire wants a decimal string. */
-export type GuidArg = bigint | string;
+/**
+ * What every guid-taking method accepts: the opaque decimal string the SDK
+ * itself hands out (ADR-0017). The wire form is the same string.
+ */
+export type GuidArg = string;
 
 /**
  * Client-side guid validation, thrown before anything reaches the wire.
@@ -84,18 +87,23 @@ export type GuidArg = bigint | string;
  * precision-truncated — a live trajectory showed one silently targeting
  * nothing. `undefined` is rejected with a pointer to where guids come from,
  * because the module's own `missing_guid` reply cannot name the JS call site.
+ *
+ * A `bigint` is not on the surface any more (nothing SDK-visible produces
+ * one), but a model can still conjure one (`123n`) and it names exactly one
+ * guid — so it is repaired to the string form rather than rejected, per
+ * ADR-0016's deterministic-repair rule.
  */
-function assertGuid(guid: unknown, arg: string): asserts guid is GuidArg {
+function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint {
   if (guid === undefined || guid === null) {
     throw new TypeError(
-      `${arg} is ${guid === undefined ? "undefined" : "null"} — pass a guid as a bigint or ` +
-        `decimal string (guids come from state.nearbyUnits(), state.closest(...), or event data)`,
+      `${arg} is ${guid === undefined ? "undefined" : "null"} — pass a guid as its decimal ` +
+        `string (guids come from state.nearbyUnits(), state.closest(...), or event data)`,
     );
   }
   if (typeof guid === "number") {
     throw new TypeError(
       `${arg} is a number — guids exceed Number.MAX_SAFE_INTEGER and a number silently loses ` +
-        `precision (targeting nothing); pass a bigint or a decimal string (e.g. unit.guid or String(guid))`,
+        `precision (targeting nothing); pass the decimal string the state cache gave you (unit.guid)`,
     );
   }
 }
@@ -103,11 +111,6 @@ function assertGuid(guid: unknown, arg: string): asserts guid is GuidArg {
 function guidArg(guid: GuidArg, arg: string): string {
   assertGuid(guid, arg);
   return typeof guid === "bigint" ? guidKey(guid) : guid;
-}
-
-function toBigInt(guid: GuidArg, arg: string): bigint {
-  assertGuid(guid, arg);
-  return typeof guid === "bigint" ? guid : BigInt(guid);
 }
 
 /** Client-side position validation for move_to: each axis a finite number. */
@@ -245,7 +248,7 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   character_missing_after_create: "the character did not appear after creation — retry createSession once",
   timeout: "the module's internal wait ran out — the world may be busy; retry once before assuming failure",
   invalid_guid:
-    "the guid did not parse as a decimal u64 string — pass unit.guid (a bigint) or String(guid), never a rounded number",
+    "the guid did not parse as a decimal u64 string — pass unit.guid exactly as the state cache gave it, never a rounded number",
 };
 
 export class WrathRequestError extends Error {
@@ -392,7 +395,8 @@ export interface KillTargetOptions {
 
 /** What every `KillResult` carries, whatever the outcome. */
 interface KillResultFacts {
-  readonly guid: bigint;
+  /** The target's guid, in the same opaque decimal-string form state uses. */
+  readonly guid: string;
   readonly swings: number;
   /** Our own health as a percent of max at exit; `undefined` when unobserved. */
   readonly healthPct: number | undefined;
@@ -1095,8 +1099,8 @@ export class WrathClient {
    * because a fight and a corpse are two decisions.
    */
   async killTarget(guid: GuidArg, options: KillTargetOptions = {}): Promise<KillResult> {
-    const id = toBigInt(guid, "killTarget(guid)");
-    const key = guidKey(id);
+    const id = guidArg(guid, "killTarget(guid)");
+    const key = id;
     const refaceMs = options.refaceIntervalMs ?? 1500;
     const reapproachMs = options.reapproachIntervalMs ?? 6000;
     const meleeRange = options.meleeRange ?? 5;
@@ -1107,7 +1111,7 @@ export class WrathClient {
     let swings = 0;
     const offSwing = this.events.on("SMSG_ATTACKERSTATEUPDATE", (e) => {
       if (isDecodeError(e.data)) return;
-      if ((e.data as { attackerGuid: bigint }).attackerGuid === this.state.self.guid) swings++;
+      if ((e.data as { attackerGuid: string }).attackerGuid === this.state.self.guid) swings++;
     });
     // The server cancelling our swing is observable, so react to it rather than
     // assuming the opening `attack_start` holds for the whole fight. The
@@ -1116,7 +1120,7 @@ export class WrathClient {
     let rearmWanted = false;
     const offStop = this.events.on("SMSG_ATTACKSTOP", (e) => {
       if (isDecodeError(e.data)) return;
-      const d = e.data as { attackerGuid: bigint; victimGuid: bigint; attackerDead: boolean };
+      const d = e.data as { attackerGuid: string; victimGuid: string; attackerDead: boolean };
       if (d.attackerGuid !== this.state.self.guid || d.attackerDead) return;
       if (d.victimGuid !== id) return; // a re-target names the *old* victim
       rearmWanted = true;
@@ -1251,7 +1255,7 @@ export class WrathClient {
    * neither, so it still throws `EventTimeoutError`.
    */
   async lootCorpse(guid: GuidArg, options: LootOptions = {}): Promise<LootResult> {
-    const id = toBigInt(guid, "lootCorpse(guid)");
+    const id = guidArg(guid, "lootCorpse(guid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.lootAll(id);
@@ -1403,8 +1407,7 @@ export class WrathClient {
    * `undefined`, not a TypeError (observed in live runs, 4 of them).
    */
   get selfKey(): string | undefined {
-    const self = this.state?.self;
-    return self?.guid === undefined ? undefined : guidKey(self.guid);
+    return this.state?.self?.guid;
   }
 
   // --------------------------------------------------------------- internals

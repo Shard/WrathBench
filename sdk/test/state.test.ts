@@ -54,7 +54,7 @@ function toEvents(frames: readonly unknown[]): GameEvent[] {
   });
 }
 
-const SEED = { guid: 7n, name: "Fenwick" };
+const SEED = { guid: "7", name: "Fenwick" };
 
 describe("state cache: what it learns from events", () => {
   test("char enum populates known characters and self level", () => {
@@ -78,7 +78,7 @@ describe("state cache: what it learns from events", () => {
     expect(cache.motd?.value).toEqual(["fixture line one", "fixture line two"]);
     expect(cache.chat).toHaveLength(1);
     expect(cache.chat[0]?.message).toBe("ping from the fixture");
-    expect(cache.chat[0]?.senderGuid).toBe(7n);
+    expect(cache.chat[0]?.senderGuid).toBe("7");
     expect(cache.notifications).toEqual([
       { seq: 7, ts: 1_700_000_000_070, text: "fixture notification" },
     ]);
@@ -86,8 +86,8 @@ describe("state cache: what it learns from events", () => {
 
   test("names come only from name-query hits", () => {
     const cache = StateCache.replay(toEvents(fullStream), { seed: SEED });
-    expect(cache.nameOf(9n)).toBe("Ordrick");
-    expect(cache.nameOf(10n)).toBeUndefined();
+    expect(cache.nameOf("9")).toBe("Ordrick");
+    expect(cache.nameOf("10")).toBeUndefined();
     expect(cache.names.size).toBe(1);
   });
 });
@@ -113,7 +113,7 @@ describe("state cache: what it refuses to invent", () => {
 
   test("seeding by name alone still resolves self from the char enum", () => {
     const cache = StateCache.replay(toEvents(loginSequence), { seed: { name: "Quilby" } });
-    expect(cache.self.guid).toBe(8n);
+    expect(cache.self.guid).toBe("8");
     expect(cache.self.level?.value).toBe(11);
   });
 
@@ -287,7 +287,7 @@ describe("state cache: self, from the wire", () => {
       },
     };
     const cache = StateCache.replay(toEvents([...loginSequence, impostor]), { seed: SEED });
-    expect(cache.self.guid).toBe(7n);
+    expect(cache.self.guid).toBe("7");
     expect(cache.self.health).toBeUndefined();
     expect(cache.anomalies).toHaveLength(1);
     expect(cache.anomalies[0]?.kind).toBe("self_guid_mismatch");
@@ -297,7 +297,7 @@ describe("state cache: self, from the wire", () => {
 
   test("with no seed, the self flag is what tells us who we are", () => {
     const cache = StateCache.replay(toEvents([...loginSequence, selfCreate]));
-    expect(cache.self.guid).toBe(7n);
+    expect(cache.self.guid).toBe("7");
     expect(cache.self.health?.value).toEqual({ current: 80, max: 100 });
   });
 
@@ -334,7 +334,7 @@ describe("state cache: world queries", () => {
 
   test("creaturesByEntry selects on the observed template id", () => {
     const cache = StateCache.replay(events, { seed: SEED });
-    expect(cache.creaturesByEntry(CREATURE_ENTRY).map((o) => o.guid)).toEqual([BigInt(CREATURE_GUID)]);
+    expect(cache.creaturesByEntry(CREATURE_ENTRY).map((o) => o.guid)).toEqual([CREATURE_GUID]);
     expect(cache.creaturesByEntry(1)).toHaveLength(0);
   });
 
@@ -379,13 +379,13 @@ describe("state cache: replay", () => {
 
   test("the seed is the only non-event input, and it is recorded", () => {
     const cache = StateCache.replay(toEvents(loginSequence), { seed: SEED });
-    expect(cache.seed).toEqual({ guid: 7n, name: "Fenwick" });
+    expect(cache.seed).toEqual({ guid: "7", name: "Fenwick" });
   });
 
   test("seedSelf after the fact backfills self from an already-seen char enum", () => {
     const cache = StateCache.replay(toEvents(loginSequence));
     expect(cache.self.level).toBeUndefined();
-    cache.seedSelf({ guid: 7n, name: "Fenwick" });
+    cache.seedSelf({ guid: "7", name: "Fenwick" });
     expect(cache.self.level?.value).toBe(3);
   });
 
@@ -492,14 +492,14 @@ describe("state cache: self progress, target and inventory", () => {
 
   test("our own targetGuid resolves to the object in view", () => {
     const cache = withWorld([selfTarget]);
-    expect(cache.self.targetGuid?.value).toBe(BigInt(CREATURE_GUID));
-    expect(cache.target?.guid).toBe(BigInt(CREATURE_GUID));
+    expect(cache.self.targetGuid?.value).toBe(CREATURE_GUID);
+    expect(cache.target?.guid).toBe(CREATURE_GUID);
     expect(cache.target?.name?.value).toBe("Thistlebore");
   });
 
   test("a target that has left view is a target we cannot see", () => {
     const cache = withWorld([selfTarget, creatureOutOfRange]);
-    expect(cache.self.targetGuid?.value).toBe(BigInt(CREATURE_GUID));
+    expect(cache.self.targetGuid?.value).toBe(CREATURE_GUID);
     expect(cache.target).toBeUndefined();
   });
 
@@ -509,7 +509,7 @@ describe("state cache: self progress, target and inventory", () => {
     const [item] = cache.inventory;
     expect(item?.slot).toBe(BACKPACK_SLOT);
     // The high half is above 2^32: a truncating join would lose it entirely.
-    expect(item?.guid).toBe(BigInt(ITEM_GUID));
+    expect(item?.guid).toBe(ITEM_GUID);
     expect(item?.itemId).toBe(ITEM_ENTRY);
     expect(item?.name).toBe("Gritstone Charm");
     expect(item?.stackCount).toBe(5);
@@ -519,7 +519,7 @@ describe("state cache: self progress, target and inventory", () => {
   test("an occupied slot whose item has not been created is still occupied", () => {
     const cache = withWorld([inventorySlot]);
     expect(cache.inventory).toHaveLength(1);
-    expect(cache.inventory[0]?.guid).toBe(BigInt(ITEM_GUID));
+    expect(cache.inventory[0]?.guid).toBe(ITEM_GUID);
     expect(cache.inventory[0]?.itemId).toBeUndefined();
     expect(cache.inventory[0]?.name).toBeUndefined();
   });
@@ -537,7 +537,7 @@ describe("state cache: auras and creature movement", () => {
 
   test("aura slots accumulate and carry their durations", () => {
     const cache = withWorld([auraUpdate]);
-    const auras = cache.aurasOf(BigInt(CREATURE_GUID));
+    const auras = cache.aurasOf(CREATURE_GUID);
     expect(auras.map((a) => a.spellId)).toEqual([7777, 8888]);
     expect(auras[0]?.duration).toBe(12000);
     expect(auras[1]?.stacks).toBe(3);
@@ -545,17 +545,17 @@ describe("state cache: auras and creature movement", () => {
 
   test("a cleared slot is dropped, and the others survive", () => {
     const cache = withWorld([auraUpdate, auraRemoved]);
-    expect(cache.aurasOf(BigInt(CREATURE_GUID)).map((a) => a.slot)).toEqual([1]);
+    expect(cache.aurasOf(CREATURE_GUID).map((a) => a.slot)).toEqual([1]);
   });
 
   test("UPDATE_ALL replaces the list rather than merging into it", () => {
     const cache = withWorld([auraUpdate, auraUpdateAll]);
-    expect(cache.aurasOf(BigInt(CREATURE_GUID)).map((a) => a.spellId)).toEqual([9999]);
+    expect(cache.aurasOf(CREATURE_GUID).map((a) => a.spellId)).toEqual([9999]);
   });
 
   test("auras leave with the unit they were on", () => {
     const cache = withWorld([auraUpdate, creatureDestroy]);
-    expect(cache.aurasOf(BigInt(CREATURE_GUID))).toEqual([]);
+    expect(cache.aurasOf(CREATURE_GUID)).toEqual([]);
   });
 
   test("monster move is served as destination and duration, and nothing else", () => {
@@ -633,7 +633,7 @@ describe("WB_SESSION_STATE (reattach)", () => {
 
   test("populates self on an unseeded cache (resume into live session)", () => {
     const cache = StateCache.replay(toEvents([frame("7")]));
-    expect(cache.seed?.guid).toBe(7n);
+    expect(cache.seed?.guid).toBe("7");
     expect(cache.self.position?.value.map).toBe(0);
     expect(cache.self.position?.value.x).toBeCloseTo(-8949.9);
     expect(cache.self.level?.value).toBe(3);
@@ -650,5 +650,41 @@ describe("WB_SESSION_STATE (reattach)", () => {
     expect(cache.self.level?.value).toBeUndefined();
     expect(cache.anomalies.length).toBe(1);
     expect(cache.anomalies[0]!.kind).toBe("session_state_guid_mismatch");
+  });
+});
+
+describe("ADR-0017: guids are opaque decimal strings at the model surface", () => {
+  test("nearbyUnits guids and targetGuid are plain strings", () => {
+    const cache = StateCache.replay(toEvents(worldStream), { seed: SEED });
+    const units = cache.nearbyUnits();
+    expect(units.length).toBeGreaterThan(0);
+    for (const u of units) {
+      expect(typeof u.guid).toBe("string");
+      expect(u.guid).toMatch(/^\d+$/);
+      if (u.targetGuid !== undefined) expect(typeof u.targetGuid.value).toBe("string");
+    }
+    expect(units.map((u) => u.guid)).toContain(CREATURE_GUID);
+  });
+
+  test("JSON.stringify works on a nearby unit and on the whole snapshot self", () => {
+    const cache = StateCache.replay(toEvents(worldStream), { seed: SEED });
+    const unit = cache.nearby.get(CREATURE_GUID);
+    expect(unit).toBeDefined();
+    // The single most frequent model-facing error of the first measured night
+    // (JSON.stringify cannot serialize BigInt) must be impossible from state.
+    expect(() => JSON.stringify(unit)).not.toThrow();
+    expect(JSON.stringify({ guid: unit!.guid })).toContain(`"${CREATURE_GUID}"`);
+    const snap = cache.snapshot();
+    expect(() => JSON.stringify(snap.self)).not.toThrow();
+    expect(() => JSON.stringify(snap.inventory)).not.toThrow();
+    expect(() => JSON.stringify(snap.questLog)).not.toThrow();
+  });
+
+  test("guid strings compare with === and key Maps directly", () => {
+    const cache = StateCache.replay(toEvents(worldStream), { seed: SEED });
+    const unit = cache.nearbyUnits().find((u) => u.guid === CREATURE_GUID);
+    expect(unit).toBeDefined();
+    const byGuid = new Map(cache.nearbyUnits().map((u) => [u.guid, u]));
+    expect(byGuid.get(CREATURE_GUID)).toBe(unit!);
   });
 });
