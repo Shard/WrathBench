@@ -48,6 +48,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <strings.h>
 
 using boost::asio::ip::tcp;
@@ -333,13 +334,45 @@ namespace WrathBench
         return fut.get();
     }
 
+    // A guid request field must be a decimal u64 string (PROTOCOL.md). Empty
+    // means "absent" (validated separately); anything else that does not parse
+    // is a client bug — reported as 400 invalid_guid, never coerced to 0.
+    static bool GuidFieldParses(std::string const& v)
+    {
+        if (v.empty())
+            return true;
+        if (v.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+        try { (void)std::stoull(v); return true; } catch (...) { return false; }
+    }
+
+    // Every missing/invalid-param reply names the action and the param it was
+    // about: a bare "missing_guid" cost live-run turns to diagnose.
+    static HttpReply MissingParam(std::string const& action, char const* code, char const* param)
+    {
+        return {400, Json::Writer().Add("ok", false).Add("error", code)
+            .Add("action", action).Add("param", param).Str()};
+    }
+
     HttpReply Manager::HttpAction(std::string const& body)
     {
         Json::Value req = Json::Parse(body);
         std::string token = req.GetString("token");
         std::string action = req.GetString("action");
         if (token.empty())
-            return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
+            return MissingParam(action, "missing_token", "token");
+
+        // Guid-shaped fields are validated wherever they appear, before any
+        // per-action branching: a truncated or non-decimal guid must never
+        // silently become guid 0 (which targets nothing).
+        for (char const* key : { "guid", "targetGuid", "itemGuid" })
+        {
+            std::string v = req.GetString(key);
+            if (!GuidFieldParses(v))
+                return {400, Json::Writer().Add("ok", false).Add("error", "invalid_guid")
+                    .Add("action", action).Add("param", key)
+                    .Add("received", v.substr(0, 64)).Str()};
+        }
 
         auto ack = std::make_shared<std::promise<HttpReply>>();
         auto fut = ack->get_future();
@@ -352,7 +385,8 @@ namespace WrathBench
         else if (action == "move_to")
         {
             if (!req.Has("x") || !req.Has("y") || !req.Has("z"))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_position").Str()};
+                return MissingParam(action, "missing_position",
+                    !req.Has("x") ? "x" : (!req.Has("y") ? "y" : "z"));
             float x = (float)req.GetDouble("x"), y = (float)req.GetDouble("y"), z = (float)req.GetDouble("z");
             PushTask([this, token, x, y, z, ack]() { DoMoveTo(token, x, y, z, ack); });
         }
@@ -365,7 +399,7 @@ namespace WrathBench
             bool hasO = req.Has("orientation");
             bool hasXY = req.Has("x") && req.Has("y");
             if (!hasO && !hasXY)
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_face_target").Str()};
+                return MissingParam(action, "missing_face_target", "orientation or x,y");
             float o = (float)req.GetDouble("orientation");
             float x = (float)req.GetDouble("x"), y = (float)req.GetDouble("y");
             PushTask([this, token, hasO, o, hasXY, x, y, ack]() { DoFace(token, hasO, o, hasXY, x, y, ack); });
@@ -399,25 +433,25 @@ namespace WrathBench
                 return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
 
             if (needsGuid && req.GetString("guid").empty())
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_guid").Str()};
+                return MissingParam(action, "missing_guid", "guid");
             if (action == "gossip_select" && (!req.Has("menuId") || !req.Has("optionId")))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_option").Str()};
+                return MissingParam(action, "missing_option", !req.Has("menuId") ? "menuId" : "optionId");
             if ((action == "quest_details" || action == "quest_accept" || action == "quest_complete"
                  || action == "quest_choose_reward" || action == "quest_abandon") && !req.Has("questId"))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_quest_id").Str()};
+                return MissingParam(action, "missing_quest_id", "questId");
             if (action == "quest_choose_reward" && !req.Has("rewardIndex"))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_reward_index").Str()};
+                return MissingParam(action, "missing_reward_index", "rewardIndex");
             if ((action == "cast_spell" || action == "cancel_cast") && !req.Has("spellId"))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_spell_id").Str()};
+                return MissingParam(action, "missing_spell_id", "spellId");
             if (action == "loot_item" && !req.Has("slot"))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_slot").Str()};
+                return MissingParam(action, "missing_slot", "slot");
             if (action == "buy_item" && (!req.Has("itemId") || !req.Has("slot")))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_item").Str()};
+                return MissingParam(action, "missing_item", !req.Has("itemId") ? "itemId" : "slot");
             if (action == "sell_item" && req.GetString("itemGuid").empty())
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_item_guid").Str()};
+                return MissingParam(action, "missing_item_guid", "itemGuid");
             if ((action == "equip_item" || action == "use_item" || action == "destroy_item")
                 && (!req.Has("bag") || !req.Has("slot")))
-                return {400, Json::Writer().Add("ok", false).Add("error", "missing_bag_slot").Str()};
+                return MissingParam(action, "missing_bag_slot", !req.Has("bag") ? "bag" : "slot");
 
             PushTask([this, token, action, body, ack]() { DoGameAction(token, action, body, ack); });
         }
