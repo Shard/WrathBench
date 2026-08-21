@@ -331,6 +331,12 @@ priority. Items graduate out of this file into commits; the dev loop
       threaded through `waitFor`; SDK helpers label their waits).
     Parked pending ADRs (deliberately not shipped): BigInt.prototype.toJSON,
     sdk.wait/events.off aliases, machine-readable error class taxonomy.
+    **ADR-0017 shipped 2026-08-22**: guids are opaque decimal strings at the
+    model surface (state fields, helper params/returns, event payloads);
+    bigint lives only behind the SDK's parseGuid/formatGuid seam. The BigInt
+    error class is gone from SDK surfaces; the sandbox's BigInt-stringify
+    hint stays for snippet-conjured bigints (a `123n` literal) and the prompt
+    now states the string contract.
 
 ## Surface candidates (add when a run makes them the obstacle)
 

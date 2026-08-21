@@ -44,7 +44,18 @@ condition (compare runs with and without), never as a quiet default.
   do not compare across it (ADR-0004).
 - The BigInt error class ceases to exist rather than getting a better
   message; the ADR-0016 hint for it becomes dead text and is removed with
-  the refactor.
+  the refactor. One deliberate exception (implementation, 2026-08-22): the
+  sandbox's JSON.stringify-on-BigInt message rewrite stays, because a model
+  can still conjure a bigint itself (a `123n` literal) — the message now says
+  SDK guids are already strings and names `String(x)` for the model's own
+  values.
+- `GuidArg` narrows to `string`, but a bigint passed at runtime is silently
+  converted to its decimal string rather than rejected: it names exactly one
+  guid, which makes the conversion a deterministic repair under ADR-0016's
+  rule 1. `number` and `undefined`/`null` stay loud rejections as decided.
+- The internal bigint use (bit packing/unpacking) is contained behind one
+  SDK-private pair, `parseGuid`/`formatGuid` in `sdk/src/protocol.ts`, so the
+  string/bigint boundary is auditable in one place.
 - Guid strings are ~20 characters; state summaries pay a modest token cost
   over short aliases. Accepted — representation is fair game to optimize,
   referents are not.
