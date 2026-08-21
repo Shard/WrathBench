@@ -110,6 +110,8 @@ describe("sandbox evaluation", () => {
     expect(host.totalRestarts).toBe(1);
     const notices = host.drainNotices();
     expect(notices.some((n) => n.kind === "sandbox_restarted" && n.text.includes("unexpectedly"))).toBe(true);
+    // the notice carries the exit code so a crash is diagnosable from the trajectory
+    expect(notices.some((n) => n.kind === "sandbox_restarted" && n.text.includes("exit code 7"))).toBe(true);
     // lazy respawn: the next snippet gets a fresh, working runtime
     const after = await host.evalSnippet("typeof precious");
     expect(after.value).toBe(JSON.stringify("undefined"));
@@ -124,6 +126,50 @@ describe("sandbox evaluation", () => {
     const res = await host.evalSnippet("1 + 1");
     expect(res.ok).toBe(true);
     expect(res.value).toBe("2");
+  }, 15_000);
+
+  test("unhandled rejection from a fire-and-forget promise does not kill the runtime (night-laguna-oc-1 bug)", async () => {
+    const host = makeHost();
+    await host.evalSnippet("let precious = 'state';");
+    // The night-laguna-oc-1 shape: an async SDK call fired without await whose
+    // promise rejects after the snippet result has already been sent.
+    const res = await host.evalSnippet(
+      "void (async () => { await sleep(50); throw new Error('late-boom'); })(); 'done'",
+    );
+    expect(res.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(host.totalRestarts).toBe(0);
+    // the error was reported, not fatal: a session_note notice, never a restart
+    const notices = host.drainNotices();
+    expect(notices.some((n) => n.kind === "sandbox_restarted")).toBe(false);
+    expect(notices.some((n) => n.kind === "session_note" && n.text.includes("late-boom"))).toBe(true);
+    // bindings survived, and the next snippet's logs carry the background error
+    const after = await host.evalSnippet("precious");
+    expect(after.value).toBe(JSON.stringify("state"));
+    expect(after.logs.some((l) => l.level === "error" && l.text.includes("late-boom"))).toBe(true);
+  }, 15_000);
+
+  test("background uncaught exception is reported, not fatal", async () => {
+    const host = makeHost();
+    await host.evalSnippet("let precious = 'state'; setTimeout(() => { throw new Error('timer-boom'); }, 50);");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(host.totalRestarts).toBe(0);
+    expect(host.drainNotices().some((n) => n.kind === "session_note" && n.text.includes("timer-boom"))).toBe(true);
+    const after = await host.evalSnippet("precious");
+    expect(after.value).toBe(JSON.stringify("state"));
+  }, 15_000);
+
+  test("crash notice carries the child's last stderr", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet(
+      "process.stderr.write('doom marker 42\\n'); await sleep(20); process.exit(9);",
+    );
+    expect(res.restarted).toBe(true);
+    const notices = host.drainNotices();
+    const crash = notices.find((n) => n.kind === "sandbox_restarted");
+    expect(crash).toBeDefined();
+    expect(crash!.text).toContain("exit code 9");
+    expect(crash!.text).toContain("doom marker 42");
   }, 15_000);
 
   test("scratchpad helpers bridge to the host-owned file", async () => {

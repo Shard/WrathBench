@@ -69,6 +69,10 @@ export class SandboxHost {
   /** Consecutive restarts without an intervening successful snippet. */
   consecutiveRestarts = 0;
   totalRestarts = 0;
+  /** Rolling tail of the current child's stderr, for crash diagnosis. */
+  private stderrTail = "";
+  /** Resolves when the current child's stderr stream has drained. */
+  private stderrDone: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: SandboxHostOptions) {}
 
@@ -100,12 +104,12 @@ export class SandboxHost {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
       },
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", "inherit", "pipe"],
       serialization: "json",
       ipc: (message) => {
         this.onMessage(message as ChildToHost, markReady);
       },
-      onExit: (sub) => {
+      onExit: (sub, exitCode, signalCode) => {
         // Deliberate kills (restart/stop) null `this.proc` before killing, so a
         // match here means the child died on its own — crash, OOM, exit(). The
         // state loss must reach the model as a notice (it did not in gate2-ox-3)
@@ -115,15 +119,45 @@ export class SandboxHost {
           this.proc = null;
           this.consecutiveRestarts++;
           this.totalRestarts++;
-          this.notice("sandbox_restarted", `sandbox process exited unexpectedly. ${STATE_LOSS_RECOVERY}`);
-          this.markReady(); // never leave a start() awaiting a dead child
+          // Let the stderr pipe drain (briefly) so the crash output makes it
+          // into the notice — Bun prints the fatal error just before exiting.
+          const emit = (): void => {
+            const cause = `exit code ${exitCode ?? "?"}, signal ${signalCode ?? "none"}`;
+            const tail = this.stderrTail.trim().slice(-600);
+            this.notice(
+              "sandbox_restarted",
+              `sandbox process exited unexpectedly (${cause}).` +
+                (tail ? ` Last stderr: ${tail}\n` : " ") +
+                STATE_LOSS_RECOVERY,
+            );
+            this.markReady(); // never leave a start() awaiting a dead child
+          };
+          void Promise.race([this.stderrDone, new Promise((r) => setTimeout(r, 100))]).then(emit);
         }
         for (const [, p] of this.pending) p.reject(new SandboxExitedError());
         this.pending.clear();
         this.abandonedEvals.clear();
       },
     });
+    this.stderrTail = "";
+    this.stderrDone = this.pumpStderr(this.proc);
     await this.ready;
+  }
+
+  /** Mirror the child's stderr to ours while keeping a tail for crash notices. */
+  private async pumpStderr(proc: Subprocess): Promise<void> {
+    const stream = proc.stderr;
+    if (!(stream instanceof ReadableStream)) return;
+    const decoder = new TextDecoder();
+    try {
+      for await (const chunk of stream) {
+        const text = decoder.decode(chunk as Uint8Array, { stream: true });
+        process.stderr.write(text);
+        this.stderrTail = (this.stderrTail + text).slice(-4_000);
+      }
+    } catch {
+      // stream torn down with the process; the tail keeps what we saw
+    }
   }
 
   private onMessage(msg: ChildToHost, markReady: () => void): void {
