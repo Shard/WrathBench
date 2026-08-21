@@ -237,6 +237,11 @@ Validation errors (all `400`): `missing_guid`, `missing_option`,
 `missing_quest_id`, `missing_reward_index`, `missing_spell_id`,
 `missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`.
 
+### POST /characters
+
+`{ "token": <str>, "account"?: <str> }` → `200 { "ok": true, "token", "enum": { "count": <number>, "characters": [ { "guid", "name", "race", "class", "gender", "level" }, ... ] } }`.
+A parked utility session (never enters world) answers with the decoded `SMSG_CHAR_ENUM` for the account — the same data a client's character-select screen shows. Exists for the runner's episode hygiene (list-then-delete leftover characters); errors mirror `/character-delete` (`missing_token`, `token_in_use`, `unknown_account`, `account_in_use` when a live session holds the account, `504 timeout`).
+
 ### POST /character-delete
 
 Delete a character by name through the real `CMSG_CHAR_DELETE` path (added in

@@ -221,6 +221,43 @@ async function main(): Promise<void> {
   }
   console.error(`[wrathbench] trajectory: ${runDir}`);
 
+  if (!resumed) {
+    // Episode hygiene (ADR-0006 fresh character per episode): the account has
+    // ~10 character slots and every character on it is disposable between
+    // episodes. Clear them so the model can always create its assigned one.
+    // Best-effort: a failure here degrades to the old behaviour, it does not
+    // block the run.
+    try {
+      const listRes = await fetch(`${config.moduleUrl}/characters`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: `${config.runId}-hygiene` }),
+      });
+      const list = (await listRes.json()) as {
+        ok?: boolean;
+        enum?: { characters?: { name?: string }[] };
+      };
+      const names = (list.enum?.characters ?? []).map((c) => c.name).filter((n): n is string => !!n);
+      for (const name of names) {
+        const del = await fetch(`${config.moduleUrl}/character-delete`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: `${config.runId}-hygiene-del-${name}`, character: name }),
+        });
+        const dj = (await del.json()) as { deleted?: boolean; error?: string };
+        if (dj.deleted !== true) {
+          console.error(`[wrathbench] hygiene: could not delete leftover character ${name} (${dj.error ?? del.status})`);
+        }
+      }
+      if (names.length > 0) {
+        console.error(`[wrathbench] hygiene: cleared ${names.length} leftover character(s)`);
+        trajectory.append({ t: "harness", kind: "hygiene", cleared: names.length });
+      }
+    } catch (err) {
+      console.error(`[wrathbench] hygiene: skipped (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+
   const initialNotices = resumed
       ? [
           {
@@ -234,7 +271,18 @@ async function main(): Promise<void> {
               "acting through `sdk`.",
           } as const,
         ]
-      : [];
+      : [
+          {
+            ts: Date.now(),
+            kind: "session_note",
+            text:
+              `your assigned character for this episode: name "${config.character}", race ${config.race}, ` +
+              `class ${config.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin). Create it with ` +
+              `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
+              `after \`await connect()\`. Use exactly these values: the account's character slots were cleared ` +
+              `for this episode and other combinations may be rejected by the server's race/class rules.`,
+          } as const,
+        ];
 
   const outcome =
     config.driver === "claude-subscription"

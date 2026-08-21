@@ -92,6 +92,10 @@ namespace WrathBench
         // Character-delete utility session (POST /character-delete): parks at
         // the character-select stage, sends CMSG_CHAR_DELETE, never logs in.
         bool deleteMode{false};
+        // Character-list utility session (POST /characters): parks at the
+        // character-select stage, answers with the decoded CMSG_CHAR_ENUM
+        // response, never logs in. Episode hygiene for the runner.
+        bool listMode{false};
 
         // Login state machine, driven by the outbound packet tap.
         enum Phase { P_AUTH, P_ENUM, P_CREATE, P_ENUM2, P_LOGIN, P_INWORLD, P_DONE, P_DELETE };
@@ -168,6 +172,7 @@ namespace WrathBench
         HttpReply HttpAction(std::string const& body);
         HttpReply HttpDeleteSession(std::string const& body);
         HttpReply HttpCharacterDelete(std::string const& body);
+        HttpReply HttpCharacterList(std::string const& body);
         HttpReply HttpHealth();
 
         void DoCreateSession(std::shared_ptr<BenchSession> s, std::shared_ptr<std::promise<HttpReply>> ack);
