@@ -16,6 +16,7 @@ Phase 0: build the control surface and get any model to liftoff. See `docs/PHASE
 - The agent observes only what a real game client could observe. The action path goes through the same server opcode handlers a client would hit. See `docs/CONTRACTS.md`. If you find yourself reaching for a server-side shortcut that a client could not do, that is the signal to stop.
 - The C++ module stays thin: packet bridge and event tap only. Game semantics live in TypeScript.
 - The agent loop is model-agnostic. No per-model prompts, retries, or tuning.
+- SDK surface is simple by default, flexible via the raw-action escape hatch: helpers are earned by observed need in trajectories, never speculative, and there is no convenience middle tier (ADR-0015).
 - Pinned versions are pinned. AzerothCore commit, Bun version, and the module build are changed deliberately and documented.
 
 ## Repository layout
