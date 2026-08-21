@@ -11,7 +11,7 @@ import {
   CONTEXT_POLICY,
   assembleContext,
   formatStateSummary,
-  trimMessageWindow,
+  messageWindow,
   type ChatMessage,
   type SnapshotLike,
 } from "./context";
@@ -142,7 +142,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
 
-  let window: ChatMessage[] = [];
+  // Append-only. The model-visible window is a pure function of it (ADR-0012
+  // addendum): no trim state accumulates, so a rebuilt history cuts identically.
+  const history: ChatMessage[] = [];
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
   const builder = new ContextBuilder({
     config,
@@ -183,7 +185,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       const messages: ChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
-        ...window,
+        ...messageWindow(history),
         { role: "user", content: contextText },
       ];
 
@@ -210,7 +212,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           : {}),
       };
       trajectory.append({ t: "response", turn, message: assistant });
-      window.push(assistant);
+      history.push(assistant);
 
       // 5. execute tool calls in order
       for (const tc of outcome.turn.toolCalls) {
@@ -239,10 +241,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           if (o.sandbox.totalRestarts > restartsBefore) watchdogs.noteSandboxRestart();
           else if (result.isError !== true) watchdogs.noteSnippetSuccess();
         }
-        window.push({ role: "tool", content: result.text, tool_call_id: tc.id });
+        history.push({ role: "tool", content: result.text, tool_call_id: tc.id });
       }
-
-      window = trimMessageWindow(window);
 
       // 6. bookkeeping and pacing
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {

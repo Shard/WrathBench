@@ -38,3 +38,16 @@ Resume semantics follow from the policy: a restarted runner starts with an empty
 - Scores are comparable across models because context handling cannot be a scaffold advantage.
 - Models with weak note-taking will underperform models with strong note-taking at equal reasoning strength. That is signal, not bias: long-horizon memory management is part of what WrathBench measures.
 - Changing any constant in `CONTEXT_POLICY`, the summary template, or the system prompt is a harness version change and re-baselines results.
+
+## Addendum: block trimming for prompt caching (2026-08-21)
+
+The message window still holds recent assistant/tool messages verbatim, but it no longer slides one message per turn. It grows to `MESSAGE_WINDOW_MAX` (48) and is then cut back by one block of `MESSAGE_WINDOW_TRIM` (24) oldest messages, so it oscillates between 24 and 48 rather than sitting at a fixed 24.
+
+The reason is prompt caching, not context quality. Providers cache by longest byte-identical prefix. Under the sliding window, every turn past 24 messages dropped the oldest message, so the sent prefix diverged immediately after the system prompt and every call paid a full prefix recompute. Under block trimming the prefix is byte-identical for a whole 24-message block (≈8–12 tool exchanges at Phase-0 rates) and only the deliberate block cut invalidates it: one miss per block instead of one miss per turn. Over a six-hour episode that is the difference between recomputing the window on every call and recomputing it a handful of times.
+
+Two properties keep this from becoming scaffold cleverness:
+
+- **The cut is a pure function of the whole stored history** (`messageWindowCut`), not of accumulated in-memory trim state. It is monotone in history length and constant within a block, which is exactly what makes the prefix stable; and a history rebuilt from persisted records cuts at the same index an in-memory one does. It is computed over the full history rather than over the previously trimmed window on purpose: the boundary snaps forward to the next assistant message so a tool-call is never separated from its results, and that shortening would otherwise delay the next trim and drift the boundaries off the block grid.
+- **Resume semantics are unchanged.** A resumed run still starts with an empty window and the harness notice saying so, per the original decision — nothing else is promised to survive. So a resumed run's first request still differs from a never-paused run's; what this addendum buys is that the window is *reproducible from a history*, not that history is now preserved. Rebuilding history from the trajectory log would be a different decision.
+
+The average window is larger (36 messages against 24), which is the cost paid for the cache. Per the Consequences above this is a harness version change and re-baselines results.
