@@ -41,7 +41,8 @@ Response `200`:
   "worldStopped": false,
   "sessions": 1,
   "droppedPackets": 4213,
-  "droppedPacketsLive": 37
+  "droppedPacketsLive": 37,
+  "droppedByOpcode": { "SMSG_POWER_UPDATE": 1400, "SMSG_EMOTE": 220, "0x4F2": 3 }
 }
 ```
 - `sessions` — number of live bench sessions.
@@ -50,6 +51,10 @@ Response `200`:
   signal for later stages; see the whitelist section below.
 - `droppedPacketsLive` — the same count summed across only the currently live
   sessions.
+- `droppedByOpcode` — per-opcode breakdown of `droppedPackets` (process
+  lifetime, added 2026-08): the top 30 dropped opcodes by count, keyed by the
+  core's opcode-table name where it has one, `"0xNNN"` hex otherwise. This is
+  the whitelist-expansion census PHASE-0 anticipates.
 
 ### POST /session
 
@@ -62,11 +67,22 @@ Request:
   "token": "run-abc123",     // required, opaque session id chosen by the caller
   "account": "RUNNER",       // optional, defaults to WrathBench.Account
   "character": "Benchy",     // required, character name
-  "race": 1,                  // optional, default 1 (Human)
-  "class": 1,                 // optional, default 1 (Warrior)
+  "race": 1,                  // required when the character must be created; in [1,11]
+  "class": 1,                 // required when the character must be created; in [1,11]
   "gender": 0                 // optional, default 0 (Male)
 }
 ```
+
+`race`/`class` semantics (tightened 2026-08): when the named character already
+exists on the account, `race` and `class` are ignored entirely (as before —
+the existing character is logged in as-is). When the character does not exist
+— so this request will CREATE one — both must be numeric and in `[1,11]`;
+anything else (absent, non-numeric, out of range) fails the request with
+`400 {"ok":false,"error":"invalid_race_class","token":...}` before any
+char-create packet is synthesized. There is no silent default character
+anymore. Whether a create is needed is only known once the module sees the
+account's character list, so this check happens mid-flow (after `SMSG_CHAR_ENUM`),
+not at request parse time.
 
 Success `200`:
 ```json
@@ -91,6 +107,9 @@ reappears on the event stream in the self `SMSG_UPDATE_OBJECT` create block
 Errors:
 - `400 {"ok":false,"error":"missing_token"}`
 - `400 {"ok":false,"error":"missing_character"}`
+- `400 {"ok":false,"error":"invalid_race_class","token":...}` — the character
+  does not exist and race/class are not both in [1,11] (see above; decided at
+  char-enum time, before any char-create packet is synthesized).
 - `409 {"ok":false,"error":"token_in_use"}`
 - `400 {"ok":false,"error":"unknown_account"}`
 - `400 {"ok":false,"error":"socket_setup_failed"}`
@@ -307,6 +326,17 @@ Delivery guarantees:
   have its events delivered to that subscriber. Events emitted concurrently
   with the handshake itself may or may not be seen; open the event stream
   before `POST /session` (as the probes do) and this window is irrelevant.
+- Reattach state (added 2026-08): when a WebSocket subscribes to a token whose
+  session is already in world, the module emits one synthetic
+  `WB_SESSION_STATE` event (shape below) so a reconnecting consumer regains the
+  self state it would otherwise only have gotten from the long-gone
+  `SMSG_LOGIN_VERIFY_WORLD`. Player state is read on the world thread, so the
+  event is delivered asynchronously shortly after the subscribe — effectively
+  the first frame, though events emitted concurrently with the attach may
+  precede it. It takes the next `seq` and fans out to every subscriber of the
+  token like any event (so `seq` stays gapless for subscribers that never
+  disconnected; they can ignore the extra state event). A subscribe during
+  login emits nothing — the real `SMSG_LOGIN_VERIFY_WORLD` follows anyway.
 
 Every event frame:
 ```json
@@ -435,14 +465,15 @@ would issue on cache miss; the answers arrive as `SMSG_CREATURE_QUERY_RESPONSE`
 
 #### Module-synthesized events
 
-Two event `opcode` values do not correspond to server packets; they are produced
-by the module's client-side movement engine (the knowledge a real client has
-locally while running). Their `opcodeId`s are outside the real opcode range.
+These event `opcode` values do not correspond to server packets; they carry
+knowledge a real client has locally (the movement engine's own position, the
+session's own identity). Their `opcodeId`s are outside the real opcode range.
 
 | opcode | id | `data` fields |
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
 | `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" } }` |
+| `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
 2^53, so it falls under the counter exemption to the u64-as-string rule stated

@@ -159,6 +159,10 @@ services:
       AC_WRATH_BENCH_BIND_ADDRESS: "0.0.0.0"
       AC_WRATH_BENCH_PORT: "8086"
       AC_WRATH_BENCH_AUDIT_DIR: "/azerothcore/env/dist/logs/wrathbench"
+      # Server.log with per-boot timestamped backups (appender flag 16), so
+      # ERROR/WARN history survives restarts and container recreation on the
+      # data/logs volume. Default mode "w" truncated every boot.
+      AC_APPENDER_SERVER: "2,5,16,Server.log,w"
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:

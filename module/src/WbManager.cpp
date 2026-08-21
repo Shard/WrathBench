@@ -43,6 +43,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -203,6 +204,18 @@ namespace WrathBench
         }
     }
 
+    // Name an opcode id for the /health drop histogram: the core's opcode
+    // table name where it has one, "0xNNN" hex otherwise.
+    static std::string DropOpcodeName(uint16 opc)
+    {
+        if (opc < NUM_OPCODE_HANDLERS)
+            if (OpcodeHandler const* h = opcodeTable[static_cast<Opcodes>(opc)])
+                return h->Name;
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "0x%03X", opc);
+        return buf;
+    }
+
     HttpReply Manager::HttpHealth()
     {
         uint64_t sessions;
@@ -213,6 +226,20 @@ namespace WrathBench
             for (auto& [token, s] : _byToken)
                 liveDrops += s->dropCount.load();
         }
+
+        // Top 30 dropped opcodes by count (whitelist-expansion census signal).
+        std::vector<std::pair<uint16, uint64_t>> drops;
+        for (size_t i = 0; i < kOpcodeSpace; ++i)
+            if (uint64_t c = _dropsByOpcode[i].load(std::memory_order_relaxed))
+                drops.emplace_back(static_cast<uint16>(i), c);
+        size_t const top = std::min<size_t>(drops.size(), 30);
+        std::partial_sort(drops.begin(), drops.begin() + top, drops.end(),
+            [](auto const& a, auto const& b) { return a.second > b.second; });
+        drops.resize(top);
+        Json::Writer byOpcode;
+        for (auto const& [opc, count] : drops)
+            byOpcode.Add(DropOpcodeName(opc), count);
+
         Json::Writer w;
         w.Add("ok", true);
         w.Add("module", "mod-wrathbench");
@@ -220,6 +247,7 @@ namespace WrathBench
         w.Add("sessions", sessions);
         w.Add("droppedPackets", _totalDrops.load()); // lifetime
         w.Add("droppedPacketsLive", liveDrops);      // across current sessions
+        w.Raw("droppedByOpcode", byOpcode.Str());    // lifetime, top 30 by count
         return {200, w.Str()};
     }
 
@@ -237,8 +265,14 @@ namespace WrathBench
         s->token = token;
         s->account = req.GetString("account", _account);
         s->charName = req.GetString("character", "");
-        s->charRace = static_cast<uint8>(req.GetInt("race", 1));   // 1 = Human
-        s->charClass = static_cast<uint8>(req.GetInt("class", 1));  // 1 = Warrior
+        // Absent or garbage race/class deliberately parse to 0, which is outside
+        // the valid [1,11] range. Whether that matters is only decided at
+        // char-enum time: an existing character ignores these entirely, but a
+        // character CREATE with an out-of-range race/class fails the request
+        // with 400 invalid_race_class instead of silently making a default
+        // Human Warrior (the incident this guards against).
+        s->charRace = static_cast<uint8>(req.GetInt("race", 0));
+        s->charClass = static_cast<uint8>(req.GetInt("class", 0));
         s->charGender = static_cast<uint8>(req.GetInt("gender", 0));
         if (s->charName.empty())
             return {400, Json::Writer().Add("ok", false).Add("error", "missing_character").Str()};
@@ -1273,6 +1307,16 @@ namespace WrathBench
                     }
                     else if (phase == BenchSession::P_ENUM)
                     {
+                        // The character does not exist, so this session must
+                        // CREATE one — the point where race/class stop being
+                        // ignorable. Reject out-of-range values before any
+                        // char-create packet is synthesized (400, not the
+                        // usual 502: this is a caller error, not a game one).
+                        if (s->charRace < 1 || s->charRace > 11 || s->charClass < 1 || s->charClass > 11)
+                        {
+                            FailAck(*s, "invalid_race_class", 400);
+                            break;
+                        }
                         WorldPacket* p = new WorldPacket(CMSG_CHAR_CREATE, 32);
                         *p << s->charName;
                         *p << uint8(s->charRace) << uint8(s->charClass) << uint8(s->charGender);
@@ -1359,6 +1403,11 @@ namespace WrathBench
         {
             s->dropCount.fetch_add(1);
             _totalDrops.fetch_add(1);
+            // Per-opcode histogram for the whitelist-expansion census
+            // (PHASE-0). Relaxed atomic add: this is the hot path, fired for
+            // every non-whitelisted packet on world and map threads.
+            if (opcode < kOpcodeSpace)
+                _dropsByOpcode[opcode].fetch_add(1, std::memory_order_relaxed);
         }
 
         return false; // never write bench packets to the parked socket
@@ -1375,10 +1424,10 @@ namespace WrathBench
         s.ack->set_value({200, w.Str()});
     }
 
-    void Manager::FailAck(BenchSession& s, std::string const& message)
+    void Manager::FailAck(BenchSession& s, std::string const& message, int status /*= 502*/)
     {
         if (!s.ackFired.exchange(true) && s.ack)
-            s.ack->set_value({502, Json::Writer().Add("ok", false).Add("error", message).Add("token", s.token).Str()});
+            s.ack->set_value({status, Json::Writer().Add("ok", false).Add("error", message).Add("token", s.token).Str()});
 
         // A failure here means the session never reached the world; discard it so it
         // does not linger in the session maps. Called from the tap on the world
@@ -1432,8 +1481,42 @@ namespace WrathBench
     // ------------------------------------------------------- ws attach
     void Manager::OnWsOpen(std::string const& token, std::shared_ptr<IWsConn> conn)
     {
-        std::lock_guard<std::mutex> lock(_sessMutex);
-        _wsByToken[token].push_back(std::move(conn));
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            _wsByToken[token].push_back(std::move(conn));
+        }
+
+        // Reattach state (io thread): a subscriber that connects after
+        // SMSG_LOGIN_VERIFY_WORLD fired would otherwise never learn its own
+        // position/map. Emit one synthetic WB_SESSION_STATE event carrying only
+        // client-visible facts (what LOGIN_VERIFY_WORLD plus the session's own
+        // identity would carry). Player state must be read on the world thread,
+        // so the event is delivered asynchronously via the task queue; it takes
+        // the next seq and fans out to every subscriber like any event, keeping
+        // seq gapless for subscribers that stayed connected.
+        auto s = FindByToken(token);
+        if (!s || s->phase.load() != BenchSession::P_INWORLD || s->tearingDown.load())
+            return;
+        PushTask([this, s]() {
+            if (s->tearingDown.load() || s->phase.load() != BenchSession::P_INWORLD)
+                return;
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                return;
+            Player* player = s->ws->GetPlayer();
+            if (!player || !player->IsInWorld())
+                return;
+            Json::Writer w;
+            w.Add("character", s->charName)
+             .AddGuid("guid", (uint64_t)player->GetGUID().GetRawValue())
+             .Add("inWorld", true)
+             .Add("map", player->GetMapId())
+             .Add("x", (double)player->GetPositionX())
+             .Add("y", (double)player->GetPositionY())
+             .Add("z", (double)player->GetPositionZ())
+             .Add("o", (double)player->GetOrientation())
+             .Add("level", (uint32)player->GetLevel());
+            EmitEvent(*s, "WB_SESSION_STATE", 0xFF03, w.Str());
+        });
     }
 
     void Manager::OnWsClose(std::string const& token, IWsConn* conn)

@@ -20,6 +20,7 @@
 
 #include "WbHttpServer.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -220,7 +221,7 @@ namespace WrathBench
         void EmitEvent(BenchSession& s, std::string const& opcodeName, uint16_t opcodeId, std::string const& dataJson);
         void Audit(BenchSession& s, char const* kind, std::string const& json);
         void SucceedAck(BenchSession& s);
-        void FailAck(BenchSession& s, std::string const& message);
+        void FailAck(BenchSession& s, std::string const& message, int status = 502);
 
         std::shared_ptr<BenchSession> FindByToken(std::string const& token);
         std::shared_ptr<BenchSession> FindByWs(WorldSession* ws);
@@ -245,6 +246,14 @@ namespace WrathBench
         // Lifetime count of dropped (non-whitelisted) outbound packets, surviving
         // session teardown so /health reflects it after a session ends.
         std::atomic<uint64_t> _totalDrops{0};
+
+        // Per-opcode counts of dropped packets, process lifetime. Indexed by
+        // opcode id; 0x600 covers the whole 3.3.5 opcode space (max 0x51F).
+        // Lock-free: the drop path fires for every non-whitelisted packet on
+        // world and map threads. The Manager is a function-local static, so the
+        // array starts zeroed by static storage before first use.
+        static constexpr size_t kOpcodeSpace = 0x600;
+        std::array<std::atomic<uint64_t>, kOpcodeSpace> _dropsByOpcode{};
 
         std::mutex _sessMutex;
         std::unordered_map<std::string, std::shared_ptr<BenchSession>> _byToken;
