@@ -236,12 +236,18 @@ namespace WrathBench
         std::shared_ptr<BenchSession> FindByToken(std::string const& token);
         std::shared_ptr<BenchSession> FindByWs(WorldSession* ws);
 
+        // Is this account on the WrathBench.Accounts allowlist
+        // (case-insensitive)? io/world threads; the list is set once in
+        // Configure and read-only afterwards.
+        bool AccountPermitted(std::string const& account) const;
+
         // config
         bool _enabled{false};
         std::string _bindAddress{"0.0.0.0"};
         uint16_t _port{8086};
         unsigned _threads{2};
         std::string _account{"RUNNER"};
+        std::vector<std::string> _accounts; // allowlist; defaults to {_account}
         std::string _auditDir;
 
         std::unique_ptr<HttpServer> _http;

@@ -208,9 +208,15 @@ priority. Items graduate out of this file into commits; the dev loop
      4. SDK scopes `WB_MOVE_RESULT` correlation to a session epoch (advanced
         on `createSession` and on seq-restart detection); regression test in
         `sdk/test/client.test.ts` covers the stale-result relog case.
-     5. `/character-delete` minimally gated: only the configured account is
-        served, and never while a different token holds a live bench session
-        on it (`403 account_not_permitted` / `409 account_owned_by_other_token`).
+     5. `/character-delete` minimally gated: only accounts on the
+        `WrathBench.Accounts` allowlist (compose: RUNNER, RUNNER2, SHAKEOUT,
+        PROBE; defaults to `WrathBench.Account` when unset) are served, and
+        never while a different token holds a live bench session on the
+        account (`403 account_not_permitted` /
+        `409 account_owned_by_other_token`). The first cut hard-coded the
+        single configured account and broke smoke-probe cleanup on PROBE
+        post-deploy; the allowlist replaced it 2026-08-22, and `/session` and
+        `/characters` now apply the same allowlist for symmetry.
         Per-character credentials remain item 10.
      6. Runner prompt documents die → repop → ghost-run → reclaimCorpse with
         the spirit-healer fallback, including reclaim's silent-rejection
