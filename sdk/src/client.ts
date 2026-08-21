@@ -968,9 +968,10 @@ export class WrathClient {
    *
    * The default `timeout` (25s) is deliberately under the runner's 30s snippet
    * cap so an in-snippet call returns its verdict rather than being abandoned
-   * mid-fight; a longer fight belongs in a background routine. A pre-approach
-   * walk that outlasts the deadline is folded into `detail` and reported as
-   * `timeout` rather than thrown, so the outcome stays a value.
+   * mid-fight; a longer fight belongs in a background routine. An approach walk
+   * that outlasts the deadline — before the first swing or after it — is folded
+   * into `detail` and reported as `timeout` rather than thrown, so the outcome
+   * stays a value.
    *
    * Returns a value for every game outcome and throws only for a refused
    * request. The caller is expected to loot afterwards: `killTarget` does not,
@@ -1019,6 +1020,21 @@ export class WrathClient {
 
     let outcome: KillResult["status"] | undefined;
     let note = "";
+    /**
+     * Walk to the target, recording what the walk did. A walk that never
+     * finishes is the clock running out, which the loop reports as `timeout` on
+     * its next tick — so it is folded into `note` rather than thrown out of a
+     * helper whose whole contract is a value per outcome.
+     */
+    const walkTo = async (at: Point3): Promise<void> => {
+      try {
+        const walk = await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
+        if (!walk.ok) note = ` (approach: ${walk.status})`;
+      } catch (e) {
+        if (!(e instanceof EventTimeoutError)) throw e;
+        note = " (approach never finished)";
+      }
+    };
     const done = (status: KillResult["status"]): KillResult => {
       outcome = status;
       const armed = leavingArmed(status, options.disengage === true);
@@ -1044,15 +1060,7 @@ export class WrathClient {
       // 25-second stare. A walk that runs out the clock is an answer too.
       const opening = aimAt();
       const from = this.state.self.position?.value;
-      if (opening && from && distance2d(from, opening) > meleeRange) {
-        try {
-          const walk = await this.moveTo(opening, { timeout: Math.max(1000, deadline - Date.now()) });
-          if (!walk.ok) note = ` (approach: ${walk.status})`;
-        } catch (e) {
-          if (!(e instanceof EventTimeoutError)) throw e;
-          note = " (approach never finished)";
-        }
-      }
+      if (opening && from && distance2d(from, opening) > meleeRange) await walkTo(opening);
       const facing = aimAt();
       if (facing) await this.faceQuietly(facing);
       await this.attackStart(id);
@@ -1095,7 +1103,7 @@ export class WrathClient {
           reapproachAt = now + reapproachMs;
           const pos = this.state.self.position?.value;
           if (pos && distance2d(pos, at) > meleeRange) {
-            await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
+            await walkTo(at);
             const after = aimAt();
             if (after) await this.faceQuietly(after);
             await this.attackStart(id);
