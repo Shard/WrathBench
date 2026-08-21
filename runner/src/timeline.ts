@@ -37,10 +37,20 @@ export function renderTimeline(runDir: string, runId: string): string {
   const stateRows = trajectory.stateRows(runId);
   trajectory.close();
 
+  const shakeout = (meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined;
+  if (typeof shakeout === "string" && shakeout.length > 0) {
+    // First and last thing the reader sees: this run is not a score.
+    lines.push("!! ".repeat(8).trim());
+    lines.push(`!! ${shakeout.toUpperCase()} — NOT A HARNESS RESULT`);
+    lines.push("!! ".repeat(8).trim());
+    lines.push("");
+  }
   lines.push(`run:        ${runId}`);
   if (meta !== null) {
     lines.push(`harness:    ${meta.harnessVersion}`);
-    lines.push(`adapter:    ${meta.config.adapter}${meta.config.model !== undefined ? ` (${meta.config.model})` : ""}`);
+    // `adapter` is the pre-driver name for the same thing; old runs only have it.
+    const driver = meta.config.driver ?? meta.config.adapter;
+    lines.push(`driver:     ${driver}${meta.config.model !== undefined ? ` (${meta.config.model})` : ""}`);
     lines.push(`character:  ${meta.config.character} (race ${meta.config.race}, class ${meta.config.class})`);
     lines.push(`started:    ${fmtTs(meta.startedAt)}`);
   }
@@ -107,6 +117,10 @@ export function renderTimeline(runDir: string, runId: string): string {
       const text = typeof e["text"] === "string" ? e["text"] : JSON.stringify(e);
       lines.push(`  [${fmtTs(e.ts)}] ${e.t}: ${text.split("\n")[0]!.slice(0, 140)}`);
     }
+  }
+  if (typeof shakeout === "string" && shakeout.length > 0) {
+    lines.push("");
+    lines.push(`!! ${shakeout.toUpperCase()} — NOT A HARNESS RESULT`);
   }
   return lines.join("\n");
 }
