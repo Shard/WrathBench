@@ -7,6 +7,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { normalizePauseReason } from "../src/index";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -181,7 +182,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.shakeout = str(r["shakeout"]) ?? row.shakeout;
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
-        row.pauseReason = str(r["pause_reason"]);
+        // Stored reasons predate the rename; normalise so one vocabulary shows.
+        const pause = str(r["pause_reason"]);
+        row.pauseReason = pause === null ? null : normalizePauseReason(pause);
         if (row.apiBase === null && typeof r["config_json"] === "string") {
           try {
             row.apiBase = str((JSON.parse(r["config_json"]) as { apiBase?: unknown }).apiBase);

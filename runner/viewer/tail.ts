@@ -249,18 +249,46 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   let context = 0;
   let turns = 0;
   let reported = false;
+  // The provider reports a turn's prompt size on the *response*, so a request's
+  // estimate is held until the response either confirms or replaces it.
+  let pending: number | null = null;
+
   for (const e of entries) {
     const usage = e["usage"] as { prompt: number; completion: number } | undefined;
     if (e.t === "request") {
+      if (pending !== null) prompt += pending; // a turn that never got a response
       turns++;
-      const p = usage !== undefined ? ((reported = true), usage.prompt) : estimateTokens(Number(e["promptChars"] ?? 0));
-      prompt += p;
-      context = p;
-      completion += usage?.completion ?? 0;
+      const est = estimateTokens(Number(e["promptChars"] ?? 0));
+      if (usage !== undefined) {
+        reported = true;
+        prompt += usage.prompt;
+        completion += usage.completion;
+        context = usage.prompt;
+        pending = null;
+      } else {
+        pending = est;
+        context = est;
+      }
     } else if (e.t === "response") {
-      completion += usage !== undefined ? ((reported = true), usage.completion) : estimateTokens(Number(e["outChars"] ?? 0));
+      if (usage !== undefined) {
+        reported = true;
+        if (usage.prompt > 0) {
+          prompt += usage.prompt;
+          context = usage.prompt;
+        } else if (pending !== null) {
+          prompt += pending;
+        }
+        completion += usage.completion;
+      } else {
+        if (pending !== null) prompt += pending;
+        completion += estimateTokens(Number(e["outChars"] ?? 0));
+      }
+      pending = null;
     }
   }
+  // A request still in flight has already been sent, so it counts.
+  if (pending !== null) prompt += pending;
+
   return {
     source: reported ? "reported" : "estimated",
     contextTokens: context,
