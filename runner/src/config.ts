@@ -71,6 +71,9 @@ export const runConfigSchema = z.object({
 
   // Character (PHASE-0: run config, default forgiving solo class — Human Paladin).
   character: z.string().min(2).max(12).default("Benchy"),
+  /** Game account for this run's sessions. Parallel runs need distinct accounts
+   * (the core allows one live session per account). Created via bootstrap. */
+  account: z.string().min(2).max(16).default("RUNNER"),
   race: z.number().int().min(1).max(11).default(1),
   class: z.number().int().min(1).max(11).default(2),
 
