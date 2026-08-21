@@ -196,10 +196,13 @@ export function renderError(err: unknown): string {
     if (pos != null && typeof pos.line === "number") {
       return `${err.name}: ${renderBuildMessage(err as { message?: string; position?: BuildPosition })}`;
     }
+    // SDK guids are plain strings (ADR-0017), so only a bigint the snippet
+    // itself conjured (a 123n literal) can reach this — still worth naming.
     if (err instanceof TypeError && BIGINT_STRINGIFY_RE.test(err.message)) {
       return (
-        `${err.name}: ${err.message} — guids are bigints and JSON.stringify throws on them; ` +
-        `use String(guid), template literals, or console.log directly`
+        `${err.name}: ${err.message} — JSON.stringify throws on BigInt values; ` +
+        `SDK guids are already plain strings, so convert your own bigints with ` +
+        `String(x), template literals, or console.log directly`
       );
     }
     return `${err.name}: ${err.message}`;

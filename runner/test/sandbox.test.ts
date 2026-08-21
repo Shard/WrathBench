@@ -225,12 +225,13 @@ describe("error rendering (2026-08 audit fixes)", () => {
     expect(res.error).toContain("const b = ;");
   });
 
-  test("JSON.stringify on a bigint names the fix", async () => {
+  test("JSON.stringify on a snippet-conjured bigint names the fix (SDK guids are strings now)", async () => {
     const host = makeHost();
-    const res = await host.evalSnippet("JSON.stringify({ guid: 123n })");
+    const res = await host.evalSnippet("JSON.stringify({ n: 123n })");
     expect(res.ok).toBe(false);
     expect(res.error).toContain("BigInt");
-    expect(res.error).toContain("String(guid)");
+    expect(res.error).toContain("guids are already plain strings");
+    expect(res.error).toContain("String(x)");
   });
 
   test("timed-out snippet returns its buffered console logs and background-routine guidance", async () => {
