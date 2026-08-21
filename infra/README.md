@@ -40,11 +40,11 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
   `infra/docker/server.Dockerfile` with `module/` compiled in.
 - **runner** — placeholder today (`sleep infinity`). Becomes the agent loop.
 
-Nothing is published to the host. The realm is reachable only from inside the
-`wrathbench` bridge network; per `docs/DATA-AND-LEGAL.md` there is no public
-play endpoint, and 8085 and 3724 in particular must never leave the network. If
-you need a port for debugging, bind it to `127.0.0.1` explicitly and do not
-commit it.
+Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
+published to the host are 3724 (authserver) and 8085 (worldserver), bound
+explicitly to `127.0.0.1` so the operator's own client can log in and spectate
+— see `SPECTATOR.md`. Nothing may ever bind beyond loopback. Any other port
+needed for debugging follows the same rule and is not committed.
 
 ## Configuration
 
@@ -91,14 +91,9 @@ The cost of direct SQL is a small reimplementation of SRP6, pinned to
 derivation, logins fail at the authserver and `bootstrap.ts` is where to look.
 
 The runner account is an ordinary player with no `account_access` row. The
-agent gets no GM privileges by contract (`docs/CONTRACTS.md`). If you need an
-operator account for debugging, create it by hand from the worldserver console:
-
-```
-docker compose -f infra/compose.yml attach worldserver
-AC> account create admin <password>
-AC> account set gmlevel admin 3 -1
-```
+agent gets no GM privileges by contract (`docs/CONTRACTS.md`). For a GM
+operator account to spectate the world with your own client, use
+`infra/spectator-account.ts` — see `SPECTATOR.md`.
 
 Override the defaults with `WRATHBENCH_ACCOUNT_USER`,
 `WRATHBENCH_ACCOUNT_PASSWORD`, `WRATHBENCH_REALM_NAME`, and
