@@ -21,7 +21,7 @@ import { z } from "zod";
  * The protocol revision this file was written against. Bump deliberately: the
  * SDK surface is part of the harness surface (see sdk/README.md).
  */
-export const PROTOCOL_REVISION = "phase0-stage2+movement";
+export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat";
 
 // ---------------------------------------------------------------- primitives
 
@@ -148,6 +148,15 @@ export const faceResponseSchema = z.looseObject({
 });
 export type FaceResponse = z.infer<typeof faceResponseSchema>;
 
+/** POST /character-delete */
+export const characterDeleteResponseSchema = z.looseObject({
+  ok: z.literal(true),
+  token: z.string(),
+  character: z.string(),
+  deleted: z.boolean(),
+});
+export type CharacterDeleteResponse = z.infer<typeof characterDeleteResponseSchema>;
+
 /** DELETE /session */
 export const deleteSessionResponseSchema = z.looseObject({
   ok: z.literal(true),
@@ -180,7 +189,48 @@ export type ActionRequest =
   | { token: string; action: "move_to"; x: number; y: number; z: number }
   | { token: string; action: "stop" }
   | { token: string; action: "face"; orientation: number }
-  | { token: string; action: "face"; x: number; y: number };
+  | { token: string; action: "face"; x: number; y: number }
+  // quest/combat extension. Guids are decimal strings on the wire.
+  | { token: string; action: "set_target"; guid: string }
+  | { token: string; action: "clear_target" }
+  | { token: string; action: "attack_start"; guid: string }
+  | { token: string; action: "attack_stop" }
+  | { token: string; action: "cast_spell"; spellId: number; targetGuid?: string }
+  | { token: string; action: "cancel_cast"; spellId: number }
+  | { token: string; action: "interact"; guid: string }
+  | { token: string; action: "gossip_hello"; guid: string }
+  | { token: string; action: "gossip_select"; guid: string; menuId: number; optionId: number }
+  | { token: string; action: "quest_list"; guid: string }
+  | { token: string; action: "quest_details"; guid: string; questId: number }
+  | { token: string; action: "quest_accept"; guid: string; questId: number }
+  | { token: string; action: "quest_complete"; guid: string; questId: number }
+  | { token: string; action: "quest_choose_reward"; guid: string; questId: number; rewardIndex: number }
+  | { token: string; action: "quest_abandon"; questId: number }
+  | { token: string; action: "loot"; guid: string }
+  | { token: string; action: "loot_all"; guid: string }
+  | { token: string; action: "loot_item"; slot: number }
+  | { token: string; action: "loot_money" }
+  | { token: string; action: "loot_release"; guid: string }
+  | { token: string; action: "vendor_list"; guid: string }
+  | { token: string; action: "buy_item"; guid: string; itemId: number; slot: number; count?: number }
+  | { token: string; action: "sell_item"; guid: string; itemGuid: string; count?: number }
+  | { token: string; action: "repair_all"; guid: string }
+  | { token: string; action: "equip_item"; bag: number; slot: number }
+  | { token: string; action: "use_item"; bag: number; slot: number; targetGuid?: string }
+  | { token: string; action: "destroy_item"; bag: number; slot: number; count?: number }
+  | { token: string; action: "repop" }
+  | { token: string; action: "reclaim_corpse"; guid?: string };
+
+/**
+ * POST /character-delete body. Not session-scoped: the module stands up its own
+ * parked session for the delete (ADR-0013), so `token` is a throwaway for this
+ * one operation's audit log, never the live session's token.
+ */
+export interface CharacterDeleteRequest {
+  token: string;
+  character: string;
+  account?: string;
+}
 
 /** DELETE /session body. */
 export interface DeleteSessionRequest {
@@ -266,6 +316,14 @@ export type MessageChatData = z.infer<typeof messageChatDataSchema>;
  * The object is *loose*, so a field the module starts serving before this file
  * knows about it survives to the state cache as an unvalidated extra rather
  * than being stripped.
+ *
+ * The quest/combat extension's two *indexed* field families are deliberately
+ * left to that passthrough rather than spelled out: `quest<0-24><Id|State|
+ * CountsLo|CountsHi|Time>` and `invSlot<0-38><Lo|Hi>` are 203 keys whose only
+ * consumer is the state cache's quest-log and inventory fold, which reads them
+ * by name out of the field record. Enumerating them here would buy a typed
+ * `fields.quest3Id` nobody wants and 203 lines of schema to keep in step with
+ * the module.
  */
 export const updateFieldsSchema = z.looseObject({
   // all objects
@@ -301,6 +359,19 @@ export const updateFieldsSchema = z.looseObject({
   powerType: z.number().optional(),
   // players
   playerFlags: z.number().optional(),
+  // players, self only (the server marks these PRIVATE)
+  money: z.number().optional(),
+  xp: z.number().optional(),
+  nextLevelXp: z.number().optional(),
+  // items and containers
+  stackCount: z.number().optional(),
+  durability: z.number().optional(),
+  maxDurability: z.number().optional(),
+  itemFlags: z.number().optional(),
+  ownerLo: z.number().optional(),
+  ownerHi: z.number().optional(),
+  containedLo: z.number().optional(),
+  containedHi: z.number().optional(),
   // game objects
   goDisplayId: z.number().optional(),
   goFlags: z.number().optional(),
@@ -462,6 +533,368 @@ export const moveResultDataSchema = z.looseObject({
 });
 export type MoveResultData = z.infer<typeof moveResultDataSchema>;
 
+// ----------------------------------------------- quest / combat extension
+//
+// One schema per row of PROTOCOL.md's quest/combat whitelist, in the same
+// order. All loose, all optional-where-the-module-says-conditional.
+
+export const attackStartDataSchema = z.looseObject({
+  attackerGuid: guidSchema,
+  victimGuid: guidSchema,
+});
+export type AttackStartData = z.infer<typeof attackStartDataSchema>;
+
+export const attackStopDataSchema = z.looseObject({
+  attackerGuid: guidSchema,
+  victimGuid: guidSchema,
+  attackerDead: z.boolean(),
+});
+export type AttackStopData = z.infer<typeof attackStopDataSchema>;
+
+/** One melee swing, either direction. Per-school sub-damages are pre-summed. */
+export const attackerStateUpdateDataSchema = z.looseObject({
+  attackerGuid: guidSchema,
+  victimGuid: guidSchema,
+  hitInfo: z.number(),
+  damage: z.number(),
+  overkill: z.number(),
+  absorb: z.number(),
+  resist: z.number(),
+  blocked: z.number(),
+  victimState: z.number(),
+  miss: z.boolean(),
+  crit: z.boolean(),
+});
+export type AttackerStateUpdateData = z.infer<typeof attackerStateUpdateDataSchema>;
+
+export const spellStartDataSchema = z.looseObject({
+  casterGuid: guidSchema,
+  spellId: z.number(),
+  castTimeMs: z.number(),
+  targetGuid: guidSchema.optional(),
+});
+export type SpellStartData = z.infer<typeof spellStartDataSchema>;
+
+export const spellGoDataSchema = z.looseObject({
+  casterGuid: guidSchema,
+  spellId: z.number(),
+  hitGuids: z.array(guidSchema),
+  misses: z.array(z.looseObject({ guid: guidSchema, reason: z.number() })),
+});
+export type SpellGoData = z.infer<typeof spellGoDataSchema>;
+
+/** `result` is a SpellCastResult code; the SDK does not name them. */
+export const castFailedDataSchema = z.looseObject({
+  spellId: z.number(),
+  result: z.number(),
+});
+export type CastFailedData = z.infer<typeof castFailedDataSchema>;
+
+export const spellFailureDataSchema = z.looseObject({
+  casterGuid: guidSchema,
+  spellId: z.number(),
+  result: z.number(),
+});
+export type SpellFailureData = z.infer<typeof spellFailureDataSchema>;
+
+export const periodicAuraLogDataSchema = z.looseObject({
+  targetGuid: guidSchema,
+  casterGuid: guidSchema,
+  spellId: z.number(),
+  auraType: z.number(),
+  amount: z.number(),
+});
+export type PeriodicAuraLogData = z.infer<typeof periodicAuraLogDataSchema>;
+
+/**
+ * One visible aura slot. `spellId: 0` means the slot was cleared, and then the
+ * module sends `removed: true` instead of the optional fields — which is why
+ * every field but `slot`/`spellId` is optional here.
+ */
+export const auraSchema = z.looseObject({
+  slot: z.number(),
+  spellId: z.number(),
+  removed: z.boolean().optional(),
+  flags: z.number().optional(),
+  level: z.number().optional(),
+  stacks: z.number().optional(),
+  casterGuid: guidSchema.optional(),
+  maxDuration: z.number().optional(),
+  duration: z.number().optional(),
+});
+export type AuraData = z.infer<typeof auraSchema>;
+
+/** `SMSG_AURA_UPDATE` (changed slots) and `SMSG_AURA_UPDATE_ALL` (full list). */
+export const auraUpdateDataSchema = z.looseObject({
+  targetGuid: guidSchema,
+  auras: z.array(auraSchema),
+});
+export type AuraUpdateData = z.infer<typeof auraUpdateDataSchema>;
+
+export const logXpGainDataSchema = z.looseObject({
+  victimGuid: guidSchema,
+  amount: z.number(),
+  fromKill: z.boolean(),
+});
+export type LogXpGainData = z.infer<typeof logXpGainDataSchema>;
+
+export const levelUpInfoDataSchema = z.looseObject({
+  level: z.number(),
+  healthGained: z.number(),
+});
+export type LevelUpInfoData = z.infer<typeof levelUpInfoDataSchema>;
+
+export const itemPushResultDataSchema = z.looseObject({
+  playerGuid: guidSchema,
+  itemId: z.number(),
+  count: z.number(),
+  totalCount: z.number(),
+  bagSlot: z.number(),
+  itemSlot: z.number(),
+  looted: z.boolean(),
+  created: z.boolean(),
+});
+export type ItemPushResultData = z.infer<typeof itemPushResultDataSchema>;
+
+export const questGiverStatusDataSchema = z.looseObject({
+  guid: guidSchema,
+  status: z.number(),
+});
+export type QuestGiverStatusData = z.infer<typeof questGiverStatusDataSchema>;
+
+/** One row of a questgiver's list, in either of the two shapes that carry it. */
+export const offeredQuestSchema = z.looseObject({
+  questId: z.number(),
+  icon: z.number(),
+  level: z.number(),
+  title: z.string(),
+  repeatable: z.boolean().optional(),
+});
+export type OfferedQuest = z.infer<typeof offeredQuestSchema>;
+
+export const questGiverQuestListDataSchema = z.looseObject({
+  guid: guidSchema,
+  greeting: z.string(),
+  quests: z.array(offeredQuestSchema),
+});
+export type QuestGiverQuestListData = z.infer<typeof questGiverQuestListDataSchema>;
+
+/** An item reward: fixed (`rewards`) or one of a choice (`choiceRewards`). */
+export const questRewardItemSchema = z.looseObject({
+  itemId: z.number(),
+  count: z.number(),
+});
+export type QuestRewardItem = z.infer<typeof questRewardItemSchema>;
+
+export const questGiverQuestDetailsDataSchema = z.looseObject({
+  guid: guidSchema,
+  questId: z.number(),
+  title: z.string(),
+  details: z.string(),
+  objectives: z.string(),
+  choiceRewards: z.array(questRewardItemSchema),
+  rewards: z.array(questRewardItemSchema),
+  money: z.number(),
+  xp: z.number(),
+});
+export type QuestGiverQuestDetailsData = z.infer<typeof questGiverQuestDetailsDataSchema>;
+
+export const questGiverRequestItemsDataSchema = z.looseObject({
+  guid: guidSchema,
+  questId: z.number(),
+  title: z.string(),
+  text: z.string(),
+  requiredMoney: z.number(),
+  requiredItems: z.array(questRewardItemSchema),
+  completable: z.boolean(),
+});
+export type QuestGiverRequestItemsData = z.infer<typeof questGiverRequestItemsDataSchema>;
+
+export const questGiverOfferRewardDataSchema = z.looseObject({
+  guid: guidSchema,
+  questId: z.number(),
+  title: z.string(),
+  text: z.string(),
+  choiceRewards: z.array(questRewardItemSchema),
+  rewards: z.array(questRewardItemSchema),
+  money: z.number(),
+  xp: z.number(),
+});
+export type QuestGiverOfferRewardData = z.infer<typeof questGiverOfferRewardDataSchema>;
+
+export const questGiverQuestCompleteDataSchema = z.looseObject({
+  questId: z.number(),
+  xp: z.number(),
+  money: z.number(),
+});
+export type QuestGiverQuestCompleteData = z.infer<typeof questGiverQuestCompleteDataSchema>;
+
+export const questGiverQuestFailedDataSchema = z.looseObject({
+  questId: z.number(),
+  reason: z.number(),
+});
+export type QuestGiverQuestFailedData = z.infer<typeof questGiverQuestFailedDataSchema>;
+
+/** Kill (or gameobject, `entry | 0x80000000`) credit toward one objective. */
+export const questUpdateAddKillDataSchema = z.looseObject({
+  questId: z.number(),
+  entry: z.number(),
+  current: z.number(),
+  required: z.number(),
+  guid: guidSchema,
+});
+export type QuestUpdateAddKillData = z.infer<typeof questUpdateAddKillDataSchema>;
+
+/** The core sends this one empty; item progress lives in the quest-log fields. */
+export const questUpdateAddItemDataSchema = z.looseObject({});
+export type QuestUpdateAddItemData = z.infer<typeof questUpdateAddItemDataSchema>;
+
+export const questUpdateQuestIdDataSchema = z.looseObject({ questId: z.number() });
+export type QuestUpdateQuestIdData = z.infer<typeof questUpdateQuestIdDataSchema>;
+
+export const gossipOptionSchema = z.looseObject({
+  optionId: z.number(),
+  icon: z.number(),
+  text: z.string(),
+});
+export type GossipOption = z.infer<typeof gossipOptionSchema>;
+
+/**
+ * A gossip menu — which, on a gossip-flagged questgiver, is *also* how the
+ * quest list arrives (`quests[]`), instead of `SMSG_QUESTGIVER_QUEST_LIST`.
+ * Callers that want offered quests must accept either opcode.
+ */
+export const gossipMessageDataSchema = z.looseObject({
+  guid: guidSchema,
+  menuId: z.number(),
+  textId: z.number(),
+  options: z.array(gossipOptionSchema),
+  quests: z.array(offeredQuestSchema),
+});
+export type GossipMessageData = z.infer<typeof gossipMessageDataSchema>;
+
+export const emptyDataSchema = z.looseObject({});
+export type EmptyData = z.infer<typeof emptyDataSchema>;
+
+/** One row of an open loot window. `slotType` 0 is free to loot. */
+export const lootItemSchema = z.looseObject({
+  slot: z.number(),
+  itemId: z.number(),
+  count: z.number(),
+  slotType: z.number(),
+});
+export type LootItemData = z.infer<typeof lootItemSchema>;
+
+export const lootResponseDataSchema = z.looseObject({
+  guid: guidSchema,
+  lootType: z.number(),
+  gold: z.number(),
+  items: z.array(lootItemSchema),
+});
+export type LootResponseData = z.infer<typeof lootResponseDataSchema>;
+
+export const lootRemovedDataSchema = z.looseObject({ slot: z.number() });
+export type LootRemovedData = z.infer<typeof lootRemovedDataSchema>;
+
+export const lootMoneyNotifyDataSchema = z.looseObject({ money: z.number() });
+export type LootMoneyNotifyData = z.infer<typeof lootMoneyNotifyDataSchema>;
+
+export const lootReleaseResponseDataSchema = z.looseObject({ guid: guidSchema });
+export type LootReleaseResponseData = z.infer<typeof lootReleaseResponseDataSchema>;
+
+/** `slot` is 1-based; `leftInStock` -1 means unlimited. */
+export const vendorItemSchema = z.looseObject({
+  slot: z.number(),
+  itemId: z.number(),
+  price: z.number(),
+  buyCount: z.number(),
+  leftInStock: z.number(),
+  extendedCost: z.number(),
+});
+export type VendorItem = z.infer<typeof vendorItemSchema>;
+
+export const listInventoryDataSchema = z.looseObject({
+  vendorGuid: guidSchema,
+  items: z.array(vendorItemSchema),
+  emptyReason: z.number().optional(),
+});
+export type ListInventoryData = z.infer<typeof listInventoryDataSchema>;
+
+export const buyItemDataSchema = z.looseObject({
+  vendorGuid: guidSchema,
+  slot: z.number(),
+  count: z.number(),
+});
+export type BuyItemData = z.infer<typeof buyItemDataSchema>;
+
+export const buyFailedDataSchema = z.looseObject({
+  vendorGuid: guidSchema,
+  itemId: z.number(),
+  result: z.number(),
+});
+export type BuyFailedData = z.infer<typeof buyFailedDataSchema>;
+
+export const sellItemDataSchema = z.looseObject({
+  vendorGuid: guidSchema,
+  itemGuid: guidSchema,
+  result: z.number(),
+});
+export type SellItemData = z.infer<typeof sellItemDataSchema>;
+
+/** `result` is an InventoryResult code; the SDK does not name them. */
+export const inventoryChangeFailureDataSchema = z.looseObject({
+  result: z.number(),
+  itemGuid: guidSchema.optional(),
+  itemGuid2: guidSchema.optional(),
+  requiredLevel: z.number().optional(),
+});
+export type InventoryChangeFailureData = z.infer<typeof inventoryChangeFailureDataSchema>;
+
+export const itemQueryResponseDataSchema = z.looseObject({
+  itemId: z.number(),
+  found: z.boolean(),
+  name: z.string().optional(),
+  quality: z.number().optional(),
+  inventoryType: z.number().optional(),
+  buyPrice: z.number().optional(),
+  sellPrice: z.number().optional(),
+  itemLevel: z.number().optional(),
+  requiredLevel: z.number().optional(),
+  class: z.number().optional(),
+  subClass: z.number().optional(),
+});
+export type ItemQueryResponseData = z.infer<typeof itemQueryResponseDataSchema>;
+
+/** `map: -1` clears the release marker. */
+export const deathReleaseLocDataSchema = z.looseObject({
+  map: z.number(),
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+});
+export type DeathReleaseLocData = z.infer<typeof deathReleaseLocDataSchema>;
+
+export const corpseReclaimDelayDataSchema = z.looseObject({ delayMs: z.number() });
+export type CorpseReclaimDelayData = z.infer<typeof corpseReclaimDelayDataSchema>;
+
+export const charDeleteDataSchema = z.looseObject({ result: z.number() });
+export type CharDeleteData = z.infer<typeof charDeleteDataSchema>;
+
+/**
+ * A creature's movement, reduced to what a player perceives: where it is, where
+ * it is heading, and how long it will take. The spline points are consumed by
+ * the module and never served (ADR-0010/0013). A stopped creature sends
+ * `stopped: true` and no destination.
+ */
+export const monsterMoveDataSchema = z.looseObject({
+  guid: guidSchema,
+  pos: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }),
+  destination: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+  durationMs: z.number().optional(),
+  stopped: z.boolean().optional(),
+});
+export type MonsterMoveData = z.infer<typeof monsterMoveDataSchema>;
+
 const moveOpcodeSchemas = Object.fromEntries(
   MOVE_OPCODES.map((op) => [op, moveUpdateDataSchema]),
 ) as { [K in MoveOpcode]: typeof moveUpdateDataSchema };
@@ -487,6 +920,55 @@ export const eventDataSchemas = {
   WB_MOVE_PROGRESS: moveProgressDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
   ...moveOpcodeSchemas,
+  // quest/combat extension — combat
+  SMSG_ATTACKSTART: attackStartDataSchema,
+  SMSG_ATTACKSTOP: attackStopDataSchema,
+  SMSG_ATTACKERSTATEUPDATE: attackerStateUpdateDataSchema,
+  SMSG_SPELL_START: spellStartDataSchema,
+  SMSG_SPELL_GO: spellGoDataSchema,
+  SMSG_CAST_FAILED: castFailedDataSchema,
+  SMSG_SPELL_FAILURE: spellFailureDataSchema,
+  SMSG_PERIODICAURALOG: periodicAuraLogDataSchema,
+  SMSG_AURA_UPDATE: auraUpdateDataSchema,
+  SMSG_AURA_UPDATE_ALL: auraUpdateDataSchema,
+  // progress
+  SMSG_LOG_XPGAIN: logXpGainDataSchema,
+  SMSG_LEVELUP_INFO: levelUpInfoDataSchema,
+  SMSG_ITEM_PUSH_RESULT: itemPushResultDataSchema,
+  // quests and gossip
+  SMSG_QUESTGIVER_STATUS: questGiverStatusDataSchema,
+  SMSG_QUESTGIVER_QUEST_LIST: questGiverQuestListDataSchema,
+  SMSG_QUESTGIVER_QUEST_DETAILS: questGiverQuestDetailsDataSchema,
+  SMSG_QUESTGIVER_REQUEST_ITEMS: questGiverRequestItemsDataSchema,
+  SMSG_QUESTGIVER_OFFER_REWARD: questGiverOfferRewardDataSchema,
+  SMSG_QUESTGIVER_QUEST_COMPLETE: questGiverQuestCompleteDataSchema,
+  SMSG_QUESTGIVER_QUEST_FAILED: questGiverQuestFailedDataSchema,
+  SMSG_QUESTUPDATE_ADD_KILL: questUpdateAddKillDataSchema,
+  SMSG_QUESTUPDATE_ADD_ITEM: questUpdateAddItemDataSchema,
+  SMSG_QUESTUPDATE_COMPLETE: questUpdateQuestIdDataSchema,
+  SMSG_QUESTUPDATE_FAILED: questUpdateQuestIdDataSchema,
+  SMSG_GOSSIP_MESSAGE: gossipMessageDataSchema,
+  SMSG_GOSSIP_COMPLETE: emptyDataSchema,
+  // loot, vendor, inventory
+  SMSG_LOOT_RESPONSE: lootResponseDataSchema,
+  SMSG_LOOT_REMOVED: lootRemovedDataSchema,
+  SMSG_LOOT_MONEY_NOTIFY: lootMoneyNotifyDataSchema,
+  SMSG_LOOT_CLEAR_MONEY: emptyDataSchema,
+  SMSG_LOOT_RELEASE_RESPONSE: lootReleaseResponseDataSchema,
+  SMSG_LIST_INVENTORY: listInventoryDataSchema,
+  SMSG_BUY_ITEM: buyItemDataSchema,
+  SMSG_BUY_FAILED: buyFailedDataSchema,
+  SMSG_SELL_ITEM: sellItemDataSchema,
+  SMSG_INVENTORY_CHANGE_FAILURE: inventoryChangeFailureDataSchema,
+  SMSG_ITEM_QUERY_SINGLE_RESPONSE: itemQueryResponseDataSchema,
+  // death
+  SMSG_DEATH_RELEASE_LOC: deathReleaseLocDataSchema,
+  SMSG_CORPSE_RECLAIM_DELAY: corpseReclaimDelayDataSchema,
+  SMSG_DURABILITY_DAMAGE_DEATH: emptyDataSchema,
+  // session
+  SMSG_CHAR_DELETE: charDeleteDataSchema,
+  // creature movement
+  SMSG_MONSTER_MOVE: monsterMoveDataSchema,
 } as const;
 
 export type KnownOpcode = keyof typeof eventDataSchemas;

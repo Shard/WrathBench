@@ -13,6 +13,30 @@ export interface StubOptions {
   closeAfterPush?: boolean;
   /** Override handlers per route; return undefined to fall through to defaults. */
   routes?: Partial<Record<"health" | "session" | "action" | "deleteSession", () => Response>>;
+  /**
+   * `POST /character-delete`, by attempt number. The real module answers `504
+   * timeout` until the core has released the character, so a stub that never
+   * varies cannot exercise the retry.
+   */
+  characterDelete?: (attempt: number, body: CharacterDeleteBody) => Response;
+  /**
+   * Refuse one kind of action while the rest still work — the module rejects a
+   * `face` with `409 moving` while a move is running, and only that one.
+   * Return undefined to fall through to the default ack.
+   */
+  failAction?: (action: string) => Response | undefined;
+}
+
+export interface CharacterDeleteBody {
+  token?: string;
+  character?: string;
+  account?: string;
+}
+
+/** One dispatched action body, as the SDK sent it. */
+export interface RecordedAction {
+  action: string;
+  [key: string]: unknown;
 }
 
 export interface StubServer {
@@ -24,6 +48,10 @@ export interface StubServer {
   dropSockets(): void;
   connections: number;
   sockets: ServerWebSocket<{ token: string }>[];
+  /** Every `POST /action` body the SDK sent, in order. */
+  actions: RecordedAction[];
+  /** Every `POST /character-delete` body, in order. */
+  characterDeletes: CharacterDeleteBody[];
   stop(): Promise<void>;
 }
 
@@ -38,6 +66,8 @@ export function startStub(options: StubOptions = {}): StubServer {
   const sockets = new Set<ServerWebSocket<{ token: string }>>();
   let connections = 0;
   let moveIdGen = 0;
+  const actions: RecordedAction[] = [];
+  const characterDeletes: CharacterDeleteBody[] = [];
 
   const server = Bun.serve<{ token: string }, never>({
     port: 0,
@@ -77,6 +107,21 @@ export function startStub(options: StubOptions = {}): StubServer {
       if (url.pathname === "/session" && req.method === "DELETE") {
         return options.routes?.deleteSession?.() ?? json({ ok: true, token: "stub" });
       }
+      if (url.pathname === "/character-delete" && req.method === "POST") {
+        return req.json().then((body) => {
+          const attempt = characterDeletes.length;
+          characterDeletes.push(body as CharacterDeleteBody);
+          return (
+            options.characterDelete?.(attempt, body as CharacterDeleteBody) ??
+            json({
+              ok: true,
+              token: (body as CharacterDeleteBody).token ?? "stub",
+              character: (body as CharacterDeleteBody).character ?? "Fenwick",
+              deleted: true,
+            })
+          );
+        });
+      }
       if (url.pathname === "/action" && req.method === "POST") {
         const override = options.routes?.action?.();
         if (override) return override;
@@ -84,6 +129,9 @@ export function startStub(options: StubOptions = {}): StubServer {
         // `move_to` hands back the moveId its WB_MOVE_RESULT will carry.
         return req.json().then((body) => {
           const action = (body as { action?: string }).action ?? "say";
+          actions.push({ ...(body as object), action } as RecordedAction);
+          const refused = options.failAction?.(action);
+          if (refused) return refused;
           if (action === "move_to") {
             return json({ ok: true, action, token: "stub", moveId: ++moveIdGen });
           }
@@ -132,6 +180,8 @@ export function startStub(options: StubOptions = {}): StubServer {
     get sockets() {
       return [...sockets];
     },
+    actions,
+    characterDeletes,
     async stop() {
       await server.stop(true);
     },
