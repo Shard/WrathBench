@@ -143,7 +143,17 @@ export class OpenAiChatAdapter implements ChatAdapter {
         lastStatus = undefined;
         continue;
       }
-      const text = await res.text();
+      let text: string;
+      try {
+        // The body read shares the request's AbortSignal: a provider that
+        // returns headers and then stalls the body times out HERE, and that
+        // is as retryable as the fetch itself failing.
+        text = await res.text();
+      } catch (err) {
+        lastError = `body read failed: ${err instanceof Error ? err.message : String(err)}`;
+        lastStatus = undefined;
+        continue;
+      }
       if (res.ok) {
         let json: unknown;
         try {
