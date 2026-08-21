@@ -53,8 +53,9 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 /**
  * Pause reasons: the run is suspended, not judged. Resumable with `--resume`.
  * `window-exhausted` covers subscription/quota exhaustion on the model API.
+ * `rate-limited` covers post-retry HTTP 429 without quota wording (free pools).
  */
-export const PAUSE_REASONS = ["window-exhausted", "operator-pause"] as const;
+export const PAUSE_REASONS = ["window-exhausted", "rate-limited", "operator-pause"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config

@@ -42,7 +42,7 @@ export interface AssistantTurn {
 
 export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
-  | { kind: "pause"; reason: "window-exhausted"; detail: string }
+  | { kind: "pause"; reason: "window-exhausted" | "rate-limited"; detail: string }
   | { kind: "stub-complete" };
 
 export class AdapterError extends Error {
@@ -183,6 +183,11 @@ export class OpenAiChatAdapter implements ChatAdapter {
     }
     if (lastStatus === 402) {
       return { kind: "pause", reason: "window-exhausted", detail: lastError };
+    }
+    if (lastStatus === 429) {
+      // Free-pool upstreams rate-limit without quota wording. Still a pause:
+      // the run is suspendable and resumable, not broken.
+      return { kind: "pause", reason: "rate-limited", detail: lastError };
     }
     throw new AdapterError(`model API failed after ${this.maxAttempts} attempts: ${lastError}`, lastStatus);
   }
