@@ -7,7 +7,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } from "../src/adapter";
+import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
+import { toJsonSafe } from "../src/jsonsafe";
 import { runLoop } from "../src/loop";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
@@ -100,6 +102,44 @@ describe("runLoop", () => {
     // One compact record per completion, logged once even across several samples.
     const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
     expect(done.map((r) => r["questId"])).toEqual([7, 9]);
+    options.trajectory.close();
+  });
+
+  test("the new signals survive the real snapshot serializer, not just the stub", async () => {
+    // The sandbox answers the state rpc with toJsonSafe(state.snapshot(), 6).
+    // Stubbing the payload proves loop.ts reads it; this proves the SDK's own
+    // snapshot still carries both signals once it has been through that.
+    const cache = new StateCache({ seed: { guid: "7", name: "Fenwick" } });
+    for (const frame of [
+      {
+        seq: 1,
+        opcode: "SMSG_UPDATE_OBJECT",
+        opcodeId: 0x0a9,
+        ts: 1,
+        data: {
+          blocks: 1,
+          objects: [{ update: "values", guid: "7", fields: { money: 12345 } }],
+        },
+      },
+      {
+        seq: 2,
+        opcode: "SMSG_QUESTGIVER_QUEST_COMPLETE",
+        opcodeId: 0x191,
+        ts: 2,
+        data: { questId: 7, xp: 400, money: 250 },
+      },
+    ]) {
+      const parsed = parseEventFrame(JSON.stringify(frame));
+      if (!parsed.ok) throw new Error(`fixture did not parse: ${parsed.error}`);
+      cache.apply(parsed.event);
+    }
+    const wire = toJsonSafe(cache.snapshot(), 6) as Record<string, unknown>;
+
+    const { options } = setup(new StubAdapter([{ content: "acting", toolCalls: [] }]), {}, wire);
+    await runLoop(options);
+    const row = options.trajectory.stateRows("run-test")[0]!;
+    expect(row["money"]).toBe(12345);
+    expect(row["quests_completed"]).toBe(1);
     options.trajectory.close();
   });
 
