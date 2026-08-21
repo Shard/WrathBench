@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformOf, readRun } from "../viewer/runs";
-import { TrajectoryTail, splitLines, summarize, tokenTotals } from "../viewer/tail";
+import { TrajectoryTail, scanRunTotals, splitLines, summarize, tokenTotals } from "../viewer/tail";
 
 function tempFile(): string {
   return join(mkdtempSync(join(tmpdir(), "wrathbench-viewer-")), "trajectory.jsonl");
@@ -252,6 +252,74 @@ describe("tokenTotals", () => {
 
   test("an empty run totals to zero rather than NaN", () => {
     expect(tokenTotals([])).toMatchObject({ source: "estimated", contextTokens: 0, totalTokens: 0, turns: 0 });
+  });
+
+  test("cache figures the provider never mentions stay null, not zero", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize({ t: "response", ts: 1, message: {}, usage: { prompt_tokens: 900, completion_tokens: 30 } }, 1, 0, 1),
+    ]);
+    // A compat provider that reports no cache read is not a provider that read
+    // nothing from cache, and the UI must be able to tell the two apart.
+    expect(t.cacheReadTokens).toBeNull();
+    expect(t.cacheWriteTokens).toBeNull();
+  });
+
+  test("cache reads and writes sum across turns, in either vocabulary", () => {
+    const t = tokenTotals([
+      // OpenAI-compat: cached_tokens, and nothing at all about writes.
+      summarize(
+        { t: "response", ts: 1, message: {}, usage: { prompt_tokens: 900, completion_tokens: 30, cached_tokens: 400 } },
+        0, 0, 1,
+      ),
+      // The claude driver's normalised shape adds the writes.
+      summarize(
+        {
+          t: "response", ts: 2, message: {},
+          usage: { prompt_tokens: 1000, completion_tokens: 40, cached_tokens: 600, cache_write_tokens: 50 },
+        },
+        1, 0, 1,
+      ),
+    ]);
+    expect(t.cacheReadTokens).toBe(1000);
+    expect(t.cacheWriteTokens).toBe(50);
+    expect(t.promptTokens).toBe(1900);
+  });
+});
+
+describe("scanRunTotals", () => {
+  test("totals a whole file and reports the wall clock it spans", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({ t: "request", ts: 1100, messages: [{ role: "user", content: "hello" }] }),
+        JSON.stringify({
+          t: "response", ts: 1200, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 500, completion_tokens: 20, cached_tokens: 100 },
+        }),
+        JSON.stringify({ t: "state", ts: 5000, level: 2 }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.entries).toBe(4);
+    expect(totals.firstTs).toBe(1000);
+    expect(totals.lastTs).toBe(5000);
+    expect(totals.tokens.source).toBe("reported");
+    expect(totals.tokens.totalTokens).toBe(520);
+    expect(totals.tokens.cacheReadTokens).toBe(100);
+    expect(totals.tokens.cacheWriteTokens).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a missing file is an empty run, not a crash", async () => {
+    const totals = await scanRunTotals(join(tmpdir(), "wrathbench-no-such-run", "trajectory.jsonl"));
+    expect(totals.entries).toBe(0);
+    expect(totals.firstTs).toBeNull();
+    expect(totals.tokens.totalTokens).toBe(0);
   });
 });
 
