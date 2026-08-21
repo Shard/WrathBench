@@ -221,7 +221,7 @@ async function handle(req: Request): Promise<Response> {
 }
 
 const server = Bun.serve({
-  hostname: REQUIRED_HOST,
+  hostname: host,
   port,
   idleTimeout: 0,
   fetch: (req) =>
