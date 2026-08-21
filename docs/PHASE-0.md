@@ -27,34 +27,34 @@ All of the following:
 Roughly in order. Each item is small enough to be a day or two; the module is the exception.
 
 ### Infra
-- [ ] Compose: authserver, worldserver, database, runner. Volumes for `data/client`, `data/wiki`, `data/runs`.
-- [ ] Worldserver image that builds `module/` in.
-- [ ] Extraction script for maps, vmaps, mmaps, DBCs from a local 3.3.5a client into `data/client`. Documented, idempotent, host-side.
-- [ ] Realm and account bootstrap so a session can create a character without manual steps.
+- [x] Compose: authserver, worldserver, database, runner. Volumes for `data/client`, `data/wiki`, `data/runs`.
+- [x] Worldserver image that builds `module/` in.
+- [x] Extraction script for maps, vmaps, mmaps, DBCs from a local 3.3.5a client into `data/client`. Documented, idempotent, host-side.
+- [x] Realm and account bootstrap so a session can create a character without manual steps.
 
 ### Module
-- [ ] Session management: token to character mapping, login, logout, create character.
-- [ ] Action endpoint: HTTP, JSON in, ack out, errors as events. Opcodes per `docs/CONTRACTS.md` Phase 0 set.
-- [ ] Event tap: filter outbound packets for the session to the observation contract, publish as JSON over WebSocket.
-- [ ] Movement: resolve move-to into client movement packets along an mmaps path.
-- [ ] Audit log to a file per session.
+- [x] Session management: token to character mapping, login, logout, create character.
+- [ ] Action endpoint: HTTP, JSON in, ack out, errors as events. Opcodes per `docs/CONTRACTS.md` Phase 0 set. (session/chat/movement done; combat/quest/loot/vendor/inventory in progress)
+- [x] Event tap: filter outbound packets for the session to the observation contract, publish as JSON over WebSocket.
+- [x] Movement: resolve move-to into client movement packets along an mmaps path.
+- [x] Audit log to a file per session.
 
 ### SDK
-- [ ] Typed client for the module: actions and an async event stream.
-- [ ] State cache built from events: self, target, nearby objects, quest log, inventory.
-- [ ] First composed helpers as the smoke script needs them. No speculative helpers.
-- [ ] `bun test` coverage for the state cache and message schemas.
+- [x] Typed client for the module: actions and an async event stream.
+- [ ] State cache built from events: self, target, nearby objects, quest log, inventory. (self/nearby done; quest log and inventory follow the combat protocol increment)
+- [x] First composed helpers as the smoke script needs them. No speculative helpers.
+- [x] `bun test` coverage for the state cache and message schemas.
 
 ### Runner
-- [ ] Sandbox: separate process, persistent per session, network limited to the module, per-snippet timeout, stdout and errors captured.
-- [ ] MCP server: `run_snippet`, `recent_events`, `state_summary`, `search_reference`, `read_scratchpad`, `write_scratchpad`.
-- [ ] Agent loop: fixed prompt, fixed context policy, one OpenAI-compatible adapter, resumable from persisted scratchpad and summary.
-- [ ] Watchdogs with named termination reasons.
-- [ ] Trajectory JSONL and run sqlite under `data/runs/<id>/`.
-- [ ] Minimal terminal timeline viewer for a run (level, zone, XP delta, events per minute). Enough to read a stall in a few minutes.
+- [x] Sandbox: separate process, persistent per session, network limited to the module, per-snippet timeout, stdout and errors captured.
+- [x] MCP server: `run_snippet`, `recent_events`, `state_summary`, `search_reference`, `read_scratchpad`, `write_scratchpad`.
+- [x] Agent loop: fixed prompt, fixed context policy, one OpenAI-compatible adapter, resumable from persisted scratchpad and summary.
+- [x] Watchdogs with named termination reasons.
+- [x] Trajectory JSONL and run sqlite under `data/runs/<id>/`.
+- [x] Minimal terminal timeline viewer for a run (level, zone, XP delta, events per minute). Enough to read a stall in a few minutes.
 
 ### Wiki
-- [ ] Build a searchable bundle from a local dump. Plain text search is enough.
+- [x] Build a searchable bundle from a local dump. Plain text search is enough.
 
 ### Smoke
 - [ ] `infra/smoke/one-quest.ts`: the forty-line script that proves the loop.
