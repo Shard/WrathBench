@@ -27,7 +27,11 @@ rather than respawning.
   `:next` image tag and land in a deploy window between runs.
 - Trajectory JSONL lines are huge: never read whole files — use compact python
   extractors, and poll `run.sqlite` for level/xp.
-- Watch runs with the Monitor tool (filtered events), not re-read loops.
+- Watch runs with the Monitor tool (filtered events), not re-read loops — and
+  filter to decision-worthy events only: level-ups/milestones,
+  harness-attributable failures, termination/pause. No XP ticks, turn
+  counters, or model-attributable errors; those get one batch trajectory
+  analysis after the run. Poll ~3 min for a 60–90 min episode.
 - One live game session per account (RUNNER / SHAKEOUT / PROBE; per-run
   `--account` exists). Runs launch via `./infra/run-episode.sh`.
 - The claude-subscription driver is SHAKEOUT-ONLY and must never see
