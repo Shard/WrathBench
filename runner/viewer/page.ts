@@ -66,6 +66,18 @@ export const PAGE = String.raw`<!doctype html>
   .collapsed::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.6em;
                       background: linear-gradient(transparent, var(--bg)); }
   pre.collapsed::after { background: linear-gradient(transparent, var(--panel)); }
+  .status { margin: 20px 0 10px; padding: 22px 24px; border: 1px solid var(--line);
+            border-left: 3px solid var(--ok); border-radius: 6px; background: var(--panel);
+            font-size: 17px; line-height: 1.6; display: flex; gap: 16px; align-items: center; }
+  .status .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ok);
+                 flex: none; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); }
+                     50% { opacity: .3; transform: scale(.7); } }
+  @media (prefers-reduced-motion: reduce) { .status .dot { animation: none; } }
+  .status .what { font-weight: 600; }
+  .status .since { color: var(--dim); font-size: 14px; }
+  .status.stale { border-left-color: var(--warn); }
+  .status.stale .dot { background: var(--warn); animation: none; }
   .metrics { display: inline-flex; gap: 14px; flex-wrap: wrap; }
   #ctrl { display: inline-flex; gap: 14px; flex-wrap: wrap; margin-left: auto; }
   .metrics b { font-weight: 600; color: var(--fg); }
@@ -126,6 +138,7 @@ async function renderIndex() {
 /* ---------- run ---------- */
 const WINDOW = 200;
 let RUN = null, feed = null, firstLoaded = 0, follow = true, es = null;
+let statusBox = null, lastEntry = null;
 
 function sparkline(states) {
   const pts = states.filter((s) => s.level !== null && s.level > 0);
@@ -176,8 +189,8 @@ function showMetrics(tok) {
 /* ---------- expansion presets ---------- */
 /* Which block kinds a preset expands. Individual blocks stay click-toggleable. */
 const PRESETS = {
-  all: ["snippet", "response"],
-  snippets: ["snippet", "response"],
+  all: ["snippet", "response", "result"],
+  snippets: ["snippet", "response", "result"],
   responses: ["response"],
   minimal: [],
 };
@@ -270,6 +283,8 @@ function renderEntry(e) {
       const pre = el("pre", "", e.text);
       if (e.isError) pre.classList.add("err");
       div.append(pre);
+      const b = collapsible("result", pre, e.text);
+      if (b) meta.append(b);
       if (e.clipped) meta.append(rawButton(e.i, "raw"));
       break;
     }
@@ -315,10 +330,75 @@ function renderEntry(e) {
   return div;
 }
 
+/* ---------- live activity ---------- */
+/*
+ * What the session is plausibly doing, read off the tail of the trajectory.
+ * The loop writes a fixed cycle — request → response → tool_call → snippet →
+ * snippet_result → events_served → (state) → request — so the type of the last
+ * entry, plus how long it has sat there, is the whole story.
+ */
+function activity(e) {
+  if (!e) return "starting up…";
+  switch (e.t) {
+    case "meta": case "resume": return "starting up…";
+    case "request": return "waiting on the model…";
+    case "response":
+      return e.tools && e.tools.length ? "dispatching " + e.tools.join(", ") + "…" : "model replied — next turn pending";
+    case "tool_call":
+      return e.name === "run_snippet" ? "running snippet…" : "calling " + (e.name || "a tool") + "…";
+    case "snippet": return "running snippet…";
+    case "snippet_result":
+      return e.isError ? "snippet errored — model is reading it" : "reading the snippet result…";
+    case "tool_result": return "tool finished — next turn pending";
+    case "events_served": return "gathering world events / next turn pending";
+    case "state": return "idle between turns";
+    case "harness": case "watchdog": return "harness notice — see above";
+    case "pause": return "paused: " + (e.reason || "unknown");
+    default: return "working…";
+  }
+}
+
+/* Elapsed since the last thing the run wrote, ticking once a second. */
+function drawStatus() {
+  if (!statusBox || !lastEntry) return;
+  const secs = Math.max(0, Math.round((Date.now() - lastEntry.ts) / 1000));
+  const stale = secs > 120;
+  statusBox.className = "status" + (stale ? " stale" : "");
+  statusBox.textContent = "";
+  statusBox.append(el("span", "dot"));
+  const body = el("div", "");
+  body.append(el("div", "what", stale
+    ? "no trajectory activity for " + fmtDur(secs * 1000) + " — the run may have stopped"
+    : activity(lastEntry)));
+  const bits = [];
+  if (lastEntry.turn !== undefined) bits.push("turn " + lastEntry.turn);
+  bits.push(secs + "s since last " + lastEntry.t.replace(/_/g, " "));
+  body.append(el("div", "since", bits.join(" · ")));
+  statusBox.append(body);
+}
+
+/* The run ended while we watched: the pulse becomes a termination banner. */
+function finish(main, end) {
+  if (statusBox) { statusBox.remove(); statusBox = null; }
+  if (es) { es.close(); es = null; }
+  main.append(el("div", "banner term",
+    "terminated: " + (end.reason || "?") + (end.detail ? " — " + end.detail : "")));
+}
+
+function startStatus(main) {
+  statusBox = el("div", "status");
+  main.append(statusBox);
+  drawStatus();
+  setInterval(drawStatus, 1000);
+}
+
 function append(entries, where) {
   const frag = document.createDocumentFragment();
   for (const e of entries) { const n = renderEntry(e); if (n) frag.append(n); }
-  if (where === "top") feed.prepend(frag); else feed.append(frag);
+  if (where === "top") { feed.prepend(frag); return; }
+  feed.append(frag);
+  // The newest entry drives the activity line, whatever its type.
+  if (entries.length) { lastEntry = entries[entries.length - 1]; drawStatus(); }
 }
 
 async function loadEarlier(btn) {
@@ -398,12 +478,17 @@ async function renderRun(runId) {
   // A run that has already terminated will never grow: no point holding a stream open.
   if (RUN.terminationReason) return;
 
+  // The activity line belongs to a run that is still going; it ends with the run.
+  if (RUN.live) startStatus(main);
+
   es = new EventSource("/api/run/" + encodeURIComponent(runId) + "/stream");
   es.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.tokens) showMetrics(msg.tokens);
     if (msg.entries && msg.entries.length) {
       append(msg.entries, "bottom");
+      const end = msg.entries.find((e) => e.t === "termination");
+      if (end) finish(main, end);
       if (follow) window.scrollTo(0, document.body.scrollHeight);
     }
   };

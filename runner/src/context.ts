@@ -5,8 +5,9 @@
  * Per model request the conversation is rebuilt as:
  *
  *   [ system prompt ]
- *   [ the message window: recent assistant / tool messages, verbatim, cut at
- *     assistant boundaries so tool-call pairs stay intact ]
+ *   [ the message window: recent assistant / tool messages, each capped at
+ *     WINDOW_MESSAGE_CHARS, cut at assistant boundaries so tool-call pairs
+ *     stay intact ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       goal line, harness notices, state summary, last EVENT_WINDOW events,
  *       scratchpad ]
@@ -43,6 +44,14 @@ export const CONTEXT_POLICY = {
    */
   MESSAGE_WINDOW_MAX: 48,
   MESSAGE_WINDOW_TRIM: 24,
+  /**
+   * Max chars of one window message's content, in the same spirit as
+   * EVENT_DATA_CHARS: a single 27k-char snippet result was observed sitting in
+   * the window for a dozen turns, crowding out the summary it was supposed to
+   * inform. The full text is always in the trajectory; the model is told how
+   * much was cut so it can print less and re-run.
+   */
+  WINDOW_MESSAGE_CHARS: 4_000,
   /** Chat / notification tail lengths inside the state summary. */
   CHAT_TAIL: 10,
   NOTIFICATION_TAIL: 5,
@@ -219,8 +228,26 @@ export function messageWindowCut(history: ChatMessage[]): number {
   return cut;
 }
 
-/** The model-visible message window for a full history. Pure. */
+/**
+ * Cap one message's content at WINDOW_MESSAGE_CHARS with a fixed suffix.
+ * Deterministic: the suffix carries only the number of characters dropped.
+ */
+export function capWindowMessage(m: ChatMessage): ChatMessage {
+  const max = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
+  if (typeof m.content !== "string" || m.content.length <= max) return m;
+  const dropped = m.content.length - max;
+  return { ...m, content: `${m.content.slice(0, max)}\n…[truncated ${dropped} chars]` };
+}
+
+/**
+ * The model-visible message window for a full history. Pure.
+ *
+ * The cap is applied here, on the way out, rather than to the stored history:
+ * the trajectory records tool results in full, so capping at push time would
+ * leave the in-memory history holding different bytes than a history rebuilt
+ * from the log, and the two would stop windowing identically.
+ */
 export function messageWindow(history: ChatMessage[]): ChatMessage[] {
   const cut = messageWindowCut(history);
-  return cut === 0 ? history : history.slice(cut);
+  return (cut === 0 ? history : history.slice(cut)).map(capWindowMessage);
 }

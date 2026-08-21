@@ -22,7 +22,7 @@ export type { ToolContext, ToolDef, ToolResult } from "./tools";
 export { McpServer, MCP_PROTOCOL_VERSION } from "./mcp";
 
 export { SYSTEM_PROMPT } from "./prompt";
-export { CONTEXT_POLICY, assembleContext, formatStateSummary, formatEventLine, messageWindow, messageWindowCut } from "./context";
+export { CONTEXT_POLICY, assembleContext, formatStateSummary, formatEventLine, messageWindow, messageWindowCut, capWindowMessage } from "./context";
 export type { ChatMessage, ContextInputs, SnapshotLike } from "./context";
 
 export { OpenAiChatAdapter, StubAdapter, AdapterError, stubTurnSchema } from "./adapter";
