@@ -85,3 +85,11 @@ priority. Items graduate out of this file into commits; the dev loop
 12. Harness version still reads `git describe --dirty` at run time; freeze to
     a tagged 0.1 once gates 3 and 4 close, per ADR-0004 (everything to date is
     harness validation, not results).
+13. **Metric design against grind collapse** (before Phase-1 measurement):
+    RuneBench's own site records that raw total-XP "punished exploration" and
+    collapsed to "simple grind with as little stopping as possible"; they
+    moved to peak XP-rate windows. Our furthest-level metric has the same
+    exposure — decide the Phase-1 metric (quest weight, level-per-hour curve,
+    or similar) deliberately and write the ADR before the first scored run,
+    not after (their mid-eval metric change is half of why aggregators
+    exclude their results).
