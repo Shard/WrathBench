@@ -282,6 +282,7 @@ state.nearby        // Map<guidKey, NearbyObject>                (from SMSG_UPDA
 state.questLog      // QuestLogEntry[]   — derived from the raw quest<slot><Off> fields
 state.quest(id)     // one quest log slot, or undefined
 state.inventory     // InventoryItem[]   — invSlot halves joined to items and names
+state.questCompletions, state.questsCompleted  // turn-ins seen (SMSG_QUESTGIVER_QUEST_COMPLETE)
 state.money, state.xp, state.nextLevelXp   // Observed<number> | undefined (self only)
 state.target        // the NearbyObject our own targetGuid points at, when in view
 state.aurasOf(guid) // AuraEntry[]       (from SMSG_AURA_UPDATE / _ALL)
