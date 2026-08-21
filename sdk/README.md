@@ -87,8 +87,11 @@ class WrathClient {
 }
 ```
 
-Every action guid is a `bigint` or a decimal string; the SDK renders it the way
-the wire wants.
+Every guid — state fields, helper returns, and every guid argument — is an
+opaque decimal string (ADR-0017), which is also exactly what the wire carries:
+compare with `===`, use as Map keys, `JSON.stringify` freely. A `number` guid
+is rejected loudly (precision loss); a bigint you conjure yourself is converted
+for you.
 
 ### Combat, loot and quests
 

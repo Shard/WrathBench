@@ -16,22 +16,22 @@ function makeClient(): WrathClient {
 describe("guid argument validation", () => {
   test("a number guid is rejected before the wire, naming the method and the precision hazard", () => {
     const client = makeClient();
-    expect(() => client.setTarget(12970366926827028480 as unknown as bigint)).toThrow(TypeError);
+    expect(() => client.setTarget(12970366926827028480 as unknown as string)).toThrow(TypeError);
     try {
-      client.setTarget(123 as unknown as bigint);
+      client.setTarget(123 as unknown as string);
       throw new Error("did not throw");
     } catch (e) {
       const msg = (e as Error).message;
       expect(msg).toContain("setTarget(guid)");
       expect(msg).toContain("MAX_SAFE_INTEGER");
-      expect(msg).toContain("bigint");
+      expect(msg).toContain("decimal string");
     }
   });
 
   test("an undefined guid is rejected, naming the method and where guids come from", () => {
     const client = makeClient();
     try {
-      client.attackStart(undefined as unknown as bigint);
+      client.attackStart(undefined as unknown as string);
       throw new Error("did not throw");
     } catch (e) {
       expect(e).toBeInstanceOf(TypeError);
@@ -44,16 +44,18 @@ describe("guid argument validation", () => {
 
   test("helpers taking guids validate too (killTarget, sellItem's itemGuid)", async () => {
     const client = makeClient();
-    await expect(client.killTarget(42 as unknown as bigint)).rejects.toThrow(/killTarget\(guid\).*number/s);
-    expect(() => client.sellItem(1n, undefined as unknown as bigint)).toThrow(/sellItem\(\.\.\., itemGuid\)/);
+    await expect(client.killTarget(42 as unknown as string)).rejects.toThrow(/killTarget\(guid\).*number/s);
+    expect(() => client.sellItem("1", undefined as unknown as string)).toThrow(/sellItem\(\.\.\., itemGuid\)/);
   });
 
-  test("a decimal string and a bigint still pass validation (throwing only at transport)", () => {
+  test("a decimal string passes; a model-conjured bigint is repaired, not rejected (ADR-0017)", () => {
     const client = makeClient();
     // These reach fetch against an unreachable host: the returned promise
-    // rejects with a transport error, but nothing throws synchronously.
+    // rejects with a transport error, but nothing throws synchronously. A
+    // bigint names exactly one guid, so it is silently converted to the
+    // string form (ADR-0016 deterministic repair) rather than thrown on.
     expect(() => void client.setTarget("12970366926827028480").catch(() => {})).not.toThrow();
-    expect(() => void client.setTarget(7n).catch(() => {})).not.toThrow();
+    expect(() => void client.setTarget(7n as unknown as string).catch(() => {})).not.toThrow();
   });
 });
 
