@@ -7,10 +7,12 @@
  *
  * - Retryable: network errors, HTTP 408/429/5xx. Exponential backoff
  *   1s * 2^attempt with ±25% jitter, capped at 30s, max 5 attempts.
- * - After retries are exhausted on a 429/402 whose body suggests quota or
- *   subscription exhaustion (insufficient credit, quota, billing), the outcome
- *   is a PAUSE (`quota-exhausted`), not a failure: the run is suspended and
- *   resumable, because a spent budget says nothing about the model.
+ * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
+ *   failure: a spent budget says nothing about the model, so the run is
+ *   suspended and resumable. The body wording only picks which pause it is —
+ *   `quota-exhausted` when it suggests credit/quota/billing (402 always),
+ *   `rate-limited` otherwise. It is sticky across attempts: a 429 followed by
+ *   a network timeout is still a pause.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
  *
@@ -154,6 +156,11 @@ export class OpenAiChatAdapter implements ChatAdapter {
 
     let lastError = "";
     let lastStatus: number | undefined;
+    // Sticky across attempts, deliberately: a 429 followed by a retry that dies
+    // of a network timeout used to clear `lastStatus` and turn a budget pause
+    // into a terminal adapter-error (observed on run-real-smoke-1). What the
+    // provider said once about the budget outlives one flaky socket.
+    let budget: { reason: "quota-exhausted" | "rate-limited"; detail: string } | null = null;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       if (attempt > 0) {
         const base = Math.min(1_000 * 2 ** (attempt - 1), 30_000);
@@ -215,6 +222,17 @@ export class OpenAiChatAdapter implements ChatAdapter {
       }
       lastStatus = res.status;
       lastError = `HTTP ${res.status}: ${text.slice(0, 500)}`;
+      // A 429 is a pause whatever the body says; the hints only decide whether
+      // it reads as a spent budget or as ordinary rate limiting. Body wording
+      // is a provider's whim and a run must not die on it.
+      if (res.status === 429 || res.status === 402) {
+        const quota = res.status === 402 || EXHAUSTION_HINTS.test(lastError);
+        // Quota wins once seen: an empty wallet does not become a passing
+        // rate limit because a later attempt was worded differently.
+        if (budget === null || (quota && budget.reason === "rate-limited")) {
+          budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
+        }
+      }
       const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
       if (!retryable && res.status !== 402) {
         throw new AdapterError(lastError, res.status);
@@ -222,17 +240,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
       if (res.status === 402) break; // no point retrying an empty wallet
     }
 
-    if ((lastStatus === 429 || lastStatus === 402) && EXHAUSTION_HINTS.test(lastError)) {
-      return { kind: "pause", reason: "quota-exhausted", detail: lastError };
-    }
-    if (lastStatus === 402) {
-      return { kind: "pause", reason: "quota-exhausted", detail: lastError };
-    }
-    if (lastStatus === 429) {
-      // Free-pool upstreams rate-limit without quota wording. Still a pause:
-      // the run is suspendable and resumable, not broken.
-      return { kind: "pause", reason: "rate-limited", detail: lastError };
-    }
+    // The run is suspendable and resumable, not broken.
+    if (budget !== null) return { kind: "pause", ...budget };
     throw new AdapterError(`model API failed after ${this.maxAttempts} attempts: ${lastError}`, lastStatus);
   }
 }
