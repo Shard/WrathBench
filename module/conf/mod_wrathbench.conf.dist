@@ -1,0 +1,19 @@
+#
+# mod-wrathbench configuration
+#
+# Copy to mod_wrathbench.conf to override; .conf.dist is the distributed default.
+#
+
+[worldserver]
+
+########################################
+# WrathBench
+########################################
+#
+#    WrathBench.Enable
+#        Description: Enable the WrathBench control module.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+WrathBench.Enable = 1

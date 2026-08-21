@@ -1,0 +1,15 @@
+{
+  "name": "wrathbench",
+  "private": true,
+  "workspaces": ["sdk", "runner", "wiki"],
+  "engines": {
+    "bun": "1.4.0"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "7.0.2"
+  }
+}

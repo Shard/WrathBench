@@ -9,3 +9,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0005: Bun 1.4 and a thin C++ module
 - ADR-0006: Fresh character reset for Phase 0
 - ADR-0007: Stock AzerothCore, no playerbots fork
+- ADR-0008: Worldserver image adapted from upstream's Dockerfile
