@@ -21,11 +21,16 @@
 #include "AccountMgr.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
+#include "PathGenerator.h"
 #include "Player.h"
 #include "SharedDefines.h"
+#include "Timer.h"
+#include "UpdateData.h"
+#include "UpdateFields.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -36,6 +41,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <strings.h>
@@ -135,6 +141,10 @@ namespace WrathBench
         }
         for (auto& t : tasks)
             t();
+
+        // Drive synthesized movement (ADR-0010). World thread: maps are not
+        // mid-update here, so reading player state and QueuePacket are both safe.
+        TickMovers(NowMs());
 
         // Keep parked sockets from being reaped by the idle-connection check in
         // WorldSession::Update (it calls CloseSocket once m_timeOutTime hits 0).
@@ -250,13 +260,38 @@ namespace WrathBench
         std::string action = req.GetString("action");
         if (token.empty())
             return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
-        if (action != "say")
-            return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
 
-        std::string text = req.GetString("text");
         auto ack = std::make_shared<std::promise<HttpReply>>();
         auto fut = ack->get_future();
-        PushTask([this, token, text, ack]() { DoSay(token, text, ack); });
+
+        if (action == "say")
+        {
+            std::string text = req.GetString("text");
+            PushTask([this, token, text, ack]() { DoSay(token, text, ack); });
+        }
+        else if (action == "move_to")
+        {
+            if (!req.Has("x") || !req.Has("y") || !req.Has("z"))
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_position").Str()};
+            float x = (float)req.GetDouble("x"), y = (float)req.GetDouble("y"), z = (float)req.GetDouble("z");
+            PushTask([this, token, x, y, z, ack]() { DoMoveTo(token, x, y, z, ack); });
+        }
+        else if (action == "stop")
+        {
+            PushTask([this, token, ack]() { DoStop(token, ack); });
+        }
+        else if (action == "face")
+        {
+            bool hasO = req.Has("orientation");
+            bool hasXY = req.Has("x") && req.Has("y");
+            if (!hasO && !hasXY)
+                return {400, Json::Writer().Add("ok", false).Add("error", "missing_face_target").Str()};
+            float o = (float)req.GetDouble("orientation");
+            float x = (float)req.GetDouble("x"), y = (float)req.GetDouble("y");
+            PushTask([this, token, hasO, o, hasXY, x, y, ack]() { DoFace(token, hasO, o, hasXY, x, y, ack); });
+        }
+        else
+            return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
 
         if (fut.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
             return {504, Json::Writer().Add("ok", false).Add("error", "timeout").Str()};
@@ -362,22 +397,37 @@ namespace WrathBench
         // SMSG_LOGIN_VERIFY_WORLD (or an error packet). Do not set the ack here.
     }
 
+    // Shared guard for the Do* action handlers (world thread). Validates the
+    // session is in world and still owned by the core, and resolves the player.
+    // On failure the error reply is set and nullptr returned.
+    Player* Manager::CheckActionSession(std::shared_ptr<BenchSession> const& s,
+        std::shared_ptr<std::promise<HttpReply>>& ack)
+    {
+        auto reply = [&](int status, char const* err) {
+            ack->set_value({status, Json::Writer().Add("ok", false).Add("error", err).Str()});
+            return nullptr;
+        };
+        if (!s || !s->ws)
+            return reply(404, "no_session");
+        if (s->phase.load() != BenchSession::P_INWORLD)
+            return reply(409, "not_in_world");
+        // Confirm the core still owns this exact WorldSession before dereferencing it.
+        if (sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+            return reply(410, "session_gone");
+        Player* player = s->ws->GetPlayer();
+        if (!player)
+            return reply(409, "no_player");
+        return player;
+    }
+
     void Manager::DoSay(std::string token, std::string text, std::shared_ptr<std::promise<HttpReply>> ack)
     {
         auto reply = [&](int status, std::string const& json) { ack->set_value({status, json}); };
 
         auto s = FindByToken(token);
-        if (!s || !s->ws)
-            return reply(404, Json::Writer().Add("ok", false).Add("error", "no_session").Str());
-        if (s->phase.load() != BenchSession::P_INWORLD)
-            return reply(409, Json::Writer().Add("ok", false).Add("error", "not_in_world").Str());
-        // Confirm the core still owns this exact WorldSession before dereferencing it.
-        if (sWorldSessionMgr->FindSession(s->accountId) != s->ws)
-            return reply(410, Json::Writer().Add("ok", false).Add("error", "session_gone").Str());
-
-        Player* player = s->ws->GetPlayer();
+        Player* player = CheckActionSession(s, ack);
         if (!player)
-            return reply(409, Json::Writer().Add("ok", false).Add("error", "no_player").Str());
+            return;
 
         // Language derived from the player's team, as a real client does. Sending
         // LANG_UNIVERSAL would be flagged as a hack by HandleMessagechatOpcode.
@@ -391,6 +441,299 @@ namespace WrathBench
 
         Audit(*s, "action", Json::Writer().Add("op", "say").Add("text", text).Str());
         reply(200, Json::Writer().Add("ok", true).Add("action", "say").Add("token", token).Str());
+    }
+
+    // ------------------------------------------------------------- movement
+    // ADR-0010: move_to is resolved once against the server's mmaps (the single
+    // sanctioned exception in docs/CONTRACTS.md), then driven as the client
+    // movement packet sequence a real client would send: MSG_MOVE_START_FORWARD,
+    // MSG_MOVE_HEARTBEAT at ~500ms, MSG_MOVE_STOP — all through QueuePacket into
+    // the stock HandleMovementOpcodes. The agent sees progress/arrival/failure
+    // events only, never the path.
+
+    static std::string PosJson(float x, float y, float z, float o)
+    {
+        return Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Add("o", (double)o).Str();
+    }
+
+    // Synthesize one client movement packet (MovementInfo layout mirrors
+    // WorldSession::ReadMovementInfo: flags u32, flags2 u16, time u32, xyzo,
+    // fallTime u32; no transport/swim/fall extras for ground movement). The
+    // module's clock doubles as the "client" clock; CMSG_TIME_SYNC_RESP below
+    // keeps the session's clock delta near zero so these timestamps are accepted.
+    static void SendMovePacket(BenchSession& s, Player* player, uint16 opcode, uint32 moveFlags,
+        float x, float y, float z, float o)
+    {
+        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 2 + 4 + 16 + 4);
+        *p << player->GetPackGUID();
+        *p << uint32(moveFlags);
+        *p << uint16(0);            // flags2
+        *p << uint32(getMSTime());
+        *p << float(x) << float(y) << float(z) << float(o);
+        *p << uint32(0);            // fallTime
+        s.ws->QueuePacket(p);
+    }
+
+    void Manager::FinishMove(BenchSession& s, char const* status)
+    {
+        MoveState& m = s.move;
+        if (!m.active)
+            return;
+        m.active = false;
+        m.stopping = false;
+        m.points.clear();
+
+        Json::Writer w;
+        w.Add("moveId", m.moveId).Add("status", status);
+        // Server-confirmed position, when the session is still live: this is the
+        // ground truth that the synthesized movement was actually applied.
+        Player* player = (s.ws && sWorldSessionMgr->FindSession(s.accountId) == s.ws) ? s.ws->GetPlayer() : nullptr;
+        if (player)
+            w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+        EmitEvent(s, "WB_MOVE_RESULT", 0xFF01, w.Str());
+    }
+
+    void Manager::DoMoveTo(std::string token, float x, float y, float z, std::shared_ptr<std::promise<HttpReply>> ack)
+    {
+        auto s = FindByToken(token);
+        Player* player = CheckActionSession(s, ack);
+        if (!player)
+            return;
+
+        Audit(*s, "action", Json::Writer().Add("op", "move_to")
+            .Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str());
+
+        if (s->move.active)
+            FinishMove(*s, "superseded");
+
+        uint64_t moveId = ++s->moveIdGen;
+        MoveState& m = s->move;
+        m.moveId = moveId;
+
+        // Ack means "queued"; the game-level outcome arrives as a WB_MOVE_RESULT
+        // event, per the transport/game error split in PROTOCOL.md.
+        ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "move_to")
+            .Add("token", token).Add("moveId", moveId).Str()});
+
+        auto failEvent = [&](char const* status) {
+            Json::Writer w;
+            w.Add("moveId", moveId).Add("status", status);
+            w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+            EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
+        };
+
+        if (player->GetExactDist2d(x, y) > 250.0f)
+            return failEvent("too_far");
+
+        // The one sanctioned mmaps use (docs/CONTRACTS.md "Pathing"). PathGenerator
+        // runs against the player's map; world thread, maps are not mid-update here.
+        PathGenerator gen(player);
+        bool built = gen.CalculatePath(x, y, z, false);
+        PathType type = gen.GetPathType();
+        Movement::PointsArray const& pts = gen.GetPath();
+        bool good = built && (type & PATHFIND_NORMAL)
+            && !(type & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_SHORT | PATHFIND_FARFROMPOLY))
+            && pts.size() >= 2;
+        if (good)
+        {
+            G3D::Vector3 const& end = gen.GetActualEndPosition();
+            float dx = end.x - x, dy = end.y - y, dz = end.z - z;
+            if (dx * dx + dy * dy + dz * dz > 16.0f) // navmesh end > 4y from request
+                good = false;
+        }
+        if (!good)
+            return failEvent("no_path");
+
+        int64_t now = NowMs();
+        m.points.clear();
+        m.points.reserve(pts.size());
+        for (auto const& v : pts)
+            m.points.push_back({v.x, v.y, v.z});
+        m.seg = 0;
+        m.segDone = 0.0f;
+        m.lastMs = now;
+        m.lastPacketMs = now;
+        m.lastProgressMs = now;
+        m.curX = m.points[0].x; m.curY = m.points[0].y; m.curZ = m.points[0].z;
+        m.destX = m.points.back().x; m.destY = m.points.back().y; m.destZ = m.points.back().z;
+        m.curO = Position::NormalizeOrientation(std::atan2(m.points[1].y - m.points[0].y, m.points[1].x - m.points[0].x));
+        m.stopping = false;
+        m.active = true;
+
+        SendMovePacket(*s, player, MSG_MOVE_START_FORWARD, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO);
+        Audit(*s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_START_FORWARD")
+            .Add("moveId", moveId).Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
+    }
+
+    void Manager::DoStop(std::string token, std::shared_ptr<std::promise<HttpReply>> ack)
+    {
+        auto s = FindByToken(token);
+        Player* player = CheckActionSession(s, ack);
+        if (!player)
+            return;
+
+        Audit(*s, "action", Json::Writer().Add("op", "stop").Str());
+
+        if (s->move.active)
+        {
+            MoveState& m = s->move;
+            // Stop where the "client" is (the interpolated position); the server
+            // accepts it the same way it accepts any client stop mid-run.
+            SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO);
+            FinishMove(*s, "stopped");
+        }
+        else
+        {
+            SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+        }
+        ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "stop").Add("token", token).Str()});
+    }
+
+    void Manager::DoFace(std::string token, bool hasO, float o, bool hasXY, float x, float y,
+        std::shared_ptr<std::promise<HttpReply>> ack)
+    {
+        auto s = FindByToken(token);
+        Player* player = CheckActionSession(s, ack);
+        if (!player)
+            return;
+
+        if (s->move.active)
+            return ack->set_value({409, Json::Writer().Add("ok", false).Add("error", "moving").Str()});
+
+        float target = hasO ? Position::NormalizeOrientation(o)
+                            : (hasXY ? player->GetAngle(x, y) : player->GetOrientation());
+
+        Audit(*s, "action", Json::Writer().Add("op", "face").Add("orientation", (double)target).Str());
+        SendMovePacket(*s, player, MSG_MOVE_SET_FACING, MOVEMENTFLAG_NONE,
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), target);
+        ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "face")
+            .Add("token", token).Add("orientation", (double)target).Str()});
+    }
+
+    void Manager::TickMovers(int64_t nowMs)
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (s->move.active)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+            TickMover(*s, nowMs);
+    }
+
+    void Manager::TickMover(BenchSession& s, int64_t nowMs)
+    {
+        MoveState& m = s.move;
+        if (!m.active || s.tearingDown.load())
+        {
+            m.active = false;
+            return;
+        }
+        if (!s.ws || sWorldSessionMgr->FindSession(s.accountId) != s.ws)
+        {
+            m.active = false; // session died under us; nothing to report to
+            return;
+        }
+        Player* player = s.ws->GetPlayer();
+        if (!player || !player->IsInWorld())
+        {
+            m.active = false;
+            return;
+        }
+
+        if (m.stopping)
+        {
+            // MSG_MOVE_STOP is queued; arrival is confirmed when the server-side
+            // position reaches the destination.
+            if (player->GetExactDist2d(m.destX, m.destY) < 2.5f)
+                FinishMove(s, "arrived");
+            else if (nowMs > m.stopDeadlineMs)
+                FinishMove(s, "interrupted");
+            return;
+        }
+
+        if (!player->IsAlive())
+        {
+            SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+            FinishMove(s, "interrupted");
+            return;
+        }
+
+        int64_t dt = nowMs - m.lastMs;
+        m.lastMs = nowMs;
+        if (dt <= 0)
+            return;
+
+        // Advance along the polyline at the character's current run speed.
+        float advance = player->GetSpeed(MOVE_RUN) * float(dt) / 1000.0f;
+        while (m.seg + 1 < m.points.size())
+        {
+            WbVec const& a = m.points[m.seg];
+            WbVec const& b = m.points[m.seg + 1];
+            float sx = b.x - a.x, sy = b.y - a.y, sz = b.z - a.z;
+            float segLen = std::sqrt(sx * sx + sy * sy + sz * sz);
+            float remain = segLen - m.segDone;
+            if (advance < remain || segLen <= 0.0001f)
+            {
+                m.segDone += advance;
+                float t = segLen > 0.0001f ? m.segDone / segLen : 1.0f;
+                m.curX = a.x + sx * t;
+                m.curY = a.y + sy * t;
+                m.curZ = a.z + sz * t;
+                m.curO = Position::NormalizeOrientation(std::atan2(sy, sx));
+                advance = 0.0f;
+                break;
+            }
+            advance -= remain;
+            ++m.seg;
+            m.segDone = 0.0f;
+        }
+
+        if (m.seg + 1 >= m.points.size())
+        {
+            // Geometric end of path: send the stop at the exact destination and
+            // wait for the server to confirm.
+            m.curX = m.destX; m.curY = m.destY; m.curZ = m.destZ;
+            SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.destX, m.destY, m.destZ, m.curO);
+            Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_STOP")
+                .Add("moveId", m.moveId).Raw("pos", PosJson(m.destX, m.destY, m.destZ, m.curO)).Str());
+            m.stopping = true;
+            m.stopDeadlineMs = nowMs + 3000;
+            return;
+        }
+
+        // Heartbeat cadence, as a real client: ~500ms. Before each heartbeat,
+        // verify the server actually applied the previous packets; a large gap
+        // means something (root, teleport, rejection) interrupted the move.
+        if (nowMs - m.lastPacketMs >= 500)
+        {
+            if (player->GetExactDist2d(m.curX, m.curY) > 15.0f)
+            {
+                SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+                FinishMove(s, "interrupted");
+                return;
+            }
+            SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO);
+            m.lastPacketMs = nowMs;
+            Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_HEARTBEAT")
+                .Add("moveId", m.moveId).Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
+        }
+
+        // Progress events: the position the module's client-side movement engine
+        // is at — knowledge a real client has locally.
+        if (nowMs - m.lastProgressMs >= 1000)
+        {
+            m.lastProgressMs = nowMs;
+            Json::Writer w;
+            w.Add("moveId", m.moveId);
+            w.Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO));
+            EmitEvent(s, "WB_MOVE_PROGRESS", 0xFF02, w.Str());
+        }
     }
 
     std::shared_ptr<BenchSession> Manager::TeardownByToken(std::string const& token)
@@ -446,7 +789,42 @@ namespace WrathBench
 
         uint16 opcode = packet.GetOpcode();
         std::string name, dataJson;
-        bool whitelisted = DecodeEvent(opcode, packet, name, dataJson);
+        bool whitelisted;
+        if (opcode == SMSG_UPDATE_OBJECT)
+        {
+            // The hot path (ADR-0005): decoded inline, one pass, per-session
+            // object-type cache for VALUES blocks. Compression is not a concern
+            // here: EncryptableAndCompressiblePacket::CompressIfNeeded runs at
+            // socket-write time, below this tap, so SMSG_COMPRESSED_UPDATE_OBJECT
+            // never reaches us.
+            name = "SMSG_UPDATE_OBJECT";
+            dataJson = DecodeUpdateObject(*s, ws, packet);
+            whitelisted = true;
+        }
+        else
+            whitelisted = DecodeEvent(opcode, packet, name, dataJson);
+
+        // Answer time sync like a client whose clock is the server clock, so the
+        // session's clock delta stays ~0 and synthesized movement timestamps are
+        // accepted without the fallback-log spam in SynchronizeMovement.
+        if (opcode == SMSG_TIME_SYNC_REQ)
+        {
+            WorldPacket copy(packet);
+            uint32 counter = 0;
+            if (copy.size() >= 4) copy >> counter;
+            WorldPacket tmp(CMSG_TIME_SYNC_RESP, 8);
+            tmp << counter << uint32(getMSTime());
+            ws->QueuePacket(new WorldPacket(std::move(tmp), GameTime::Now()));
+        }
+
+        // Keep the client-side object cache in sync with destroys.
+        if (opcode == SMSG_DESTROY_OBJECT && packet.size() >= 8)
+        {
+            WorldPacket copy(packet);
+            uint64 guid = 0; copy >> guid;
+            std::lock_guard<std::mutex> lock(s->objMutex);
+            s->knownObjects.erase(guid);
+        }
 
         // Drive the login state machine off the packets we observe.
         int phase = s->phase.load();
@@ -547,7 +925,7 @@ namespace WrathBench
             return;
         Json::Writer w;
         w.Add("ok", true).Add("token", s.token).Add("account", s.account)
-         .Add("character", s.charName).Add("guid", s.targetGuidRaw).Add("inWorld", true);
+         .Add("character", s.charName).AddGuid("guid", s.targetGuidRaw).Add("inWorld", true);
         s.ack->set_value({200, w.Str()});
     }
 
@@ -626,6 +1004,351 @@ namespace WrathBench
     }
 
     // =================================================================
+    // SMSG_UPDATE_OBJECT decoding (the observation hot path, ADR-0005/0010).
+    // Layouts mirror Object::BuildCreateUpdateBlockForPlayer /
+    // BuildMovementUpdate / BuildValuesUpdate and UpdateData::BuildPacket at
+    // the pinned commit. Only whitelisted fields are named; everything else in
+    // the mask is consumed and dropped (docs/CONTRACTS.md).
+    // =================================================================
+
+    static char const* TypeIdName(uint8 typeId)
+    {
+        switch (typeId)
+        {
+            case TYPEID_OBJECT:        return "object";
+            case TYPEID_ITEM:          return "item";
+            case TYPEID_CONTAINER:     return "container";
+            case TYPEID_UNIT:          return "unit";
+            case TYPEID_PLAYER:        return "player";
+            case TYPEID_GAMEOBJECT:    return "gameObject";
+            case TYPEID_DYNAMICOBJECT: return "dynamicObject";
+            case TYPEID_CORPSE:        return "corpse";
+            default:                   return "unknown";
+        }
+    }
+
+    // Skip a Movement::PacketBuilder::WriteCreate spline blob (never served: the
+    // client gets it, but serving creature spline paths would leak route data the
+    // player only sees as animation; position comes from the movement block).
+    static void SkipSplineCreate(WorldPacket& p)
+    {
+        uint32 sflags; p >> sflags;
+        if (sflags & 0x00020000)      { float a; p >> a; }                    // Final_Angle
+        else if (sflags & 0x00010000) { uint64 t; p >> t; }                   // Final_Target
+        else if (sflags & 0x00008000) { float fx, fy, fz; p >> fx >> fy >> fz; } // Final_Point
+        uint32 timePassed, duration, id; p >> timePassed >> duration >> id;
+        float durMod, durModNext, vertAccel; p >> durMod >> durModNext >> vertAccel;
+        uint32 effectStart; p >> effectStart;
+        uint32 nodes; p >> nodes;
+        p.rpos(p.rpos() + size_t(nodes) * 12);
+        uint8 mode; p >> mode;
+        float ex, ey, ez; p >> ex >> ey >> ez;
+    }
+
+    // Parse the movement part of a CREATE/MOVEMENT block (Object::BuildMovementUpdate)
+    // and add pos / moveFlags / runSpeed / self / targetGuid to the object JSON.
+    static void DecodeMovementBlockUpd(WorldPacket& p, Json::Writer& o)
+    {
+        uint16 flags; p >> flags;
+        if (flags & UPDATEFLAG_SELF)
+            o.Add("self", true);
+
+        if (flags & UPDATEFLAG_LIVING)
+        {
+            uint32 mflags; uint16 mflags2; uint32 mtime;
+            p >> mflags >> mflags2 >> mtime;
+            float x, y, z, ori;
+            p >> x >> y >> z >> ori;
+            if (mflags & MOVEMENTFLAG_ONTRANSPORT)
+            {
+                uint64 tg; p.readPackGUID(tg);
+                float tx, ty, tz, to; uint32 tt; uint8 seat;
+                p >> tx >> ty >> tz >> to >> tt >> seat;
+                if (mflags2 & MOVEMENTFLAG2_INTERPOLATED_MOVEMENT)
+                    { uint32 t2; p >> t2; }
+            }
+            if ((mflags & (MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING)) || (mflags2 & MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING))
+                { float pitch; p >> pitch; }
+            uint32 fallTime; p >> fallTime;
+            if (mflags & MOVEMENTFLAG_FALLING)
+                { float a, b, c, d; p >> a >> b >> c >> d; }
+            if (mflags & MOVEMENTFLAG_SPLINE_ELEVATION)
+                { float se; p >> se; }
+            float speeds[9];
+            for (float& sp : speeds) p >> sp;
+            if (mflags & MOVEMENTFLAG_SPLINE_ENABLED)
+                SkipSplineCreate(p);
+            o.Add("moveFlags", mflags);
+            o.Raw("pos", PosJson(x, y, z, ori));
+            o.Add("runSpeed", (double)speeds[1]);
+        }
+        else if (flags & UPDATEFLAG_POSITION)
+        {
+            uint64 tg; p.readPackGUID(tg);
+            float x, y, z, cx, cy, cz, ori, cOri;
+            p >> x >> y >> z >> cx >> cy >> cz >> ori >> cOri;
+            o.Raw("pos", PosJson(x, y, z, ori));
+        }
+        else if (flags & UPDATEFLAG_STATIONARY_POSITION)
+        {
+            float x, y, z, ori;
+            p >> x >> y >> z >> ori;
+            o.Raw("pos", PosJson(x, y, z, ori));
+        }
+
+        if (flags & UPDATEFLAG_UNKNOWN)   { uint32 u; p >> u; }
+        if (flags & UPDATEFLAG_LOWGUID)   { uint32 u; p >> u; }
+        if (flags & UPDATEFLAG_HAS_TARGET)
+        {
+            uint64 tg = 0; p.readPackGUID(tg);
+            o.AddGuid("targetGuid", (uint64_t)tg);
+        }
+        if (flags & UPDATEFLAG_TRANSPORT) { uint32 t; p >> t; }
+        if (flags & UPDATEFLAG_VEHICLE)   { uint32 vid; float vo; p >> vid >> vo; }
+        if (flags & UPDATEFLAG_ROTATION)  { int64 rot; p >> rot; }
+    }
+
+    // One whitelisted update field -> named JSON key. Returns false if the index
+    // is not served (caller has already consumed the value).
+    static bool AppendNamedField(Json::Writer& f, uint8 typeId, uint32 index, uint32 v,
+        uint32& tLo, uint32& tHi, bool& hasLo, bool& hasHi, uint32* entryOut)
+    {
+        if (index == OBJECT_FIELD_ENTRY)
+        {
+            f.Add("entry", v);
+            if (entryOut) *entryOut = v;
+            return true;
+        }
+        if (index == OBJECT_FIELD_SCALE_X)
+        {
+            float fv; std::memcpy(&fv, &v, 4);
+            f.Add("scale", (double)fv);
+            return true;
+        }
+
+        if (typeId == TYPEID_UNIT || typeId == TYPEID_PLAYER)
+        {
+            if (index == UNIT_FIELD_TARGET)     { tLo = v; hasLo = true; return true; }
+            if (index == UNIT_FIELD_TARGET + 1) { tHi = v; hasHi = true; return true; }
+            switch (index)
+            {
+                case UNIT_FIELD_BYTES_0:
+                    f.Add("race", v & 0xFF).Add("class", (v >> 8) & 0xFF)
+                     .Add("gender", (v >> 16) & 0xFF).Add("powerType", (v >> 24) & 0xFF);
+                    return true;
+                case UNIT_FIELD_HEALTH:          f.Add("health", v); return true;
+                case UNIT_FIELD_MAXHEALTH:       f.Add("maxHealth", v); return true;
+                case UNIT_FIELD_LEVEL:           f.Add("level", v); return true;
+                case UNIT_FIELD_FACTIONTEMPLATE: f.Add("faction", v); return true;
+                case UNIT_FIELD_FLAGS:           f.Add("unitFlags", v); return true;
+                case UNIT_FIELD_DISPLAYID:       f.Add("displayId", v); return true;
+                case UNIT_DYNAMIC_FLAGS:         f.Add("dynamicFlags", v); return true;
+                case UNIT_NPC_FLAGS:             f.Add("npcFlags", v); return true;
+                default: break;
+            }
+            if (index >= UNIT_FIELD_POWER1 && index < UNIT_FIELD_POWER1 + 7)
+            {
+                f.Add("power" + std::to_string(index - UNIT_FIELD_POWER1 + 1), v);
+                return true;
+            }
+            if (index >= UNIT_FIELD_MAXPOWER1 && index < UNIT_FIELD_MAXPOWER1 + 7)
+            {
+                f.Add("maxPower" + std::to_string(index - UNIT_FIELD_MAXPOWER1 + 1), v);
+                return true;
+            }
+            if (typeId == TYPEID_PLAYER && index == PLAYER_FLAGS)
+            {
+                f.Add("playerFlags", v);
+                return true;
+            }
+        }
+        else if (typeId == TYPEID_GAMEOBJECT)
+        {
+            switch (index)
+            {
+                case GAMEOBJECT_DISPLAYID: f.Add("goDisplayId", v); return true;
+                case GAMEOBJECT_FLAGS:     f.Add("goFlags", v); return true;
+                case GAMEOBJECT_FACTION:   f.Add("goFaction", v); return true;
+                case GAMEOBJECT_LEVEL:     f.Add("goLevel", v); return true;
+                case GAMEOBJECT_BYTES_1:
+                    f.Add("goState", v & 0xFF).Add("goType", (v >> 8) & 0xFF);
+                    return true;
+                default: break;
+            }
+        }
+        return false;
+    }
+
+    // Parse a BuildValuesUpdate mask+values run into the whitelisted named
+    // fields. All values are consumed regardless of whitelist membership.
+    static std::string DecodeValuesBlock(WorldPacket& p, uint8 typeId, uint32* entryOut)
+    {
+        uint8 blockCount; p >> blockCount;
+        uint32 mask[64]; // m_valuesCount caps far below 64*32 fields
+        if (blockCount > 64)
+            throw ByteBufferException();
+        for (uint8 i = 0; i < blockCount; ++i)
+            p >> mask[i];
+
+        Json::Writer f;
+        uint32 tLo = 0, tHi = 0;
+        bool hasLo = false, hasHi = false;
+        uint32 fieldCount = uint32(blockCount) * 32;
+        for (uint32 i = 0; i < fieldCount; ++i)
+        {
+            if (!(mask[i >> 5] & (1u << (i & 31))))
+                continue;
+            uint32 v; p >> v;
+            AppendNamedField(f, typeId, i, v, tLo, tHi, hasLo, hasHi, entryOut);
+        }
+        if (hasLo)
+            f.AddGuid("targetGuid", uint64_t(tLo) | (uint64_t(tHi) << 32));
+        return f.Str();
+    }
+
+    std::string Manager::DecodeUpdateObject(BenchSession& s, WorldSession* ws, WorldPacket const& packet)
+    {
+        WorldPacket p(packet);
+        // Creature/name queries a real client would fire on cache miss; issued
+        // after the parse so a decode error doesn't send half-baked queries.
+        std::vector<std::pair<uint32, uint64_t>> creatureQueries;
+        std::vector<uint64_t> nameQueries;
+
+        Json::Writer top;
+        std::string objects = "[";
+        bool first = true;
+        try
+        {
+            uint32 blockCount; p >> blockCount;
+            top.Add("blocks", blockCount);
+            for (uint32 b = 0; b < blockCount; ++b)
+            {
+                uint8 updateType; p >> updateType;
+                Json::Writer o;
+                switch (updateType)
+                {
+                    case UPDATETYPE_VALUES:
+                    {
+                        uint64 guid = 0; p.readPackGUID(guid);
+                        uint8 typeId = 0xFF;
+                        {
+                            std::lock_guard<std::mutex> lock(s.objMutex);
+                            auto it = s.knownObjects.find(guid);
+                            if (it != s.knownObjects.end())
+                                typeId = it->second;
+                        }
+                        o.Add("update", "values").AddGuid("guid", (uint64_t)guid);
+                        std::string fields = DecodeValuesBlock(p, typeId, nullptr);
+                        o.Raw("fields", fields);
+                        break;
+                    }
+                    case UPDATETYPE_MOVEMENT:
+                    {
+                        uint64 guid = 0; p.readPackGUID(guid);
+                        o.Add("update", "movement").AddGuid("guid", (uint64_t)guid);
+                        DecodeMovementBlockUpd(p, o);
+                        break;
+                    }
+                    case UPDATETYPE_CREATE_OBJECT:
+                    case UPDATETYPE_CREATE_OBJECT2:
+                    {
+                        uint64 guid = 0; p.readPackGUID(guid);
+                        uint8 typeId; p >> typeId;
+                        o.Add("update", "create").AddGuid("guid", (uint64_t)guid)
+                         .Add("objectType", TypeIdName(typeId));
+                        DecodeMovementBlockUpd(p, o);
+                        uint32 entry = 0;
+                        std::string fields = DecodeValuesBlock(p, typeId, &entry);
+                        o.Raw("fields", fields);
+                        {
+                            std::lock_guard<std::mutex> lock(s.objMutex);
+                            s.knownObjects[guid] = typeId;
+                            if (typeId == TYPEID_UNIT && entry && s.queriedCreatures.insert(entry).second)
+                                creatureQueries.emplace_back(entry, guid);
+                            if (typeId == TYPEID_PLAYER && s.queriedNames.insert(guid).second)
+                                nameQueries.push_back(guid);
+                        }
+                        break;
+                    }
+                    case UPDATETYPE_OUT_OF_RANGE_OBJECTS:
+                    case UPDATETYPE_NEAR_OBJECTS:
+                    {
+                        uint32 n; p >> n;
+                        std::string guids = "[";
+                        for (uint32 i = 0; i < n; ++i)
+                        {
+                            uint64 guid = 0; p.readPackGUID(guid);
+                            if (i) guids += ',';
+                            guids += '"' + std::to_string(guid) + '"';
+                            if (updateType == UPDATETYPE_OUT_OF_RANGE_OBJECTS)
+                            {
+                                std::lock_guard<std::mutex> lock(s.objMutex);
+                                s.knownObjects.erase(guid);
+                            }
+                        }
+                        guids += "]";
+                        o.Add("update", updateType == UPDATETYPE_OUT_OF_RANGE_OBJECTS ? "outOfRange" : "near");
+                        o.Raw("guids", guids);
+                        break;
+                    }
+                    default:
+                        // Unknown block type: cannot resync the stream, bail out.
+                        throw ByteBufferException();
+                }
+                if (!first) objects += ',';
+                objects += o.Str();
+                first = false;
+            }
+        }
+        catch (std::exception const&)
+        {
+            return Json::Writer().Add("decodeError", true).Str();
+        }
+        objects += "]";
+        top.Raw("objects", objects);
+
+        for (auto const& [entry, guid] : creatureQueries)
+        {
+            WorldPacket* q = new WorldPacket(CMSG_CREATURE_QUERY, 12);
+            *q << uint32(entry) << uint64(guid);
+            ws->QueuePacket(q);
+        }
+        for (uint64_t guid : nameQueries)
+        {
+            WorldPacket* q = new WorldPacket(CMSG_NAME_QUERY, 8);
+            *q << uint64(guid);
+            ws->QueuePacket(q);
+        }
+        return top.Str();
+    }
+
+    // Opcode-name helper for the observed MSG_MOVE_* whitelist.
+    static char const* MoveOpcodeName(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case MSG_MOVE_START_FORWARD:      return "MSG_MOVE_START_FORWARD";
+            case MSG_MOVE_START_BACKWARD:     return "MSG_MOVE_START_BACKWARD";
+            case MSG_MOVE_STOP:               return "MSG_MOVE_STOP";
+            case MSG_MOVE_START_STRAFE_LEFT:  return "MSG_MOVE_START_STRAFE_LEFT";
+            case MSG_MOVE_START_STRAFE_RIGHT: return "MSG_MOVE_START_STRAFE_RIGHT";
+            case MSG_MOVE_STOP_STRAFE:        return "MSG_MOVE_STOP_STRAFE";
+            case MSG_MOVE_JUMP:               return "MSG_MOVE_JUMP";
+            case MSG_MOVE_START_TURN_LEFT:    return "MSG_MOVE_START_TURN_LEFT";
+            case MSG_MOVE_START_TURN_RIGHT:   return "MSG_MOVE_START_TURN_RIGHT";
+            case MSG_MOVE_STOP_TURN:          return "MSG_MOVE_STOP_TURN";
+            case MSG_MOVE_SET_FACING:         return "MSG_MOVE_SET_FACING";
+            case MSG_MOVE_HEARTBEAT:          return "MSG_MOVE_HEARTBEAT";
+            case MSG_MOVE_FALL_LAND:          return "MSG_MOVE_FALL_LAND";
+            case MSG_MOVE_START_SWIM:         return "MSG_MOVE_START_SWIM";
+            case MSG_MOVE_STOP_SWIM:          return "MSG_MOVE_STOP_SWIM";
+            case MSG_MOVE_SET_RUN_MODE:       return "MSG_MOVE_SET_RUN_MODE";
+            case MSG_MOVE_SET_WALK_MODE:      return "MSG_MOVE_SET_WALK_MODE";
+            default:                          return "MSG_MOVE";
+        }
+    }
+
+    // =================================================================
     // Whitelisted SMSG decoders. Field layouts mirror the server-side
     // builders in AzerothCore at the pinned commit; see module/PROTOCOL.md.
     // =================================================================
@@ -693,7 +1416,7 @@ namespace WrathBench
                     name = "SMSG_NAME_QUERY_RESPONSE";
                     uint64 guid = 0; p.readPackGUID(guid);
                     uint8 unknown = 1; if (p.rpos() < p.size()) p >> unknown; // NameUnknown
-                    w.Add("guid", (uint64_t)guid).Add("found", unknown == 0);
+                    w.AddGuid("guid", (uint64_t)guid).Add("found", unknown == 0);
                     if (unknown == 0 && p.rpos() < p.size())
                     {
                         std::string pname; p >> pname;
@@ -718,7 +1441,7 @@ namespace WrathBench
                         p.rpos(p.rpos() + msgLen);
                     }
                     uint8 chatTag = 0; if (p.rpos() < p.size()) p >> chatTag;
-                    w.Add("type", (uint32)type).Add("language", lang).Add("senderGuid", (uint64_t)sender)
+                    w.Add("type", (uint32)type).Add("language", lang).AddGuid("senderGuid", (uint64_t)sender)
                      .Add("message", msg).Add("chatTag", (uint32)chatTag);
                     break;
                 }
@@ -746,12 +1469,58 @@ namespace WrathBench
                             p >> displayInfo >> invType >> enchant;
                         }
                         if (i) chars += ',';
-                        chars += Json::Writer().Add("guid", (uint64_t)guid).Add("name", cname)
+                        chars += Json::Writer().AddGuid("guid", (uint64_t)guid).Add("name", cname)
                             .Add("race", (uint32)race).Add("class", (uint32)cls).Add("gender", (uint32)gender)
                             .Add("level", (uint32)level).Str();
                     }
                     chars += "]";
                     w.Add("count", (uint32)count).Raw("characters", chars);
+                    break;
+                }
+                case SMSG_DESTROY_OBJECT:
+                {
+                    name = "SMSG_DESTROY_OBJECT";
+                    uint64 guid = 0; p >> guid;
+                    uint8 onDeath = 0; if (p.rpos() < p.size()) p >> onDeath;
+                    w.AddGuid("guid", (uint64_t)guid).Add("onDeath", onDeath != 0);
+                    break;
+                }
+                case SMSG_CREATURE_QUERY_RESPONSE:
+                {
+                    name = "SMSG_CREATURE_QUERY_RESPONSE";
+                    uint32 entry = 0; p >> entry;
+                    if (entry & 0x80000000)
+                    {
+                        w.Add("entry", entry & 0x7FFFFFFF).Add("found", false);
+                        break;
+                    }
+                    std::string cname; p >> cname;
+                    std::string n2, n3, n4; p >> n2 >> n3 >> n4; // always empty
+                    std::string subname; p >> subname;
+                    std::string iconName; p >> iconName;
+                    uint32 typeFlags, ctype, family, rank;
+                    p >> typeFlags >> ctype >> family >> rank;
+                    w.Add("entry", entry).Add("found", true).Add("name", cname)
+                     .Add("subname", subname).Add("type", ctype).Add("rank", rank);
+                    break;
+                }
+                // Observed movement of nearby units/players, relayed by the server
+                // with the same opcode the mover's client sent. Position only; the
+                // extras (transport, fall, pitch) are skipped, not served.
+                case MSG_MOVE_START_FORWARD: case MSG_MOVE_START_BACKWARD: case MSG_MOVE_STOP:
+                case MSG_MOVE_START_STRAFE_LEFT: case MSG_MOVE_START_STRAFE_RIGHT: case MSG_MOVE_STOP_STRAFE:
+                case MSG_MOVE_JUMP: case MSG_MOVE_START_TURN_LEFT: case MSG_MOVE_START_TURN_RIGHT:
+                case MSG_MOVE_STOP_TURN: case MSG_MOVE_SET_FACING: case MSG_MOVE_HEARTBEAT:
+                case MSG_MOVE_FALL_LAND: case MSG_MOVE_START_SWIM: case MSG_MOVE_STOP_SWIM:
+                case MSG_MOVE_SET_RUN_MODE: case MSG_MOVE_SET_WALK_MODE:
+                {
+                    name = MoveOpcodeName(opcode);
+                    uint64 guid = 0; p.readPackGUID(guid);
+                    uint32 mflags = 0; uint16 mflags2 = 0; uint32 mtime = 0;
+                    p >> mflags >> mflags2 >> mtime;
+                    float x, y, z, o;
+                    p >> x >> y >> z >> o;
+                    w.AddGuid("guid", (uint64_t)guid).Add("flags", mflags).Raw("pos", PosJson(x, y, z, o));
                     break;
                 }
                 default:

@@ -29,11 +29,13 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class WorldSession;
 class WorldSocket;
 class WorldPacket;
+class Player;
 
 // The parked-socket client end is an Asio tcp socket; forward-declare the type
 // so the header stays free of Asio. Defined in AzerothCore's Socket.h.
@@ -42,6 +44,32 @@ class WorldPacket;
 
 namespace WrathBench
 {
+    // A waypoint of a resolved navmesh path. Internal to the mover; never leaves
+    // the module (docs/CONTRACTS.md: the agent gets progress/arrival/failure
+    // events, not the path).
+    struct WbVec
+    {
+        float x{0}, y{0}, z{0};
+    };
+
+    // Per-session synthesized-movement state (ADR-0010). Touched only on the
+    // world thread (DoMoveTo/DoStop/DoFace and the Update tick), so unlocked.
+    struct MoveState
+    {
+        bool active{false};
+        bool stopping{false};       // MSG_MOVE_STOP sent, waiting for the server to confirm
+        uint64_t moveId{0};
+        std::vector<WbVec> points;  // resolved path, points[0] = start
+        size_t seg{0};              // moving from points[seg] to points[seg+1]
+        float segDone{0};           // distance covered on the current segment
+        int64_t lastMs{0};          // last tick timestamp
+        int64_t lastPacketMs{0};    // last heartbeat dispatch
+        int64_t lastProgressMs{0};  // last WB_MOVE_PROGRESS event
+        int64_t stopDeadlineMs{0};  // arrival-confirm timeout once stopping
+        float curX{0}, curY{0}, curZ{0}, curO{0}; // interpolated client-side position
+        float destX{0}, destY{0}, destZ{0};
+    };
+
     // Per-token headless session. See ADR-0009 for the parked-socket design.
     struct BenchSession
     {
@@ -75,6 +103,19 @@ namespace WrathBench
         std::atomic<uint64_t> dropCount{0};
         std::atomic<uint64_t> eventSeq{0};
         std::atomic<bool> tearingDown{false};
+
+        // Movement synthesis (world thread only).
+        MoveState move;
+        uint64_t moveIdGen{0};
+
+        // Client-side object cache mirror, fed by the update-object tap. Needed
+        // because UPDATETYPE_VALUES blocks carry no object type (a real client
+        // resolves them against its own cache). Also tracks which name/creature
+        // queries this "client" has already issued. Tap threads -> mutex.
+        std::mutex objMutex;
+        std::unordered_map<uint64_t, uint8_t> knownObjects;      // guid -> TypeID
+        std::unordered_set<uint32_t> queriedCreatures;           // creature entries
+        std::unordered_set<uint64_t> queriedNames;               // player guids
 
         std::ofstream audit;
         std::mutex auditMutex;
@@ -121,6 +162,23 @@ namespace WrathBench
         void DoCreateSession(std::shared_ptr<BenchSession> s, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoSay(std::string token, std::string text, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoDeleteSession(std::string token, std::shared_ptr<std::promise<HttpReply>> ack);
+        void DoMoveTo(std::string token, float x, float y, float z, std::shared_ptr<std::promise<HttpReply>> ack);
+        void DoStop(std::string token, std::shared_ptr<std::promise<HttpReply>> ack);
+        void DoFace(std::string token, bool hasO, float o, bool hasXY, float x, float y, std::shared_ptr<std::promise<HttpReply>> ack);
+
+        // Mover (world thread only; see ADR-0010).
+        void TickMovers(int64_t nowMs);
+        void TickMover(BenchSession& s, int64_t nowMs);
+        void FinishMove(BenchSession& s, char const* status);
+
+        // In-world session guard for action handlers. Returns the player, or
+        // nullptr after setting the error reply. World thread only.
+        Player* CheckActionSession(std::shared_ptr<BenchSession> const& s,
+            std::shared_ptr<std::promise<HttpReply>>& ack);
+
+        // Update-object decoding (tap threads). Returns the event data JSON and
+        // issues the creature/name queries a client cache miss would.
+        std::string DecodeUpdateObject(BenchSession& s, WorldSession* ws, WorldPacket const& packet);
 
         // Remove a session from the maps and close its parked socket (a client
         // disconnect at the WorldSession level). World thread only. Returns the

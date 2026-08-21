@@ -11,3 +11,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0007: Stock AzerothCore, no playerbots fork
 - ADR-0008: Worldserver image adapted from upstream's Dockerfile
 - ADR-0009: Headless WorldSession on a parked loopback socket
+- ADR-0010: Synthesized client movement and update-object decoding
