@@ -282,10 +282,15 @@ Request:
 { "token": "del-abc123", "account": "RUNNER", "character": "Benchy" }
 ```
 (`token` is a fresh throwaway token for this operation's audit log/event
-stream; `account` optional as in `POST /session`.)
+stream; `account` optional as in `POST /session`, but must name the module's
+configured account — deletes are refused for any other account, and refused
+while a different token holds a live bench session on it. Minimal ownership
+gate for the one-account-per-run scheme; per-character credentials are the
+Phase-1 fix.)
 
 Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
 Errors: `400 missing_token`, `400 missing_character`, `409 token_in_use`,
+`403 account_not_permitted`, `409 account_owned_by_other_token`,
 `400 unknown_account`, `400 account_in_use`, `400 character_not_found`,
 `502 char_delete_failed_code_<N>` (N is the `SMSG_CHAR_DELETE` result code,
 e.g. guild leader / arena captain refusals), `504 timeout`.
