@@ -84,6 +84,11 @@ export function renderTimeline(runDir: string, runId: string): string {
     if (map !== null && map !== undefined) {
       lines.push(`last pos:   map ${String(map)} (${String(last["x"])}, ${String(last["y"])}, ${String(last["z"])})`);
     }
+    // Columns added later; a run.sqlite written before them has neither.
+    const money = last["money"];
+    if (typeof money === "number") lines.push(`money:      ${money}c`);
+    const quests = last["quests_completed"];
+    if (typeof quests === "number") lines.push(`quests:     ${quests} turned in`);
   }
 
   // events per minute, snippet counts, errors from the JSONL

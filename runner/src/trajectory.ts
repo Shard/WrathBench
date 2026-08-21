@@ -31,6 +31,10 @@ export interface StateLine {
   z?: number | undefined;
   eventCount?: number | undefined;
   lastSeq?: number | undefined;
+  /** Copper on the character, from `PLAYER_FIELD_COINAGE`. */
+  money?: number | undefined;
+  /** Turn-ins the server confirmed this session, cumulative. */
+  questsCompleted?: number | undefined;
 }
 
 export interface RunMeta {
@@ -77,9 +81,22 @@ CREATE TABLE IF NOT EXISTS state (
   map INTEGER,
   x REAL, y REAL, z REAL,
   event_count INTEGER,
-  last_seq INTEGER
+  last_seq INTEGER,
+  -- Phase-1 signal vector groundwork: recorded, never scored here.
+  money INTEGER,
+  quests_completed INTEGER
 );
 `;
+
+/**
+ * Columns added to `state` after the first runs were written. `CREATE TABLE IF
+ * NOT EXISTS` is a no-op on an existing run.sqlite, so a resumed run would
+ * otherwise write into a table that lacks them.
+ */
+const STATE_ADDED_COLUMNS: Record<string, string> = {
+  money: "INTEGER",
+  quests_completed: "INTEGER",
+};
 
 export class Trajectory {
   readonly dir: string;
@@ -95,6 +112,17 @@ export class Trajectory {
     this.jsonlPath = join(dir, "trajectory.jsonl");
     this.db = new Database(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
+    this.migrateState();
+  }
+
+  /** Additive, idempotent: add any `state` column this build knows and the file lacks. */
+  private migrateState(): void {
+    const have = new Set(
+      (this.db.query(`PRAGMA table_info(state)`).all() as { name: string }[]).map((c) => c.name),
+    );
+    for (const [name, type] of Object.entries(STATE_ADDED_COLUMNS)) {
+      if (!have.has(name)) this.db.exec(`ALTER TABLE state ADD COLUMN ${name} ${type}`);
+    }
   }
 
   /** Register a secret to scrub from every persisted string. */
@@ -140,8 +168,8 @@ export class Trajectory {
     this.append({ t: "state", ...s });
     this.db
       .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -154,6 +182,8 @@ export class Trajectory {
         s.z ?? null,
         s.eventCount ?? null,
         s.lastSeq ?? null,
+        s.money ?? null,
+        s.questsCompleted ?? null,
       );
   }
 

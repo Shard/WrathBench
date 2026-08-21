@@ -14,12 +14,13 @@ import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
-function fakeSandbox(): SandboxHost {
+function fakeSandbox(snapshot: Record<string, unknown> = {}): SandboxHost {
   const fake = {
     evalSnippet: (code: string): Promise<SnippetResult> =>
       Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 }),
     recentEvents: () => Promise.resolve([]),
-    stateSnapshot: () => Promise.resolve({ self: {}, lastSeq: -1, eventCount: 0 }),
+    stateSnapshot: () =>
+      Promise.resolve({ self: {}, lastSeq: -1, eventCount: 0, ...snapshot }),
     totalRestarts: 0,
     consecutiveRestarts: 0,
     drainNotices: () => [],
@@ -28,7 +29,11 @@ function fakeSandbox(): SandboxHost {
   return fake as unknown as SandboxHost;
 }
 
-function setup(adapter: ChatAdapter, extraConfig: Record<string, unknown> = {}) {
+function setup(
+  adapter: ChatAdapter,
+  extraConfig: Record<string, unknown> = {},
+  snapshot: Record<string, unknown> = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
   const config = {
     ...loadRunConfig({ adapter: "stub", stepIntervalMs: 0, stateIntervalMs: 1, ...extraConfig }),
@@ -42,7 +47,7 @@ function setup(adapter: ChatAdapter, extraConfig: Record<string, unknown> = {}) 
     options: {
       config,
       adapter,
-      sandbox: fakeSandbox(),
+      sandbox: fakeSandbox(snapshot),
       scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
@@ -72,6 +77,29 @@ describe("runLoop", () => {
     expect(options.scratchpad.read()).toBe("# hi");
     const row = options.trajectory.runRow("run-test");
     expect(row?.["termination_reason"]).toBe("stub-complete");
+    options.trajectory.close();
+  });
+
+  test("money and quest turn-ins reach the state row and the trajectory", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [] }]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      {
+        money: { value: 12345, seq: 34, ts: 1 },
+        questCompletions: [
+          { questId: 7, xp: 400, money: 250, seq: 49, ts: 2 },
+          { questId: 9, xp: 10, money: 0, seq: 50, ts: 3 },
+        ],
+      },
+    );
+    await runLoop(options);
+    const rows = options.trajectory.stateRows("run-test");
+    expect(rows[0]!["money"]).toBe(12345);
+    expect(rows[0]!["quests_completed"]).toBe(2);
+    // One compact record per completion, logged once even across several samples.
+    const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
+    expect(done.map((r) => r["questId"])).toEqual([7, 9]);
     options.trajectory.close();
   });
 
