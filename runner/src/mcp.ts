@@ -17,7 +17,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { TOOLS, callTool, type ToolContext } from "./tools";
+import { TOOLS, callTool, coerceToolArgs, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
@@ -89,8 +89,14 @@ export class McpServer {
       case "tools/call": {
         if (!this.initialized) return fail(-32002, "server not initialized");
         const name = String(msg.params?.["name"] ?? "");
-        const args = msg.params?.["arguments"] ?? {};
-        const result = await callTool(this.ctx, name, args);
+        // Leniency at the transport edge: some clients send `arguments` as a
+        // JSON *string* (sometimes fenced); coerceToolArgs handles that.
+        const raw = msg.params?.["arguments"] ?? {};
+        const coerced = coerceToolArgs(name, raw);
+        const result = coerced.ok
+          ? await callTool(this.ctx, name, coerced.args)
+          : { text: coerced.error, isError: true };
+        const args = coerced.ok ? coerced.args : raw;
         this.opts.onToolCall?.(name, args, result);
         return respond({
           content: [{ type: "text", text: result.text }],

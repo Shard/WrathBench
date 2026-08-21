@@ -16,7 +16,7 @@ import {
   type SnapshotLike,
 } from "./context";
 import { SYSTEM_PROMPT } from "./prompt";
-import { TOOLS, callTool, type ToolContext } from "./tools";
+import { TOOLS, callTool, coerceToolArgs, type ToolContext } from "./tools";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -225,11 +225,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       for (const tc of outcome.turn.toolCalls) {
         let args: unknown = {};
         let argError: string | null = null;
-        try {
-          args = tc.arguments.trim().length === 0 ? {} : JSON.parse(tc.arguments);
-        } catch (err) {
-          argError = `tool arguments were not valid JSON: ${String(err)}`;
-        }
+        const coerced = coerceToolArgs(tc.name, tc.arguments);
+        if (coerced.ok) args = coerced.args;
+        else argError = coerced.error;
         trajectory.append({ t: "tool_call", turn, name: tc.name, args: argError ?? args });
         if (tc.name === "run_snippet" && argError === null) {
           trajectory.append({ t: "snippet", turn, code: (args as { code?: string }).code ?? "" });
