@@ -24,6 +24,7 @@ import {
   questCombatStream,
   questComplete,
   questProgress,
+  questRewarded,
   selfProgress,
   selfTarget,
   CREATURE_ENTRY,
@@ -467,6 +468,45 @@ describe("state cache: the quest log, folded out of the raw update fields", () =
     // ADD_KILL is observable, but the log is what the cache reports; nothing
     // here invents progress from the packet's `current`.
     expect(cache.quest(QUEST_ID)?.counts).toEqual([0, 0, 0, 0]);
+  });
+
+  test("a turn-in is counted and listed with the reward the server named", () => {
+    const cache = withWorld([questAccepted, questRewarded(QUEST_ID)]);
+    expect(cache.questsCompleted).toBe(1);
+    expect(cache.questCompletions).toEqual([
+      { questId: QUEST_ID, xp: 400, money: 250, seq: 49, ts: 1_700_000_000_490 },
+    ]);
+  });
+
+  test("nothing is counted before a turn-in is observed", () => {
+    expect(withWorld([questAccepted]).questsCompleted).toBe(0);
+    expect(withWorld([questAccepted]).questCompletions).toEqual([]);
+  });
+
+  test("two turn-ins of the same quest are two completions, not one", () => {
+    // Repeatables exist; deduping by quest id would silently undercount them.
+    const cache = withWorld([
+      questRewarded(QUEST_ID, 60),
+      questRewarded(OTHER_QUEST_ID, 61),
+      questRewarded(QUEST_ID, 62),
+    ]);
+    expect(cache.questsCompleted).toBe(3);
+    expect(cache.questCompletions.map((q) => q.questId)).toEqual([
+      QUEST_ID,
+      OTHER_QUEST_ID,
+      QUEST_ID,
+    ]);
+  });
+
+  test("the completion list reaches the snapshot and is decoupled from it", () => {
+    const cache = StateCache.replay(toEvents([...worldStream, questRewarded(QUEST_ID)]), {
+      seed: SEED,
+    });
+    const snap = cache.snapshot();
+    expect(snap.questCompletions.map((q) => q.questId)).toEqual([QUEST_ID]);
+    for (const e of toEvents([questRewarded(OTHER_QUEST_ID, 63)])) cache.apply(e);
+    expect(snap.questCompletions).toHaveLength(1);
+    expect(cache.questsCompleted).toBe(2);
   });
 });
 

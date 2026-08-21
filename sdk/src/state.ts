@@ -189,6 +189,23 @@ export interface QuestLogEntry {
 }
 
 /**
+ * One quest turn-in the server confirmed, from `SMSG_QUESTGIVER_QUEST_COMPLETE`.
+ *
+ * The quest log cannot tell us this after the fact: a rewarded quest leaves the
+ * log entirely, so the only trace of the turn-in is the packet itself. `xp` and
+ * `money` are the reward the packet named, kept because they are what the
+ * server said, not a derivation.
+ */
+export interface QuestCompletion {
+  readonly questId: number;
+  readonly xp: number | undefined;
+  /** Copper the turn-in awarded, as the packet reported it. */
+  readonly money: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
  * One occupied inventory slot: equipment and bags are 0-22, the backpack 23-38.
  *
  * A three-way join, and each leg can be missing: the `invSlot<n>Lo`/`Hi` halves
@@ -313,6 +330,7 @@ export interface StateSnapshot {
   readonly nearby: ReadonlyMap<GuidKey, NearbyObject>;
   readonly auras: ReadonlyMap<GuidKey, readonly AuraEntry[]>;
   readonly questLog: readonly QuestLogEntry[];
+  readonly questCompletions: readonly QuestCompletion[];
   readonly inventory: readonly InventoryItem[];
   readonly money: Observed<number> | undefined;
   readonly xp: Observed<number> | undefined;
@@ -379,6 +397,15 @@ export class StateCache {
   private readonly chatBuf: ChatEntry[] = [];
   private readonly notifyBuf: NotificationEntry[] = [];
   private readonly gapBuf: GapRecord[] = [];
+  /**
+   * Turn-ins seen this cache's lifetime, oldest first. Never trimmed and never
+   * deduped: a repeatable quest turned in twice is two completions, and seq
+   * restarts when a session is recreated so seq is not an identity. Like
+   * `eventCount`, this is a lifetime counter across session recreation. It
+   * would double-count only if the stream ever replayed a window it had
+   * already served, which it does not.
+   */
+  private readonly questDoneBuf: QuestCompletion[] = [];
   private readonly anomalyBuf: Anomaly[] = [];
   private readonly chatTail: number;
   private readonly notificationTail: number;
@@ -500,6 +527,16 @@ export class StateCache {
     return out;
   }
 
+  /** Confirmed turn-ins, oldest first. Empty until one is observed. */
+  get questCompletions(): readonly QuestCompletion[] {
+    return this.questDoneBuf;
+  }
+
+  /** How many turn-ins the server has confirmed for this cache. */
+  get questsCompleted(): number {
+    return this.questDoneBuf.length;
+  }
+
   /** The quest log slot holding `questId`, if the log shows it at all. */
   quest(questId: number): QuestLogEntry | undefined {
     return this.questLog.find((q) => q.questId === questId);
@@ -567,6 +604,7 @@ export class StateCache {
       nearby: new Map([...this.nearby].map(([k, v]) => [k, { ...v, fields: new Map(v.fields) }])),
       auras: new Map([...this.auraSlots].map(([k, v]) => [k, [...v.values()].sort((a, b) => a.slot - b.slot)])),
       questLog: this.questLog,
+      questCompletions: [...this.questDoneBuf],
       inventory: this.inventory,
       money: this.money,
       xp: this.xp,
@@ -658,6 +696,19 @@ export class StateCache {
           seq: event.seq,
           ts: event.ts,
         };
+        return;
+      }
+      case "SMSG_QUESTGIVER_QUEST_COMPLETE": {
+        // The turn-in receipt. The quest leaves the log when it is rewarded, so
+        // this packet is the only place the completion is ever observable.
+        const d = event.data as { questId: number; xp?: number; money?: number };
+        this.questDoneBuf.push({
+          questId: d.questId,
+          xp: d.xp,
+          money: d.money,
+          seq: event.seq,
+          ts: event.ts,
+        });
         return;
       }
       case "SMSG_NAME_QUERY_RESPONSE": {

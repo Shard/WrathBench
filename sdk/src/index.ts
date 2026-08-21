@@ -60,6 +60,7 @@ export type {
   NotificationEntry,
   Observed,
   Point3,
+  QuestCompletion,
   QuestLogEntry,
   SelfState,
   StateCacheOptions,
