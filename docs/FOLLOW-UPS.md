@@ -14,14 +14,12 @@ priority. Items graduate out of this file into commits; the dev loop
    `sandbox_restarted` notice with recovery guidance, counts it for the
    runaway watchdog, and respawns lazily. Two tests cover mid-snippet and
    between-snippet death.
-2. **Canonical gate-2 confirmation episode.** Every gate-2 element (create,
-   accept, kill objectives, loot, turn in, level) happened unaided across
-   today's runs, but not as one chain in one episode — gate2-ox-3 accepted its
-   kill quest after its killing spree, so it never collected quest kill
-   credits. One clean free-model episode on the current harness settles it.
-3. **Gate 3 rerun**: after fix 1, one 60+ minute frontier episode with zero
-   harness-attributable trajectory errors. gate2-ox-3 (1h01m, 51 turns, 6
-   model-attributable errors, 1 harness) shows it is close.
+2. ~~Canonical gate-2 confirmation episode~~ **PASSED 2026-08-21**
+   (gate2-ox-4): full chain in causal order in one unaided episode — accept
+   turn 9 → 8/8 kill credits → loot → quest 7 turn-in (170 XP) → level 3.
+3. ~~Gate 3 rerun~~ **PASSED 2026-08-21** (gate2-ox-4): 2h06m, 123 turns,
+   zero harness-attributable errors (6 snippet errors, all model-attributable;
+   no watchdog fires, no sandbox restarts, no harness notices).
 4. **Gate 4 rehearsal**: fresh-machine bring-up from compose + `data/` only —
    clean volumes, rebuild, bootstrap, extraction skipped (data exists), smoke
    probe. Document as the quick-start in README.md.

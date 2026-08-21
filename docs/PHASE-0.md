@@ -8,8 +8,8 @@ A harness any model can plug into. Small capable models create a character, comp
 
 All of the following (status as of 2026-08-21, see docs/FOLLOW-UPS.md):
 1. The smoke script completes one quest end to end through the SDK: create character, accept, kill objectives, loot, turn in, gain a level. **PASSED** (two consecutive runs).
-2. A model, via the MCP tools, does the same unaided at least once. **Demonstrated across runs** (stealth/ox-alpha reached level 3 in 1h; every element shown unaided) — one canonical single-episode confirmation queued.
-3. A frontier model runs for an hour and its trajectory contains no errors attributable to the module, SDK, runner, or sandbox. **Near** — the hour ran; one harness-attributable defect found (sandbox restart notice lost) and queued; rerun after the fix.
+2. A model, via the MCP tools, does the same unaided at least once. **PASSED** (gate2-ox-4, 2026-08-21: stealth/ox-alpha, one episode — accept at turn 9, 8/8 quest kill credits, loot, quest 7 turned in for 170 XP, level 3).
+3. A frontier model runs for an hour and its trajectory contains no errors attributable to the module, SDK, runner, or sandbox. **PASSED** (gate2-ox-4: 2h06m, 123 turns, zero watchdog fires, zero sandbox restarts, zero harness notices; all 6 snippet errors model-attributable — two BigInt stringify, one API misuse, three in-snippet await timeouts where the abandoned-eval path behaved as documented. The gate-blocking sandbox-restart-notice defect from gate2-ox-3 was fixed and tested before this run.)
 4. Everything runs from `infra/compose.yml` on a fresh machine given only the extracted client data in `data/`. **Rehearsal pending.**
 
 ## Fixed for this phase
