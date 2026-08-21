@@ -78,6 +78,12 @@ export const PAGE = String.raw`<!doctype html>
   .status .since { color: var(--dim); font-size: 14px; }
   .status.stale { border-left-color: var(--warn); }
   .status.stale .dot { background: var(--warn); animation: none; }
+  .breakout { display: flex; gap: 26px; flex-wrap: wrap; }
+  .breakout .cell { min-width: 82px; }
+  .breakout .cell.wide { min-width: 0; }
+  .breakout .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .breakout .v { font-size: 16px; font-weight: 600; }
+  .breakout .n { color: var(--dim); font-size: 11px; }
   .metrics { display: inline-flex; gap: 14px; flex-wrap: wrap; }
   #ctrl { display: inline-flex; gap: 14px; flex-wrap: wrap; margin-left: auto; }
   .metrics b { font-weight: 600; color: var(--fg); }
@@ -100,6 +106,45 @@ const fmtDur = (ms) => { const s = Math.floor(ms/1000); const h = Math.floor(s/3
   const m = Math.floor((s%3600)/60); return h ? h+"h"+String(m).padStart(2,"0")+"m" : m+"m"+String(s%60).padStart(2,"0")+"s"; };
 const num = (v) => (v === null || v === undefined) ? "—" : String(v);
 
+/*
+ * Wall-clock ages, the way an operator reads them. The exact stamp never goes
+ * away — it moves to the title attribute, so hovering still answers "when".
+ */
+function fmtRel(ts) {
+  if (!ts) return "—";
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 0) return "just now";
+  if (secs < 45) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return (mins || 1) + "m ago";
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + "h ago";
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 30) return days + "d ago";
+  const months = Math.floor(days / 30);
+  if (months < 12) return months + "mo ago";
+  return Math.floor(days / 365) + "y ago";
+}
+
+/*
+ * The subscription driver is called "claude-subscription" in configs and
+ * trajectories and stays that way — this is the label the operator reads, and
+ * only the label.
+ */
+const DRIVER_LABELS = { "claude-subscription": "claude-sdk" };
+const label = (name) => (name && DRIVER_LABELS[name]) || name;
+
+/* How long the run has been going: first trajectory entry to last, and for a
+ * live run, to now — it is still accruing. */
+function playtimeMs(r, now) {
+  const from = r.firstTs || r.startedAt;
+  if (!from) return null;
+  const to = r.live ? now : (r.lastTs || r.endedAt || r.mtime);
+  if (!to) return null;
+  return Math.max(0, to - from);
+}
+
 async function api(path) {
   const r = await fetch(path);
   if (!r.ok) throw new Error(path + " → " + r.status);
@@ -107,38 +152,74 @@ async function api(path) {
 }
 
 /* ---------- index ---------- */
+/*
+ * What the tokens column may honestly say. A run whose driver never logged
+ * provider usage gets an estimate marked with a tilde — except the claude-sdk
+ * lane, where the estimate was so far off the truth that saying nothing is more
+ * useful than saying a number.
+ */
+function tokenCell(r) {
+  const tok = r.tokens;
+  if (!tok || (tok.turns === 0 && tok.totalTokens === 0)) return ["—", "", "dim"];
+  if (tok.source === "reported")
+    return [fmtTokens(tok.totalTokens), "Provider-reported, summed over " + tok.turns + " turns.", ""];
+  if (r.driver === "claude-subscription")
+    return ["usage not recorded", "This run predates usage logging in the claude driver: " +
+      "the CLI reported tokens and the driver discarded them. A character estimate would be " +
+      "wildly low here, so none is shown.", "dim"];
+  return ["~" + fmtTokens(tok.totalTokens),
+    "Estimated from characters ÷ 4 — this provider reported no usage.", "dim"];
+}
+
 async function renderIndex() {
   $("#crumb").textContent = "runs";
   const { runs } = await api("/api/runs");
   const main = $("#main"); main.textContent = "";
   const t = el("table");
   const head = el("tr");
-  for (const h of ["run", "state", "model", "driver", "level", "xp", "started", "outcome"]) head.append(el("th", "", h));
+  for (const h of ["run", "state", "model", "level", "xp", "started", "playtime", "tokens", "outcome"])
+    head.append(el("th", "", h));
   t.append(head);
+  const ticking = [];
   for (const r of runs) {
     const tr = el("tr");
     const c1 = el("td"); const a = el("a", "", r.runId); a.href = "/run/" + encodeURIComponent(r.runId); c1.append(a);
     if (r.shakeout) { c1.append(document.createTextNode(" ")); c1.append(el("span", "warn", "[" + r.shakeout + "]")); }
     tr.append(c1);
     tr.append(el("td", r.live ? "live" : "dim", r.live ? "● LIVE" : (r.pauseReason ? "paused" : (r.terminationReason ? "done" : "cold"))));
-    tr.append(el("td", "", (r.platform ? r.platform + " · " : "") + (r.model || "—")));
-    tr.append(el("td", "", r.driver || "—"));
+    tr.append(el("td", "", (r.platform ? label(r.platform) + " · " : "") + (r.model || "—")));
     tr.append(el("td", "", num(r.level)));
     tr.append(el("td", "", num(r.xp)));
-    tr.append(el("td", "dim", fmtTs(r.startedAt)));
+    const started = el("td", "dim", fmtRel(r.startedAt));
+    started.title = fmtTs(r.startedAt);
+    tr.append(started);
+    const play = el("td", r.live ? "" : "dim", "—");
+    const paint = () => {
+      const ms = playtimeMs(r, Date.now());
+      play.textContent = ms === null ? "—" : fmtDur(ms);
+    };
+    paint();
+    // A live run is still accruing playtime; its cell keeps counting.
+    if (r.live) ticking.push(paint);
+    tr.append(play);
+    const cell = tokenCell(r);
+    const tokens = el("td", cell[2], cell[0]);
+    if (cell[1]) tokens.title = cell[1];
+    tr.append(tokens);
     const out = r.terminationReason ? r.terminationReason + (r.terminationDetail ? " — " + r.terminationDetail : "")
       : (r.pauseReason ? "paused: " + r.pauseReason : "—");
     tr.append(el("td", "dim", out));
     t.append(tr);
   }
   main.append(t);
+  if (ticking.length) setInterval(() => { for (const f of ticking) f(); }, 1000);
   if (runs.length === 0) main.append(el("p", "dim", "no runs under data/runs"));
 }
 
 /* ---------- run ---------- */
 const WINDOW = 200;
 let RUN = null, feed = null, firstLoaded = 0, follow = true, es = null;
-let statusBox = null, lastEntry = null;
+let statusBox = null, lastEntry = null, breakoutBox = null;
 
 function sparkline(states) {
   const pts = states.filter((s) => s.level !== null && s.level > 0);
@@ -160,7 +241,7 @@ function sparkline(states) {
 
 /* ---------- header metrics ---------- */
 const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
-const modelLabel = () => (RUN.platform ? RUN.platform + " · " : "") + (RUN.model || "?");
+const modelLabel = () => (RUN.platform ? label(RUN.platform) + " · " : "") + (RUN.model || "?");
 
 /*
  * Token counts. The runner logs a provider "usage" block on response entries
@@ -186,6 +267,81 @@ function showMetrics(tok) {
     "Prompt + completion summed over " + tok.turns + " turns, as billed."));
   $("#hdr").textContent = "";
   $("#hdr").append(box);
+}
+
+/* ---------- token breakout and cost ---------- */
+/*
+ * PRICING — $ per million tokens. Prices as of 2026-08; edit here.
+ *
+ *   claude-sonnet-5  list $3.00 in / $15.00 out, currently under introductory
+ *                    pricing at $2.00 / $10.00 through 2026-08-31. The
+ *                    introductory rate is what is used below; swap in 3.00 /
+ *                    15.00 (and 0.30 / 3.75 for cache) once it lapses.
+ *   claude-opus-5    $5.00 in / $25.00 out.
+ *
+ * Cache rates follow the published multipliers on the model's input price:
+ * a cache read is 0.1x, a 5-minute cache write is 1.25x.
+ *
+ * These are Anthropic API list prices. A claude-sdk run is billed against a
+ * subscription, not per token, so its cost line is what the same work would
+ * have cost on the API — a comparison figure, not an invoice.
+ */
+const PRICING = [
+  { id: "claude-opus-5", match: /opus/i, input: 5.00, output: 25.00, cacheRead: 0.50, cacheWrite: 6.25 },
+  { id: "claude-sonnet-5", match: /sonnet/i, input: 2.00, output: 10.00, cacheRead: 0.20, cacheWrite: 2.50 },
+];
+
+/* Only price what we can name. An unknown model gets tokens and no cost. */
+function priceFor(run) {
+  const model = run.model || "";
+  if (run.driver !== "claude-subscription" && !/claude/i.test(model)) return null;
+  for (const p of PRICING) if (p.match.test(model)) return p;
+  return null;
+}
+
+function costOf(tok, p) {
+  const read = tok.cacheReadTokens || 0;
+  const write = tok.cacheWriteTokens || 0;
+  // Cached tokens are a subset of the prompt, so the full-price part is what
+  // is left after both cache figures come out of it.
+  const fresh = Math.max(0, tok.promptTokens - read - write);
+  return (fresh * p.input + read * p.cacheRead + write * p.cacheWrite +
+          tok.completionTokens * p.output) / 1e6;
+}
+
+function breakout(tok, run) {
+  const box = el("div", "banner breakout");
+  const row = (name, value, note) => {
+    const d = el("div", "cell");
+    d.append(el("div", "k", name), el("div", "v", value));
+    if (note) d.append(el("div", "n", note));
+    box.append(d);
+  };
+  if (tok.source !== "reported") {
+    const why = run.driver === "claude-subscription"
+      ? "usage not recorded — this run predates usage logging in the claude driver"
+      : "no per-field breakout: this provider reported no usage";
+    box.append(el("div", "cell wide dim", why));
+    if (run.driver !== "claude-subscription")
+      row("estimate", "~" + fmtTokens(tok.totalTokens), "characters ÷ 4, all turns");
+    return box;
+  }
+  row("input", fmtTokens(tok.promptTokens), "cached included");
+  row("output", fmtTokens(tok.completionTokens), "");
+  row("cache read", tok.cacheReadTokens === null ? "—" : fmtTokens(tok.cacheReadTokens),
+    tok.cacheReadTokens === null ? "not reported" : "of the input above");
+  row("cache write", tok.cacheWriteTokens === null ? "—" : fmtTokens(tok.cacheWriteTokens),
+    tok.cacheWriteTokens === null ? "not reported" : "");
+  row("total", fmtTokens(tok.totalTokens), tok.turns + " turns");
+  const p = priceFor(run);
+  if (p === null) {
+    row("cost", "—", "no price on file for this model");
+  } else {
+    const usd = costOf(tok, p);
+    row("cost", "$" + (usd < 1 ? usd.toFixed(3) : usd.toFixed(2)),
+      "at " + p.id + " API list" + (run.driver === "claude-subscription" ? ", not billed" : ""));
+  }
+  return box;
 }
 
 /* ---------- expansion presets ---------- */
@@ -427,17 +583,21 @@ async function renderRun(runId) {
 
   const hdr = el("div", "banner");
   // The driver only repeats itself when it stood in for an unknown platform.
-  const line1 = [modelLabel(), RUN.driver === RUN.platform ? null : RUN.driver,
+  const line1 = [modelLabel(), RUN.driver === RUN.platform ? null : label(RUN.driver),
     "harness " + (RUN.harnessVersion || "?"), "character " + (RUN.character || "?")]
     .filter(Boolean).join(" · ");
   hdr.append(el("div", "", line1));
   const dur = RUN.startedAt ? fmtDur((RUN.endedAt || RUN.mtime || Date.now()) - RUN.startedAt) : "?";
-  hdr.append(el("div", "dim", "started " + fmtTs(RUN.startedAt) + " · " + dur + " · " + info.total + " entries"));
+  const when = el("div", "dim", "started " + fmtRel(RUN.startedAt) + " · " + dur + " · " + info.total + " entries");
+  when.title = "started " + fmtTs(RUN.startedAt);
+  hdr.append(when);
   const lvl = el("div", "");
   lvl.append(document.createTextNode("level " + num(RUN.level) + " · xp " + num(RUN.xp) + "  "));
   const sp = sparkline(info.states); if (sp) lvl.append(sp);
   hdr.append(lvl);
   main.append(hdr);
+  breakoutBox = breakout(info.tokens, RUN);
+  main.append(breakoutBox);
 
   if (RUN.terminationReason)
     main.append(el("div", "banner term", "terminated: " + RUN.terminationReason +
@@ -486,7 +646,14 @@ async function renderRun(runId) {
   es = new EventSource("/api/run/" + encodeURIComponent(runId) + "/stream");
   es.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.tokens) showMetrics(msg.tokens);
+    if (msg.tokens) {
+      showMetrics(msg.tokens);
+      if (breakoutBox) {
+        const next = breakout(msg.tokens, RUN);
+        breakoutBox.replaceWith(next);
+        breakoutBox = next;
+      }
+    }
     if (msg.entries && msg.entries.length) {
       append(msg.entries, "bottom");
       const end = msg.entries.find((e) => e.t === "termination");
