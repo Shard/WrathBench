@@ -59,6 +59,10 @@ Three commitments, in order of bindingness.
 - Signal recording lands additively (state-table columns, trajectory
   entries); old runs simply lack the new columns and derivations must
   tolerate that.
+- Derivation caveat (implementation, 2026-08-22): `quests_completed` in the
+  state table counts per StateCache lifetime and resets on sandbox restart —
+  derive quest totals from `max()` over a run's state rows or from the
+  per-turn-in `quest_complete` trajectory records, never from the final row.
 - Goodhart pressure moves from the model to the derivation author — where
   it can be revised without re-running anything.
 - Supersedes the open question in FOLLOW-UPS 13.
