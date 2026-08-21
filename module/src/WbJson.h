@@ -80,6 +80,10 @@ namespace WrathBench::Json
         Writer& Add(std::string_view k, double v) { Key(k); _ss << v; return *this; }
         // Raw: value already valid JSON (nested object/array).
         Writer& Raw(std::string_view k, std::string_view rawJson) { Key(k); _ss << rawJson; return *this; }
+        // Guids (and any u64 that can exceed 2^53) go on the wire as decimal
+        // strings: 3.3.5a guids carry a high part (e.g. 0xF130...) that JSON
+        // consumers backed by IEEE doubles would silently corrupt.
+        Writer& AddGuid(std::string_view k, uint64_t v) { Key(k); _ss << '"' << v << '"'; return *this; }
 
         std::string Str() const { return "{" + _ss.str() + "}"; }
 
@@ -107,6 +111,13 @@ namespace WrathBench::Json
             auto it = _obj.find(k);
             if (it == _obj.end() || it->second.empty()) return dflt;
             try { return std::stoll(it->second); } catch (...) { return dflt; }
+        }
+
+        double GetDouble(std::string const& k, double dflt = 0.0) const
+        {
+            auto it = _obj.find(k);
+            if (it == _obj.end() || it->second.empty()) return dflt;
+            try { return std::stod(it->second); } catch (...) { return dflt; }
         }
 
         std::map<std::string, std::string> const& Members() const { return _obj; }
