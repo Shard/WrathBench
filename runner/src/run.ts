@@ -184,6 +184,19 @@ async function main(): Promise<void> {
       : [],
   });
 
+  if (outcome.kind === "terminated") {
+    // A finished run frees its module session so the account is not held
+    // (the realm caps characters/sessions per account). A PAUSED run keeps
+    // the session alive on purpose: that is the --resume path.
+    try {
+      await sandbox.evalSnippet(
+        "if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }",
+      );
+    } catch {
+      // Best-effort: a dead sandbox or module leaves the session to the
+      // module's own logout path.
+    }
+  }
   await sandbox.stop();
   if (outcome.kind === "paused") {
     console.error(`[wrathbench] paused: ${outcome.reason} — resume with --resume ${config.runId}`);
