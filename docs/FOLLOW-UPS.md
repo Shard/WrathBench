@@ -28,9 +28,11 @@ priority. Items graduate out of this file into commits; the dev loop
 
 ## Harness quality
 
-5. `WB_SESSION_STATE` live verification on a real resume-into-live-session
-   (SDK fold is unit-tested; the module emission path has only been
-   code-reviewed).
+5. ~~WB_SESSION_STATE live verification~~ **Verified 2026-08-21** by
+   `infra/smoke/module-session-state.ts`: reattach to an in-world session
+   delivers one synthetic state event with the right character/guid/position/
+   level, a pre-login subscriber gets none, and the event fans out to every
+   subscriber with a shared seq.
 6. ~~eventCount vs lastSeq +3 drift~~ **Fixed 2026-08-21**: not
    double-application — `lastSeq` was max'd, so after session-retry churn
    restarted the seq numbering it held the old session's max (+3 = the three
