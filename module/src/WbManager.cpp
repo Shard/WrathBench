@@ -84,6 +84,35 @@ namespace WrathBench
         _threads = std::max<unsigned>(1, sConfigMgr->GetOption<uint32>("WrathBench.Threads", 2));
         _account = sConfigMgr->GetOption<std::string>("WrathBench.Account", "RUNNER");
         _auditDir = sConfigMgr->GetOption<std::string>("WrathBench.AuditDir", "/azerothcore/env/dist/logs/wrathbench");
+
+        // Account allowlist: the accounts this module serves at all. Comma
+        // separated; defaults to the single default account, so an unset
+        // option behaves as before.
+        _accounts.clear();
+        std::string accounts = sConfigMgr->GetOption<std::string>("WrathBench.Accounts", _account);
+        for (size_t start = 0; start <= accounts.size();)
+        {
+            size_t end = accounts.find(',', start);
+            if (end == std::string::npos)
+                end = accounts.size();
+            std::string name = accounts.substr(start, end - start);
+            // trim surrounding whitespace
+            while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
+            while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+            if (!name.empty())
+                _accounts.push_back(name);
+            start = end + 1;
+        }
+        if (_accounts.empty())
+            _accounts.push_back(_account);
+    }
+
+    bool Manager::AccountPermitted(std::string const& account) const
+    {
+        for (std::string const& allowed : _accounts)
+            if (strcasecmp(account.c_str(), allowed.c_str()) == 0)
+                return true;
+        return false;
     }
 
     void Manager::Start()
@@ -270,6 +299,10 @@ namespace WrathBench
         auto s = std::make_shared<BenchSession>();
         s->token = token;
         s->account = req.GetString("account", _account);
+        // Same allowlist as /character-delete: the module serves only its
+        // configured bench accounts, on every surface.
+        if (!AccountPermitted(s->account))
+            return {403, Json::Writer().Add("ok", false).Add("error", "account_not_permitted").Str()};
         s->charName = req.GetString("character", "");
         // Absent or garbage race/class deliberately parse to 0, which is outside
         // the valid [1,11] range. Whether that matters is only decided at
@@ -427,14 +460,14 @@ namespace WrathBench
 
         std::string account = req.GetString("account", _account);
 
-        // Minimal ownership gate for the one-account-per-run scheme
+        // Minimal ownership gate for the current per-run account scheme
         // (FOLLOW-UPS 14; per-character credentials are the real Phase-1 fix,
-        // FOLLOW-UPS 10). Deletes are only served for the account the module
-        // config maps every token to, and never while another token holds a
-        // live bench session on that account — an unauthenticated caller must
-        // not be able to delete a character out from under a running episode
-        // or on an arbitrary named account.
-        if (strcasecmp(account.c_str(), _account.c_str()) != 0)
+        // FOLLOW-UPS 10). Deletes are only served for accounts on the
+        // configured allowlist (WrathBench.Accounts), and never while another
+        // token holds a live bench session on the account — an unauthenticated
+        // caller must not be able to delete a character out from under a
+        // running episode or on an arbitrary named account.
+        if (!AccountPermitted(account))
             return {403, Json::Writer().Add("ok", false).Add("error", "account_not_permitted").Str()};
         {
             std::lock_guard<std::mutex> lock(_sessMutex);
@@ -475,6 +508,8 @@ namespace WrathBench
         auto s = std::make_shared<BenchSession>();
         s->token = token;
         s->account = req.GetString("account", _account);
+        if (!AccountPermitted(s->account))
+            return {403, Json::Writer().Add("ok", false).Add("error", "account_not_permitted").Str()};
         s->listMode = true;
 
         auto ack = std::make_shared<std::promise<HttpReply>>();

@@ -170,6 +170,9 @@ services:
       # data/logs volume. Default mode "w" truncated every boot.
       AC_APPENDER_SERVER: "2,5,16,Server.log,w"
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
+      # Account allowlist: every surface taking an "account" param serves only
+      # these (module refuses others with 403 account_not_permitted).
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,SHAKEOUT,PROBE"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc

@@ -111,6 +111,8 @@ Errors:
   does not exist and race/class are not both in [1,11] (see above; decided at
   char-enum time, before any char-create packet is synthesized).
 - `409 {"ok":false,"error":"token_in_use"}`
+- `403 {"ok":false,"error":"account_not_permitted"}` — `account` is not on the
+  `WrathBench.Accounts` allowlist.
 - `400 {"ok":false,"error":"unknown_account"}`
 - `400 {"ok":false,"error":"socket_setup_failed"}`
 - `502 {"ok":false,"error":"char_create_failed_code_<N>","token":...}` — game-level
@@ -261,7 +263,7 @@ Validation errors (all `400`): `missing_guid`, `missing_option`,
 ### POST /characters
 
 `{ "token": <str>, "account"?: <str> }` → `200 { "ok": true, "token", "enum": { "count": <number>, "characters": [ { "guid", "name", "race", "class", "gender", "level" }, ... ] } }`.
-A parked utility session (never enters world) answers with the decoded `SMSG_CHAR_ENUM` for the account — the same data a client's character-select screen shows. Exists for the runner's episode hygiene (list-then-delete leftover characters); errors mirror `/character-delete` (`missing_token`, `token_in_use`, `unknown_account`, `account_in_use` when a live session holds the account, `504 timeout`).
+A parked utility session (never enters world) answers with the decoded `SMSG_CHAR_ENUM` for the account — the same data a client's character-select screen shows. Exists for the runner's episode hygiene (list-then-delete leftover characters); errors mirror `/character-delete` (`missing_token`, `token_in_use`, `account_not_permitted`, `unknown_account`, `account_in_use` when a live session holds the account, `504 timeout`).
 
 ### POST /character-delete
 
@@ -282,11 +284,12 @@ Request:
 { "token": "del-abc123", "account": "RUNNER", "character": "Benchy" }
 ```
 (`token` is a fresh throwaway token for this operation's audit log/event
-stream; `account` optional as in `POST /session`, but must name the module's
-configured account — deletes are refused for any other account, and refused
-while a different token holds a live bench session on it. Minimal ownership
-gate for the one-account-per-run scheme; per-character credentials are the
-Phase-1 fix.)
+stream; `account` optional as in `POST /session`, but must be on the module's
+configured account allowlist (`WrathBench.Accounts`, defaulting to the single
+`WrathBench.Account`) — deletes are refused for any other account, and refused
+while a different token holds a live bench session on it. `POST /session` and
+`POST /characters` apply the same allowlist. Minimal ownership gate for the
+per-run account scheme; per-character credentials are the Phase-1 fix.)
 
 Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
 Errors: `400 missing_token`, `400 missing_character`, `409 token_in_use`,
