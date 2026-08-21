@@ -97,6 +97,7 @@ function parseArgs(argv: string[]): {
   maxHours: number | undefined;
   skip: string[];
   freeTokens: string[];
+  date: string | undefined;
   log: string | undefined;
 } {
   let roster: string | undefined;
@@ -105,6 +106,7 @@ function parseArgs(argv: string[]): {
   let until: string | undefined;
   let maxHours: number | undefined;
   let log: string | undefined;
+  let date: string | undefined;
   const skip: string[] = [];
   const freeTokens: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -127,6 +129,9 @@ function parseArgs(argv: string[]): {
           const v = argv[++i];
           if (v !== undefined) skip.push(v);
         }
+        break;
+      case "--date":
+        date = argv[++i];
         break;
       case "--free-tokens":
         {
@@ -151,7 +156,7 @@ function parseArgs(argv: string[]): {
         roster = a;
     }
   }
-  return { roster, dryRun, resumeRoster, until, maxHours, skip, freeTokens, log };
+  return { roster, dryRun, resumeRoster, until, maxHours, skip, freeTokens, date, log };
 }
 
 function usage(): void {
@@ -165,6 +170,9 @@ function usage(): void {
       "  --free-tokens a,b    DELETE /session for these tokens (run ids) before starting —",
       "                       a hand-started paused run still holds the shared game account",
       "  --resume-roster      continue a partially completed roster",
+      "  --date YYYYMMDD      the stamp in derived run ids and the log name. Defaults to today —",
+      "                       pass the ORIGINAL date when resuming a roster after midnight, or the",
+      "                       derived run ids change and every model relaunches from scratch",
       "  --dry-run            print the plan and the exact argv per episode; launch nothing",
       "  --log <path>         roster JSONL (default data/runs/roster-<YYYYMMDD>.jsonl)",
     ].join("\n"),
@@ -279,6 +287,18 @@ function readRunRow(runId: string): RunRow | undefined {
   }
 }
 
+/** The character a resumed run will actually use, per its stored meta.json. */
+function metaCharacter(runId: string): string | undefined {
+  const path = join(runDir(runId), "meta.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { character?: string } };
+    return meta.config?.character;
+  } catch {
+    return undefined;
+  }
+}
+
 function readLevel(runId: string): number | undefined {
   const path = join(runDir(runId), "run.sqlite");
   if (!existsSync(path)) return undefined;
@@ -353,7 +373,32 @@ function record(entry: {
 
 let stopping = false;
 let child: ReturnType<typeof Bun.spawn> | undefined;
+let childRunId: string | undefined;
 const wakeups: (() => void)[] = [];
+
+/**
+ * Signal the runner *inside* the container.
+ *
+ * Verified by hand: SIGTERM to the local `docker compose exec` process does NOT
+ * reach the process it started in the container — the exec'd command survives
+ * and would be orphaned. So the signal has to be delivered on the other side.
+ * Scoped to the run id (which appears in the runner's argv as `--run-id` or
+ * `--resume`) so a parallel shakeout run in the same container is never hit.
+ */
+function signalInContainer(runId: string, signal: "TERM" | "KILL"): void {
+  const sh =
+    `for d in /proc/[0-9]*; do c=$(tr "\\0" " " < $d/cmdline 2>/dev/null); ` +
+    `case "$c" in *run.ts*${runId}*) kill -${signal} "\${d#/proc/}" 2>/dev/null ;; esac; done`;
+  try {
+    Bun.spawnSync(["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "runner", "sh", "-c", sh], {
+      cwd: REPO_ROOT,
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  } catch {
+    // best effort
+  }
+}
 
 function requestStop(sig: string): void {
   if (stopping) process.exit(130);
@@ -361,10 +406,13 @@ function requestStop(sig: string): void {
   say(`${sig}: no further episodes will be launched`);
   for (const w of wakeups.splice(0)) w();
   if (child !== undefined) {
-    say(`${sig}: forwarding SIGTERM to the running episode (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
-    child.kill("SIGTERM");
     const c = child;
+    const id = childRunId;
+    say(`${sig}: terminating the running episode (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
+    c.kill("SIGTERM");
+    if (id !== undefined) signalInContainer(id, "TERM");
     setTimeout(() => {
+      if (id !== undefined) signalInContainer(id, "KILL");
       try {
         c.kill("SIGKILL");
       } catch {
@@ -391,6 +439,7 @@ async function nap(ms: number, deadline: number | undefined, why: string): Promi
 
 async function runEpisode(spec: Resolved, resume: boolean): Promise<number> {
   const argv = episodeArgv(spec, resume);
+  childRunId = spec.runId;
   child = Bun.spawn(argv, {
     cwd: REPO_ROOT,
     stdin: "inherit",
@@ -399,6 +448,7 @@ async function runEpisode(spec: Resolved, resume: boolean): Promise<number> {
   });
   const code = await child.exited;
   child = undefined;
+  childRunId = undefined;
   return code;
 }
 
@@ -625,7 +675,11 @@ async function main(): Promise<void> {
     console.error(`run-roster: ${rosterPath} must contain a JSON array of specs`);
     process.exit(2);
   }
-  const stampToday = dateStamp();
+  if (args.date !== undefined && !/^\d{8}$/.test(args.date)) {
+    console.error(`run-roster: --date wants YYYYMMDD, got ${args.date}`);
+    process.exit(2);
+  }
+  const stampToday = args.date ?? dateStamp();
   let specs = resolve(raw as RosterSpec[], stampToday);
   const skip = new Set(args.skip);
   if (skip.size > 0) {
@@ -657,6 +711,12 @@ async function main(): Promise<void> {
       pending.push({ spec, resume: true });
       continue;
     }
+    if (args.resumeRoster && row === undefined) {
+      say(
+        `resume-roster: no existing run for ${spec.runId} — launching fresh` +
+          ` (if you expected a resume, the date stamp moved: pass --date <the original YYYYMMDD>)`,
+      );
+    }
     if (!args.resumeRoster && row !== undefined) {
       say(
         `warning: ${spec.runId} already exists and this is not --resume-roster; it will be launched fresh onto the same run id`,
@@ -674,8 +734,13 @@ async function main(): Promise<void> {
     console.log("\n--- plan (dry run; nothing launched, nothing logged) ---");
     for (const [i, a] of pending.entries()) {
       const s = a.spec;
+      // A resumed episode reloads identity from meta.json; the derived values
+      // here would be a lie, so show what it will actually use.
+      const identity = a.resume
+        ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
+        : `   character ${s.character} (race ${s.race}, class ${s.class})\n   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
       console.log(
-        `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n   character ${s.character} (race ${s.race}, class ${s.class})\n   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)\n   pre-launch: DELETE /session token=${s.runId} via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
+        `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session token=${s.runId} via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {
