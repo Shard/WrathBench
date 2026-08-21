@@ -1,0 +1,14 @@
+# Keep the docker build context small and free of anything Blizzard-derived
+# or irrelevant to the server image (context = repo root, see
+# infra/docker/server.Dockerfile).
+.git
+data
+node_modules
+deps/azerothcore/.git
+deps/azerothcore/var
+deps/azerothcore/env
+deps/azerothcore/build*
+runner
+sdk
+wiki
+docs
