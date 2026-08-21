@@ -94,6 +94,7 @@ async function main(): Promise<void> {
           : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
       token: typeof args["token"] === "string" ? args["token"] : runId,
       character: typeof args["character"] === "string" ? args["character"] : undefined,
+      account: typeof args["account"] === "string" ? args["account"] : undefined,
       race: num(args["race"]),
       class: num(args["class"]),
       driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
@@ -231,7 +232,7 @@ async function main(): Promise<void> {
       const listRes = await fetch(`${config.moduleUrl}/characters`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: `${config.runId}-hygiene` }),
+        body: JSON.stringify({ token: `${config.runId}-hygiene`, account: config.account }),
       });
       const list = (await listRes.json()) as {
         ok?: boolean;
@@ -242,7 +243,11 @@ async function main(): Promise<void> {
         const del = await fetch(`${config.moduleUrl}/character-delete`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: `${config.runId}-hygiene-del-${name}`, character: name }),
+          body: JSON.stringify({
+            token: `${config.runId}-hygiene-del-${name}`,
+            account: config.account,
+            character: name,
+          }),
         });
         const dj = (await del.json()) as { deleted?: boolean; error?: string };
         if (dj.deleted !== true) {
@@ -278,7 +283,7 @@ async function main(): Promise<void> {
             text:
               `your assigned character for this episode: name "${config.character}", race ${config.race}, ` +
               `class ${config.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin). Create it with ` +
-              `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
+              `\`await sdk.createSession({ character: "${config.character}", account: "${config.account}", race: ${config.race}, class: ${config.class} })\` ` +
               `after \`await connect()\`. Use exactly these values: the account's character slots were cleared ` +
               `for this episode and other combinations may be rejected by the server's race/class rules.`,
           } as const,
