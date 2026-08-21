@@ -425,9 +425,28 @@ namespace WrathBench
         if (FindByToken(token))
             return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
 
+        std::string account = req.GetString("account", _account);
+
+        // Minimal ownership gate for the one-account-per-run scheme
+        // (FOLLOW-UPS 14; per-character credentials are the real Phase-1 fix,
+        // FOLLOW-UPS 10). Deletes are only served for the account the module
+        // config maps every token to, and never while another token holds a
+        // live bench session on that account — an unauthenticated caller must
+        // not be able to delete a character out from under a running episode
+        // or on an arbitrary named account.
+        if (strcasecmp(account.c_str(), _account.c_str()) != 0)
+            return {403, Json::Writer().Add("ok", false).Add("error", "account_not_permitted").Str()};
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [otherToken, other] : _byToken)
+                if (!other->tearingDown.load() && otherToken != token
+                    && strcasecmp(other->account.c_str(), account.c_str()) == 0)
+                    return {409, Json::Writer().Add("ok", false).Add("error", "account_owned_by_other_token").Str()};
+        }
+
         auto s = std::make_shared<BenchSession>();
         s->token = token;
-        s->account = req.GetString("account", _account);
+        s->account = account;
         s->charName = req.GetString("character");
         s->deleteMode = true;
 
