@@ -227,12 +227,17 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     "you already have a live session on this account — sdk already works; do not call createSession again",
   no_session: "call await connect() then await sdk.createSession({...}) first",
   not_in_world:
-    "the character is not in the world — await sdk.createSession({...}) and let it resolve before acting",
+    "the character is not in the world — if a createSession is still resolving, let it finish; " +
+    "if the session is stuck, await sdk.deleteSession() first, then await sdk.createSession({...})",
   token_in_use:
-    "another live connection already holds this token — reuse the existing session instead of opening a second one",
+    "another session already holds this token — reuse the existing session; if it is defunct " +
+    "(no_player/session_gone), await sdk.deleteSession() to release the token, then await sdk.createSession({...})",
   no_player:
-    "the session exists but its player is gone — recreate it with await sdk.createSession({...})",
-  session_gone: "the session was torn down — await connect() then await sdk.createSession({...}) again",
+    "the session exists but its player is gone — await sdk.deleteSession() to release the token, " +
+    "then await sdk.createSession({...}); a bare createSession is refused with token_in_use while the old record remains",
+  session_gone:
+    "the session was torn down but its record can still hold the token — await sdk.deleteSession() " +
+    "(ignore its error), then await sdk.createSession({...})",
   unsupported_action:
     "that action is not in the module's whitelist — inspect the sdk surface for what is supported",
   moving: "a move is in progress — await sdk.stop() first, or supersede it with sdk.moveTo(...)",

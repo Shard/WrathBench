@@ -98,7 +98,7 @@ describe("error-code hints", () => {
     ["no_session", /await connect\(\).*createSession/],
     ["not_in_world", /createSession/],
     ["token_in_use", /reuse the existing session/],
-    ["no_player", /recreate/],
+    ["no_player", /deleteSession/],
     ["unsupported_action", /whitelist/],
     ["moving", /sdk\.stop\(\)/],
     ["missing_guid", /nearbyUnits/],
@@ -113,6 +113,17 @@ describe("error-code hints", () => {
       expect(err.message).toMatch(pattern);
     });
   }
+
+  test("every member of the stale-session cycle names the actual exit (deleteSession)", () => {
+    // no_player/session_gone/not_in_world are only emitted while the session
+    // record still holds the token, so a bare createSession answers
+    // token_in_use — the recovery is deleteSession() first. Each hint in that
+    // cycle must name it, or the hints steer a model into a loop with no exit.
+    for (const code of ["no_player", "session_gone", "not_in_world", "token_in_use"]) {
+      const err = new WrathRequestError(409, { ok: false, error: code });
+      expect(err.message).toContain("deleteSession");
+    }
+  });
 
   test("an unknown code renders without a hint, unchanged", () => {
     const err = new WrathRequestError(400, { ok: false, error: "some_future_code" });
