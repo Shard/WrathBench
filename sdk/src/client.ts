@@ -56,7 +56,12 @@ import {
   type QuestGiverRequestItemsData,
   type SessionResponse,
 } from "./protocol";
-import { EventStream, type EventStreamOptions, type StreamEvent } from "./events";
+import {
+  EventStream,
+  EventTimeoutError,
+  type EventStreamOptions,
+  type StreamEvent,
+} from "./events";
 import {
   pointOf,
   StateCache,
@@ -280,7 +285,12 @@ export interface DeleteCharacterOptions {
 }
 
 export interface KillTargetOptions {
-  /** Give up after this long and return `status: "timeout"`. Default 60000. */
+  /**
+   * Give up after this long and return `status: "timeout"`. Default 25000,
+   * chosen to sit under the runner's 30s snippet cap: a call that outlives the
+   * snippet is abandoned mid-fight and its verdict is never seen. Raise it only
+   * from a background routine, which outlives the snippet that started it.
+   */
   timeout?: number;
   /** How often to re-face the target while swinging. Default 1500. */
   refaceIntervalMs?: number;
@@ -290,28 +300,84 @@ export interface KillTargetOptions {
   meleeRange?: number;
   /** How often the loop looks at the world. Default 300. */
   pollIntervalMs?: number;
+  /**
+   * Send `attack_stop` on the way out even when the fight did not end — i.e.
+   * on `timeout` and `lost`, which otherwise leave the character swinging.
+   * Default false. See `KillResult.attacking`.
+   */
+  disengage?: boolean;
+  /**
+   * Break off when our own health drops below this percent of max (0-100).
+   * Returns `aborted_low_health` and always disengages, because the point of
+   * asking is to stop taking hits. Unobserved health never triggers it.
+   */
+  abortBelowHealthPct?: number;
+}
+
+/** What every `KillResult` carries, whatever the outcome. */
+interface KillResultFacts {
+  readonly guid: bigint;
+  readonly swings: number;
+  /** Our own health as a percent of max at exit; `undefined` when unobserved. */
+  readonly healthPct: number | undefined;
+  /**
+   * Whether we left auto-attack running. The server keeps swinging from a
+   * single `CMSG_ATTACKSWING` until it is cancelled, and cancelling it while
+   * both combatants are alive is how a character gets killed standing still —
+   * so a fight that has not ended is left armed unless `disengage` was asked
+   * for. Call `attackStop()` when you actually want to break off.
+   */
+  readonly attacking: boolean;
+  /** One line about how it ended and what state the character was left in. */
+  readonly detail: string;
 }
 
 /**
  * How a fight ended, as a value (ADR-0011).
  *
  * `killed` is the target's own observed health reaching zero — the thing a
- * player watches the health bar for. The three failures are deliberately
- * coarse, and in particular there is no `evaded`: a creature resetting is not
- * separately observable on this whitelist (no packet says "evade"; the tells a
- * player reads are the mob running off and healing, which is exactly what
- * `timeout` and `lost` already cover). Naming a status the module never
- * uttered would put an SDK invention where only the world's words belong.
+ * player watches the health bar for. The failures are deliberately coarse, and
+ * in particular there is no `evaded`: a creature resetting is not separately
+ * observable on this whitelist (no packet says "evade"; the tells a player
+ * reads are the mob running off and healing, which is exactly what `timeout`
+ * and `lost` already cover). Naming a status the module never uttered would put
+ * an SDK invention where only the world's words belong. `aborted_low_health` is
+ * the one status that reports *our* decision rather than the world's, and it
+ * says so.
  */
 export type KillResult =
-  | { readonly ok: true; readonly status: "killed"; readonly guid: bigint; readonly swings: number }
-  | {
+  | ({ readonly ok: true; readonly status: "killed" } & KillResultFacts)
+  | ({
       readonly ok: false;
-      /** `player_died` — we died. `lost` — it left view alive. `timeout` — still up. */
-      readonly status: "player_died" | "lost" | "timeout";
-      readonly guid: bigint;
-      readonly swings: number;
-    };
+      /**
+       * `player_died` — we died. `lost` — it left view alive. `timeout` — still
+       * up. `aborted_low_health` — we broke off at `abortBelowHealthPct`.
+       */
+      readonly status: "player_died" | "lost" | "timeout" | "aborted_low_health";
+    } & KillResultFacts);
+
+/** How each outcome reads, before the note and the armed/disarmed clause. */
+const KILL_DETAIL: Record<KillResult["status"], string> = {
+  killed: "target died",
+  player_died: "we died",
+  lost: "target left view alive",
+  timeout: "timed out with both alive",
+  aborted_low_health: "broke off on low health",
+};
+
+/**
+ * Whether the character is left swinging. Only an ended fight disarms, unless
+ * the caller asked to disengage; an outcome we never reached (the helper threw)
+ * counts as "still fighting".
+ */
+function leavingArmed(status: KillResult["status"] | undefined, disengage: boolean): boolean {
+  if (disengage) return false;
+  return !(status === "killed" || status === "player_died" || status === "aborted_low_health");
+}
+
+/** Re-arm guards: never faster than this, never more than this many per fight. */
+const REARM_MIN_INTERVAL_MS = 500;
+const REARM_CAP = 20;
 
 export interface LootOptions {
   /** How long to wait for the loot window / release. Default 10000. */
@@ -882,8 +948,29 @@ export class WrathClient {
    *   - **re-approach**. Creatures wander and get knocked around; if the
    *     target drifts beyond `meleeRange` the loop walks back in and swings
    *     again.
+   *   - **approach**. The first swing is issued from melee range, not from
+   *     wherever the character happened to be standing: a `killTarget` on
+   *     something 50 yards off used to spend its whole timeout out of reach and
+   *     land zero swings.
    *   - **death**. Ours ends the fight immediately (`player_died`); theirs is
    *     read off the observed health reaching zero.
+   *   - **staying armed**. One `CMSG_ATTACKSWING` makes the server swing until
+   *     it is cancelled; movement does not cancel it, and only `attack_stop`,
+   *     a death, losing the target or re-targeting does. So `attack_stop` is
+   *     sent only when the fight actually ended (`killed`, `player_died`,
+   *     `aborted_low_health`) or when `disengage: true` was asked for.
+   *     `timeout` and `lost` leave the character swinging — disarming a
+   *     half-fought mob is how a character dies — and `attacking`/`detail` say
+   *     so. If the helper throws, the character is likewise left as it was.
+   *   - **re-arming**. If the server reports our auto-attack stopped
+   *     (`SMSG_ATTACKSTOP`, not because we died) while the target is still
+   *     alive and still ours, the loop swings again, rate-limited and capped.
+   *
+   * The default `timeout` (25s) is deliberately under the runner's 30s snippet
+   * cap so an in-snippet call returns its verdict rather than being abandoned
+   * mid-fight; a longer fight belongs in a background routine. A pre-approach
+   * walk that outlasts the deadline is folded into `detail` and reported as
+   * `timeout` rather than thrown, so the outcome stays a value.
    *
    * Returns a value for every game outcome and throws only for a refused
    * request. The caller is expected to loot afterwards: `killTarget` does not,
@@ -896,12 +983,25 @@ export class WrathClient {
     const reapproachMs = options.reapproachIntervalMs ?? 6000;
     const meleeRange = options.meleeRange ?? 5;
     const pollMs = options.pollIntervalMs ?? 300;
-    const deadline = Date.now() + (options.timeout ?? 60_000);
+    const deadline = Date.now() + (options.timeout ?? 25_000);
+    const abortPct = options.abortBelowHealthPct;
 
     let swings = 0;
     const offSwing = this.events.on("SMSG_ATTACKERSTATEUPDATE", (e) => {
       if (isDecodeError(e.data)) return;
       if ((e.data as { attackerGuid: bigint }).attackerGuid === this.state.self.guid) swings++;
+    });
+    // The server cancelling our swing is observable, so react to it rather than
+    // assuming the opening `attack_start` holds for the whole fight. The
+    // handler only raises a flag; the loop decides, because by the time it runs
+    // the cache may already know the victim is dead.
+    let rearmWanted = false;
+    const offStop = this.events.on("SMSG_ATTACKSTOP", (e) => {
+      if (isDecodeError(e.data)) return;
+      const d = e.data as { attackerGuid: bigint; victimGuid: bigint; attackerDead: boolean };
+      if (d.attackerGuid !== this.state.self.guid || d.attackerDead) return;
+      if (d.victimGuid !== id) return; // a re-target names the *old* victim
+      rearmWanted = true;
     });
 
     const aimAt = (): Point3 | undefined => {
@@ -910,35 +1010,91 @@ export class WrathClient {
     };
     const selfDead = (): boolean => this.state.self.health?.value.current === 0;
     const targetDead = (): boolean => this.state.nearby.get(key)?.health?.value.current === 0;
-    const done = (status: KillResult["status"]): KillResult =>
-      status === "killed"
-        ? { ok: true, status, guid: id, swings }
-        : { ok: false, status, guid: id, swings };
+    /** Our health as a percent of max, or undefined while it is unobserved. */
+    const healthPct = (): number | undefined => {
+      const h = this.state.self.health?.value;
+      if (h === undefined || h.max <= 0) return undefined;
+      return (h.current / h.max) * 100;
+    };
+
+    let outcome: KillResult["status"] | undefined;
+    let note = "";
+    const done = (status: KillResult["status"]): KillResult => {
+      outcome = status;
+      const armed = leavingArmed(status, options.disengage === true);
+      const facts: KillResultFacts = {
+        guid: id,
+        swings,
+        healthPct: healthPct(),
+        attacking: armed,
+        detail:
+          `${KILL_DETAIL[status]}${note}; ` +
+          (armed
+            ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
+            : "auto-attack stopped"),
+      };
+      return status === "killed"
+        ? { ok: true, status, ...facts }
+        : { ok: false, status, ...facts };
+    };
 
     try {
       await this.setTarget(id);
+      // Close the distance before the first swing, so it is a swing and not a
+      // 25-second stare. A walk that runs out the clock is an answer too.
       const opening = aimAt();
-      if (opening) await this.faceQuietly(opening);
+      const from = this.state.self.position?.value;
+      if (opening && from && distance2d(from, opening) > meleeRange) {
+        try {
+          const walk = await this.moveTo(opening, { timeout: Math.max(1000, deadline - Date.now()) });
+          if (!walk.ok) note = ` (approach: ${walk.status})`;
+        } catch (e) {
+          if (!(e instanceof EventTimeoutError)) throw e;
+          note = " (approach never finished)";
+        }
+      }
+      const facing = aimAt();
+      if (facing) await this.faceQuietly(facing);
       await this.attackStart(id);
 
       let refaceAt = Date.now() + refaceMs;
       let reapproachAt = Date.now() + reapproachMs;
+      let rearms = 0;
+      let rearmNotBefore = 0;
       for (;;) {
         if (targetDead()) return done("killed");
         if (selfDead()) return done("player_died");
         if (!this.state.nearby.has(key)) return done("lost");
+        if (abortPct !== undefined) {
+          const pct = healthPct();
+          if (pct !== undefined && pct < abortPct) {
+            note = ` (health ${pct.toFixed(0)}% below the ${abortPct}% floor)`;
+            return done("aborted_low_health");
+          }
+        }
         if (Date.now() > deadline) return done("timeout");
 
         const at = aimAt();
         const now = Date.now();
+        if (rearmWanted) {
+          rearmWanted = false;
+          // Re-checked here, not in the handler: an ATTACKSTOP for a victim
+          // that is about to be reported dead must not re-arm into a corpse.
+          if (rearms < REARM_CAP && now >= rearmNotBefore && !targetDead()) {
+            rearms++;
+            rearmNotBefore = now + REARM_MIN_INTERVAL_MS;
+            if (at) await this.faceQuietly(at);
+            await this.attackStart(id);
+          }
+        }
         if (at && now >= refaceAt) {
           refaceAt = now + refaceMs;
           await this.faceQuietly(at);
         }
         if (at && now >= reapproachAt) {
           reapproachAt = now + reapproachMs;
-          const from = this.state.self.position?.value;
-          if (from && distance2d(from, at) > meleeRange) {
+          const pos = this.state.self.position?.value;
+          if (pos && distance2d(pos, at) > meleeRange) {
             await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
             const after = aimAt();
             if (after) await this.faceQuietly(after);
@@ -949,9 +1105,13 @@ export class WrathClient {
       }
     } finally {
       offSwing();
-      // Always stop swinging on the way out: a live auto-attack would follow us
-      // into the next thing the caller does.
-      await this.attackStop().catch(() => {});
+      offStop();
+      // Only disarm when the fight is over, or when the caller asked. Anything
+      // else — including an exception on the way out — leaves the server
+      // swinging, because a disarmed character in a live fight dies.
+      if (!leavingArmed(outcome, options.disengage === true)) {
+        await this.attackStop().catch(() => {});
+      }
     }
   }
 

@@ -4,6 +4,7 @@ import { connect, WrathRequestError, WrathTransportError } from "../src/client";
 import { EventTimeoutError } from "../src/events";
 import {
   addKill,
+  attackStopped,
   chatEcho,
   CREATURE_GUID,
   creatureCreate,
@@ -19,6 +20,7 @@ import {
   moveResult,
   offerReward,
   OTHER_QUEST_ID,
+  PLAYER_GUID,
   QUEST_ID,
   questAccepted,
   questComplete,
@@ -332,6 +334,9 @@ describe("client: killTarget", () => {
       pollIntervalMs: 10,
       // Long enough that the re-approach never fires in this test.
       reapproachIntervalMs: 60_000,
+      // Wider than the fixture's ~35y gap, so neither approach walks: this
+      // test is about the swing loop, not about closing the distance.
+      meleeRange: 100,
     });
     await untilAction(stub, "attack_start");
     // A client faces continuously; the module needs telling, or swings miss.
@@ -339,7 +344,14 @@ describe("client: killTarget", () => {
     stub.push(JSON.stringify(creatureHealth(0, 61)));
     const result = await fight;
 
-    expect(result).toEqual({ ok: true, status: "killed", guid: BigInt(CREATURE_GUID), swings: 0 });
+    expect(result).toMatchObject({
+      ok: true,
+      status: "killed",
+      guid: BigInt(CREATURE_GUID),
+      swings: 0,
+      attacking: false,
+    });
+    expect(result.detail).toContain("auto-attack stopped");
     const sent = stub.actions.map((a) => a.action);
     expect(sent.slice(0, 3)).toEqual(["set_target", "face", "attack_start"]);
     // Re-faced while swinging, and stopped swinging on the way out.
@@ -354,7 +366,11 @@ describe("client: killTarget", () => {
   test("counts our own swings and ignores the ones aimed at us", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    const fight = client.killTarget(CREATURE_GUID, { timeout: 5000, pollIntervalMs: 10 });
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
     await untilAction(stub, "attack_start");
     stub.push(JSON.stringify(swing(SELF_GUID, CREATURE_GUID, 62)));
     stub.push(JSON.stringify(swing(CREATURE_GUID, SELF_GUID, 63)));
@@ -369,7 +385,11 @@ describe("client: killTarget", () => {
   test("our own death ends the fight, and says so", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    const fight = client.killTarget(CREATURE_GUID, { timeout: 5000, pollIntervalMs: 10 });
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
     await untilAction(stub, "attack_start");
     stub.push(JSON.stringify(selfHealth(0, 66)));
     const result = await fight;
@@ -382,7 +402,11 @@ describe("client: killTarget", () => {
   test("a target that leaves view alive is lost, not killed", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    const fight = client.killTarget(CREATURE_GUID, { timeout: 5000, pollIntervalMs: 10 });
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
     await untilAction(stub, "attack_start");
     stub.push(JSON.stringify({ ...creatureOutOfRange, seq: 67 }));
     const result = await fight;
@@ -395,7 +419,11 @@ describe("client: killTarget", () => {
   test("a target that will not die times out as a value, not a throw", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    const result = await client.killTarget(CREATURE_GUID, { timeout: 60, pollIntervalMs: 10 });
+    const result = await client.killTarget(CREATURE_GUID, {
+      timeout: 60,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
     expect(result.ok).toBe(false);
     expect(result.status).toBe("timeout");
     client.close();
@@ -417,6 +445,7 @@ describe("client: killTarget", () => {
       refaceIntervalMs: 20,
       pollIntervalMs: 10,
       reapproachIntervalMs: 60_000,
+      meleeRange: 100,
     });
     await untilAction(stub, "attack_start");
     await Bun.sleep(60);
@@ -427,7 +456,7 @@ describe("client: killTarget", () => {
     await stub.stop();
   });
 
-  test("a wandering target is walked back to and re-engaged", async () => {
+  test("closes to melee before the first swing, and re-approaches after", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const fight = client.killTarget(CREATURE_GUID, {
@@ -436,11 +465,151 @@ describe("client: killTarget", () => {
       reapproachIntervalMs: 20,
       meleeRange: 5,
     });
-    // The creature is ~35y away in the fixtures, so the loop walks to it.
+    // The creature is ~35y away in the fixtures, so the walk comes first: a
+    // swing from 35 yards is a 0-swing timeout waiting to happen.
     const moveAt = await untilAction(stub, "move_to");
     stub.push(JSON.stringify(moveResult("arrived", 1, 68)));
-    await untilAction(stub, "attack_start", moveAt);
+    const attackAt = await untilAction(stub, "attack_start", moveAt);
+    expect(attackAt).toBeGreaterThan(moveAt);
     stub.push(JSON.stringify(creatureHealth(0, 69)));
+    expect((await fight).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a timeout leaves the character swinging, and says so", async () => {
+    // Defect A: the old helper disarmed on the way out of *every* fight,
+    // including one both combatants walked out of alive. The server swings from
+    // one CMSG_ATTACKSWING until it is cancelled, so cancelling mid-fight is
+    // how a character stands there and dies.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const result = await client.killTarget(CREATURE_GUID, {
+      timeout: 60,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
+    expect(result.status).toBe("timeout");
+    expect(result.attacking).toBe(true);
+    expect(result.detail).toContain("still auto-attacking");
+    expect(stub.actions.map((a) => a.action)).not.toContain("attack_stop");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a lost target also leaves the character swinging", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
+    await untilAction(stub, "attack_start");
+    stub.push(JSON.stringify({ ...creatureOutOfRange, seq: 90 }));
+    const result = await fight;
+    expect(result.status).toBe("lost");
+    expect(result.attacking).toBe(true);
+    expect(stub.actions.map((a) => a.action)).not.toContain("attack_stop");
+    client.close();
+    await stub.stop();
+  });
+
+  test("disengage: true breaks off even when the fight did not end", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const result = await client.killTarget(CREATURE_GUID, {
+      timeout: 60,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+      disengage: true,
+    });
+    expect(result.status).toBe("timeout");
+    expect(result.attacking).toBe(false);
+    expect(stub.actions.at(-1)?.action).toBe("attack_stop");
+    client.close();
+    await stub.stop();
+  });
+
+  test("abortBelowHealthPct breaks off on our own health, with the numbers", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+      abortBelowHealthPct: 30,
+    });
+    await untilAction(stub, "attack_start");
+    // The fixture character is 80/100; drop it to 20/100.
+    stub.push(JSON.stringify(selfHealth(20, 91)));
+    const result = await fight;
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("aborted_low_health");
+    expect(result.healthPct).toBe(20);
+    expect(result.detail).toContain("30% floor");
+    // Breaking off is the whole point, so this is the one case that disarms.
+    expect(result.attacking).toBe(false);
+    expect(stub.actions.at(-1)?.action).toBe("attack_stop");
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unobserved health never trips the low-health abort", async () => {
+    // No self create block in this world, so `state.self.health` is undefined —
+    // which must not read as 0%.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, creatureCreate, creatureQuery]) });
+    const client = await inWorld(stub);
+    const result = await client.killTarget(CREATURE_GUID, {
+      timeout: 60,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+      abortBelowHealthPct: 90,
+    });
+    expect(result.status).toBe("timeout");
+    expect(result.healthPct).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("a mid-fight ATTACKSTOP from the server is re-armed", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      refaceIntervalMs: 60_000,
+      reapproachIntervalMs: 60_000,
+      meleeRange: 100,
+    });
+    const first = await untilAction(stub, "attack_start");
+    // Ours, we are not dead, and the victim is still the target: swing again.
+    stub.push(JSON.stringify(attackStopped(SELF_GUID, CREATURE_GUID, false, 92)));
+    await untilAction(stub, "attack_start", first + 1);
+    stub.push(JSON.stringify(creatureHealth(0, 93)));
+    expect((await fight).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an ATTACKSTOP that is not ours, or names another victim, is ignored", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      refaceIntervalMs: 60_000,
+      reapproachIntervalMs: 60_000,
+      meleeRange: 100,
+    });
+    await untilAction(stub, "attack_start");
+    stub.push(JSON.stringify(attackStopped(CREATURE_GUID, SELF_GUID, false, 94)));
+    stub.push(JSON.stringify(attackStopped(SELF_GUID, PLAYER_GUID, false, 95)));
+    stub.push(JSON.stringify(attackStopped(SELF_GUID, CREATURE_GUID, true, 96)));
+    await Bun.sleep(60);
+    expect(stub.actions.filter((a) => a.action === "attack_start")).toHaveLength(1);
+    stub.push(JSON.stringify(creatureHealth(0, 97)));
     expect((await fight).ok).toBe(true);
     client.close();
     await stub.stop();

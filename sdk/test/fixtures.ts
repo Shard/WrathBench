@@ -626,6 +626,25 @@ export function swing(attackerGuid: string, victimGuid: string, seq: number): un
   };
 }
 
+/**
+ * The server cancelling an auto-attack. `attackerDead: false` with a live
+ * victim is the mid-fight cancel the SDK re-arms from.
+ */
+export function attackStopped(
+  attackerGuid: string,
+  victimGuid: string,
+  attackerDead: boolean,
+  seq: number,
+): unknown {
+  return {
+    seq,
+    opcode: "SMSG_ATTACKSTOP",
+    opcodeId: 0x144,
+    ts: 1_700_000_000_000 + seq,
+    data: { attackerGuid, victimGuid, attackerDead },
+  };
+}
+
 /** The whole quest/combat fold in one stream, for the replay property. */
 export const questCombatStream: unknown[] = [
   ...worldStream,
