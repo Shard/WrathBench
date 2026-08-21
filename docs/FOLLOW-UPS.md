@@ -229,6 +229,10 @@ priority. Items graduate out of this file into commits; the dev loop
      `infra/smoke/` probes, then verify with an actual death far from the
      graveyard followed by a completed corpse run — no smoke test dies yet,
      and remember the 250y `move_to` cap means the ghost run is chained hops.
+   - **Verified end-to-end 2026-08-22**: `infra/smoke/death-recovery.ts` now
+     dies for real (level-1 Human vs pulled Kobold Vermin, 150y from the
+     graveyard) and passed against the deployed worldserver — repop teleport
+     applied, ghost corpse run arrived, reclaim resurrected.
    - **Aside, character-delete has no ownership check** (status above, point 5):
      `Manager::HttpCharacterDelete` requires only a non-empty `token` that is
      not currently in use and a non-empty `character`; `account` is
