@@ -90,12 +90,12 @@ describe("runLoop", () => {
     const pausing: ChatAdapter = {
       label: "pausing",
       complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
-        Promise.resolve({ kind: "pause", reason: "window-exhausted", detail: "429 quota" }),
+        Promise.resolve({ kind: "pause", reason: "quota-exhausted", detail: "429 quota" }),
     };
     const { options } = setup(pausing);
     const outcome = await runLoop(options);
-    expect(outcome).toEqual({ kind: "paused", reason: "window-exhausted", detail: "429 quota" });
-    expect(options.trajectory.runRow("run-test")?.["pause_reason"]).toBe("window-exhausted");
+    expect(outcome).toEqual({ kind: "paused", reason: "quota-exhausted", detail: "429 quota" });
+    expect(options.trajectory.runRow("run-test")?.["pause_reason"]).toBe("quota-exhausted");
     expect(options.trajectory.runRow("run-test")?.["termination_reason"]).toBeNull();
     options.trajectory.close();
   });

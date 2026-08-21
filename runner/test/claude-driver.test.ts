@@ -157,13 +157,13 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
-  test("a usage-limit result pauses the run as window-exhausted", async () => {
+  test("a usage-limit result pauses the run as quota-exhausted", async () => {
     const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 });
     const outcome = await runClaudeEpisode(options);
     expect(outcome.kind).toBe("paused");
-    expect(outcome.kind === "paused" && outcome.reason).toBe("window-exhausted");
+    expect(outcome.kind === "paused" && outcome.reason).toBe("quota-exhausted");
     expect(outcome.kind === "paused" && outcome.detail).toContain("resets at");
-    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBe("window-exhausted");
+    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBe("quota-exhausted");
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBeNull();
     trajectory.close();
   }, 20_000);
@@ -172,7 +172,7 @@ describe("claude-subscription driver", () => {
     const { trajectory, options } = setupEpisode("limit-exit", { maxTurns: 3 });
     const outcome = await runClaudeEpisode(options);
     expect(outcome.kind).toBe("paused");
-    expect(outcome.kind === "paused" && outcome.reason).toBe("window-exhausted");
+    expect(outcome.kind === "paused" && outcome.reason).toBe("quota-exhausted");
     trajectory.close();
   }, 20_000);
 
@@ -271,10 +271,10 @@ describe("claude-subscription driver", () => {
 describe("detectLimit", () => {
   test("recognises the CLI's limit shapes and parses the reset epoch", () => {
     const epoch = detectLimit("Claude AI usage limit reached|1780000000");
-    expect(epoch?.reason).toBe("window-exhausted");
+    expect(epoch?.reason).toBe("quota-exhausted");
     expect(epoch?.detail).toContain(new Date(1780000000 * 1000).toISOString());
     expect(detectLimit("You've hit your 5-hour limit. Your limit resets at 3pm.")?.reason).toBe(
-      "window-exhausted",
+      "quota-exhausted",
     );
     expect(detectLimit("ordinary assistant text about limits of the sandbox")).toBeNull();
     expect(detectLimit(undefined)).toBeNull();

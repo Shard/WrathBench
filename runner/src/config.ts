@@ -53,11 +53,22 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 
 /**
  * Pause reasons: the run is suspended, not judged. Resumable with `--resume`.
- * `window-exhausted` covers subscription/quota exhaustion on the model API.
- * `rate-limited` covers post-retry HTTP 429 without quota wording (free pools).
+ * `quota-exhausted` covers exhaustion of the model API budget: paid credit,
+ * or a subscription's usage window. `rate-limited` covers post-retry HTTP 429
+ * without quota wording (free pools). Neither has anything to do with context
+ * size — which is what the old name, `window-exhausted`, kept implying.
  */
-export const PAUSE_REASONS = ["window-exhausted", "rate-limited", "operator-pause"] as const;
+export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
+
+/**
+ * Pause reasons persisted before the rename read in the current vocabulary.
+ * Runs are long-lived rows in the trajectory store; nothing validates a stored
+ * pause reason, so this exists purely so old rows display under one name.
+ */
+export function normalizePauseReason(stored: string): string {
+  return stored === "window-exhausted" ? "quota-exhausted" : stored;
+}
 
 // --------------------------------------------------------------- run config
 

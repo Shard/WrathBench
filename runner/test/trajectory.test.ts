@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRunConfig } from "../src/config";
+import { PAUSE_REASONS, loadRunConfig, normalizePauseReason } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 
 function tempRunDir(): string {
@@ -57,13 +57,20 @@ describe("Trajectory", () => {
     const traj = new Trajectory(dir);
     const config = loadRunConfig({});
     traj.writeMeta({ runId: "run-z", harnessVersion: "v", startedAt: 1, config });
-    traj.setPause("run-z", "window-exhausted", "429 quota");
-    expect(traj.runRow("run-z")?.["pause_reason"]).toBe("window-exhausted");
+    traj.setPause("run-z", "quota-exhausted", "429 quota");
+    expect(traj.runRow("run-z")?.["pause_reason"]).toBe("quota-exhausted");
     traj.setTermination("run-z", "no-xp", "45m of nothing");
     const row = traj.runRow("run-z");
     expect(row?.["termination_reason"]).toBe("no-xp");
     expect(row?.["pause_reason"]).toBeNull();
     traj.close();
+  });
+
+  test("a pause reason stored under the old name reads as the current one", () => {
+    // Nothing validates a stored pause reason, so old rows keep their bytes;
+    // this is the one place the old vocabulary is translated for display.
+    expect(normalizePauseReason("window-exhausted")).toBe("quota-exhausted");
+    for (const r of PAUSE_REASONS) expect(normalizePauseReason(r)).toBe(r);
   });
 
   test("registered secrets are scrubbed from every line", () => {
