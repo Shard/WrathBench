@@ -503,6 +503,11 @@ export class WrathClient {
         });
       }
     }
+    // A session boundary for the event stream: per-session ids (`moveId`,
+    // `seq`) restart with the new module session, so correlations issued from
+    // here on must never match buffered events of an earlier session. Advanced
+    // before the POST so the login handshake events land in the new epoch.
+    this.events.advanceEpoch();
     const body: CreateSessionRequest = { token: this.token, ...request };
     const res = await this.request("POST", "/session", body, sessionResponseSchema);
     this.state.seedSelf({ guid: res.guid, name: res.character });
@@ -872,19 +877,25 @@ export class WrathClient {
    * resolves with `status: "superseded"`.
    */
   async moveTo(point: MovePoint, options: MoveToOptions = {}): Promise<MoveResult> {
+    const epoch = this.events.epoch;
     const ack = await this.moveToAsync(point);
-    // The match is the moveId alone, and the buffer is searched: a result can
-    // land while the POST response is still in flight (an immediate `no_path`
-    // does exactly that). No `sinceSeq` bound — `seq` restarts when a token's
-    // session is recreated, so any seq-based floor can outrun the very event it
-    // is meant to admit, while `moveId` is unique per session and issued by the
-    // ack we are holding.
+    // The match is the moveId within the current session epoch, and the buffer
+    // is searched: a result can land while the POST response is still in
+    // flight (an immediate `no_path` does exactly that). No `sinceSeq` bound —
+    // `seq` restarts when a token's session is recreated, so any seq-based
+    // floor can outrun the very event it is meant to admit. `moveId` alone is
+    // not enough either: the module's generator is per-session and restarts on
+    // recreate, so after a relog the buffer can hold a byte-identical stale
+    // result from the previous session (observed in night-opus-1: 8s-timeout
+    // probes "resolving" in 59ms against pre-relog payloads). The epoch,
+    // advanced on every session boundary, is what scopes the match to the
+    // session that issued this ack.
     const event = await this.events.waitFor(
       (e) =>
         isEvent(e, "WB_MOVE_RESULT") &&
         !isDecodeError(e.data) &&
         (e.data as MoveResultData).moveId === ack.moveId,
-      { timeout: options.timeout ?? 90_000 },
+      { timeout: options.timeout ?? 90_000, sinceEpoch: epoch },
     );
     const data = event.data as MoveResultData;
     const status: MoveStatus = data.status;

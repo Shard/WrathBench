@@ -146,6 +146,46 @@ describe("client: movement", () => {
     }
   });
 
+  test("a relog cannot resolve a moveTo against the previous session's stale result", async () => {
+    // The module's moveId generator is per-session and restarts when the
+    // session is recreated, so after a relog a fresh ack can reuse a moveId
+    // that a stale buffered result still carries (FOLLOW-UPS item 14: probes
+    // with 8s timeouts "resolved" in 59ms against pre-relog payloads). The
+    // stub pins moveId 1 on every ack to force exactly that collision.
+    const stub = startStub({
+      onConnect: () => frames(loginSequence),
+      routes: { action: () => json({ ok: true, action: "move_to", token: "stub", moveId: 1 }, 200) },
+    });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    // First session: a completed move leaves its result in the buffer.
+    const first = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 1, 36)));
+    expect((await first).status).toBe("arrived");
+
+    // Relog: the module recreates the session; seq and moveId both restart.
+    await client.logout();
+    await client.createSession({ character: "Fenwick" });
+    for (const f of frames(loginSequence)) stub.push(f);
+
+    // The stale result (moveId 1, seq 36) is still buffered. It must not
+    // settle the new session's move: absence of a fresh result is a timeout.
+    await expect(client.moveTo({ x: 4, y: 5, z: 6 }, { timeout: 100 })).rejects.toBeInstanceOf(
+      EventTimeoutError,
+    );
+
+    // The new session's own result still resolves, buffered or live.
+    const pending = client.moveTo({ x: 4, y: 5, z: 6 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 1, 5)));
+    const result = await pending;
+    expect(result.status).toBe("arrived");
+    expect(result.seq).toBe(5);
+
+    client.close();
+    await stub.stop();
+  });
+
   test("a request the module refuses still throws; a missing result times out", async () => {
     const refusing = startStub({
       routes: { action: () => json({ ok: false, error: "missing_position" }, 400) },
