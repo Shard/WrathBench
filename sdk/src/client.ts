@@ -76,12 +76,52 @@ import type { z } from "zod";
 /** Anything a caller can hand us as a guid. The wire wants a decimal string. */
 export type GuidArg = bigint | string;
 
-function guidArg(guid: GuidArg): string {
+/**
+ * Client-side guid validation, thrown before anything reaches the wire.
+ *
+ * `number` is rejected outright: 3.3.5a guids carry a high part above
+ * Number.MAX_SAFE_INTEGER, so a numeric guid has usually already been
+ * precision-truncated — a live trajectory showed one silently targeting
+ * nothing. `undefined` is rejected with a pointer to where guids come from,
+ * because the module's own `missing_guid` reply cannot name the JS call site.
+ */
+function assertGuid(guid: unknown, arg: string): asserts guid is GuidArg {
+  if (guid === undefined || guid === null) {
+    throw new TypeError(
+      `${arg} is ${guid === undefined ? "undefined" : "null"} — pass a guid as a bigint or ` +
+        `decimal string (guids come from state.nearbyUnits(), state.closest(...), or event data)`,
+    );
+  }
+  if (typeof guid === "number") {
+    throw new TypeError(
+      `${arg} is a number — guids exceed Number.MAX_SAFE_INTEGER and a number silently loses ` +
+        `precision (targeting nothing); pass a bigint or a decimal string (e.g. unit.guid or String(guid))`,
+    );
+  }
+}
+
+function guidArg(guid: GuidArg, arg: string): string {
+  assertGuid(guid, arg);
   return typeof guid === "bigint" ? guidKey(guid) : guid;
 }
 
-function toBigInt(guid: GuidArg): bigint {
+function toBigInt(guid: GuidArg, arg: string): bigint {
+  assertGuid(guid, arg);
   return typeof guid === "bigint" ? guid : BigInt(guid);
+}
+
+/** Client-side position validation for move_to: each axis a finite number. */
+function assertMovePoint(point: unknown, method: string): asserts point is MovePoint {
+  if (point === null || typeof point !== "object") {
+    throw new TypeError(`${method} needs a point object { x, y, z }, got ${point === null ? "null" : typeof point}`);
+  }
+  for (const axis of ["x", "y", "z"] as const) {
+    const v = (point as Record<string, unknown>)[axis];
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      const shown = v === undefined ? "undefined" : typeof v === "number" ? String(v) : typeof v;
+      throw new TypeError(`${method} position ${axis} must be a finite number, got ${shown}`);
+    }
+  }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -172,6 +212,42 @@ const CHAR_RESPONSE_HINTS: Record<number, string> = {
   0x5f: "name is reserved",
 };
 
+/**
+ * One actionable sentence per request-error code, rendered into the
+ * `WrathRequestError` message. Deterministic and model-agnostic: the same
+ * pattern as `CHAR_RESPONSE_HINTS`, extended to the codes live runs actually
+ * hit. Keys are module error codes (KnownErrorCode plus codes the module
+ * added later); an unknown code simply renders without a hint.
+ */
+const ERROR_CODE_HINTS: Record<string, string> = {
+  account_in_use:
+    "you already have a live session on this account — sdk already works; do not call createSession again",
+  no_session: "call await connect() then await sdk.createSession({...}) first",
+  not_in_world:
+    "the character is not in the world — await sdk.createSession({...}) and let it resolve before acting",
+  token_in_use:
+    "another live connection already holds this token — reuse the existing session instead of opening a second one",
+  no_player:
+    "the session exists but its player is gone — recreate it with await sdk.createSession({...})",
+  session_gone: "the session was torn down — await connect() then await sdk.createSession({...}) again",
+  unsupported_action:
+    "that action is not in the module's whitelist — inspect the sdk surface for what is supported",
+  moving: "a move is in progress — await sdk.stop() first, or supersede it with sdk.moveTo(...)",
+  missing_guid:
+    "this action needs a guid argument — get one from state.nearbyUnits() or state.closest(...)",
+  missing_position: "move_to needs finite x, y and z numbers",
+  missing_face_target: "face needs either an orientation in radians or an { x, y } point",
+  missing_token: "the request body is missing its session token — call through the sdk client methods",
+  missing_character: "createSession needs a character name",
+  unknown_account: "the account name is not on the module's allowlist for this realm",
+  socket_setup_failed: "the module could not open the internal client socket — retry once, then check the server",
+  login_failed: "the server refused the login — check the character name and account",
+  character_missing_after_create: "the character did not appear after creation — retry createSession once",
+  timeout: "the module's internal wait ran out — the world may be busy; retry once before assuming failure",
+  invalid_guid:
+    "the guid did not parse as a decimal u64 string — pass unit.guid (a bigint) or String(guid), never a rounded number",
+};
+
 export class WrathRequestError extends Error {
   override readonly name = "WrathRequestError";
   readonly status: number;
@@ -187,7 +263,7 @@ export class WrathRequestError extends Error {
     // The numeric code is the server's word; the parenthetical is the string a
     // real client's UI shows for it (GlobalStrings) — client-visible knowledge,
     // added because a bare number proved unactionable in live runs.
-    const hint = match ? CHAR_RESPONSE_HINTS[Number(match[1])] : undefined;
+    const hint = match ? CHAR_RESPONSE_HINTS[Number(match[1])] : ERROR_CODE_HINTS[body.error];
     super(`module rejected request: ${body.error}${hint ? ` (${hint})` : ""} (HTTP ${status})`);
     this.status = status;
     this.code = body.error;
@@ -533,6 +609,7 @@ export class WrathClient {
    * outcome is a `WB_MOVE_RESULT` event. Prefer `moveTo`, which waits for it.
    */
   moveToAsync(point: MovePoint): Promise<MoveToResponse> {
+    assertMovePoint(point, "moveTo");
     return this.request(
       "POST",
       "/action",
@@ -583,7 +660,7 @@ export class WrathClient {
 
   /** `CMSG_SET_SELECTION`. What the client shows as the current target. */
   setTarget(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "set_target", guid: guidArg(guid) });
+    return this.action({ action: "set_target", guid: guidArg(guid, "setTarget(guid)") });
   }
 
   /** `CMSG_SET_SELECTION` with guid 0. */
@@ -597,7 +674,7 @@ export class WrathClient {
    * that second condition needs help here.
    */
   attackStart(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "attack_start", guid: guidArg(guid) });
+    return this.action({ action: "attack_start", guid: guidArg(guid, "attackStart(guid)") });
   }
 
   /** `CMSG_ATTACKSTOP`. */
@@ -610,7 +687,7 @@ export class WrathClient {
     return this.action(
       targetGuid === undefined
         ? { action: "cast_spell", spellId }
-        : { action: "cast_spell", spellId, targetGuid: guidArg(targetGuid) },
+        : { action: "cast_spell", spellId, targetGuid: guidArg(targetGuid, "castSpell(spellId, targetGuid)") },
     );
   }
 
@@ -621,17 +698,17 @@ export class WrathClient {
 
   /** `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. */
   interact(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "interact", guid: guidArg(guid) });
+    return this.action({ action: "interact", guid: guidArg(guid, "interact(guid)") });
   }
 
   /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
   gossipHello(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "gossip_hello", guid: guidArg(guid) });
+    return this.action({ action: "gossip_hello", guid: guidArg(guid, "gossipHello(guid)") });
   }
 
   /** `CMSG_GOSSIP_SELECT_OPTION`; ids come from `SMSG_GOSSIP_MESSAGE`. */
   gossipSelect(guid: GuidArg, menuId: number, optionId: number): Promise<ActionResponse> {
-    return this.action({ action: "gossip_select", guid: guidArg(guid), menuId, optionId });
+    return this.action({ action: "gossip_select", guid: guidArg(guid, "gossipSelect(guid, ...)"), menuId, optionId });
   }
 
   /**
@@ -640,27 +717,27 @@ export class WrathClient {
    * `acceptQuestFrom` handles both shapes.
    */
   questList(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "quest_list", guid: guidArg(guid) });
+    return this.action({ action: "quest_list", guid: guidArg(guid, "questList(guid)") });
   }
 
   /** `CMSG_QUESTGIVER_QUERY_QUEST` — quest text via `..._QUEST_DETAILS`. */
   questDetails(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_details", guid: guidArg(guid), questId });
+    return this.action({ action: "quest_details", guid: guidArg(guid, "questDetails(guid, questId)"), questId });
   }
 
   /** `CMSG_QUESTGIVER_ACCEPT_QUEST`. */
   questAccept(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_accept", guid: guidArg(guid), questId });
+    return this.action({ action: "quest_accept", guid: guidArg(guid, "questAccept(guid, questId)"), questId });
   }
 
   /** `CMSG_QUESTGIVER_COMPLETE_QUEST` — answered by REQUEST_ITEMS or OFFER_REWARD. */
   questComplete(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_complete", guid: guidArg(guid), questId });
+    return this.action({ action: "quest_complete", guid: guidArg(guid, "questComplete(guid, questId)"), questId });
   }
 
   /** `CMSG_QUESTGIVER_CHOOSE_REWARD`; index into `choiceRewards`, 0 when none. */
   questChooseReward(guid: GuidArg, questId: number, rewardIndex = 0): Promise<ActionResponse> {
-    return this.action({ action: "quest_choose_reward", guid: guidArg(guid), questId, rewardIndex });
+    return this.action({ action: "quest_choose_reward", guid: guidArg(guid, "questChooseReward(guid, ...)"), questId, rewardIndex });
   }
 
   /** `CMSG_QUESTLOG_REMOVE_QUEST`; the module maps quest id to log slot. */
@@ -670,7 +747,7 @@ export class WrathClient {
 
   /** `CMSG_LOOT` — opens the loot window (`SMSG_LOOT_RESPONSE`). */
   loot(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot", guid: guidArg(guid) });
+    return this.action({ action: "loot", guid: guidArg(guid, "loot(guid)") });
   }
 
   /**
@@ -678,7 +755,7 @@ export class WrathClient {
    * arrives (ADR-0013). Fire-and-forget: prefer `lootCorpse`, which waits.
    */
   lootAll(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot_all", guid: guidArg(guid) });
+    return this.action({ action: "loot_all", guid: guidArg(guid, "lootAll(guid)") });
   }
 
   /** `CMSG_AUTOSTORE_LOOT_ITEM`; `slot` from `SMSG_LOOT_RESPONSE.items[]`. */
@@ -693,27 +770,32 @@ export class WrathClient {
 
   /** `CMSG_LOOT_RELEASE` — closes the loot window. */
   lootRelease(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot_release", guid: guidArg(guid) });
+    return this.action({ action: "loot_release", guid: guidArg(guid, "lootRelease(guid)") });
   }
 
   /** `CMSG_LIST_INVENTORY` — `SMSG_LIST_INVENTORY` follows. */
   vendorList(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "vendor_list", guid: guidArg(guid) });
+    return this.action({ action: "vendor_list", guid: guidArg(guid, "vendorList(guid)") });
   }
 
   /** `CMSG_BUY_ITEM`; `slot` is the 1-based vendor slot. */
   buyItem(guid: GuidArg, itemId: number, slot: number, count?: number): Promise<ActionResponse> {
-    return this.action({ action: "buy_item", guid: guidArg(guid), itemId, slot, count });
+    return this.action({ action: "buy_item", guid: guidArg(guid, "buyItem(guid, ...)"), itemId, slot, count });
   }
 
   /** `CMSG_SELL_ITEM`; omit `count` to sell the whole stack. */
   sellItem(guid: GuidArg, itemGuid: GuidArg, count?: number): Promise<ActionResponse> {
-    return this.action({ action: "sell_item", guid: guidArg(guid), itemGuid: guidArg(itemGuid), count });
+    return this.action({
+      action: "sell_item",
+      guid: guidArg(guid, "sellItem(guid, ...)"),
+      itemGuid: guidArg(itemGuid, "sellItem(..., itemGuid)"),
+      count,
+    });
   }
 
   /** `CMSG_REPAIR_ITEM` with item guid 0 — repair everything. */
   repairAll(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "repair_all", guid: guidArg(guid) });
+    return this.action({ action: "repair_all", guid: guidArg(guid, "repairAll(guid)") });
   }
 
   /** `CMSG_AUTOEQUIP_ITEM`; bag 255 is the backpack, slots 23-38. */
@@ -727,7 +809,7 @@ export class WrathClient {
       action: "use_item",
       bag,
       slot,
-      targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid),
+      targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid, "useItem(..., targetGuid)"),
     });
   }
 
@@ -745,7 +827,7 @@ export class WrathClient {
   reclaimCorpse(guid?: GuidArg): Promise<ActionResponse> {
     return this.action({
       action: "reclaim_corpse",
-      guid: guid === undefined ? undefined : guidArg(guid),
+      guid: guid === undefined ? undefined : guidArg(guid, "reclaimCorpse(guid)"),
     });
   }
 
@@ -755,7 +837,7 @@ export class WrathClient {
    * sickness; the outcome arrives through ordinary events (health, auras).
    */
   spiritHealerActivate(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "spirit_healer_activate", guid: guidArg(guid) });
+    return this.action({ action: "spirit_healer_activate", guid: guidArg(guid, "spiritHealerActivate(guid)") });
   }
 
   /**
@@ -851,10 +933,17 @@ export class WrathClient {
     options: WaitForChatOptions = {},
   ): Promise<ChatEntry> {
     const predicate = typeof match === "string" ? (e: ChatEntry) => e.message === match : match;
-    const event = await this.events.waitFor((e) => {
-      if (!isEvent(e, "SMSG_MESSAGECHAT") || isDecodeError(e.data)) return false;
-      return predicate(toChatEntry(e.seq, e.ts, e.data));
-    }, options);
+    const event = await this.events.waitFor(
+      (e) => {
+        if (!isEvent(e, "SMSG_MESSAGECHAT") || isDecodeError(e.data)) return false;
+        return predicate(toChatEntry(e.seq, e.ts, e.data));
+      },
+      {
+        description:
+          typeof match === "string" ? `a chat line saying ${JSON.stringify(match)}` : "a matching chat line",
+        ...options,
+      },
+    );
     return toChatEntry(event.seq, event.ts, event.data as ChatFields);
   }
 
@@ -895,7 +984,11 @@ export class WrathClient {
         isEvent(e, "WB_MOVE_RESULT") &&
         !isDecodeError(e.data) &&
         (e.data as MoveResultData).moveId === ack.moveId,
-      { timeout: options.timeout ?? 90_000, sinceEpoch: epoch },
+      {
+        timeout: options.timeout ?? 90_000,
+        sinceEpoch: epoch,
+        description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
+      },
     );
     const data = event.data as MoveResultData;
     const status: MoveStatus = data.status;
@@ -948,7 +1041,11 @@ export class WrathClient {
       },
       // The buffer is not re-scanned: those events are already folded into the
       // cache, and `scan()` above has just looked at the result.
-      { timeout: options.timeout ?? 10_000, includeBuffered: false },
+      {
+        timeout: options.timeout ?? 10_000,
+        includeBuffered: false,
+        description: "a nearby object matching the waitForNearby predicate",
+      },
     );
     // `waitFor` only resolves when `scan()` found something.
     return hit as NearbyObject;
@@ -998,7 +1095,7 @@ export class WrathClient {
    * because a fight and a corpse are two decisions.
    */
   async killTarget(guid: GuidArg, options: KillTargetOptions = {}): Promise<KillResult> {
-    const id = toBigInt(guid);
+    const id = toBigInt(guid, "killTarget(guid)");
     const key = guidKey(id);
     const refaceMs = options.refaceIntervalMs ?? 1500;
     const reapproachMs = options.reapproachIntervalMs ?? 6000;
@@ -1154,7 +1251,7 @@ export class WrathClient {
    * neither, so it still throws `EventTimeoutError`.
    */
   async lootCorpse(guid: GuidArg, options: LootOptions = {}): Promise<LootResult> {
-    const id = toBigInt(guid);
+    const id = toBigInt(guid, "lootCorpse(guid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.lootAll(id);
@@ -1163,7 +1260,7 @@ export class WrathClient {
         (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
         !isDecodeError(e.data) &&
         (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout },
+      { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
     );
     if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
       return { ok: false, status: "empty", gold: 0, items: [] };
@@ -1173,6 +1270,7 @@ export class WrathClient {
       timeout,
       sinceSeq: first.seq + 1,
       includeBuffered: true,
+      description: "the loot window closing (SMSG_LOOT_RELEASE_RESPONSE)",
     });
     return { ok: true, status: "looted", gold: window.gold, items: window.items };
   }
@@ -1204,14 +1302,18 @@ export class WrathClient {
         (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
         !isDecodeError(e.data) &&
         (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout },
+      { timeout, description: "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE)" },
     );
     const offered = (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
     const wanted = offered.find((q) => q.questId === questId);
     if (!wanted) return { ok: false, status: "not_offered", questId, offered };
 
     await this.questAccept(npcGuid, questId);
-    const quest = await this.waitForState(() => this.state.quest(questId), timeout);
+    const quest = await this.waitForState(
+      () => this.state.quest(questId),
+      timeout,
+      `quest ${questId} to appear in the quest log after accept`,
+    );
     return { ok: true, status: "accepted", questId, quest, title: wanted.title };
   }
 
@@ -1243,7 +1345,10 @@ export class WrathClient {
         (e) =>
           (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
           (sinceSeq === undefined || e.seq > sinceSeq),
-        { timeout },
+        {
+          timeout,
+          description: `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS)`,
+        },
       );
       if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
         const req = answer.data as QuestGiverRequestItemsData;
@@ -1256,7 +1361,11 @@ export class WrathClient {
           isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
           !isDecodeError(e.data) &&
           (e.data as QuestGiverQuestCompleteData).questId === questId,
-        { timeout, sinceSeq: answer.seq + 1 },
+        {
+          timeout,
+          sinceSeq: answer.seq + 1,
+          description: `SMSG_QUESTGIVER_QUEST_COMPLETE for quest ${questId}`,
+        },
       );
       const d = complete.data as QuestGiverQuestCompleteData;
       return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
@@ -1276,15 +1385,26 @@ export class WrathClient {
    * unfinished is the absence of an outcome rather than one (ADR-0011).
    */
   waitForQuestObjective(questId: number, options: QuestOptions = {}): Promise<QuestLogEntry> {
-    return this.waitForState(() => {
-      const q = this.state.quest(questId);
-      return q?.complete === true ? q : undefined;
-    }, options.timeout ?? 60_000);
+    return this.waitForState(
+      () => {
+        const q = this.state.quest(questId);
+        return q?.complete === true ? q : undefined;
+      },
+      options.timeout ?? 60_000,
+      `quest ${questId} objectives to read complete in the quest log`,
+    );
   }
 
-  /** Our own guid as a map key, once the session response has seeded it. */
+  /**
+   * Our own guid as a map key, once the session response has seeded it.
+   *
+   * Optional-chained on `this.state` because introspection idioms read getters
+   * off the prototype (where `this` has no fields) — that must yield
+   * `undefined`, not a TypeError (observed in live runs, 4 of them).
+   */
   get selfKey(): string | undefined {
-    return this.state.self.guid === undefined ? undefined : guidKey(this.state.self.guid);
+    const self = this.state?.self;
+    return self?.guid === undefined ? undefined : guidKey(self.guid);
   }
 
   // --------------------------------------------------------------- internals
@@ -1323,7 +1443,11 @@ export class WrathClient {
    * then re-checks on every event, which is exact because the cache is folded
    * before waiters run. Throws `EventTimeoutError` if it never holds.
    */
-  private async waitForState<T>(read: () => T | undefined, timeout: number): Promise<T> {
+  private async waitForState<T>(
+    read: () => T | undefined,
+    timeout: number,
+    description?: string,
+  ): Promise<T> {
     const already = read();
     if (already !== undefined) return already;
     let hit: T | undefined;
@@ -1332,7 +1456,11 @@ export class WrathClient {
         hit = read();
         return hit !== undefined;
       },
-      { timeout, includeBuffered: false },
+      {
+        timeout,
+        includeBuffered: false,
+        description: description ?? "a state-cache condition to hold",
+      },
     );
     return hit as T;
   }

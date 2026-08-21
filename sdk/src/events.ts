@@ -98,13 +98,25 @@ export interface WaitForOptions {
   sinceEpoch?: number;
   /** Search the retained buffer before waiting. Default true. */
   includeBuffered?: boolean;
+  /**
+   * What this wait is for, in words (e.g. `WB_MOVE_RESULT for moveId 3`).
+   * Rendered into the `EventTimeoutError`, so a timeout says what never
+   * arrived instead of just "an event".
+   */
+  description?: string;
   signal?: AbortSignal;
 }
 
 export class EventTimeoutError extends Error {
   override readonly name = "EventTimeoutError";
-  constructor(readonly timeoutMs: number) {
-    super(`timed out after ${timeoutMs}ms waiting for an event`);
+  /** What was being waited for, when the caller said. */
+  readonly waitingFor: string | undefined;
+  constructor(
+    readonly timeoutMs: number,
+    waitingFor?: string,
+  ) {
+    super(`timed out after ${timeoutMs}ms waiting for ${waitingFor ?? "an event"}`);
+    this.waitingFor = waitingFor;
   }
 }
 
@@ -409,7 +421,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
    * the login events that arrived during the call.
    */
   waitFor(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
-    const { timeout = 10_000, sinceSeq, sinceEpoch, includeBuffered = true, signal } = options;
+    const { timeout = 10_000, sinceSeq, sinceEpoch, includeBuffered = true, description, signal } = options;
     // A live event is always tested at its own epoch: `emit` runs synchronously
     // inside `ingest`, after any epoch bump, so `epochCounter` is exact here.
     const matches = (e: StreamEvent): boolean =>
@@ -454,7 +466,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
       timer = setTimeout(() => {
         if (waiter.settled) return;
         waiter.settled = true;
-        waiter.reject(new EventTimeoutError(timeout));
+        waiter.reject(new EventTimeoutError(timeout, description));
       }, timeout);
       this.waiters.add(waiter);
     });
@@ -465,7 +477,10 @@ export class EventStream implements AsyncIterable<StreamEvent> {
     opcode: K,
     options?: WaitForOptions,
   ): Promise<EventByOpcode[K]> {
-    return this.waitFor((e) => e.opcode === opcode, options) as Promise<EventByOpcode[K]>;
+    return this.waitFor((e) => e.opcode === opcode, {
+      description: `a ${String(opcode)} event`,
+      ...options,
+    }) as Promise<EventByOpcode[K]>;
   }
 
   /**
