@@ -1,0 +1,3 @@
+[submodule "deps/azerothcore"]
+	path = deps/azerothcore
+	url = https://github.com/azerothcore/azerothcore-wotlk.git

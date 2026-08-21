@@ -1,0 +1,19 @@
+# Pinned versions
+
+Pins are changed deliberately and documented here with a date and reason. See CLAUDE.md hard constraints.
+
+## AzerothCore
+
+- Commit: `3cafaf4a588fd1f287678fdb37438fdedd1ed85c` (master, 2026-08-20)
+- Where: git submodule at `deps/azerothcore`; the submodule pointer in our history is the authoritative pin, this file is the human-readable record.
+- Why this commit: latest master at project start (2026-08-21). Master is the supported branch for 3.3.5a; there is no meaningful stable tag cadence to prefer.
+- Bumping: update the submodule, rebuild the worldserver image, rerun the smoke script, update this file in the same commit.
+
+## Bun
+
+- Version: 1.4.0, pinned in `.bun-version` and `package.json` (to be created with the workspace scaffold).
+- Patch bumps are deliberate; see ADR-0005.
+
+## Game client (not in repo)
+
+- WoW 3.3.5a build 12340, supplied locally by each contributor into `data/`; never committed. See `docs/DATA-AND-LEGAL.md`.
