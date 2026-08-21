@@ -59,6 +59,8 @@ export interface ContextBuilderOptions {
 export class ContextBuilder {
   private lastStateAt = 0;
   private live = false;
+  /** High-water mark into the snapshot's quest-completion list, for logging. */
+  private questsLogged = 0;
   private readonly now: () => number;
 
   constructor(private readonly o: ContextBuilderOptions) {
@@ -97,6 +99,17 @@ export class ContextBuilder {
       | undefined;
     const level = snap.self?.level?.value as number | undefined;
     const xp = snap.xp?.value as number | undefined;
+    const money = snap.money?.value as number | undefined;
+    // The list only grows, so anything past the high-water mark is new. One
+    // compact record each; the state line carries the count, not the list.
+    const completions = snap.questCompletions ?? [];
+    // A shorter list means the cache was rebuilt (sandbox restart); re-log from
+    // the start rather than going silent for the rest of the run.
+    if (completions.length < this.questsLogged) this.questsLogged = 0;
+    for (const c of completions.slice(this.questsLogged)) {
+      trajectory.append({ t: "quest_complete", questId: c.questId });
+    }
+    this.questsLogged = completions.length;
     trajectory.recordState(config.runId, {
       level,
       xp,
@@ -106,6 +119,8 @@ export class ContextBuilder {
       z: pos?.z,
       eventCount: snap.eventCount,
       lastSeq: snap.lastSeq,
+      money,
+      questsCompleted: completions.length,
     });
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;

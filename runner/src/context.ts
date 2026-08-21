@@ -83,6 +83,10 @@ export interface SnapshotLike {
   };
   /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
   xp?: ObservedLike;
+  /** Copper (top level in the SDK snapshot, like `xp`). Recorded, not shown. */
+  money?: ObservedLike;
+  /** Confirmed turn-ins this session, oldest first. Recorded, not shown. */
+  questCompletions?: { questId?: unknown; ts?: unknown }[];
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
   chat?: { senderGuid?: unknown; message?: unknown }[];

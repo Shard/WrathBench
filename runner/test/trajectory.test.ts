@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,49 @@ describe("Trajectory", () => {
     expect(rows[1]!["level"]).toBe(3);
     expect(readTrajectory(dir).filter((r) => r.t === "state")).toHaveLength(2);
     traj.close();
+  });
+
+  test("money and quests completed are recorded, and stay null when unobserved", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    traj.recordState("run-m", { level: 4, money: 12345, questsCompleted: 2 });
+    traj.recordState("run-m", { level: 4 });
+    const rows = traj.stateRows("run-m");
+    expect(rows[0]!["money"]).toBe(12345);
+    expect(rows[0]!["quests_completed"]).toBe(2);
+    // Never a guessed zero for something no event carried (docs/CONTRACTS.md).
+    expect(rows[1]!["money"]).toBeNull();
+    expect(rows[1]!["quests_completed"]).toBeNull();
+    const line = readTrajectory(dir).find((r) => r.t === "state");
+    expect(line?.["money"]).toBe(12345);
+    expect(line?.["questsCompleted"]).toBe(2);
+    traj.close();
+  });
+
+  test("a run.sqlite written before the new columns gains them on open", () => {
+    const dir = tempRunDir();
+    // The pre-migration state table, exactly as older runs carry it.
+    const old = new Database(join(dir, "run.sqlite"));
+    old.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER,
+      xp INTEGER, map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER);`);
+    old.query(`INSERT INTO state (run_id, ts, level) VALUES ('run-old', 1, 7)`).run();
+    old.close();
+
+    const traj = new Trajectory(dir);
+    traj.recordState("run-old", { level: 8, money: 42, questsCompleted: 1 });
+    const rows = traj.stateRows("run-old");
+    expect(rows).toHaveLength(2);
+    // The pre-existing row keeps its data and reads null for the new columns.
+    expect(rows[0]!["level"]).toBe(7);
+    expect(rows[0]!["money"]).toBeNull();
+    expect(rows[1]!["money"]).toBe(42);
+    expect(rows[1]!["quests_completed"]).toBe(1);
+    traj.close();
+
+    // Reopening is a no-op: the migration must not fail on an already-migrated file.
+    const again = new Trajectory(dir);
+    expect(again.stateRows("run-old")).toHaveLength(2);
+    again.close();
   });
 
   test("termination and pause reasons are recorded", () => {
