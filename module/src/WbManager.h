@@ -117,6 +117,11 @@ namespace WrathBench
         MoveState move;
         uint64_t moveIdGen{0};
 
+        // Teleport-ack pacing (world thread only): when the last ack for a
+        // still-pending teleport was queued, 0 when none is pending. See
+        // TickTeleportAcks.
+        int64_t teleportAckQueuedMs{0};
+
         // Client-side object cache mirror, fed by the update-object tap. Needed
         // because UPDATETYPE_VALUES blocks carry no object type (a real client
         // resolves them against its own cache). Also tracks which name/creature
@@ -193,6 +198,11 @@ namespace WrathBench
         void TickMovers(int64_t nowMs);
         void TickMover(BenchSession& s, int64_t nowMs);
         void FinishMove(BenchSession& s, char const* status);
+
+        // Answer pending teleports the way a real client does (world thread
+        // only): MSG_MOVE_TELEPORT_ACK / MSG_MOVE_WORLDPORT_ACK through the
+        // stock handlers, so the destination is applied and movement resumes.
+        void TickTeleportAcks(int64_t nowMs);
 
         // In-world session guard for action handlers. Returns the player, or
         // nullptr after setting the error reply. World thread only.
