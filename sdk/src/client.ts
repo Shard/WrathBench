@@ -25,6 +25,7 @@
 
 import {
   actionResponseSchema,
+  characterDeleteResponseSchema,
   deleteSessionResponseSchema,
   errorBodySchema,
   faceResponseSchema,
@@ -34,21 +35,69 @@ import {
   isEvent,
   moveToResponseSchema,
   sessionResponseSchema,
+  type ActionRequest,
   type ActionResponse,
+  type CharacterDeleteResponse,
   type CreateSessionRequest,
   type DeleteSessionResponse,
   type ErrorBody,
   type FaceResponse,
+  type GossipMessageData,
   type HealthResponse,
   type KnownMoveStatus,
+  type LootItemData,
+  type LootResponseData,
   type MoveResultData,
   type MoveStatus,
   type MoveToResponse,
+  type OfferedQuest,
+  type QuestGiverQuestCompleteData,
+  type QuestGiverQuestListData,
+  type QuestGiverRequestItemsData,
   type SessionResponse,
 } from "./protocol";
 import { EventStream, type EventStreamOptions, type StreamEvent } from "./events";
-import { StateCache, type ChatEntry, type NearbyObject, type UnitPosition } from "./state";
+import {
+  pointOf,
+  StateCache,
+  type ChatEntry,
+  type NearbyObject,
+  type Point3,
+  type QuestLogEntry,
+  type UnitPosition,
+} from "./state";
 import type { z } from "zod";
+
+/** Anything a caller can hand us as a guid. The wire wants a decimal string. */
+export type GuidArg = bigint | string;
+
+function guidArg(guid: GuidArg): string {
+  return typeof guid === "bigint" ? guidKey(guid) : guid;
+}
+
+function toBigInt(guid: GuidArg): bigint {
+  return typeof guid === "bigint" ? guid : BigInt(guid);
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Ground distance. Melee range is a horizontal question — a target one step up
+ * a slope is in reach — and it is the only distance the helpers ask about.
+ */
+function distance2d(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/**
+ * A `POST /action` body with the token left out; the client fills it in. The
+ * conditional distributes over the union so each member keeps its own fields.
+ */
+type ActionBody = ActionRequest extends infer T
+  ? T extends { token: string }
+    ? Omit<T, "token">
+    : never
+  : never;
 
 /**
  * Error codes PROTOCOL.md documents today. Widened with `(string & {})` on
@@ -192,6 +241,105 @@ export interface WaitForNearbyOptions {
   timeout?: number;
 }
 
+export interface DeleteCharacterOptions {
+  /** Defaults to the module's configured account, as `POST /session` does. */
+  account?: string;
+  /** How many times to send the delete. Default 8. */
+  attempts?: number;
+  /** Wait before the *first* attempt; the core needs a moment after logout. */
+  initialDelayMs?: number;
+  /** Wait between attempts. Default 3000. */
+  retryDelayMs?: number;
+}
+
+export interface KillTargetOptions {
+  /** Give up after this long and return `status: "timeout"`. Default 60000. */
+  timeout?: number;
+  /** How often to re-face the target while swinging. Default 1500. */
+  refaceIntervalMs?: number;
+  /** How often to check whether the target has wandered out of reach. Default 6000. */
+  reapproachIntervalMs?: number;
+  /** Distance beyond which we walk to the target again. Default 5 yards. */
+  meleeRange?: number;
+  /** How often the loop looks at the world. Default 300. */
+  pollIntervalMs?: number;
+}
+
+/**
+ * How a fight ended, as a value (ADR-0011).
+ *
+ * `killed` is the target's own observed health reaching zero — the thing a
+ * player watches the health bar for. The three failures are deliberately
+ * coarse, and in particular there is no `evaded`: a creature resetting is not
+ * separately observable on this whitelist (no packet says "evade"; the tells a
+ * player reads are the mob running off and healing, which is exactly what
+ * `timeout` and `lost` already cover). Naming a status the module never
+ * uttered would put an SDK invention where only the world's words belong.
+ */
+export type KillResult =
+  | { readonly ok: true; readonly status: "killed"; readonly guid: bigint; readonly swings: number }
+  | {
+      readonly ok: false;
+      /** `player_died` — we died. `lost` — it left view alive. `timeout` — still up. */
+      readonly status: "player_died" | "lost" | "timeout";
+      readonly guid: bigint;
+      readonly swings: number;
+    };
+
+export interface LootOptions {
+  /** How long to wait for the loot window / release. Default 10000. */
+  timeout?: number;
+}
+
+/** What a corpse gave up. `empty` means the server closed the window at once. */
+export type LootResult =
+  | {
+      readonly ok: true;
+      readonly status: "looted";
+      readonly gold: number;
+      readonly items: readonly LootItemData[];
+    }
+  | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] };
+
+export interface QuestOptions {
+  timeout?: number;
+}
+
+/**
+ * The outcome of asking a questgiver for a quest.
+ *
+ * `already_in_log` is a success and not a curiosity: turn-in chains at this
+ * commit auto-advance, so the core may have added the follow-up quest to the
+ * log during the previous turn-in and an explicit accept would be a no-op. The
+ * quest log is the truth, so the helper reads it first and says so.
+ */
+export type QuestAcceptResult =
+  | {
+      readonly ok: true;
+      readonly status: "accepted" | "already_in_log";
+      readonly questId: number;
+      readonly quest: QuestLogEntry;
+      readonly title: string | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "not_offered";
+      readonly questId: number;
+      /** What the NPC did offer, so a caller can say what it saw. */
+      readonly offered: readonly OfferedQuest[];
+    };
+
+/** The outcome of a turn-in. `not_complete` is the questgiver refusing. */
+export type QuestTurnInResult =
+  | {
+      readonly ok: true;
+      readonly status: "complete";
+      readonly questId: number;
+      readonly xp: number;
+      readonly money: number;
+    }
+  | { readonly ok: false; readonly status: "not_complete"; readonly questId: number };
+
 /**
  * Connect to the module and (by default) subscribe to the event stream.
  *
@@ -310,6 +458,240 @@ export class WrathClient {
         ? { token: this.token, action: "face", orientation: orientationOrPoint }
         : { token: this.token, action: "face", x: orientationOrPoint.x, y: orientationOrPoint.y };
     return this.request("POST", "/action", body, faceResponseSchema);
+  }
+
+  // ------------------------------------- quest/combat actions (one per opcode)
+  //
+  // Thin by design: each is exactly one row of PROTOCOL.md's single-opcode
+  // table, and each acks "queued". Everything the *game* then decides — a cast
+  // failure, a gossip menu, a loot window, an inventory error — arrives as an
+  // event, never as a return value here. The composed helpers below are the
+  // ones that wait for a verdict.
+
+  /** `CMSG_SET_SELECTION`. What the client shows as the current target. */
+  setTarget(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "set_target", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_SET_SELECTION` with guid 0. */
+  clearTarget(): Promise<ActionResponse> {
+    return this.action({ action: "clear_target" });
+  }
+
+  /**
+   * `CMSG_ATTACKSWING` — start melee auto-attack. The server swings while the
+   * character is in range *and facing the victim*; see `killTarget` for why
+   * that second condition needs help here.
+   */
+  attackStart(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "attack_start", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_ATTACKSTOP`. */
+  attackStop(): Promise<ActionResponse> {
+    return this.action({ action: "attack_stop" });
+  }
+
+  /** `CMSG_CAST_SPELL`. No target guid means self/auto-target. */
+  castSpell(spellId: number, targetGuid?: GuidArg): Promise<ActionResponse> {
+    return this.action(
+      targetGuid === undefined
+        ? { action: "cast_spell", spellId }
+        : { action: "cast_spell", spellId, targetGuid: guidArg(targetGuid) },
+    );
+  }
+
+  /** `CMSG_CANCEL_CAST`. */
+  cancelCast(spellId: number): Promise<ActionResponse> {
+    return this.action({ action: "cancel_cast", spellId });
+  }
+
+  /** `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. */
+  interact(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "interact", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
+  gossipHello(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "gossip_hello", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_GOSSIP_SELECT_OPTION`; ids come from `SMSG_GOSSIP_MESSAGE`. */
+  gossipSelect(guid: GuidArg, menuId: number, optionId: number): Promise<ActionResponse> {
+    return this.action({ action: "gossip_select", guid: guidArg(guid), menuId, optionId });
+  }
+
+  /**
+   * `CMSG_QUESTGIVER_HELLO`. The answer is `SMSG_QUESTGIVER_QUEST_LIST` — or,
+   * on a gossip-flagged NPC, an `SMSG_GOSSIP_MESSAGE` with the quests embedded.
+   * `acceptQuestFrom` handles both shapes.
+   */
+  questList(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "quest_list", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_QUESTGIVER_QUERY_QUEST` — quest text via `..._QUEST_DETAILS`. */
+  questDetails(guid: GuidArg, questId: number): Promise<ActionResponse> {
+    return this.action({ action: "quest_details", guid: guidArg(guid), questId });
+  }
+
+  /** `CMSG_QUESTGIVER_ACCEPT_QUEST`. */
+  questAccept(guid: GuidArg, questId: number): Promise<ActionResponse> {
+    return this.action({ action: "quest_accept", guid: guidArg(guid), questId });
+  }
+
+  /** `CMSG_QUESTGIVER_COMPLETE_QUEST` — answered by REQUEST_ITEMS or OFFER_REWARD. */
+  questComplete(guid: GuidArg, questId: number): Promise<ActionResponse> {
+    return this.action({ action: "quest_complete", guid: guidArg(guid), questId });
+  }
+
+  /** `CMSG_QUESTGIVER_CHOOSE_REWARD`; index into `choiceRewards`, 0 when none. */
+  questChooseReward(guid: GuidArg, questId: number, rewardIndex = 0): Promise<ActionResponse> {
+    return this.action({ action: "quest_choose_reward", guid: guidArg(guid), questId, rewardIndex });
+  }
+
+  /** `CMSG_QUESTLOG_REMOVE_QUEST`; the module maps quest id to log slot. */
+  questAbandon(questId: number): Promise<ActionResponse> {
+    return this.action({ action: "quest_abandon", questId });
+  }
+
+  /** `CMSG_LOOT` — opens the loot window (`SMSG_LOOT_RESPONSE`). */
+  loot(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "loot", guid: guidArg(guid) });
+  }
+
+  /**
+   * `CMSG_LOOT` plus the auto-loot follow-ups the client sends once the window
+   * arrives (ADR-0013). Fire-and-forget: prefer `lootCorpse`, which waits.
+   */
+  lootAll(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "loot_all", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_AUTOSTORE_LOOT_ITEM`; `slot` from `SMSG_LOOT_RESPONSE.items[]`. */
+  lootItem(slot: number): Promise<ActionResponse> {
+    return this.action({ action: "loot_item", slot });
+  }
+
+  /** `CMSG_LOOT_MONEY`. */
+  lootMoney(): Promise<ActionResponse> {
+    return this.action({ action: "loot_money" });
+  }
+
+  /** `CMSG_LOOT_RELEASE` — closes the loot window. */
+  lootRelease(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "loot_release", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_LIST_INVENTORY` — `SMSG_LIST_INVENTORY` follows. */
+  vendorList(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "vendor_list", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_BUY_ITEM`; `slot` is the 1-based vendor slot. */
+  buyItem(guid: GuidArg, itemId: number, slot: number, count?: number): Promise<ActionResponse> {
+    return this.action({ action: "buy_item", guid: guidArg(guid), itemId, slot, count });
+  }
+
+  /** `CMSG_SELL_ITEM`; omit `count` to sell the whole stack. */
+  sellItem(guid: GuidArg, itemGuid: GuidArg, count?: number): Promise<ActionResponse> {
+    return this.action({ action: "sell_item", guid: guidArg(guid), itemGuid: guidArg(itemGuid), count });
+  }
+
+  /** `CMSG_REPAIR_ITEM` with item guid 0 — repair everything. */
+  repairAll(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "repair_all", guid: guidArg(guid) });
+  }
+
+  /** `CMSG_AUTOEQUIP_ITEM`; bag 255 is the backpack, slots 23-38. */
+  equipItem(bag: number, slot: number): Promise<ActionResponse> {
+    return this.action({ action: "equip_item", bag, slot });
+  }
+
+  /** `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell. */
+  useItem(bag: number, slot: number, targetGuid?: GuidArg): Promise<ActionResponse> {
+    return this.action({
+      action: "use_item",
+      bag,
+      slot,
+      targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid),
+    });
+  }
+
+  /** `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. */
+  destroyItem(bag: number, slot: number, count?: number): Promise<ActionResponse> {
+    return this.action({ action: "destroy_item", bag, slot, count });
+  }
+
+  /** `CMSG_REPOP_REQUEST` — release the spirit while dead. */
+  repop(): Promise<ActionResponse> {
+    return this.action({ action: "repop" });
+  }
+
+  /** `CMSG_RECLAIM_CORPSE` — resurrect at the corpse. */
+  reclaimCorpse(guid?: GuidArg): Promise<ActionResponse> {
+    return this.action({
+      action: "reclaim_corpse",
+      guid: guid === undefined ? undefined : guidArg(guid),
+    });
+  }
+
+  /**
+   * POST /character-delete — delete a character by name through the real
+   * `CMSG_CHAR_DELETE` path. Not the session token: the module stands up its
+   * own parked session, so this takes (and defaults) a throwaway one per
+   * attempt (ADR-0013).
+   *
+   * Retrying is in here rather than in the caller because the retry is a
+   * property of the module's contract, not of any one script: for up to about
+   * a minute after logout the core still tracks an offline session for the
+   * character and silently ignores the delete, which surfaces as `504 timeout`
+   * — or, if the module's internal wait outlasts `requestTimeoutMs`, as an
+   * aborted request. Both mean "not released yet", so both are retried.
+   * Anything else the module says (`character_not_found`, `account_in_use`, a
+   * `char_delete_failed_code_<N>`) is a real answer and is thrown straight out.
+   */
+  async deleteCharacter(
+    character: string,
+    options: DeleteCharacterOptions = {},
+  ): Promise<CharacterDeleteResponse> {
+    const attempts = options.attempts ?? 8;
+    const retryDelay = options.retryDelayMs ?? 3000;
+    let last: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0 || options.initialDelayMs !== undefined) {
+        await sleep(attempt === 0 ? (options.initialDelayMs ?? 0) : retryDelay);
+      }
+      try {
+        const res = await this.request(
+          "POST",
+          "/character-delete",
+          {
+            // A fresh token per attempt: a reused one can still be held by the
+            // parked session the previous attempt timed out on.
+            token: `${this.token}-del${attempt}`,
+            character,
+            account: options.account,
+          },
+          characterDeleteResponseSchema,
+        );
+        if (res.deleted) return res;
+        last = new Error(`module answered ok without deleted:true for ${character}`);
+      } catch (e) {
+        // `account_in_use` is the same not-yet-released transient as `timeout`:
+        // the core holds a logged-out session for ~60s (PROTOCOL.md).
+        const retryable =
+          e instanceof WrathTransportError ||
+          (e instanceof WrathRequestError && (e.code === "timeout" || e.code === "account_in_use"));
+        if (!retryable) throw e;
+        last = e;
+      }
+    }
+    throw new WrathTransportError(
+      `character-delete for ${character} never returned deleted:true in ${attempts} attempts` +
+        ` (last: ${String(last)})`,
+      { method: "POST", path: "/character-delete", cause: last },
+    );
   }
 
   /** DELETE /session — log the character out (a real client-style disconnect). */
@@ -444,12 +826,286 @@ export class WrathClient {
     return hit as NearbyObject;
   }
 
+  /**
+   * Fight a target until it (or we) drops.
+   *
+   * Owns the whole melee loop, because every part of it turned out to be
+   * load-bearing on live runs:
+   *
+   *   - **facing**. A synthesized character never auto-faces the way a client
+   *     does, and the server drops a swing that is not facing its victim. So
+   *     the target is faced before the first swing and re-faced every
+   *     `refaceIntervalMs` — through `faceQuietly`, because the module refuses
+   *     a `face` while a move is running and a fight must not end over that.
+   *   - **re-approach**. Creatures wander and get knocked around; if the
+   *     target drifts beyond `meleeRange` the loop walks back in and swings
+   *     again.
+   *   - **death**. Ours ends the fight immediately (`player_died`); theirs is
+   *     read off the observed health reaching zero.
+   *
+   * Returns a value for every game outcome and throws only for a refused
+   * request. The caller is expected to loot afterwards: `killTarget` does not,
+   * because a fight and a corpse are two decisions.
+   */
+  async killTarget(guid: GuidArg, options: KillTargetOptions = {}): Promise<KillResult> {
+    const id = toBigInt(guid);
+    const key = guidKey(id);
+    const refaceMs = options.refaceIntervalMs ?? 1500;
+    const reapproachMs = options.reapproachIntervalMs ?? 6000;
+    const meleeRange = options.meleeRange ?? 5;
+    const pollMs = options.pollIntervalMs ?? 300;
+    const deadline = Date.now() + (options.timeout ?? 60_000);
+
+    let swings = 0;
+    const offSwing = this.events.on("SMSG_ATTACKERSTATEUPDATE", (e) => {
+      if (isDecodeError(e.data)) return;
+      if ((e.data as { attackerGuid: bigint }).attackerGuid === this.state.self.guid) swings++;
+    });
+
+    const aimAt = (): Point3 | undefined => {
+      const obj = this.state.nearby.get(key);
+      return obj === undefined ? undefined : pointOf(obj)?.value;
+    };
+    const selfDead = (): boolean => this.state.self.health?.value.current === 0;
+    const targetDead = (): boolean => this.state.nearby.get(key)?.health?.value.current === 0;
+    const done = (status: KillResult["status"]): KillResult =>
+      status === "killed"
+        ? { ok: true, status, guid: id, swings }
+        : { ok: false, status, guid: id, swings };
+
+    try {
+      await this.setTarget(id);
+      const opening = aimAt();
+      if (opening) await this.faceQuietly(opening);
+      await this.attackStart(id);
+
+      let refaceAt = Date.now() + refaceMs;
+      let reapproachAt = Date.now() + reapproachMs;
+      for (;;) {
+        if (targetDead()) return done("killed");
+        if (selfDead()) return done("player_died");
+        if (!this.state.nearby.has(key)) return done("lost");
+        if (Date.now() > deadline) return done("timeout");
+
+        const at = aimAt();
+        const now = Date.now();
+        if (at && now >= refaceAt) {
+          refaceAt = now + refaceMs;
+          await this.faceQuietly(at);
+        }
+        if (at && now >= reapproachAt) {
+          reapproachAt = now + reapproachMs;
+          const from = this.state.self.position?.value;
+          if (from && distance2d(from, at) > meleeRange) {
+            await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
+            const after = aimAt();
+            if (after) await this.faceQuietly(after);
+            await this.attackStart(id);
+          }
+        }
+        await sleep(pollMs);
+      }
+    } finally {
+      offSwing();
+      // Always stop swinging on the way out: a live auto-attack would follow us
+      // into the next thing the caller does.
+      await this.attackStop().catch(() => {});
+    }
+  }
+
+  /**
+   * Empty a corpse and wait until the window is closed again.
+   *
+   * `loot_all` is the module replaying the client's auto-loot sequence
+   * (ADR-0013), so this is one action plus the two events that bracket it: the
+   * window that says what was there, and the release that says it is finished.
+   * A corpse with nothing on it releases without ever opening a window, which
+   * is `{ ok: false, status: "empty" }` — an answer, not a failure. Silence is
+   * neither, so it still throws `EventTimeoutError`.
+   */
+  async lootCorpse(guid: GuidArg, options: LootOptions = {}): Promise<LootResult> {
+    const id = toBigInt(guid);
+    const timeout = options.timeout ?? 10_000;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.lootAll(id);
+    const first = await this.events.waitFor(
+      (e) =>
+        (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
+        !isDecodeError(e.data) &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout },
+    );
+    if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
+      return { ok: false, status: "empty", gold: 0, items: [] };
+    }
+    const window = first.data as LootResponseData;
+    await this.events.waitFor((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
+      timeout,
+      sinceSeq: first.seq + 1,
+      includeBuffered: true,
+    });
+    return { ok: true, status: "looted", gold: window.gold, items: window.items };
+  }
+
+  /**
+   * Take a quest from an NPC and confirm it landed in the quest log.
+   *
+   * Two shapes of "here are my quests" have to be accepted, because a
+   * gossip-flagged questgiver answers `quest_list` with an
+   * `SMSG_GOSSIP_MESSAGE` carrying the quests rather than an
+   * `SMSG_QUESTGIVER_QUEST_LIST`. And the log is checked *first*, because a
+   * turn-in chain may already have added the quest for us.
+   */
+  async acceptQuestFrom(
+    npcGuid: GuidArg,
+    questId: number,
+    options: QuestOptions = {},
+  ): Promise<QuestAcceptResult> {
+    const timeout = options.timeout ?? 10_000;
+    const inLog = this.state.quest(questId);
+    if (inLog) {
+      return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
+    }
+
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.questList(npcGuid);
+    const menu = await this.events.waitFor(
+      (e) =>
+        (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
+        !isDecodeError(e.data) &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout },
+    );
+    const offered = (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
+    const wanted = offered.find((q) => q.questId === questId);
+    if (!wanted) return { ok: false, status: "not_offered", questId, offered };
+
+    await this.questAccept(npcGuid, questId);
+    const quest = await this.waitForState(() => this.state.quest(questId), timeout);
+    return { ok: true, status: "accepted", questId, quest, title: wanted.title };
+  }
+
+  /**
+   * Hand a finished quest back and take a reward.
+   *
+   * `quest_complete` is answered either with the reward offer or with
+   * `SMSG_QUESTGIVER_REQUEST_ITEMS` — which, when it says the quest *is*
+   * completable, is the client's cue to send the completion again to get the
+   * offer. A `completable: false` is the questgiver saying no, and comes back
+   * as `{ ok: false, status: "not_complete" }`.
+   */
+  async turnInQuest(
+    npcGuid: GuidArg,
+    questId: number,
+    rewardIndex = 0,
+    options: QuestOptions = {},
+  ): Promise<QuestTurnInResult> {
+    const timeout = options.timeout ?? 10_000;
+    const isFor = (e: StreamEvent, opcode: "SMSG_QUESTGIVER_OFFER_REWARD" | "SMSG_QUESTGIVER_REQUEST_ITEMS") =>
+      isEvent(e, opcode) &&
+      !isDecodeError(e.data) &&
+      (e.data as { questId: number }).questId === questId;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.questComplete(npcGuid, questId);
+      const answer = await this.events.waitFor(
+        (e) =>
+          (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout },
+      );
+      if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
+        const req = answer.data as QuestGiverRequestItemsData;
+        if (!req.completable) return { ok: false, status: "not_complete", questId };
+        continue; // completable: ask again, which is what the client does.
+      }
+      await this.questChooseReward(npcGuid, questId, rewardIndex);
+      const complete = await this.events.waitFor(
+        (e) =>
+          isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
+          !isDecodeError(e.data) &&
+          (e.data as QuestGiverQuestCompleteData).questId === questId,
+        { timeout, sinceSeq: answer.seq + 1 },
+      );
+      const d = complete.data as QuestGiverQuestCompleteData;
+      return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
+    }
+    return { ok: false, status: "not_complete", questId };
+  }
+
+  /**
+   * Wait until the quest log says a quest's objectives are done.
+   *
+   * The quest log — not an event — is the source, because the core does not
+   * emit `SMSG_QUESTUPDATE_COMPLETE` for kill objectives at the pinned commit:
+   * the only thing that reports a finished kill objective to a client is the
+   * completion bit in the served quest-log state field. Resolves with the log
+   * entry, whose `counts` are the objective counters; throws
+   * `EventTimeoutError` if it never completes, because a quest that is still
+   * unfinished is the absence of an outcome rather than one (ADR-0011).
+   */
+  waitForQuestObjective(questId: number, options: QuestOptions = {}): Promise<QuestLogEntry> {
+    return this.waitForState(() => {
+      const q = this.state.quest(questId);
+      return q?.complete === true ? q : undefined;
+    }, options.timeout ?? 60_000);
+  }
+
   /** Our own guid as a map key, once the session response has seeded it. */
   get selfKey(): string | undefined {
     return this.state.self.guid === undefined ? undefined : guidKey(this.state.self.guid);
   }
 
   // --------------------------------------------------------------- internals
+
+  /** One `POST /action`, with the session token filled in. */
+  private action(body: ActionBody): Promise<ActionResponse> {
+    return this.request("POST", "/action", { token: this.token, ...body }, actionResponseSchema);
+  }
+
+  /**
+   * `face`, with the module's refusals swallowed.
+   *
+   * A real client faces its target continuously and simply cannot fail at it;
+   * the module's `face` is a single opcode that the module rejects with `409
+   * moving` while a move is running, and the character may also have died or
+   * left the world between the decision and the call. None of those are worth
+   * ending a fight over, so this is the one place the SDK drops a request
+   * error on the floor — and it is why every re-face tick in `killTarget` goes
+   * through here.
+   */
+  private async faceQuietly(point: { x: number; y: number }): Promise<void> {
+    try {
+      await this.face(point);
+    } catch (e) {
+      // Swallow ONLY the load-bearing refusal (409 while a move is active):
+      // anything else — no_session, session_gone, transport loss — must
+      // surface so a dead session fails the fight fast instead of burning
+      // its timeout on invisible re-face ticks.
+      if (e instanceof WrathRequestError && e.code === "moving") return;
+      throw e;
+    }
+  }
+
+  /**
+   * Wait until a predicate over the *state cache* holds. Checks immediately,
+   * then re-checks on every event, which is exact because the cache is folded
+   * before waiters run. Throws `EventTimeoutError` if it never holds.
+   */
+  private async waitForState<T>(read: () => T | undefined, timeout: number): Promise<T> {
+    const already = read();
+    if (already !== undefined) return already;
+    let hit: T | undefined;
+    await this.events.waitFor(
+      () => {
+        hit = read();
+        return hit !== undefined;
+      },
+      { timeout, includeBuffered: false },
+    );
+    return hit as T;
+  }
 
   private async request<S extends z.ZodType>(
     method: string,

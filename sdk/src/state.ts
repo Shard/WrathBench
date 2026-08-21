@@ -36,8 +36,12 @@ import {
   guidKey,
   isDecodeError,
   isMoveOpcode,
+  type AuraData,
+  type AuraUpdateData,
   type CreateBlock,
   type GuidKey,
+  type ItemQueryResponseData,
+  type MonsterMoveData,
   type MoveUpdateData,
   type PositionData,
   type UpdateBlock,
@@ -72,6 +76,25 @@ export interface UnitPosition {
  */
 export interface WorldPosition extends UnitPosition {
   readonly map: number;
+}
+
+/** A point with no orientation: what `SMSG_MONSTER_MOVE` carries. */
+export interface Point3 {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/**
+ * A creature's movement as a player perceives it (ADR-0013): where the spline
+ * started, where it is heading, how long it takes. No path points: the module
+ * consumes them.
+ */
+export interface Motion {
+  readonly position: Point3;
+  readonly destination: Point3 | undefined;
+  readonly durationMs: number | undefined;
+  readonly stopped: boolean;
 }
 
 /** Current/max pair, as a client would display it. */
@@ -134,6 +157,84 @@ export interface SelfState extends UnitFieldsState {
   guid: bigint | undefined;
   name: string | undefined;
   position: Observed<WorldPosition> | undefined;
+  /** `UNIT_FIELD_TARGET` on our own block: what the client shows as selected. */
+  targetGuid: Observed<bigint> | undefined;
+}
+
+/**
+ * One occupied quest-log slot, folded out of the raw `quest<slot><Off>` update
+ * fields (PROTOCOL.md; ADR-0013 keeps the wire shape and leaves the join here).
+ *
+ * `complete` is the quest log's own completion bit, and it is the *only*
+ * reliable completion signal for a kill objective at the pinned commit: the
+ * core emits `SMSG_QUESTUPDATE_COMPLETE` for exploration/event objectives but
+ * not for kill ones. `counts` are the four packed u16 objective counters, one
+ * per objective slot, split out of the two u32 halves — the log carries the
+ * current counts only, never the required ones (those are on
+ * `SMSG_QUESTUPDATE_ADD_KILL` and the quest details), so nothing here compares
+ * them.
+ */
+export interface QuestLogEntry {
+  readonly slot: number;
+  readonly questId: number;
+  /** Raw `PLAYER_QUEST_LOG_x_STATE`, unmasked, as the wire carried it. */
+  readonly state: number;
+  /** `state & 1` — the objectives are done and the quest can be turned in. */
+  readonly complete: boolean;
+  readonly counts: readonly [number, number, number, number];
+  /** `PLAYER_QUEST_LOG_x_TIME`, when the slot carried one. */
+  readonly timer: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * One occupied inventory slot: equipment and bags are 0-22, the backpack 23-38.
+ *
+ * A three-way join, and each leg can be missing: the `invSlot<n>Lo`/`Hi` halves
+ * give a guid, the item's own create block gives that guid an `entry`, and an
+ * item query gives the entry a name. A slot whose item has not been created for
+ * us yet is still a real observation — the slot is occupied — so it appears
+ * with `itemId` and `name` undefined rather than being hidden.
+ */
+export interface InventoryItem {
+  readonly slot: number;
+  readonly guid: bigint;
+  readonly itemId: number | undefined;
+  readonly name: string | undefined;
+  readonly stackCount: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/** What an item query answered about one item entry. */
+export interface ItemInfo {
+  readonly itemId: number;
+  readonly name: string;
+  readonly quality: number | undefined;
+  readonly inventoryType: number | undefined;
+  readonly itemLevel: number | undefined;
+  readonly requiredLevel: number | undefined;
+  readonly sellPrice: number | undefined;
+  readonly buyPrice: number | undefined;
+}
+
+/**
+ * One visible aura slot on a unit. A cleared slot is not an entry: the module
+ * sends `removed: true` for it and the cache drops the slot instead of keeping
+ * a zero-spell ghost.
+ */
+export interface AuraEntry {
+  readonly slot: number;
+  readonly spellId: number;
+  readonly flags: number | undefined;
+  readonly level: number | undefined;
+  readonly stacks: number | undefined;
+  readonly casterGuid: bigint | undefined;
+  readonly maxDuration: number | undefined;
+  readonly duration: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
 }
 
 /** What a creature query answered about one creature entry. */
@@ -159,6 +260,8 @@ export interface NearbyObject extends UnitFieldsState {
   /** Joined from a name query (players) or a creature query (units). Never guessed. */
   name: Observed<string> | undefined;
   position: Observed<UnitPosition> | undefined;
+  /** From `SMSG_MONSTER_MOVE`: creatures move by spline, not by `MSG_MOVE_*`. */
+  motion: Observed<Motion> | undefined;
   targetGuid: Observed<bigint> | undefined;
   /** Seq of the event that first put this object in view. */
   firstSeq: number;
@@ -205,7 +308,14 @@ export interface StateSnapshot {
   readonly characters: Observed<CharacterSummary[]> | undefined;
   readonly names: ReadonlyMap<GuidKey, Observed<string>>;
   readonly creatures: ReadonlyMap<number, Observed<CreatureInfo>>;
+  readonly items: ReadonlyMap<number, Observed<ItemInfo>>;
   readonly nearby: ReadonlyMap<GuidKey, NearbyObject>;
+  readonly auras: ReadonlyMap<GuidKey, readonly AuraEntry[]>;
+  readonly questLog: readonly QuestLogEntry[];
+  readonly inventory: readonly InventoryItem[];
+  readonly money: Observed<number> | undefined;
+  readonly xp: Observed<number> | undefined;
+  readonly nextLevelXp: Observed<number> | undefined;
   readonly chat: readonly ChatEntry[];
   readonly notifications: readonly NotificationEntry[];
   readonly motd: Observed<string[]> | undefined;
@@ -221,6 +331,7 @@ export class StateCache {
     name: undefined,
     level: undefined,
     position: undefined,
+    targetGuid: undefined,
     health: undefined,
     power: undefined,
     fields: new Map<string, Observed<number>>(),
@@ -242,8 +353,22 @@ export class StateCache {
    */
   readonly creatures = new Map<number, Observed<CreatureInfo>>();
 
+  /**
+   * itemId -> item template info, from `SMSG_ITEM_QUERY_SINGLE_RESPONSE`.
+   * Never pruned, for the same reason as `creatures`: the module issues the
+   * query once per entry per session.
+   */
+  readonly items = new Map<number, Observed<ItemInfo>>();
+
   /** guid -> object in view, from `SMSG_UPDATE_OBJECT` and `MSG_MOVE_*`. */
   readonly nearby = new Map<GuidKey, NearbyObject>();
+
+  /**
+   * guid -> slot -> aura. Kept per slot because `SMSG_AURA_UPDATE` is a *slot*
+   * delta: it names only the slots that changed, and a slot the server clears
+   * arrives as `removed` rather than as an absence.
+   */
+  private readonly auraSlots = new Map<GuidKey, Map<number, AuraEntry>>();
 
   motd: Observed<string[]> | undefined;
 
@@ -318,6 +443,108 @@ export class StateCache {
     return this.anomalyBuf;
   }
 
+  // ------------------------------------------------------ derived self views
+  //
+  // Each of these is computed from `self.fields` on read rather than kept as a
+  // second copy written by a second path. That is what makes replay equal live
+  // for free: there is only one write seam (`mergeFields`), and these are pure
+  // functions of what it stored.
+
+  /** Copper, from `PLAYER_FIELD_COINAGE`. Self only; the server marks it private. */
+  get money(): Observed<number> | undefined {
+    return this.self.fields.get("money");
+  }
+
+  /** Current XP toward the next level. */
+  get xp(): Observed<number> | undefined {
+    return this.self.fields.get("xp");
+  }
+
+  /** XP required for the next level, as the client's bar shows it. */
+  get nextLevelXp(): Observed<number> | undefined {
+    return this.self.fields.get("nextLevelXp");
+  }
+
+  /**
+   * The quest log, occupied slots only. `questNId === 0` is an empty slot and
+   * does not become an entry with quest id 0.
+   */
+  get questLog(): QuestLogEntry[] {
+    const out: QuestLogEntry[] = [];
+    for (let slot = 0; slot < QUEST_LOG_SLOTS; slot++) {
+      const id = this.self.fields.get(`quest${slot}Id`);
+      if (!id || id.value === 0) continue;
+      const state = this.self.fields.get(`quest${slot}State`);
+      const lo = this.self.fields.get(`quest${slot}CountsLo`);
+      const hi = this.self.fields.get(`quest${slot}CountsHi`);
+      const timer = this.self.fields.get(`quest${slot}Time`);
+      const raw = state?.value ?? 0;
+      out.push({
+        slot,
+        questId: id.value,
+        state: raw,
+        complete: (raw & QUEST_STATE_COMPLETE) !== 0,
+        // Two u32s, each holding two u16 objective counters (3.3.5 layout).
+        counts: [
+          (lo?.value ?? 0) & 0xffff,
+          ((lo?.value ?? 0) >>> 16) & 0xffff,
+          (hi?.value ?? 0) & 0xffff,
+          ((hi?.value ?? 0) >>> 16) & 0xffff,
+        ],
+        timer: timer?.value,
+        seq: Math.max(id.seq, state?.seq ?? -1, lo?.seq ?? -1, hi?.seq ?? -1),
+        ts: Math.max(id.ts, state?.ts ?? 0, lo?.ts ?? 0, hi?.ts ?? 0),
+      });
+    }
+    return out;
+  }
+
+  /** The quest log slot holding `questId`, if the log shows it at all. */
+  quest(questId: number): QuestLogEntry | undefined {
+    return this.questLog.find((q) => q.questId === questId);
+  }
+
+  /**
+   * Occupied inventory slots, joined guid -> item create block -> item query.
+   * A slot whose halves are both zero is empty and is not reported.
+   */
+  get inventory(): InventoryItem[] {
+    const out: InventoryItem[] = [];
+    for (let slot = 0; slot <= INVENTORY_LAST_SLOT; slot++) {
+      const lo = this.self.fields.get(`invSlot${slot}Lo`);
+      const hi = this.self.fields.get(`invSlot${slot}Hi`);
+      if (!lo && !hi) continue;
+      const guid = (BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0);
+      if (guid === 0n) continue;
+      const item = this.nearby.get(guidKey(guid));
+      const itemId = item?.entry?.value;
+      out.push({
+        slot,
+        guid,
+        itemId,
+        name: itemId === undefined ? undefined : this.items.get(itemId)?.value.name,
+        stackCount: item?.fields.get("stackCount")?.value,
+        seq: Math.max(lo?.seq ?? -1, hi?.seq ?? -1),
+        ts: Math.max(lo?.ts ?? 0, hi?.ts ?? 0),
+      });
+    }
+    return out;
+  }
+
+  /** The object our own `targetGuid` points at, when it is also in view. */
+  get target(): NearbyObject | undefined {
+    const guid = this.self.targetGuid?.value;
+    if (guid === undefined || guid === 0n) return undefined;
+    return this.nearby.get(guidKey(guid));
+  }
+
+  /** Visible auras on a unit, by slot. Empty when none have been observed. */
+  aurasOf(guid: bigint): AuraEntry[] {
+    const slots = this.auraSlots.get(guidKey(guid));
+    if (!slots) return [];
+    return [...slots.values()].sort((a, b) => a.slot - b.slot);
+  }
+
   /** Name for a guid, if a name query ever returned one. Never guessed. */
   nameOf(guid: bigint): string | undefined {
     if (this.self.guid !== undefined && guid === this.self.guid) return this.self.name;
@@ -333,7 +560,14 @@ export class StateCache {
       characters: this.characters,
       names: new Map(this.names),
       creatures: new Map(this.creatures),
+      items: new Map(this.items),
       nearby: new Map([...this.nearby].map(([k, v]) => [k, { ...v, fields: new Map(v.fields) }])),
+      auras: new Map([...this.auraSlots].map(([k, v]) => [k, [...v.values()].sort((a, b) => a.slot - b.slot)])),
+      questLog: this.questLog,
+      inventory: this.inventory,
+      money: this.money,
+      xp: this.xp,
+      nextLevelXp: this.nextLevelXp,
       chat: [...this.chatBuf],
       notifications: [...this.notifyBuf],
       motd: this.motd,
@@ -430,6 +664,80 @@ export class StateCache {
         }
         return;
       }
+      case "SMSG_ITEM_QUERY_SINGLE_RESPONSE": {
+        const d = event.data as ItemQueryResponseData;
+        if (!d.found || d.name === undefined) return;
+        this.items.set(d.itemId, {
+          value: {
+            itemId: d.itemId,
+            name: d.name,
+            quality: d.quality,
+            inventoryType: d.inventoryType,
+            itemLevel: d.itemLevel,
+            requiredLevel: d.requiredLevel,
+            sellPrice: d.sellPrice,
+            buyPrice: d.buyPrice,
+          },
+          seq: event.seq,
+          ts: event.ts,
+        });
+        for (const obj of this.nearby.values()) {
+          if (obj.entry?.value === d.itemId) this.joinName(obj);
+        }
+        return;
+      }
+      case "SMSG_AURA_UPDATE":
+      case "SMSG_AURA_UPDATE_ALL": {
+        const d = event.data as AuraUpdateData;
+        const key = guidKey(d.targetGuid);
+        // UPDATE_ALL is the full visible list, so it replaces; UPDATE names
+        // only the slots that changed and merges into what is already there.
+        const slots =
+          event.opcode === "SMSG_AURA_UPDATE_ALL"
+            ? new Map<number, AuraEntry>()
+            : (this.auraSlots.get(key) ?? new Map<number, AuraEntry>());
+        for (const a of d.auras as AuraData[]) {
+          if (a.removed === true || a.spellId === 0) {
+            slots.delete(a.slot);
+            continue;
+          }
+          slots.set(a.slot, {
+            slot: a.slot,
+            spellId: a.spellId,
+            flags: a.flags,
+            level: a.level,
+            stacks: a.stacks,
+            casterGuid: a.casterGuid,
+            maxDuration: a.maxDuration,
+            duration: a.duration,
+            seq: event.seq,
+            ts: event.ts,
+          });
+        }
+        if (slots.size === 0) this.auraSlots.delete(key);
+        else this.auraSlots.set(key, slots);
+        return;
+      }
+      case "SMSG_MONSTER_MOVE": {
+        const d = event.data as MonsterMoveData;
+        if (this.isSelfGuid(d.guid)) return;
+        this.upsertNearby(d.guid, event.seq, (obj) => {
+          obj.motion = {
+            value: {
+              position: { x: d.pos.x, y: d.pos.y, z: d.pos.z },
+              destination: d.destination
+                ? { x: d.destination.x, y: d.destination.y, z: d.destination.z }
+                : undefined,
+              durationMs: d.durationMs,
+              stopped: d.stopped === true,
+            },
+            seq: event.seq,
+            ts: event.ts,
+          };
+          this.joinName(obj);
+        });
+        return;
+      }
       case "SMSG_UPDATE_OBJECT": {
         const d = event.data as { objects: UpdateBlock[] };
         for (const block of d.objects) this.applyUpdateBlock(block, event.seq, event.ts);
@@ -437,7 +745,7 @@ export class StateCache {
       }
       case "SMSG_DESTROY_OBJECT": {
         const d = event.data as { guid: bigint };
-        this.nearby.delete(guidKey(d.guid));
+        this.forget(d.guid);
         return;
       }
       case "WB_MOVE_PROGRESS":
@@ -535,7 +843,7 @@ export class StateCache {
     let best: NearbyObject | undefined;
     let bestD2 = Infinity;
     for (const obj of this.nearby.values()) {
-      const p = obj.position?.value;
+      const p = pointOf(obj)?.value;
       if (!p) continue;
       if (filter && !filter(obj)) continue;
       const d2 = (p.x - from.x) ** 2 + (p.y - from.y) ** 2 + (p.z - from.z) ** 2;
@@ -583,7 +891,7 @@ export class StateCache {
       }
       case "outOfRange": {
         const b = block as { guids: bigint[] };
-        for (const g of b.guids) this.nearby.delete(guidKey(g));
+        for (const g of b.guids) this.forget(g);
         return;
       }
       case "near":
@@ -633,6 +941,17 @@ export class StateCache {
       this.mergeFields(obj, block.fields, seq, ts);
       this.joinName(obj);
     });
+  }
+
+  /**
+   * Drop everything observed *about one object* when it leaves view. Auras go
+   * with it: a client stops showing the buff bar of a unit it cannot see, and
+   * keeping them would let a stale aura outlive its unit.
+   */
+  private forget(guid: bigint): void {
+    const key = guidKey(guid);
+    this.nearby.delete(key);
+    this.auraSlots.delete(key);
   }
 
   private isSelfGuid(guid: bigint): boolean {
@@ -735,6 +1054,11 @@ export class StateCache {
   private joinName(obj: NearbyObject): void {
     const type = obj.objectType?.value;
     const entry = obj.entry?.value;
+    if ((type === "item" || type === "container") && entry !== undefined) {
+      const info = this.items.get(entry);
+      if (info) obj.name = { value: info.value.name, seq: info.seq, ts: info.ts };
+      return;
+    }
     if (type !== "player" && entry !== undefined) {
       const info = this.creatures.get(entry);
       if (info) {
@@ -778,6 +1102,7 @@ export class StateCache {
         name: undefined,
         level: undefined,
         position: undefined,
+        motion: undefined,
         health: undefined,
         power: undefined,
         targetGuid: undefined,
@@ -796,4 +1121,33 @@ export class StateCache {
 /** Drop everything but x/y/z/o: the wire gives a nearby object nothing else. */
 function toUnitPosition(pos: PositionData): UnitPosition {
   return { x: pos.x, y: pos.y, z: pos.z, o: pos.o };
+}
+
+/** `PLAYER_QUEST_LOG_1_1` .. `_25_1`: 25 slots on 3.3.5. */
+const QUEST_LOG_SLOTS = 25;
+/** The quest log's completion bit, the one the probe verified live. */
+const QUEST_STATE_COMPLETE = 1;
+/** Equipment + bags are 0-22, backpack 23-38 (PROTOCOL.md). */
+const INVENTORY_LAST_SLOT = 38;
+
+/**
+ * Where an object is, from the freshest thing that said so.
+ *
+ * Two independent sources with different shapes: `MSG_MOVE_*`/update blocks
+ * give an oriented position, `SMSG_MONSTER_MOVE` gives a spline start plus a
+ * destination and no orientation. For a creature that is mid-spline the
+ * destination is the better answer to "where do I walk to reach it", which is
+ * what a player reads off the animation, so it wins within one motion
+ * observation. Returns `undefined` rather than guessing when nothing said.
+ */
+export function pointOf(obj: NearbyObject): Observed<Point3> | undefined {
+  const pos = obj.position;
+  const motion = obj.motion;
+  if (motion && (!pos || motion.seq >= pos.seq)) {
+    const m = motion.value;
+    const p = m.stopped ? m.position : (m.destination ?? m.position);
+    return { value: p, seq: motion.seq, ts: motion.ts };
+  }
+  if (!pos) return undefined;
+  return { value: { x: pos.value.x, y: pos.value.y, z: pos.value.z }, seq: pos.seq, ts: pos.ts };
 }

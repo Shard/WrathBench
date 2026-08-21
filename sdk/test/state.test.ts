@@ -2,9 +2,30 @@ import { describe, expect, test } from "bun:test";
 
 import { parseEventFrame, type GameEvent } from "../src/protocol";
 import { STREAM_GAP, type StreamEvent, type StreamGapEvent } from "../src/events";
-import { StateCache } from "../src/state";
+import { pointOf, StateCache } from "../src/state";
 import {
+  addKill,
+  auraRemoved,
+  auraUpdate,
+  auraUpdateAll,
+  BACKPACK_SLOT,
   chatEcho,
+  inventorySlot,
+  ITEM_ENTRY,
+  ITEM_GUID,
+  itemCreate,
+  itemQuery,
+  monsterMove,
+  monsterStopped,
+  OTHER_QUEST_ID,
+  QUEST_ID,
+  questAccepted,
+  questChained,
+  questCombatStream,
+  questComplete,
+  questProgress,
+  selfProgress,
+  selfTarget,
   CREATURE_ENTRY,
   CREATURE_GUID,
   creatureCreate,
@@ -396,3 +417,197 @@ describe("state cache: replay", () => {
     expect(cache.lastSeq).toBe(20);
   });
 });
+
+describe("state cache: the quest log, folded out of the raw update fields", () => {
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("an occupied slot becomes an entry; an empty one does not", () => {
+    const cache = withWorld([questAccepted]);
+    expect(cache.questLog).toHaveLength(1);
+    const [quest] = cache.questLog;
+    expect(quest?.slot).toBe(0);
+    expect(quest?.questId).toBe(QUEST_ID);
+    expect(quest?.complete).toBe(false);
+    expect(quest?.counts).toEqual([0, 0, 0, 0]);
+    // `quest1Id: 0` was served and must not turn into a quest with id 0.
+    expect(cache.questLog.some((q) => q.questId === 0)).toBe(false);
+  });
+
+  test("the two u32 halves split into four u16 objective counters", () => {
+    const cache = withWorld([questAccepted, questProgress]);
+    expect(cache.quest(QUEST_ID)?.counts).toEqual([3, 5, 7, 9]);
+  });
+
+  test("completion is the state bit, not a count comparison", () => {
+    const before = withWorld([questAccepted, questProgress]);
+    expect(before.quest(QUEST_ID)?.complete).toBe(false);
+    // The counts do not move; only the state field does. This is the whole
+    // point: the core sends no QUESTUPDATE_COMPLETE for a kill objective.
+    const after = withWorld([questAccepted, questProgress, questComplete]);
+    expect(after.quest(QUEST_ID)?.state).toBe(1);
+    expect(after.quest(QUEST_ID)?.complete).toBe(true);
+    expect(after.quest(QUEST_ID)?.counts).toEqual([3, 5, 7, 9]);
+  });
+
+  test("a chain's auto-added quest shows up as a second slot", () => {
+    const cache = withWorld([questAccepted, questChained]);
+    expect(cache.questLog.map((q) => q.questId)).toEqual([QUEST_ID, OTHER_QUEST_ID]);
+    expect(cache.quest(OTHER_QUEST_ID)?.slot).toBe(1);
+    expect(cache.quest(12345)).toBeUndefined();
+  });
+
+  test("a quest entry carries the seq of the field that last moved it", () => {
+    const cache = withWorld([questAccepted, questProgress]);
+    expect(cache.quest(QUEST_ID)?.seq).toBe(31);
+  });
+
+  test("kill credit is an event, and does not itself write the log", () => {
+    const cache = withWorld([questAccepted, addKill]);
+    // ADD_KILL is observable, but the log is what the cache reports; nothing
+    // here invents progress from the packet's `current`.
+    expect(cache.quest(QUEST_ID)?.counts).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe("state cache: self progress, target and inventory", () => {
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("money and the XP bar are exposed, with provenance", () => {
+    const cache = withWorld([selfProgress]);
+    expect(cache.money?.value).toBe(12345);
+    expect(cache.xp?.value).toBe(480);
+    expect(cache.nextLevelXp?.value).toBe(2100);
+    expect(cache.money?.seq).toBe(34);
+    expect(cache.self.level?.value).toBe(4);
+  });
+
+  test("nothing invents them before an event carried them", () => {
+    const cache = withWorld([]);
+    expect(cache.money).toBeUndefined();
+    expect(cache.xp).toBeUndefined();
+    expect(cache.nextLevelXp).toBeUndefined();
+  });
+
+  test("our own targetGuid resolves to the object in view", () => {
+    const cache = withWorld([selfTarget]);
+    expect(cache.self.targetGuid?.value).toBe(BigInt(CREATURE_GUID));
+    expect(cache.target?.guid).toBe(BigInt(CREATURE_GUID));
+    expect(cache.target?.name?.value).toBe("Thistlebore");
+  });
+
+  test("a target that has left view is a target we cannot see", () => {
+    const cache = withWorld([selfTarget, creatureOutOfRange]);
+    expect(cache.self.targetGuid?.value).toBe(BigInt(CREATURE_GUID));
+    expect(cache.target).toBeUndefined();
+  });
+
+  test("inventory reassembles the guid halves and joins the item's name", () => {
+    const cache = withWorld([inventorySlot, itemCreate, itemQuery]);
+    expect(cache.inventory).toHaveLength(1);
+    const [item] = cache.inventory;
+    expect(item?.slot).toBe(BACKPACK_SLOT);
+    // The high half is above 2^32: a truncating join would lose it entirely.
+    expect(item?.guid).toBe(BigInt(ITEM_GUID));
+    expect(item?.itemId).toBe(ITEM_ENTRY);
+    expect(item?.name).toBe("Gritstone Charm");
+    expect(item?.stackCount).toBe(5);
+    expect(cache.items.get(ITEM_ENTRY)?.value.sellPrice).toBe(40);
+  });
+
+  test("an occupied slot whose item has not been created is still occupied", () => {
+    const cache = withWorld([inventorySlot]);
+    expect(cache.inventory).toHaveLength(1);
+    expect(cache.inventory[0]?.guid).toBe(BigInt(ITEM_GUID));
+    expect(cache.inventory[0]?.itemId).toBeUndefined();
+    expect(cache.inventory[0]?.name).toBeUndefined();
+  });
+
+  test("a zeroed slot is empty, not an item with guid 0", () => {
+    const cache = withWorld([inventorySlot]);
+    // `invSlot24Lo/Hi` were served as 0/0 in the same block.
+    expect(cache.inventory.map((i) => i.slot)).toEqual([BACKPACK_SLOT]);
+  });
+});
+
+describe("state cache: auras and creature movement", () => {
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("aura slots accumulate and carry their durations", () => {
+    const cache = withWorld([auraUpdate]);
+    const auras = cache.aurasOf(BigInt(CREATURE_GUID));
+    expect(auras.map((a) => a.spellId)).toEqual([7777, 8888]);
+    expect(auras[0]?.duration).toBe(12000);
+    expect(auras[1]?.stacks).toBe(3);
+  });
+
+  test("a cleared slot is dropped, and the others survive", () => {
+    const cache = withWorld([auraUpdate, auraRemoved]);
+    expect(cache.aurasOf(BigInt(CREATURE_GUID)).map((a) => a.slot)).toEqual([1]);
+  });
+
+  test("UPDATE_ALL replaces the list rather than merging into it", () => {
+    const cache = withWorld([auraUpdate, auraUpdateAll]);
+    expect(cache.aurasOf(BigInt(CREATURE_GUID)).map((a) => a.spellId)).toEqual([9999]);
+  });
+
+  test("auras leave with the unit they were on", () => {
+    const cache = withWorld([auraUpdate, creatureDestroy]);
+    expect(cache.aurasOf(BigInt(CREATURE_GUID))).toEqual([]);
+  });
+
+  test("monster move is served as destination and duration, and nothing else", () => {
+    const cache = withWorld([monsterMove]);
+    const obj = cache.nearby.get(CREATURE_GUID);
+    expect(obj?.motion?.value.durationMs).toBe(2000);
+    expect(obj?.motion?.value.destination).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
+    // Where to walk to reach it: the destination while it is in motion.
+    expect(pointOf(obj!)?.value).toEqual({ x: -1190.0, y: 970.0, z: 42.0 });
+  });
+
+  test("a stopped creature is where it stopped", () => {
+    const cache = withWorld([monsterMove, monsterStopped]);
+    expect(pointOf(cache.nearby.get(CREATURE_GUID)!)?.value).toEqual({ x: -1195.0, y: 972.0, z: 42.0 });
+  });
+
+  test("an oriented position newer than the spline still wins", () => {
+    const cache = withWorld([monsterMove, { ...creatureMove, seq: 60 }]);
+    expect(pointOf(cache.nearby.get(CREATURE_GUID)!)?.value).toEqual({ x: -1210.0, y: 985.0, z: 42.0 });
+  });
+});
+
+describe("state cache: the quest/combat fold replays", () => {
+  test("replaying the stream equals feeding it live", () => {
+    const events = toEvents(questCombatStream);
+    const replayed = StateCache.replay(events, { seed: SEED });
+    const live = new StateCache({ seed: SEED });
+    for (const e of events) live.apply(e);
+    expect(JSON.stringify(live.snapshot(), jsonSafe)).toEqual(
+      JSON.stringify(replayed.snapshot(), jsonSafe),
+    );
+  });
+
+  test("the snapshot carries the derived views and is decoupled from the cache", () => {
+    const events = toEvents(questCombatStream);
+    const cache = StateCache.replay(events, { seed: SEED });
+    const snap = cache.snapshot();
+    expect(snap.questLog.map((q) => q.questId)).toEqual([QUEST_ID, OTHER_QUEST_ID]);
+    expect(snap.inventory[0]?.name).toBe("Gritstone Charm");
+    expect(snap.money?.value).toBe(12345);
+    expect(snap.auras.get(CREATURE_GUID)?.map((a) => a.spellId)).toEqual([8888]);
+
+    // Later events must not reach a snapshot already taken.
+    for (const e of toEvents([questChained, creatureDestroy])) cache.apply(e);
+    expect(snap.auras.get(CREATURE_GUID)?.map((a) => a.spellId)).toEqual([8888]);
+    expect(snap.questLog).toHaveLength(2);
+  });
+});
+
+/** bigints do not survive JSON; render them for the structural comparison. */
+function jsonSafe(_key: string, value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Map) return [...value.entries()];
+  return value;
+}

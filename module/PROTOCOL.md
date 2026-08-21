@@ -506,7 +506,7 @@ Quests and gossip (quest/gossip text served as the client would show it):
 | `SMSG_QUESTGIVER_QUEST_FAILED` | 0x192 | `{ "questId", "reason" }` |
 | `SMSG_QUESTUPDATE_ADD_KILL` | 0x199 | `{ "questId", "entry", "current", "required", "guid" }` (gameobject credit arrives with `entry | 0x80000000`) |
 | `SMSG_QUESTUPDATE_ADD_ITEM` | 0x19A | `{}` — the core sends it empty; item progress is in the quest-log update fields |
-| `SMSG_QUESTUPDATE_COMPLETE` | 0x198 | `{ "questId" }` |
+| `SMSG_QUESTUPDATE_COMPLETE` | 0x198 | `{ "questId" }` — NOT sent for kill/item objectives at the pinned commit (exploration/event quests only); read completion from the quest-log `State` complete bit or the final `ADD_KILL` with `current == required` (ADR-0013) |
 | `SMSG_QUESTUPDATE_FAILED` | 0x196 | `{ "questId" }` |
 | `SMSG_GOSSIP_MESSAGE` | 0x17D | `{ "guid", "menuId", "textId", "options": [{ "optionId", "icon", "text" }], "quests": [{ "questId", "icon", "level", "title" }] }` |
 | `SMSG_GOSSIP_COMPLETE` | 0x17E | `{}` |

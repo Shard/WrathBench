@@ -61,20 +61,88 @@ class WrathClient {
   logout(): Promise<DeleteSessionResponse>                            // alias
   close(): void                                                       // closes the stream only
 
+  // quest/combat extension: one method per single-opcode action
+  setTarget(guid) / clearTarget()
+  attackStart(guid) / attackStop()
+  castSpell(spellId, targetGuid?) / cancelCast(spellId)
+  interact(guid) / gossipHello(guid) / gossipSelect(guid, menuId, optionId)
+  questList(guid) / questDetails(guid, questId) / questAccept(guid, questId)
+  questComplete(guid, questId) / questChooseReward(guid, questId, rewardIndex?) / questAbandon(questId)
+  loot(guid) / lootAll(guid) / lootItem(slot) / lootMoney() / lootRelease(guid)
+  vendorList(guid) / buyItem(guid, itemId, slot, count?) / sellItem(guid, itemGuid, count?) / repairAll(guid)
+  equipItem(bag, slot) / useItem(bag, slot, targetGuid?) / destroyItem(bag, slot, count?)
+  repop() / reclaimCorpse(guid?)
+  deleteCharacter(name, o?: DeleteCharacterOptions): Promise<CharacterDeleteResponse>  // POST /character-delete
+
+  // composed helpers — each waits for the game's verdict
   waitForChat(match: string | ((e: ChatEntry) => boolean), o?: WaitForChatOptions): Promise<ChatEntry>
   moveTo(point: MovePoint, o?: MoveToOptions): Promise<MoveResult>
   waitForNearby(p: (o: NearbyObject) => boolean, o?: WaitForNearbyOptions): Promise<NearbyObject>
+  killTarget(guid, o?: KillTargetOptions): Promise<KillResult>
+  lootCorpse(guid, o?: LootOptions): Promise<LootResult>
+  acceptQuestFrom(npcGuid, questId, o?: QuestOptions): Promise<QuestAcceptResult>
+  turnInQuest(npcGuid, questId, rewardIndex?, o?: QuestOptions): Promise<QuestTurnInResult>
+  waitForQuestObjective(questId, o?: QuestOptions): Promise<QuestLogEntry>
   get selfKey(): string | undefined
 }
 ```
+
+Every action guid is a `bigint` or a decimal string; the SDK renders it the way
+the wire wants.
+
+### Combat, loot and quests
+
+```ts
+const fight = await client.killTarget(kobold.guid);      // { ok, status, guid, swings }
+if (fight.ok) await client.lootCorpse(kobold.guid);      // { ok, status, gold, items }
+```
+
+`killTarget` owns the whole melee loop, and each part of it is there because a
+live run needed it: a synthesized character never auto-faces the way a client
+does and the server drops a swing that is not facing its victim, so the target
+is faced before the first swing and re-faced every ~1.5s; a target that drifts
+out of melee range is walked back to and re-engaged; our own death ends it at
+once. Statuses are `killed` (the target's observed health reached zero),
+`player_died`, `lost` (it left view alive) and `timeout`. There is deliberately
+no `evaded`: nothing on the whitelist says "evade", and naming a status the
+module never uttered would be an SDK invention in a field that otherwise only
+holds the world's words.
+
+`lootCorpse` sends `loot_all` — the module replaying the client's auto-loot
+sequence — and returns once the window has been emptied and released. A corpse
+with nothing on it releases without ever opening a window, which is
+`{ ok: false, status: "empty" }`: an answer, not a failure. Silence still
+throws `EventTimeoutError`.
+
+`acceptQuestFrom` reads the quest log *first*, because a turn-in chain may
+already have added the quest (the core auto-advances, so an explicit accept can
+be a no-op) — that is `status: "already_in_log"`. Otherwise it asks, and
+accepts the list in either shape: a gossip-flagged questgiver answers
+`quest_list` with an `SMSG_GOSSIP_MESSAGE` carrying the quests, not an
+`SMSG_QUESTGIVER_QUEST_LIST`. `turnInQuest` handles the other branch of the
+same asymmetry: `SMSG_QUESTGIVER_REQUEST_ITEMS` that says the quest *is*
+completable is the client's cue to send the completion again.
+
+`waitForQuestObjective` waits on the **quest log**, not on an event, because at
+the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill
+objective: the only thing that reports one to a client is the completion bit in
+the served quest-log state field.
+
+`deleteCharacter` retries on its own, and that belongs in the SDK rather than
+in a caller: for up to about a minute after logout the core still tracks an
+offline session for the character and silently ignores `CMSG_CHAR_DELETE`,
+which surfaces as `504 timeout` (or as an aborted request, if the module's
+internal wait outlasts `requestTimeoutMs`). Both mean "not released yet" and
+are retried with a fresh throwaway token each time; anything else the module
+says is a real answer and is thrown.
 
 `ConnectOptions`: `baseUrl`, `token`, and optionally `eventsUrl`,
 `subscribeEvents` (default true), `requestTimeoutMs` (default 30000 — the
 session call blocks up to 20s server-side), `fetchImpl`, `events` (stream
 options), `state` (`chatTail`, `notificationTail`).
 
-Helpers stop at `say`, `waitForChat`, `moveTo` and `waitForNearby` because that
-is all the protocol currently supports and all the probes have needed.
+Helpers stop here because this is what the probes and `infra/smoke/one-quest.ts`
+have actually needed. Nothing is added in anticipation.
 
 ### Movement
 
@@ -192,7 +260,14 @@ state.self          // { guid, name, level?, position?, health?, power?, fields 
 state.characters    // Observed<CharacterSummary[]> | undefined  (from SMSG_CHAR_ENUM)
 state.names         // Map<guidKey, Observed<string>>            (from SMSG_NAME_QUERY_RESPONSE)
 state.creatures     // Map<entry, Observed<CreatureInfo>>        (from SMSG_CREATURE_QUERY_RESPONSE)
-state.nearby        // Map<guidKey, NearbyObject>                (from SMSG_UPDATE_OBJECT, MSG_MOVE_*)
+state.items         // Map<itemId, Observed<ItemInfo>>          (from SMSG_ITEM_QUERY_SINGLE_RESPONSE)
+state.nearby        // Map<guidKey, NearbyObject>                (from SMSG_UPDATE_OBJECT, MSG_MOVE_*, SMSG_MONSTER_MOVE)
+state.questLog      // QuestLogEntry[]   — derived from the raw quest<slot><Off> fields
+state.quest(id)     // one quest log slot, or undefined
+state.inventory     // InventoryItem[]   — invSlot halves joined to items and names
+state.money, state.xp, state.nextLevelXp   // Observed<number> | undefined (self only)
+state.target        // the NearbyObject our own targetGuid points at, when in view
+state.aurasOf(guid) // AuraEntry[]       (from SMSG_AURA_UPDATE / _ALL)
 state.chat          // readonly ChatEntry[]  (bounded tail)
 state.notifications // readonly NotificationEntry[]
 state.motd          // Observed<string[]> | undefined
@@ -206,6 +281,27 @@ state.creaturesByEntry(id)   // units whose observed template entry is `id`
 state.closest(filter?)       // nearest object with a position, from ours
 StateCache.replay(events, { seed })
 ```
+
+`questLog`, `inventory`, `money`, `xp`, `nextLevelXp` and `target` are *derived
+on read* from `self.fields` rather than kept as a second copy written by a
+second path. There is one write seam (the field merge), so replay-equals-live
+holds for them for free. The wire's shape is preserved on the way in
+(ADR-0013): the module serves `quest3State` and `invSlot23Lo` as raw per-u32
+fields and this is where they are folded.
+
+- A quest slot's four objective counters are two u32s of packed u16s, split
+  into `counts[0..3]`. The log carries the *current* counts only — `required`
+  lives on `SMSG_QUESTUPDATE_ADD_KILL` and the quest details — so nothing here
+  compares them, and `complete` is the state field's own bit.
+- `questNId === 0` is an empty slot and does not become a quest with id 0.
+- An inventory slot is a three-way join: the two u32 guid halves, the item's
+  own create block (for `entry`), and an item query (for the name). Each leg
+  can be missing, and a slot whose item has not been created for us yet is
+  still reported — it *is* occupied — with `itemId` and `name` undefined.
+- `pointOf(obj)` answers "where do I walk to reach it" from the freshest of the
+  two independent sources: an oriented position (update blocks, `MSG_MOVE_*`)
+  or `SMSG_MONSTER_MOVE`'s destination, which is what a player reads off a
+  moving creature's animation.
 
 Every observed field group is an `Observed<T> = { value, seq, ts }`, so
 staleness is legible rather than implied. That matters most for position: our
@@ -262,10 +358,10 @@ Two rules the tests enforce:
    says "you are guid N". It is recorded on `state.seed` so a replay is explicit
    about it.
 
-**Extension point for the coming action sets.** `apply()` is a switch on opcode
-and every world write goes through `upsertNearby()`. Landing combat or loot
-events means: add the schema in `src/protocol.ts`, add one `case` in
-`src/state.ts`, add fields to `NearbyObject`/`SelfState`. Unknown opcodes,
+**Extension point.** `apply()` is a switch on opcode and every world write goes
+through `upsertNearby()`. Landing a new event means: add the schema in
+`src/protocol.ts`, add one `case` in `src/state.ts`, and derive rather than
+duplicate if it belongs to `self`. Unknown opcodes,
 unknown update-block kinds and unknown `data` fields all already pass through
 rather than failing, so an SDK built against today's whitelist keeps streaming
 when the module's widens.
@@ -273,7 +369,7 @@ when the module's widens.
 ## Running things
 
 ```bash
-bun test sdk                 # 89 tests, no game stack needed
+bun test sdk                 # 133 tests, no game stack needed
 bunx tsc --noEmit -p sdk     # strict typecheck of src, test and examples
 
 # live checks, need the stack up; not part of bun test
