@@ -4,5 +4,15 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "module": "src/index.ts"
+  "module": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./search": "./src/search.ts"
+  },
+  "scripts": {
+    "build-bundle": "bun src/build.ts",
+    "search": "bun src/search.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
 }
