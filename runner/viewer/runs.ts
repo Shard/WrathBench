@@ -35,6 +35,9 @@ export interface RunRow {
   pauseReason: string | null;
   level: number | null;
   xp: number | null;
+  /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
+  money: number | null;
+  questsCompleted: number | null;
   mtime: number | null;
   bytes: number | null;
   live: boolean;
@@ -116,6 +119,24 @@ function readMetaSafe(dir: string): MetaShape | null {
   }
 }
 
+/**
+ * Which columns a run's `state` table actually has.
+ *
+ * The table gains signals over time and an old run directory never gains them
+ * retroactively — the databases here are opened readonly precisely so that
+ * stays true. Asking the schema first is what lets one viewer read both, and
+ * keeps a column that does not exist yet from turning into an error the whole
+ * listing pays for.
+ */
+function stateColumns(db: Database): Set<string> {
+  try {
+    const rows = db.query(`PRAGMA table_info(state)`).all() as { name?: unknown }[];
+    return new Set(rows.map((r) => String(r.name)));
+  } catch {
+    return new Set();
+  }
+}
+
 function num(v: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
@@ -142,6 +163,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     pauseReason: null,
     level: null,
     xp: null,
+    money: null,
+    questsCompleted: null,
     mtime: null,
     bytes: null,
     live: false,
@@ -203,6 +226,31 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.level = num(last["level"]);
         row.xp = num(last["xp"]);
       }
+
+      /*
+       * The newest sample that actually carried a value. Zero is a real
+       * reading — a broke character has 0 copper — so only NULL is treated as
+       * "nothing recorded", and a column the schema lacks stays null rather
+       * than becoming a misleading 0.
+       */
+      const cols = stateColumns(db);
+      const latest = (column: string): number | null => {
+        if (!cols.has(column)) return null;
+        try {
+          const r = db
+            .query(
+              // The column name is one of our own literals, never user input.
+              `SELECT ${column} AS v FROM state WHERE run_id = ? AND ${column} IS NOT NULL
+               ORDER BY ts DESC LIMIT 1`,
+            )
+            .get(runId) as Record<string, unknown> | null;
+          return r === null ? null : num(r["v"]);
+        } catch {
+          return null;
+        }
+      };
+      row.money = latest("money");
+      row.questsCompleted = latest("quests_completed");
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
     } finally {

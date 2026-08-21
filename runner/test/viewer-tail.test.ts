@@ -358,4 +358,53 @@ describe("readRun", () => {
 
     expect(readRun(runsDir, "paused-run").pauseReason).toBe("quota-exhausted");
   });
+
+  /** The `state` table grows columns; an old run directory never gets them. */
+  function runWithState(columns: string, rows: unknown[][]): { runsDir: string; id: string } {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-state-"));
+    const id = "a-run";
+    const dir = join(runsDir, id);
+    mkdirSync(dir);
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
+      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT);
+      CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER${columns});`);
+    db.query(`INSERT INTO run (run_id, config_json) VALUES (?, ?)`).run(id, "{}");
+    const width = 4 + columns.split(",").filter((c) => c.trim().length > 0).length;
+    const holes = new Array(width).fill("?").join(", ");
+    for (const r of rows) db.query(`INSERT INTO state VALUES (${holes})`).run(...(r as never[]));
+    db.close();
+    return { runsDir, id };
+  }
+
+  test("money and quests read from a schema that has them, newest non-null wins", () => {
+    const { runsDir, id } = runWithState(", money INTEGER, quests_completed INTEGER", [
+      [ "a-run", 100, 2, 50, 12345, 7 ],
+      // A later sample that recorded neither must not erase the last reading.
+      [ "a-run", 200, 3, 90, null, null ],
+    ]);
+    const row = readRun(runsDir, id);
+    expect(row.money).toBe(12345);
+    expect(row.questsCompleted).toBe(7);
+  });
+
+  test("a recorded zero is kept, not mistaken for nothing recorded", () => {
+    const { runsDir, id } = runWithState(", money INTEGER, quests_completed INTEGER", [
+      ["a-run", 100, 2, 50, 0, 0],
+    ]);
+    const row = readRun(runsDir, id);
+    expect(row.money).toBe(0);
+    expect(row.questsCompleted).toBe(0);
+  });
+
+  test("a schema without the columns yields null, not an error", () => {
+    const { runsDir, id } = runWithState("", [["a-run", 100, 2, 50]]);
+    const row = readRun(runsDir, id);
+    expect(row.money).toBeNull();
+    expect(row.questsCompleted).toBeNull();
+    expect(row.error).toBeUndefined();
+    // The rest of the row still reads normally against the older schema.
+    expect(row.level).toBe(2);
+  });
 });
