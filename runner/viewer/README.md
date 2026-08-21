@@ -31,8 +31,16 @@ directory never gains a schema it did not have.
 ## What it shows
 
 The index lists every directory under `data/runs`, newest first: model,
-shakeout flag, latest level and XP from the `state` table, when it started,
-playtime, total tokens, and how it ended. Start times are relative ("2h ago",
+shakeout flag, character, harness stamp (the `harness-` prefix is stripped —
+it is the same on every row; hover for the full git describe), latest level,
+XP, money and completed quests from the `state` table, when it started,
+playtime, total tokens, and how it ended.
+
+The `state` table gains signals over time and an old run directory never gains
+them retroactively, so the viewer asks each database what columns it has before
+selecting: `money` and `quests_completed` render `—` where the schema predates
+them. Zero is a real reading — a broke character has 0 copper — so only a
+missing value gets the em dash, never a recorded zero. Start times are relative ("2h ago",
 "yesterday") with the exact stamp on hover. Playtime is the wall clock the
 trajectory spans, first entry to last; a live run's cell keeps counting. A run
 counts as **live** when it has no termination reason *and* its

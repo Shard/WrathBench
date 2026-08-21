@@ -135,6 +135,26 @@ function fmtRel(ts) {
 const DRIVER_LABELS = { "claude-subscription": "claude-sdk" };
 const label = (name) => (name && DRIVER_LABELS[name]) || name;
 
+/*
+ * Copper, as the game shows it. Zero is a real reading — a character can be
+ * broke — so 0 renders "0c" and only a missing value renders an em dash.
+ */
+function fmtMoney(copper) {
+  if (copper === null || copper === undefined) return "—";
+  const g = Math.floor(copper / 10000);
+  const s = Math.floor((copper % 10000) / 100);
+  const c = copper % 100;
+  const parts = [];
+  if (g) parts.push(g + "g");
+  if (g || s) parts.push(s + "s");
+  parts.push(c + "c");
+  return parts.join(" ");
+}
+
+/* The harness stamp is a git describe — "harness-0.1-12-g542034f". The prefix
+ * is the same on every row, so it earns no width; the full string is on hover. */
+const shortHarness = (v) => (v ? String(v).replace(/^harness-/, "") : "—");
+
 /* How long the run has been going: first trajectory entry to last, and for a
  * live run, to now — it is still accruing. */
 function playtimeMs(r, now) {
@@ -177,7 +197,8 @@ async function renderIndex() {
   const main = $("#main"); main.textContent = "";
   const t = el("table");
   const head = el("tr");
-  for (const h of ["run", "state", "model", "level", "xp", "started", "playtime", "tokens", "outcome"])
+  for (const h of ["run", "state", "model", "character", "harness", "level", "xp", "money",
+    "quests", "started", "playtime", "tokens", "outcome"])
     head.append(el("th", "", h));
   t.append(head);
   const ticking = [];
@@ -188,8 +209,19 @@ async function renderIndex() {
     tr.append(c1);
     tr.append(el("td", r.live ? "live" : "dim", r.live ? "● LIVE" : (r.pauseReason ? "paused" : (r.terminationReason ? "done" : "cold"))));
     tr.append(el("td", "", (r.platform ? label(r.platform) + " · " : "") + (r.model || "—")));
+    tr.append(el("td", "", r.character || "—"));
+    const harness = el("td", "dim", shortHarness(r.harnessVersion));
+    if (r.harnessVersion) harness.title = r.harnessVersion;
+    tr.append(harness);
     tr.append(el("td", "", num(r.level)));
     tr.append(el("td", "", num(r.xp)));
+    const money = el("td", r.money === null ? "dim" : "", fmtMoney(r.money));
+    if (r.money === null) money.title = "not recorded — this run predates the money column";
+    tr.append(money);
+    const quests = el("td", r.questsCompleted === null ? "dim" : "", num(r.questsCompleted));
+    if (r.questsCompleted === null)
+      quests.title = "not recorded — this run predates the quests column";
+    tr.append(quests);
     const started = el("td", "dim", fmtRel(r.startedAt));
     started.title = fmtTs(r.startedAt);
     tr.append(started);
@@ -317,6 +349,10 @@ function breakout(tok, run) {
     if (note) d.append(el("div", "n", note));
     box.append(d);
   };
+  // World signals first: they are what the run is actually for, and unlike the
+  // token figures they mean the same thing on every driver.
+  row("money", fmtMoney(run.money), run.money === null ? "not recorded" : "on hand");
+  row("quests", num(run.questsCompleted), run.questsCompleted === null ? "not recorded" : "completed");
   if (tok.source !== "reported") {
     const why = run.driver === "claude-subscription"
       ? "usage not recorded — this run predates usage logging in the claude driver"
@@ -455,6 +491,10 @@ function renderEntry(e) {
       const bits = ["level " + num(e.level), "xp " + num(e.xp)];
       if (e.map !== undefined && e.map !== null)
         bits.push("map " + e.map + " (" + [e.x, e.y, e.z].map((v) => Number(v).toFixed(0)).join(", ") + ")");
+      // Only when the recorder put them there: an older run has neither.
+      if (typeof e.money === "number") bits.push("money " + fmtMoney(e.money));
+      const q = typeof e.quests_completed === "number" ? e.quests_completed : e.questsCompleted;
+      if (typeof q === "number") bits.push("quests " + q);
       bits.push("events " + num(e.eventCount));
       meta.append(el("span", "", bits.join(" · ")));
       break;
@@ -648,6 +688,14 @@ async function renderRun(runId) {
     const msg = JSON.parse(ev.data);
     if (msg.tokens) {
       showMetrics(msg.tokens);
+      // A live run's money and quest count move; the newest state sample in
+      // this batch is fresher than whatever the page loaded with.
+      for (const e of (msg.entries || [])) {
+        if (e.t !== "state") continue;
+        if (typeof e.money === "number") RUN.money = e.money;
+        if (typeof e.quests_completed === "number") RUN.questsCompleted = e.quests_completed;
+        if (typeof e.questsCompleted === "number") RUN.questsCompleted = e.questsCompleted;
+      }
       if (breakoutBox) {
         const next = breakout(msg.tokens, RUN);
         breakoutBox.replaceWith(next);
