@@ -192,6 +192,8 @@ namespace WrathBench
                 return HttpDeleteSession(body);
             if (method == "POST" && target == "/character-delete")
                 return HttpCharacterDelete(body);
+            if (method == "POST" && target == "/characters")
+                return HttpCharacterList(body);
 
             return {404, Json::Writer().Add("ok", false).Add("error", "not_found").Str()};
         }
@@ -387,6 +389,33 @@ namespace WrathBench
         s->account = req.GetString("account", _account);
         s->charName = req.GetString("character");
         s->deleteMode = true;
+
+        auto ack = std::make_shared<std::promise<HttpReply>>();
+        s->ack = ack;
+        auto fut = ack->get_future();
+        PushTask([this, s, ack]() { DoCreateSession(s, ack); });
+
+        if (fut.wait_for(std::chrono::seconds(20)) != std::future_status::ready)
+        {
+            PushTask([this, token]() { TeardownByToken(token); });
+            return {504, Json::Writer().Add("ok", false).Add("error", "timeout").Add("token", token).Str()};
+        }
+        return fut.get();
+    }
+
+    HttpReply Manager::HttpCharacterList(std::string const& body)
+    {
+        Json::Value req = Json::Parse(body);
+        std::string token = req.GetString("token");
+        if (token.empty())
+            return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
+        if (FindByToken(token))
+            return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
+
+        auto s = std::make_shared<BenchSession>();
+        s->token = token;
+        s->account = req.GetString("account", _account);
+        s->listMode = true;
 
         auto ack = std::make_shared<std::promise<HttpReply>>();
         s->ack = ack;
@@ -1190,6 +1219,29 @@ namespace WrathBench
             }
             case SMSG_CHAR_ENUM:
             {
+                if (s->listMode)
+                {
+                    if (phase == BenchSession::P_ENUM)
+                    {
+                        // dataJson is the whitelisted decode of this very packet:
+                        // {"count":N,"characters":[{guid,name,race,class,gender,level},...]}
+                        if (!s->ackFired.exchange(true) && s->ack)
+                            s->ack->set_value({200, Json::Writer().Add("ok", true).Add("token", s->token)
+                                .Raw("enum", dataJson).Str()});
+                        if (!s->tearingDown.exchange(true))
+                        {
+                            {
+                                std::lock_guard<std::mutex> lock(_sessMutex);
+                                _byToken.erase(s->token);
+                                if (s->ws)
+                                    _byWs.erase(s->ws);
+                            }
+                            if (s->socket)
+                                s->socket->CloseSocket();
+                        }
+                    }
+                    break;
+                }
                 if (s->deleteMode)
                 {
                     if (phase == BenchSession::P_ENUM)
