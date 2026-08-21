@@ -30,6 +30,13 @@ export const CONTEXT_POLICY = {
   /** Chat / notification tail lengths inside the state summary. */
   CHAT_TAIL: 10,
   NOTIFICATION_TAIL: 5,
+  /**
+   * Ambient-motion opcodes excluded from the model-visible event window (they
+   * still fold into the state cache, whose nearby/motion the summary reflects).
+   * Measured on gate2-ox-1: SMSG_MONSTER_MOVE alone was 69% of served events
+   * while combat/quest signal was 1.8% — the window exists for signal.
+   */
+  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE)/,
 } as const;
 
 // ------------------------------------------------------------ state summary
@@ -117,7 +124,10 @@ export interface ContextInputs {
 
 export function formatEventLine(e: EventSummary): string {
   const schema = e.schemaError !== undefined ? " [schema mismatch]" : "";
-  return `#${e.seq} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}`;
+  // A stream_gap is synthetic and carries the NEXT real event's seq; rendering
+  // that number made it look like a duplicate. Mark it as the gap it is.
+  const tag = e.opcode === "stream_gap" ? "#gap" : `#${e.seq}`;
+  return `${tag} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}`;
 }
 
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
@@ -133,12 +143,17 @@ export function assembleContext(inputs: ContextInputs): string {
 
   parts.push(inputs.stateSummary);
 
-  const window = inputs.events.slice(-CONTEXT_POLICY.EVENT_WINDOW);
+  const eligible = inputs.events.filter(
+    (e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode),
+  );
+  const excluded = inputs.events.length - eligible.length;
+  const window = eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW);
   if (window.length === 0) {
     parts.push("[events]\nnone yet");
   } else {
+    const note = excluded > 0 ? `; ${excluded} ambient movement events folded into state only` : "";
     parts.push(
-      `[events: last ${window.length}, newest last]\n${window.map(formatEventLine).join("\n")}`,
+      `[events: last ${window.length}, newest last${note}]\n${window.map(formatEventLine).join("\n")}`,
     );
   }
 

@@ -144,6 +144,29 @@ export class WrathTransportError extends Error {
 }
 
 /** The module answered, and said no. */
+/**
+ * What a real client's UI displays for SMSG_CHAR_CREATE result codes
+ * (ResponseCodes in the core; only the ones a WrathBench run can plausibly
+ * hit). Keyed by decimal code as it appears in `char_create_failed_code_<N>`.
+ */
+const CHAR_RESPONSE_HINTS: Record<number, string> = {
+  0x30: "character creation error",
+  0x31: "character creation failed",
+  0x32: "that name is already in use",
+  0x33: "character creation disabled",
+  0x35: "the account has reached its character limit on this realm",
+  0x36: "the account has reached its character limit",
+  0x3a: "class requires an expansion the account lacks",
+  0x3e: "that race/class combination is not allowed",
+  0x59: "no name given",
+  0x5a: "name too short",
+  0x5b: "name too long",
+  0x5c: "name contains an invalid character",
+  0x5d: "name mixes languages (letters only, one language)",
+  0x5e: "name is profane",
+  0x5f: "name is reserved",
+};
+
 export class WrathRequestError extends Error {
   override readonly name = "WrathRequestError";
   readonly status: number;
@@ -156,7 +179,11 @@ export class WrathRequestError extends Error {
 
   constructor(status: number, body: ErrorBody) {
     const match = /^char_create_failed_code_(\d+)$/.exec(body.error);
-    super(`module rejected request: ${body.error} (HTTP ${status})`);
+    // The numeric code is the server's word; the parenthetical is the string a
+    // real client's UI shows for it (GlobalStrings) — client-visible knowledge,
+    // added because a bare number proved unactionable in live runs.
+    const hint = match ? CHAR_RESPONSE_HINTS[Number(match[1])] : undefined;
+    super(`module rejected request: ${body.error}${hint ? ` (${hint})` : ""} (HTTP ${status})`);
     this.status = status;
     this.code = body.error;
     this.charCreateResultCode = match?.[1] !== undefined ? Number(match[1]) : undefined;
@@ -395,6 +422,21 @@ export class WrathClient {
    * Seeds the state cache with our own guid and name, which no event carries.
    */
   async createSession(request: Omit<CreateSessionRequest, "token">): Promise<SessionResponse> {
+    // Runtime guard: race/class must be numeric ids. A string like "hunter"
+    // used to be silently coerced to 0 by the module and the server then
+    // created a default Human Warrior — the wrong character with no error
+    // (observed live, gate2-ox-1). Fail loudly instead.
+    for (const key of ["race", "class"] as const) {
+      const v = (request as Record<string, unknown>)[key];
+      if (v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 11)) {
+        throw new WrathRequestError(400, {
+          ok: false,
+          error:
+            `invalid_${key}: must be a numeric id 1-11, got ${JSON.stringify(v)} ` +
+            `(e.g. race 1 = Human, class 2 = Paladin)`,
+        });
+      }
+    }
     const body: CreateSessionRequest = { token: this.token, ...request };
     const res = await this.request("POST", "/session", body, sessionResponseSchema);
     this.state.seedSelf({ guid: res.guid, name: res.character });
@@ -1113,6 +1155,12 @@ export class WrathClient {
     body: unknown,
     schema: S,
   ): Promise<z.infer<S>> {
+    if (schema === undefined || typeof (schema as { safeParse?: unknown }).safeParse !== "function") {
+      throw new TypeError(
+        `request(${method}, ${path}) needs a Zod schema as its 4th argument — ` +
+          `prefer the typed methods on the client over calling request() directly`,
+      );
+    }
     const url = `${this.baseUrl}${path}`;
     let res: Response;
     try {

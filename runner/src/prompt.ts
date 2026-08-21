@@ -19,6 +19,7 @@ Snippets run in one long-lived process. Top-level const/let/var/function/class d
   - await sdk.say(text) — say something in local chat.
   - await sdk.waitForChat(textOrPredicate, { timeout }) — wait for a chat line.
   - sdk.state — a cache folded from events: self (guid, name, level, position), characters, chat, notifications, nearby, gaps. Fields are undefined until an event carried them; undefined means unobserved, never zero.
+  - sdk.state.nearby is a Map keyed by guid string (not an array — use state.nearbyUnits() for an array of units, state.closest(filter) for the nearest match, state.creaturesByEntry(id)). Every observed field on state objects is wrapped as { value, seq, ts } so you can see how fresh it is; read x.value.
   - sdk.events — the raw event stream: on(opcode, fn), waitForOpcode(opcode, { timeout }), recent(n). Events are the server's SMSG_* packets as JSON.
   - The SDK surface may be wider than this list; inspect it from a snippet (e.g. Object.getOwnPropertyNames(Object.getPrototypeOf(sdk))) before assuming a capability is missing.
 - state, events: aliases for sdk.state and sdk.events.

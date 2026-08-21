@@ -21,6 +21,7 @@ The state summary format is a fixed line-oriented template (`formatStateSummary`
 Numbers chosen, and why they are these and not others:
 
 - **N = 64 events.** Big enough to span a combat sequence plus its loot/quest updates at Phase-0 event rates; small enough that a busy window does not drown the summary. Not tuned per model — revisiting it is a harness version bump.
+- **Ambient motion is excluded from the window** (`EVENT_WINDOW_EXCLUDE`: `SMSG_MONSTER_MOVE`, observed `MSG_MOVE_*`). Measured on the first real frontier run (gate2-ox-1, 2026-08-21): 69% of served events were wandering-NPC movement and 1.8% were combat/quest signal, so the window as first specified carried mostly noise. These events still fold into the state cache (nearby positions/motion) and remain available verbatim through the `recent_events` tool; the window annotates how many were folded away. Amended pre-freeze; the policy including this filter is the 0.x policy.
 - **24 messages ≈ 8–12 tool exchanges.** Enough short-term memory to carry a multi-step interaction (gossip → accept → move), small enough to force real use of the scratchpad.
 - **Determinism.** `assembleContext` is pure; the test suite requires byte-identical output for identical inputs, so a trajectory replays into exactly the context the model saw.
 
