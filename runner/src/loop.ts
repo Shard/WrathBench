@@ -41,22 +41,111 @@ export type LoopOutcome =
   | { kind: "terminated"; reason: TerminationReason; detail?: string }
   | { kind: "paused"; reason: PauseReason; detail?: string };
 
+export interface ContextBuilderOptions {
+  config: RunConfig & { runId: string };
+  sandbox: SandboxHost;
+  scratchpad: Scratchpad;
+  trajectory: Trajectory;
+  watchdogs: Watchdogs;
+  now?: () => number;
+}
+
+/**
+ * The per-turn preamble, shared by every driver: snapshot state, emit the
+ * periodic state line, gather the event window and assemble the fixed context
+ * message (ADR-0012). It lives in one place precisely because it *is* the
+ * context policy — a driver that assembled its own would be per-model tuning.
+ */
+export class ContextBuilder {
+  private lastStateAt = 0;
+  private live = false;
+  private readonly now: () => number;
+
+  constructor(private readonly o: ContextBuilderOptions) {
+    this.now = o.now ?? Date.now;
+  }
+
+  /** Whether the last snapshot showed a character in the world. */
+  get sessionLive(): boolean {
+    return this.live;
+  }
+
+  async snapshot(): Promise<SnapshotLike | null> {
+    try {
+      const snap = (await this.o.sandbox.stateSnapshot()) as SnapshotLike;
+      this.live = snap.self?.guid !== undefined && snap.self.guid !== null;
+      return snap;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * One turn's user context message. Records the periodic state line and the
+   * `events_served` trajectory record as a side effect, exactly as the loop
+   * did before this was extracted.
+   */
+  async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
+    const { config, trajectory, watchdogs } = this.o;
+    const snap = await this.snapshot();
+    if (snap !== null && this.now() - this.lastStateAt >= config.stateIntervalMs) {
+      this.lastStateAt = this.now();
+      const pos = snap.self?.position?.value as
+        | { map?: number; x?: number; y?: number; z?: number }
+        | undefined;
+      const level = snap.self?.level?.value as number | undefined;
+      trajectory.recordState(config.runId, {
+        level,
+        map: pos?.map,
+        x: pos?.x,
+        y: pos?.y,
+        z: pos?.z,
+        eventCount: snap.eventCount,
+        lastSeq: snap.lastSeq,
+      });
+      if (this.live) watchdogs.noteProgress(level, undefined);
+    }
+
+    pendingNotices.push(...this.o.sandbox.drainNotices());
+    let events: Parameters<typeof assembleContext>[0]["events"] = [];
+    try {
+      events = await this.o.sandbox.recentEvents(CONTEXT_POLICY.EVENT_WINDOW);
+    } catch {
+      // sandbox mid-restart: an empty window is honest
+    }
+    const contextText = assembleContext({
+      stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
+      events,
+      scratchpad: this.o.scratchpad.read(),
+      notices: pendingNotices.splice(0, pendingNotices.length),
+      turn,
+    });
+    trajectory.append({ t: "events_served", via: "context", count: events.length, events });
+    return contextText;
+  }
+}
+
 export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
-  const now = o.now ?? Date.now;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
 
-  let sessionLive = false;
-  let lastStateAt = 0;
   let window: ChatMessage[] = [];
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
+  const builder = new ContextBuilder({
+    config,
+    sandbox: o.sandbox,
+    scratchpad: o.scratchpad,
+    trajectory,
+    watchdogs,
+    ...(o.now !== undefined ? { now: o.now } : {}),
+  });
 
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
     scratchpad: o.scratchpad,
     wiki: o.wiki,
-    sessionLive: () => sessionLive,
+    sessionLive: () => builder.sessionLive,
     onEventsServed: (events) =>
       trajectory.append({ t: "events_served", via: "tool", count: events.length, events }),
   };
@@ -64,16 +153,6 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
     trajectory.setTermination(runId, reason, detail);
     return { kind: "terminated", reason, detail };
-  };
-
-  const snapshotState = async (): Promise<SnapshotLike | null> => {
-    try {
-      const snap = (await o.sandbox.stateSnapshot()) as SnapshotLike;
-      sessionLive = snap.self?.guid !== undefined && snap.self.guid !== null;
-      return snap;
-    } catch {
-      return null;
-    }
   };
 
   let turn = 0;
@@ -86,43 +165,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(verdict.reason, verdict.detail);
       }
 
-      // 2. periodic state line
-      const snap = await snapshotState();
-      if (snap !== null && now() - lastStateAt >= config.stateIntervalMs) {
-        lastStateAt = now();
-        const pos = snap.self?.position?.value as
-          | { map?: number; x?: number; y?: number; z?: number }
-          | undefined;
-        const level = snap.self?.level?.value as number | undefined;
-        trajectory.recordState(runId, {
-          level,
-          map: pos?.map,
-          x: pos?.x,
-          y: pos?.y,
-          z: pos?.z,
-          eventCount: snap.eventCount,
-          lastSeq: snap.lastSeq,
-        });
-        if (sessionLive) watchdogs.noteProgress(level, undefined);
-      }
-
-      // 3. assemble the fixed context
+      // 2. state line + 3. the fixed context (ADR-0012)
       turn++;
-      pendingNotices.push(...o.sandbox.drainNotices());
-      let events: Parameters<typeof assembleContext>[0]["events"] = [];
-      try {
-        events = await o.sandbox.recentEvents(CONTEXT_POLICY.EVENT_WINDOW);
-      } catch {
-        // sandbox mid-restart: an empty window is honest
-      }
-      const contextText = assembleContext({
-        stateSummary: formatStateSummary(snap, { sessionLive }),
-        events,
-        scratchpad: o.scratchpad.read(),
-        notices: pendingNotices.splice(0, pendingNotices.length),
-        turn,
-      });
-      trajectory.append({ t: "events_served", via: "context", count: events.length, events });
+      const contextText = await builder.build(turn, pendingNotices);
 
       const messages: ChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },

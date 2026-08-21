@@ -2,9 +2,12 @@
 /**
  * Run entry point.
  *
- *   bun runner/src/run.ts --adapter openai --model <id> [--api-base URL] [flags]
- *   bun runner/src/run.ts --adapter stub --stub <script.json> [flags]
+ *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [flags]
+ *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
+ *   bun runner/src/run.ts --driver claude-subscription --model opus  [SHAKEOUT ONLY]
  *   bun runner/src/run.ts --resume <run-id>
+ *
+ * `--adapter` is the old name for `--driver` and still works.
  *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
  * meta.json, keeps its token (so a still-alive module session is reattached by
@@ -17,7 +20,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
-import { loadRunConfig, newRunId, type RunConfig } from "./config";
+import { runClaudeEpisode } from "./adapter-claude";
+import { DRIVERS, loadRunConfig, newRunId, shakeoutStamp, type RunConfig } from "./config";
 import { runLoop } from "./loop";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
@@ -48,6 +52,10 @@ function num(v: string | boolean | undefined): number | undefined {
 async function main(): Promise<void> {
   const args = parseArgs(Bun.argv.slice(2));
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
+  if (typeof args["driver"] === "string" && !(DRIVERS as readonly string[]).includes(args["driver"])) {
+    console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
+    process.exit(2);
+  }
 
   let config: RunConfig & { runId: string; token: string };
   let resumed = false;
@@ -73,6 +81,7 @@ async function main(): Promise<void> {
       character: typeof args["character"] === "string" ? args["character"] : undefined,
       race: num(args["race"]),
       class: num(args["class"]),
+      driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
       adapter: typeof args["adapter"] === "string" ? args["adapter"] : undefined,
       model: typeof args["model"] === "string" ? args["model"] : undefined,
       apiBase:
@@ -100,20 +109,32 @@ async function main(): Promise<void> {
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
 
-  // adapter
-  let adapter: ChatAdapter;
-  if (config.adapter === "stub") {
+  // driver
+  let adapter: ChatAdapter | undefined;
+  if (config.driver === "stub") {
     if (config.stubScript === undefined) {
-      console.error("--adapter stub requires --stub <script.json>");
+      console.error("--driver stub requires --stub <script.json>");
       process.exit(2);
     }
     adapter = StubAdapter.fromScriptFile(config.stubScript);
+  } else if (config.driver === "claude-subscription") {
+    const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
+    if (token === undefined || token.trim().length === 0) {
+      console.error(
+        "--driver claude-subscription needs $CLAUDE_CODE_OAUTH_TOKEN.\n" +
+          "  generate one with:  claude setup-token\n" +
+          "  then put it in .env as CLAUDE_CODE_OAUTH_TOKEN=... (.env is gitignored)\n" +
+          "  and start the run through infra/run-episode.sh, which exports it for you.",
+      );
+      process.exit(2);
+    }
+    trajectory.redact(token);
   } else {
     const apiKey = process.env[config.apiKeyEnv];
     const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
     if (config.model === undefined || apiKey === undefined || apiBase === undefined) {
       console.error(
-        `openai adapter needs --model, --api-base (or OPENAI_BASE_URL), and $${config.apiKeyEnv} set`,
+        `openai driver needs --model, --api-base (or OPENAI_BASE_URL), and $${config.apiKeyEnv} set`,
       );
       process.exit(2);
     }
@@ -121,9 +142,16 @@ async function main(): Promise<void> {
     adapter = new OpenAiChatAdapter({ baseUrl: apiBase, apiKey, model: config.model });
   }
 
+  const shakeout = shakeoutStamp(config.driver);
   const version = harnessVersion();
   if (!resumed) {
-    trajectory.writeMeta({ runId: config.runId, harnessVersion: version, startedAt: Date.now(), config });
+    trajectory.writeMeta({
+      runId: config.runId,
+      harnessVersion: version,
+      startedAt: Date.now(),
+      config,
+      ...(shakeout !== undefined ? { shakeout } : {}),
+    });
   } else {
     trajectory.clearPause(config.runId);
     trajectory.append({ t: "resume", harnessVersion: version });
@@ -156,19 +184,14 @@ async function main(): Promise<void> {
   });
 
   console.error(
-    `[wrathbench] run ${config.runId} (${resumed ? "resumed" : "new"}) — adapter ${adapter.label}, harness ${version}`,
+    `[wrathbench] run ${config.runId} (${resumed ? "resumed" : "new"}) — driver ${config.driver}${adapter !== undefined ? ` (${adapter.label})` : ""}, harness ${version}`,
   );
+  if (shakeout !== undefined) {
+    console.error(`[wrathbench] ${shakeout.toUpperCase()} — this run is NOT a harness result`);
+  }
   console.error(`[wrathbench] trajectory: ${runDir}`);
 
-  const outcome = await runLoop({
-    config,
-    adapter,
-    sandbox,
-    scratchpad,
-    wiki,
-    trajectory,
-    watchdogs,
-    initialNotices: resumed
+  const initialNotices = resumed
       ? [
           {
             ts: Date.now(),
@@ -179,10 +202,32 @@ async function main(): Promise<void> {
               "same token: run `await connect()`, then `await sdk.createSession({...})` — a " +
               "`token_in_use` error means the session is still alive and you can simply keep " +
               "acting through `sdk`.",
-          },
+          } as const,
         ]
-      : [],
-  });
+      : [];
+
+  const outcome =
+    config.driver === "claude-subscription"
+      ? await runClaudeEpisode({
+          config,
+          runDir,
+          sandbox,
+          scratchpad,
+          wiki,
+          trajectory,
+          watchdogs,
+          initialNotices,
+        })
+      : await runLoop({
+          config,
+          adapter: adapter!,
+          sandbox,
+          scratchpad,
+          wiki,
+          trajectory,
+          watchdogs,
+          initialNotices,
+        });
 
   if (outcome.kind === "terminated") {
     // A finished run frees its module session so the account is not held

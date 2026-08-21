@@ -38,6 +38,12 @@ export interface RunMeta {
   harnessVersion: string;
   startedAt: number;
   config: RunConfig;
+  /**
+   * Set for non-scoring drivers (`SHAKEOUT_STAMP`). Present in meta.json, in
+   * the `shakeout` column of run.sqlite and in the timeline header, so a run
+   * driven by an external scaffold cannot be mistaken for a harness score.
+   */
+  shakeout?: string;
 }
 
 export interface TrajectoryRecord {
@@ -53,6 +59,10 @@ CREATE TABLE IF NOT EXISTS run (
   started_at INTEGER NOT NULL,
   ended_at INTEGER,
   adapter TEXT,
+  -- The driver is its own column, not just a key inside config_json: a
+  -- cross-run SELECT must be able to exclude shakeout runs without parsing.
+  driver TEXT,
+  shakeout TEXT,
   model TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
@@ -109,8 +119,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, adapter, model, config_json)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -118,6 +128,8 @@ export class Trajectory {
         meta.harnessVersion,
         meta.startedAt,
         meta.config.adapter,
+        meta.config.driver,
+        meta.shakeout ?? null,
         meta.config.model ?? null,
         this.scrub(jsonLine(meta.config)),
       );

@@ -6,7 +6,16 @@
 
 export const HARNESS_VERSION_FALLBACK = "0.0.0-phase0-unversioned";
 
-export function harnessVersion(): string {
+/**
+ * `WRATHBENCH_HARNESS_VERSION` wins when set. The runner normally executes in
+ * a container that has the repo mounted but no git binary and no `.git` write
+ * access; `infra/run-episode.sh` computes `git describe` on the host and passes
+ * it in, so containerised trajectories carry a real version instead of the
+ * "unversioned" fallback.
+ */
+export function harnessVersion(env: Record<string, string | undefined> = process.env): string {
+  const fromEnv = env["WRATHBENCH_HARNESS_VERSION"];
+  if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv.trim();
   try {
     const proc = Bun.spawnSync(["git", "describe", "--tags", "--always", "--dirty"], {
       cwd: import.meta.dir,

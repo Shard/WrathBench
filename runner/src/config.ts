@@ -73,9 +73,25 @@ export const runConfigSchema = z.object({
   race: z.number().int().min(1).max(11).default(1),
   class: z.number().int().min(1).max(11).default(2),
 
-  // Model adapter. `stub` plays a scripted response file: it exists to test the
-  // harness without a model, never to help a model.
-  adapter: z.enum(["openai", "stub"]).default("openai"),
+  /**
+   * Which driver runs the episode.
+   *
+   *  - `openai`: the fixed loop over an OpenAI-compatible endpoint. The only
+   *    driver a *result* run may use (ADR-0004).
+   *  - `stub`: the fixed loop over a scripted response file. Harness testing
+   *    without a model, never to help a model.
+   *  - `claude-subscription`: SHAKEOUT ONLY. Drives an episode through the
+   *    `claude` CLI on a Claude subscription. The CLI is an external scaffold
+   *    (its own conversation history, its own compaction, its own preamble), so
+   *    the context policy of ADR-0012 does not hold and the run is stamped
+   *    `shakeout-only (external scaffold)` everywhere it is recorded.
+   */
+  driver: z.enum(["openai", "claude-subscription", "stub"]).optional(),
+
+  // Legacy name for the driver, kept so old meta.json files resume. `driver`
+  // is authoritative and this is kept equal to it after parsing; nothing new
+  // should read `adapter`.
+  adapter: z.enum(["openai", "claude-subscription", "stub"]).default("openai"),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
   model: z.string().optional(),
   /** e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. */
@@ -102,7 +118,18 @@ export const runConfigSchema = z.object({
 
   watchdogs: watchdogConfigSchema.prefault({}),
 });
-export type RunConfig = z.infer<typeof runConfigSchema>;
+
+/** Every driver a run can be started with. `stub` and `claude-subscription` never score. */
+export const DRIVERS = ["openai", "claude-subscription", "stub"] as const;
+export type Driver = (typeof DRIVERS)[number];
+
+/** Drivers whose runs are harness shakeout, never a result. */
+export const SHAKEOUT_DRIVERS: readonly Driver[] = ["claude-subscription", "stub"];
+
+/** The stamp carried by meta.json, run.sqlite and the timeline for a non-scoring driver. */
+export const SHAKEOUT_STAMP = "shakeout-only (external scaffold)";
+
+export type RunConfig = z.infer<typeof runConfigSchema> & { driver: Driver };
 
 export function newRunId(now: Date = new Date()): string {
   const stamp = now
@@ -113,7 +140,29 @@ export function newRunId(now: Date = new Date()): string {
   return `run-${stamp}`;
 }
 
-/** Parse and default a run config object (e.g. from CLI flags or meta.json). */
+/**
+ * Parse and default a run config object (e.g. from CLI flags or meta.json).
+ * `driver` and the legacy `adapter` are reconciled here so exactly one of them
+ * has to be supplied and both are recorded.
+ */
 export function loadRunConfig(raw: unknown): RunConfig {
-  return runConfigSchema.parse(raw ?? {});
+  const parsed = runConfigSchema.parse(raw ?? {});
+  const explicitDriver = (raw as { driver?: unknown } | null | undefined)?.driver;
+  const driver: Driver =
+    parsed.driver ?? (explicitDriver === undefined && parsed.adapter === "stub" ? "stub" : "openai");
+  // The legacy field tracks the driver exactly, so an old
+  // `WHERE adapter = 'openai'` query cannot silently absorb a shakeout run.
+  return { ...parsed, driver, adapter: driver };
+}
+
+/** True when this driver's runs must never be read as a harness score. */
+export function isShakeoutDriver(driver: Driver): boolean {
+  return SHAKEOUT_DRIVERS.includes(driver);
+}
+
+/** The stamp a run gets, or undefined for a driver whose runs can score. */
+export function shakeoutStamp(driver: Driver): string | undefined {
+  if (driver === "claude-subscription") return SHAKEOUT_STAMP;
+  if (driver === "stub") return "shakeout-only (scripted stub)";
+  return undefined;
 }
