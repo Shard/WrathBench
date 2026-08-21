@@ -185,7 +185,7 @@ Success `200` (means "queued and pathing", not "arrived"):
 { "ok": true, "action": "move_to", "token": "run-abc123", "moveId": 1 }
 ```
 
-Additional error: `400 {"ok":false,"error":"missing_position"}`.
+Additional error: `400 {"ok":false,"error":"missing_position","action":"move_to","param":"<first missing axis>"}`.
 
 The outcome arrives as a `WB_MOVE_RESULT` event carrying the same `moveId`
 (statuses below). A `move_to` issued while a previous one is still running
@@ -210,7 +210,7 @@ Request: `{ "token": "run-abc123", "action": "face", "orientation": 1.57 }`
 or `{ "token": "run-abc123", "action": "face", "x": -8900.0, "y": -130.0 }`
 
 Success `200`: `{ "ok": true, "action": "face", "token": ..., "orientation": 1.57 }`
-Additional errors: `400 {"ok":false,"error":"missing_face_target"}`,
+Additional errors: `400 {"ok":false,"error":"missing_face_target","action":"face","param":"orientation or x,y"}`,
 `409 {"ok":false,"error":"moving"}` (stop first, or supersede with `move_to`).
 
 #### Single-opcode actions (quest/combat extension, 2026-08)
@@ -259,6 +259,12 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 Validation errors (all `400`): `missing_guid`, `missing_option`,
 `missing_quest_id`, `missing_reward_index`, `missing_spell_id`,
 `missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`.
+
+Every `missing_*` reply from `POST /action` echoes what it was about:
+`{"ok":false,"error":"missing_guid","action":"set_target","param":"guid"}`.
+A guid-shaped field (`guid`, `targetGuid`, `itemGuid`) that is present but not
+a decimal u64 string is `400 invalid_guid`, echoing `action`, `param` and the
+received value (truncated to 64 chars) — never silently coerced to guid 0.
 
 ### POST /characters
 
