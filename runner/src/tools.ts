@@ -151,7 +151,11 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
       }
       case "state_summary": {
         const snapshot = (await ctx.sandbox.stateSnapshot()) as SnapshotLike;
-        return { text: formatStateSummary(snapshot, { sessionLive: ctx.sessionLive() }) };
+        // Liveness from the snapshot just fetched, not the loop's per-turn
+        // flag: claude-driver turns span many tool calls and the stale flag
+        // contradicted the populated character data next to it.
+        const live = (snapshot as { self?: { guid?: unknown } }).self?.guid != null;
+        return { text: formatStateSummary(snapshot, { sessionLive: live }) };
       }
       case "search_reference": {
         const { query, limit } = parsed.data as { query: string; limit: number };
