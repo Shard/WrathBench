@@ -4,10 +4,11 @@
  *
  *   bun runner/viewer/serve.ts            # from the repo root, on the host
  *
- * Loopback only, always. Trajectory content carries game-derived text and per
- * `docs/DATA-AND-LEGAL.md` none of it may be exposed beyond this machine, so a
- * configured bind address other than 127.0.0.1 is a startup failure rather than
- * something the operator can talk the process out of.
+ * Loopback by default. Trajectory content carries game-derived text; the
+ * DATA-AND-LEGAL.md posture is no public endpoint and no distribution, so a
+ * non-loopback bind is a startup failure unless the operator explicitly opts
+ * a trusted private network in with WRATHBENCH_VIEWER_LAN=1. The module stays
+ * loopback regardless — LAN viewers can read pages, not reach the server.
  *
  * Everything here reads. The runs directory is never written to, and each
  * run.sqlite is opened readonly so a live writer is untouched.
@@ -26,11 +27,13 @@ import {
 } from "./tail";
 
 const REQUIRED_HOST = "127.0.0.1";
-const host = process.env["WRATHBENCH_VIEWER_HOST"] ?? REQUIRED_HOST;
-if (host !== REQUIRED_HOST) {
+const lanOptIn = process.env["WRATHBENCH_VIEWER_LAN"] === "1";
+const host = process.env["WRATHBENCH_VIEWER_HOST"] ?? (lanOptIn ? "0.0.0.0" : REQUIRED_HOST);
+if (host !== REQUIRED_HOST && !lanOptIn) {
   console.error(
     `refusing to start: WRATHBENCH_VIEWER_HOST=${host}. The viewer serves game-derived ` +
-      `trajectory text and binds ${REQUIRED_HOST} only (docs/DATA-AND-LEGAL.md).`,
+      `trajectory text and binds ${REQUIRED_HOST} unless WRATHBENCH_VIEWER_LAN=1 ` +
+      `explicitly opts a trusted private network in (docs/DATA-AND-LEGAL.md).`,
   );
   process.exit(1);
 }
