@@ -172,7 +172,11 @@ services:
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
       # Account allowlist: every surface taking an "account" param serves only
       # these (module refuses others with 403 account_not_permitted).
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,SHAKEOUT,PROBE"
+      # SHAKEOUT2 is the second subscription-lane account (parallel opus+sonnet;
+      # one live session per account). It exists in auth already; this line only
+      # takes effect when the worldserver container is next recreated, and until
+      # then the module answers 403 account_not_permitted for it.
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,SHAKEOUT,SHAKEOUT2,PROBE"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc

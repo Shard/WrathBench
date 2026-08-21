@@ -5,6 +5,12 @@
  *   ./infra/run-roster.sh infra/roster-example.json --until 07:30
  *   ./infra/run-roster.sh infra/roster-example.json --max-hours 8 --skip nvidia/nemotron-3-ultra-550b-a55b:free
  *   ./infra/run-roster.sh infra/roster-example.json --dry-run
+ *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
+ *
+ * Every entry is config: `model`, `driver` (openai | claude-subscription),
+ * `account`, `apiBase`/`apiKeyEnv` (openai only), `character`/`race`/`class`,
+ * `episodeMs`. Everything but `model` has a default, so the old shape — a bare
+ * list of `{ "model": ... }` — still means exactly what it meant before.
  *
  * One episode at a time, in roster order, each launched through
  * `infra/run-episode.sh` (so its preflight, .env handling and harness version
@@ -34,13 +40,19 @@
  */
 
 import { Database } from "bun:sqlite";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // ------------------------------------------------------------------ types
 
-interface RosterSpec {
+type Driver = "openai" | "claude-subscription";
+
+export interface RosterSpec {
   model: string;
+  /** Defaults to "openai". `claude-subscription` runs are SHAKEOUT-ONLY. */
+  driver?: Driver;
+  /** Game account for the entry's session. Omitted -> the runner's default. */
+  account?: string;
   apiBase?: string;
   apiKeyEnv?: string;
   runId?: string;
@@ -50,8 +62,10 @@ interface RosterSpec {
   episodeMs?: number;
 }
 
-interface Resolved {
+export interface Resolved {
   model: string;
+  driver: Driver;
+  account: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
   runId: string;
@@ -82,6 +96,10 @@ const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
 const CHILD_TERM_GRACE_MS = 30_000;
 const RUNS_DIR = "data/runs";
+/** A trajectory touched more recently than this belongs to a live process. */
+const LIVE_TRAJECTORY_MS = 3 * 60_000;
+const ACCOUNT_WAIT_POLL_MS = 60_000;
+const ACCOUNT_WAIT_MAX_MS = 30 * 60_000;
 
 const REPO_ROOT = dirname(import.meta.dir);
 const COMPOSE_FILE = join(REPO_ROOT, "infra", "compose.yml");
@@ -92,6 +110,7 @@ const EPISODE_SH = join(REPO_ROOT, "infra", "run-episode.sh");
 function parseArgs(argv: string[]): {
   roster: string | undefined;
   dryRun: boolean;
+  loop: boolean;
   resumeRoster: boolean;
   until: string | undefined;
   maxHours: number | undefined;
@@ -102,6 +121,7 @@ function parseArgs(argv: string[]): {
 } {
   let roster: string | undefined;
   let dryRun = false;
+  let loop = false;
   let resumeRoster = false;
   let until: string | undefined;
   let maxHours: number | undefined;
@@ -114,6 +134,9 @@ function parseArgs(argv: string[]): {
     switch (a) {
       case "--dry-run":
         dryRun = true;
+        break;
+      case "--loop":
+        loop = true;
         break;
       case "--resume-roster":
         resumeRoster = true;
@@ -156,7 +179,7 @@ function parseArgs(argv: string[]): {
         roster = a;
     }
   }
-  return { roster, dryRun, resumeRoster, until, maxHours, skip, freeTokens, date, log };
+  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log };
 }
 
 function usage(): void {
@@ -169,6 +192,8 @@ function usage(): void {
       "  --skip <model-id>    omit a model from the roster (repeatable)",
       "  --free-tokens a,b    DELETE /session for these tokens (run ids) before starting —",
       "                       a hand-started paused run still holds the shared game account",
+      "  --loop               when the roster is exhausted, start over (cycle 2+ run ids get a",
+      "                       -cN suffix so each pass is its own run). Requires --until/--max-hours",
       "  --resume-roster      continue a partially completed roster",
       "  --date YYYYMMDD      the stamp in derived run ids and the log name. Defaults to today —",
       "                       pass the ORIGINAL date when resuming a roster after midnight, or the",
@@ -209,17 +234,23 @@ function deriveCharacter(model: string, taken: Set<string>): string {
   return name.slice(0, 11) + "Z";
 }
 
-function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
+export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
   const taken = new Set<string>();
   const out: Resolved[] = [];
   for (const s of specs) {
     if (typeof s.model !== "string" || s.model.length === 0) {
       throw new Error(`roster entry without a model: ${JSON.stringify(s)}`);
     }
+    const driver = s.driver ?? "openai";
+    if (driver !== "openai" && driver !== "claude-subscription") {
+      throw new Error(`roster entry ${s.model}: unknown driver ${String(driver)}`);
+    }
     const character = s.character ?? deriveCharacter(s.model, taken);
     taken.add(character.toLowerCase());
     out.push({
       model: s.model,
+      driver,
+      account: s.account,
       apiBase: s.apiBase ?? DEFAULT_API_BASE,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
       runId: s.runId ?? `roster-${slug(s.model)}-${stamp}`,
@@ -232,20 +263,19 @@ function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
   return out;
 }
 
-function episodeArgv(spec: Resolved, resume: boolean): string[] {
+/**
+ * The api-base/api-key-env pair is meaningless to the claude-subscription
+ * driver (it authenticates through the `claude` CLI's own OAuth token), so a
+ * claude entry gets neither flag. Everything else is driver-independent.
+ */
+export function episodeArgv(spec: Resolved, resume: boolean): string[] {
   if (resume) return [EPISODE_SH, "--resume", spec.runId];
-  return [
-    EPISODE_SH,
-    "--driver",
-    "openai",
-    "--model",
-    spec.model,
-    "--run-id",
-    spec.runId,
-    "--api-base",
-    spec.apiBase,
-    "--api-key-env",
-    spec.apiKeyEnv,
+  const argv = [EPISODE_SH, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
+  if (spec.driver === "openai") {
+    argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
+  }
+  if (spec.account !== undefined) argv.push("--account", spec.account);
+  argv.push(
     "--character",
     spec.character,
     "--race",
@@ -254,7 +284,13 @@ function episodeArgv(spec: Resolved, resume: boolean): string[] {
     String(spec.class),
     "--episode-ms",
     String(spec.episodeMs),
-  ];
+  );
+  return argv;
+}
+
+/** A cycle-2+ copy of a spec: same identity, its own run id. */
+export function forCycle(spec: Resolved, cycle: number): Resolved {
+  return cycle <= 1 ? spec : { ...spec, runId: `${spec.runId}-c${cycle}` };
 }
 
 // ------------------------------------------------------------------- run state
@@ -341,6 +377,105 @@ function turnsSince(runId: string, sinceTs: number): number {
     return n;
   }
   return n;
+}
+
+// ------------------------------------------------------------- account guard
+
+/**
+ * The core allows one live session per game account, and the module answers
+ * `account_in_use` to the second createSession. Two roster processes (the
+ * two-wide pattern) or a hand-started run therefore have to stay off each
+ * other's account.
+ *
+ * `freeSession` cannot be the answer here: it is keyed on `token == runId`, so
+ * it only ever frees the session of the very run the roster is about to launch
+ * or resume — never someone else's. Freeing another run's session would kick a
+ * *running* process out of the world. So the guard only reads, and waits.
+ *
+ * "Live" is inferred from the run's own files: no termination row, and either
+ * a pause row (a paused run holds its session deliberately) or a write in the
+ * last few minutes. A crashed run — no termination row, no pause row, cold
+ * files — is not live and is not waited on. Deliberately no process scan: the
+ * only pattern available for one (`*run.ts*<runId>*`, as in signalInContainer)
+ * is a substring match, and `roster-x-<date>` is a prefix of the loop's
+ * `roster-x-<date>-c2`, so cycle 2 would see cycle 1 as forever alive.
+ * The spec's own run id is always excluded — a `--resume` attempt would
+ * otherwise refuse to launch the entry it is guarding, forever.
+ */
+function accountOfRun(runId: string): string | undefined {
+  const path = join(runDir(runId), "meta.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { account?: string } };
+    return meta.config?.account;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Age of the most recently touched artefact of a run, whichever it is. */
+function activityAgeMs(runId: string): number | undefined {
+  let newest: number | undefined;
+  for (const name of ["trajectory.jsonl", "run.sqlite"]) {
+    try {
+      const m = statSync(join(runDir(runId), name)).mtimeMs;
+      if (newest === undefined || m > newest) newest = m;
+    } catch {
+      // not written yet
+    }
+  }
+  return newest === undefined ? undefined : Date.now() - newest;
+}
+
+/** @returns the run id holding `account`, or undefined when it is free. */
+export function accountHeldBy(account: string | undefined, ownRunId: string): string | undefined {
+  const want = (account ?? "RUNNER").toUpperCase();
+  let dirs: string[];
+  try {
+    dirs = readdirSync(join(REPO_ROOT, RUNS_DIR));
+  } catch {
+    return undefined;
+  }
+  for (const id of dirs) {
+    if (id === ownRunId) continue;
+    const acct = accountOfRun(id);
+    if (acct === undefined || acct.toUpperCase() !== want) continue;
+    const row = readRunRow(id);
+    if (row !== undefined && row.termination_reason !== null && row.termination_reason !== "") continue;
+    // A PAUSED run keeps its module session alive on purpose (that is what
+    // --resume reattaches to), so it holds the account however cold its files
+    // have gone. Anything else is judged by recent writes.
+    if (row !== undefined && row.pause_reason !== null && row.pause_reason !== "") return id;
+    const age = activityAgeMs(id);
+    if (age !== undefined && age < LIVE_TRAJECTORY_MS) return id;
+  }
+  return undefined;
+}
+
+/** @returns true when the account came free (or was never held). */
+async function awaitAccount(
+  spec: Resolved,
+  deadline: number | undefined,
+  dryRun: boolean,
+): Promise<boolean> {
+  if (dryRun) return true;
+  const giveUp = Date.now() + ACCOUNT_WAIT_MAX_MS;
+  for (;;) {
+    const holder = accountHeldBy(spec.account, spec.runId);
+    if (holder === undefined) return true;
+    if (stopping || Date.now() >= giveUp || (deadline !== undefined && Date.now() >= deadline)) {
+      say(`account ${spec.account ?? "RUNNER"} still held by ${holder} — skipping ${spec.runId}`);
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "skipped",
+        detail: `account ${spec.account ?? "RUNNER"} in use by ${holder}`,
+      });
+      return false;
+    }
+    say(`account ${spec.account ?? "RUNNER"} is live under ${holder} — waiting before ${spec.runId}`);
+    await nap(ACCOUNT_WAIT_POLL_MS, deadline, `account ${spec.account ?? "RUNNER"} held by ${holder}`);
+  }
 }
 
 // ------------------------------------------------------------------ output
@@ -539,6 +674,7 @@ async function attemptSpec(
 ): Promise<"done" | "defer"> {
   let resume = opts.resume;
   for (let retry = 0; ; retry++) {
+    if (!(await awaitAccount(spec, opts.deadline, opts.dryRun))) return "done";
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchTs = Date.now();
     say(
@@ -590,6 +726,26 @@ async function attemptSpec(
         outcome: "paused-operator",
         ...(level !== undefined ? { level } : {}),
         detail: verdict.reason,
+      });
+      await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
+      return "done";
+    }
+
+    // The defer/retry queue exists for OpenRouter's per-provider free-tier
+    // pools: another model's pool may be open while this one is saturated, so
+    // advancing and coming back is the useful move. A Claude subscription has
+    // no such per-provider structure — its episodes end at the episode or
+    // tool-call limit, and a pause that does happen will not be cleared by
+    // running a different model first. So a claude entry never defers: it is
+    // recorded and the roster advances.
+    if (spec.driver === "claude-subscription") {
+      say(`paused ${spec.runId}: ${verdict.reason} (claude-subscription — no defer queue), advancing`);
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "paused-operator",
+        ...(level !== undefined ? { level } : {}),
+        detail: `${verdict.reason}; claude-subscription entries are not deferred; turns ${turns}`,
       });
       await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
       return "done";
@@ -688,6 +844,10 @@ async function main(): Promise<void> {
     say(`skipping ${before - specs.length} model(s): ${[...skip].join(", ")}`);
   }
   const deadline = computeDeadline(args.until, args.maxHours);
+  if (args.loop && deadline === undefined) {
+    console.error("run-roster: --loop needs a stop condition (--until HH:MM or --max-hours N)");
+    process.exit(2);
+  }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
 
   const pending: Attempt[] = [];
@@ -736,9 +896,16 @@ async function main(): Promise<void> {
       const s = a.spec;
       // A resumed episode reloads identity from meta.json; the derived values
       // here would be a lie, so show what it will actually use.
+      const endpoint =
+        s.driver === "openai"
+          ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n`
+          : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
-        : `   character ${s.character} (race ${s.race}, class ${s.class})\n   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
+        : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}\n` +
+          `   character ${s.character} (race ${s.race}, class ${s.class})\n` +
+          endpoint +
+          `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
       console.log(
         `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session token=${s.runId} via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
       );
@@ -746,8 +913,21 @@ async function main(): Promise<void> {
     if (args.freeTokens.length > 0) {
       console.log(`\npre-roster: DELETE /session for tokens ${args.freeTokens.join(", ")}`);
     }
+    if (args.loop) {
+      console.log(
+        `\nloop: after the last entry the roster starts over until the budget is spent.` +
+          `\n      cycle 2 run ids: ${pending.map((a) => forCycle(a.spec, 2).runId).join(", ")}`,
+      );
+    }
+    console.log(
+      `\nguard:  an entry waits (poll ${ACCOUNT_WAIT_POLL_MS / 60_000}m, give up after ${ACCOUNT_WAIT_MAX_MS / 60_000}m)` +
+        ` while another run holds its account — no termination row,\n        and either a pause row or a write in the last` +
+        ` ${LIVE_TRAJECTORY_MS / 60_000}m. Never frees another run's session.` +
+        `\n        accounts in this roster: ${[...new Set(pending.map((a) => a.spec.account ?? "RUNNER (default)"))].join(", ")}`,
+    );
     console.log(
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
+        `\n        claude-subscription entries never defer (no per-provider pools to wait on)` +
         `\n        mid-episode pause -> --resume with backoff ${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, then defer` +
         `\n        retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each` +
         `\n        roster log: ${logPath}`,
@@ -764,15 +944,27 @@ async function main(): Promise<void> {
   }
 
   let queue: Attempt[] = [];
-  for (const a of pending) {
-    if (stopping) break;
-    if (deadline !== undefined && Date.now() >= deadline) {
-      say(`wall-clock budget reached — not launching ${a.spec.model}`);
-      record({ runId: a.spec.runId, model: a.spec.model, outcome: "budget-stop", detail: "not launched" });
-      continue;
+  for (let cycle = 1; ; cycle++) {
+    // Cycle 1 is the roster as written (so a non-loop run is byte-identical to
+    // before). Later cycles are fresh runs under `-cN` run ids: reusing the run
+    // id would append to one trajectory and overwrite the run row that
+    // classify() reads. Characters are deliberately reused — a fresh episode
+    // wipes the account's characters first, so cycle N starts at level 1 either
+    // way. Loop mode burns tokens; it does not accumulate progress.
+    const attempts = cycle === 1 ? pending : pending.map((a) => ({ spec: forCycle(a.spec, cycle), resume: false }));
+    if (cycle > 1) say(`loop cycle ${cycle}: restarting the roster (${attempts.length} episode(s))`);
+    for (const a of attempts) {
+      if (stopping) break;
+      if (deadline !== undefined && Date.now() >= deadline) {
+        say(`wall-clock budget reached — not launching ${a.spec.model}`);
+        record({ runId: a.spec.runId, model: a.spec.model, outcome: "budget-stop", detail: "not launched" });
+        continue;
+      }
+      const res = await attemptSpec(a.spec, { resume: a.resume, deadline, dryRun: false });
+      if (res === "defer") queue.push({ spec: a.spec, resume: true });
     }
-    const res = await attemptSpec(a.spec, { resume: a.resume, deadline, dryRun: false });
-    if (res === "defer") queue.push({ spec: a.spec, resume: true });
+    if (!args.loop || stopping) break;
+    if (deadline !== undefined && Date.now() >= deadline) break;
   }
 
   for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping; cycle++) {

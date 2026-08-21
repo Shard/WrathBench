@@ -78,6 +78,12 @@ one-live-session-per-account limit. On a fresh machine create it once with:
       -e WRATHBENCH_ACCOUNT_USER=PROBE -e WRATHBENCH_ACCOUNT_PASSWORD=PROBE \
       bootstrap
 
+Every extra account is made the same way — `SHAKEOUT`, `RUNNER2`, `SHAKEOUT2`.
+It is a pure auth-database write, so it is safe on a running server (add
+`--no-deps` to keep `compose run` from touching `db-import`), but the account is
+not usable by the module until it is in `AC_WRATH_BENCH_ACCOUNTS`, which is read
+when the worldserver container is created.
+
 
 It writes SQL directly rather than using SOAP or the worldserver console. SOAP
 cannot create the *first* account — `ACSoap.cpp` requires the caller to be
@@ -100,6 +106,59 @@ Override the defaults with `WRATHBENCH_ACCOUNT_USER`,
 `WRATHBENCH_DB_ROOT_PASSWORD` in the environment or a local `.env`. Usernames
 and passwords are uppercased before hashing, as AzerothCore does; use uppercase
 values to keep that a non-question.
+
+## Rosters
+
+`infra/run-roster.sh <roster.json>` runs a list of episodes one at a time
+through `run-episode.sh`. The roster JSON is a plain array; every entry is
+config and everything but `model` has a default, so an old bare
+`[{ "model": ... }]` roster still produces exactly the argv it always did:
+
+| key | default | notes |
+| --- | --- | --- |
+| `model` | — | required, passed through verbatim |
+| `driver` | `openai` | or `claude-subscription` (SHAKEOUT lane only) |
+| `account` | runner default (`RUNNER`) | one live session per account |
+| `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
+| `character`, `race`, `class` | derived from the model, Human Paladin | |
+| `episodeMs` | 5400000 (90m) | |
+| `runId` | `roster-<model-slug>-<date>` | |
+
+`--loop` restarts the roster when the list is exhausted, until `--until` or
+`--max-hours` (one of which it requires). Cycle 2 onward gets `-cN` run ids;
+characters are reused, and since a fresh episode wipes the account's characters
+first, every cycle starts at level 1. Loop mode burns tokens, it does not build
+a levelling curve.
+
+Before each launch the roster checks whether another run already holds the
+entry's account — no termination row, and either a pause row or a write in the
+last few minutes — and waits rather than launching into `account_in_use`. It
+only ever *frees* its own session (`DELETE /session` is keyed on
+`token == runId`); another process's session is never touched.
+
+Two rosters ship for the subscription lane:
+
+- `roster-claude.json` — opus and sonnet alternating on `SHAKEOUT`, 90m each.
+  Runnable today: `./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30`.
+- `roster-claude-2wide.json` — opus on `SHAKEOUT`, sonnet on `SHAKEOUT2`, for
+  running the two lanes at the same time. **Not runnable until the worldserver
+  is next recreated**: the account exists in auth, but `SHAKEOUT2` only enters
+  the module's `AC_WRATH_BENCH_ACCOUNTS` allowlist on container recreate, and
+  until then every createSession on it answers 403 `account_not_permitted`.
+
+The roster runs its entries sequentially by design. Two lanes in parallel means
+two roster processes, one per JSON, each with its own account and its own
+`--log` path so the two JSONLs do not interleave:
+
+    ./infra/run-roster.sh infra/roster-claude-2wide.json --skip sonnet \
+      --log data/runs/roster-opus.jsonl --loop --until 07:30 &
+    ./infra/run-roster.sh infra/roster-claude-2wide.json --skip opus \
+      --log data/runs/roster-sonnet.jsonl --loop --until 07:30 &
+
+The account guard is what keeps those two honest if a lane is ever pointed at
+the wrong account. Do not run `roster-claude.json` and `roster-claude-2wide.json`
+on the same day at the same time: both derive their run ids from the model name
+(`roster-opus-<date>`), so the two opus entries would be the same run.
 
 ## Where data lives
 
