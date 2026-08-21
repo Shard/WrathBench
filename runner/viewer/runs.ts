@@ -23,6 +23,9 @@ export interface RunRow {
   adapter: string | null;
   shakeout: string | null;
   character: string | null;
+  /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
+  platform: string | null;
+  apiBase: string | null;
   harnessVersion: string | null;
   startedAt: number | null;
   endedAt: number | null;
@@ -78,7 +81,28 @@ interface MetaShape {
   harnessVersion?: string;
   startedAt?: number;
   shakeout?: string;
-  config?: { model?: string; driver?: string; adapter?: string; character?: string };
+  config?: { model?: string; driver?: string; adapter?: string; character?: string; apiBase?: string };
+}
+
+/**
+ * Name the platform a run's model came from. The api base is the honest source
+ * — the driver only says how we talked to it, not who served the weights.
+ */
+export function platformOf(apiBase: string | null, driver: string | null): string | null {
+  if (apiBase !== null) {
+    let host = apiBase;
+    try {
+      host = new URL(apiBase).hostname;
+    } catch {
+      /* a malformed base still tells us something; fall through with the raw string */
+    }
+    if (host.includes("openrouter.ai")) return "openrouter";
+    if (host.includes("api.anthropic.com")) return "anthropic";
+    if (host.includes("api.openai.com")) return "openai";
+    if (host.includes("localhost") || host.startsWith("127.")) return "local";
+    return host.replace(/^api\./, "");
+  }
+  return driver;
 }
 
 function readMetaSafe(dir: string): MetaShape | null {
@@ -107,6 +131,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     adapter: null,
     shakeout: null,
     character: null,
+    platform: null,
+    apiBase: null,
     harnessVersion: null,
     startedAt: null,
     endedAt: null,
@@ -130,6 +156,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.driver = str(meta.config?.driver) ?? str(meta.config?.adapter);
     row.adapter = str(meta.config?.adapter);
     row.character = str(meta.config?.character);
+    row.apiBase = str(meta.config?.apiBase);
   }
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -155,6 +182,13 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
         row.pauseReason = str(r["pause_reason"]);
+        if (row.apiBase === null && typeof r["config_json"] === "string") {
+          try {
+            row.apiBase = str((JSON.parse(r["config_json"]) as { apiBase?: unknown }).apiBase);
+          } catch {
+            /* a run row with unparseable config still lists */
+          }
+        }
       }
       const last = db
         .query(
@@ -173,6 +207,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     }
   }
 
+  row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;
   return row;
