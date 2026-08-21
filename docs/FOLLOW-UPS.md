@@ -20,9 +20,10 @@ priority. Items graduate out of this file into commits; the dev loop
 3. ~~Gate 3 rerun~~ **PASSED 2026-08-21** (gate2-ox-4): 2h06m, 123 turns,
    zero harness-attributable errors (6 snippet errors, all model-attributable;
    no watchdog fires, no sandbox restarts, no harness notices).
-4. **Gate 4 rehearsal**: fresh-machine bring-up from compose + `data/` only —
-   clean volumes, rebuild, bootstrap, extraction skipped (data exists), smoke
-   probe. Document as the quick-start in README.md.
+4. ~~Gate 4 rehearsal~~ **PASSED 2026-08-21**: down -v, fresh up, db
+   re-import, bootstrap verified, module-slice + session-state probes PASS,
+   spectator ports green; Quick Start in README validated (images prebuilt —
+   fresh-machine compile of the pinned tree is the one unexercised step).
 
 ## Harness quality
 
@@ -96,9 +97,10 @@ priority. Items graduate out of this file into commits; the dev loop
 
 11. ~~data/runs/run-mcp-check~~ Deleted 2026-08-21 (pre-fix artifact, no
     termination record).
-12. Harness version still reads `git describe --dirty` at run time; freeze to
-    a tagged 0.1 once gates 3 and 4 close, per ADR-0004 (everything to date is
-    harness validation, not results).
+12. ~~Tag 0.1~~ **Done 2026-08-21**: all four gates passed; tagged
+    `harness-0.1` (annotated). Runs launched via run-episode.sh now stamp
+    `harness-0.1[-N-gHASH]` from git describe. Everything before the tag was
+    harness validation, not results (ADR-0004).
 13. **Metric design against grind collapse** (before Phase-1 measurement):
     RuneBench's own site records that raw total-XP "punished exploration" and
     collapsed to "simple grind with as little stopping as possible"; they
