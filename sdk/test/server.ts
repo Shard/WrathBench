@@ -37,6 +37,7 @@ function json(body: unknown, status = 200): Response {
 export function startStub(options: StubOptions = {}): StubServer {
   const sockets = new Set<ServerWebSocket<{ token: string }>>();
   let connections = 0;
+  let moveIdGen = 0;
 
   const server = Bun.serve<{ token: string }, never>({
     port: 0,
@@ -77,7 +78,21 @@ export function startStub(options: StubOptions = {}): StubServer {
         return options.routes?.deleteSession?.() ?? json({ ok: true, token: "stub" });
       }
       if (url.pathname === "/action" && req.method === "POST") {
-        return options.routes?.action?.() ?? json({ ok: true, action: "say", token: "stub" });
+        const override = options.routes?.action?.();
+        if (override) return override;
+        // The default ack mirrors the module: shape depends on the action, and
+        // `move_to` hands back the moveId its WB_MOVE_RESULT will carry.
+        return req.json().then((body) => {
+          const action = (body as { action?: string }).action ?? "say";
+          if (action === "move_to") {
+            return json({ ok: true, action, token: "stub", moveId: ++moveIdGen });
+          }
+          if (action === "face") {
+            const b = body as { orientation?: number; x?: number; y?: number };
+            return json({ ok: true, action, token: "stub", orientation: b.orientation ?? 0 });
+          }
+          return json({ ok: true, action, token: "stub" });
+        });
       }
       return new Response("not found", { status: 404 });
     },

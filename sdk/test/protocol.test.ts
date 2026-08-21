@@ -9,17 +9,24 @@ import {
   isDecodeError,
   isEvent,
   isKnownOpcode,
+  isMoveOpcode,
   KNOWN_OPCODES,
+  MOVE_OPCODES,
+  moveToResponseSchema,
   parseEventFrame,
   sessionResponseSchema,
+  updateObjectDataSchema,
 } from "../src/protocol";
 import {
   chatEcho,
+  creatureCreate,
+  CREATURE_GUID,
   fullStream,
-  futureUpdateObject,
+  futureOpcode,
   healthResponseFixture,
   loginSequence,
   malformedChat,
+  moveResult,
   sessionResponseFixture,
   undecodableChat,
 } from "./fixtures";
@@ -84,9 +91,36 @@ describe("event frames", () => {
       "SMSG_NOTIFICATION",
       "SMSG_NAME_QUERY_RESPONSE",
       "SMSG_MESSAGECHAT",
+      "SMSG_UPDATE_OBJECT",
+      "SMSG_DESTROY_OBJECT",
+      "SMSG_CREATURE_QUERY_RESPONSE",
+      "WB_MOVE_PROGRESS",
+      "WB_MOVE_RESULT",
+      ...MOVE_OPCODES,
     ]);
     expect(isKnownOpcode("SMSG_MESSAGECHAT")).toBe(true);
-    expect(isKnownOpcode("SMSG_UPDATE_OBJECT")).toBe(false);
+    expect(isKnownOpcode("SMSG_UPDATE_OBJECT")).toBe(true);
+    expect(isKnownOpcode("SMSG_TRAINER_LIST")).toBe(false);
+  });
+
+  test("every observed MSG_MOVE_* name shares the one movement payload", () => {
+    for (const opcode of MOVE_OPCODES) {
+      expect(isMoveOpcode(opcode)).toBe(true);
+      const parsed = parseEventFrame(
+        JSON.stringify({
+          seq: 0,
+          opcode,
+          opcodeId: 0xb5,
+          ts: 1,
+          data: { guid: "42", flags: 1, pos: { x: 1, y: 2, z: 3, o: 4 } },
+        }),
+      );
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect((parsed.event as { schemaError?: string }).schemaError).toBeUndefined();
+      expect((parsed.event.data as { guid: bigint }).guid).toBe(42n);
+    }
+    expect(isMoveOpcode("MSG_MOVE_TELEPORT_ACK")).toBe(false);
   });
 
   test("every fixture frame parses, envelope intact", () => {
@@ -137,10 +171,67 @@ describe("event frames", () => {
   });
 
   test("an opcode added after this revision passes through with raw data", () => {
-    const result = parseEventFrame(JSON.stringify(futureUpdateObject));
+    const result = parseEventFrame(JSON.stringify(futureOpcode));
     if (!result.ok) throw new Error("unknown opcodes must not fail");
-    expect(result.event.opcode).toBe("SMSG_UPDATE_OBJECT");
-    expect((result.event.data as { blockCount: number }).blockCount).toBe(1);
+    expect(result.event.opcode).toBe("SMSG_TRAINER_LIST");
+    expect((result.event.data as { count: number }).count).toBe(1);
+  });
+
+  test("a creature guid above 2^63 survives the frame as an exact string", () => {
+    // The regression this pins: a guid emitted as a JSON *number* is corrupted
+    // by JSON.parse before any schema can see it, so the fixture has to be a
+    // string — as the module writes it — and it has to round-trip exactly.
+    const frame = JSON.stringify(creatureCreate).replace(/\s+/g, "");
+    expect(frame).toContain(`"guid":"${CREATURE_GUID}"`);
+    const result = parseEventFrame(frame);
+    if (!result.ok) throw new Error("update-object frame should parse");
+    const objects = (result.event.data as { objects: { guid: bigint }[] }).objects;
+    const guid = objects[0]?.guid as bigint;
+    expect(guidKey(guid)).toBe(CREATURE_GUID);
+    // …and the number path is exactly what it protects against.
+    expect(String(Number(CREATURE_GUID))).not.toBe(CREATURE_GUID);
+  });
+
+  test("update blocks decode by kind, and an unknown kind still survives", () => {
+    const parsed = updateObjectDataSchema.parse({
+      blocks: 5,
+      objects: [
+        { update: "create", guid: "5", objectType: "gameObject", fields: { entry: 1, goState: 1 } },
+        { update: "values", guid: "5", fields: { health: 3 } },
+        { update: "movement", guid: "5", pos: { x: 1, y: 2, z: 3, o: 0 }, moveFlags: 2 },
+        { update: "outOfRange", guids: ["5", "6"] },
+        { update: "somethingLater", guid: "5" },
+      ],
+    });
+    expect(parsed.objects.map((o) => o.update)).toEqual([
+      "create",
+      "values",
+      "movement",
+      "outOfRange",
+      "somethingLater",
+    ]);
+    const outOfRange = parsed.objects[3] as { guids: bigint[] };
+    expect(outOfRange.guids).toEqual([5n, 6n]);
+  });
+
+  test("a create block without a position parses — not every object has one", () => {
+    const parsed = updateObjectDataSchema.parse({
+      blocks: 1,
+      objects: [{ update: "create", guid: "5", objectType: "item", fields: {} }],
+    });
+    expect((parsed.objects[0] as { pos?: unknown }).pos).toBeUndefined();
+  });
+
+  test("moveId is a number on the wire, and a numeric string is tolerated", () => {
+    expect(moveToResponseSchema.parse({ ok: true, action: "move_to", token: "t", moveId: 3 }).moveId).toBe(3);
+    expect(moveToResponseSchema.parse({ ok: true, action: "move_to", token: "t", moveId: "3" }).moveId).toBe(3);
+  });
+
+  test("a move status this revision does not know still parses", () => {
+    const result = parseEventFrame(JSON.stringify(moveResult("some_future_status")));
+    if (!result.ok) throw new Error("frame should parse");
+    expect(isEvent(result.event, "WB_MOVE_RESULT")).toBe(true);
+    expect((result.event.data as { status: string }).status).toBe("some_future_status");
   });
 
   test("a broken envelope is a parse failure, not a silent drop", () => {
