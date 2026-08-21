@@ -131,8 +131,11 @@ first, every cycle starts at level 1. Loop mode burns tokens, it does not build
 a levelling curve.
 
 Before each launch the roster checks whether another run already holds the
-entry's account — no termination row, and either a pause row or a write in the
-last few minutes — and waits rather than launching into `account_in_use`. It
+entry's account — no termination row and a write in the last few minutes — and
+waits (polling, giving up after 30 minutes) rather than launching into
+`account_in_use`. This applies to old rosters too: an entry without `account`
+is guarded on `RUNNER`, so it now waits behind a live hand-started run there
+where before it launched and failed in seconds. It
 only ever *frees* its own session (`DELETE /session` is keyed on
 `token == runId`); another process's session is never touched.
 
