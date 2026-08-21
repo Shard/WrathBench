@@ -39,9 +39,17 @@ priority. Items graduate out of this file into commits; the dev loop
    events the aborted first session delivered). `StateCache.apply` now assigns
    `lastSeq` from every non-gap event; `eventCount` remains a lifetime counter
    across sessions by design.
-7. Whitelist census review once a few long runs have fed
-   `/health.droppedByOpcode` — expand the observation whitelist where the
-   census says models are blind to something a client would show.
+7. ~~Whitelist census review~~ **Done 2026-08-21** over 11 runs (1,723
+   drops): no dropped opcode showed a model demonstrably blocked — the
+   ADR-0015 small-surface bar holds, all skipped. Two watch-items to
+   re-check later, both flagged by the census rather than by a hurt run:
+   - `SMSG_QUESTGIVER_STATUS_MULTIPLE`: agents currently get no passive
+     quest-marker signal at all (the whitelisted singular STATUS only
+     answers explicit queries) and compensate with wiki lookups; fine in
+     Northshire's ~5-NPC hub, may not scale to bigger zones.
+   - `SMSG_INITIAL_SPELLS`: CONTRACTS promises "known spells" as an
+     observation but no opcode serves it; add when a spellcasting class
+     first needs `cast_spell` against uncertain ids, not before.
 8. Claude-driver ContextBuilder: state sampling and watchdog checks are solid
    now, but a `window-exhausted` pause still loses the CLI's accumulated
    context on resume (documented; acceptable for shakeout).
