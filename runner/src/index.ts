@@ -9,7 +9,7 @@
  *   bun runner/src/classify.ts  manual termination classification
  */
 
-export { loadRunConfig, newRunId, runConfigSchema, watchdogConfigSchema, TERMINATION_REASONS, PAUSE_REASONS } from "./config";
+export { loadRunConfig, newRunId, runConfigSchema, watchdogConfigSchema, TERMINATION_REASONS, PAUSE_REASONS, normalizePauseReason } from "./config";
 export type { RunConfig, WatchdogConfig, TerminationReason, PauseReason } from "./config";
 
 export { SandboxHost } from "./sandbox/host";

@@ -134,9 +134,12 @@ const LIMIT_PATTERNS = [
 ];
 
 /**
- * Subscription window exhaustion, as the CLI reports it. A spent window says
- * nothing about the model, so it is a PAUSE — the run resumes when the window
- * does (see PAUSE_REASONS in config.ts).
+ * Subscription usage-window exhaustion, as the CLI reports it — the one place
+ * where an exhausted *window* is literally what happened; it is still the same
+ * spent-budget condition the API adapter's 402/quota path hits, so it shares
+ * the `quota-exhausted` pause reason (see PAUSE_REASONS in config.ts). A spent
+ * budget says nothing about the model, so it is a PAUSE: the run resumes when
+ * the window does.
  *
  * Only ever called on CLI-originated text: stderr, an unparseable stdout line,
  * or an errored `result`. Never on assistant output — an agent narrating "the
@@ -154,7 +157,7 @@ export function detectLimit(text: string | undefined | null): { reason: PauseRea
     const ms = raw > 1e11 ? raw : raw * 1000;
     detail = `${detail} (resets at ${new Date(ms).toISOString()})`;
   }
-  return { reason: "window-exhausted", detail };
+  return { reason: "quota-exhausted", detail };
 }
 
 // ------------------------------------------------------------------- stream

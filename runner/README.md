@@ -147,7 +147,7 @@ actually returns to the runner:
 
 Subscription window exhaustion (`Claude AI usage limit reached|<epoch>`, or
 limit wording on stderr with a non-zero exit) is a **pause**
-(`window-exhausted`) with the reset time in the detail, not a termination —
+(`quota-exhausted`) with the reset time in the detail, not a termination —
 resume with `--resume <run-id>` when the window resets. A resumed run starts a
 fresh `claude` process: the CLI's own accumulated history does not come back,
 only the scratchpad — which is the promise the harness makes anyway (ADR-0012).
@@ -209,7 +209,7 @@ observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `turn-limit` (driver turns) and `tool-call-limit` (tool calls per episode).
 `environment-defect` is never auto-detected — it is applied by a human via
 `classify.ts` after reading the trajectory. Model-API quota exhaustion is a
-*pause* (`window-exhausted`), not a termination: the run resumes when the
+*pause* (`quota-exhausted`), not a termination: the run resumes when the
 window does.
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks

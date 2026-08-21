@@ -51,7 +51,7 @@ priority. Items graduate out of this file into commits; the dev loop
      observation but no opcode serves it; add when a spellcasting class
      first needs `cast_spell` against uncertain ids, not before.
 8. Claude-driver ContextBuilder: state sampling and watchdog checks are solid
-   now, but a `window-exhausted` pause still loses the CLI's accumulated
+   now, but a `quota-exhausted` pause still loses the CLI's accumulated
    context on resume (documented; acceptable for shakeout).
 
 8a. **Extractive digest — deferred behind an evidence gate** (2026-08-21

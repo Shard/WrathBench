@@ -9,7 +9,7 @@
  *   1s * 2^attempt with ±25% jitter, capped at 30s, max 5 attempts.
  * - After retries are exhausted on a 429/402 whose body suggests quota or
  *   subscription exhaustion (insufficient credit, quota, billing), the outcome
- *   is a PAUSE (`window-exhausted`), not a failure: the run is suspended and
+ *   is a PAUSE (`quota-exhausted`), not a failure: the run is suspended and
  *   resumable, because a spent budget says nothing about the model.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
@@ -55,7 +55,7 @@ export interface AssistantTurn {
 
 export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
-  | { kind: "pause"; reason: "window-exhausted" | "rate-limited"; detail: string }
+  | { kind: "pause"; reason: "quota-exhausted" | "rate-limited"; detail: string }
   | { kind: "stub-complete" };
 
 export class AdapterError extends Error {
@@ -223,10 +223,10 @@ export class OpenAiChatAdapter implements ChatAdapter {
     }
 
     if ((lastStatus === 429 || lastStatus === 402) && EXHAUSTION_HINTS.test(lastError)) {
-      return { kind: "pause", reason: "window-exhausted", detail: lastError };
+      return { kind: "pause", reason: "quota-exhausted", detail: lastError };
     }
     if (lastStatus === 402) {
-      return { kind: "pause", reason: "window-exhausted", detail: lastError };
+      return { kind: "pause", reason: "quota-exhausted", detail: lastError };
     }
     if (lastStatus === 429) {
       // Free-pool upstreams rate-limit without quota wording. Still a pause:

@@ -5,6 +5,7 @@
  */
 
 import { join } from "node:path";
+import { normalizePauseReason } from "./config";
 import { readMeta, readTrajectory, Trajectory, type TrajectoryRecord } from "./trajectory";
 
 function fmtTs(ts: number): string {
@@ -64,7 +65,7 @@ export function renderTimeline(runDir: string, runId: string): string {
     const detail = row?.["termination_detail"];
     lines.push(`ended as:   ${reason}${typeof detail === "string" ? ` — ${detail}` : ""}`);
   } else if (typeof pause === "string") {
-    lines.push(`paused as:  ${pause} (resumable)`);
+    lines.push(`paused as:  ${normalizePauseReason(pause)} (resumable)`);
   } else {
     lines.push("ended as:   (still running or never finalised)");
   }
