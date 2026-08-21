@@ -56,7 +56,7 @@
 import type { Database } from "bun:sqlite";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { SHAKEOUT_STAMP, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, type LoopOutcome } from "./loop";
@@ -362,9 +362,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   });
 
   // ---- files the CLI needs, all inside the run directory
-  const configDir = join(o.runDir, "claude-config");
+  // Absolute: the CLI runs from a scratch temp cwd, so every path handed to it
+  // must not be relative to the repo.
+  const configDir = resolve(o.runDir, "claude-config");
   mkdirSync(configDir, { recursive: true });
-  const mcpConfigPath = join(o.runDir, "claude-mcp.json");
+  const mcpConfigPath = resolve(o.runDir, "claude-mcp.json");
   const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
   writeFileSync(
     mcpConfigPath,

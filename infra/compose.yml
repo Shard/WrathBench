@@ -182,9 +182,13 @@ services:
         condition: service_completed_successfully
 
   # ------------------------------------------------------------------- runner
-  # Placeholder. Becomes the agent loop (runner/) once it exists.
+  # The agent loop (runner/). Bun plus the Claude Code CLI for the
+  # claude-subscription shakeout driver (runner/README.md Drivers).
   runner:
-    image: oven/bun:1.4.0
+    image: wrathbench/runner
+    build:
+      context: ..
+      dockerfile: infra/docker/runner.Dockerfile
     working_dir: /wrathbench
     command: ["sleep", "infinity"]
     volumes:
