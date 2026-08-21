@@ -1,0 +1,39 @@
+[
+  {
+    "content": "Connecting and entering the world.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "await connect();\nconst session = await sdk.createSession({ character: \"Stubby\", race: 1, class: 2 });\nreturn session;"
+        }
+      }
+    ]
+  },
+  {
+    "content": "Saying something and waiting for the echo.",
+    "toolCalls": [
+      {
+        "name": "run_snippet",
+        "arguments": {
+          "code": "await sdk.say(\"hello from the stub\");\nreturn await sdk.waitForChat(\"hello from the stub\", { timeout: 8000 });"
+        }
+      }
+    ]
+  },
+  {
+    "content": "Checking recent events for the chat echo.",
+    "toolCalls": [{ "name": "recent_events", "arguments": { "limit": 30 } }]
+  },
+  {
+    "content": "Recording progress in the scratchpad.",
+    "toolCalls": [
+      {
+        "name": "write_scratchpad",
+        "arguments": { "content": "# stub live check\n- session up as Stubby\n- say echo observed" }
+      },
+      { "name": "read_scratchpad", "arguments": {} },
+      { "name": "state_summary", "arguments": {} }
+    ]
+  }
+]
