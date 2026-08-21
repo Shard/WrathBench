@@ -41,7 +41,7 @@ Resume semantics follow from the policy: a restarted runner starts with an empty
 
 ## Addendum: block trimming for prompt caching (2026-08-21)
 
-The message window still holds recent assistant/tool messages verbatim, but it no longer slides one message per turn. It grows to `MESSAGE_WINDOW_MAX` (48) and is then cut back by one block of `MESSAGE_WINDOW_TRIM` (24) oldest messages, so it oscillates between 24 and 48 rather than sitting at a fixed 24.
+This supersedes the "at most 24 messages" in item 2 of the Decision above. The message window still holds recent assistant/tool messages, but it no longer slides one message per turn. It grows to `MESSAGE_WINDOW_MAX` (48) and is then cut back by one block of `MESSAGE_WINDOW_TRIM` (24) oldest messages, so it oscillates between 24 and 48 rather than sitting at a fixed 24.
 
 The reason is prompt caching, not context quality. Providers cache by longest byte-identical prefix. Under the sliding window, every turn past 24 messages dropped the oldest message, so the sent prefix diverged immediately after the system prompt and every call paid a full prefix recompute. Under block trimming the prefix is byte-identical for a whole 24-message block (≈8–12 tool exchanges at Phase-0 rates) and only the deliberate block cut invalidates it: one miss per block instead of one miss per turn. Over a six-hour episode that is the difference between recomputing the window on every call and recomputing it a handful of times.
 
