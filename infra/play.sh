@@ -26,8 +26,13 @@ printf 'set realmlist 127.0.0.1\n' > "$CLIENT_DIR/Data/enUS/realmlist.wtf"
 mkdir -p "$CLIENT_DIR/WTF"
 CONFIG="$CLIENT_DIR/WTF/Config.wtf"
 touch "$CONFIG"
-grep -v '^SET accountName ' "$CONFIG" > "$CONFIG.tmp" || true
-printf 'SET accountName "SPECTATOR"\n' >> "$CONFIG.tmp"
+# gxCursor 0 = software cursor (hardware cursor renders wrongly under
+# wine/proton); the account name prefill saves typing.
+grep -v -e '^SET accountName ' -e '^SET gxCursor ' "$CONFIG" > "$CONFIG.tmp" || true
+{
+  printf 'SET accountName "SPECTATOR"\n'
+  printf 'SET gxCursor "0"\n'
+} >> "$CONFIG.tmp"
 mv "$CONFIG.tmp" "$CONFIG"
 
 # Preflight: the realm must be reachable from the host.
@@ -55,4 +60,22 @@ fi
 
 echo "launching client (account SPECTATOR — password in infra/SPECTATOR.md notes)"
 cd "$CLIENT_DIR"
+
+# Prefer Proton-GE (bundles DXVK for flicker-free D3D9 and modern raw-input
+# mouse handling); fall back to plain wine with the two equivalent fixes
+# (DXVK via winetricks, DirectInput MouseWarpOverride for the camera).
+PROTON="${WRATHBENCH_PROTON:-/usr/share/steam/compatibilitytools.d/proton-ge-custom/proton}"
+if [ -x "$PROTON" ]; then
+  export STEAM_COMPAT_DATA_PATH="$WINEPREFIX-proton"
+  export STEAM_COMPAT_CLIENT_INSTALL_PATH="$HOME/.steam/root"
+  mkdir -p "$STEAM_COMPAT_DATA_PATH"
+  echo "using Proton-GE ($PROTON)"
+  exec "$PROTON" run Wow.exe -windowed
+fi
+
+echo "Proton not found; using wine with DXVK + mouse-warp fixes"
+if command -v winetricks >/dev/null && [ ! -f "$WINEPREFIX/dxvk.installed" ]; then
+  winetricks -q dxvk >/dev/null 2>&1 && touch "$WINEPREFIX/dxvk.installed" || true
+fi
+wine reg add "HKCU\\Software\\Wine\\DirectInput" /v MouseWarpOverride /t REG_SZ /d force /f >/dev/null 2>&1 || true
 exec wine Wow.exe -windowed
