@@ -5,7 +5,7 @@
  * server through the loopback bridge.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode } from "../src/adapter-claude";
@@ -184,6 +184,81 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("a watchdog fires DURING a turn, records the reason, and kills the CLI", async () => {
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {
+      watchdogs: { episodeMs: 300 },
+    });
+    const started = Date.now();
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
+    // it did not wait for the turn to finish: the fake would have run for minutes
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const records = readTrajectory(runDir);
+    // the named reason is in the trajectory, and it is recorded before nothing
+    expect(records.find((r) => r.t === "watchdog")?.["reason"]).toBe("episode-limit");
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(1);
+    expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("episode-limit");
+    // and it happened inside a single driver turn
+    expect(records.filter((r) => r.t === "request")).toHaveLength(1);
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("episode-limit");
+    trajectory.close();
+  }, 30_000);
+
+  test("the tool-call ceiling bounds the CLI's inner loop", async () => {
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {
+      maxToolCallsPerEpisode: 3,
+    });
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 50, killGraceMs: 200 });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
+    expect(outcome.kind === "terminated" && outcome.detail).toContain("cap 3");
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "snippet")).toHaveLength(3);
+    expect(records.find((r) => r.t === "limit")?.["kind"]).toBe("tool-call-limit");
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("tool-call-limit");
+    trajectory.close();
+  }, 30_000);
+
+  test("at the ceiling, further tool calls are refused rather than executed", async () => {
+    // cap 1: one call runs, the next is refused with an explicit result — the
+    // same path the real CLI hits while it is being torn down.
+    const { runDir, trajectory, options } = setupEpisode("long-turn", { maxToolCallsPerEpisode: 1 });
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 50, killGraceMs: 200 });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "snippet")).toHaveLength(1);
+    trajectory.close();
+  }, 30_000);
+
+  test("the world is sampled on the clock during a long turn, not once per turn", async () => {
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {
+      maxToolCallsPerEpisode: 12,
+      stateIntervalMs: 1,
+    });
+    await runClaudeEpisode({ ...options, watchdogTickMs: 20, killGraceMs: 200 });
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "request")).toHaveLength(1); // one driver turn
+    expect(records.filter((r) => r.t === "state").length).toBeGreaterThan(1);
+    expect(trajectory.stateRows("run-test").length).toBeGreaterThan(1);
+    trajectory.close();
+  }, 30_000);
+
+  test("aborting the episode finalises it as manual", async () => {
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {});
+    const abort = new AbortController();
+    setTimeout(() => abort.abort("SIGTERM"), 300);
+    const outcome = await runClaudeEpisode({
+      ...options,
+      signal: abort.signal,
+      watchdogTickMs: 50,
+      killGraceMs: 200,
+    });
+    expect(outcome).toEqual({ kind: "terminated", reason: "manual", detail: "SIGTERM" });
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(1);
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("manual");
+    trajectory.close();
+  }, 30_000);
+
   test("claudeArgs uses only flags that exist, and never invents --max-turns", () => {
     const args = claudeArgs({ mcpConfigPath: "/tmp/x.json", model: "opus" });
     expect(args.slice(0, 2)).toEqual(["-p", "--verbose"]);
@@ -264,6 +339,55 @@ describe("driver selection and stamping", () => {
     expect(rendered).toContain("NOT A HARNESS RESULT");
     expect(rendered).toContain("driver:     claude-subscription");
   });
+
+  test("an externally delivered SIGTERM finalises the run as manual", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-"));
+    const cwd = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-cwd-"));
+    const proc = Bun.spawn({
+      cmd: [
+        process.execPath,
+        join(import.meta.dir, "..", "src", "run.ts"),
+        "--driver",
+        "claude-subscription",
+        "--model",
+        "x",
+        "--runs-dir",
+        dir,
+        "--max-tool-calls",
+        "100000",
+        // nothing is listening: the sandbox only dials on connect(), which the
+        // fake never asks for
+        "--module-url",
+        "http://127.0.0.1:9",
+      ],
+      cwd,
+      env: {
+        PATH: `${fakeBinDir()}:${process.env["PATH"] ?? ""}`,
+        HOME: process.env["HOME"] ?? "/tmp",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token-for-tests",
+        WB_FAKE_MODE: "long-turn",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // let it get into the turn and run some tool calls
+    await new Promise((r) => setTimeout(r, 2_500));
+    proc.kill("SIGTERM");
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    expect(stderr).toContain("SIGTERM: terminating run as `manual`");
+
+    const runId = readdirSync(dir).find((d) => d.startsWith("run-"));
+    expect(runId).toBeDefined();
+    const runDir = join(dir, runId!);
+    const terminations = readTrajectory(runDir).filter((r) => r.t === "termination");
+    expect(terminations).toHaveLength(1);
+    expect(terminations[0]?.["reason"]).toBe("manual");
+    const trajectory = new Trajectory(runDir);
+    expect(trajectory.runRow(runId!)?.["termination_reason"]).toBe("manual");
+    expect(trajectory.runRow(runId!)?.["ended_at"]).not.toBeNull();
+    trajectory.close();
+  }, 40_000);
 
   test("run.ts refuses to start the claude driver without the OAuth token", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-"));

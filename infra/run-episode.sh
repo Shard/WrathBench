@@ -6,7 +6,8 @@
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
 #
-# Anything else is passed through to `bun runner/src/run.ts` verbatim.
+# Anything else is passed through to `bun runner/src/run.ts` verbatim, e.g.
+# --max-turns <n> (driver turns) or --max-tool-calls <n> (tool calls/episode).
 #
 # What this script adds over calling the runner directly:
 #
@@ -28,7 +29,7 @@ COMPOSE_FILE="${SCRIPT_DIR}/compose.yml"
 SERVICE="runner"
 
 usage() {
-  sed -n '3,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ---------------------------------------------------------------- arguments

@@ -91,6 +91,7 @@ async function main(): Promise<void> {
       apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
       stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
       maxTurns: num(args["max-turns"]),
+      maxToolCallsPerEpisode: num(args["max-tool-calls"]),
       stepIntervalMs: num(args["step-interval-ms"]),
       stateIntervalMs: num(args["state-interval-ms"]),
       snippetTimeoutMs: num(args["snippet-timeout-ms"]),
@@ -174,14 +175,28 @@ async function main(): Promise<void> {
 
   const watchdogs = new Watchdogs(config.watchdogs);
 
+  // A killed runner must still leave a finalised run. SIGTERM matters as much
+  // as SIGINT here: that is what `docker compose down`, a supervisor, or an
+  // operator's `kill` sends. The episode driver is asked to unwind (it records
+  // the termination itself and tears down its CLI child); the fixed loop has
+  // no such seam, so the record is written here.
   let stopping = false;
-  process.on("SIGINT", () => {
+  const abort = new AbortController();
+  const onSignal = (sig: string): void => {
     if (stopping) process.exit(130);
     stopping = true;
-    console.error("\nSIGINT: terminating run as `manual`");
-    trajectory.setTermination(config.runId, "manual", "SIGINT");
-    void sandbox.stop().finally(() => process.exit(130));
-  });
+    console.error(`\n${sig}: terminating run as \`manual\``);
+    if (config.driver === "claude-subscription") {
+      abort.abort(sig);
+      // Backstop: never hang forever waiting for a wedged child.
+      setTimeout(() => process.exit(130), 20_000).unref();
+    } else {
+      trajectory.setTermination(config.runId, "manual", sig);
+      void sandbox.stop().finally(() => process.exit(130));
+    }
+  };
+  process.on("SIGINT", () => onSignal("SIGINT"));
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
 
   console.error(
     `[wrathbench] run ${config.runId} (${resumed ? "resumed" : "new"}) — driver ${config.driver}${adapter !== undefined ? ` (${adapter.label})` : ""}, harness ${version}`,
@@ -217,6 +232,7 @@ async function main(): Promise<void> {
           trajectory,
           watchdogs,
           initialNotices,
+          signal: abort.signal,
         })
       : await runLoop({
           config,
@@ -249,6 +265,10 @@ async function main(): Promise<void> {
     console.error(`[wrathbench] terminated: ${outcome.reason}${outcome.detail !== undefined ? ` (${outcome.detail})` : ""}`);
   }
   trajectory.close();
+  if (stopping) {
+    wiki?.close();
+    process.exit(130);
+  }
   wiki?.close();
 }
 

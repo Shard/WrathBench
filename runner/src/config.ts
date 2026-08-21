@@ -42,6 +42,7 @@ export const TERMINATION_REASONS = [
   "episode-limit", // watchdog: wall clock
   "snippet-runaway", // watchdog: sandbox kept getting killed for blocking
   "turn-limit", // config maxTurns reached (smoke/dev runs)
+  "tool-call-limit", // config maxToolCallsPerEpisode reached (bounds an external scaffold's inner loop)
   "stub-complete", // the scripted stub adapter played its last response
   "adapter-error", // fatal, non-retryable model API error
   "harness-error", // an unexpected error in the runner itself
@@ -103,6 +104,18 @@ export const runConfigSchema = z.object({
 
   /** Stop after this many model steps. Unlimited when absent (result runs). */
   maxTurns: z.number().int().positive().optional(),
+  /**
+   * Hard ceiling on tool calls for the whole episode => `tool-call-limit`.
+   *
+   * `maxTurns` counts *driver* turns, which is a real bound only when the
+   * driver owns the tool loop. The claude-subscription driver does not: one
+   * driver turn observed 168 tool calls over 40 minutes, and there is no
+   * `--max-turns` in that CLI. So the count that matters for an external
+   * scaffold is this one, enforced at the MCP boundary where the calls
+   * actually arrive. Generous by default — it is a runaway guard, not a task
+   * budget. Ignored by the fixed loop, whose bound is `maxTurns`.
+   */
+  maxToolCallsPerEpisode: z.number().int().positive().default(500),
   /** Fixed pacing between model steps; not a tuning knob, an API courtesy. */
   stepIntervalMs: z.number().int().nonnegative().default(3_000),
   /** How often a periodic state line is recorded. */

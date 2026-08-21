@@ -176,6 +176,29 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
 
+    // One driver turn that never ends on its own and keeps calling tools —
+    // the shape the first real subscription run took (168 tool calls, 40
+    // minutes, one turn). Only the harness can stop it.
+    if (mode === "long-turn") {
+      emit({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "working" }] },
+        session_id: "fake-session",
+      });
+      for (let i = 0; mcp !== null && i < 10_000; i++) {
+        const res = (await mcp.call("tools/call", {
+          name: "run_snippet",
+          arguments: { code: `await sdk.say("inner ${i}")` },
+        })) as { result?: { isError?: boolean; content?: { text?: string }[] } };
+        if (res.result?.isError === true && (res.result.content?.[0]?.text ?? "").includes("run terminated")) {
+          saveRecord();
+          process.exit(0);
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      continue;
+    }
+
     // model output that merely talks about in-game limits: must not pause
     if (mode === "chatty-limit") {
       const prose =
