@@ -93,20 +93,34 @@ the wire wants.
 ### Combat, loot and quests
 
 ```ts
-const fight = await client.killTarget(kobold.guid);      // { ok, status, guid, swings }
+// { ok, status, guid, swings, healthPct, attacking, detail }
+const fight = await client.killTarget(kobold.guid, { abortBelowHealthPct: 35 });
 if (fight.ok) await client.lootCorpse(kobold.guid);      // { ok, status, gold, items }
+if (fight.attacking) await client.attackStop();          // it left us swinging
 ```
 
 `killTarget` owns the whole melee loop, and each part of it is there because a
 live run needed it: a synthesized character never auto-faces the way a client
 does and the server drops a swing that is not facing its victim, so the target
-is faced before the first swing and re-faced every ~1.5s; a target that drifts
-out of melee range is walked back to and re-engaged; our own death ends it at
-once. Statuses are `killed` (the target's observed health reached zero),
-`player_died`, `lost` (it left view alive) and `timeout`. There is deliberately
-no `evaded`: nothing on the whitelist says "evade", and naming a status the
-module never uttered would be an SDK invention in a field that otherwise only
-holds the world's words.
+is faced before the first swing and re-faced every ~1.5s; the character walks
+into melee range before that first swing and is walked back whenever the target
+drifts out of it; our own death ends it at once. Statuses are `killed` (the
+target's observed health reached zero), `player_died`, `lost` (it left view
+alive), `timeout`, and `aborted_low_health` when `abortBelowHealthPct` was given
+and our own health fell under it. There is deliberately no `evaded`: nothing on
+the whitelist says "evade", and naming a status the module never uttered would
+be an SDK invention in a field that otherwise only holds the world's words.
+
+The one thing to know before composing with it: a single `CMSG_ATTACKSWING`
+makes the server swing until it is cancelled, and moving does not cancel it. So
+`killTarget` sends `attack_stop` only when the fight is over (`killed`,
+`player_died`, `aborted_low_health`) or when `disengage: true` was passed —
+`timeout` and `lost` leave the character swinging, because disarming a
+half-fought mob is how a character dies standing still. `attacking` says which
+happened and `detail` says it in words. If the server cancels our auto-attack
+mid-fight (`SMSG_ATTACKSTOP` with the target still alive), the loop swings
+again. The default `timeout` is 25s, deliberately under the runner's 30s
+snippet cap; longer fights belong in a background routine.
 
 `lootCorpse` sends `loot_all` — the module replaying the client's auto-loot
 sequence — and returns once the window has been emptied and released. A corpse
