@@ -173,7 +173,7 @@ async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> 
     `WB_MOVE_RESULT for ${what}`,
   );
   if (res.data.status === "arrived") return "arrived";
-  if ((res.data.status === "no_path" || res.data.status === "too_far") && depth < 4) {
+  if (res.data.status === "too_far" && depth < 4) {
     const mid = {
       x: (self.pos.x + target.x) / 2,
       y: (self.pos.y + target.y) / 2,
