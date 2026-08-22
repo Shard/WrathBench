@@ -1688,14 +1688,16 @@ export class WrathClient {
       const at = this.state.inventory.find((i) => i.guid === guid);
       return at !== undefined && at.slot < BACKPACK_FIRST_SLOT ? at.slot : undefined;
     };
-    const leftSource = (): boolean =>
-      guid !== undefined &&
-      !this.state.bag().items.some((i) => i.bag === bag && i.slot === slot && i.guid === guid);
+    // Weaker but still the server's word: the item is no longer anywhere in the
+    // backpack. Only read when no equipment slot claimed it, so a bag-to-bag
+    // shuffle cannot be mistaken for an equip.
+    const leftBackpack = (): boolean =>
+      guid !== undefined && !this.state.bag().items.some((i) => i.guid === guid);
 
     await this.action({ action: "equip_item", bag, slot });
 
     let failure: InventoryChangeFailureData | undefined;
-    const settled = (): boolean => equippedSlot() !== undefined || leftSource();
+    const settled = (): boolean => equippedSlot() !== undefined || leftBackpack();
     if (!settled()) {
       try {
         await this.waitEvent(
@@ -1719,7 +1721,9 @@ export class WrathClient {
           },
           {
             timeout: options.timeout ?? 3000,
-            includeBuffered: false,
+            // Buffered events stay in scope on purpose: the verdict can land on
+            // the stream while the POST is still in flight, which is what
+            // `sinceSeq` fences (the same pattern as buySpell).
             description:
               `the verdict for equipping bag ${bag} slot ${slot} ` +
               `(the item in an equipment slot, or SMSG_INVENTORY_CHANGE_FAILURE)`,
@@ -1749,7 +1753,7 @@ export class WrathClient {
           `${level === undefined ? "" : `, needs level ${level}`}) — the item is still at bag ${bag} slot ${slot}`,
       };
     }
-    if (leftSource()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
+    if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
     return {
       ok: false,
       status: "unconfirmed",

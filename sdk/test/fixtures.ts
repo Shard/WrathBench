@@ -582,6 +582,11 @@ export function inventoryChangeFailure(
   };
 }
 
+/** The source slot zeroed with no arrival seen: the item left the backpack. */
+export function inventorySlotCleared(seq: number, slot: number): unknown {
+  return selfFields(seq, { [`invSlot${slot}Lo`]: 0, [`invSlot${slot}Hi`]: 0 });
+}
+
 /**
  * The character's own inventory fields after the server moved `ITEM_GUID` from
  * one slot to another — what an accepted equip looks like on the wire (the old
