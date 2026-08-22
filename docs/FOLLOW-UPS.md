@@ -157,10 +157,10 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     convenience middle tier ADR-0015 forbids; decide deliberately, with Mark, not
     inline. Item 17's parked `sdk.wait` alias is the same decision.
 
-27. ~~**Questgiver status icon on nearby units**~~ Built 2026-08-22, awaiting
-    deploy (module commit `a4ed1a3`, SDK `756eb83`; image
-    `wrathbench/worldserver:next`; smoke `infra/smoke/quest-status.ts` must pass
-    in the deploy window — WORKLOG "needs deploy"). The `!`/`?`/greyed marker a
+27. ~~**Questgiver status icon on nearby units**~~ Built and deployed 2026-08-22
+    (module commit `a4ed1a3`, SDK `756eb83`; image
+    `wrathbench/worldserver:next`; smoke `infra/smoke/quest-status.ts` passed live
+    in the deploy window — WORKLOG). The `!`/`?`/greyed marker a
     real client renders over an NPC's head, inside the observation contract.
     Evidence: laguna spent turns 103-238 at 0.1y from the giver of quest 783
     (McBride ends it), ox-alpha 8-10 turns, nemotron 10, qwen 5. Shipped: the
@@ -170,8 +170,8 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     quest-log change (ADR-0021), and the turn-in/quest-list silences name the
     observed marker.
 
-28. ~~**Quest objective text and required counts**~~ Built 2026-08-22, awaiting
-    deploy (same commits/image/smoke as 27). Evidence: ox-alpha lost ~15-20
+28. ~~**Quest objective text and required counts**~~ Built and deployed 2026-08-22
+    (same commits/image/smoke as 27). Evidence: ox-alpha lost ~15-20
     turns grinding wolves for a kobold quest, watching `counts` stay at 0.
     Shipped: `quest_query` + the `SMSG_QUEST_QUERY_RESPONSE` decode;
     `state.quests` holds the template and `state.quest(id)` carries `title` and

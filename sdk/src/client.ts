@@ -969,8 +969,10 @@ export class WrathClient {
   //
   //  - `questgiver_status_query` once per questgiver-flagged unit/gameobject
   //    that comes into view (the client does this to draw the !/? marker),
-  //    skipped when a status for that guid already arrived in the same burst
-  //    (the login `SMSG_QUESTGIVER_STATUS_MULTIPLE` covers the initial view).
+  //    skipped when a status for that guid already arrived in the same burst.
+  //    The core's unprompted login-time `SMSG_QUESTGIVER_STATUS_MULTIPLE` is
+  //    empty (sent before visibility is populated; verified live 2026-08-22),
+  //    so these per-guid queries are what populate the initial view.
   //  - `questgiver_status_multiple_query` when the quest log's membership or
   //    a quest's complete bit changes (the client re-requests every marker on
   //    a quest-log update; counters alone do not move a marker, so they do
@@ -1060,8 +1062,9 @@ export class WrathClient {
       this.questQueried.add(id);
       if (!this.state.quests.has(id)) this.fireAndForget({ action: "quest_query", questId: id });
     }
-    // The first fold of the log is our own create block at login, where the
-    // core already sends SMSG_QUESTGIVER_STATUS_MULTIPLE unprompted.
+    // The first fold of the log is our own create block at login; the markers
+    // for the initial view come from the per-guid spawn queries above, so no
+    // refresh is owed yet — only a later change to the log earns one.
     if (first || this.multipleTimer !== undefined) return;
     this.multipleTimer = setTimeout(() => {
       this.multipleTimer = undefined;

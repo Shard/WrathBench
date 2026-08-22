@@ -84,7 +84,7 @@ nearest-preceding-opening heuristic, so a quest page can state its own id under
 kind `npc`. It costs a ranking preference, not the match, and the next rebuild
 is another `mv` — no second drain.
 
-### Questgiver markers and quest objectives (FOLLOW-UPS 27, 28) — NEEDS DEPLOY
+### Questgiver markers and quest objectives (FOLLOW-UPS 27, 28) — deployed
 
 Both items from the five-trajectory review, built and unit-tested but **not yet
 live**: the module half is in the `wrathbench/worldserver:next` image only, and
@@ -126,7 +126,18 @@ docker compose -f infra/compose.yml exec runner bun infra/smoke/module-quest.ts 
 # 4. re-enable the lanes (or `up -d --no-deps fleet`)
 ```
 
-`quest-status.ts` asserts: the login `SMSG_QUESTGIVER_STATUS_MULTIPLE` names
+**Deployed 2026-08-22** (`:next` retagged `:latest`, `:prev` is the rollback).
+`module-quest.ts` passed; `quest-status.ts` first failed on its own wrong
+assumption — the core's unprompted login-time `SMSG_QUESTGIVER_STATUS_MULTIPLE`
+is *empty* (sent before the visibility container is populated, although the
+create blocks precede it on the stream; verified live on PROBE). A
+`questgiver_status_multiple_query` sent once Willem is in view returns every
+questgiver with the right status, and the per-guid answer agrees, so the module
+decode is correct and no rebuild was needed; the smoke now queries after Willem
+is in view, and the SDK's initial-view markers come from its per-guid spawn
+queries (comment corrected, behaviour unchanged). Re-run: PASS end to end.
+
+`quest-status.ts` asserts: after Willem is in view, `questgiver_status_multiple_query` names
 Deputy Willem with an available status; `questgiver_status_query` for his guid
 returns the same status as `SMSG_QUESTGIVER_STATUS`; `quest_query 783` decodes a
 title and four zeroed npc-or-go slots; `quest_query 7` decodes
