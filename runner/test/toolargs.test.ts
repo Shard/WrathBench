@@ -165,7 +165,117 @@ describe("strict schemas", () => {
     expect((await callTool(ctx, "recent_events", { limit: "500" })).text).toBe("no events yet");
     expect((await callTool(ctx, "recent_events", { limit: 0 })).text).toBe("no events yet");
     expect((await callTool(ctx, "recent_events", {})).text).toBe("no events yet");
-    expect(seen).toEqual([200, 1, 50]);
+    // The clamped limit counts events AFTER the fold, so the sandbox is scanned
+    // 8x wider, capped at the SDK's 500-event retained buffer.
+    expect(seen).toEqual([500, 8, 400]);
+  });
+});
+
+/**
+ * The ambient-movement fold, shared with the context window (ADR-0012): the
+ * tool used to serve up to 200 raw lines, of which SMSG_MONSTER_MOVE alone was
+ * 69% on gate2-ox-1.
+ */
+describe("recent_events movement fold", () => {
+  const ev = (seq: number, opcode: string) => ({ seq, ts: seq, opcode, data: {} });
+
+  /** A stream where every third event is signal and the rest is ambient motion. */
+  function streamCtx(events: ReturnType<typeof ev>[], seen: number[] = []) {
+    return makeCtx({
+      sandbox: {
+        recentEvents: async (limit: number) => {
+          seen.push(limit);
+          return events.slice(-limit);
+        },
+      } as unknown as SandboxHost,
+    });
+  }
+
+  test("ambient movement is dropped and reported in a trailing note", async () => {
+    const events = [
+      ev(1, "SMSG_MESSAGECHAT"),
+      ev(2, "SMSG_MONSTER_MOVE"),
+      ev(3, "MSG_MOVE_HEARTBEAT"),
+      ev(4, "SMSG_ATTACKERSTATEUPDATE"),
+    ];
+    const res = await callTool(streamCtx(events), "recent_events", {});
+    expect(res.text).toContain("#1 SMSG_MESSAGECHAT");
+    expect(res.text).toContain("#4 SMSG_ATTACKERSTATEUPDATE");
+    expect(res.text).not.toContain("SMSG_MONSTER_MOVE");
+    expect(res.text).not.toContain("MSG_MOVE_HEARTBEAT");
+    expect(res.text).toContain("(+2 ambient movement events folded into state");
+    expect(res.text).toContain("{includeMovement: true}");
+  });
+
+  test("includeMovement passes the raw stream through, and scans exactly limit", async () => {
+    const events = [ev(1, "SMSG_MESSAGECHAT"), ev(2, "SMSG_MONSTER_MOVE")];
+    const seen: number[] = [];
+    const res = await callTool(streamCtx(events, seen), "recent_events", {
+      limit: 10,
+      includeMovement: true,
+    });
+    expect(res.text).toContain("SMSG_MONSTER_MOVE");
+    expect(res.text).not.toContain("folded into state");
+    expect(seen).toEqual([10]);
+  });
+
+  test("limit counts signal events, and the note covers only that span", async () => {
+    // 30 events, 10 of them signal, interleaved 1 signal : 2 ambient.
+    const events = Array.from({ length: 30 }, (_, i) =>
+      i % 3 === 0 ? ev(i, "SMSG_SPELL_GO") : ev(i, "SMSG_MONSTER_MOVE"),
+    );
+    const res = await callTool(streamCtx(events), "recent_events", { limit: 3 });
+    const lines = res.text.split("\n");
+    expect(lines).toHaveLength(4); // 3 signal events + the fold note
+    expect(lines.slice(0, 3).every((l) => l.includes("SMSG_SPELL_GO"))).toBe(true);
+    // The span starts at the oldest visible event (#21), so only the 6 ambient
+    // events inside it are reported — not all 20 in the scanned buffer.
+    expect(lines[3]).toContain("(+6 ambient movement events folded into state");
+  });
+
+  test("an all-movement stream says so instead of claiming no events", async () => {
+    const events = Array.from({ length: 5 }, (_, i) => ev(i, "SMSG_MONSTER_MOVE"));
+    const res = await callTool(streamCtx(events), "recent_events", {});
+    expect(res.text).toContain("no non-movement events yet");
+    expect(res.text).toContain("(+5 ambient movement events folded into state");
+  });
+
+  test('includeMovement coerces "true"/"false" by value, not JS truthiness', async () => {
+    const events = [ev(1, "SMSG_MONSTER_MOVE")];
+    const on = await callTool(streamCtx(events), "recent_events", { includeMovement: "true" });
+    expect(on.text).toContain("SMSG_MONSTER_MOVE");
+    const off = await callTool(streamCtx(events), "recent_events", { includeMovement: "false" });
+    expect(off.text).not.toContain("#1 SMSG_MONSTER_MOVE");
+    expect(off.text).toContain("no non-movement events yet");
+    // snake_case is normalized like the other aliases
+    const alias = await callTool(streamCtx(events), "recent_events", { include_movement: true });
+    expect(alias.text).toContain("SMSG_MONSTER_MOVE");
+  });
+
+  test("onEventsServed logs the visible events and the folded count", async () => {
+    const events = [ev(1, "SMSG_MONSTER_MOVE"), ev(2, "SMSG_MESSAGECHAT")];
+    let served: unknown[] = [];
+    let folded: number | undefined;
+    const ctx = makeCtx({
+      sandbox: {
+        recentEvents: async (limit: number) => events.slice(-limit),
+      } as unknown as SandboxHost,
+      onEventsServed: (e, f) => {
+        served = e;
+        folded = f;
+      },
+    });
+    await callTool(ctx, "recent_events", {});
+    expect(served).toHaveLength(1);
+    expect((served[0] as { opcode: string }).opcode).toBe("SMSG_MESSAGECHAT");
+    expect(folded).toBe(1);
+  });
+
+  test("the arg-error hint names includeMovement and what changed", async () => {
+    const res = await callTool(makeCtx(), "recent_events", { nope: 1 });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("includeMovement");
+    expect(res.text).toContain("counted after ambient movement is folded out");
   });
 });
 

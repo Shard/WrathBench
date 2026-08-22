@@ -15,14 +15,16 @@ function fakeSandbox(): SandboxHost {
   const fake = {
     evalSnippet: (code: string): Promise<SnippetResult> =>
       Promise.resolve({ ok: true, value: `evaluated:${code}`, logs: [], durationMs: 1 }),
+    // A three-event buffer, sliced like the real one: recent_events over-fetches
+    // to fold ambient movement, so `limit` is no longer the count it returns.
     recentEvents: (limit: number) =>
       Promise.resolve(
-        Array.from({ length: Math.min(limit, 3) }, (_, i) => ({
+        Array.from({ length: 3 }, (_, i) => ({
           seq: i,
           ts: i,
           opcode: "SMSG_MESSAGECHAT",
           data: { message: `m${i}` },
-        })),
+        })).slice(-limit),
       ),
     stateSnapshot: () =>
       Promise.resolve({ self: { name: "Benchy", guid: "7" }, lastSeq: 2, eventCount: 3 }),
@@ -116,9 +118,11 @@ describe("McpServer", () => {
       method: "tools/call",
       params: { name: "recent_events", arguments: { limit: 2 } },
     });
-    expect((events?.["result"] as { content: { text: string }[] }).content[0]!.text).toContain(
-      "#0 SMSG_MESSAGECHAT",
-    );
+    // limit 2 now means two *signal* events, taken from the newest end.
+    const eventText = (events?.["result"] as { content: { text: string }[] }).content[0]!.text;
+    expect(eventText.split("\n")).toHaveLength(2);
+    expect(eventText).toContain("#1 SMSG_MESSAGECHAT");
+    expect(eventText).toContain("#2 SMSG_MESSAGECHAT");
   });
 
   test("scratchpad write/read round-trips through tools", async () => {

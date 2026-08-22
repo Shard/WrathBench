@@ -141,6 +141,16 @@ describe("summarize", () => {
     expect(s["events"]).toBeUndefined();
     expect(s["count"]).toBe(3);
     expect(s["opcodes"]).toEqual(["SMSG_A×2", "SMSG_B×1"]);
+    expect(s["moreOpcodes"]).toBeUndefined();
+    expect(s["folded"]).toBeUndefined();
+  });
+
+  test("cuts the opcode tally at six and carries the folded count", () => {
+    const events = Array.from({ length: 9 }, (_, i) => ({ opcode: `SMSG_${i}`, data: {} }));
+    const s = summarize({ t: "events_served", ts: 1, via: "tool", count: 9, events, folded: 41 }, 0, 0, 10);
+    expect((s["opcodes"] as string[]).length).toBe(6);
+    expect(s["moreOpcodes"]).toBe(3);
+    expect(s["folded"]).toBe(41);
   });
 
   test("keeps error results flagged and cuts very long text", () => {

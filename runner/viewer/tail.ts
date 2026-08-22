@@ -207,10 +207,13 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       }
       base["via"] = rec["via"];
       base["count"] = rec["count"] ?? events.length;
-      base["opcodes"] = [...byOpcode.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 6)
-        .map(([op, n]) => `${op}×${n}`);
+      const tally = [...byOpcode.entries()].sort((a, b) => b[1] - a[1]);
+      base["opcodes"] = tally.slice(0, 6).map(([op, n]) => `${op}×${n}`);
+      // The tally is cut at six; an operator reading it must know when there
+      // were more kinds than that, or the line reads as the whole story.
+      if (tally.length > 6) base["moreOpcodes"] = tally.length - 6;
+      // Ambient movement the recent_events tool folded out of this reply.
+      if (typeof rec["folded"] === "number") base["folded"] = rec["folded"];
       base["clipped"] = events.length > 0;
       return base;
     }

@@ -9,7 +9,8 @@
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
 import { searchReference } from "@wrathbench/wiki/search";
-import { formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
+import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
+import type { EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 
@@ -36,7 +37,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "recent_events",
     description:
-      "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said.",
+      "Return the most recent game events (server packets as JSON), oldest first. Use after acting to see what the server said. Ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*) are folded out by default — they fold into cached state instead, and a trailing note says how many were dropped. Pass includeMovement: true for the raw stream.",
     inputSchema: {
       type: "object",
       properties: {
@@ -44,7 +45,12 @@ export const TOOLS: ToolDef[] = [
           type: "integer",
           minimum: 1,
           maximum: 200,
-          description: "How many events to return. Default 50.",
+          description: "How many events to return, counted AFTER the movement fold. Default 50.",
+        },
+        includeMovement: {
+          type: "boolean",
+          description:
+            "Include ambient movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*). Default false.",
         },
       },
       additionalProperties: false,
@@ -95,6 +101,16 @@ export const TOOLS: ToolDef[] = [
 // that sent { snippet: "..." } got an empty object and a confusing "code
 // required" instead of being told about its unknown key. Aliases are
 // normalized (normalizeToolArgs) BEFORE this validation runs.
+/**
+ * Booleanish, deterministically (ADR-0016). NOT z.coerce.boolean(): that is JS
+ * truthiness, so the string "false" — which models do send — would read true.
+ */
+const booleanish = z
+  .union([z.boolean(), z.string(), z.number()])
+  .transform((v) =>
+    typeof v === "boolean" ? v : typeof v === "number" ? v !== 0 : /^(true|1|yes|on)$/i.test(v.trim()),
+  );
+
 const argSchemas = {
   run_snippet: z.strictObject({ code: z.string().min(1) }),
   recent_events: z
@@ -105,8 +121,12 @@ const argSchemas = {
         .number()
         .transform((n) => Math.min(200, Math.max(1, Math.round(n))))
         .default(50),
+      includeMovement: booleanish.default(false),
     })
-    .default({ limit: 50 }),
+    // `.prefault({})`, not `.default({ limit: 50 })`: a `default` value is
+    // returned as-is, so naming only some fields would pin the rest out of
+    // existence; a prefault re-parses `{}` and lets the field defaults run.
+    .prefault({}),
   state_summary: z.strictObject({}).default({}),
   search_reference: z.strictObject({
     query: z.string().min(1),
@@ -122,7 +142,11 @@ const argSchemas = {
 /** Prose restatement of each tool's parameters, for validation error replies. */
 const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
   run_snippet: "run_snippet expects { code: string } — the TypeScript source to evaluate.",
-  recent_events: "recent_events expects { limit?: number } — how many events to return, 1-200, default 50.",
+  recent_events:
+    "recent_events expects { limit?: number, includeMovement?: boolean } — how many events to return " +
+    "(1-200, default 50, counted after ambient movement is folded out), and whether to include ambient " +
+    "movement packets (SMSG_MONSTER_MOVE, MSG_MOVE_*; default false). includeMovement is new: it used to " +
+    "serve every packet unconditionally.",
   state_summary: "state_summary takes no parameters ({}).",
   search_reference:
     "search_reference expects { query: string, limit?: number } — title or keywords, and max results 1-20 (default 8).",
@@ -137,6 +161,7 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
 const ARG_ALIASES: Record<string, Record<string, string>> = {
   run_snippet: { cmd: "code", snippet: "code", source: "code", script: "code", ts: "code" },
   write_scratchpad: { text: "content", markdown: "content" },
+  recent_events: { include_movement: "includeMovement", includemovement: "includeMovement" },
   search_reference: { q: "query" },
 };
 
@@ -295,6 +320,15 @@ function renderIssues(name: keyof typeof argSchemas, error: z.ZodError): string 
     .join("; ");
 }
 
+/**
+ * How much wider than `limit` recent_events scans so the fold still returns
+ * `limit` signal events. Measured on gate2-ox-1: ambient movement was ~85% of
+ * the stream, so 8x covers the observed worst case; the cap is the SDK's
+ * retained event buffer (EventStream bufferSize, default 500).
+ */
+const RECENT_EVENTS_SCAN_FACTOR = 8;
+const RECENT_EVENTS_SCAN_MAX = 500;
+
 export interface ToolContext {
   sandbox: SandboxHost;
   scratchpad: Scratchpad;
@@ -302,8 +336,11 @@ export interface ToolContext {
   wiki?: Database | undefined;
   /** Whether a game session has been established (for the summary header). */
   sessionLive: () => boolean;
-  /** Called with every event batch actually served to the model. */
-  onEventsServed?: (events: unknown[]) => void;
+  /**
+   * Called with every event batch actually served to the model (the visible
+   * ones), plus how many ambient movement events were folded out of that span.
+   */
+  onEventsServed?: (events: unknown[], folded?: number) => void;
 }
 
 export interface ToolResult {
@@ -354,11 +391,39 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         return { text: lines.join("\n"), isError: !res.ok };
       }
       case "recent_events": {
-        const { limit } = parsed.data as { limit: number };
-        const events = await ctx.sandbox.recentEvents(limit);
-        ctx.onEventsServed?.(events);
-        if (events.length === 0) return { text: "no events yet" };
-        return { text: events.map(formatEventLine).join("\n") };
+        const { limit, includeMovement } = parsed.data as { limit: number; includeMovement: boolean };
+        if (includeMovement) {
+          const events = await ctx.sandbox.recentEvents(limit);
+          ctx.onEventsServed?.(events, 0);
+          if (events.length === 0) return { text: "no events yet" };
+          return { text: events.map(formatEventLine).join("\n") };
+        }
+        // `limit` counts SIGNAL events, so scan a wider span and fold within it.
+        const scan = Math.min(RECENT_EVENTS_SCAN_MAX, limit * RECENT_EVENTS_SCAN_FACTOR);
+        const scanned = (await ctx.sandbox.recentEvents(scan)) as EventSummary[];
+        const ambient = (e: EventSummary): boolean =>
+          CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode);
+        const visible = scanned.filter((e) => !ambient(e)).slice(-limit);
+        // The span the reply covers. When `limit` truncated the signal events,
+        // it starts at the oldest visible one — reporting ambient events from
+        // before it would credit the note with a span the reply never showed.
+        // When it did not, the reply is everything there was, so the span is
+        // the whole scan and leading ambient events still get counted (an
+        // all-movement buffer must say so, not silently look empty).
+        const spanStart =
+          visible.length < limit ? 0 : scanned.indexOf(visible[0]!);
+        const folded = scanned.slice(spanStart).filter(ambient).length;
+        ctx.onEventsServed?.(visible, folded);
+        const note =
+          folded === 0
+            ? undefined
+            : `(+${folded} ambient movement events folded into state — pass {includeMovement: true} for the raw stream)`;
+        if (visible.length === 0) {
+          return { text: note === undefined ? "no events yet" : `no non-movement events yet\n${note}` };
+        }
+        const lines = visible.map(formatEventLine);
+        if (note !== undefined) lines.push(note);
+        return { text: lines.join("\n") };
       }
       case "state_summary": {
         const snapshot = (await ctx.sandbox.stateSnapshot()) as SnapshotLike;
