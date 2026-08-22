@@ -12,6 +12,7 @@ Status: Phase 0, pre-alpha. Private repository. See `docs/PHASE-0.md`.
 - `docs/CONTRACTS.md`: what the agent may observe and do
 - `docs/PHASE-0.md`: current scope, task list, and the gate
 - `docs/DATA-AND-LEGAL.md`: data handling posture
+- `docs/WORKLOG.md`: dated record of investigations and fixes that shipped
 - `docs/decisions/`: architecture decision records
 
 ## Quick start
