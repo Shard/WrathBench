@@ -299,3 +299,16 @@ describe("events.off (2026-08-23 softening: EventEmitter-shaped removal)", () =>
     );
   });
 });
+
+test('on("*") and off("*") route to the any-handler set', () => {
+  const stream = offlineStream();
+  const seen: number[] = [];
+  const h = (e: { seq: number }) => seen.push(e.seq);
+  stream.on("*", h as never);
+  const all = [...frames(fullStream)];
+  stream.ingest(all[0]!);
+  expect(seen).toHaveLength(1);
+  expect(stream.off("*", h as never)).toBe(true);
+  stream.ingest(all[1]!);
+  expect(seen).toHaveLength(1);
+});
