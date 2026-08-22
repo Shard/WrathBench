@@ -78,7 +78,7 @@
     },
     {
       "name": "ox-alpha",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER",
       "loop": true,
       "untilDefault": "18:00",
@@ -113,7 +113,7 @@
     },
     {
       "name": "free-oc-a",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER2",
       "loop": true,
       "untilDefault": "18:00",
@@ -125,7 +125,7 @@
     },
     {
       "name": "free-oc-b",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER5",
       "loop": true,
       "untilDefault": "18:00",
@@ -136,7 +136,7 @@
     },
     {
       "name": "local-qwen",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER6",
       "loop": true,
       "untilDefault": "18:00",
