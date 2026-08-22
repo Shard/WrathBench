@@ -153,10 +153,11 @@ export interface OpenAiAdapterOptions {
  * Attribution only — never fetched, never used for auth or routing. OpenRouter
  * groups requests into an "app" by the `HTTP-Referer` header and labels it with
  * `X-Title`; without them the harness shows up on openrouter.ai as "unknown".
- * A placeholder domain the operator can claim later; override per-run with
+ * The repository is the identity this project owns long-term — private for now,
+ * which is fine: nothing dereferences it. Override per-run with
  * `WRATHBENCH_APP_URL`.
  */
-export const APP_URL = "https://wrathbench.dev";
+export const APP_URL = "https://github.com/Shard/WrathBench";
 export const APP_TITLE = "WrathBench";
 /**
  * Deliberately a constant and not `harnessVersion()`: that shells out to `git
