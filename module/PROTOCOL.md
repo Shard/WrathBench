@@ -629,6 +629,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
 | `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` only on `path_incomplete` |
+| `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
@@ -671,6 +672,23 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
 `WB_MOVE_PROGRESS.pos` is the engine's interpolated position (what a client
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an
 `arrived` result is proof the server accepted the synthesized movement.
+
+Areatriggers (2026-08, FOLLOW-UPS 38 N1). A real client tests its own position
+against the `AreaTrigger.dbc` volumes it ships and sends `CMSG_AREATRIGGER`
+the moment it enters one — the player never chooses to. The module does the
+same: it reads `AreaTrigger.dbc` from the server data volume (`DataDir/dbc`,
+the same file a client has), tests the mover's interpolated position after
+each heartbeat with the same sphere/oriented-box geometry as
+`Player::IsInAreaTriggerRadius`, and queues `CMSG_AREATRIGGER` once per entry
+(re-sent after 1.5s if still inside and nothing happened, since the server
+checks its applied position and a heartbeat can lag). Each dispatch is
+audited (`op: "areatrigger"`) and mirrored as `WB_AREATRIGGER`. Consequences
+are whatever the server does for that trigger, as for a client: a map
+transfer (`SMSG_TRANSFER_PENDING` … `transferred`), exploration quest credit
+(`SMSG_QUESTUPDATE_COMPLETE`), or the inn's rest flag — all of which now
+happen without an agent action, because they happen to a client without a
+player action. Triggers fire only while a `move_to` is in progress; the
+server's own radius check rejects any hit the interpolation got wrong.
 
 ### Quest/combat extension whitelist (2026-08, additive)
 
