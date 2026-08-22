@@ -6,6 +6,41 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### API ergonomics pass: HUD, generated API.md, UnitView/gossip-by-text, wiki coords (issue #2, items 1–4)
+
+A four-part harness-surface change to make the existing two-tier API usable the way
+RuneBench's is, without importing porcelain or breaking the observation contract.
+Item 5 (travel / `no_path` split / area triggers) was deliberately not started.
+
+- **Item 1 — state HUD** (`b5e3d8b`). `formatStateSummary` became a fixed line-oriented
+  client HUD (session, character, position, health, xp, money, bag, quests, target,
+  nearby, open-window `ui` fold, stream, chat) driven only by observed snapshot fields;
+  unobserved still prints `unobserved`, never `0`. The nearby line derives from
+  `state.units()` and never prints exact mob health (CONTRACTS.md); the `ui` fold is
+  computed in the sandbox (which holds the full event buffer) so `formatStateSummary`'s
+  signature — and its off-limits callers — stayed untouched.
+- **Item 2 — generated `sdk/API.md`** (`56be196`). A generator emits the doc from the live
+  `WrathClient`/`StateCache`/`EventStream` prototypes with bidirectional drift checks
+  (an invented row or an undocumented public method fails the build); `bun run docs:api:check`
+  gates staleness. The sandbox exposes it as ambient `API_MD_PATH`, and the prompt's
+  `Object.getOwnPropertyDescriptors` introspection recipe (ADR-0015's turn-waster) was
+  deleted in favour of pointing at that file.
+- **Item 3 — name-on-find, guid-on-act** (`2ed903c`, `8910a17`, `337ecfb`). `state.units({name})`
+  matching went from substring-includes to exact/whole-word/shortest-then-nearest (and
+  accepts a RegExp); guid-taking helpers now accept a `UnitView` directly while raw
+  actions stay guid-only (deliberate ADR-0015 fence); `gossipSelect(guid, "option text")`
+  resolves against a new last-gossip cache fold from `SMSG_GOSSIP_MESSAGE`/`_COMPLETE`.
+- **Item 4 — wiki coordinate channel** (`10e871e`). Coordinates are extracted from raw
+  wowwiki wikitext (`{{coords}}`, infobox loc) *before* stripping and persisted in a new
+  `page_coords` bundle table (schema v2, fail-closed on old bundles); `search_reference`
+  returns them as reference hints, explicitly not live observation. No AzerothCore DB or
+  Questie source.
+
+ADR-0004 consequence: this bumps the harness surface (prompt, context policy, SDK, and
+reference bundle all changed together), so free-model scores before and after this pass
+are not comparable — the post-cutover build is the new baseline. ADR-0012 gained a dated
+addendum for the HUD; item 18's "wowwiki coordinates" clause is closed.
+
 ### Death was unrecoverable: an unacked teleport froze movement permanently (item 14)
 
 Night-opus-1 (Dwarf Paladin, level 5) died in Dun Morogh, released, and then sat

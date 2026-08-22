@@ -56,10 +56,12 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     only ever updates from `SMSG_LOGIN_VERIFY_WORLD`; (3) split `no_path` into
     distinguishable causes, or teach the z-ladder/subdivision recovery recipe in the
     prompt; (4) a contract-clean coordinates source — the probe hardcoded DB-derived
-    waypoints, which the observation contract denies an agent; the wiki bundle's
-    wowwiki coordinates are the equivalent. Transport (boat, tram, zeppelin)
-    semantics stay unknown and untested until (1) and (2) land. Depended on the
-    item-14 teleport ack, which has shipped.
+    waypoints, which the observation contract denies an agent. The wiki-coordinate
+    channel for this shipped 2026-08-22 (issue #2 item 4, WORKLOG): `search_reference`
+    now returns wowwiki `{{coords}}`/infobox coordinates as reference hints — so (4)
+    is done; a *live-observed* position source is still open under (1)/(2). Transport
+    (boat, tram, zeppelin) semantics stay unknown and untested until (1) and (2) land.
+    Depended on the item-14 teleport ack, which has shipped.
 
 19. **Unguessable session tokens — pre-public/MCP blocker** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). `POST /action` and
