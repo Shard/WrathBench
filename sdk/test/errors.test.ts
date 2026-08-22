@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { WrathClient, WrathRequestError } from "../src/client";
+import { KNOWN_ERROR_CODES, WrathClient, WrathRequestError } from "../src/client";
 import { EventStream, EventTimeoutError } from "../src/events";
 
 function makeClient(): WrathClient {
@@ -152,6 +152,27 @@ describe("error-code hints", () => {
   test("char_create hints still take precedence", () => {
     const err = new WrathRequestError(400, { ok: false, error: "char_create_failed_code_50" });
     expect(err.message).toContain("that name is already in use");
+  });
+
+  test("every KnownErrorCode renders a hint — the table cannot drift from the list", () => {
+    // The module grew codes (account_not_permitted) the hint table never
+    // learned, and unknown_account's hint described the wrong condition. Any
+    // code promoted into KNOWN_ERROR_CODES must carry a hint from day one.
+    for (const code of KNOWN_ERROR_CODES) {
+      const err = new WrathRequestError(400, { ok: false, error: code });
+      expect(err.message).not.toBe(`module rejected request: ${code} (HTTP 400)`);
+    }
+  });
+
+  test("the two account refusals describe their own conditions, not each other's", () => {
+    // account_not_permitted = allowlist miss; unknown_account = the name
+    // passed the allowlist but no auth-DB account exists. The old
+    // unknown_account hint sent operators to the (already-correct) allowlist.
+    const permitted = new WrathRequestError(403, { ok: false, error: "account_not_permitted" });
+    expect(permitted.message).toContain("allowlist");
+    const unknown = new WrathRequestError(400, { ok: false, error: "unknown_account" });
+    expect(unknown.message).toContain("auth database");
+    expect(unknown.message).not.toContain("is not on the module's allowlist");
   });
 });
 

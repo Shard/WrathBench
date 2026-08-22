@@ -6,7 +6,7 @@
  * a major one and wants an ADR under docs/decisions/.
  */
 
-export { connect, WrathClient, WrathRequestError, WrathTransportError } from "./client";
+export { connect, KNOWN_ERROR_CODES, WrathClient, WrathRequestError, WrathTransportError } from "./client";
 export type {
   ConnectOptions,
   DeleteCharacterOptions,
