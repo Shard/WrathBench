@@ -132,12 +132,8 @@ export default function RunDetail() {
       <Show when={detail()} fallback={<p class="dim">loading…</p>}>
         {(d) => {
           const run = (): RunDetailResponse["run"] => d().run;
-          const playtime = (): number | null => {
-            const states = d().states;
-            const first = states[0]?.ts ?? run().startedAt;
-            if (first === null || first === undefined) return null;
-            return (run().endedAt ?? now()) - first;
-          };
+          /* Playtime is the API's: cumulative active time, paused stretches out. */
+          const playtime = (): number | null => d().playtimeMs ?? null;
           return (
             <>
               <h2 class="section">

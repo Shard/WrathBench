@@ -28,7 +28,15 @@ import type {
 import { readPositions } from "./positions";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
-import { TrajectoryTail, scanRunTotals, tokenTotals, type RunTotals } from "./tail";
+import {
+  SEGMENT_MARKS,
+  TrajectoryTail,
+  playtimeMs,
+  scanRunTotals,
+  segmentsFrom,
+  tokenTotals,
+  type RunTotals,
+} from "./tail";
 
 /** How often the live tail rescans, and the biggest window a client may ask for. */
 export const POLL_MS = 1000;
@@ -326,6 +334,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         tokens: totals?.tokens ?? null,
         firstTs: totals?.firstTs ?? null,
         lastTs: totals?.lastTs ?? null,
+        playtimeMs:
+          totals === null
+            ? null
+            : playtimeMs(totals.segments, {
+                lastTs: totals.lastTs,
+                live: row.live,
+                now: Date.now(),
+              }),
       });
     }
     return out;
@@ -360,11 +376,27 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
 
     if (rest === "" || rest === "/") {
       await scan(runId, tail);
+      const run = readRun(runsDir, runId);
+      /*
+       * Playtime comes off the tail's own index rather than `runTotals`: the
+       * tail is incremental, where a live run misses the (size, mtime) totals
+       * cache on every poll and would re-read the whole file. Both paths run
+       * the same `segmentsFrom`/`playtimeMs`, so the two pages agree by
+       * construction.
+       */
+      const entries = tail.entries;
+      let lastTs: number | null = null;
+      const marks: { t: string; ts: number }[] = [];
+      for (const e of entries) {
+        if (e.ts > 0) lastTs = e.ts;
+        if (SEGMENT_MARKS.has(e.t) || marks.length === 0) marks.push({ t: e.t, ts: e.ts });
+      }
       return json({
-        run: readRun(runsDir, runId),
+        run,
         states: readStates(runsDir, runId),
-        total: tail.entries.length,
-        tokens: tokenTotals(tail.entries),
+        total: entries.length,
+        tokens: tokenTotals(entries),
+        playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
       });
     }
 

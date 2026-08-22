@@ -360,6 +360,85 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   };
 }
 
+/** One stretch of a run during which the harness was actually driving. */
+export interface ActiveSegment {
+  start: number;
+  /** Null while the segment is still open — the run had not paused or ended. */
+  end: number | null;
+}
+
+/** The record kinds that open or close an active segment. */
+export const SEGMENT_MARKS = new Set(["meta", "resume", "pause", "termination"]);
+
+/** The trajectory records that open and close an active segment. */
+export interface SegmentMark {
+  t: string;
+  ts: number;
+}
+
+/**
+ * Split a run into the stretches it was actually being driven.
+ *
+ * A run's wall clock span is not its playtime: `--resume` picks a run up hours
+ * after a rate limit paused it, and the gap belongs to nobody. A segment opens
+ * at `meta` (the first launch) and at each `resume`, and closes at each `pause`
+ * or `termination`. The last segment stays open when the run neither paused nor
+ * ended — `playtimeMs` decides what to close it at.
+ *
+ * The "only if none is open" guard is load-bearing, not defensive: a resume
+ * that regenerates the session token writes a *second* `meta` record mid-file
+ * (run.ts), and without the guard that would open a duplicate segment.
+ *
+ * A trajectory whose first record is neither `meta` nor `resume` — an older or
+ * truncated file — opens its first segment at that record, so playtime degrades
+ * to the old span rather than to zero.
+ */
+export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
+  const out: ActiveSegment[] = [];
+  let open: number | null = null;
+  for (const m of marks) {
+    if (m.ts <= 0) continue;
+    if (m.t === "meta" || m.t === "resume") {
+      if (open === null) open = m.ts;
+    } else if (m.t === "pause" || m.t === "termination") {
+      if (open !== null) {
+        out.push({ start: open, end: m.ts });
+        open = null;
+      }
+    } else if (open === null && out.length === 0) {
+      open = m.ts;
+    }
+  }
+  if (open !== null) out.push({ start: open, end: null });
+  return out;
+}
+
+/**
+ * Cumulative active time: the sum of the segments, with an open one closed at
+ * `now` for a live run and at the last entry otherwise.
+ *
+ * A run that is paused right now has no open segment, so a fresh mtime (the
+ * sqlite file still being touched) cannot make the current pause count.
+ *
+ * This is deliberately *not* what the `episode-limit` watchdog measures.
+ * `Watchdogs` is constructed fresh in each worker process with
+ * `startedAt = now()` (run.ts), so its `episodeMs` is per-process uptime since
+ * the current resume: it resets on every resume and never sees paused time. It
+ * is a subset of the number here, which is what the whole run has spent driving.
+ */
+export function playtimeMs(
+  segments: readonly ActiveSegment[],
+  opts: { lastTs: number | null; live: boolean; now: number },
+): number | null {
+  if (segments.length === 0) return null;
+  let total = 0;
+  for (const seg of segments) {
+    const end = seg.end ?? (opts.live ? opts.now : (opts.lastTs ?? seg.start));
+    total += Math.max(0, end - seg.start);
+  }
+  return total;
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -367,6 +446,8 @@ export interface RunTotals {
   firstTs: number | null;
   lastTs: number | null;
   entries: number;
+  /** Stretches the run was actually being driven; see `segmentsFrom`. */
+  segments: ActiveSegment[];
 }
 
 /**
@@ -381,6 +462,7 @@ export interface RunTotals {
  */
 export async function scanRunTotals(path: string): Promise<RunTotals> {
   const projections: EntrySummary[] = [];
+  const marks: SegmentMark[] = [];
   let firstTs: number | null = null;
   let lastTs: number | null = null;
   let entries = 0;
@@ -402,6 +484,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       if (firstTs === null) firstTs = ts;
       lastTs = ts;
     }
+    // Segment marks are read before the token projection filters everything
+    // else out: `meta`, `pause`, `resume` and `termination` are none of them
+    // requests or responses.
+    if (SEGMENT_MARKS.has(t) || marks.length === 0) marks.push({ t, ts });
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
@@ -427,7 +513,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   }
   take(carry);
 
-  return { tokens: tokenTotals(projections), firstTs, lastTs, entries };
+  return { tokens: tokenTotals(projections), firstTs, lastTs, entries, segments: segmentsFrom(marks) };
 }
 
 /** A complete line that is not JSON must surface, never vanish. */

@@ -104,7 +104,7 @@ describe("shapes", () => {
           character: "Chr", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
           pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, mtime: 5,
-          bytes: 9, live: true, tokens: null, firstTs: 1, lastTs: 2,
+          bytes: 9, live: true, tokens: null, firstTs: 1, lastTs: 2, playtimeMs: 1,
         },
       ],
     };
