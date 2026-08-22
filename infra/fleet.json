@@ -105,7 +105,7 @@
       "enabled": true,
       "account": "SHAKEOUT",
       "loop": false,
-      "objective": "Travel from Coldridge Valley to Ironforge on foot, using roads and the game's own transport if you find any (flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. Once in Ironforge, find the flight master and a trainer and note them in the log.",
+      "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
       "watchdogs": { "episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000 },
       "maxToolCalls": 2500,
       "entries": [
