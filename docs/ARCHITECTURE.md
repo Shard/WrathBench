@@ -49,11 +49,14 @@ the SPA owns everything that is UI.
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
-- `dashboard/` is a SolidJS SPA: fleet overview, run detail, and the ADR-0019
-  map. It imports two modules from the viewer rather than copying them — the API
-  wire types and the world→tile transform — so drift between the two sides is a
+- `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
+  on 2026-08-22, the only UI: fleet overview, run detail, and the ADR-0019 map.
+  It imports two modules from the viewer rather than copying them — the API wire
+  types and the world→tile transform — so drift between the two sides is a
   compile error. It is the only place in the repository with a dependency graph;
-  the harness itself still runs with no build step.
+  the harness itself still runs with no build step. Without a build on disk the
+  viewer serves the API as usual and answers page routes with a plain-text
+  notice naming `bun run --cwd dashboard build`; there is no fallback UI.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet

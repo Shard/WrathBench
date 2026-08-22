@@ -235,21 +235,31 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     data/wiki/bundle.sqlite`, a few minutes, atomic rename), then spot-check
     `schema_version`, `coord_rows` and `id_rows` in `meta`.
 
-31. **Delete the hand-written viewer pages** (2026-08-22, one week's use — so from
-    2026-08-29). `runner/viewer/page.ts` and `map-page.ts` still serve at
-    `/legacy/…`, kept only so the SPA can be compared against them on real runs.
-    Deleting them also deletes the last hand-copied duplicate of the ADR-0019
-    coordinate transform and the `BASE`-prefix shim both pages carry. Do it once
-    the operator has stopped opening `/legacy` — and take the parity gaps in item
-    32 with it, or accept losing them.
+31. ~~**Delete the hand-written viewer pages**~~ Dropped 2026-08-22 on operator
+    decision, ahead of the one-week mark: the SolidJS dashboard is the only UI.
+    `runner/viewer/page.ts`, `map-page.ts` and every `/legacy` route are gone,
+    and with them the last hand-copied duplicate of the ADR-0019 coordinate
+    transform and the `BASE`-prefix shim both pages carried. With no build on
+    disk the viewer now answers page routes with a plain-text notice naming
+    `bun run --cwd dashboard build` rather than a fallback UI. The parity gaps in
+    item 32 were accepted as losses, not ported.
 
-32. **Dashboard parity gaps against the pages it replaced** (2026-08-22). Three
-    things the old run page did that the SPA does not, each deliberate rather
-    than forgotten:
-    - **Cost estimate.** `page.ts` carries a `PRICING` constant (dollars per
-      million tokens, per model) and renders an estimated spend beside the token
+32. **Dashboard parity gaps against the pages it replaced** (2026-08-22; the
+    pages themselves were deleted the same day, item 31). Three things the old
+    run page did that the SPA does not, each deliberate rather than forgotten:
+    - **Cost estimate.** `page.ts` carried a `PRICING` constant (dollars per
+      million tokens, per model) and rendered an estimated spend beside the token
       breakdown. Not ported: a hard-coded price table drifts silently, and the
       right home for it is probably the roster, next to the model ids it prices.
+      The table as it stood, so it need not be dug out of git history — dollars
+      per million, input / output / cache read / cache write: `claude-opus-5`
+      5.00 / 25.00 / 0.50 / 6.25, `claude-sonnet-5` 2.00 / 10.00 / 0.20 / 2.50.
+      Sonnet's row is Anthropic's introductory rate, which lapses 2026-08-31 and
+      reverts to list 3.00 / 15.00 (cache 0.30 / 3.75). Cache rates are the
+      published multipliers on input: a read is 0.1x, a 5-minute write 1.25x.
+      Only models matching `/claude/i` (or the `claude-subscription` driver) were
+      priced at all, and a claude-sdk run is billed against a subscription, so
+      its figure was what the same work would have cost on the API.
     - **Whole-feed expand preset.** The old top bar had a Minimal / Responses /
       Snippets / All dropdown remembered in `localStorage`; the SPA folds and
       unfolds per block only.

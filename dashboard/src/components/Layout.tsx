@@ -21,9 +21,6 @@ export function Layout(props: ParentProps) {
           </A>
         </nav>
         <span class="spacer" />
-        <span class="dim">
-          <a href="/legacy/">legacy</a>
-        </span>
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>
     </div>

@@ -63,10 +63,11 @@ so a quiet run can be told from a dead connection. No auth and no rate limiter
 are added here — a public deployment needs both decided with the hosting, and
 guessing at them now would be a mechanism nobody had asked for.
 
-**Migration.** The hand-written pages keep serving, at `/legacy/…` once a build
-exists and at `/` when it does not, so a fresh checkout still shows runs with no
-build step. They derive their route prefix from the URL, which is what lets one
-document work at either path.
+**Migration.** The hand-written pages kept serving for a transition, at
+`/legacy/…` once a build existed and at `/` when it did not. That transition
+ended on 2026-08-22 (FOLLOW-UPS 31): the pages and the `/legacy` routes are
+deleted, the SPA is the only UI, and a checkout with no build gets a plain-text
+notice naming the build command rather than a fallback UI.
 
 ## The open legal question
 
