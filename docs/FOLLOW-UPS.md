@@ -344,7 +344,7 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     the other half, and is cheap because the module already sees every
     session; defer until it is the next obstacle.
 
-38. **`/health` has no build or version id** (2026-08-22, from ADR-0023). The
+41. **`/health` has no build or version id** (2026-08-22, from ADR-0023). The
     module answers non-loopback callers with liveness only — `ok`, `module`,
     `worldStopped`, and zeroed counters — so nothing outside the worldserver
     container can tell which build it is talking to. The fleet's preflight gate
@@ -366,7 +366,7 @@ tram, one flight — unaided) is the public release trigger. Items 38–40 are t
 surface work that gets there. Source for 38: the 2026-08-22 spatial-delivery
 research synthesis (operator's notes) and the travel probe (WORKLOG).
 
-39. **Navigation plan — rungs 2–4** (2026-08-22). Supersedes the ordering in
+38. **Navigation plan — rungs 2–4** (2026-08-22). Supersedes the ordering in
     item 18; the probe already made travel the obstacle, so Layer A is earned.
     Scoped to what a capital needs: walking, the Deeprun Tram, flight masters.
     Boats, zeppelins and elevators are rung-7 work and stay out.
