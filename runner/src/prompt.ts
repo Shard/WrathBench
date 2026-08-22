@@ -5,7 +5,7 @@
  * else. No strategy hints beyond what the tools themselves imply.
  */
 
-export const SYSTEM_PROMPT = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. Your goal: create a character, survive, complete quests, and gain as many levels as you can. Progress is measured by the server (level and XP); nothing else counts.
+export const SYSTEM_PROMPT = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
 
 You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.
 
