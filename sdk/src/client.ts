@@ -579,7 +579,11 @@ export type QuestAcceptResult =
       readonly offered: readonly OfferedQuest[];
     };
 
-/** The outcome of a turn-in. `not_complete` is the questgiver refusing. */
+/**
+ * The outcome of a turn-in. `not_complete` is the questgiver refusing;
+ * `inventory_full` is the server refusing to hand over the reward — the quest
+ * is still in the log and can be turned in again once a bag slot is free.
+ */
 export type QuestTurnInResult =
   | {
       readonly ok: true;
@@ -588,7 +592,15 @@ export type QuestTurnInResult =
       readonly xp: number;
       readonly money: number;
     }
-  | { readonly ok: false; readonly status: "not_complete"; readonly questId: number };
+  | { readonly ok: false; readonly status: "not_complete"; readonly questId: number }
+  | {
+      readonly ok: false;
+      readonly status: "inventory_full";
+      readonly questId: number;
+      /** Raw `InventoryResult` code from `SMSG_INVENTORY_CHANGE_FAILURE`. */
+      readonly result: number;
+      readonly hint: string;
+    };
 
 /**
  * Connect to the module and (by default) subscribe to the event stream.
@@ -1504,17 +1516,32 @@ export class WrathClient {
         continue; // completable: ask again, which is what the client does.
       }
       await this.questChooseReward(npcGuid, questId, rewardIndex);
+      // Raced against the completion: a reward that does not fit answers the
+      // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
+      // this race, a full bag was indistinguishable from silence and burned
+      // the whole timeout (morning-opus-1).
       const complete = await this.events.waitFor(
         (e) =>
-          isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
-          !isDecodeError(e.data) &&
-          (e.data as QuestGiverQuestCompleteData).questId === questId,
+          (isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
+            !isDecodeError(e.data) &&
+            (e.data as QuestGiverQuestCompleteData).questId === questId) ||
+          (isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") && !isDecodeError(e.data)),
         {
           timeout,
           sinceSeq: answer.seq + 1,
-          description: `SMSG_QUESTGIVER_QUEST_COMPLETE for quest ${questId}`,
+          description: `SMSG_QUESTGIVER_QUEST_COMPLETE for quest ${questId} (or SMSG_INVENTORY_CHANGE_FAILURE)`,
         },
       );
+      if (complete.opcode === "SMSG_INVENTORY_CHANGE_FAILURE") {
+        const fail = complete.data as InventoryChangeFailureData;
+        return {
+          ok: false,
+          status: "inventory_full",
+          questId,
+          result: fail.result,
+          hint: "the reward could not be stored — free a bag slot (sell or destroyItem), then turn in again",
+        };
+      }
       const d = complete.data as QuestGiverQuestCompleteData;
       return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
     }

@@ -557,6 +557,17 @@ export function questRewarded(questId: number, seq = 49): unknown {
   };
 }
 
+/** `result` 48 is EQUIP_ERR_INVENTORY_FULL, the bag-full refusal. */
+export function inventoryChangeFailure(seq: number, result = 48): unknown {
+  return {
+    seq,
+    opcode: "SMSG_INVENTORY_CHANGE_FAILURE",
+    opcodeId: 0x112,
+    ts: 1_700_000_000_495,
+    data: { result },
+  };
+}
+
 /** `slotType` defaults to 4 (LOOT_SLOT_TYPE_OWNER): what every solo loot carries. */
 export function lootResponse(seq = 50, slotType = 4): unknown {
   return {
