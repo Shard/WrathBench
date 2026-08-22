@@ -290,8 +290,17 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
       fleet has ever produced, shakeouts and failed lanes included. Decide what
       the public listing selects before pointing a domain at it.
 
-34. **Nested templates mislabel the kind of an extracted entity id**
-    (2026-08-22). `extractIds` decides an id's kind by the nearest preceding
+34. ~~**Nested templates mislabel the kind of an extracted entity id**~~ Fixed
+    2026-08-22; bundle built to `bundle.next.sqlite`, swap pending.
+    `extractIds` now brace-matches template calls and takes the kind from the
+    narrowest frame that actually encloses the id field, widening outward past
+    frames whose name implies no kind (`{{#if:`, `{{PAGENAME}}`); unbalanced
+    input is tolerated (a stray `}}` is ignored, an unclosed `{{` runs to the
+    end of the text) and the 2000-char proximity window is gone, since a closed
+    frame provably encloses its own long fields. Rebuild: 84260 id rows, kinds
+    before → after quest 14909 → 16031, npc 20553 → 18903, item 25668 → 24370,
+    unknown 23038 → 24870; `quest 783` now leads with `Quest:A Threat Within`.
+    Original report: `extractIds` decides an id's kind by the nearest preceding
     `{{template` opening, which a nested call defeats: `Quest:A Threat Within`
     writes `{{questbox | … | start = {{npc||Deputy Willem}} | end =
     {{npc||Marshal McBride}} | id = 783 }}`, so the opening nearest `| id =` is

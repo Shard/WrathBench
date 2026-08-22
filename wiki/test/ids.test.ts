@@ -54,6 +54,61 @@ describe("extractIds", () => {
     ]);
   });
 
+  test("a nested template does not steal the kind of the outer template's id", () => {
+    expect(
+      extractIds("{{questbox | start = {{npc||Example Person Alpha}} | end = {{npc||Example Person Beta}} | id = 783 }}"),
+    ).toEqual([{ kind: "quest", id: 783 }]);
+  });
+
+  test("a closed inner template keeps its own id, the outer keeps its own", () => {
+    expect(extractIds("{{questbox|reward={{itembox|id=9}}|id=7}}")).toEqual([
+      { kind: "item", id: 9 },
+      { kind: "quest", id: 7 },
+    ]);
+  });
+
+  test("sequential templates each colour only their own ids", () => {
+    expect(extractIds("{{npcbox|id=11}}\n{{questbox|id=22}}\n{{itembox|id=33}}")).toEqual([
+      { kind: "npc", id: 11 },
+      { kind: "quest", id: 22 },
+      { kind: "item", id: 33 },
+    ]);
+  });
+
+  test("an id after a closed template but inside no template is unknown", () => {
+    expect(extractIds("{{npcbox|name=Example Person Alpha}}\nSee also |id=44 in the table.")).toEqual([
+      { kind: "unknown", id: 44 },
+    ]);
+  });
+
+  test("a wrapper template with no kind of its own falls out to the infobox", () => {
+    expect(extractIds("{{questbox | name = Example Quest Alpha | {{#if:x| id = 783 }} }}")).toEqual([
+      { kind: "quest", id: 783 },
+    ]);
+  });
+
+  test("a long field before the id does not lose the kind", () => {
+    const filler = "lorem ipsum ".repeat(400);
+    expect(extractIds(`{{questbox | description = ${filler} | id = 4242 }}`)).toEqual([
+      { kind: "quest", id: 4242 },
+    ]);
+  });
+
+  test("unbalanced braces are tolerated", () => {
+    // Truncated: the template is never closed, and still encloses its id.
+    expect(extractIds("{{questbox | name = Example Quest Alpha | id = 783")).toEqual([
+      { kind: "quest", id: 783 },
+    ]);
+    // A stray close with nothing open is ignored.
+    expect(extractIds("}}{{npcbox|id=5}}")).toEqual([{ kind: "npc", id: 5 }]);
+    // An unclosed *inner* template swallows the rest: the innermost open frame
+    // is the npc, so the id takes its kind. Ambiguous by construction; pinned
+    // so the choice is deliberate.
+    expect(extractIds("{{questbox | start = {{npc||Example Person Alpha | id = 783 }}")).toEqual([
+      { kind: "npc", id: 783 },
+    ]);
+  });
+
   test("a far-away template opening does not colour a later id", () => {
     const text = `{{questbox|name=Example Quest Alpha}}\n${"lorem ipsum ".repeat(400)}\n{{examplebox|id=31}}`;
     expect(extractIds(text)).toEqual([{ kind: "unknown", id: 31 }]);
