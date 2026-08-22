@@ -28,3 +28,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0024: Objective and watchdog overrides are run dimensions
 - ADR-0026: The comparability tuple is stamped, never recomputed
 - ADR-0027: Navigation is the module's: typed causes, client-parity triggers and transports
+- ADR-0028: Wiki coordinates are a run dimension, withheld in scored runs

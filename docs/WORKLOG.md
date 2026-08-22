@@ -4,6 +4,10 @@ Dated records of investigations and fixes that graduated out of docs/FOLLOW-UPS.
 The trajectory data and the commits are the primary sources; this is the narrative
 index — what was wrong, why, and what shipped. Reverse chronological.
 
+## 2026-08-23
+
+- Wiki coordinates tier (ADR-0028): `wikiCoords` run dimension, names-first by default, served only on the unscored nav-probe lane; withheld coords are absent from `search_reference` (field dropped, prose pairs redacted), stated in the tool description, stamped into the comparability tuple and grouped on the eval surface. Closes FOLLOW-UPS 38's open decision.
+
 ## 2026-08-22
 
 ### Navigation N1: typed move causes, areatriggers, transports (ADR-0027)

@@ -13,7 +13,7 @@ Allowed, with the client's limits:
 - World objects: creatures, players, game objects, and items within update range, with the fields a client receives (name, level, health as the client sees it, faction, position, hostile/neutral/friendly, target). Objects outside update range or not yet sent by the server are not visible.
 - Target: what the client shows for the current target.
 - Events: combat log entries, spell results, loot windows, quest updates, gossip menus, vendor lists, chat, death and release, zone changes, errors the client would display.
-- Map knowledge: nothing beyond what the SDK or reference bundle provides. The agent does not get the server navmesh or spawn tables.
+- Map knowledge: nothing beyond what the SDK or reference bundle provides. The agent does not get the server navmesh or spawn tables. Wiki-recorded coordinates in the reference bundle are withheld in scored runs and served only where the run's `wikiCoords` dimension says so (ADR-0028).
 
 Not allowed, even though the server knows them:
 - Exact mob health when the client would show a percentage.

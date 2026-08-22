@@ -538,11 +538,13 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     TaxiPath / areatrigger_teleport tables, walkability masks, a persistent
     map notebook (a labeled context-engine change under item 8b if ever).
 
-    **Open decision:** item 18(4) shipped wowwiki infobox coordinates into
-    `search_reference` on 2026-08-22. The research verdict is that exact yards
-    are an answer key for the scored lane and should be names-first unless a
-    held-out / perturbed-twin protocol exists. Decide before the first scored
-    rung-4 run; either keep and label, or drop from the scored lane.
+    **Decided 2026-08-23 (ADR-0028):** item 18(4) shipped wowwiki infobox
+    coordinates into `search_reference` on 2026-08-22; exact yards are an
+    answer key for the scored lane. Resolution: `wikiCoords` is a run
+    dimension, default false (names-first) everywhere, `true` only on the
+    unscored nav-probe lane, stamped into the comparability tuple and a
+    grouping key on the eval surface. Pull back to a labeled coords tier for
+    the scored lane only if the names-only ladder proves unclimbable.
 
 39. **Spellbook, cooldowns, and the raw-action escape hatch** (2026-08-22;
     harness-0.3, cross-cutting). SHIPPED 2026-08-22 in the `:next` module
