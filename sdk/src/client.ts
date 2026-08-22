@@ -92,6 +92,12 @@ export type GuidArg = string;
  * one), but a model can still conjure one (`123n`) and it names exactly one
  * guid — so it is repaired to the string form rather than rejected, per
  * ADR-0016's deterministic-repair rule.
+ *
+ * Everything else — objects, arrays, booleans — is rejected too, or the
+ * `asserts` clause would be a lie: the commonest live mistake is passing the
+ * whole unit (`sdk.setTarget(state.closest(...))`) instead of `.guid`, and
+ * letting it reach the wire buys only the module's generic `invalid_guid`,
+ * which cannot name the JS call site or the `.guid` fix.
  */
 function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint {
   if (guid === undefined || guid === null) {
@@ -104,6 +110,13 @@ function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint
     throw new TypeError(
       `${arg} is a number — guids exceed Number.MAX_SAFE_INTEGER and a number silently loses ` +
         `precision (targeting nothing); pass the decimal string the state cache gave you (unit.guid)`,
+    );
+  }
+  if (typeof guid !== "string" && typeof guid !== "bigint") {
+    const kind = Array.isArray(guid) ? "an array" : typeof guid === "object" ? "an object" : `a ${typeof guid}`;
+    throw new TypeError(
+      `${arg} is ${kind}, not a guid — pass the .guid field itself (unit.guid, not the whole ` +
+        `unit): the opaque decimal string from state.nearbyUnits(), state.closest(...), or event data`,
     );
   }
 }
