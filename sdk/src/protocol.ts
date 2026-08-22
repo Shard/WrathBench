@@ -21,7 +21,7 @@ import { z } from "zod";
  * The protocol revision this file was written against. Bump deliberately: the
  * SDK surface is part of the harness surface (see sdk/README.md).
  */
-export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat+trainer";
+export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat+trainer+spellbook";
 
 // ---------------------------------------------------------------- primitives
 
@@ -249,7 +249,96 @@ export type ActionRequest =
   | { token: string; action: "trainer_buy_spell"; guid: string; spellId: number }
   | { token: string; action: "repop" }
   | { token: string; action: "reclaim_corpse"; guid?: string }
-  | { token: string; action: "spirit_healer_activate"; guid: string };
+  | { token: string; action: "spirit_healer_activate"; guid: string }
+  // spellbook/talent extension
+  | { token: string; action: "learn_talent"; talentId: number; rank: number }
+  | { token: string; action: "learn_preview_talents"; talents: readonly (readonly [number, number])[] }
+  /** The escape hatch (ADR-0025): an allowlisted client opcode by name and its body as hex. */
+  | { token: string; action: "raw"; opcode: string; payload: string };
+
+// ------------------------------------------------------------ raw payloads
+
+/**
+ * One field of a raw-action payload (ADR-0025). Integers are little-endian,
+ * as on the 3.3.5a wire; `guid` is a plain u64 (given as the decimal string
+ * every guid already is), `packedGuid` the client's compressed form, `cstring`
+ * a NUL-terminated UTF-8 string, `bytes` pre-built hex.
+ */
+export const rawFieldSchema = z.union([
+  z.strictObject({ u8: z.number().int().min(0).max(0xff) }),
+  z.strictObject({ u16: z.number().int().min(0).max(0xffff) }),
+  z.strictObject({ u32: z.number().int().min(0).max(0xffffffff) }),
+  z.strictObject({ i32: z.number().int().min(-0x80000000).max(0x7fffffff) }),
+  z.strictObject({ f32: z.number() }),
+  z.strictObject({ u64: z.string().regex(/^\d+$/) }),
+  z.strictObject({ guid: guidSchema }),
+  z.strictObject({ packedGuid: guidSchema }),
+  z.strictObject({ cstring: z.string() }),
+  z.strictObject({ bytes: z.string().regex(/^([0-9a-fA-F]{2})*$/) }),
+]);
+export type RawField = z.input<typeof rawFieldSchema>;
+
+/**
+ * What `client.raw(opcode, payload)` accepts: a hex string, raw bytes, or a
+ * list of typed fields the SDK packs. Validated here because the bytes go
+ * straight into a server handler — a malformed payload must be rejected with
+ * a reason, never sent and silently mis-parsed.
+ */
+export const rawPayloadSchema = z.union([
+  z.string().regex(/^([0-9a-fA-F]{2})*$/, "hex string of whole bytes"),
+  z.instanceof(Uint8Array),
+  z.array(rawFieldSchema),
+]);
+export type RawPayload = z.input<typeof rawPayloadSchema>;
+
+/** The opcode names the module's allowlist uses; the module is the authority on membership. */
+export const rawOpcodeSchema = z.string().regex(/^CMSG_[A-Z0-9_]+$/, "a CMSG_* opcode name");
+
+function hex(bytes: Uint8Array): string {
+  let out = "";
+  for (const b of bytes) out += b.toString(16).padStart(2, "0");
+  return out;
+}
+
+function le(value: bigint, width: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < width; ++i) out.push(Number((value >> BigInt(8 * i)) & 0xffn));
+  return out;
+}
+
+/** Pack an already-validated payload into the hex string the module takes. */
+export function encodeRawPayload(payload: z.output<typeof rawPayloadSchema>): string {
+  if (typeof payload === "string") return payload.toLowerCase();
+  if (payload instanceof Uint8Array) return hex(payload);
+  const bytes: number[] = [];
+  for (const f of payload) {
+    if ("u8" in f) bytes.push(f.u8);
+    else if ("u16" in f) bytes.push(...le(BigInt(f.u16), 2));
+    else if ("u32" in f) bytes.push(...le(BigInt(f.u32), 4));
+    else if ("i32" in f) bytes.push(...le(BigInt(f.i32 >>> 0), 4));
+    else if ("f32" in f) {
+      const dv = new DataView(new ArrayBuffer(4));
+      dv.setFloat32(0, f.f32, true);
+      bytes.push(...new Uint8Array(dv.buffer));
+    } else if ("u64" in f) bytes.push(...le(BigInt(f.u64), 8));
+    else if ("guid" in f) bytes.push(...le(parseGuid(f.guid), 8));
+    else if ("packedGuid" in f) {
+      const g = parseGuid(f.packedGuid);
+      let mask = 0;
+      const tail: number[] = [];
+      for (let i = 0; i < 8; ++i) {
+        const b = Number((g >> BigInt(8 * i)) & 0xffn);
+        if (b !== 0) {
+          mask |= 1 << i;
+          tail.push(b);
+        }
+      }
+      bytes.push(mask, ...tail);
+    } else if ("cstring" in f) bytes.push(...new TextEncoder().encode(f.cstring), 0);
+    else if ("bytes" in f) bytes.push(...Uint8Array.from(Buffer.from(f.bytes, "hex")));
+  }
+  return hex(Uint8Array.from(bytes));
+}
 
 /**
  * POST /character-delete body. Not session-scoped: the module stands up its own
@@ -963,6 +1052,86 @@ export const trainerBuyFailedDataSchema = z.looseObject({
 });
 export type TrainerBuyFailedData = z.infer<typeof trainerBuyFailedDataSchema>;
 
+/**
+ * One spellbook row. `rank` and `name` are what a client reads from its own
+ * Spell.dbc for the id (1 / absent for an unranked or unknown spell); the
+ * module serves them the way it serves item-template fields.
+ */
+export const knownSpellSchema = z.looseObject({
+  spellId: z.number(),
+  rank: z.number().optional(),
+  name: z.string().optional(),
+});
+export type KnownSpellData = z.infer<typeof knownSpellSchema>;
+
+/**
+ * One login-time cooldown row from `SMSG_INITIAL_SPELLS`. A spell with a
+ * category cooldown carries it in `categoryCooldownMs` and 0 in `cooldownMs`.
+ */
+export const initialCooldownSchema = z.looseObject({
+  spellId: z.number(),
+  itemId: z.number(),
+  category: z.number(),
+  cooldownMs: z.number(),
+  categoryCooldownMs: z.number(),
+});
+
+/** `SMSG_INITIAL_SPELLS`: the whole spellbook (active spec) plus running cooldowns, at login. */
+export const initialSpellsDataSchema = z.looseObject({
+  spells: z.array(knownSpellSchema),
+  cooldowns: z.array(initialCooldownSchema),
+});
+export type InitialSpellsData = z.infer<typeof initialSpellsDataSchema>;
+
+export const learnedSpellDataSchema = knownSpellSchema;
+export type LearnedSpellData = z.infer<typeof learnedSpellDataSchema>;
+
+export const removedSpellDataSchema = z.looseObject({ spellId: z.number() });
+export type RemovedSpellData = z.infer<typeof removedSpellDataSchema>;
+
+/** `SMSG_SUPERCEDED_SPELL`: `supersededSpellId` leaves the book, `spellId` replaces it. */
+export const supersededSpellDataSchema = z.looseObject({
+  supersededSpellId: z.number(),
+  spellId: z.number(),
+  rank: z.number().optional(),
+  name: z.string().optional(),
+});
+export type SupersededSpellData = z.infer<typeof supersededSpellDataSchema>;
+
+/** `SMSG_SPELL_COOLDOWN`: cooldowns that just started; `flags & 1` means the GCD was included. */
+export const spellCooldownDataSchema = z.looseObject({
+  guid: guidSchema,
+  flags: z.number(),
+  cooldowns: z.array(z.looseObject({ spellId: z.number(), cooldownMs: z.number() })),
+});
+export type SpellCooldownData = z.infer<typeof spellCooldownDataSchema>;
+
+/** `SMSG_COOLDOWN_EVENT` / `SMSG_CLEAR_COOLDOWN`: one spell's cooldown started or was cleared. */
+export const cooldownEventDataSchema = z.looseObject({
+  spellId: z.number(),
+  guid: guidSchema,
+});
+export type CooldownEventData = z.infer<typeof cooldownEventDataSchema>;
+
+export const talentRowSchema = z.looseObject({
+  talentId: z.number(),
+  /** 0-based: rank 0 is the first point. */
+  rank: z.number(),
+});
+
+/**
+ * `SMSG_TALENTS_INFO` for the player. The pet form arrives as `{ pet: true }`
+ * with nothing else (no pet surface).
+ */
+export const talentsInfoDataSchema = z.looseObject({
+  pet: z.boolean(),
+  unspentPoints: z.number().optional(),
+  specCount: z.number().optional(),
+  activeSpec: z.number().optional(),
+  specs: z.array(z.looseObject({ talents: z.array(talentRowSchema) })).optional(),
+});
+export type TalentsInfoData = z.infer<typeof talentsInfoDataSchema>;
+
 /** `result` is an InventoryResult code; the SDK does not name them. */
 export const inventoryChangeFailureDataSchema = z.looseObject({
   result: z.number(),
@@ -1090,6 +1259,15 @@ export const eventDataSchemas = {
   SMSG_TRAINER_BUY_FAILED: trainerBuyFailedDataSchema,
   SMSG_INVENTORY_CHANGE_FAILURE: inventoryChangeFailureDataSchema,
   SMSG_ITEM_QUERY_SINGLE_RESPONSE: itemQueryResponseDataSchema,
+  // spellbook, cooldowns, talents
+  SMSG_INITIAL_SPELLS: initialSpellsDataSchema,
+  SMSG_LEARNED_SPELL: learnedSpellDataSchema,
+  SMSG_REMOVED_SPELL: removedSpellDataSchema,
+  SMSG_SUPERCEDED_SPELL: supersededSpellDataSchema,
+  SMSG_SPELL_COOLDOWN: spellCooldownDataSchema,
+  SMSG_COOLDOWN_EVENT: cooldownEventDataSchema,
+  SMSG_CLEAR_COOLDOWN: cooldownEventDataSchema,
+  SMSG_TALENTS_INFO: talentsInfoDataSchema,
   // death
   SMSG_DEATH_RELEASE_LOC: deathReleaseLocDataSchema,
   SMSG_CORPSE_RECLAIM_DELAY: corpseReclaimDelayDataSchema,

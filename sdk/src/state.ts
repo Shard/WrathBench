@@ -40,8 +40,15 @@ import {
   type AuraUpdateData,
   type CreateBlock,
   type GuidKey,
+  type CooldownEventData,
+  type InitialSpellsData,
   type ItemQueryResponseData,
+  type LearnedSpellData,
   type MonsterMoveData,
+  type RemovedSpellData,
+  type SpellCooldownData,
+  type SupersededSpellData,
+  type TalentsInfoData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
   type QuestQueryResponseData,
@@ -327,6 +334,53 @@ export interface AuraEntry {
 }
 
 /** What a creature query answered about one creature entry. */
+/**
+ * One spell in the character's spellbook, from `SMSG_INITIAL_SPELLS` /
+ * `SMSG_LEARNED_SPELL`. `rank` and `name` are the client's Spell.dbc view of
+ * the id; `undefined` when the module could not resolve it.
+ */
+export interface KnownSpell {
+  readonly spellId: number;
+  readonly rank: number | undefined;
+  readonly name: string | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * A cooldown the server announced. `readyAt` is epoch ms, computed from the
+ * event's timestamp plus the announced duration; `Infinity` for the server's
+ * "infinite" marker. It is `undefined` after a bare `SMSG_COOLDOWN_EVENT`,
+ * which tells a client to start a timer whose length it reads from its own
+ * Spell.dbc — the SDK has no such table, so the spell is known to be on
+ * cooldown but not for how long (it clears on `SMSG_CLEAR_COOLDOWN` or the
+ * next announcement for that spell).
+ */
+export interface SpellCooldown {
+  readonly spellId: number;
+  readonly readyAt: number | undefined;
+  readonly cooldownMs: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+export interface TalentEntry {
+  readonly talentId: number;
+  /** 0-based, as on the wire: 0 means one point spent. */
+  readonly rank: number;
+}
+
+/** The player's talent state from the last `SMSG_TALENTS_INFO`. */
+export interface TalentState {
+  readonly unspentPoints: number;
+  readonly activeSpec: number;
+  readonly specCount: number;
+  /** Talents of the active spec. */
+  readonly talents: readonly TalentEntry[];
+  readonly seq: number;
+  readonly ts: number;
+}
+
 export interface CreatureInfo {
   readonly entry: number;
   readonly name: string;
@@ -552,6 +606,9 @@ export interface StateSnapshot {
   readonly anomalies: readonly Anomaly[];
   /** guid -> the gossip menu last observed open for that NPC (none after a close). */
   readonly gossip: ReadonlyMap<GuidKey, GossipMenu>;
+  readonly spells: readonly KnownSpell[];
+  readonly cooldowns: readonly SpellCooldown[];
+  readonly talents: TalentState | undefined;
   readonly lastSeq: number;
   readonly eventCount: number;
 }
@@ -617,6 +674,19 @@ export class StateCache {
    * Populated from that one opcode pair only; nothing here queries the server.
    */
   private readonly gossipMenus = new Map<GuidKey, GossipMenu>();
+
+  /**
+   * spellId -> spellbook row. Replaced wholesale by `SMSG_INITIAL_SPELLS`
+   * (the login-time book), then edited by `SMSG_LEARNED_SPELL`,
+   * `SMSG_REMOVED_SPELL` and `SMSG_SUPERCEDED_SPELL`. Empty until login has
+   * served the book: empty means unobserved, not "knows nothing".
+   */
+  private readonly spellBook = new Map<number, KnownSpell>();
+
+  /** spellId -> the last cooldown announcement for it. See `cooldowns()`. */
+  private readonly cooldownMap = new Map<number, SpellCooldown>();
+
+  private talentState: TalentState | undefined;
 
   /** The one input that did not come from an event. */
   readonly seed: StateSeed;
@@ -896,6 +966,38 @@ export class StateCache {
     return this.gossipMenus.get(guid);
   }
 
+  /**
+   * The spellbook as the server served it: every spell id the character
+   * knows in its active spec, by id. Empty until `SMSG_INITIAL_SPELLS` has
+   * arrived (it is sent during login, before the world is entered).
+   */
+  spells(): KnownSpell[] {
+    return [...this.spellBook.values()].sort((a, b) => a.spellId - b.spellId);
+  }
+
+  /** One spellbook row by id, or `undefined` when the character does not know it. */
+  spell(spellId: number): KnownSpell | undefined {
+    return this.spellBook.get(spellId);
+  }
+
+  /**
+   * Cooldowns still running at `now` (default: the wall clock): every spell
+   * whose `readyAt` is in the future, plus those a `SMSG_COOLDOWN_EVENT`
+   * started without a duration (`readyAt` undefined). Expired entries are
+   * dropped from the answer, not from the cache — the server never announces
+   * an expiry, so the clock is the only judge.
+   */
+  cooldowns(now: number = Date.now()): SpellCooldown[] {
+    return [...this.cooldownMap.values()]
+      .filter((c) => c.readyAt === undefined || c.readyAt > now)
+      .sort((a, b) => a.spellId - b.spellId);
+  }
+
+  /** The last `SMSG_TALENTS_INFO` for the player, or `undefined` before one arrived. */
+  talents(): TalentState | undefined {
+    return this.talentState;
+  }
+
   /** Name for a guid, if a name query ever returned one. Never guessed. */
   nameOf(guid: GuidKey): string | undefined {
     if (this.self.guid !== undefined && guid === this.self.guid) return this.self.name;
@@ -927,6 +1029,9 @@ export class StateCache {
       gaps: [...this.gapBuf],
       anomalies: [...this.anomalyBuf],
       gossip: new Map(this.gossipMenus),
+      spells: this.spells(),
+      cooldowns: this.cooldowns(),
+      talents: this.talentState,
       lastSeq: this.lastSeq,
       eventCount: this.eventCount,
     };
@@ -1053,6 +1158,84 @@ export class StateCache {
           seq: event.seq,
           ts: event.ts,
         });
+        return;
+      }
+      case "SMSG_INITIAL_SPELLS": {
+        const d = event.data as InitialSpellsData;
+        this.spellBook.clear();
+        for (const row of d.spells) {
+          this.spellBook.set(row.spellId, { spellId: row.spellId, rank: row.rank, name: row.name, seq: event.seq, ts: event.ts });
+        }
+        for (const cd of d.cooldowns) {
+          const infinite = cd.categoryCooldownMs === 0x80000000;
+          const ms = cd.cooldownMs || cd.categoryCooldownMs;
+          this.cooldownMap.set(cd.spellId, {
+            spellId: cd.spellId,
+            cooldownMs: infinite ? undefined : ms,
+            readyAt: infinite ? Number.POSITIVE_INFINITY : event.ts + ms,
+            seq: event.seq,
+            ts: event.ts,
+          });
+        }
+        return;
+      }
+      case "SMSG_LEARNED_SPELL": {
+        const d = event.data as LearnedSpellData;
+        this.spellBook.set(d.spellId, { spellId: d.spellId, rank: d.rank, name: d.name, seq: event.seq, ts: event.ts });
+        return;
+      }
+      case "SMSG_REMOVED_SPELL": {
+        const d = event.data as RemovedSpellData;
+        this.spellBook.delete(d.spellId);
+        return;
+      }
+      case "SMSG_SUPERCEDED_SPELL": {
+        const d = event.data as SupersededSpellData;
+        this.spellBook.delete(d.supersededSpellId);
+        this.spellBook.set(d.spellId, { spellId: d.spellId, rank: d.rank, name: d.name, seq: event.seq, ts: event.ts });
+        return;
+      }
+      case "SMSG_SPELL_COOLDOWN": {
+        const d = event.data as SpellCooldownData;
+        // Sent to this session for its own character (or its pet): a guid
+        // that is observably someone else is not our cooldown.
+        if (this.self.guid !== undefined && d.guid !== this.self.guid) return;
+        for (const cd of d.cooldowns) {
+          this.cooldownMap.set(cd.spellId, {
+            spellId: cd.spellId,
+            cooldownMs: cd.cooldownMs,
+            readyAt: event.ts + cd.cooldownMs,
+            seq: event.seq,
+            ts: event.ts,
+          });
+        }
+        return;
+      }
+      case "SMSG_COOLDOWN_EVENT": {
+        const d = event.data as CooldownEventData;
+        if (this.self.guid !== undefined && d.guid !== this.self.guid) return;
+        this.cooldownMap.set(d.spellId, { spellId: d.spellId, cooldownMs: undefined, readyAt: undefined, seq: event.seq, ts: event.ts });
+        return;
+      }
+      case "SMSG_CLEAR_COOLDOWN": {
+        const d = event.data as CooldownEventData;
+        if (this.self.guid !== undefined && d.guid !== this.self.guid) return;
+        this.cooldownMap.delete(d.spellId);
+        return;
+      }
+      case "SMSG_TALENTS_INFO": {
+        const d = event.data as TalentsInfoData;
+        if (d.pet) return; // no pet surface
+        const activeSpec = d.activeSpec ?? 0;
+        const spec = d.specs?.[activeSpec];
+        this.talentState = {
+          unspentPoints: d.unspentPoints ?? 0,
+          activeSpec,
+          specCount: d.specCount ?? 0,
+          talents: (spec?.talents ?? []).map((t) => ({ talentId: t.talentId, rank: t.rank })),
+          seq: event.seq,
+          ts: event.ts,
+        };
         return;
       }
       case "SMSG_NAME_QUERY_RESPONSE": {
