@@ -454,6 +454,7 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
       maxSandboxRestarts: 3,
     },
     objective: false,
+    serverBuild: { build: "harness-test-1-gdeadbee", startedAtMs: 12_345 },
   };
 
   function stamped(runs: string, tuple: unknown): void {

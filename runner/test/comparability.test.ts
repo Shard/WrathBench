@@ -8,10 +8,14 @@
  * fails at `tsc`/`bun test` parse time rather than at runtime.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CONTEXT_ENGINES,
   comparabilityOf,
+  fetchServerBuild,
   parseComparability,
   promptHash,
   sameComparability,
@@ -19,6 +23,7 @@ import {
 } from "../src/comparability";
 import { loadRunConfig } from "../src/config";
 import { SYSTEM_PROMPT } from "../src/prompt";
+import { Trajectory, readMeta } from "../src/trajectory";
 import type { ComparabilityView } from "../viewer/api-types";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
@@ -74,6 +79,95 @@ describe("comparabilityOf", () => {
       maxSandboxRestarts: 3,
     });
     expect(c.effort).toBe("high");
+  });
+});
+
+describe("fetchServerBuild", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("a reachable /health stamps build and startedAtMs", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ build: "harness-0.2-3-gabc123", startedAtMs: 555, uptimeMs: 1 }), {
+        status: 200,
+      })) as typeof fetch;
+    expect(await fetchServerBuild("http://module:8086")).toEqual({
+      build: "harness-0.2-3-gabc123",
+      startedAtMs: 555,
+    });
+  });
+
+  test("an unreachable module never blocks launch — reads null, does not throw", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    await expect(fetchServerBuild("http://module:8086")).resolves.toBeNull();
+  });
+
+  test("a module that predates the field (no build/startedAtMs) also reads null", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as typeof fetch;
+    expect(await fetchServerBuild("http://module:8086")).toBeNull();
+  });
+});
+
+describe("meta.json stamping (run.ts's launch/resume-restamp path)", () => {
+  let dir: string;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "wrathbench-comparability-meta-"));
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a reachable module's build ends up in meta.json's comparability tuple", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ build: "harness-0.3-1-gdead", startedAtMs: 42, uptimeMs: 9 }), {
+        status: 200,
+      })) as typeof fetch;
+    const config = loadRunConfig({ runId: "meta-stamp-test", driver: "openai", model: "m" });
+    const serverBuild = await fetchServerBuild(config.moduleUrl);
+    const comparability = comparabilityOf(config, "harness-0.3", serverBuild);
+
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({
+      runId: "meta-stamp-test",
+      harnessVersion: "harness-0.3",
+      startedAt: Date.now(),
+      config,
+      comparability,
+    });
+    trajectory.close();
+
+    const meta = readMeta(dir);
+    const parsed = parseComparability(meta?.comparability);
+    expect(parsed?.serverBuild).toEqual({ build: "harness-0.3-1-gdead", startedAtMs: 42 });
+  });
+
+  test("an unreachable module at launch stamps a null serverBuild, never blocking the write", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const config = loadRunConfig({ runId: "meta-stamp-unreachable", driver: "openai", model: "m" });
+    const serverBuild = await fetchServerBuild(config.moduleUrl);
+    const comparability = comparabilityOf(config, "harness-0.3", serverBuild);
+
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({
+      runId: "meta-stamp-unreachable",
+      harnessVersion: "harness-0.3",
+      startedAt: Date.now(),
+      config,
+      comparability,
+    });
+    trajectory.close();
+
+    const meta = readMeta(dir);
+    expect(parseComparability(meta?.comparability)?.serverBuild).toBeNull();
   });
 });
 

@@ -262,7 +262,7 @@ export default function RunDetail() {
                 <For each={entries()}>{(e) => <Entry entry={e} runId={run().runId} />}</For>
               </div>
 
-              <ServerFooter info={info()} />
+              <ServerFooter info={info()} run={run()} />
 
               <Show when={live() && run().terminationReason === null}>
                 <p class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
@@ -283,24 +283,39 @@ export default function RunDetail() {
 }
 
 /**
- * The worldserver the viewer can see (FOLLOW-UPS 42).
+ * The worldserver this run actually drove against, when known (ADR-0026,
+ * FOLLOW-UPS 42).
  *
- * Deliberately hedged: this is the server the *viewer* reaches now, not
- * necessarily the one this trajectory ran against — nothing records a per-run
- * server build yet, and claiming otherwise for a week-old run would be worse
- * than saying less.
+ * A run stamped with its own `comparability.serverBuild` states that as fact —
+ * it is what `/health` reported at this run's own launch or resume, not a
+ * live reading. Only a run that predates the field falls back to the hedged
+ * "worldserver now" reading off the viewer's own live `/health` poll, which is
+ * not necessarily the build this run drove.
  */
-function ServerFooter(props: { info: ApiInfoResponse | undefined }) {
+function ServerFooter(props: { info: ApiInfoResponse | undefined; run: RunDetailResponse["run"] }) {
+  const ran = (): ComparabilityView["serverBuild"] => props.run.comparability?.serverBuild ?? null;
   return (
     <footer class="identity">
       <Show
-        when={props.info?.worldserver}
-        fallback={<>worldserver: unreachable from the viewer</>}
+        when={ran()}
+        fallback={
+          <Show
+            when={props.info?.worldserver}
+            fallback={<>worldserver: unreachable from the viewer</>}
+          >
+            {(w) => (
+              <>
+                worldserver now: <span class="mono">{w().build}</span>, up since{" "}
+                {stamp(w().startedAtMs)} — not necessarily the build this run drove (this run
+                predates per-run server identity)
+              </>
+            )}
+          </Show>
+        }
       >
-        {(w) => (
+        {(b) => (
           <>
-            worldserver now: <span class="mono">{w().build}</span>, up since{" "}
-            {stamp(w().startedAtMs)} — not necessarily the build this run drove
+            worldserver: <span class="mono">{b().build}</span>, up since {stamp(b().startedAtMs)}
           </>
         )}
       </Show>
@@ -347,6 +362,12 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
             {t().budget.maxTurns === null ? "unlimited turns" : `${t().budget.maxTurns} turns`} ·{" "}
             {t().budget.maxToolCalls} tool calls · idle {ms(t().budget.idleMs)} · no-xp{" "}
             {ms(t().budget.noXpMs)} · episode {ms(t().budget.episodeMs)}
+          </dd>
+          <dt>server build</dt>
+          <dd class="mono">
+            {t().serverBuild === null
+              ? "not recorded (module unreachable at launch)"
+              : `${t().serverBuild!.build} · up since ${stamp(t().serverBuild!.startedAtMs)}`}
           </dd>
           <dt>scoring</dt>
           <dd class={t().objective || props.run.shakeout !== null ? "warn" : "ok"}>

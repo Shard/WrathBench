@@ -39,6 +39,12 @@ export interface ComparabilityView {
   budget: EpisodeBudgetView;
   /** True when an operator objective steered the run, which makes it unscored. */
   objective: boolean;
+  /**
+   * The worldserver's own build identity off its `/health` at launch (or
+   * resume-restamp) time. Null when the module was unreachable, or for a run
+   * that predates this field.
+   */
+  serverBuild: { build: string; startedAtMs: number } | null;
 }
 
 /** One run, as the listing and the detail endpoint report it. */
@@ -350,6 +356,8 @@ export interface EvalRun {
   effort: string | null;
   contextEngine: string | null;
   promptHash: string | null;
+  /** The worldserver build this run was stamped against, or null (ADR-0026). */
+  serverBuild: string | null;
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;

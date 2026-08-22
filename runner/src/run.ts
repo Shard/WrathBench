@@ -23,7 +23,7 @@
  */
 
 import { join } from "node:path";
-import { comparabilityOf, sameComparability } from "./comparability";
+import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { openWikiBundle } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
@@ -249,7 +249,12 @@ async function main(): Promise<void> {
 
   const shakeout = shakeoutStamp(config.driver, config.objective);
   const version = harnessVersion();
-  const comparability = comparabilityOf(config, version);
+  // Never blocks launch: an unreachable module (or one that predates the
+  // field) reads as `null`, same as "not recorded" everywhere else in the
+  // tuple. Fetched fresh on every launch and every resume-restamp, so a
+  // resumed run's tuple names the build it is actually resuming against.
+  const serverBuild = await fetchServerBuild(config.moduleUrl);
+  const comparability = comparabilityOf(config, version, serverBuild);
   if (!resumed) {
     trajectory.writeMeta({
       runId: config.runId,

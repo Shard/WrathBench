@@ -46,6 +46,17 @@ renderer.
 Not done: per-run server build (which worldserver a trajectory ran against),
 which wants the runner to log `/health`'s build and would then join the tuple.
 
+**Per-run server build shipped separately (FOLLOW-UPS 42).** `run.ts` now
+fetches the module's `/health` at launch and at every resume-restamp and
+stamps `comparability.serverBuild: { build, startedAtMs } | null` — null,
+never blocking, when the module is unreachable. The run page's comparability
+panel shows it, and the footer's "not necessarily the build this run drove"
+hedge now applies only to a run that predates the field; a run with its own
+recorded build states it as fact instead of guessing off the viewer's live
+`/health` poll. `/api/eval`'s grouping key picked up server build alongside
+model, harness version and effort, since it is pinned and changed
+deliberately the same way the harness version is.
+
 ### The deploy script reported "DEPLOYED and verified" having smoked nothing
 
 The first real use of `infra/deploy-worldserver.sh` printed

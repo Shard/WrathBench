@@ -392,9 +392,21 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     <build> · up <duration>` off `/api/info`, and `null` reads as "unreachable
     from the viewer (set WRATHBENCH_MODULE_URL to name it)" rather than as a
     blank — which is still what a host-side viewer sees, because compose does not
-    publish 8086. Per-run server build (which build a trajectory ran against)
-    remains not done: it wants the runner to log `/health`'s `build` in its run
-    header, and would then belong in the comparability tuple (ADR-0026).
+    publish 8086.
+
+    **Per-run server build shipped 2026-08-22.** `run.ts` fetches the module's
+    `/health` at launch and at every resume-restamp (never blocking launch: an
+    unreachable module reads `null`, timeout 2s) and stamps
+    `comparability.serverBuild: { build, startedAtMs } | null` into meta.json
+    (ADR-0026). The run page's comparability panel shows it, `/api/eval`
+    exposes `serverBuild` per run and folds it into the grouping key alongside
+    model/harness/effort, and the footer's "not necessarily the build this run
+    drove" hedge now applies only to a run whose metadata predates the field —
+    a run with its own recorded build states it as fact instead. One remaining
+    gap: a run resumed by a build older than this one still has no
+    `serverBuild` for its pre-resume portion, same as every other field this
+    stamp added.
+
     Original note follows.
 
     **Dashboard shows no server identity** (2026-08-22, from item 41). The
