@@ -28,6 +28,15 @@ import type { ComparabilityView } from "../viewer/api-types";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;
+
+/**
+ * Bun's `fetch` carries a `preconnect` static alongside the callable, which a
+ * plain mock function lacks. This assigns a no-op stub so the mock is a
+ * genuine (if partial) `typeof fetch`, rather than casting past the mismatch.
+ */
+function mockFetch(impl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): typeof fetch {
+  return Object.assign(impl, { preconnect: () => {} });
+}
 const _fromView: Comparability = {} as ComparabilityView;
 void _toView;
 void _fromView;
@@ -104,10 +113,11 @@ describe("fetchServerBuild", () => {
   });
 
   test("a reachable /health stamps build and startedAtMs", async () => {
-    globalThis.fetch = (async () =>
+    globalThis.fetch = mockFetch(async () =>
       new Response(JSON.stringify({ build: "harness-0.2-3-gabc123", startedAtMs: 555, uptimeMs: 1 }), {
         status: 200,
-      })) as typeof fetch;
+      }),
+    );
     expect(await fetchServerBuild("http://module:8086")).toEqual({
       build: "harness-0.2-3-gabc123",
       startedAtMs: 555,
@@ -115,14 +125,14 @@ describe("fetchServerBuild", () => {
   });
 
   test("an unreachable module never blocks launch — reads null, does not throw", async () => {
-    globalThis.fetch = (async () => {
+    globalThis.fetch = mockFetch(async () => {
       throw new Error("ECONNREFUSED");
-    }) as typeof fetch;
+    });
     await expect(fetchServerBuild("http://module:8086")).resolves.toBeNull();
   });
 
   test("a module that predates the field (no build/startedAtMs) also reads null", async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as typeof fetch;
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     expect(await fetchServerBuild("http://module:8086")).toBeNull();
   });
 });
@@ -140,10 +150,11 @@ describe("meta.json stamping (run.ts's launch/resume-restamp path)", () => {
   });
 
   test("a reachable module's build ends up in meta.json's comparability tuple", async () => {
-    globalThis.fetch = (async () =>
+    globalThis.fetch = mockFetch(async () =>
       new Response(JSON.stringify({ build: "harness-0.3-1-gdead", startedAtMs: 42, uptimeMs: 9 }), {
         status: 200,
-      })) as typeof fetch;
+      }),
+    );
     const config = loadRunConfig({ runId: "meta-stamp-test", driver: "openai", model: "m" });
     const serverBuild = await fetchServerBuild(config.moduleUrl);
     const comparability = comparabilityOf(config, "harness-0.3", serverBuild);
@@ -164,9 +175,9 @@ describe("meta.json stamping (run.ts's launch/resume-restamp path)", () => {
   });
 
   test("an unreachable module at launch stamps a null serverBuild, never blocking the write", async () => {
-    globalThis.fetch = (async () => {
+    globalThis.fetch = mockFetch(async () => {
       throw new Error("ECONNREFUSED");
-    }) as typeof fetch;
+    });
     const config = loadRunConfig({ runId: "meta-stamp-unreachable", driver: "openai", model: "m" });
     const serverBuild = await fetchServerBuild(config.moduleUrl);
     const comparability = comparabilityOf(config, "harness-0.3", serverBuild);
