@@ -337,6 +337,39 @@ describe("state cache: self, from the wire", () => {
     expect(cache.self.position?.value.map).toBe(369);
   });
 
+  test("a `transferred` move result never writes old-map coordinates under the new map id", () => {
+    // The module reads the character back before the teleport lands, so
+    // WB_MOVE_RESULT.pos on `transferred` is "the last old-map position"
+    // (PROTOCOL.md). Folding it would pair those x/y/z with the new map id —
+    // a WorldPosition the character was never at. SMSG_NEW_WORLD owns the
+    // arrival point, and it can land on either side of the result.
+    const resultFirst = StateCache.replay(
+      toEvents([...loginSequence, selfCreate, transferPending(369, 40), moveResult("transferred", 1, 41)]),
+      { seed: SEED },
+    );
+    // Nothing adopted: still the old map, at the position login gave.
+    expect(resultFirst.self.position?.value.map).toBe(0);
+    expect(resultFirst.self.position?.value.x).not.toBe(-1205);
+    resultFirst.apply(toEvents([newWorld(369, 42)])[0]!);
+    expect(resultFirst.self.position?.value).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
+
+    const newWorldFirst = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        selfCreate,
+        transferPending(369, 40),
+        newWorld(369, 41),
+        moveResult("transferred", 1, 42),
+      ]),
+      { seed: SEED },
+    );
+    expect(newWorldFirst.self.position?.value).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
+    expect(newWorldFirst.self.position?.seq).toBe(41);
+    // Every other move result still writes self position, transfer or not.
+    newWorldFirst.apply(toEvents([moveResult("arrived", 2, 43)])[0]!);
+    expect(newWorldFirst.self.position?.value).toEqual({ map: 369, x: -1205, y: 981, z: 42, o: 1.2 });
+  });
+
   test("a pending transfer is visible until NEW_WORLD completes or ABORTED cancels it", () => {
     const pending = StateCache.replay(toEvents([...loginSequence, transferPending(369)]), { seed: SEED });
     expect(pending.self.transfer?.value).toEqual({ toMap: 369 });

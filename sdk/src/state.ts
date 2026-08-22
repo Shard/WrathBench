@@ -1387,7 +1387,17 @@ export class StateCache {
         // Our own position while moving: the module's movement engine knows it
         // locally, exactly as a running client does. `WB_MOVE_RESULT.pos` is
         // read back from the live character, so it is the server's word.
-        const d = event.data as { pos: PositionData };
+        //
+        // Except on `transferred`: the module reads the character back *before*
+        // the teleport lands, so that `pos` is "the last old-map position"
+        // (PROTOCOL.md). `SMSG_NEW_WORLD` carries the arrival point and can
+        // land either side of the result (client.ts moveTo says so and passes
+        // its own `sinceSeq` for exactly that reason), so folding it would pair
+        // old-map x/y/z with the new map id — a WorldPosition the character was
+        // never at, which is the invention `self_position_without_map` exists
+        // to refuse. The arrival comes from `SMSG_NEW_WORLD` alone.
+        const d = event.data as { pos: PositionData; status?: string };
+        if (event.opcode === "WB_MOVE_RESULT" && d.status === "transferred") return;
         this.applySelfPosition(d.pos, event.seq, event.ts);
         return;
       }

@@ -294,6 +294,62 @@ describe("client: movement", () => {
     }
   });
 
+  test("a move that never moved sends the stop the module left unsent", async () => {
+    // fleet-nav-probe-sonnet-20260822-c3: a walking move (heartbeats carrying
+    // MOVEMENTFLAG_FORWARD) was superseded by a sweep of moveTo calls that all
+    // failed `start_off_mesh`. `DoMoveTo` finishes the superseded move without
+    // a MSG_MOVE_STOP and a planning failure sends no packet at all, so the
+    // server's last word stayed "walking forward": ~10 minutes of Hearthstone
+    // use_item answering SMSG_CAST_FAILED result 51 (SPELL_FAILED_MOVING)
+    // while the character stood still, ended by one `stop`. ADR-0016 rule 1:
+    // after a move that did not move, "stop walking" has one reading.
+    for (const status of ["too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete"] as const) {
+      const stub = startStub({ onConnect: () => frames(loginSequence) });
+      const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+      await client.createSession({ character: "Fenwick" });
+
+      const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+      stub.push(JSON.stringify(moveResult(status, 1, 30)));
+      expect((await pending).status).toBe(status);
+      expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+      client.close();
+      await stub.stop();
+    }
+
+    // The statuses where something did move, or something else is moving now:
+    // the module already sent the stop (arrived, interrupted), a stop is what
+    // ended it (stopped), or a newer move is walking and stopping it would
+    // change game semantics (superseded).
+    for (const status of ["arrived", "interrupted", "stopped", "superseded"] as const) {
+      const stub = startStub({ onConnect: () => frames(loginSequence) });
+      const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+      await client.createSession({ character: "Fenwick" });
+
+      const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+      stub.push(JSON.stringify(moveResult(status, 1, 30)));
+      expect((await pending).status).toBe(status);
+      expect(stub.actions.map((a) => a.action)).toEqual(["move_to"]);
+      client.close();
+      await stub.stop();
+    }
+  });
+
+  test("a refused stop after a failed move never masks the move verdict", async () => {
+    const stub = startStub({
+      onConnect: () => frames(loginSequence),
+      failAction: (action) => (action === "stop" ? json({ ok: false, error: "not_in_world" }, 409) : undefined),
+    });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("start_off_mesh", 1, 30)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("start_off_mesh");
+    client.close();
+    await stub.stop();
+  });
+
   test("each typed failure carries its own recovery hint; path_incomplete carries reachedPos", async () => {
     // FOLLOW-UPS 38 N1: the module now names the cause, so the hint is only
     // the recovery that follows from it (ADR-0016 rule 2).
@@ -394,7 +450,9 @@ describe("client: movement", () => {
     expect(result.to).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
     expect(result.position.x).toBe(-1205); // old-map position from the result
     expect(result.hint).toContain("map 369");
-    expect(client.state.self.position?.value.map).toBe(369);
+    // The cache holds the *arrival* point, not the old-map pos the result
+    // carried: a `transferred` result is never folded into self position.
+    expect(client.state.self.position?.value).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
     client.close();
     await stub.stop();
   });

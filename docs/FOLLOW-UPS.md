@@ -465,6 +465,35 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     here: CMSG_LOGOUT_REQUEST on the raw allowlist would let any smoke end
     cleanly in 20s instead of 60.
 
+46. **A same-map teleport is invisible to the agent** (2026-08-23, from
+    fleet-nav-probe-sonnet-20260822-c3; module work, blocked on module/).
+    A near teleport (Hearthstone, spell 8690, and every same-map port) sends
+    the client `MSG_MOVE_TELEPORT_ACK` (0x0C7) carrying the arrival point;
+    the module answers that ack (`TickTeleportAcks`) but does not tap the
+    packet, and there is no `SMSG_NEW_WORLD` on a same-map port — so the
+    agent observes strictly less than a client and `state.self.position`
+    stays at the pre-teleport coordinates until the next `move_to` returns a
+    `WB_MOVE_RESULT`. The run's model discovered this the hard way and wrote
+    "don't trust state.self.position after a hearthstone" into its
+    scratchpad. Wanted: the opcode in the tap's observed-movement case
+    (packGUID + u32 counter + MovementInfo), one row in
+    `OBSERVED_MOVE_OPCODES`, one row in module/PROTOCOL.md — the SDK's
+    `MSG_MOVE_*` fold already routes an own-guid block to self position.
+    Second half of the same bug: `TickMover` answers `transferred` for near
+    teleports too (`IsBeingTeleported()` is true for both), so a Hearthstone
+    fired mid-`moveTo` sends the SDK into a `waitForTransfer` for an
+    `SMSG_NEW_WORLD` that never comes — a full-timeout hang ending in a hint
+    that is simply false. Needs `sameMap: true` on the result, or its own
+    status. Third, related: `DoMoveTo` finishes a superseded move without
+    `MSG_MOVE_STOP` and a planning failure sends no packet at all, so the
+    server can be left with `MOVEMENTFLAG_FORWARD` as its last word and every
+    later cast fails `SPELL_FAILED_MOVING` (result 51) — observed as ~10
+    minutes of Hearthstone casts failing while the character stood still. The
+    SDK now sends that stop after any status meaning nothing moved
+    (`MOVE_LEAVES_NO_STOP`), which covers `moveTo` but not a raw `move_to`
+    action or the stop-deadline `interrupted` branch; the module should send
+    it at the source.
+
 ## Ladder work (harness-0.3 / 0.4)
 
 The eight-rung ladder in `docs/VISION.md` is the guide; rung 4 (a capital, the
