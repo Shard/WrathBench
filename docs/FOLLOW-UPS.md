@@ -619,3 +619,17 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     Deadmines before cross-continent travel and instance-portal triggers are
     reliable. Trade, mail, bank, auction house and guilds stay behind the
     earned-by-need rule until a freeplay run asks for them.
+
+47. **A cooldown the agent can actually watch** (2026-08-23; small, after a
+    character exists that has one). `state.cooldowns()` is fed by
+    `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT`, and no smoke asserts a
+    *running* cooldown, because a level-1 character cannot produce one: 3.3.5
+    sends those packets only for cooldowns the client cannot derive, so
+    GCD-only spells are silent (measured on a Human Paladin: 21084 and the
+    racial 59752 both emit `SMSG_SPELL_GO` and nothing else). `spellbook.ts`
+    asserts `SMSG_SPELL_GO` instead and says so at the cast. When a smoke has
+    a character past level 1 — or a Hearthstone `use_item`, whose 30-minute
+    cooldown the server does send — assert the packet and the cache entry it
+    produces, and the honest-but-weaker `SPELL_GO` assertion can go back to
+    being a cast-path check.
+
