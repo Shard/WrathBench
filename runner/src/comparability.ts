@@ -83,6 +83,12 @@ export const comparabilitySchema = z.object({
    */
   objective: z.boolean(),
   /**
+   * Whether the reference surface served wiki coordinates (ADR-0028). Absent
+   * on tuples stamped before the field existed; those runs are grouped as
+   * "unrecorded", never as either side.
+   */
+  wikiCoords: z.boolean().optional(),
+  /**
    * The worldserver's own build identity, off its `/health` at launch (or
    * resume-restamp) time. Null when the module was unreachable — this must
    * never block a launch, so a failed fetch reads the same as "not recorded"
@@ -147,6 +153,7 @@ export function comparabilityOf(
       maxSandboxRestarts: config.watchdogs.maxSandboxRestarts,
     },
     objective: config.objective !== undefined,
+    wikiCoords: config.wikiCoords,
     serverBuild,
   };
 }

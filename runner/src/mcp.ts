@@ -16,7 +16,7 @@
 
 import { join } from "node:path";
 import { openWikiBundle } from "./wiki";
-import { TOOLS, callTool, coerceToolArgs, type ToolContext } from "./tools";
+import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
@@ -79,7 +79,7 @@ export class McpServer {
         return respond({});
       case "tools/list":
         return respond({
-          tools: TOOLS.map((t) => ({
+          tools: toolsFor(this.ctx).map((t) => ({
             name: t.name,
             description: t.description,
             inputSchema: t.inputSchema,
@@ -158,6 +158,7 @@ async function main(): Promise<void> {
     sandbox,
     scratchpad,
     wiki,
+    wikiCoords: config.wikiCoords,
     sessionLive: () => true, // MCP mode has no loop-side session tracking
     onEventsServed: (events, folded) =>
       trajectory.append({

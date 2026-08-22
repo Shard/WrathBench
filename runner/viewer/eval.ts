@@ -157,6 +157,7 @@ export function evalRunOf(
     contextEngine: run.comparability?.contextEngine ?? null,
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,
+    wikiCoords: run.comparability?.wikiCoords ?? null,
     unscored: unscoredReason(run),
     startedAt: run.startedAt,
     terminationReason: run.terminationReason,

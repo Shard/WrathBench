@@ -11,7 +11,10 @@
  * `--objective "<text>"` renders one delimited operator objective into the
  * fixed prompt and stamps the run unscored, and `--watchdogs-json '{...}'`
  * (or the individual `--idle-ms`/`--no-xp-ms`/`--episode-ms` flags) overrides
- * watchdog thresholds, where `null`/`0` disables one.
+ * watchdog thresholds, where `null`/`0` disables one. A third, `--wiki-coords`
+ * (ADR-0028), serves wiki-recorded coordinates through `search_reference`;
+ * the default is names-first, and the choice is stamped into the
+ * comparability tuple so the two never share a chart.
  *
  * `--adapter` is the old name for `--driver` and still works.
  *
@@ -60,6 +63,19 @@ function parseArgs(argv: string[]): Record<string, string | boolean> {
     }
   }
   return out;
+}
+
+/**
+ * A boolean flag: bare `--wiki-coords` or `--wiki-coords true|1|yes` is on,
+ * `--wiki-coords false|0|no` is off, absent is undefined (the zod default).
+ */
+function flag(v: string | boolean | undefined): boolean | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === "boolean") return v;
+  const t = v.trim().toLowerCase();
+  if (t === "true" || t === "1" || t === "yes") return true;
+  if (t === "false" || t === "0" || t === "no") return false;
+  return undefined;
 }
 
 function num(v: string | boolean | undefined): number | undefined {
@@ -127,6 +143,9 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity, like model and effort: an objective steers what the whole
     // run was for, so a resumed run keeps the one it was launched with.
     objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
+    // Identity too (ADR-0028): what the reference surface served is part of
+    // what the run was, so a resume keeps the stored value.
+    wikiCoords: flag(args["wiki-coords"]),
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
     maxTurns: num(args["max-turns"]),
     maxToolCallsPerEpisode: num(args["max-tool-calls"]),

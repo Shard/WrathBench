@@ -363,6 +363,14 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
             {t().budget.maxToolCalls} tool calls · idle {ms(t().budget.idleMs)} · no-xp{" "}
             {ms(t().budget.noXpMs)} · episode {ms(t().budget.episodeMs)}
           </dd>
+          <dt>wiki reference</dt>
+          <dd>
+            {t().wikiCoords === undefined
+              ? "not recorded (predates the coordinates tier)"
+              : t().wikiCoords
+                ? "coordinates served (ADR-0028)"
+                : "names-first, coordinates withheld (ADR-0028)"}
+          </dd>
           <dt>server build</dt>
           <dd class="mono">
             {t().serverBuild === null

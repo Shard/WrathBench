@@ -16,7 +16,7 @@ import {
   type SnapshotLike,
 } from "./context";
 import { buildSystemPrompt } from "./prompt";
-import { TOOLS, callTool, coerceToolArgs, normalizeToolArgs, type ToolContext } from "./tools";
+import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -207,6 +207,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     sandbox: o.sandbox,
     scratchpad: o.scratchpad,
     wiki: o.wiki,
+    wikiCoords: config.wikiCoords,
     sessionLive: () => builder.sessionLive,
     onEventsServed: (events, folded) =>
       trajectory.append({
@@ -245,7 +246,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 4. model request
       trajectory.append({ t: "request", turn, adapter: o.adapter.label, messages });
-      const outcome = await o.adapter.complete({ messages, tools: TOOLS });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor(config) });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
         trajectory.setPause(runId, outcome.reason, outcome.detail);

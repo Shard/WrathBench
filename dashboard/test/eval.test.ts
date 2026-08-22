@@ -33,6 +33,7 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     contextEngine: "harness-fixed-window",
     promptHash: "sha256:aaaa",
     serverBuild: null,
+    wikiCoords: false,
     unscored: null,
     startedAt: 0,
     terminationReason: null,
@@ -85,6 +86,19 @@ describe("groupsForLevel", () => {
     );
     expect(groups).toHaveLength(2);
     expect(groups.map((g) => g.effort)).toEqual(["high", "low"]);
+  });
+
+  test("the wiki-coordinates tier is a dimension (ADR-0028)", () => {
+    const groups = groupsForLevel(
+      [
+        run({ runId: "names", wikiCoords: false, levels: [mark(5, 50, 5)] }),
+        run({ runId: "coords", wikiCoords: true, levels: [mark(5, 5, 1)] }),
+        run({ runId: "old", wikiCoords: null, levels: [mark(5, 7, 2)] }),
+      ],
+      5,
+    );
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.wikiCoords)).toEqual([true, null, false]);
   });
 
   test("a group that never reached the level is still reported", () => {

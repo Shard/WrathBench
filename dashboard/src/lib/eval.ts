@@ -37,6 +37,8 @@ export interface EvalGroup {
   model: string;
   harnessVersion: string;
   effort: string | null;
+  /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
+  wikiCoords: boolean | null;
   /** Runs in the group that reached the level, fastest first by turns. */
   reached: Reach[];
   /** How many runs of this group were considered at all. */
@@ -66,14 +68,17 @@ function median(values: readonly number[]): number | null {
  * commit is pinned and changed deliberately, same as the harness version, so
  * two runs on different builds are two rows, and a run with no recorded build
  * groups on its own rather than silently joining one it may not have run
- * against.
+ * against. The wiki-coordinates tier (ADR-0028) is a dimension the same way:
+ * a names-first run and a coords run are not the same task, and a run that
+ * never recorded the field groups on its own.
  */
 export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGroup[] {
   const byKey = new Map<string, EvalGroup>();
   for (const run of scored(runs)) {
     const model = run.model ?? "(unnamed)";
     const harness = run.harnessVersion ?? "(unversioned)";
-    const key = `${model} ${harness} ${run.effort ?? ""} ${run.serverBuild ?? ""}`;
+    const coordsKey = run.wikiCoords === null ? "coords?" : run.wikiCoords ? "coords" : "names";
+    const key = `${model} ${harness} ${run.effort ?? ""} ${run.serverBuild ?? ""} ${coordsKey}`;
     let g = byKey.get(key);
     if (g === undefined) {
       g = {
@@ -81,6 +86,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
         model,
         harnessVersion: harness,
         effort: run.effort,
+        wikiCoords: run.wikiCoords,
         reached: [],
         attempts: 0,
         bestTurn: null,
