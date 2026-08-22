@@ -190,22 +190,36 @@ describe("sandbox evaluation", () => {
     expect(res.error).toContain("not permitted");
   });
 
-  test("the child env is a minimal allowlist: host credentials never reach a snippet", async () => {
+  test("the child env is exactly the allowlist: host credentials never reach a snippet", async () => {
     // A canary secret in the runner's own env, plus a real provider key name.
     // Neither must be visible to a snippet dumping process.env — the model
-    // authors snippets and its exfil channel is the result stream itself.
+    // authors snippets and its exfil channel is the result stream itself. The
+    // snippet returns KEY NAMES only, so a failure never prints a credential
+    // value into test output.
     process.env["WB_CANARY_SECRET"] = "canary-do-not-leak-42";
     process.env["OPENROUTER_KEY"] = "sk-or-must-not-leak";
     try {
       const host = makeHost();
-      const res = await host.evalSnippet("JSON.stringify(process.env)");
-      // Positive control: the snippet ran and the allowlisted var IS present,
-      // so absence of the secrets means the allowlist works, not that we threw.
+      const res = await host.evalSnippet('Object.keys(process.env).sort().join(",")');
       expect(res.ok).toBe(true);
-      expect(res.value).toContain("WRATHBENCH_TOKEN");
-      expect(res.value).not.toContain("canary-do-not-leak-42");
-      expect(res.value).not.toContain("sk-or-must-not-leak");
-      expect(res.value).not.toContain("OPENROUTER_KEY");
+      // res.value is Bun.inspect of the joined string: a quoted plain string.
+      const keys = (JSON.parse(res.value ?? '""') as string).split(",");
+      // Positive control: the snippet ran and the allowlisted vars ARE present,
+      // so absence of the secrets means the allowlist works, not that we threw.
+      expect(keys).toContain("WRATHBENCH_TOKEN");
+      expect(keys).toContain("WRATHBENCH_MODULE_URL");
+      // Exact-shape check, independent of the test's cwd: every key must be one
+      // the allowlist admits. This catches both spawn-env inheritance AND the
+      // child re-importing a `.env` from its own cwd at startup (Bun auto-loads
+      // it unless spawned with --env-file=/dev/null) — the path that leaked the
+      // repo-root provider keys when the suite ran from the repo root.
+      const admitted = (k: string): boolean =>
+        k === "PATH" || k === "HOME" || k === "TMPDIR" || k.startsWith("WRATHBENCH_");
+      expect(keys.filter((k) => !admitted(k))).toEqual([]);
+      expect(keys).not.toContain("WB_CANARY_SECRET");
+      expect(keys).not.toContain("OPENROUTER_KEY");
+      expect(keys).not.toContain("OPENCODE_KEY");
+      expect(keys).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
     } finally {
       delete process.env["WB_CANARY_SECRET"];
       delete process.env["OPENROUTER_KEY"];
