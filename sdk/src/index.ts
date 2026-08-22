@@ -45,6 +45,7 @@ export type {
 } from "./client";
 
 export {
+  EventAbortedError,
   EventStream,
   EventStreamClosedError,
   EventTimeoutError,

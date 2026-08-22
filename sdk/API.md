@@ -16,7 +16,8 @@ and in template literals, and `JSON.stringify` them freely; get them from
 
 **Throw vs value (ADR-0011).** A transport or request error always throws
 (`WrathTransportError`, `WrathRequestError`), and so does the *absence* of an
-outcome (`EventTimeoutError` — no result arrived within the timeout). Anything
+outcome (`EventTimeoutError` — no result arrived within the timeout;
+`EventAbortedError` — the wait was cancelled by its abort signal). Anything
 the *game* decided is a returned value, not an exception: helpers return a
 discriminated union with an `ok` boolean and a `status`, so `if (!result.ok)`
 handles the normal failures (`target_off_mesh`, `buy_failed`, `not_complete`) without a
@@ -61,6 +62,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
+| `waitForTransfer` | `waitForTransfer({ timeout?, sinceSeq?, expectMap? }): Promise<TransferResult>` | Wait for a map transfer's server verdict: transferred (SMSG_NEW_WORLD) / aborted / waiting / no_transfer / wrong_map. moveTo already does this when a portal takes the character. |
 | `waitForQuestObjective` | `waitForQuestObjective(questId, options?): Promise<QuestLogEntry>` | Wait until the quest log marks a quest's objectives complete. |
 
 ## Raw actions (HTTP ack; outcome arrives as an event)
@@ -155,7 +157,7 @@ Events are the server's `SMSG_*` packets as JSON.
 | `on` | `events.on(opcode, fn): Unsubscribe` | Subscribe to an SMSG_* opcode; returns a function that unsubscribes. |
 | `onAny` | `events.onAny(fn): Unsubscribe` | Subscribe to every event. |
 | `once` | `events.once(opcode, fn): Unsubscribe` | Subscribe to the next single event of an opcode. |
-| `waitFor` | `events.waitFor(predicate, options?): Promise<StreamEvent>` | Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout. |
+| `waitFor` | `events.waitFor(predicate, options?): Promise<StreamEvent>` | Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires. |
 | `waitForOpcode` | `events.waitForOpcode(opcode, { timeout }): Promise<StreamEvent>` | Wait for the next event of a given opcode. |
 | `recent` | `events.recent(n?): StreamEvent[]` | The most recent buffered events, newest last. |
 | `connected` | `get events.connected: boolean` | Whether the event socket is open. |
@@ -166,5 +168,11 @@ Events are the server's `SMSG_*` packets as JSON.
 - `WrathRequestError` — the module answered `{ ok: false }` (thrown); carries
   `code`, `status`, and `kind: "request" | "game"`.
 - `EventTimeoutError` — no event arrived within the timeout (thrown).
+- `EventAbortedError` — the wait was cancelled by an `AbortSignal` before
+  anything arrived (thrown; `reason` is what the signal was aborted with).
+  Every wait honors the client's default signal (`ConnectOptions.signal`, a
+  signal or a provider consulted per wait); in the runner sandbox that is the
+  current snippet's ambient `signal`, aborted when the snippet is abandoned
+  on timeout. A `moveTo` aborted mid-walk also issues `stop` before rethrowing.
 - `KNOWN_ERROR_CODES`: `account_in_use`, `account_not_permitted`, `account_owned_by_other_token`, `character_missing_after_create`, `character_not_found`, `invalid_guid`, `invalid_payload`, `invalid_race_class`, `login_failed`, `missing_character`, `missing_face_target`, `missing_guid`, `missing_position`, `missing_token`, `moving`, `no_player`, `no_session`, `not_in_world`, `opcode_not_allowed`, `payload_too_large`, `session_gone`, `socket_setup_failed`, `timeout`, `token_in_use`, `unknown_account`, `unsupported_action`.
 - `TRAINER_SPELL_STATE`: `learnable` = 0, `unavailable` = 1, `known` = 2.
