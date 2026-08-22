@@ -27,9 +27,9 @@ sdk/           Bun/TypeScript SDK over the module (MIT)
 runner/        Agent loop, snippet sandbox, MCP server, trajectory logging (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api; see ADR-0022 (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
-infra/         Compose files, Dockerfiles, extraction scripts
+infra/         Compose files, Dockerfiles, fleet and smoke scripts
 docs/          Documentation
-data/          Gitignored. Client extracts, wiki dump, runs, sqlite stores
+data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 ```
 
 ## Toolchain
@@ -37,7 +37,7 @@ data/          Gitignored. Client extracts, wiki dump, runs, sqlite stores
 - Bun 1.4.x pinned in `.bun-version` and `package.json`. Use Bun built-ins before adding dependencies: `bun:sqlite`, `Bun.serve` (HTTP + WebSocket), `Bun.JSONL`, `Bun.markdown`, `bun test`.
 - TypeScript strict. Zod only at external boundaries (module messages, model output, config).
 - C++ follows AzerothCore's module conventions and builds inside the worldserver image.
-- Everything runs in containers via `infra/compose.yml`. Host-side work is limited to the one-time client data extraction.
+- Everything runs in containers via `infra/compose.yml`. The only host-side prerequisite is the AzerothCore server data directory at `data/client`.
 
 ## How to work
 - Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do.

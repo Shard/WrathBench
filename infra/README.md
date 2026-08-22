@@ -1,7 +1,7 @@
 # infra
 
-Everything runs in containers from `infra/compose.yml`. Host-side work is
-limited to the one-time client data extraction.
+Everything runs in containers from `infra/compose.yml`. The only host-side
+prerequisite is an AzerothCore server data directory at `data/client`.
 
 ## Bringing the stack up
 
@@ -9,7 +9,7 @@ From the repository root, on a fresh machine:
 
 ```
 mkdir -p data/{client,wiki,runs,etc,logs}
-./infra/[removed]   # once, needs a local 3.3.5a client; see [removed]
+# place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
 docker compose -f infra/compose.yml up -d
 ```
 
@@ -46,9 +46,9 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
 published to the host are 3724 (authserver) and 8085 (worldserver), bound
-explicitly to `127.0.0.1` so the operator's own client can log in and spectate
-— see `[removed]`. Nothing may ever bind beyond loopback. Any other port
-needed for debugging follows the same rule and is not committed.
+explicitly to `127.0.0.1` for operator inspection. Nothing may ever bind
+beyond loopback. Any other port needed for debugging follows the same rule
+and is not committed.
 
 ## Configuration
 
@@ -101,9 +101,8 @@ The cost of direct SQL is a small reimplementation of SRP6, pinned to
 derivation, logins fail at the authserver and `bootstrap.ts` is where to look.
 
 The runner account is an ordinary player with no `account_access` row. The
-agent gets no GM privileges by contract (`docs/CONTRACTS.md`). For a GM
-operator account to spectate the world with your own client, use
-`infra/spectator-account.ts` — see `[removed]`.
+agent gets no GM privileges by contract (`docs/CONTRACTS.md`). A GM operator
+account for inspecting the world is created by `infra/spectator-account.ts`.
 
 Override the defaults with `WRATHBENCH_ACCOUNT_USER`,
 `WRATHBENCH_ACCOUNT_PASSWORD`, `WRATHBENCH_REALM_NAME`, and
@@ -260,7 +259,7 @@ Blizzard-derived or run-specific.
 
 | path | contents | mounted as |
 | --- | --- | --- |
-| `data/client` | extracted `dbc/ maps/ vmaps/ mmaps/ Cameras/` | read-only at `/azerothcore/env/dist/data` in worldserver |
+| `data/client` | AzerothCore server data `dbc/ maps/ vmaps/ mmaps/` | read-only at `/azerothcore/env/dist/data` in worldserver |
 | `data/etc` | generated `.conf` files | `/azerothcore/env/dist/etc` in the servers |
 | `data/logs` | server logs | `/azerothcore/env/dist/logs` in the servers |
 | `data/wiki` | wiki dump and built bundle | `/wrathbench/data/wiki` in runner |

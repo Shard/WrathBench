@@ -45,7 +45,7 @@ function parseArgs(argv: string[]): Options {
   const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
   const opts: Options = {
     dataDir: join(root, "data", "minimap"),
-    clientDir: join(root, "data", "client-source", "[removed]", "Data"),
+    clientDir: join(root, "data", "client-source", "Data"),
     dbcDir: join(root, "data", "client", "dbc"),
     maps: DEFAULT_MAPS,
     force: false,

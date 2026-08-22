@@ -14,6 +14,6 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 - Version: 1.4.0, pinned in `.bun-version` and `package.json` (to be created with the workspace scaffold).
 - Patch bumps are deliberate; see ADR-0005.
 
-## Game client (not in repo)
+## Server data directory (not in repo)
 
-- WoW 3.3.5a build 12340, supplied locally by each contributor into `data/`; never committed. See `docs/DATA-AND-LEGAL.md`.
+- AzerothCore 3.3.5a data (`dbc/ maps/ vmaps/ mmaps/`) matching the pinned core, supplied by the operator at `data/client`; never committed. See `docs/DATA-AND-LEGAL.md`.

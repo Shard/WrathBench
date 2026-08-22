@@ -17,17 +17,18 @@ Status: Phase 0, pre-alpha. Private repository. See `docs/PHASE-0.md`.
 
 ## Quick start
 
-You need Docker with compose, Bun (only for host-side tooling), a local WoW
-3.3.5a client for the one-time data extraction, and a wiki dump if you want
-the reference tool. Nothing Blizzard-derived is in this repository; it all
-lives under `data/`, which is gitignored.
+You need Docker with compose, Bun (only for host-side tooling), an
+AzerothCore 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) placed
+at `data/client`, and a wiki dump if you want the reference tool. Producing
+the server data directory is outside this repository's scope; AzerothCore's
+own documentation covers it. Nothing Blizzard-derived is in this repository;
+it all lives under `data/`, which is gitignored.
 
 ```sh
 git clone --recurse-submodules <this repo> && cd wrathbench
 mkdir -p data/{client,wiki,runs,etc,logs}
 
-# one-time: extract dbc/maps/vmaps/mmaps from your client (~13 min)
-[removed]=/path/to/your/3.3.5a-client ./infra/[removed]
+# place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
 
 docker compose -f infra/compose.yml up -d --build   # first build compiles AzerothCore (+ the module)
 ```
@@ -48,10 +49,8 @@ Then run an episode (put model API keys in `.env` first — see
   --api-base <openai-compatible base url> --api-key-env <ENV_KEY_NAME>
 ```
 
-Trajectories land under `data/runs/<run-id>/`. To watch the world yourself
-with a game client, see `infra/[removed]` and `infra/[removed]`. Details,
-uid caveats, and the service graph: `infra/README.md`; extraction:
-`infra/[removed]`.
+Trajectories land under `data/runs/<run-id>/`. Details, uid caveats, and the
+service graph: `infra/README.md`.
 
 ## Licence
 

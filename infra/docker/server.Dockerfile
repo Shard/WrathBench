@@ -8,7 +8,6 @@
 # Targets:
 #   worldserver -> wrathbench/worldserver
 #   authserver  -> wrathbench/authserver
-#   tools       -> wrathbench/tools      ([removed], [removed], ...)
 #   db-import   -> wrathbench/db-import  (schema import, used by bootstrap)
 
 ARG UBUNTU_VERSION=24.04
@@ -229,30 +228,3 @@ COPY --chown=$DOCKER_USER:$DOCKER_USER \
      /azerothcore/env/dist/bin/dbimport /azerothcore/env/dist/bin/dbimport
 
 CMD [ "/azerothcore/env/dist/bin/dbimport" ]
-
-##############################################
-# Tools: client-data extractors              #
-##############################################
-
-FROM runtime AS tools
-LABEL description="WrathBench AzerothCore extraction tools"
-
-WORKDIR /azerothcore/env/dist/
-
-RUN mkdir -pv /azerothcore/env/dist/Cameras \
-              /azerothcore/env/dist/dbc     \
-              /azerothcore/env/dist/maps    \
-              /azerothcore/env/dist/mmaps   \
-              /azerothcore/env/dist/vmaps
-
-COPY --chown=$DOCKER_USER:$DOCKER_USER --from=build \
-  /azerothcore/env/dist/bin/[removed] /azerothcore/env/dist/bin/[removed]
-
-COPY --chown=$DOCKER_USER:$DOCKER_USER --from=build \
-  /azerothcore/env/dist/bin/[removed] /azerothcore/env/dist/bin/[removed]
-
-COPY --chown=$DOCKER_USER:$DOCKER_USER --from=build \
-  /azerothcore/env/dist/bin/[removed] /azerothcore/env/dist/bin/[removed]
-
-COPY --chown=$DOCKER_USER:$DOCKER_USER --from=build \
-  /azerothcore/env/dist/bin/[removed] /azerothcore/env/dist/bin/[removed]

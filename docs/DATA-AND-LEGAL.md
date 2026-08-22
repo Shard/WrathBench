@@ -4,7 +4,7 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 ## Never in git or any published artefact
 
-- Client files, MPQ archives, DBC data, or anything extracted from them (maps, vmaps, mmaps). Contributors supply their own 3.3.5a client; extraction runs on the host into `data/`, which is gitignored at the directory level and mounted into containers at run time.
+- Client files, MPQ archives, DBC data, or anything derived from them (maps, vmaps, mmaps). The server data directory lives under `data/`, gitignored at the directory level and mounted into containers at run time. The repository does not document how to obtain a client or produce that directory.
 - The wiki dump or the bundle built from it. Each operator builds their own.
 - Trajectory logs. They contain verbatim game text. If any are ever published, it is as ids and coded names with prose redacted.
 - The worldserver image never contains client data.

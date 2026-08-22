@@ -68,7 +68,7 @@ Tooling to turn a locally held wiki dump into a searchable bundle the runner can
 
 ### infra/
 
-Compose file for worldserver, authserver, database, module build, and runner. Extraction scripts for client data (run once, on the host, output into `data/`). Smoke script that drives one quest end to end through the SDK.
+Compose file for worldserver, authserver, database, module build, and runner. The server data directory is supplied by the operator under `data/`. Smoke script that drives one quest end to end through the SDK.
 
 ## Data flow for one action
 
