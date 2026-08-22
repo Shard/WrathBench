@@ -77,7 +77,7 @@ describe("activeMsUntil", () => {
   });
 
   test("an open segment is charged only up to the cursor", () => {
-    expect(activeMsUntil([{ start: 1000 }], 4000)).toBe(3000);
+    expect(activeMsUntil([{ start: 1000, end: null }], 4000)).toBe(3000);
   });
 
   test("no segments is not zero — it is unknown", () => {
