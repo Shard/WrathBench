@@ -88,12 +88,11 @@
     },
     {
       "name": "free-or-a",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER3",
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
-        { "model": "thinkingmachines/inkling:free" },
         { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
         { "model": "cohere/north-mini-code:free" },
         { "model": "z-ai/glm-5.2:free" }
@@ -101,7 +100,7 @@
     },
     {
       "name": "free-or-b",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER4",
       "loop": true,
       "untilDefault": "18:00",
@@ -137,7 +136,7 @@
     },
     {
       "name": "local-qwen",
-      "enabled": true,
+      "enabled": false,
       "account": "RUNNER6",
       "loop": true,
       "untilDefault": "18:00",
