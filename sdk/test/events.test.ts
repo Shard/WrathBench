@@ -181,6 +181,22 @@ describe("event stream: continuity", () => {
     expect(stream.gaps).toBe(before);
   });
 
+  test("a seq restart advances the session epoch (ingest-side boundary detection)", () => {
+    // The module can recreate a session under the same token without this
+    // client ever calling createSession (whose advanceEpoch would mark the
+    // boundary). The seq going backwards is the only tell, and the ingest-side
+    // bump is the only thing keeping per-session correlation ids (moveId, seq)
+    // of the old session from matching the new one's restarted counters.
+    const stream = offlineStream();
+    for (const f of frames(fullStream)) stream.ingest(f);
+    const before = stream.epoch;
+    for (const f of frames(loginSequence)) stream.ingest(f);
+    expect(stream.epoch).toBe(before + 1);
+    // Continuing forward within the new session is not another boundary.
+    stream.ingest(JSON.stringify({ ...chatEcho, seq: 30 }));
+    expect(stream.epoch).toBe(before + 1);
+  });
+
   test("a frame that is not an event envelope surfaces as stream_error", () => {
     const stream = offlineStream();
     const seen: StreamEvent[] = [];
