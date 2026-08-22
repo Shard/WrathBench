@@ -525,15 +525,17 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         if (hits.length === 0) {
           // An id query the bundle cannot answer says why, rather than letting
           // the model read "no results" as "no such quest".
-          const askedForIds = parseIdQuery(query).ids.length > 0;
-          const noIndex = askedForIds && !bundleHasIds(ctx.wiki);
-          return {
-            text:
-              `${prefix}no results` +
-              (noIndex
-                ? " (this reference bundle has no entity-id index — ids resolve only after it is rebuilt)"
-                : ""),
-          };
+          const asked = parseIdQuery(query).ids;
+          let why = "";
+          if (asked.length > 0) {
+            const named = asked
+              .map((e) => `${e.kind === undefined ? "id" : `${e.kind} id`} ${e.id}`)
+              .join(", ");
+            why = bundleHasIds(ctx.wiki)
+              ? ` (no page in the reference records ${named}; the wiki does not state an id for every entity, so this is not evidence that it does not exist)`
+              : " (this reference bundle has no entity-id index — ids resolve only after it is rebuilt)";
+          }
+          return { text: `${prefix}no results${why}` };
         }
         return {
           text:

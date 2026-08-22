@@ -148,3 +148,12 @@ describe("the per-episode repeat memo", () => {
     expect(nextEpisode.text).not.toContain("note:");
   });
 });
+
+describe("an id the reference does not record", () => {
+  test("says no page records it, rather than nothing at all", async () => {
+    const res = await search(context(bundle()), "npc entry 9999");
+    expect(res.text).toContain("no results");
+    expect(res.text).toContain("no page in the reference records npc id 9999");
+    expect(res.text).toContain("not evidence");
+  });
+});

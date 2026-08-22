@@ -326,6 +326,10 @@ export function searchReference(
   }
 
   // --- band 1: entity ids, matched only against id-shaped fields.
+  // Bounded: a low id can be stated by many pages, and an unbounded id band
+  // would push the text half of a query like "Example Zone npc entry 12" off
+  // the slate entirely. When the query is nothing but ids, they may have it all.
+  let idBudget = parsed.text === "" ? limit : Math.max(1, Math.ceil(limit / 2));
   if (hasIds && parsed.ids.length > 0) {
     const stmt = db.query<PageRow & { kind: string; entity_id: number }, [number]>(`
       SELECT p.id AS id, p.title AS title, p.ns AS ns, p.text AS text,
@@ -344,6 +348,8 @@ export function searchReference(
         ...rows.filter((r) => wanted.kind === undefined || r.kind !== wanted.kind),
       ];
       for (const row of ordered) {
+        if (idBudget <= 0) break;
+        idBudget--;
         const coords = coordsForPage(db, hasCoords, row.id);
         push(BAND.id, {
           title: row.title,
