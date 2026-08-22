@@ -68,6 +68,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 
 // ------------------------------------------------------------------ types
 
@@ -81,6 +82,15 @@ export interface FleetLane {
   entries?: RosterSpec[];
   /** Alternative to entries: a roster JSON on disk. */
   rosterFile?: string;
+  /**
+   * Lane-level defaults for the two run dimensions of ADR-0024 and for the
+   * episode's tool-call ceiling. An entry that carries its own wins; a lane
+   * that carries one applies it to every entry that does not. An objective
+   * stamps every run in the lane unscored.
+   */
+  objective?: string;
+  watchdogs?: WatchdogOverride;
+  maxToolCalls?: number;
 }
 
 /**
@@ -229,6 +239,21 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
           `a local/self-hosted apiBase is exempt`,
       );
     }
+    if (e.watchdogs !== undefined) {
+      const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
+      if (!parsed.success) {
+        fail(`lane ${lane.name}: entry ${e.model}: watchdogs — ${parsed.error.message}`);
+      }
+    }
+    if (e.objective !== undefined && (typeof e.objective !== "string" || e.objective.length === 0)) {
+      fail(`lane ${lane.name}: entry ${e.model}: objective must be a non-empty string`);
+    }
+    if (
+      e.maxToolCalls !== undefined &&
+      (typeof e.maxToolCalls !== "number" || !Number.isInteger(e.maxToolCalls) || e.maxToolCalls <= 0)
+    ) {
+      fail(`lane ${lane.name}: entry ${e.model}: maxToolCalls must be a positive integer`);
+    }
     out.push(e);
   }
   if (out.length === 0) fail(`lane ${lane.name}: no entries`);
@@ -283,6 +308,19 @@ export function parseFleet(raw: unknown): FleetConfig {
     const hasEntries = l.entries !== undefined;
     const hasFile = l.rosterFile !== undefined;
     if (hasEntries === hasFile) fail(`lane ${l.name}: exactly one of entries or rosterFile`);
+    if (l.objective !== undefined && (typeof l.objective !== "string" || l.objective.length === 0)) {
+      fail(`lane ${l.name}: objective must be a non-empty string`);
+    }
+    if (l.watchdogs !== undefined) {
+      const parsed = watchdogOverrideSchema.safeParse(l.watchdogs);
+      if (!parsed.success) fail(`lane ${l.name}: watchdogs — ${parsed.error.message}`);
+    }
+    if (
+      l.maxToolCalls !== undefined &&
+      (typeof l.maxToolCalls !== "number" || !Number.isInteger(l.maxToolCalls) || l.maxToolCalls <= 0)
+    ) {
+      fail(`lane ${l.name}: maxToolCalls must be a positive integer`);
+    }
     const lane: FleetLane = {
       name: l.name,
       enabled: l.enabled,
@@ -290,6 +328,9 @@ export function parseFleet(raw: unknown): FleetConfig {
       loop,
       ...(l.untilDefault !== undefined ? { untilDefault: l.untilDefault } : {}),
       ...(hasFile ? { rosterFile: l.rosterFile } : {}),
+      ...(l.objective !== undefined ? { objective: l.objective } : {}),
+      ...(l.watchdogs !== undefined ? { watchdogs: l.watchdogs } : {}),
+      ...(l.maxToolCalls !== undefined ? { maxToolCalls: l.maxToolCalls } : {}),
     };
     if (hasEntries) lane.entries = validateEntries(lane, l.entries);
     lanes.push(lane);
@@ -344,6 +385,17 @@ export function fillEntries(lane: FleetLane, entries: RosterSpec[], stamp: strin
   return entries.map((e) => ({
     ...e,
     account: lane.account,
+    // Lane defaults, entry wins. `watchdogs` merges key-by-key so a lane can
+    // set a long episode while one entry tightens `idleMs`.
+    ...((e.objective ?? lane.objective) !== undefined
+      ? { objective: (e.objective ?? lane.objective)! }
+      : {}),
+    ...(lane.watchdogs !== undefined || e.watchdogs !== undefined
+      ? { watchdogs: { ...lane.watchdogs, ...e.watchdogs } }
+      : {}),
+    ...((e.maxToolCalls ?? lane.maxToolCalls) !== undefined
+      ? { maxToolCalls: (e.maxToolCalls ?? lane.maxToolCalls)! }
+      : {}),
     runId:
       e.runId ??
       `fleet-${lane.name}-${slug(e.model)}${e.effort !== undefined ? `-${slug(e.effort)}` : ""}-${stamp}`,

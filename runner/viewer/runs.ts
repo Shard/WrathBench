@@ -54,7 +54,14 @@ interface MetaShape {
   harnessVersion?: string;
   startedAt?: number;
   shakeout?: string;
-  config?: { model?: string; driver?: string; adapter?: string; character?: string; apiBase?: string };
+  config?: {
+    model?: string;
+    driver?: string;
+    adapter?: string;
+    character?: string;
+    apiBase?: string;
+    objective?: string;
+  };
 }
 
 /**
@@ -121,6 +128,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     driver: null,
     adapter: null,
     shakeout: null,
+    objective: null,
     character: null,
     platform: null,
     apiBase: null,
@@ -145,6 +153,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.startedAt = num(meta.startedAt);
     row.shakeout = str(meta.shakeout);
     row.model = str(meta.config?.model);
+    row.objective = str(meta.config?.objective);
     // `adapter` is the pre-driver name for the same thing; old runs only have it.
     row.driver = str(meta.config?.driver) ?? str(meta.config?.adapter);
     row.adapter = str(meta.config?.adapter);
@@ -172,6 +181,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.driver = str(r["driver"]) ?? row.driver;
         row.adapter = str(r["adapter"]) ?? row.adapter;
         row.shakeout = str(r["shakeout"]) ?? row.shakeout;
+        // `objective` is a late column: a run.sqlite written before ADR-0024
+        // simply does not have it, and meta.json (read above) is the fallback.
+        row.objective = str(r["objective"]) ?? row.objective;
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
         // Stored reasons predate the rename; normalise so one vocabulary shows.

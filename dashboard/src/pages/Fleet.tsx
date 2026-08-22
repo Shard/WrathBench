@@ -192,6 +192,10 @@ function RunRowView(props: { row: RunListRow; now: number }) {
           {" "}
           <span class="warn">shakeout</span>
         </Show>
+        <Show when={r().objective !== null}>
+          {" "}
+          <span class="warn" title={r().objective ?? ""}>objective</span>
+        </Show>
       </td>
       <td class="dim">{r().character ?? "—"}</td>
       <td class="right mono">{num(r().level)}</td>

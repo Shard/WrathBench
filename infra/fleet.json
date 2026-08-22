@@ -86,6 +86,32 @@
       ]
     },
     {
+      "_comment": [
+        "nav-probe: a long-running, UNSCORED navigation probe (ADR-0024). One 6h episode per",
+        "enable (loop:false), on the subscription driver, with an explicit travel objective — the",
+        "question is whether the navigation surface is usable unprompted, not how fast a model",
+        "levels. race 3 / class 2 is a Dwarf Paladin, the same start the sub-sonnet lane uses:",
+        "Coldridge Valley in Dun Morogh, so the nearest capital really is Ironforge and the",
+        "Deeprun Tram is the interesting leg only if the model routes via Stormwind.",
+        "watchdogs: no-xp is DISABLED (travel earns no XP for hours and would trip it), idle stays",
+        "at 20m, wall clock is the 6h episode. maxToolCalls is raised from the 500 default because",
+        "the claude driver has been observed at ~4 tool calls/minute — 500 would end the run about",
+        "two hours in, as tool-call-limit, and the trajectory would read like a harness fault.",
+        "Account SHAKEOUT, shared with sub-sonnet: the one-lane-per-account check only binds",
+        "ENABLED lanes, so enable exactly one of the two at a time."
+      ],
+      "name": "nav-probe",
+      "enabled": false,
+      "account": "SHAKEOUT",
+      "loop": false,
+      "objective": "Travel from your starting zone to the nearest capital city (Ironforge for dwarves/gnomes via the Deeprun Tram from Stormwind if needed, Stormwind for humans). Use the game's own transport: roads, the Deeprun Tram, flight masters once discovered. Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why.",
+      "watchdogs": { "episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000 },
+      "maxToolCalls": 2500,
+      "entries": [
+        { "model": "sonnet", "driver": "claude-subscription", "character": "Navprobe", "race": 3, "class": 2 }
+      ]
+    },
+    {
       "name": "sub-opus",
       "enabled": false,
       "account": "SHAKEOUT2",

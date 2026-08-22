@@ -21,20 +21,52 @@ import { z } from "zod";
 // ---------------------------------------------------------------- watchdogs
 
 /**
+ * A millisecond threshold that can be turned off.
+ *
+ * `null` is the internal representation of "this watchdog does not fire", and
+ * `0` normalises to it — argv can only carry strings, so `--no-xp-ms 0` is the
+ * disable spelling on the command line while a roster/fleet JSON can say
+ * `null` outright. `watchdogs.ts` guards on `!== null`; a zero left as zero
+ * would trip the threshold on the first check instead of disabling it.
+ */
+function msThreshold(defaultMs: number) {
+  return z
+    .union([z.number().int().nonnegative(), z.null()])
+    .default(defaultMs)
+    .transform((v) => (v === null || v === 0 ? null : v));
+}
+
+/**
  * Watchdog thresholds and the named reasons they terminate with.
  * See `watchdogs.ts` for the semantics of each.
  */
 export const watchdogConfigSchema = z.object({
-  /** No model response for this long => `idle`. */
-  idleMs: z.number().int().positive().default(10 * 60_000),
-  /** No level/XP progress for this long (session must exist) => `no-xp`. */
-  noXpMs: z.number().int().positive().default(45 * 60_000),
-  /** Episode wall-clock limit => `episode-limit`. Generous per PHASE-0. */
-  episodeMs: z.number().int().positive().default(6 * 60 * 60_000),
+  /** No model response for this long => `idle`. Null/0 disables. */
+  idleMs: msThreshold(10 * 60_000),
+  /** No level/XP progress for this long (session must exist) => `no-xp`. Null/0 disables. */
+  noXpMs: msThreshold(45 * 60_000),
+  /** Episode wall-clock limit => `episode-limit`. Generous per PHASE-0. Null/0 disables. */
+  episodeMs: msThreshold(6 * 60 * 60_000),
   /** Consecutive sandbox restarts (event-loop-blocking snippets) => `snippet-runaway`. */
   maxSandboxRestarts: z.number().int().positive().default(3),
 });
 export type WatchdogConfig = z.infer<typeof watchdogConfigSchema>;
+
+/**
+ * A partial watchdog override, as a roster entry or fleet lane may carry it
+ * (ADR-0024). Same vocabulary as the full config, every key optional, unknown
+ * keys refused so a typo in fleet.json is a config error rather than a
+ * silently-ignored knob.
+ */
+export const watchdogOverrideSchema = z
+  .object({
+    idleMs: z.union([z.number().int().nonnegative(), z.null()]).optional(),
+    noXpMs: z.union([z.number().int().nonnegative(), z.null()]).optional(),
+    episodeMs: z.union([z.number().int().nonnegative(), z.null()]).optional(),
+    maxSandboxRestarts: z.number().int().positive().optional(),
+  })
+  .strict();
+export type WatchdogOverride = z.infer<typeof watchdogOverrideSchema>;
 
 /** Reasons a run can end. Named, closed set; the trajectory records one. */
 export const TERMINATION_REASONS = [
@@ -123,6 +155,17 @@ export const runConfigSchema = z.object({
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
   /**
+   * An operator-set objective for this one run — a run dimension, not a
+   * per-model prompt (ADR-0024). The same text is rendered into the same
+   * place in the same fixed prompt for every model and every driver; it never
+   * replaces the standing goal, it is added to it. Because a run steered at a
+   * named task is not comparable with a free-play run, a run that carries one
+   * is stamped unscored (`OBJECTIVE_STAMP`) exactly the way a shakeout driver's
+   * runs are.
+   */
+  objective: z.string().min(1).max(4000).optional(),
+
+  /**
    * Reasoning effort for this run — a profile-matrix dimension, not a tuning
    * knob for one model: it is set per roster entry and recorded, so `opus at
    * low` and `opus at high` are two comparable rows.
@@ -182,6 +225,13 @@ export const SHAKEOUT_DRIVERS: readonly Driver[] = ["claude-subscription", "stub
 
 /** The stamp carried by meta.json, run.sqlite and the timeline for a non-scoring driver. */
 export const SHAKEOUT_STAMP = "shakeout-only (external scaffold)";
+
+/**
+ * The stamp carried by a run with an operator objective. It is a probe, not a
+ * result: the run was steered at a named task, so it can never enter a scored
+ * comparison against free-play runs (ADR-0024).
+ */
+export const OBJECTIVE_STAMP = "unscored (operator objective)";
 
 export type RunConfig = z.infer<typeof runConfigSchema> & { driver: Driver };
 
@@ -250,9 +300,22 @@ export function isShakeoutDriver(driver: Driver): boolean {
   return SHAKEOUT_DRIVERS.includes(driver);
 }
 
-/** The stamp a run gets, or undefined for a driver whose runs can score. */
-export function shakeoutStamp(driver: Driver): string | undefined {
-  if (driver === "claude-subscription") return SHAKEOUT_STAMP;
-  if (driver === "stub") return "shakeout-only (scripted stub)";
-  return undefined;
+/**
+ * The stamp a run gets, or undefined for a run that can score.
+ *
+ * Two independent reasons a run never scores, and a run can carry both: the
+ * driver is an external scaffold, and/or the operator steered the run with an
+ * objective (ADR-0024). The driver's stamp stays the *prefix* so anything
+ * matching on it keeps matching.
+ */
+export function shakeoutStamp(driver: Driver, objective?: string | undefined): string | undefined {
+  const byDriver =
+    driver === "claude-subscription"
+      ? SHAKEOUT_STAMP
+      : driver === "stub"
+        ? "shakeout-only (scripted stub)"
+        : undefined;
+  const byObjective = objective !== undefined && objective.length > 0 ? OBJECTIVE_STAMP : undefined;
+  if (byDriver !== undefined && byObjective !== undefined) return `${byDriver}; ${byObjective}`;
+  return byDriver ?? byObjective;
 }

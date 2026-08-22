@@ -121,3 +121,75 @@ describe("forCycle", () => {
     expect(c3.character).toBe("Burnopus");
   });
 });
+
+/**
+ * Run dimensions (ADR-0024): an entry may carry an operator objective, partial
+ * watchdog overrides, and its own tool-call ceiling, and all three have to
+ * survive the trip into run.ts's argv.
+ */
+describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
+  const OBJECTIVE = "Travel to the nearest capital city.";
+
+  test("an entry without them is unchanged", () => {
+    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
+    expect(s).toMatchObject({ objective: undefined, watchdogs: {}, maxToolCalls: undefined, episodeMs: 5_400_000 });
+    const argv = episodeArgv(s!, false);
+    expect(argv).not.toContain("--objective");
+    expect(argv).not.toContain("--watchdogs-json");
+    expect(argv).not.toContain("--max-tool-calls");
+    expect(argv[argv.indexOf("--episode-ms") + 1]).toBe("5400000");
+  });
+
+  test("the objective reaches argv verbatim, as one argument", () => {
+    const [s] = resolve([{ model: "z-ai/glm-5.2:free", objective: OBJECTIVE }], "20260101");
+    const argv = episodeArgv(s!, false);
+    expect(argv[argv.indexOf("--objective") + 1]).toBe(OBJECTIVE);
+  });
+
+  test("an empty objective or a bad watchdog key is a config error", () => {
+    expect(() => resolve([{ model: "m", objective: "" }], "20260101")).toThrow(/objective/);
+    expect(() => resolve([{ model: "m", watchdogs: { noXpMS: 5 } as never }], "20260101")).toThrow(/watchdogs/);
+  });
+
+  test("a disabled watchdog travels as JSON null — argv cannot carry it any other way", () => {
+    const [s] = resolve(
+      [{ model: "m", watchdogs: { noXpMs: null, idleMs: 1_200_000, episodeMs: 21_600_000 } }],
+      "20260101",
+    );
+    const argv = episodeArgv(s!, false);
+    expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({
+      noXpMs: null,
+      idleMs: 1_200_000,
+    });
+    // The wall clock keeps its own flag when it is a number.
+    expect(argv[argv.indexOf("--episode-ms") + 1]).toBe("21600000");
+  });
+
+  test("0 is the argv spelling of disabled and normalises to null", () => {
+    const [s] = resolve([{ model: "m", watchdogs: { noXpMs: 0 } }], "20260101");
+    const argv = episodeArgv(s!, false);
+    expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({ noXpMs: null });
+  });
+
+  test("watchdogs.episodeMs wins over the entry's episodeMs, and can disable the wall clock", () => {
+    const [both] = resolve([{ model: "m", episodeMs: 60_000, watchdogs: { episodeMs: 21_600_000 } }], "20260101");
+    expect(both!.episodeMs).toBe(21_600_000);
+    expect(episodeArgv(both!, false)[episodeArgv(both!, false).indexOf("--episode-ms") + 1]).toBe("21600000");
+
+    const [off] = resolve([{ model: "m", episodeMs: 60_000, watchdogs: { episodeMs: null } }], "20260101");
+    expect(off!.episodeMs).toBeNull();
+    const argv = episodeArgv(off!, false);
+    expect(argv).not.toContain("--episode-ms");
+    expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({ episodeMs: null });
+  });
+
+  test("maxToolCalls maps onto --max-tool-calls", () => {
+    const [s] = resolve([{ model: "m", maxToolCalls: 2500 }], "20260101");
+    expect(episodeArgv(s!, false)[episodeArgv(s!, false).indexOf("--max-tool-calls") + 1]).toBe("2500");
+  });
+
+  test("a resumed episode carries none of them: identity comes back from meta.json", () => {
+    const [s] = resolve([{ model: "m", objective: OBJECTIVE, watchdogs: { noXpMs: null } }], "20260101");
+    expect(episodeArgv(s!, true)).toEqual([expect.any(String), "--resume", s!.runId]);
+  });
+});

@@ -15,7 +15,7 @@ import {
   type ChatMessage,
   type SnapshotLike,
 } from "./context";
-import { SYSTEM_PROMPT } from "./prompt";
+import { buildSystemPrompt } from "./prompt";
 import { TOOLS, callTool, coerceToolArgs, normalizeToolArgs, type ToolContext } from "./tools";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -205,7 +205,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const contextText = await builder.build(turn, pendingNotices);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: buildSystemPrompt(config.objective) },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];
