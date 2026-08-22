@@ -29,6 +29,8 @@
 #include "QuestDef.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
+#include "Map.h"
+#include "MapCollisionData.h"
 #include "PathGenerator.h"
 #include "Player.h"
 #include "SharedDefines.h"
@@ -1057,6 +1059,146 @@ namespace WrathBench
         s.ws->QueuePacket(p);
     }
 
+    // Does the navmesh have a tile loaded under this point? Mirrors
+    // PathGenerator::HaveTile, which is private; a missing tile is the case the
+    // core folds into PATHFIND_NORMAL|PATHFIND_NOT_USING_PATH (a straight-line
+    // "shortcut" the module must never walk).
+    static bool HaveNavTile(dtNavMesh const* navMesh, float x, float y, float z)
+    {
+        if (!navMesh)
+            return false;
+        float point[3] = { y, z, x };
+        int tx = -1, ty = -1;
+        navMesh->calcTileLoc(point, &tx, &ty);
+        if (tx < 0 || ty < 0)
+            return false;
+        return navMesh->getTileAt(tx, ty, 0) != nullptr;
+    }
+
+    static bool IsCompletePath(PathType type, Movement::PointsArray const& pts)
+    {
+        return (type & PATHFIND_NORMAL)
+            && !(type & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_SHORT | PATHFIND_FARFROMPOLY | PATHFIND_NOT_USING_PATH))
+            && pts.size() >= 2;
+    }
+
+    // The cause ladder behind a move_to (PROTOCOL.md, WB_MOVE_RESULT.status).
+    // Returns status == nullptr with `points` filled on success. Order matters:
+    // no_mesh must be tested before CalculatePath, because the core hides a
+    // missing tile inside NORMAL|NOT_USING_PATH; the endpoint check is 2D so
+    // that a stale z in the request is the mesh's problem (meshZ), not the
+    // agent's.
+    Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z)
+    {
+        PathResolve r;
+        dtNavMesh const* navMesh = player->GetMap()->GetMapCollisionData().GetMMapData().GetNavMesh();
+        if (!HaveNavTile(navMesh, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ())
+            || !HaveNavTile(navMesh, x, y, z))
+        {
+            r.status = "no_mesh";
+            return r;
+        }
+
+        PathGenerator gen(player);
+        bool built = gen.CalculatePath(x, y, z, false);
+        PathType type = gen.GetPathType();
+        Movement::PointsArray const& pts = gen.GetPath();
+
+        if (!built || (type & PATHFIND_NOT_USING_PATH))
+        {
+            // No poly under one end. The core does not say which, so ask it
+            // about the start alone: a path from the character to itself is
+            // NORMAL when the start is on the mesh.
+            PathGenerator probe(player);
+            probe.CalculatePath(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), false);
+            r.status = (probe.GetPathType() & PATHFIND_NOT_USING_PATH) ? "start_off_mesh" : "target_off_mesh";
+            return r;
+        }
+        if (type & PATHFIND_FARFROMPOLY_START)
+        {
+            r.status = "start_off_mesh";
+            return r;
+        }
+        if (type & PATHFIND_FARFROMPOLY_END)
+        {
+            r.status = "target_off_mesh";
+            return r;
+        }
+
+        auto endpointOk = [&](PathGenerator const& g) {
+            G3D::Vector3 const& end = g.GetActualEndPosition();
+            float dx = end.x - x, dy = end.y - y;
+            return dx * dx + dy * dy <= 16.0f; // navmesh end within 4y of the request, 2D
+        };
+
+        if (IsCompletePath(type, pts))
+        {
+            if (!endpointOk(gen))
+            {
+                r.status = "target_off_mesh";
+                return r;
+            }
+            for (auto const& v : pts)
+                r.points.push_back({v.x, v.y, v.z});
+        }
+        else
+        {
+            // Partial path (INCOMPLETE / SHORT / NOPATH). One module-side
+            // subdivision retry: path from where the mesh got to, onward to the
+            // target, and splice. The z-ladder and midpoint retries models used
+            // to hand-roll (travel.ts) live here now — pathing detail, not a
+            // decision the agent should have to make.
+            bool nonTrivial = pts.size() >= 2;
+            if (nonTrivial)
+            {
+                G3D::Vector3 const& a = pts.front();
+                G3D::Vector3 const& b = pts.back();
+                nonTrivial = (a - b).squaredLength() > 1.0f;
+            }
+            if (nonTrivial)
+            {
+                G3D::Vector3 const& mid = pts.back();
+                PathGenerator leg2(player);
+                bool built2 = leg2.CalculatePath(mid.x, mid.y, mid.z, x, y, z, false);
+                if (built2 && IsCompletePath(leg2.GetPathType(), leg2.GetPath()) && endpointOk(leg2))
+                {
+                    for (auto const& v : pts)
+                        r.points.push_back({v.x, v.y, v.z});
+                    Movement::PointsArray const& pts2 = leg2.GetPath();
+                    for (size_t i = 1; i < pts2.size(); ++i) // pts2[0] == mid
+                        r.points.push_back({pts2[i].x, pts2[i].y, pts2[i].z});
+                }
+                else
+                {
+                    r.status = "path_incomplete";
+                    r.hasReached = true;
+                    r.reachedX = mid.x; r.reachedY = mid.y; r.reachedZ = mid.z;
+                    return r;
+                }
+            }
+            else
+            {
+                r.status = "path_incomplete";
+                r.hasReached = true;
+                r.reachedX = player->GetPositionX(); r.reachedY = player->GetPositionY(); r.reachedZ = player->GetPositionZ();
+                return r;
+            }
+        }
+
+        if (r.points.size() < 2)
+        {
+            r.status = "path_incomplete";
+            return r;
+        }
+        float endZ = r.points.back().z;
+        if (std::fabs(endZ - z) > 1.0f)
+        {
+            r.hasMeshZ = true;
+            r.meshZ = endZ;
+        }
+        return r;
+    }
+
     void Manager::FinishMove(BenchSession& s, char const* status)
     {
         MoveState& m = s.move;
@@ -1073,6 +1215,12 @@ namespace WrathBench
         Player* player = (s.ws && sWorldSessionMgr->FindSession(s.accountId) == s.ws) ? s.ws->GetPlayer() : nullptr;
         if (player)
             w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+        // The z the mesh resolved the request to, when it differed from the
+        // request by more than 1y: the honest signal that the agent's z was off
+        // and the module walked to the ground instead.
+        if (m.hasMeshZ)
+            w.Add("meshZ", (double)m.meshZ);
+        m.hasMeshZ = false;
         EmitEvent(s, "WB_MOVE_RESULT", 0xFF01, w.Str());
     }
 
@@ -1108,30 +1256,29 @@ namespace WrathBench
         if (player->GetExactDist2d(x, y) > 250.0f)
             return failEvent("too_far");
 
-        // The one sanctioned mmaps use (docs/CONTRACTS.md "Pathing"). PathGenerator
-        // runs against the player's map; world thread, maps are not mid-update here.
-        PathGenerator gen(player);
-        bool built = gen.CalculatePath(x, y, z, false);
-        PathType type = gen.GetPathType();
-        Movement::PointsArray const& pts = gen.GetPath();
-        bool good = built && (type & PATHFIND_NORMAL)
-            && !(type & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE | PATHFIND_SHORT | PATHFIND_FARFROMPOLY))
-            && pts.size() >= 2;
-        if (good)
+        // Resolve the request against the server's mmaps (the one sanctioned
+        // navmesh use, docs/CONTRACTS.md "Pathing") into either a walkable
+        // polyline or one typed cause. FOLLOW-UPS item 38 N1: the old single
+        // `no_path` hid four different failures, and one of them (a 3D endpoint
+        // check against a request whose z was merely stale) was self-inflicted.
+        PathResolve r = ResolvePath(player, x, y, z);
+        if (r.status != nullptr)
         {
-            G3D::Vector3 const& end = gen.GetActualEndPosition();
-            float dx = end.x - x, dy = end.y - y, dz = end.z - z;
-            if (dx * dx + dy * dy + dz * dz > 16.0f) // navmesh end > 4y from request
-                good = false;
+            Json::Writer w;
+            w.Add("moveId", moveId).Add("status", r.status);
+            w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+            if (r.hasReached)
+                w.Raw("reachedPos", Json::Writer().Add("x", (double)r.reachedX).Add("y", (double)r.reachedY).Add("z", (double)r.reachedZ).Str());
+            EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
+            return;
         }
-        if (!good)
-            return failEvent("no_path");
+        std::vector<WbVec> const& pts = r.points;
+        m.meshZ = r.meshZ;
+        m.hasMeshZ = r.hasMeshZ;
 
         int64_t now = NowMs();
         m.points.clear();
-        m.points.reserve(pts.size());
-        for (auto const& v : pts)
-            m.points.push_back({v.x, v.y, v.z});
+        m.points = pts;
         m.seg = 0;
         m.segDone = 0.0f;
         m.lastMs = now;
