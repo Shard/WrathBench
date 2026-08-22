@@ -19,12 +19,15 @@
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */
 
+import { randomBytes } from "node:crypto";
 import { connect, WrathRequestError, type NearbyObject, type WrathClient } from "../src/index";
 
 const HOST = process.env.MODULE_HOST ?? "worldserver";
 const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
-const TOKEN = `sdk-move-${Date.now()}`;
+// Random hex, not a timestamp: session tokens under 32 chars are rejected with
+// `weak_token`, and a per-session token must be unique anyway.
+const TOKEN = `sdk-move-${randomBytes(16).toString("hex")}`;
 const CHARACTER = process.env.MOVE_CHARACTER ?? "Benchmove";
 /** How far to walk, in yards, when the geometry allows it. */
 const TARGET_DISTANCE = 30;
