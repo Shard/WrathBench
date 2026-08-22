@@ -462,6 +462,13 @@ priority. Items graduate out of this file into commits; the dev loop
     claude-lane trajectory records carry a `call` index because that lane's
     single long driver turn makes `turn` useless for analysis.
 
+22. **Map replay of historical runs** (Mark, 2026-08-22). The live map view
+    (ADR-0019) renders a position-feed interface, not the live store — replay
+    is "a trajectory reader + a time cursor" plugged into the same renderer:
+    route lines, death sites, zone coverage per run. Deliberately deferred;
+    the seam is the position-feed type in runner/viewer. Anything that makes
+    the renderer live-only regresses ADR-0019.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
