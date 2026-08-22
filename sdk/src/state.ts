@@ -551,8 +551,12 @@ export interface UnitFilter {
    * `{ questGiver: "reward" }` for every NPC ready to take a turn-in, or
    * `{ questGiver: ["available", "available_rep"] }`. Objects with no observed
    * status never match.
+   *
+   * `true` is shorthand for "has any marker at all": every observed status
+   * except `"none"`, which is the server saying this NPC has nothing for you.
+   * `false` is rejected — "no marker" and "never observed" are two readings.
    */
-  questGiver?: QuestGiverStatusName | QuestGiverStatusName[];
+  questGiver?: QuestGiverStatusName | QuestGiverStatusName[] | true;
 }
 
 /**
@@ -1969,8 +1973,13 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
     const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
     if (isNpc !== f.npc) return false;
   }
-  if (f.questGiver !== undefined && (view.questGiver === undefined || !f.questGiver.has(view.questGiver))) {
-    return false;
+  if (f.questGiver !== undefined) {
+    if (view.questGiver === undefined) return false;
+    if (f.questGiver === ANY_QUEST_GIVER) {
+      if (view.questGiver === "none") return false;
+    } else if (!f.questGiver.has(view.questGiver)) {
+      return false;
+    }
   }
   return true;
 }
@@ -1984,6 +1993,27 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
 // very failure this helper exists to remove.
 
 const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc", "questGiver"] as const;
+
+/** `questGiver: true` — any marker except `"none"`. Not a status name, so it cannot collide with one. */
+const ANY_QUEST_GIVER = "any" as const;
+
+/**
+ * Keys models actually passed that are not filter keys, and where the thing
+ * they wanted really lives (2026-08-23 run audit: `dead`, `guid`). Naming the
+ * replacement is explanation, not repair — inverting `dead` into `alive` would
+ * be a guess, and ADR-0016 rule 1 forbids guessing.
+ */
+const UNIT_FILTER_KEY_HINTS: Readonly<Record<string, string>> = {
+  dead: 'use alive instead — { alive: false } is the known-dead, { alive: true } drops them',
+  guid: "guid is not a criterion — each returned row carries .guid, and state.nearby is keyed by it",
+  questgiver: "questGiver is spelled with a capital G",
+  distance: "use maxDistance (yards)",
+  maxDist: "use maxDistance (yards)",
+  id: "use entry (the creature/gameobject template id)",
+  entryId: "use entry",
+  level: "level is not a criterion — each returned row carries .level; filter the array yourself",
+  hostile: "hostility is not observed as a filter criterion; read each row's fields instead",
+};
 const UNIT_FILTER_TYPES = ["unit", "player", "gameObject"] as const;
 
 /**
@@ -2000,7 +2030,7 @@ interface NormalizedUnitFilter {
   alive: boolean | undefined;
   maxDistance: number | undefined;
   npc: boolean | undefined;
-  questGiver: Set<QuestGiverStatusName> | undefined;
+  questGiver: Set<QuestGiverStatusName> | typeof ANY_QUEST_GIVER | undefined;
 }
 
 const EMPTY_UNIT_FILTER: NormalizedUnitFilter = {
@@ -2146,9 +2176,13 @@ function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilt
     (k) => !(UNIT_FILTER_KEYS as readonly string[]).includes(k),
   );
   if (unknown.length > 0) {
+    const hints = unknown
+      .map((k) => (UNIT_FILTER_KEY_HINTS[k] !== undefined ? `${k}: ${UNIT_FILTER_KEY_HINTS[k]}` : undefined))
+      .filter((h): h is string => h !== undefined);
     throw filterError(
       `unknown ${unknown.length === 1 ? "key" : "keys"} ${unknown.map(showValue).join(", ")}. ` +
-        `Valid keys are ${UNIT_FILTER_KEYS.join(", ")}. Drop the key or use one of those.`,
+        `Valid keys are ${UNIT_FILTER_KEYS.join(", ")}. Drop the key or use one of those.` +
+        (hints.length > 0 ? ` (${hints.join("; ")}.)` : ""),
     );
   }
 
@@ -2192,22 +2226,37 @@ function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilt
   if (filter.questGiver !== undefined) {
     // Exact names only: "?"/"!" or "turnin" have more than one reading
     // (reward vs reward_rep vs incomplete), so ADR-0016 says reject and list.
-    const raw = Array.isArray(filter.questGiver) ? filter.questGiver : [filter.questGiver];
-    if (raw.length === 0) {
-      throw filterError('questGiver received an empty array; pass a status name such as "reward", or omit questGiver.');
-    }
-    const names = new Set<QuestGiverStatusName>();
-    for (const item of raw) {
-      if (typeof item !== "string" || !(QUEST_GIVER_STATUS_NAMES as readonly string[]).includes(item)) {
+    // `true` is the exception: "does this NPC have anything for me" has one
+    // reading (any marker but "none"), so it is honored. `false` has two
+    // ("marker observed as none" vs "no marker observed"), so it is rejected.
+    if (filter.questGiver === true) {
+      out.questGiver = ANY_QUEST_GIVER;
+    } else if (typeof filter.questGiver === "boolean") {
+      throw filterError(
+        'questGiver received false, which has no single meaning here. Use { questGiver: true } for "has any ' +
+          'marker at all", or name the statuses you want, e.g. { questGiver: ["available", "reward"] }.',
+      );
+    } else {
+      const raw = Array.isArray(filter.questGiver) ? filter.questGiver : [filter.questGiver];
+      if (raw.length === 0) {
         throw filterError(
-          `questGiver received ${showValue(item)}, expected one of ${QUEST_GIVER_STATUS_NAMES.map(showValue).join(", ")} ` +
-            '(exact, case-sensitive) or an array of them. "reward" is a turn-in ready now, "available" a quest on offer, ' +
-            '"incomplete" an ender whose quest is not done yet.',
+          'questGiver received an empty array; pass a status name such as "reward", { questGiver: true } for any ' +
+            "marker at all, or omit questGiver.",
         );
       }
-      names.add(item as QuestGiverStatusName);
+      const names = new Set<QuestGiverStatusName>();
+      for (const item of raw) {
+        if (typeof item !== "string" || !(QUEST_GIVER_STATUS_NAMES as readonly string[]).includes(item)) {
+          throw filterError(
+            `questGiver received ${showValue(item)}, expected one of ${QUEST_GIVER_STATUS_NAMES.map(showValue).join(", ")} ` +
+              '(exact, case-sensitive), an array of them, or true for any marker at all. "reward" is a turn-in ready ' +
+              'now, "available" a quest on offer, "incomplete" an ender whose quest is not done yet.',
+          );
+        }
+        names.add(item as QuestGiverStatusName);
+      }
+      out.questGiver = names;
     }
-    out.questGiver = names;
   }
 
   if (filter.maxDistance !== undefined) {
