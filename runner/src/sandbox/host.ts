@@ -136,7 +136,12 @@ export class SandboxHost {
     // over the mutable field, so the next child's start() cannot clear it.
     const stderr = { tail: "", done: Promise.resolve() };
     this.stderr = stderr;
-    this.proc = Bun.spawn(["bun", this.entryPath], {
+    // --env-file=/dev/null: Bun auto-loads `.env` from the child's cwd into
+    // process.env AT STARTUP, regardless of the spawn env — so a repo-root
+    // `.env` (where provider keys live) would re-enter the child right past the
+    // allowlist. Pointing the flag at /dev/null disables that load (verified on
+    // Bun 1.4.0), making the child's env exactly `sandboxChildEnv`.
+    this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
