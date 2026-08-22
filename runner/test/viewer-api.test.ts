@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UNBUILT_NOTICE, createApi, readFleet } from "../viewer/api";
@@ -30,6 +30,7 @@ function fixture(): string {
     moduleUrl: "http://worldserver:8086",
     token: SENTINEL,
     character: "Fixturely",
+    account: "RUNNER",
     model: "test/model",
     apiBase: "https://openrouter.ai/api/v1",
     apiKeyEnv: "OPENROUTER_KEY",
@@ -208,6 +209,34 @@ describe("static hosting of the dashboard", () => {
   });
 });
 
+/** A one-lane fleet-state.json on `account`, with a roster beside it. */
+function laneState(runs: string, account: string): void {
+  writeFileSync(
+    join(runs, "fleet-state.json"),
+    JSON.stringify({
+      fleetPid: 7,
+      startedAt: 1,
+      heartbeatAt: 2,
+      containerized: true,
+      stamp: "20260822",
+      lanes: {
+        "lane-a": {
+          pid: 13,
+          account,
+          // Repo-relative and written by a container: only the basename is trusted.
+          rosterPath: "data/runs/fleet-a.roster.json",
+          jsonl: "j",
+          stdoutLog: "l",
+          spawnedAt: 1,
+          exitCode: null,
+          draining: false,
+          alive: true,
+        },
+      },
+    }),
+  );
+}
+
 describe("fleet state", () => {
   test("absent fleet-state.json reads as present:false, not an error", () => {
     const runs = fixture();
@@ -237,6 +266,51 @@ describe("fleet state", () => {
     expect(f.lanes.map((l) => l.name)).toEqual(["ox-alpha"]);
     expect(f.lanes[0]!.account).toBe("RUNNER");
     expect(JSON.stringify(f)).not.toContain("fleet.json");
+  });
+
+  test("each lane names the run holding its account, and its roster", () => {
+    const runs = fixture();
+    laneState(runs, "RUNNER");
+    writeFileSync(
+      join(runs, "fleet-a.roster.json"),
+      JSON.stringify([
+        { model: "test/model", apiKeyEnv: "SECRET_ENV", apiBase: "https://x/v1" },
+        { model: "next/model" },
+      ]),
+    );
+    const f = readFleet(runs);
+    expect(f.lanes[0]!.runId).toBe(RUN_ID);
+    expect(f.lanes[0]!.model).toBe("test/model");
+    expect(f.lanes[0]!.rosterModels).toEqual(["test/model", "next/model"]);
+    // The roster is projected, never forwarded: nothing but the model names.
+    expect(JSON.stringify(f)).not.toContain("SECRET_ENV");
+  });
+
+  test("a lane whose account nobody holds reads as idle, not as driving a run", () => {
+    const runs = fixture();
+    laneState(runs, "RUNNER9");
+    const f = readFleet(runs);
+    expect(f.lanes[0]!.runId).toBeNull();
+    expect(f.lanes[0]!.model).toBeNull();
+  });
+
+  test("a paused run has already freed its session, so it holds no account", () => {
+    const runs = fixture();
+    laneState(runs, "RUNNER");
+    const db = new Database(join(runs, RUN_ID, "run.sqlite"));
+    db.run(`UPDATE run SET pause_reason = 'deferred'`);
+    db.close();
+    expect(readFleet(runs).lanes[0]!.runId).toBeNull();
+  });
+
+  test("a run whose files have gone cold has let its account go", () => {
+    const runs = fixture();
+    laneState(runs, "RUNNER");
+    const old = new Date(Date.now() - 10 * 60_000);
+    for (const name of ["trajectory.jsonl", "run.sqlite"]) {
+      utimesSync(join(runs, RUN_ID, name), old, old);
+    }
+    expect(readFleet(runs).lanes[0]!.runId).toBeNull();
   });
 
   test("a truncated fleet-state.json degrades to absent rather than throwing", () => {

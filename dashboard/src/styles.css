@@ -92,6 +92,15 @@ tbody tr:hover { background: var(--panel); }
 .dot.dead { background: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
+/* Lane state, as a compact badge: the column an operator scans first. */
+.badge { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+         border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--dim); }
+.badge.running { color: var(--ok); border-color: var(--ok); }
+.badge.draining { color: var(--warn); border-color: var(--warn); }
+.badge.exited { color: var(--err); border-color: var(--err); }
+
+tbody tr.clickable { cursor: pointer; }
+
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
 

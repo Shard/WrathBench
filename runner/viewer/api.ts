@@ -14,17 +14,19 @@
  *   minimap tiles). See ADR-0022.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 import type {
   ApiInfoResponse,
   EntrySummary,
   FleetLane,
+  FleetLaneRun,
+  FleetLaneView,
   FleetResponse,
   RunListRow,
 } from "./api-types";
 import { readPositions } from "./positions";
-import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
+import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
 import { TrajectoryTail, scanRunTotals, tokenTotals, type RunTotals } from "./tail";
 
@@ -105,6 +107,115 @@ function staticFile(root: string, rel: string): Response | null {
   });
 }
 
+/**
+ * How stale a run's files may be and still be read as holding its account.
+ *
+ * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runs.ts`'s
+ * `LIVE_WINDOW_MS` (120s): the lane's run has to be resolved the same way the
+ * account guard and `--status` resolve it, or the dashboard would disagree with
+ * the supervisor about which run a lane holds near the boundary. The constant
+ * is duplicated rather than imported because importing from `infra/` would drag
+ * its repo-root and process assumptions into the viewer.
+ */
+const ACCOUNT_HELD_MS = 3 * 60_000;
+
+/** Age of the most recently touched artefact of a run — either file, whichever. */
+function runActivityAge(dir: string, now: number): number | undefined {
+  let newest: number | undefined;
+  for (const name of ["trajectory.jsonl", "run.sqlite"]) {
+    try {
+      const m = statSync(join(dir, name)).mtimeMs;
+      if (newest === undefined || m > newest) newest = m;
+    } catch {
+      // not written yet
+    }
+  }
+  return newest === undefined ? undefined : now - newest;
+}
+
+/** The account a run was launched against, straight off its own meta.json. */
+function accountOfRun(dir: string): string | undefined {
+  try {
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
+      config?: { account?: unknown };
+    };
+    const a = meta.config?.account;
+    // No recorded account means no claim: `accountHeldBy` skips such a run too,
+    // rather than guessing that it took the default one.
+    return typeof a === "string" && a.length > 0 ? a : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Which run holds each account right now, by the same inference `--status`
+ * makes (`accountHeldBy` in `run-roster.ts`): a run whose files are warm, with
+ * no termination row and no pause row. A paused run has already given its
+ * session back, so it holds nothing — the lane reads as idle, not as driving a
+ * run it has finished with.
+ *
+ * The map is keyed on account, not on lane: a hand-started run, or a previous
+ * cycle that has not gone cold, holds the account just as hard as a fleet one
+ * and will show under the lane that shares it. That is the honest reading of
+ * "what has this account" — `--status` says the same, adding only that the
+ * holder is "not fleet-managed" when the lane's own process is gone.
+ *
+ * The prefilter is the point. `/api/fleet` polls every five seconds and a runs
+ * directory holds hundreds of finished runs; only the handful whose files were
+ * touched inside the window are opened. Where `accountHeldBy` takes the first
+ * readdir match, this takes the freshest, which is the honest answer when a
+ * crashed run and its successor briefly overlap.
+ */
+export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { runId: string; model: string | null }> {
+  const out = new Map<string, { runId: string; model: string | null; age: number }>();
+  let names: string[];
+  try {
+    names = readdirSync(runsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && isValidRunId(d.name))
+      .map((d) => d.name);
+  } catch {
+    return new Map();
+  }
+  for (const id of names) {
+    const dir = join(runsDir, id);
+    const age = runActivityAge(dir, now);
+    if (age === undefined || age >= ACCOUNT_HELD_MS) continue;
+    const account = accountOfRun(dir);
+    if (account === undefined) continue;
+    const row = readRun(runsDir, id, now);
+    if (row.terminationReason !== null || row.pauseReason !== null) continue;
+    const key = account.toUpperCase();
+    const prev = out.get(key);
+    if (prev === undefined || age < prev.age) out.set(key, { runId: id, model: row.model, age });
+  }
+  return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
+}
+
+/**
+ * The models a lane's roster will work through, in order.
+ *
+ * Only the model names are projected: the roster entries also carry api bases,
+ * key environment names and accounts, and the boundary rule is to project what
+ * the UI needs rather than forward a file. The stored `rosterPath` is
+ * repo-relative and written by a supervisor that may live in another container,
+ * so only its basename is trusted and it is resolved inside the runs directory.
+ */
+export function rosterModels(runsDir: string, rosterPath: string): string[] {
+  if (typeof rosterPath !== "string" || rosterPath.length === 0) return [];
+  const file = join(runsDir, basename(rosterPath));
+  if (!existsSync(file)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { model?: unknown }[];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((e) => (e !== null && typeof e === "object" && typeof e.model === "string" ? e.model : null))
+      .filter((m): m is string => m !== null);
+  } catch {
+    return [];
+  }
+}
+
 /** Read the fleet supervisor's published state. Absent is normal, not an error. */
 export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
   const path = join(runsDir, "fleet-state.json");
@@ -118,7 +229,16 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       stamp?: string;
       lanes?: Record<string, FleetLane>;
     };
-    const lanes = Object.entries(raw.lanes ?? {}).map(([name, lane]) => ({ name, ...lane }));
+    const held = heldAccounts(runsDir, now);
+    const lanes: FleetLaneView[] = Object.entries(raw.lanes ?? {}).map(([name, lane]) => {
+      const run = held.get((lane.account ?? "RUNNER").toUpperCase());
+      const resolved: FleetLaneRun = {
+        runId: run?.runId ?? null,
+        model: run?.model ?? null,
+        rosterModels: rosterModels(runsDir, lane.rosterPath),
+      };
+      return { name, ...lane, ...resolved };
+    });
     lanes.sort((a, b) => a.name.localeCompare(b.name));
     // `fleetConfig` is deliberately not forwarded: it is a host path, and the
     // API says what the fleet is doing, not where this machine keeps things.

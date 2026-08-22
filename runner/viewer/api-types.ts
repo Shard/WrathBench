@@ -219,6 +219,26 @@ export interface FleetLane {
 }
 
 /**
+ * What the viewer resolves about a lane that `fleet-state.json` does not record:
+ * which run currently holds the lane's account, and what the lane will run next.
+ *
+ * The supervisor publishes processes, not runs; the run a lane is driving is
+ * inferred the same way `run-fleet.ts --status` infers it (see `accountHeldBy`
+ * in `run-roster.ts`) — from the run directories themselves.
+ */
+export interface FleetLaneRun {
+  /** The run holding this lane's account, or null when the account is free. */
+  runId: string | null;
+  /** That run's model. Null whenever `runId` is. */
+  model: string | null;
+  /** Models the lane's roster will work through, in roster order. */
+  rosterModels: string[];
+}
+
+/** A lane as `/api/fleet` serves it: the state file's record plus what we resolved. */
+export type FleetLaneView = FleetLane & { name: string } & FleetLaneRun;
+
+/**
  * The supervisor's published state. `present: false` is the normal answer on a
  * machine where the fleet has never run — it is not an error.
  */
@@ -229,7 +249,7 @@ export interface FleetResponse {
   heartbeatAt?: number;
   containerized?: boolean;
   stamp?: string;
-  lanes: (FleetLane & { name: string })[];
+  lanes: FleetLaneView[];
   /** Server clock at read time, so a client can age the heartbeat honestly. */
   now: number;
 }
