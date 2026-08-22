@@ -29,3 +29,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0026: The comparability tuple is stamped, never recomputed
 - ADR-0027: Navigation is the module's: typed causes, client-parity triggers and transports
 - ADR-0028: Wiki coordinates are a run dimension, withheld in scored runs
+- ADR-0029: The reference bundle states the quest's ender and the wiki's era

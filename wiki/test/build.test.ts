@@ -91,7 +91,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
   const coordRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_coords").get()!;
   expect(coordRows.n).toBe(1);
-  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("3");
+  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("4");
 
   // Ids were lifted off the raw wikitext too, and an id query finds the page
   // through the id table rather than through body prose.

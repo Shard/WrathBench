@@ -9,6 +9,7 @@
 import { Database } from "bun:sqlite";
 import type { WikiCoord } from "./coords";
 import type { WikiId } from "./ids";
+import type { WikiQuest } from "./quests";
 
 export const DEFAULT_BUNDLE_PATH = "data/wiki/bundle.sqlite";
 
@@ -77,6 +78,17 @@ export function createSchema(db: Database): void {
       id      INTEGER NOT NULL
     );
   `);
+  // What a quest page's infobox states about its giver and its turn-in, lifted
+  // before the strip (schema 4). `end` is NULL when the page does not say; it
+  // is never inferred from `start`. See quests.ts.
+  db.run(`
+    CREATE TABLE page_quest (
+      page_id  INTEGER PRIMARY KEY,
+      start    TEXT,
+      end      TEXT,
+      category TEXT
+    );
+  `);
 }
 
 /** Name of the coords table, so callers can probe for it on older bundles. */
@@ -84,6 +96,9 @@ export const COORDS_TABLE = "page_coords";
 
 /** Name of the entity-id table, so callers can probe for it on older bundles. */
 export const IDS_TABLE = "page_ids";
+
+/** Name of the quest-infobox table, so callers can probe for it on older bundles. */
+export const QUEST_TABLE = "page_quest";
 
 /**
  * True if this bundle was built with the coordinate channel (schema >= 2).
@@ -114,6 +129,20 @@ export function bundleHasIds(db: Database): boolean {
   return (row?.n ?? 0) > 0;
 }
 
+/**
+ * True if this bundle was built with the quest giver/ender channel (schema >= 4).
+ * Degrades like `page_ids` rather than failing closed: a live episode must not
+ * lose `search_reference` because the deployed bundle is a version behind.
+ */
+export function bundleHasQuest(db: Database): boolean {
+  const row = db
+    .query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .get(QUEST_TABLE);
+  return (row?.n ?? 0) > 0;
+}
+
 /** Indexes that only pay off once the table is full. */
 export function createIndexes(db: Database): void {
   db.run("CREATE INDEX pages_title ON pages(title)");
@@ -131,13 +160,14 @@ export function applyBuildPragmas(db: Database): void {
 }
 
 export interface Writer {
-  /** `coords`/`ids` are optional so older callers (and tests) still pass three args. */
+  /** `coords`/`ids`/`quest` are optional so older callers (and tests) still pass three args. */
   addPage(
     title: string,
     ns: number,
     text: string,
     coords?: readonly WikiCoord[],
     ids?: readonly WikiId[],
+    quest?: WikiQuest | null,
   ): void;
   addRedirect(source: string, target: string, ns: number): void;
   flush(): void;
@@ -155,6 +185,9 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
     "INSERT INTO page_coords (page_id, zone, x, y, raw) VALUES (?, ?, ?, ?, ?)",
   );
   const insertId = db.prepare("INSERT INTO page_ids (page_id, kind, id) VALUES (?, ?, ?)");
+  const insertQuest = db.prepare(
+    "INSERT OR REPLACE INTO page_quest (page_id, start, end, category) VALUES (?, ?, ?, ?)",
+  );
   const insertRedirect = db.prepare(
     "INSERT OR REPLACE INTO redirects (source, target, ns) VALUES (?, ?, ?)",
   );
@@ -180,7 +213,7 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
   };
 
   return {
-    addPage(title, ns, text, coords, ids) {
+    addPage(title, ns, text, coords, ids, quest) {
       begin();
       const id = nextId++;
       insertPage.run(id, title, ns, text, text.length);
@@ -192,6 +225,9 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
       }
       if (ids !== undefined) {
         for (const e of ids) insertId.run(id, e.kind, e.id);
+      }
+      if (quest !== undefined && quest !== null) {
+        insertQuest.run(id, quest.start ?? null, quest.end ?? null, quest.category ?? null);
       }
       tick();
     },

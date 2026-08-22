@@ -6,6 +6,19 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
 
 ## Harness quality
 
+47. **Unlabelled post-3.3.5 prose in wiki page leads.** ADR-0029 marks the era
+   sections the wiki labels itself, but a 2020 page's lead is written
+   present-tense about the post-Cataclysm world with no marker at all — the
+   Coldridge Valley lead still says the pass linked the valley to Dun Morogh
+   "prior to its collapse", which is false here. No build-time rule separates
+   that from Wrath-era prose. The `search_reference` description carries the
+   standing warning; a real fix would need either a pre-Cataclysm revision of
+   each page (the dump is full history, so the revision from before 2010-12 is
+   in it — a second bundle channel, expensive) or per-sentence classification
+   (not deterministic). Revisit if a trajectory shows a model misled by a lead
+   after the description warning shipped.
+
+
 8. **Context policy is not applied on the subscription lane.** The Claude-driver
    ContextBuilder's state sampling and watchdog checks are solid, but a
    `quota-exhausted` pause still loses the CLI's accumulated context on resume

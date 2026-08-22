@@ -36,6 +36,19 @@ export const WIKI_COORDS_SENTENCE = {
 } as const;
 
 /**
+ * The standing era warning on `search_reference`, fixed for every run.
+ *
+ * The reference wiki was dumped in 2020 and describes the world several
+ * expansions past the one this server runs. Its explicitly labelled
+ * post-Wrath sections are flagged in the text at bundle-build time, but a
+ * page's lead is written present-tense with no label at all — which is how a
+ * nav-probe run concluded that Coldridge Pass was collapsed and burned a
+ * session on a Cataclysm quest chain that does not exist here.
+ */
+export const WIKI_ERA_SENTENCE =
+  "This world runs patch 3.3.5a (Wrath of the Lich King): anything the wiki says about Cataclysm, the Shattering, or a later expansion describes a different world and does not apply here, so prefer what you can observe in game, and treat a wiki statement that some place is destroyed, collapsed, rebuilt or changed as post-3.3.5 unless it says otherwise; paragraphs the wiki itself labels as a later era are marked in the result text.";
+
+/**
  * The tool list for a run: `TOOLS` with the `search_reference` description
  * stating whether coordinates are served. `TOOLS` itself is the names-first
  * (default) rendering.
@@ -95,6 +108,9 @@ export const TOOLS: ToolDef[] = [
     name: "search_reference",
     description:
       "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. " +
+      "A quest page's result leads with what its infobox states — which NPC starts the quest and which NPC it is turned in to; these are often different NPCs, and when the page does not state an ender the line says so rather than implying the giver. " +
+      WIKI_ERA_SENTENCE +
+      " " +
       WIKI_COORDS_SENTENCE.withheld,
     inputSchema: {
       type: "object",

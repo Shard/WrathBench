@@ -42,6 +42,23 @@ not hours.
   a live observation and not proof anything is at that spot now. Nothing here
   reads the AzerothCore DB, DBC tables or Questie; it is all deterministic parsing
   of the wikitext.
+- Quest giver and ender are the third exception, for the same reason: a quest
+  page's `{{questbox | start=… | end=… | category=… }}` is a template, so the
+  strip takes the ender's name off the page entirely. `extractQuest` lifts the
+  three fields into `page_quest` before the strip. It reads only the
+  named-argument infoboxes (`questbox`, `questinfo`) — `{{questlong|…}}` is a
+  list-item template on index pages — and it **never infers `end` from
+  `start`**: 11,013 quest pages state a giver, 6,637 state an ender, and search
+  says "not stated on this page" for the rest rather than guessing the giver.
+  See ADR-0029.
+- Era sections are marked, not dropped. The dump is from 2020, four expansions
+  past the server this harness runs. `markEraSections` runs before the strip and
+  prefixes every paragraph of a `{{cata-section}}`/`== In Cataclysm ==` style
+  section with `[Cataclysm-era, not in patch 3.3.5]` (per paragraph, because
+  search returns a snippet window); a page the wiki says was *removed* in
+  Cataclysm gets the converse note. Nothing is deleted. A page's unlabelled
+  present-tense lead is beyond this — the `search_reference` tool description
+  carries the standing warning for that half.
 - Entity ids are the other exception, and for the same reason: `extractIds` lifts
   the numeric ids a page states about itself (`{{questbox|…|id=783}}`,
   `{{npcbox|…|id=721}}`, `|itemid=`, `|npcid=`, `|questid=`, `|entry=`) off the raw
@@ -57,6 +74,7 @@ pages       (id INTEGER PRIMARY KEY, title TEXT, ns INTEGER, text TEXT, text_len
 redirects   (source TEXT PRIMARY KEY, target TEXT, ns INTEGER)
 page_coords (page_id INTEGER, zone TEXT, x REAL, y REAL, raw TEXT)  -- wiki-derived, one row per coord
 page_ids    (page_id INTEGER, kind TEXT, id INTEGER)  -- quest/npc/item/object/spell/unknown
+page_quest  (page_id INTEGER PRIMARY KEY, start TEXT, end TEXT, category TEXT)  -- NULL end = page does not say
 meta        (key TEXT PRIMARY KEY, value TEXT)   -- source, built_at, counts, build_ms, schema_version
 pages_fts   FTS5 over (title, text), external content over pages
 ```
@@ -84,6 +102,10 @@ noise, and the runner's tool result says the bundle has no id index. Ids resolve
 after the next rebuild; the build is reproducible, so a rebuild from the same
 dump gives the same rows.
 
+`page_quest` arrived with `schema_version` 4 and degrades the same way
+`page_ids` does: `bundleHasQuest` reports its absence and `searchReference`
+simply omits the quest line, so a bundle one version behind still answers.
+
 FTS5 is required and checked before the stream starts; a sqlite build without it
 fails the build loudly rather than producing an unindexed bundle.
 
@@ -94,9 +116,12 @@ import { openBundle, searchReference } from "@wrathbench/wiki";
 
 const db = openBundle();                       // data/wiki/bundle.sqlite, read-only
 searchReference(db, "example quest alpha", { limit: 8, namespaces: [0, 118] });
-// -> { title, ns, snippet, rank, exactTitle?, redirectedFrom?, matchedId?, coords? }[]
+// -> { title, ns, snippet, rank, exactTitle?, redirectedFrom?, matchedId?, coords?, quest? }[]
 //    coords?: { zone?, x, y }[] — wiki-reference positions, not a live observation
 //    matchedId?: { kind, id }   — the page states this id in an infobox field
+//    quest?: { start?, end?, category? } — the quest infobox; absent `end` means
+//            the page does not state one, never that the giver takes it back.
+//            The same line leads the snippet, so the model reads it either way.
 ```
 
 Results come back in bands, and only inside a band does `bm25` decide:

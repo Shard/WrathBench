@@ -23,6 +23,8 @@ import {
 } from "./bundle";
 import { extractCoords } from "./coords";
 import { extractIds } from "./ids";
+import { extractQuest } from "./quests";
+import { markEraSections } from "./era";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats } from "./parse";
 import { redirectTarget, stripWikitext } from "./strip";
 
@@ -125,6 +127,7 @@ async function main(): Promise<void> {
   let charsKept = 0;
   let coordRows = 0;
   let idRows = 0;
+  let questRows = 0;
   let stoppedEarly = false;
   const parseStats: ParseStats = { pagesSkipped: 0 };
 
@@ -162,15 +165,19 @@ async function main(): Promise<void> {
         // the templates that carry them.
         const coords = extractCoords(page.wikitext);
         const ids = extractIds(page.wikitext);
-        const text = stripWikitext(page.wikitext);
+        const quest = extractQuest(page.wikitext);
+        // Era sections are marked in the wikitext, before the strip removes the
+        // templates and headings that identify them (era.ts).
+        const text = stripWikitext(markEraSections(page.wikitext));
         if (text.length === 0) {
           empties++;
         } else {
-          writer.addPage(page.title, page.ns, text, coords, ids);
+          writer.addPage(page.title, page.ns, text, coords, ids, quest);
           pagesKept++;
           charsKept += text.length;
           coordRows += coords.length;
           idRows += ids.length;
+          if (quest !== null) questRows++;
           perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
         }
       }
@@ -212,9 +219,10 @@ async function main(): Promise<void> {
     empty_pages: String(empties),
     coord_rows: String(coordRows),
     id_rows: String(idRows),
+    quest_rows: String(questRows),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
-    schema_version: "3",
+    schema_version: "4",
   });
   db.run("PRAGMA optimize");
   db.close();
