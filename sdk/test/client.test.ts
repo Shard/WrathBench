@@ -14,6 +14,7 @@ import {
   frames,
   gossipWithQuests,
   ITEM_ENTRY,
+  itemPushed,
   loginSequence,
   lootRelease,
   lootResponse,
@@ -744,17 +745,65 @@ describe("client: killTarget", () => {
 });
 
 describe("client: lootCorpse", () => {
-  test("an emptied corpse reports what was on it", async () => {
+  test("an emptied corpse reports what was actually stored", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const pending = client.lootCorpse(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "loot_all");
+    // Solo loot: the window slot arrives as LOOT_SLOT_TYPE_OWNER (4).
     stub.push(JSON.stringify(lootResponse(70)));
-    stub.push(JSON.stringify(lootRelease(71)));
+    stub.push(JSON.stringify(itemPushed(71)));
+    stub.push(JSON.stringify(lootRelease(72)));
     const loot = await pending;
     expect(loot.ok).toBe(true);
     expect(loot.gold).toBe(37);
-    expect(loot.items.map((i) => i.itemId)).toEqual([ITEM_ENTRY]);
+    expect(loot.items).toEqual([{ itemId: ITEM_ENTRY, count: 1 }]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a push that trails the release is still counted", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.lootCorpse(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "loot_all");
+    stub.push(JSON.stringify(lootResponse(70, 0))); // ALLOW_LOOT counts too
+    stub.push(JSON.stringify(lootRelease(71)));
+    stub.push(JSON.stringify(itemPushed(72)));
+    const loot = await pending;
+    expect(loot).toMatchObject({ ok: true, status: "looted", items: [{ itemId: ITEM_ENTRY, count: 1 }] });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a window whose items never reach the bag is not a success", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.lootCorpse(CREATURE_GUID, { timeout: 300 });
+    await untilAction(stub, "loot_all");
+    stub.push(JSON.stringify(lootResponse(70)));
+    stub.push(JSON.stringify(lootRelease(71)));
+    // No SMSG_ITEM_PUSH_RESULT ever arrives: bags full, or a broken replay.
+    const loot = await pending;
+    expect(loot.ok).toBe(false);
+    if (loot.ok || loot.status !== "none_stored") throw new Error(`unexpected ${loot.status}`);
+    expect(loot.items).toEqual([]);
+    expect(loot.window.map((i) => i.itemId)).toEqual([ITEM_ENTRY]);
+    expect(loot.gold).toBe(37);
+    client.close();
+    await stub.stop();
+  });
+
+  test("group-only slot types are not expected to be stored", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.lootCorpse(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "loot_all");
+    stub.push(JSON.stringify(lootResponse(70, 3))); // LOCKED: shown, never auto-stored
+    stub.push(JSON.stringify(lootRelease(71)));
+    const loot = await pending;
+    // Nothing was expected, so nothing missing: gold-only success, no items.
+    expect(loot).toMatchObject({ ok: true, status: "looted", gold: 37, items: [] });
     client.close();
     await stub.stop();
   });

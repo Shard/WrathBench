@@ -98,7 +98,7 @@ for you.
 ```ts
 // { ok, status, guid, swings, healthPct, attacking, detail }
 const fight = await client.killTarget(kobold.guid, { abortBelowHealthPct: 35 });
-if (fight.ok) await client.lootCorpse(kobold.guid);      // { ok, status, gold, items }
+if (fight.ok) await client.lootCorpse(kobold.guid);      // { ok, status, gold, items, window }
 if (fight.attacking) await client.attackStop();          // it left us swinging
 ```
 
@@ -126,9 +126,14 @@ again. The default `timeout` is 25s, deliberately under the runner's 30s
 snippet cap; longer fights belong in a background routine.
 
 `lootCorpse` sends `loot_all` — the module replaying the client's auto-loot
-sequence — and returns once the window has been emptied and released. A corpse
-with nothing on it releases without ever opening a window, which is
-`{ ok: false, status: "empty" }`: an answer, not a failure. Silence still
+sequence — and returns once the window has been emptied and released. Its
+`items` are what `SMSG_ITEM_PUSH_RESULT` confirmed *stored*, not what the
+window displayed (the window is an offer; the pushes are the receipt — ADR-0016
+forbids reporting a possible no-op as success). The window contents ride along
+as `window`. A corpse with nothing on it releases without ever opening a
+window, which is `{ ok: false, status: "empty" }`: an answer, not a failure.
+A window that showed items of which not one entered a bag — bags full, or a
+broken store path — is `{ ok: false, status: "none_stored" }`. Silence still
 throws `EventTimeoutError`.
 
 `acceptQuestFrom` reads the quest log *first*, because a turn-in chain may
