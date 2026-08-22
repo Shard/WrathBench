@@ -831,6 +831,14 @@ interface FleetState {
   heartbeatAt?: number;
   /** True when the supervisor is the `fleet` compose service, not a host process. */
   containerized?: boolean;
+  /**
+   * Set while a preflight sequence is running against `identity`. The gate
+   * record itself is only written when the sequence ends, so this is how an
+   * outside observer (deploy-worldserver.sh) tells "smoking now, wait for the
+   * verdict" from "not gating at all" without racing a second smoke onto the
+   * same account.
+   */
+  preflightInFlight?: { identity: string; since: number };
   stamp: string;
   fleetConfig: string;
   /** The last deploy-window gate result; absent for a pre-gate supervisor. */
@@ -878,6 +886,8 @@ export function resolveStatePath(
 
 const START_AT = Date.now();
 
+let preflightInFlight: { identity: string; since: number } | undefined;
+
 function writeState(
   configPath: string,
   stampToday: string,
@@ -893,6 +903,7 @@ function writeState(
     stamp: stampToday,
     fleetConfig: configPath,
     ...(preflight !== undefined ? { preflight } : {}),
+    ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     lanes: {},
   };
   for (const [name, p] of procs) {
@@ -1354,7 +1365,18 @@ async function main(): Promise<void> {
     if (action === "pass") return gateOpen(action, gate);
     say(`preflight: smoking the server (identity ${identity!})`);
     record({ lane: "-", event: "preflight-start", detail: identity });
-    gate = await runPreflight(pf, server!);
+    preflightInFlight = { identity: identity!, since: Date.now() };
+    writeState(args.config, stampToday, procs, sets.draining, gate);
+    // Keep the heartbeat fresh while the sequence runs: a smoke outlasts the
+    // liveness window and an outside observer would otherwise read a busy
+    // supervisor as a dead one.
+    const pulse = setInterval(() => writeState(args.config, stampToday, procs, sets.draining, gate), 30_000);
+    try {
+      gate = await runPreflight(pf, server!);
+    } finally {
+      clearInterval(pulse);
+      preflightInFlight = undefined;
+    }
     if (gate.ok) {
       complainedFor = undefined;
       say(`preflight: PASS in ${Math.round(gate.results.reduce((a, r) => a + r.ms, 0) / 1000)}s — lanes may spawn`);
