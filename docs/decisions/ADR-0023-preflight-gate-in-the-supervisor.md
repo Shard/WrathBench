@@ -102,3 +102,64 @@ armed gate pointed at an unpermitted account would park the entire fleet on a
 - A timed-out smoke can leak its module session. Harmless: the module reclaims a
   permitted account's stale session on the next create (commit 9bba93b), so the
   next tick's attempt is not stuck behind it.
+
+## Amendment 2026-08-23: a fast gate and a deploy-time full arc
+
+The gate as shipped ran `module-quest.ts` then `quest-status.ts`, sequentially
+on `SMOKE`: ~260s on the happy path, of which ~145s was eight level-1 melee
+fights and ~60s walking. Every worldserver restart cost the fleet four and a
+half minutes of nothing spawning, and a re-checking failure cost that per tick.
+
+**The per-tick gate is now two short smokes, and the full arc moves to deploy
+time.** `preflight.smokes` entries are `{ script, account }` (a bare string
+means the default `account`); entries with distinct accounts run concurrently
+against one shared deadline, entries on the same account run in order, and the
+clash check covers every account named. The full `module-quest.ts` arc is
+`preflight.deploySmokes`, which `deploy-worldserver.sh` runs once per deploy
+after the gate passes and the supervisor never runs. Both live in fleet.json so
+the script and the supervisor read one file and one account list.
+
+The two smokes keep every server-proven claim of the old pair and drop none:
+
+- `quest-accept-status.ts` (SMOKE, ~20s): login; the quest-status assertions
+  verbatim (STATUS_MULTIPLE names Willem available, per-guid STATUS agrees,
+  quest_query 783 with `requiredNpcOrGo.length 4` / `requiredItems.length 6`
+  and no kill objectives, quest_query 7 objective 0 `{ entry 6, count 8 }`,
+  `missing_quest_id` is a 400); accept 783; the served quest-log State field
+  reads complete; Willem no longer available; quest_complete ->
+  OFFER_REWARD -> quest_choose_reward -> QUESTGIVER_QUEST_COMPLETE + XPGAIN;
+  quest 7 in the log; vendor_list.
+- `kill-credit.ts` (SMOKE2 once permitted, ~42s): the same 783 turn-in (the
+  kill quest is gated on it), then exactly one Kobold Vermin: ATTACKERSTATEUPDATE
+  stream, SMSG_QUESTUPDATE_ADD_KILL `{ 7, 6, 1/8 }`, fromKill XPGAIN, loot
+  window and release. Fail fast: one fight, a 40s cap (1.5x the longest fight
+  in the logs), no "pick another", a death is a failure.
+
+Two things came out of measuring rather than reading:
+
+- *`SMSG_QUESTUPDATE_COMPLETE` was never a proven claim.* The core does not
+  send it for kill or talk objectives at the pinned commit (zero occurrences in
+  every trajectory on disk); the old smoke read completion off the served
+  quest-log State bit and the final ADD_KILL, and said so in a comment. The
+  fast gate asserts the same State bit on 783, which a talk quest completes on
+  accept. Objective completion by kills stays in the deploy-time arc.
+- *Character delete costs a minute after logout, by the core's rule.* A
+  disconnected session keeps its player in world for `WorldSession::expireTime`
+  (60s), during which CMSG_CHAR_DELETE is silently ignored; measured 66s from
+  logout to a successful delete, in every smoke that deletes at the end. A real
+  client's clean exit, CMSG_LOGOUT_REQUEST, is not on the raw allowlist. So the
+  fast smokes use a fixed name per script, delete *last run's* character first
+  (the same CMSG_CHAR_DELETE path, instant because the linger is long over by
+  the next tick) and only log out at the end. `spellbook.ts` still deletes last
+  and so stays out of the gate; `module-navigation.ts` does not read
+  `MODULE_ACCOUNT` and would log into a live lane's account, so it stays out
+  too.
+
+`timeoutMs` is ~3x the measured critical path. `SMOKE2`–`SMOKE4` exist in
+auth; the module permits them after the next worldserver recreate, and the
+fleet.json ships both smokes on `SMOKE` until then (sequential, ~62s) with the
+flip to `SMOKE2` documented in OPERATIONS — an armed gate bound to an
+unpermitted account is exactly the parked-fleet failure this ADR warned about.
+
+A sub-minute gate that proves late-game claims needs characters that do not
+start at level 1 — FOLLOW-UPS 45.

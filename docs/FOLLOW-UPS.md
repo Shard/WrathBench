@@ -447,6 +447,24 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     Found on the way: a single-expression snippet is awaited REPL-style, so
     the launch-a-routine recipe needs a trailing value — guidance fixed.
 
+45. **Scenario-fixture characters for smokes** (2026-08-23, from the ADR-0023
+    amendment). The fast gate proves what a level-1 character can reach in
+    under a minute from the Northshire spawn. Every late-game claim — a dungeon
+    entrance, a flight path, a trainer with ranks to sell, a mailbox with mail,
+    the tram, death far from a graveyard — is minutes of play away from the
+    spawn, so it can only live in the deploy-time arc or not be gated at all.
+    Want: pre-seeded characters. An `infra/fixtures` tool writes the
+    `acore_characters` rows for a named scenario (level, position, quest log,
+    inventory, spells) while the character is logged out, on the smoke
+    accounts only; a smoke logs into the fixture and proves its claim in
+    seconds. Never reachable from the runner or the SDK — it is an operator
+    tool against the database, not an action, so the contract in
+    docs/CONTRACTS.md is untouched. Same path fixes the two smokes left out of
+    the gate: `spellbook.ts` (deletes last, pays the 60s linger) and
+    `module-navigation.ts` (no `MODULE_ACCOUNT`). Also worth listing while
+    here: CMSG_LOGOUT_REQUEST on the raw allowlist would let any smoke end
+    cleanly in 20s instead of 60.
+
 ## Ladder work (harness-0.3 / 0.4)
 
 The eight-rung ladder in `docs/VISION.md` is the guide; rung 4 (a capital, the

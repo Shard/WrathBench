@@ -156,22 +156,45 @@ top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the lanes:
 
 ```json
 "preflight": {
-  "enabled": false,
+  "enabled": true,
   "account": "SMOKE",
-  "smokes": ["infra/smoke/module-quest.ts", "infra/smoke/quest-status.ts"],
-  "timeoutMs": 900000
+  "smokes": [
+    { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
+    { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" }
+  ],
+  "timeoutMs": 130000,
+  "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
+  "deployTimeoutMs": 600000
 }
 ```
 
-The smokes run sequentially, as the given account, before the first lane is
-spawned and again whenever the server identity changes — which is to say on
-every worldserver recreate *and* on every restart the container does by itself.
+There are two tiers (ADR-0023, amended 2026-08-23):
+
+- **`smokes` is the per-tick gate.** It runs before the first lane is spawned
+  and again whenever the server identity changes — which is to say on every
+  worldserver recreate *and* on every restart the container does by itself.
+  Entries with **distinct accounts run in parallel**; entries sharing an account
+  run in order. A bare string entry means "on `account`". The two shipped
+  smokes split the old arc's claims without losing one:
+  `quest-accept-status.ts` (login, questgiver status, quest query, accept,
+  the served quest-log complete state, turn-in reward chain, XP, vendor list,
+  ~20s) and `kill-credit.ts` (one kobold: attack stream, kill credit, loot
+  round trip, ~42s). Both delete the previous run's character first (the
+  CMSG_CHAR_DELETE proof) and only log out at the end, because a disconnected
+  character stays in world for the core's 60s `WorldSession::expireTime`
+  during which a delete is silently ignored — deleting last time's character
+  costs nothing, deleting this time's costs a minute.
+- **`deploySmokes` is the deploy-time full arc.** `module-quest.ts` — eight
+  kills to objective completion and the kill quest's own turn-in, about four
+  minutes — is run once per deploy by `infra/deploy-worldserver.sh`, after the
+  gate has passed, never by the supervisor. `deployTimeoutMs` is its budget.
+
 A failure spawns nothing, complains once, and is re-checked every tick, so a fix
 or a rollback unblocks the fleet with no operator action. Drains still work
-while the gate is shut. `timeoutMs` is the budget for the whole sequence, not
-per script. `./infra/run-fleet.sh --status` shows the last gate result;
-`--dry-run` shows the plan. See
-`docs/decisions/ADR-0023-preflight-gate-in-the-supervisor.md`.
+while the gate is shut. `timeoutMs` is the budget for the whole gate — every
+child gets the same deadline — and is set at ~3x the measured critical path.
+`./infra/run-fleet.sh --status` shows the last gate result, per script;
+`--dry-run` shows the plan.
 
 Server identity is the worldserver's boot, read off the shared logs volume
 (`data/logs/Server.log`'s creation time), plus a digest of `/health`'s stable
@@ -179,18 +202,31 @@ fields. Nothing keys on that string being unique — the deploy script keys on t
 gate result's timestamp — so at worst a marker that fails to change costs an
 extra smoke run.
 
-**Arming it takes two one-time steps**, in this order, because an armed gate
-pointed at an account the module does not permit parks the entire fleet on a
-403:
+**Gate accounts.** Every account a smoke is bound to must exist in auth and be
+in the module's allowlist. `SMOKE`–`SMOKE4` exist in auth (bootstrapped
+2026-08-22/23; the bootstrap is an idempotent auth-DB upsert and is safe with
+the server running):
 
-1. Create the account:
-   `docker compose -f infra/compose.yml run --rm --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE bootstrap`
-2. Recreate the worldserver so it picks up `SMOKE` in `AC_WRATH_BENCH_ACCOUNTS`
-   (it is already in `infra/compose.yml`) — i.e. the next deploy window.
+```
+docker compose -f infra/compose.yml run --rm --no-deps \
+  -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap
+```
 
-Then flip `"enabled": true`. The gate account must be its own: sharing it with
-an enabled lane is refused as a config error, and it is never `PROBE`, which is
-the ad-hoc debugging account.
+All four are in `AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml`, which the
+module reads **only at worldserver recreate**. Until the next recreate the
+running module permits `SMOKE` alone, so the shipped fleet.json binds both
+smokes to `SMOKE` (sequential, ~62s, `timeoutMs` 190000). After the recreate,
+flip `kill-credit.ts` to `SMOKE2` and `timeoutMs` to 130000 for the parallel
+~42s gate. Never before: a smoke bound to an unpermitted account gets 403
+`account_not_permitted`, the gate fails, and no lane spawns until it is fixed.
+The order of operations at that drain window is therefore: recreate the
+worldserver, then restart the fleet (which is also what picks up the new
+supervisor code — a running supervisor rejects the `{ script, account }` entry
+shape and keeps its last good config until restarted).
+
+The gate accounts must be their own: sharing one with an enabled lane is refused
+as a config error (every per-entry account is checked), and none is ever
+`PROBE`, the ad-hoc debugging account.
 
 ### Ad-hoc launches still work
 
