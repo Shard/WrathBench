@@ -16,9 +16,8 @@
  * scratchpad, not the chat history, is the durable memory (ADR-0011).
  */
 
-import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { openWikiBundle } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
 import {
@@ -224,9 +223,7 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
-  const wiki = existsSync(config.wikiBundle)
-    ? new Database(config.wikiBundle, { readonly: true })
-    : undefined;
+  const wiki = openWikiBundle(config.wikiBundle);
   if (wiki === undefined) {
     console.error(`warning: wiki bundle not found at ${config.wikiBundle}; search_reference will report unavailable`);
   }
