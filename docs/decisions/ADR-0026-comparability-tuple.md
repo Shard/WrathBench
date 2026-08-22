@@ -40,6 +40,21 @@ recomputed for what will actually be enforced, written, and the change recorded
 as a `comparability_restamped` harness record so the earlier portion stays
 readable in the trajectory.
 
+**A resumed run's recorded turn index keeps climbing.** The driver counts this
+episode's turns — `maxTurns` bounds an episode, and a resumed run's conversation
+is gone — but the *recorded* index is offset by the run's existing high-water
+mark, or turns-to-level would credit a resumed run with the handful of turns
+since its last pause, flattering exactly the runs that had the most trouble. A
+run whose recorded series still goes backwards (resumed by a build that predates
+this) is read as having no usable turn index at all rather than as a fast run.
+
+**A resumed run's harness version moves with its tuple.** The run is being
+driven by the build that resumed it, and leaving the top-level stamp at the
+launch build would have the run row and its own tuple name two different
+versions — on the one page whose claim is comparability. The restamp record
+carries `leashChanged`, so a resume onto a newer commit can be told from a
+resume that actually tightened the leash.
+
 **Turns and tool calls are recorded separately, never collapsed.** The fixed
 loop ignores the tool-call ceiling; the claude driver has no real turn bound.
 Averaging them into one "budget" number would hide which one binds.

@@ -82,6 +82,16 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("maxTurn is the high-water mark a resume continues from", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    expect(traj.maxTurn("run-t2")).toBe(0);
+    traj.recordState("run-t2", { level: 1, turn: 4 });
+    traj.recordState("run-t2", { level: 1 });
+    expect(traj.maxTurn("run-t2")).toBe(4);
+    traj.close();
+  });
+
   test("a run.sqlite written before the new columns gains them on open", () => {
     const dir = tempRunDir();
     // The pre-migration state table, exactly as older runs carry it.

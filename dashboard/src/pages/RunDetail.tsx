@@ -18,6 +18,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { subscribeTail } from "../api/live";
 import {
   api,
+  type ApiInfoResponse,
   type ComparabilityView,
   type FeedEntry,
   type RunDetailResponse,
@@ -44,6 +45,8 @@ const DETAIL_POLL_MS = 10_000;
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
 
+  /* Which worldserver the viewer can see, for the footer (FOLLOW-UPS 42). */
+  const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
   const [detail, setDetail] = createSignal<RunDetailResponse | undefined>(undefined);
   const [entries, setEntries] = createSignal<FeedEntry[]>([]);
   const [from, setFrom] = createSignal(0);
@@ -76,6 +79,8 @@ export default function RunDetail() {
     onCleanup(() => {
       if (resummarise !== undefined) clearInterval(resummarise);
     });
+
+    void api.info().then(setInfo).catch(() => undefined);
 
     void api
       .run(params.id)
@@ -257,6 +262,8 @@ export default function RunDetail() {
                 <For each={entries()}>{(e) => <Entry entry={e} runId={run().runId} />}</For>
               </div>
 
+              <ServerFooter info={info()} />
+
               <Show when={live() && run().terminationReason === null}>
                 <p class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
                   <span class="dot live" />
@@ -272,6 +279,32 @@ export default function RunDetail() {
         }}
       </Show>
     </div>
+  );
+}
+
+/**
+ * The worldserver the viewer can see (FOLLOW-UPS 42).
+ *
+ * Deliberately hedged: this is the server the *viewer* reaches now, not
+ * necessarily the one this trajectory ran against — nothing records a per-run
+ * server build yet, and claiming otherwise for a week-old run would be worse
+ * than saying less.
+ */
+function ServerFooter(props: { info: ApiInfoResponse | undefined }) {
+  return (
+    <footer class="identity">
+      <Show
+        when={props.info?.worldserver}
+        fallback={<>worldserver: unreachable from the viewer</>}
+      >
+        {(w) => (
+          <>
+            worldserver now: <span class="mono">{w().build}</span>, up since{" "}
+            {stamp(w().startedAtMs)} — not necessarily the build this run drove
+          </>
+        )}
+      </Show>
+    </footer>
   );
 }
 
