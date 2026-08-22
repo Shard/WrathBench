@@ -18,7 +18,9 @@ const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
 const WS = `ws://${HOST}:${PORT}`;
 
-const TOKEN = `probe-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-${crypto.randomUUID()}`;
 // WoW character names are letters only (digits => CHAR_NAME_MIXED_LANGUAGES) and
 // must be unique. A random letter suffix keeps re-runs from colliding.
 function randomName(): string {

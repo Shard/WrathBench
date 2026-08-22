@@ -328,6 +328,25 @@ namespace WrathBench
         if (token.empty())
             return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
 
+        // Minimum-entropy gate (FOLLOW-UPS 19, docs/CONTRACTS.md accepted risk).
+        // The session token is a bearer capability over /action, /events and
+        // DELETE /session, and the historical default was the run id — a
+        // second-granularity timestamp another run could enumerate. Length is a
+        // proxy for entropy, not a substitute for a random secret issued by the
+        // module (still item 19), but it takes guessable tokens off the table.
+        // Checked before the session is registered so a rejected token leaves
+        // nothing behind. Hint per ADR-0016: a human reading it should know
+        // what to do.
+        static constexpr size_t kMinTokenChars = 32;
+        if (token.size() < kMinTokenChars)
+            return {400, Json::Writer().Add("ok", false).Add("error", "weak_token")
+                .Add("received", (uint32_t)token.size())
+                .Add("minimum", (uint32_t)kMinTokenChars)
+                .Add("hint", "session tokens are bearer capabilities and must be at least 32 characters; "
+                             "the runner generates one per run — pass that token through instead of a "
+                             "hand-written or run-id-derived string, or append random hex to it")
+                .Str()};
+
         if (FindByToken(token))
             return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
 
@@ -448,6 +467,7 @@ namespace WrathBench
                 "quest_list", "quest_details", "quest_accept", "quest_complete",
                 "quest_choose_reward", "loot", "loot_all", "loot_release",
                 "vendor_list", "buy_item", "sell_item", "repair_all",
+                "trainer_list", "trainer_buy_spell",
                 "spirit_healer_activate", nullptr };
             static char const* kNoParams[] = {
                 "clear_target", "attack_stop", "loot_money", "repop", "reclaim_corpse", nullptr };
@@ -475,7 +495,8 @@ namespace WrathBench
                 return MissingParam(action, "missing_quest_id", "questId");
             if (action == "quest_choose_reward" && !req.Has("rewardIndex"))
                 return MissingParam(action, "missing_reward_index", "rewardIndex");
-            if ((action == "cast_spell" || action == "cancel_cast") && !req.Has("spellId"))
+            if ((action == "cast_spell" || action == "cancel_cast" || action == "trainer_buy_spell")
+                && !req.Has("spellId"))
                 return MissingParam(action, "missing_spell_id", "spellId");
             if (action == "loot_item" && !req.Has("slot"))
                 return MissingParam(action, "missing_slot", "slot");
@@ -1101,6 +1122,27 @@ namespace WrathBench
         {
             p = new WorldPacket(CMSG_REPAIR_ITEM, 8 + 8 + 1);
             *p << uint64(guid) << uint64(0) << uint8(0);     // item guid 0 = repair all
+        }
+        else if (action == "trainer_list")
+        {
+            // CMSG_TRAINER_LIST is the same Hello shape as gossip/vendor: one
+            // guid. The server answers SMSG_TRAINER_LIST, or nothing at all if
+            // the NPC is out of interaction range, is not a trainer, or trains
+            // another class (NPCHandler::HandleTrainerListOpcode returns
+            // silently on all three) — the ack means "opcode queued" only.
+            p = new WorldPacket(CMSG_TRAINER_LIST, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "trainer_buy_spell")
+        {
+            // uint64 trainer guid + int32 spell id, exactly what
+            // WorldPackets::NPC::TrainerBuySpell::Read consumes. The spell is
+            // paid for out of the character's own money server-side; a failure
+            // arrives as SMSG_TRAINER_BUY_FAILED with a reason.
+            uint32 spellId = static_cast<uint32>(req.GetInt("spellId"));
+            p = new WorldPacket(CMSG_TRAINER_BUY_SPELL, 8 + 4);
+            *p << uint64(guid) << uint32(spellId);
+            auditW.Add("spellId", spellId);
         }
         else if (action == "equip_item")
         {
@@ -2920,6 +2962,66 @@ namespace WrathBench
                         { uint32 param; p >> param; }
                     uint8 result; p >> result;
                     w.AddGuid("vendorGuid", (uint64_t)guid).Add("itemId", itemId).Add("result", (uint32)result);
+                    break;
+                }
+                // --------------------------------------------------- trainer
+                // Field order follows WorldPackets::NPC::TrainerList::Write on
+                // the pinned core (src/server/game/Server/Packets/NPCPackets.cpp).
+                case SMSG_TRAINER_LIST:
+                {
+                    name = "SMSG_TRAINER_LIST";
+                    uint64 guid; p >> guid;
+                    int32 trainerType; p >> trainerType;  // Trainer::Type: 0 class, 1 mount, 2 tradeskill, 3 pet
+                    int32 count; p >> count;
+                    std::string spells = "[";
+                    bool firstSpell = true;
+                    for (int32 i = 0; i < count && p.rpos() < p.size(); ++i)
+                    {
+                        int32 spellId; p >> spellId;
+                        // Trainer::SpellState, what the client colours the row
+                        // with: 0 available (green, trainable now), 1
+                        // unavailable (red — level, skill, prerequisite spell or
+                        // class/race), 2 known (gray, already learned). Money is
+                        // NOT part of this state: a green spell still fails to
+                        // buy with reason 1 if the character cannot afford it.
+                        uint8 state; p >> state;
+                        int32 cost; p >> cost;              // copper, reputation discount already applied
+                        p.rpos(p.rpos() + 8);               // PointCost[2]: talent points (always 0) + profession-slot flag
+                        uint8 reqLevel; p >> reqLevel;
+                        int32 reqSkill; p >> reqSkill;      // skill line id, 0 = none
+                        int32 reqSkillValue; p >> reqSkillValue;
+                        p.rpos(p.rpos() + 12);              // ReqAbility[3]: prerequisite spell ids, summarised by state
+                        if (!firstSpell) spells += ',';
+                        spells += Json::Writer().Add("spellId", spellId).Add("state", (uint32)state)
+                            .Add("cost", cost).Add("reqLevel", (uint32)reqLevel)
+                            .Add("reqSkill", reqSkill).Add("reqSkillValue", reqSkillValue).Str();
+                        firstSpell = false;
+                    }
+                    spells += "]";
+                    std::string greeting;
+                    if (p.rpos() < p.size()) p >> greeting; // trainer window text
+                    w.AddGuid("guid", (uint64_t)guid).Add("trainerType", trainerType)
+                     .Raw("spells", spells).Add("greeting", greeting);
+                    break;
+                }
+                case SMSG_TRAINER_BUY_SUCCEEDED:
+                {
+                    name = "SMSG_TRAINER_BUY_SUCCEEDED";
+                    uint64 guid; p >> guid;
+                    int32 spellId; p >> spellId;
+                    w.AddGuid("guid", (uint64_t)guid).Add("spellId", spellId);
+                    break;
+                }
+                case SMSG_TRAINER_BUY_FAILED:
+                {
+                    name = "SMSG_TRAINER_BUY_FAILED";
+                    uint64 guid; p >> guid;
+                    int32 spellId; p >> spellId;
+                    // Trainer::FailReason: 0 unavailable (not on this trainer's
+                    // list / not trainable), 1 not enough money, 2 not enough
+                    // skill (also the catch-all for level and prerequisites).
+                    int32 reason; p >> reason;
+                    w.AddGuid("guid", (uint64_t)guid).Add("spellId", spellId).Add("reason", reason);
                     break;
                 }
                 case SMSG_SELL_ITEM:

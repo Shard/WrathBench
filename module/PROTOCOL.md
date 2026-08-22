@@ -117,6 +117,14 @@ reappears on the event stream in the self `SMSG_UPDATE_OBJECT` create block
 Errors:
 - `400 {"ok":false,"error":"missing_token"}`
 - `400 {"ok":false,"error":"missing_character"}`
+- `400 {"ok":false,"error":"weak_token","received":<len>,"minimum":32,"hint":...}` —
+  the token is shorter than 32 characters. The session token is a bearer
+  capability over `/action`, `/events` and `DELETE /session`, so a guessable one
+  (the old run-id default was a second-granularity timestamp) lets one run drive
+  another; length is a proxy for entropy until the module issues the secret
+  itself (FOLLOW-UPS 19). Checked before the session is registered. The
+  `/characters` and `/character-delete` utility surfaces are deliberately not
+  gated: they park at character-select, never enter world, and take no actions.
 - `400 {"ok":false,"error":"invalid_race_class","token":...}` — the character
   does not exist and race/class are not both in [1,11] (see above; decided at
   char-enum time, before any char-create packet is synthesized).
@@ -148,7 +156,8 @@ quest/combat extension set (2026-08, additive): `set_target`, `clear_target`,
 `quest_complete`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
 `loot_money`, `loot_release`, `loot_all`, `vendor_list`, `buy_item`,
 `sell_item`, `repair_all`, `equip_item`, `use_item`, `destroy_item`, `repop`,
-`reclaim_corpse`, `spirit_healer_activate` (2026-08, additive). Acks that the
+`reclaim_corpse`, `spirit_healer_activate` (2026-08, additive), and the trainer
+extension (2026-08, additive): `trainer_list`, `trainer_buy_spell`. Acks that the
 opcode was synthesized and queued; the game
 result (the chat echo, an arrival, or an error) arrives on the WebSocket.
 
@@ -262,6 +271,8 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `equip_item` | `bag`, `slot` | `CMSG_AUTOEQUIP_ITEM` | `bag` 255 = backpack/equipment container, `slot` 23-38 = backpack slots |
 | `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM` | module fills item guid + on-use spell id from the item (client-cache knowledge); `400 no_item_at_slot`, `400 item_not_usable` |
 | `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
+| `trainer_list` | `guid` | `CMSG_TRAINER_LIST` | `SMSG_TRAINER_LIST` follows — or nothing at all when the NPC is out of interaction range, is not a trainer, or trains another class (the handler returns silently) |
+| `trainer_buy_spell` | `guid`, `spellId` | `CMSG_TRAINER_BUY_SPELL` | costs the character's own money server-side; answered by `SMSG_TRAINER_BUY_SUCCEEDED` or `SMSG_TRAINER_BUY_FAILED` |
 | `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
 | `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional |
 | `spirit_healer_activate` | `guid` | `CMSG_SPIRIT_HEALER_ACTIVATE` | graveyard resurrection fallback; no dedicated response opcode — the outcome arrives through already-served events (health update fields, res-sickness aura) |
@@ -591,6 +602,9 @@ Loot, vendor, inventory:
 | `SMSG_BUY_ITEM` | 0x1A4 | `{ "vendorGuid", "slot", "count" }` |
 | `SMSG_BUY_FAILED` | 0x1A5 | `{ "vendorGuid", "itemId", "result": <u8> }` |
 | `SMSG_SELL_ITEM` | 0x1A1 | `{ "vendorGuid", "itemGuid", "result": <u8> }` (0 = success) |
+| `SMSG_TRAINER_LIST` | 0x1B1 | `{ "guid", "trainerType": <i32>, "spells": [{ "spellId", "state": <u8>, "cost" (copper, discounted), "reqLevel", "reqSkill" (skill line id, 0 = none), "reqSkillValue" }], "greeting" }` — `trainerType` 0 class, 1 mount, 2 tradeskill, 3 pet; `state` 0 available (green), 1 unavailable (red: level/skill/prerequisite/class), 2 known (gray). `state` says nothing about money: a green spell still fails with reason 1 if unaffordable |
+| `SMSG_TRAINER_BUY_SUCCEEDED` | 0x1B3 | `{ "guid", "spellId" }` |
+| `SMSG_TRAINER_BUY_FAILED` | 0x1B4 | `{ "guid", "spellId", "reason": <i32> }` — 0 unavailable, 1 not enough money, 2 not enough skill (also level/prerequisites) |
 | `SMSG_INVENTORY_CHANGE_FAILURE` | 0x112 | `{ "result": <u8>, "itemGuid"?, "itemGuid2"?, "requiredLevel"? }` (InventoryResult code) |
 | `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"? }` |
 

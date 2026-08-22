@@ -10,8 +10,10 @@
  *      while a *different* token holds a live bench session on the account,
  *      and succeeds once that session is gone.
  *
- * All three gates exist in the currently deployed worldserver image, so the
- * whole probe runs against it — nothing here needs a rebuild. The one behavior
+ * It also probes the minimum-entropy token gate (FOLLOW-UPS 19): POST /session
+ * with a sub-32-character token is refused 400 weak_token with an actionable
+ * hint. That check needs the trainer/token-hardening image and fails against
+ * anything older; the three account gates predate it. The one behavior
  * this cannot cover black-box is the world-thread re-check that closes the
  * same-tick create/delete race (DoCreateSession's _byToken scan): hitting it
  * deterministically needs two requests inside one world tick, which an
@@ -31,7 +33,9 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Must not be on WrathBench.Accounts; nothing else about it needs to exist.
 const BAD_ACCOUNT = process.env.MODULE_BAD_ACCOUNT ?? "WBNOTALLOWED";
 
-const TOKEN = `probe-acct-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-acct-${crypto.randomUUID()}`;
 
 function randomName(): string {
   const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -126,6 +130,16 @@ async function main() {
     }),
     403, "account_not_permitted",
   );
+
+  // --- 1b. Minimum-entropy token gate on POST /session (FOLLOW-UPS 19).
+  // Needs the trainer/token-hardening image; fails against anything older.
+  const weak = await req("POST", "/session", {
+    token: "short-token", account: ACCOUNT, character: CHARACTER, race: 1, class: 1,
+  });
+  expectRefusal("/session with a sub-32-character token", weak, 400, "weak_token");
+  if (weak.json?.received !== "short-token".length || weak.json?.minimum !== 32 || !weak.json?.hint) {
+    fail(`weak_token reply is missing its actionable fields: ${JSON.stringify(weak.json)}`);
+  }
 
   // --- 2. Allowlisted account works: enum answers.
   const list = await req("POST", "/characters", { token: `${TOKEN}-list`, account: ACCOUNT });

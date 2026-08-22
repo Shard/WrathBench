@@ -21,7 +21,9 @@ const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
 const WS = `ws://${HOST}:${PORT}`;
 
-const TOKEN = `probe-quest-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-quest-${crypto.randomUUID()}`;
 // Fresh character every run (the whole point: the arc starts at level 1 with a
 // clean quest log). Deleted at the end through /character-delete, which is
 // itself part of what this probe proves.

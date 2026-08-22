@@ -19,7 +19,9 @@ const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
 const WS = `ws://${HOST}:${PORT}`;
 
-const TOKEN = `probe-move-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-move-${crypto.randomUUID()}`;
 // Fixed name: POST /session reuses an existing character, so repeated probe
 // runs do not eat into the realm's 10-characters-per-account cap.
 const CHARACTER = "Benchmove";
