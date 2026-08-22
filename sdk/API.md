@@ -58,6 +58,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `questsAvailableFrom` | `questsAvailableFrom(npcGuid: GuidOrUnit, options?): Promise<{ ok, quests }>` | What an NPC is offering right now; an empty list is an answer, not an error. |
 | `trainerList` | `trainerList(npcGuid: GuidOrUnit, options?): Promise<TrainerListResult>` | What a trainer teaches, each row with derived learnable/affordable. |
 | `buySpell` | `buySpell(npcGuid: GuidOrUnit, spellId, options?): Promise<BuySpellResult>` | Learn one spell from a trainer for money; returns learned or buy_failed. |
+| `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
 | `waitForQuestObjective` | `waitForQuestObjective(questId, options?): Promise<QuestLogEntry>` | Wait until the quest log marks a quest's objectives complete. |
@@ -104,6 +105,8 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `spiritHealerActivate` | `spiritHealerActivate(guid: GuidArg): Promise<ActionResponse>` | Resurrect at a graveyard spirit healer (durability cost, resurrection sickness). |
 | `trainerListAsync` | `trainerListAsync(guid: GuidArg): Promise<ActionResponse>` | Ask a trainer for its list without waiting (prefer trainerList). |
 | `trainerBuySpellAsync` | `trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>` | Buy a spell without waiting (prefer buySpell). |
+| `learnTalentAsync` | `learnTalentAsync(talentId, rank): Promise<ActionResponse>` | Spend a talent point without waiting (prefer learnTalent). |
+| `raw` | `raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>` | Escape hatch (ADR-0025): send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: "x" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md "raw". The answer arrives on sdk.events only if its opcode is whitelisted there. |
 
 ## State reads (`state.*`)
 
@@ -125,6 +128,10 @@ zero.
 | `questLog` | `get state.questLog: QuestLogEntry[]` | All quest-log entries. |
 | `lastGossip` | `state.lastGossip(guid): GossipMenu | undefined` | The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against). |
 | `aurasOf` | `state.aurasOf(guid): AuraEntry[]` | Observed auras on a unit, by slot. |
+| `spells` | `state.spells(): KnownSpell[]` | The spellbook the server served: [{ spellId, rank, name }] for every spell the character knows (empty until login's SMSG_INITIAL_SPELLS; kept current by learned/removed/superseded events). |
+| `spell` | `state.spell(spellId): KnownSpell | undefined` | One spellbook row by id; undefined means the character does not know that spell. |
+| `cooldowns` | `state.cooldowns(now?): SpellCooldown[]` | Spells still on cooldown: [{ spellId, readyAt (epoch ms, or undefined when the server gave no duration), cooldownMs }]. |
+| `talents` | `state.talents(): TalentState | undefined` | Last SMSG_TALENTS_INFO: { unspentPoints, activeSpec, specCount, talents: [{ talentId, rank (0-based) }] }. |
 | `nameOf` | `state.nameOf(guid): string | undefined` | The name for a guid, if a name query ever returned one. |
 | `snapshot` | `state.snapshot(): StateSnapshot` | A frozen plain-object copy of the whole cache. |
 | `target` | `get state.target: NearbyObject | undefined` | The object our own target points at, when it is also in view. |
@@ -159,5 +166,5 @@ Events are the server's `SMSG_*` packets as JSON.
 - `WrathRequestError` — the module answered `{ ok: false }` (thrown); carries
   `code`, `status`, and `kind: "request" | "game"`.
 - `EventTimeoutError` — no event arrived within the timeout (thrown).
-- `KNOWN_ERROR_CODES`: `account_in_use`, `account_not_permitted`, `account_owned_by_other_token`, `character_missing_after_create`, `character_not_found`, `invalid_guid`, `invalid_race_class`, `login_failed`, `missing_character`, `missing_face_target`, `missing_guid`, `missing_position`, `missing_token`, `moving`, `no_player`, `no_session`, `not_in_world`, `session_gone`, `socket_setup_failed`, `timeout`, `token_in_use`, `unknown_account`, `unsupported_action`.
+- `KNOWN_ERROR_CODES`: `account_in_use`, `account_not_permitted`, `account_owned_by_other_token`, `character_missing_after_create`, `character_not_found`, `invalid_guid`, `invalid_payload`, `invalid_race_class`, `login_failed`, `missing_character`, `missing_face_target`, `missing_guid`, `missing_position`, `missing_token`, `moving`, `no_player`, `no_session`, `not_in_world`, `opcode_not_allowed`, `payload_too_large`, `session_gone`, `socket_setup_failed`, `timeout`, `token_in_use`, `unknown_account`, `unsupported_action`.
 - `TRAINER_SPELL_STATE`: `learnable` = 0, `unavailable` = 1, `known` = 2.

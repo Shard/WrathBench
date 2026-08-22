@@ -72,6 +72,7 @@ const CLIENT_HELPERS: readonly Row[] = [
   { name: "questsAvailableFrom", sig: "questsAvailableFrom(npcGuid: GuidOrUnit, options?): Promise<{ ok, quests }>", purpose: "What an NPC is offering right now; an empty list is an answer, not an error." },
   { name: "trainerList", sig: "trainerList(npcGuid: GuidOrUnit, options?): Promise<TrainerListResult>", purpose: "What a trainer teaches, each row with derived learnable/affordable." },
   { name: "buySpell", sig: "buySpell(npcGuid: GuidOrUnit, spellId, options?): Promise<BuySpellResult>", purpose: "Learn one spell from a trainer for money; returns learned or buy_failed." },
+  { name: "learnTalent", sig: "learnTalent(talentId, rank, options?): Promise<LearnTalentResult>", purpose: "Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents()." },
   { name: "waitForChat", sig: "waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>", purpose: "Wait for a chat line matching a string or predicate." },
   { name: "waitForNearby", sig: "waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>", purpose: "Wait until an object in view satisfies the predicate." },
   { name: "waitForQuestObjective", sig: "waitForQuestObjective(questId, options?): Promise<QuestLogEntry>", purpose: "Wait until the quest log marks a quest's objectives complete." },
@@ -123,6 +124,8 @@ const CLIENT_RAW: readonly Row[] = [
   { name: "spiritHealerActivate", sig: "spiritHealerActivate(guid: GuidArg): Promise<ActionResponse>", purpose: "Resurrect at a graveyard spirit healer (durability cost, resurrection sickness)." },
   { name: "trainerListAsync", sig: "trainerListAsync(guid: GuidArg): Promise<ActionResponse>", purpose: "Ask a trainer for its list without waiting (prefer trainerList)." },
   { name: "trainerBuySpellAsync", sig: "trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>", purpose: "Buy a spell without waiting (prefer buySpell)." },
+  { name: "learnTalentAsync", sig: "learnTalentAsync(talentId, rank): Promise<ActionResponse>", purpose: "Spend a talent point without waiting (prefer learnTalent)." },
+  { name: "raw", sig: "raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>", purpose: "Escape hatch (ADR-0025): send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: \"x\" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md \"raw\". The answer arrives on sdk.events only if its opcode is whitelisted there." },
 ];
 
 /** WrathClient prototype members that are internal plumbing, deliberately undocumented. */
@@ -163,6 +166,10 @@ const STATE_ROWS: readonly Row[] = [
   { name: "questLog", sig: "get state.questLog: QuestLogEntry[]", purpose: "All quest-log entries." },
   { name: "lastGossip", sig: "state.lastGossip(guid): GossipMenu | undefined", purpose: "The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against)." },
   { name: "aurasOf", sig: "state.aurasOf(guid): AuraEntry[]", purpose: "Observed auras on a unit, by slot." },
+  { name: "spells", sig: "state.spells(): KnownSpell[]", purpose: "The spellbook the server served: [{ spellId, rank, name }] for every spell the character knows (empty until login's SMSG_INITIAL_SPELLS; kept current by learned/removed/superseded events)." },
+  { name: "spell", sig: "state.spell(spellId): KnownSpell | undefined", purpose: "One spellbook row by id; undefined means the character does not know that spell." },
+  { name: "cooldowns", sig: "state.cooldowns(now?): SpellCooldown[]", purpose: "Spells still on cooldown: [{ spellId, readyAt (epoch ms, or undefined when the server gave no duration), cooldownMs }]." },
+  { name: "talents", sig: "state.talents(): TalentState | undefined", purpose: "Last SMSG_TALENTS_INFO: { unspentPoints, activeSpec, specCount, talents: [{ talentId, rank (0-based) }] }." },
   { name: "nameOf", sig: "state.nameOf(guid): string | undefined", purpose: "The name for a guid, if a name query ever returned one." },
   { name: "snapshot", sig: "state.snapshot(): StateSnapshot", purpose: "A frozen plain-object copy of the whole cache." },
   { name: "target", sig: "get state.target: NearbyObject | undefined", purpose: "The object our own target points at, when it is also in view." },

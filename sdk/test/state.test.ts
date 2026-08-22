@@ -1364,3 +1364,92 @@ describe("state cache: quest objectives from the quest query (FOLLOW-UPS 28)", (
     expect(c.quest(QUEST_ID)?.objectives).toHaveLength(4);
   });
 });
+
+describe("state cache: spellbook, cooldowns and talents (FOLLOW-UPS 39)", () => {
+  const at = (seq: number, opcode: string, opcodeId: number, data: unknown) => ({
+    seq,
+    opcode,
+    opcodeId,
+    ts: 1_700_000_000_000 + seq,
+    data,
+  });
+  const initialSpells = at(60, "SMSG_INITIAL_SPELLS", 0x12a, {
+    spells: [
+      { spellId: 100, rank: 1, name: "Fixture Strike" },
+      { spellId: 200, rank: 1 },
+    ],
+    cooldowns: [
+      { spellId: 100, itemId: 0, category: 0, cooldownMs: 30_000, categoryCooldownMs: 0 },
+      { spellId: 300, itemId: 0, category: 5, cooldownMs: 0, categoryCooldownMs: 0x80000000 },
+    ],
+  });
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("empty until SMSG_INITIAL_SPELLS; then the book and its cooldowns are what the server served", () => {
+    expect(withWorld([]).spells()).toEqual([]);
+    expect(withWorld([]).talents()).toBeUndefined();
+    const c = withWorld([initialSpells]);
+    expect(c.spells().map((s) => [s.spellId, s.rank, s.name])).toEqual([
+      [100, 1, "Fixture Strike"],
+      [200, 1, undefined],
+    ]);
+    expect(c.spell(200)?.seq).toBe(60);
+    expect(c.spell(999)).toBeUndefined();
+    const cds = c.cooldowns(1_700_000_000_060 + 1000);
+    expect(cds.map((x) => [x.spellId, x.readyAt, x.cooldownMs])).toEqual([
+      [100, 1_700_000_000_060 + 30_000, 30_000],
+      [300, Number.POSITIVE_INFINITY, undefined],
+    ]);
+    // The clock is the only judge of expiry.
+    expect(c.cooldowns(1_700_000_000_060 + 31_000).map((x) => x.spellId)).toEqual([300]);
+  });
+
+  test("learned, removed and superseded edit the book in place", () => {
+    const c = withWorld([
+      initialSpells,
+      at(61, "SMSG_LEARNED_SPELL", 0x12b, { spellId: 400, rank: 2, name: "Fixture Strike" }),
+      at(62, "SMSG_SUPERCEDED_SPELL", 0x12c, { supersededSpellId: 100, spellId: 400, rank: 2 }),
+      at(63, "SMSG_REMOVED_SPELL", 0x203, { spellId: 200 }),
+    ]);
+    expect(c.spells().map((s) => s.spellId)).toEqual([400]);
+    expect(c.spell(400)?.rank).toBe(2);
+  });
+
+  test("cooldown announcements replace, COOLDOWN_EVENT is duration-less, CLEAR drops; other guids are ignored", () => {
+    const c = withWorld([
+      initialSpells,
+      at(61, "SMSG_SPELL_COOLDOWN", 0x134, { guid: "7", flags: 1, cooldowns: [{ spellId: 100, cooldownMs: 5000 }, { spellId: 500, cooldownMs: 0 }] }),
+      at(62, "SMSG_COOLDOWN_EVENT", 0x135, { spellId: 600, guid: "7" }),
+      at(63, "SMSG_CLEAR_COOLDOWN", 0x1de, { spellId: 300, guid: "7" }),
+      at(64, "SMSG_SPELL_COOLDOWN", 0x134, { guid: "99", flags: 0, cooldowns: [{ spellId: 700, cooldownMs: 9000 }] }),
+    ]);
+    const now = 1_700_000_000_061 + 100;
+    expect(c.cooldowns(now).map((x) => [x.spellId, x.readyAt])).toEqual([
+      [100, 1_700_000_000_061 + 5000],
+      [600, undefined],
+    ]);
+  });
+
+  test("SMSG_TALENTS_INFO keeps the active spec; the pet form changes nothing", () => {
+    const c = withWorld([
+      at(61, "SMSG_TALENTS_INFO", 0x4c0, {
+        pet: false,
+        unspentPoints: 2,
+        specCount: 2,
+        activeSpec: 1,
+        specs: [{ talents: [{ talentId: 1, rank: 0 }] }, { talents: [{ talentId: 7, rank: 2 }] }],
+      }),
+      at(62, "SMSG_TALENTS_INFO", 0x4c0, { pet: true }),
+    ]);
+    expect(c.talents()).toEqual({
+      unspentPoints: 2,
+      activeSpec: 1,
+      specCount: 2,
+      talents: [{ talentId: 7, rank: 2 }],
+      seq: 61,
+      ts: 1_700_000_000_061,
+    });
+    expect(c.snapshot().talents?.unspentPoints).toBe(2);
+  });
+});

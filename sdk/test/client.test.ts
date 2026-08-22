@@ -1754,3 +1754,83 @@ describe("client: questgiver status and quest query, issued the way a client doe
     await stub.stop();
   });
 });
+
+describe("client: talents and the raw escape hatch (FOLLOW-UPS 39, ADR-0025)", () => {
+  const talentsInfo = (seq: number, talents: { talentId: number; rank: number }[], unspent = 0) =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_TALENTS_INFO",
+      opcodeId: 0x4c0,
+      ts: 1_700_000_000_000 + seq,
+      data: { pet: false, unspentPoints: unspent, specCount: 1, activeSpec: 0, specs: [{ talents }] },
+    });
+
+  test("learnTalent reads the verdict off the SMSG_TALENTS_INFO answer", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.learnTalent(42, 0, { timeout: 2000 });
+    const at = await untilAction(stub, "learn_talent");
+    expect(stub.actions[at]).toMatchObject({ action: "learn_talent", talentId: 42, rank: 0 });
+    stub.push(talentsInfo(60, [{ talentId: 42, rank: 0 }]));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.talents.talents).toEqual([{ talentId: 42, rank: 0 }]);
+
+    const refused = client.learnTalent(43, 1, { timeout: 2000 });
+    await untilAction(stub, "learn_talent", at + 1);
+    stub.push(talentsInfo(61, [{ talentId: 42, rank: 0 }], 0));
+    const r2 = await refused;
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.hint).toContain("unspentPoints is 0");
+    await stub.stop();
+  });
+
+  test("raw packs a field list little-endian and sends the allowlisted opcode by name", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.raw("CMSG_TEXT_EMOTE", [
+      { u32: 0x0102 },
+      { u8: 7 },
+      { guid: "4294967296" }, // 0x1_0000_0000
+      { packedGuid: "4294967296" },
+      { cstring: "hi" },
+      { i32: -1 },
+      { u16: 0xabcd },
+      { bytes: "ff" },
+    ]);
+    expect(ack.opcode).toBe("CMSG_TEXT_EMOTE");
+    expect(ack.payload).toBe("02010000" + "07" + "0000000001000000" + "1001" + "686900" + "ffffffff" + "cdab" + "ff");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "raw", opcode: "CMSG_TEXT_EMOTE", payload: ack.payload });
+
+    // Bodiless, hex, and bytes forms.
+    expect((await client.raw("CMSG_GROUP_DISBAND")).payload).toBe("");
+    expect((await client.raw("CMSG_GROUP_DISBAND", "ABCD")).payload).toBe("abcd");
+    expect((await client.raw("CMSG_GROUP_DISBAND", Uint8Array.from([1, 255]))).payload).toBe("01ff");
+    await stub.stop();
+  });
+
+  test("raw rejects a non-opcode name and a malformed payload before anything is sent", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const before = stub.actions.length;
+    expect(() => client.raw("say", "")).toThrow(/CMSG_\* name/);
+    expect(() => client.raw("CMSG_EMOTE", "abc")).toThrow(/hex string/);
+    expect(() => client.raw("CMSG_EMOTE", [{ u8: 300 }])).toThrow(/payload/);
+    expect(() => client.raw("CMSG_EMOTE", [{ u9: 3 } as never])).toThrow(/field/);
+    expect(stub.actions.length).toBe(before);
+    await stub.stop();
+  });
+
+  test("the module's raw refusals render hints", async () => {
+    const stub = startStub({
+      onConnect: () => combatWorld(),
+      failAction: (a) =>
+        a === "raw" ? json({ ok: false, error: "opcode_not_allowed", action: "raw", opcode: "CMSG_EMOTE" }, 400) : undefined,
+    });
+    const client = await inWorld(stub);
+    const err = await client.raw("CMSG_EMOTE", [{ u32: 1 }]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WrathRequestError);
+    expect((err as WrathRequestError).message).toContain("allowlist");
+    await stub.stop();
+  });
+});

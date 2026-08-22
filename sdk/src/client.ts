@@ -26,6 +26,9 @@
 import {
   actionResponseSchema,
   characterDeleteResponseSchema,
+  encodeRawPayload,
+  rawOpcodeSchema,
+  rawPayloadSchema,
   deleteSessionResponseSchema,
   errorBodySchema,
   faceResponseSchema,
@@ -58,7 +61,9 @@ import {
   type QuestGiverRequestItemsData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
+  type RawPayload,
   type SessionResponse,
+  type TalentsInfoData,
   type TrainerBuyFailedData,
   type TrainerListData,
   type TrainerSpellData,
@@ -77,6 +82,7 @@ import {
   type NearbyObject,
   type Point3,
   type QuestLogEntry,
+  type TalentState,
   type UnitPosition,
   type UnitView,
 } from "./state";
@@ -270,6 +276,10 @@ export const KNOWN_ERROR_CODES = [
   // guid-taking actions
   "missing_guid",
   "invalid_guid",
+  // raw passthrough (ADR-0025)
+  "opcode_not_allowed",
+  "invalid_payload",
+  "payload_too_large",
 ] as const;
 
 export type KnownErrorCode = (typeof KNOWN_ERROR_CODES)[number];
@@ -372,6 +382,13 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   item_not_usable:
     "the server refused CMSG_USE_ITEM for that bag/slot — the item there has no on-use effect, " +
     "or the slot is empty or shifted (slots move after looting/selling); check state.bag()",
+  opcode_not_allowed:
+    "sdk.raw() only sends the CMSG_* names on the module's allowlist (module/PROTOCOL.md, \"raw\"); " +
+    "an opcode that already has a dedicated sdk method must go through that method",
+  invalid_payload:
+    "the raw payload did not reach the module as whole hex bytes — pass a field list like " +
+    "[{ u32: id }, { guid: unit.guid }] and let the SDK pack it",
+  payload_too_large: "a raw payload is capped at 512 bytes — no client packet on the allowlist needs more",
 };
 
 export class WrathRequestError extends Error {
@@ -912,6 +929,29 @@ export type BuySpellResult =
 
 export interface TrainerOptions {
   timeout?: number;
+}
+
+/**
+ * The outcome of `learnTalent`, as a value (ADR-0011). The server always
+ * answers `CMSG_LEARN_TALENT` with a fresh `SMSG_TALENTS_INFO`, whether or
+ * not it learned anything; `learned` is read off that answer.
+ */
+export type LearnTalentResult =
+  | { readonly ok: true; readonly status: "learned"; readonly talentId: number; readonly rank: number; readonly talents: TalentState }
+  | {
+      readonly ok: false;
+      readonly status: "not_learned";
+      readonly talentId: number;
+      readonly rank: number;
+      readonly talents: TalentState;
+      readonly hint: string;
+    };
+
+export interface RawActionResponse extends ActionResponse {
+  /** The opcode name as sent. */
+  readonly opcode: string;
+  /** The body bytes as sent, hex. */
+  readonly payload: string;
 }
 
 /**
@@ -1461,6 +1501,52 @@ export class WrathClient {
    */
   spiritHealerActivate(guid: GuidArg): Promise<ActionResponse> {
     return this.action({ action: "spirit_healer_activate", guid: guidArg(guid, "spiritHealerActivate(guid)") });
+  }
+
+  /**
+   * `CMSG_LEARN_TALENT` — spend one talent point. `rank` is 0-based as on the
+   * wire (0 = the first point in that talent). Prefer `learnTalent`, which
+   * waits for the `SMSG_TALENTS_INFO` answer.
+   */
+  learnTalentAsync(talentId: number, rank: number): Promise<ActionResponse> {
+    return this.action({ action: "learn_talent", talentId, rank });
+  }
+
+  /**
+   * The raw-action escape hatch (ADR-0025, ADR-0015). Sends one client opcode
+   * from the module's allowlist (module/PROTOCOL.md, "raw") with a body you
+   * build: a hex string, bytes, or a field list the SDK packs little-endian —
+   * `[{ u32: 5 }, { guid: unit.guid }, { cstring: "text" }]`. The ack means
+   * "queued into the stock handler"; whatever the server answers arrives on
+   * the event stream only if its opcode is whitelisted there, so an
+   * unanswered raw action is the signal to ask for a surface, not a failure.
+   *
+   * Opcodes that already have a method (`castSpell`, `say`, `lootAll`, …) are
+   * not on the allowlist: one audited path per opcode.
+   */
+  raw(opcode: string, payload: RawPayload = ""): Promise<RawActionResponse> {
+    const op = rawOpcodeSchema.safeParse(opcode);
+    if (!op.success) {
+      throw new TypeError(
+        `raw(opcode, payload): opcode must be a CMSG_* name (got ${JSON.stringify(opcode)}) — ` +
+          `see module/PROTOCOL.md "raw" for the allowlist`,
+      );
+    }
+    const body = rawPayloadSchema.safeParse(payload);
+    if (!body.success) {
+      throw new TypeError(
+        `raw(${opcode}, payload): payload must be a hex string, a Uint8Array, or a list of ` +
+          `{ u8 | u16 | u32 | i32 | f32 | u64 | guid | packedGuid | cstring | bytes } fields — ` +
+          body.error.issues.map((i) => `${i.path.join(".") || "payload"}: ${i.message}`).join("; "),
+      );
+    }
+    const hexPayload = encodeRawPayload(body.data);
+    return this.request(
+      "POST",
+      "/action",
+      { token: this.token, action: "raw", opcode: op.data, payload: hexPayload },
+      actionResponseSchema,
+    ).then((ack) => ({ ...ack, opcode: op.data, payload: hexPayload }));
   }
 
   /**
@@ -2086,6 +2172,50 @@ export class WrathClient {
         learnable: s.state === TRAINER_SPELL_STATE.learnable,
         affordable: money === undefined ? undefined : money >= s.cost,
       })),
+    };
+  }
+
+  /**
+   * Spend a talent point and wait for the server's verdict.
+   *
+   * The handler answers every `CMSG_LEARN_TALENT` with `SMSG_TALENTS_INFO`,
+   * so the verdict is whether that answer shows `talentId` at `rank` (0-based,
+   * as on the wire). A refusal is a value, not a throw: the server says
+   * nothing about *why* (no points, wrong tree tier, prerequisite missing),
+   * so the hint lists what a client checks before enabling the button.
+   */
+  async learnTalent(talentId: number, rank: number, options: TrainerOptions = {}): Promise<LearnTalentResult> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.learnTalentAsync(talentId, rank);
+    await this.events.waitFor(
+      (e) =>
+        isEvent(e, "SMSG_TALENTS_INFO") &&
+        !isDecodeError(e.data) &&
+        !(e.data as TalentsInfoData).pet &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout: options.timeout ?? 10_000,
+        description: `the SMSG_TALENTS_INFO answering learn_talent(${talentId}, ${rank})`,
+      },
+    );
+    const talents = this.state.talents();
+    if (talents === undefined) {
+      throw new Error("learnTalent: SMSG_TALENTS_INFO arrived but the state cache holds no talent state");
+    }
+    const row = talents.talents.find((t) => t.talentId === talentId);
+    if (row !== undefined && row.rank >= rank) {
+      return { ok: true, status: "learned", talentId, rank, talents };
+    }
+    return {
+      ok: false,
+      status: "not_learned",
+      talentId,
+      rank,
+      talents,
+      hint:
+        `the server did not record talent ${talentId} at rank ${rank} — it needs an unspent point ` +
+        `(state.talents().unspentPoints is ${talents.unspentPoints}), the previous rank first, enough ` +
+        `points in that tree's earlier tiers, and any prerequisite talent; the server names no reason`,
     };
   }
 
