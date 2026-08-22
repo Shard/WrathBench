@@ -1308,3 +1308,114 @@ describe("ADR-0017: guid arguments at the client surface", () => {
     await stub.stop();
   });
 });
+
+describe("client: gossipSelect by observed option text (item 3c)", () => {
+  const gossipMenu = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_GOSSIP_MESSAGE",
+      opcodeId: 0x17d,
+      ts: 1_700_000_000_000 + seq,
+      data: {
+        guid: CREATURE_GUID,
+        menuId: 7,
+        textId: 100,
+        options: [
+          { optionId: 1, icon: 0, text: "Train me" },
+          { optionId: 2, icon: 0, text: "Make me a Guild Master" },
+          { optionId: 3, icon: 0, text: "I want to train in a new skill" },
+        ],
+        quests: [],
+      },
+    });
+  const gossipComplete = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_GOSSIP_COMPLETE",
+      opcodeId: 0x17e,
+      ts: 1_700_000_000_000 + seq,
+      data: {},
+    });
+
+  async function withMenu() {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(gossipMenu(200));
+    await client.events.waitForOpcode("SMSG_GOSSIP_MESSAGE", { timeout: 2000 });
+    return { stub, client };
+  }
+
+  test("resolves an exact option text to its optionId and the menu's menuId", async () => {
+    const { stub, client } = await withMenu();
+    await client.gossipSelect(CREATURE_GUID, "Train me");
+    const sent = stub.actions.at(-1)!;
+    expect(sent.action).toBe("gossip_select");
+    expect(sent).toMatchObject({ guid: CREATURE_GUID, menuId: 7, optionId: 1 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("resolves a unique substring, case-insensitively", async () => {
+    const { stub, client } = await withMenu();
+    await client.gossipSelect(CREATURE_GUID, "guild master");
+    expect(stub.actions.at(-1)).toMatchObject({ menuId: 7, optionId: 2 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("an ambiguous substring rejects with both matching texts and dispatches nothing", async () => {
+    const { stub, client } = await withMenu();
+    const before = stub.actions.length;
+    await expect(client.gossipSelect(CREATURE_GUID, "train")).rejects.toThrow(
+      /Train me[\s\S]*I want to train in a new skill|I want to train in a new skill[\s\S]*Train me/,
+    );
+    expect(stub.actions.length).toBe(before);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unmatched text rejects with the option list", async () => {
+    const { stub, client } = await withMenu();
+    await expect(client.gossipSelect(CREATURE_GUID, "nonsense")).rejects.toThrow(/no option.*matches.*Train me/s);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a numeric option uses the menu's menuId and must be on the menu", async () => {
+    const { stub, client } = await withMenu();
+    await client.gossipSelect(CREATURE_GUID, 2);
+    expect(stub.actions.at(-1)).toMatchObject({ menuId: 7, optionId: 2 });
+    await expect(client.gossipSelect(CREATURE_GUID, 9)).rejects.toThrow(/no option 9/);
+    client.close();
+    await stub.stop();
+  });
+
+  test("the raw menuId+optionId form is unchanged", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // No menu observed, yet the raw form still dispatches: it does not consult the fold.
+    await client.gossipSelect(CREATURE_GUID, 42, 3);
+    expect(stub.actions.at(-1)).toMatchObject({ action: "gossip_select", menuId: 42, optionId: 3 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("with no menu open, the by-text form rejects with a pointer to gossipHello", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await expect(client.gossipSelect(CREATURE_GUID, "Train me")).rejects.toThrow(
+      /no gossip menu.*gossipHello/s,
+    );
+    client.close();
+    await stub.stop();
+  });
+
+  test("a gossip complete closes the menu, so a later by-text select rejects", async () => {
+    const { stub, client } = await withMenu();
+    stub.push(gossipComplete(201));
+    await client.events.waitForOpcode("SMSG_GOSSIP_COMPLETE", { timeout: 2000 });
+    await expect(client.gossipSelect(CREATURE_GUID, "Train me")).rejects.toThrow(/no gossip menu/);
+    client.close();
+    await stub.stop();
+  });
+});

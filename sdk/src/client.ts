@@ -941,9 +941,37 @@ export class WrathClient {
     return this.action({ action: "gossip_hello", guid: guidArg(guid, "gossipHello(guid)") });
   }
 
-  /** `CMSG_GOSSIP_SELECT_OPTION`; ids come from `SMSG_GOSSIP_MESSAGE`. */
-  gossipSelect(guid: GuidArg, menuId: number, optionId: number): Promise<ActionResponse> {
-    return this.action({ action: "gossip_select", guid: guidArg(guid, "gossipSelect(guid, ...)"), menuId, optionId });
+  /**
+   * `CMSG_GOSSIP_SELECT_OPTION`; ids come from `SMSG_GOSSIP_MESSAGE`.
+   *
+   * Two forms. The raw form takes the numeric `menuId` and `optionId` straight
+   * off the packet. The convenience form takes just an `option` — an option's
+   * visible `text` (case-insensitive exact, or a unique substring) or its
+   * `optionId` — and resolves it against the menu last observed open for this
+   * NPC (`state.lastGossip(guid)`), filling in the `menuId` from there. The
+   * guid itself is always the raw string form: no name resolution on the
+   * referent, only on the option within an already-open menu.
+   *
+   * The convenience form throws (nothing is dispatched) when no menu is open
+   * for the guid, when the text matches no option or more than one, or when a
+   * numeric option is not on the menu — every rejection lists the options so
+   * the next call is obvious (ADR-0016). A menu is only ever read from the
+   * `SMSG_GOSSIP_MESSAGE`/`SMSG_GOSSIP_COMPLETE` fold; the server is not
+   * queried.
+   */
+  gossipSelect(guid: GuidArg, option: string | number): Promise<ActionResponse>;
+  gossipSelect(guid: GuidArg, menuId: number, optionId: number): Promise<ActionResponse>;
+  async gossipSelect(guid: GuidArg, a: string | number, b?: number): Promise<ActionResponse> {
+    const id = guidArg(guid, "gossipSelect(guid, ...)");
+    if (b !== undefined) {
+      // Raw form: caller supplied both menuId and optionId.
+      return this.action({ action: "gossip_select", guid: id, menuId: a as number, optionId: b });
+    }
+    // Convenience form: resolve against the last observed menu. `async`, so a
+    // bad option is a rejected promise like every other helper, not a
+    // synchronous throw.
+    const { menuId, optionId } = this.resolveGossipOption(id, a);
+    return this.action({ action: "gossip_select", guid: id, menuId, optionId });
   }
 
   /**
@@ -1905,6 +1933,49 @@ export class WrathClient {
   }
 
   // --------------------------------------------------------------- internals
+
+  /**
+   * Resolve a `gossipSelect` option (text or numeric id) against the menu last
+   * observed open for `guid`. Throws — nothing is dispatched — for a missing
+   * menu, no match, an ambiguous text, or an id that is not on the menu, each
+   * message listing the options (ADR-0016).
+   */
+  private resolveGossipOption(guid: string, option: string | number): { menuId: number; optionId: number } {
+    const menu = this.state.lastGossip(guidKey(guid));
+    if (!menu) {
+      throw new TypeError(
+        `gossipSelect(guid, option): no gossip menu has been observed open for ${guid} — open one first ` +
+          `with gossipHello(guid) (or questList), then select. If you already have the ids, use the raw ` +
+          `form gossipSelect(guid, menuId, optionId).`,
+      );
+    }
+    const list = menu.options.map((o) => `[${o.optionId}] ${JSON.stringify(o.text)}`).join(", ");
+    if (typeof option === "number") {
+      const found = menu.options.find((o) => o.optionId === option);
+      if (!found) {
+        throw new TypeError(
+          `gossipSelect(guid, ${option}): the menu currently open for ${guid} has no option ${option}. ` +
+            `Options are: ${list}.`,
+        );
+      }
+      return { menuId: menu.menuId, optionId: found.optionId };
+    }
+    const q = option.trim().toLowerCase();
+    const exact = menu.options.filter((o) => o.text.toLowerCase() === q);
+    const matched = exact.length > 0 ? exact : menu.options.filter((o) => o.text.toLowerCase().includes(q));
+    if (matched.length === 1) return { menuId: menu.menuId, optionId: matched[0]!.optionId };
+    if (matched.length === 0) {
+      throw new TypeError(
+        `gossipSelect(guid, ${JSON.stringify(option)}): no option on the menu currently open for ${guid} ` +
+          `matches. Options are: ${list}. Pass the exact text, a unique substring, or the numeric optionId.`,
+      );
+    }
+    const both = matched.map((o) => `[${o.optionId}] ${JSON.stringify(o.text)}`).join(", ");
+    throw new TypeError(
+      `gossipSelect(guid, ${JSON.stringify(option)}): matches ${matched.length} options on the menu open ` +
+        `for ${guid}: ${both}. Use the exact text, a longer unique substring, or the numeric optionId.`,
+    );
+  }
 
   /** One `POST /action`, with the session token filled in. */
   private action(body: ActionBody): Promise<ActionResponse> {

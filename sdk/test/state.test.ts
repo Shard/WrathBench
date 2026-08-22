@@ -1089,3 +1089,56 @@ describe("state.units(): the flat scan helper", () => {
     expect(() => c.units({ maxDistance: -1 })).toThrow(/expected a distance >= 0/);
   });
 });
+
+describe("state cache: the gossip menu fold (item 3c)", () => {
+  const gossipMsg = (guid: string, seq: number) => ({
+    seq,
+    opcode: "SMSG_GOSSIP_MESSAGE",
+    opcodeId: 0x17d,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      guid,
+      menuId: 5,
+      textId: 1,
+      options: [
+        { optionId: 0, icon: 0, text: "Train me" },
+        { optionId: 1, icon: 0, text: "Show wares" },
+      ],
+      quests: [],
+    },
+  });
+  const gossipComplete = (seq: number) => ({
+    seq,
+    opcode: "SMSG_GOSSIP_COMPLETE",
+    opcodeId: 0x17e,
+    ts: 1_700_000_000_000 + seq,
+    data: {},
+  });
+
+  test("SMSG_GOSSIP_MESSAGE folds into lastGossip and the snapshot, options only", () => {
+    const c = StateCache.replay(toEvents([...worldStream, gossipMsg("2002", 70)]), { seed: SEED });
+    const menu = c.lastGossip("2002");
+    expect(menu?.menuId).toBe(5);
+    expect(menu?.options).toEqual([
+      { optionId: 0, text: "Train me" },
+      { optionId: 1, text: "Show wares" },
+    ]);
+    expect(c.snapshot().gossip.get("2002")?.menuId).toBe(5);
+  });
+
+  test("SMSG_GOSSIP_COMPLETE clears the open menu", () => {
+    const c = StateCache.replay(
+      toEvents([...worldStream, gossipMsg("2002", 70), gossipComplete(71)]),
+      { seed: SEED },
+    );
+    expect(c.lastGossip("2002")).toBeUndefined();
+    expect(c.snapshot().gossip.size).toBe(0);
+  });
+
+  test("guid lookups are canonical, so a non-canonical guid finds the same menu", () => {
+    const c = StateCache.replay(toEvents([...worldStream, gossipMsg("2002", 70)]), { seed: SEED });
+    // "2002" is already canonical here; the fold keys by the schema-canonical
+    // guid, which is what gossipSelect looks up with guidKey(...).
+    expect(c.lastGossip("2002")?.menuId).toBe(5);
+  });
+});
