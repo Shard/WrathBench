@@ -12,6 +12,11 @@
  *   limit       first turn ends with the CLI's usage-limit `result`.
  *   limit-exit  writes the usage-limit line to stderr and exits non-zero.
  *   silent      ends the turn with a `result` and no assistant output.
+ *   stubborn    pauses the run with a usage-limit result, then ignores SIGTERM
+ *               and keeps running: the shape that used to leave an orphaned CLI
+ *               behind, because a pause tears down through shutdown() alone.
+ *               Records its own pid and its MCP child's so the test can assert
+ *               both are dead once the driver returns.
  *
  * Everything it saw (argv, selected env, the system prompt, the MCP tool list,
  * the user messages) is written to $WB_FAKE_RECORD as JSON after every event.
@@ -39,6 +44,8 @@ function variadic(name: string): string[] {
 }
 
 const record: Record<string, unknown> = {
+  pid: process.pid,
+  mcpPid: null as number | null,
   argv,
   cwd: process.cwd(),
   systemPrompt: flagValue("--system-prompt"),
@@ -91,6 +98,7 @@ async function startMcp(): Promise<McpChild | null> {
     stdout: "pipe",
     stderr: "inherit",
   });
+  record["mcpPid"] = proc.pid;
   const pending = new Map<number, (v: Record<string, unknown>) => void>();
   void (async () => {
     const decoder = new TextDecoder();
@@ -161,6 +169,28 @@ for await (const chunk of Bun.stdin.stream()) {
       process.stderr.write("Claude AI usage limit reached|1780000000\n");
       saveRecord();
       process.exit(1);
+    }
+
+    if (mode === "stubborn" && turn === 1) {
+      // Swallow the polite signal, then answer with the pause the driver acts
+      // on. The pause path never calls killClaude: shutdown() is the only
+      // thing standing between this process and an orphan.
+      process.on("SIGTERM", () => {
+        /* deliberately ignored */
+      });
+      emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        result: "Claude AI usage limit reached|1780000000",
+        num_turns: 1,
+        duration_ms: 5,
+        session_id: "fake-session",
+      });
+      saveRecord();
+      await new Promise(() => {
+        /* never resolves: only a SIGKILL ends this */
+      });
     }
 
     if (mode === "limit" && turn === 1) {
