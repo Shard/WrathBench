@@ -3,7 +3,7 @@
  * behind.
  *
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
- * published view — lanes, accounts, PIDs, a heartbeat — and it is the only
+ * published view — lanes, accounts, a heartbeat — and it is the only
  * honest liveness signal across a container boundary. `/api/runs` is the
  * filesystem's view, where "live" means an unterminated run whose trajectory
  * grew recently. A lane can be alive with no live run (between episodes), and a
@@ -11,9 +11,11 @@
  * so the page shows both rather than reconciling them into one number.
  */
 
-import { A } from "@solidjs/router";
+import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type FleetResponse, type RunListRow } from "../api/client";
+import type { FleetLaneView } from "@viewer/api-types";
+import { FLEET_COLUMNS, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -85,34 +87,11 @@ export default function Fleet() {
                 <table>
                   <thead>
                     <tr>
-                      <th>lane</th>
-                      <th>account</th>
-                      <th>pid</th>
-                      <th>state</th>
-                      <th>spawned</th>
-                      <th>exit</th>
+                      <For each={FLEET_COLUMNS}>{(c) => <th>{c}</th>}</For>
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={f().lanes}>
-                      {(lane) => (
-                        <tr>
-                          <td>{lane.name}</td>
-                          <td class="dim">{lane.account}</td>
-                          <td class="mono dim">{lane.pid}</td>
-                          <td>
-                            <span class={`dot ${lane.alive === false ? "dead" : "live"}`} />
-                            {lane.alive === false ? "exited" : lane.draining ? "draining" : "running"}
-                          </td>
-                          <td class="dim" title={stamp(lane.spawnedAt)}>
-                            {fmtWhen(lane.spawnedAt, now())}
-                          </td>
-                          <td class={lane.exitCode === null || lane.exitCode === 0 ? "dim" : "err"}>
-                            {lane.exitCode === null ? "—" : lane.exitCode}
-                          </td>
-                        </tr>
-                      )}
-                    </For>
+                    <For each={f().lanes}>{(lane) => <LaneRow lane={lane} now={now()} />}</For>
                   </tbody>
                 </table>
               </div>
@@ -148,6 +127,46 @@ export default function Fleet() {
         </div>
       </Show>
     </div>
+  );
+}
+
+/**
+ * One lane. The whole row is a click-through to the run the lane is holding, so
+ * the fleet table is a way into a live run and not just a status readout — the
+ * model cell carries the same link for anyone tabbing rather than clicking, and
+ * the handler stands aside when the click already landed on that anchor.
+ */
+function LaneRow(props: { lane: FleetLaneView; now: number }) {
+  const navigate = useNavigate();
+  const lane = (): FleetLaneView => props.lane;
+  const href = (): string | null => laneRunHref(lane());
+  const state = (): string => laneState(lane());
+  const onClick = (e: MouseEvent): void => {
+    const to = href();
+    if (to === null || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    if ((e.target as Element | null)?.closest("a") !== null) return;
+    navigate(to);
+  };
+  return (
+    <tr onClick={onClick} class={href() === null ? undefined : "clickable"}>
+      <td>
+        <span class={`dot ${state() === "exited" ? "dead" : state() === "running" ? "live" : ""}`} />
+        <span class={`badge ${state()}`}>{state()}</span>
+      </td>
+      <td>{lane().name}</td>
+      <td class="dim" title={laneModelTitle(lane())}>
+        <Show when={href()} fallback={laneModelLabel(lane())}>
+          {(to) => <A href={to()}>{laneModelLabel(lane())}</A>}
+        </Show>
+      </td>
+      <td class="dim">{lane().account}</td>
+      <td class="dim" title={stamp(lane().spawnedAt)}>
+        {fmtWhen(lane().spawnedAt, props.now)}
+      </td>
+      <td class={lane().exitCode === null || lane().exitCode === 0 ? "dim" : "err"}>
+        {lane().exitCode === null ? "—" : lane().exitCode}
+      </td>
+    </tr>
   );
 }
 
