@@ -6,6 +6,50 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### The deploy-window smoke becomes a fleet gate (ADR-0023)
+
+Deploying a worldserver was a manual checklist ending in "run a smoke if you
+remember". A server that boots and answers `/health` can still fail to drive a
+quest arc — a dropped action, a stale map volume — and the discoverer was
+otherwise a model, hours later, in an unwatched trajectory; every episode
+launched in between is spent. The second, untyped trigger is worse:
+`restart: unless-stopped` brings a crashed worldserver back on its own and the
+fleet spawns straight into it.
+
+The smoke moved into the supervisor. `infra/fleet.json` grows a hot-reloaded
+top-level `preflight` block (`enabled`, `account`, `smokes`, `timeoutMs`); the
+supervisor runs those scripts before it spawns any lane and again whenever the
+server identity changes, records `{at, serverIdentity, ok, results}` in
+`fleet-state.json`, and only then spawns. A failure blocks spawning, complains
+once per identity, and is re-checked every tick, so a fix or a rollback unblocks
+the fleet with no operator action; only `start` is suppressed, so an operator can
+still drain a lane during a bad deploy.
+
+Server identity had no honest source: `/health` serves non-loopback callers
+liveness only (no build id, no uptime) and the supervisor is a container with no
+docker socket. It is taken instead from what the two containers share — the logs
+volume, where each boot creates a fresh `Server.log` — plus a digest of
+`/health`'s stable fields. That is weaker than an image id and is allowed to be,
+because nothing keys on the string: `infra/deploy-worldserver.sh` keys on the
+gate result's *timestamp*, so a marker that fails to change can only cost an
+extra smoke run, never greenlight an unsmoked server. An unreadable log volume
+yields a marker that changes every ten minutes on its own — fail toward
+re-smoking, never toward a frozen "already smoked".
+
+`infra/deploy-worldserver.sh` replaces the manual sequence: refuse while any
+episode is live (`run-fleet --live-runs`, exit code carries it), `:latest` ->
+`:prev`, `:next` -> `:latest`, recreate `--no-deps`, wait for health, wait for
+the supervisor's gate result on the new server (falling through to smoking
+directly when the supervisor predates the gate or preflight is off), roll back to
+`:prev` on failure.
+
+Shipped armed-off. The gate needs its own account — a smoke holds a live session
+for its whole arc, so sharing one with a lane means mutual reclaims, and
+`parseFleet` refuses that config — and `SMOKE` needs a one-time `bootstrap` run
+plus a worldserver recreate to enter `AC_WRATH_BENCH_ACCOUNTS`. `PROBE` was
+explicitly not reused: an armed gate that fights an operator's live probe is
+worse than no gate.
+
 ### Dashboard: the viewer splits into a read-only API and a SolidJS SPA (ADR-0022)
 
 The viewer's two hand-written HTML pages had reached the end of what a template

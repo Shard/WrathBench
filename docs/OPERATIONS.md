@@ -93,20 +93,71 @@ crash or a machine reboot, so run ids change there too.
 
 ### Deploy window (worldserver changes)
 
-Recreating the worldserver kills every live session. Get to zero live runs
-first:
+One script, from the host:
 
-1. Set every lane in `infra/fleet.json` to `"enabled": false`.
-2. Wait until `./infra/run-fleet.sh --status` shows no lane with a live run —
-   the lanes drain at their next episode boundary, so allow for an episode
-   (up to 90 minutes) or `docker compose -f infra/compose.yml stop fleet` to
-   cut it to the 30s graceful-termination path.
-3. `docker compose -f infra/compose.yml up -d --no-deps worldserver` (this
-   recreates it; it is the one time recreation is the point). `--no-deps` again:
-   the `runner` container is where ad-hoc host episodes live, and it goes stale
-   against its image every time `build fleet` retags `wrathbench/runner`, so a
-   dependency sweep would recreate it and kill anything exec'd into it.
-4. Re-enable the lanes, or `up -d --no-deps fleet` if you stopped the service.
+```
+./infra/deploy-worldserver.sh                  # promote wrathbench/worldserver:next
+./infra/deploy-worldserver.sh --next-tag wrathbench/worldserver:mybuild
+```
+
+It refuses to run while any episode is live, tags the running image `:prev`,
+promotes the new one to `:latest`, recreates the worldserver (`--no-deps`; the
+one time recreation is the point), waits for the module to answer `/health`
+ready, and then waits for the fleet's own preflight gate to record a pass
+against the new server. On a smoke failure it retags `:prev`, recreates, and
+exits non-zero. `--no-smoke` deploys unverified and says so; `--allow-live`
+skips the refusal and kills whatever is running.
+
+Getting to zero live runs is still yours to do, and it is the same drain as
+ever: set every lane in `infra/fleet.json` to `"enabled": false` and wait until
+`./infra/run-fleet.sh --status` shows no lane with a live run (an episode can
+take up to 90 minutes; `docker compose -f infra/compose.yml stop fleet` cuts it
+to the 30s graceful path). `./infra/run-fleet.sh --live-runs` is the same check
+the script uses — it lists live episodes and exits non-zero if there are any.
+Re-enable the lanes afterwards.
+
+### The preflight gate
+
+The supervisor smokes the server before it launches anything. The knob is the
+top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the lanes:
+
+```json
+"preflight": {
+  "enabled": false,
+  "account": "SMOKE",
+  "smokes": ["infra/smoke/module-quest.ts", "infra/smoke/quest-status.ts"],
+  "timeoutMs": 900000
+}
+```
+
+The smokes run sequentially, as the given account, before the first lane is
+spawned and again whenever the server identity changes — which is to say on
+every worldserver recreate *and* on every restart the container does by itself.
+A failure spawns nothing, complains once, and is re-checked every tick, so a fix
+or a rollback unblocks the fleet with no operator action. Drains still work
+while the gate is shut. `timeoutMs` is the budget for the whole sequence, not
+per script. `./infra/run-fleet.sh --status` shows the last gate result;
+`--dry-run` shows the plan. See
+`docs/decisions/ADR-0023-preflight-gate-in-the-supervisor.md`.
+
+Server identity is the worldserver's boot, read off the shared logs volume
+(`data/logs/Server.log`'s creation time), plus a digest of `/health`'s stable
+fields. Nothing keys on that string being unique — the deploy script keys on the
+gate result's timestamp — so at worst a marker that fails to change costs an
+extra smoke run.
+
+**Arming it takes two one-time steps**, in this order, because an armed gate
+pointed at an account the module does not permit parks the entire fleet on a
+403:
+
+1. Create the account:
+   `docker compose -f infra/compose.yml run --rm --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE bootstrap`
+2. Recreate the worldserver so it picks up `SMOKE` in `AC_WRATH_BENCH_ACCOUNTS`
+   (it is already in `infra/compose.yml`) — i.e. the next deploy window.
+
+Then flip `"enabled": true`. The gate account must be its own: sharing it with
+an enabled lane is refused as a config error, and it is never `PROBE`, which is
+the ad-hoc debugging account.
 
 ### Ad-hoc launches still work
 

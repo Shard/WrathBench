@@ -342,3 +342,18 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     contract-clean. A server-wide position sampler (every character, ~10 s) is
     the other half, and is cheap because the module already sees every
     session; defer until it is the next obstacle.
+
+38. **`/health` has no build or version id** (2026-08-22, from ADR-0023). The
+    module answers non-loopback callers with liveness only — `ok`, `module`,
+    `worldStopped`, and zeroed counters — so nothing outside the worldserver
+    container can tell which build it is talking to. The fleet's preflight gate
+    works around it by deriving server identity from the boot of the world
+    (`data/logs/Server.log`'s creation time on the shared volume) plus a digest
+    of `/health`'s stable fields, which detects change but names nothing. A
+    `build` field (the module's compile-time git describe, or the image id
+    passed in as `AC_WRATH_BENCH_BUILD`) and a `startedAtMs` would make the
+    identity honest and let `--status`, trajectories and the deploy script all
+    say *which* server a run happened on. Trivial in `WbManager::HttpHealth`;
+    deferred only because it needs a worldserver rebuild and recreate to become
+    true of the running server, and `healthDigest()` already folds any new
+    stable field into the identity the moment it appears.

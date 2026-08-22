@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_PREFLIGHT,
+  bootMarker,
   diffLanes,
+  formatGate,
+  gateDecision,
+  gateOpen,
+  healthDigest,
+  parsePreflight,
+  smokePath,
+  tailOf,
   fillEntries,
   isAllowlistedFree,
   isClaudeFamily,
@@ -14,7 +23,9 @@ import {
   validateEntries,
   type FleetConfig,
   type FleetLane,
+  type FleetPreflight,
   type LaneSets,
+  type PreflightRecord,
 } from "./run-fleet";
 
 /**
@@ -369,5 +380,155 @@ describe("fleetComplete", () => {
   test("work in flight or waiting is never complete either way", () => {
     expect(fleetComplete({ running: 1, toStart: 0, hasDeadline: true })).toBe(false);
     expect(fleetComplete({ running: 0, toStart: 1, hasDeadline: true })).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------- preflight gate
+
+function pf(over: Partial<FleetPreflight> = {}): FleetPreflight {
+  return { enabled: true, account: "SMOKE", smokes: ["infra/smoke/module-quest.ts"], timeoutMs: 900_000, ...over };
+}
+function rec(over: Partial<PreflightRecord> = {}): PreflightRecord {
+  return { at: 1000, serverIdentity: "boot:1|module=mod-wrathbench", ok: true, results: [], ...over };
+}
+
+describe("parsePreflight", () => {
+  test("an absent block is a disabled gate — an older fleet.json keeps working", () => {
+    expect(parsePreflight(undefined)).toEqual(DEFAULT_PREFLIGHT);
+    expect(parseFleet(fleetJson([lane()])).preflight.enabled).toBe(false);
+  });
+
+  test("the shipped shape parses", () => {
+    const p = parsePreflight({
+      enabled: true,
+      account: "SMOKE",
+      smokes: ["infra/smoke/module-quest.ts", "infra/smoke/quest-status.ts"],
+      timeoutMs: 900000,
+    });
+    expect(p.account).toBe("SMOKE");
+    expect(p.smokes).toHaveLength(2);
+    expect(p.timeoutMs).toBe(900000);
+  });
+
+  test("enabled with no smokes is a config error, not a silently open gate", () => {
+    expect(() => parsePreflight({ enabled: true, account: "SMOKE", smokes: [] })).toThrow(/no smokes/);
+  });
+
+  test("shape errors are refused", () => {
+    expect(() => parsePreflight({ account: "SMOKE", smokes: [] })).toThrow(/enabled must be/);
+    expect(() => parsePreflight({ enabled: false, smokes: [] })).toThrow(/account is required/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: "x" })).toThrow(/array of script paths/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: [], timeoutMs: 0 })).toThrow(/positive number/);
+  });
+
+  test("the gate account may not be an enabled lane's — they would evict each other", () => {
+    const withPf = (lanes: unknown[], preflight: unknown) => ({ _notes: [], lanes, preflight });
+    expect(() =>
+      parseFleet(withPf([lane({ account: "SMOKE" })], { enabled: true, account: "smoke", smokes: ["a.ts"] })),
+    ).toThrow(/needs its own account/);
+    // Disabled gate, or a disabled lane, is no clash.
+    expect(() =>
+      parseFleet(withPf([lane({ account: "SMOKE", enabled: false })], { enabled: true, account: "SMOKE", smokes: ["a.ts"] })),
+    ).not.toThrow();
+  });
+});
+
+describe("server identity", () => {
+  test("the live log's creation time is the boot marker", () => {
+    expect(bootMarker(1787396829400.96, ["Server.log", "Server.log.2026-08-22 11-07-09"], 5)).toBe("boot:1787396829401");
+  });
+
+  test("a new boot changes it", () => {
+    expect(bootMarker(1, [], 0)).not.toBe(bootMarker(2, [], 0));
+  });
+
+  test("without birthtime it falls back to the rotated backups", () => {
+    expect(bootMarker(0, ["Server.log", "Server.log.2026-08-21 13-17-30", "Server.log.2026-08-22 11-07-09"], 5)).toBe(
+      "logs:2:Server.log.2026-08-22 11-07-09",
+    );
+  });
+
+  test("an unreadable log dir fails toward re-gating, not toward a frozen identity", () => {
+    const a = bootMarker(undefined, undefined, 0);
+    const b = bootMarker(undefined, undefined, 11 * 60_000);
+    expect(a).toStartWith("unknown:");
+    expect(a).not.toBe(b);
+  });
+
+  test("health digest ignores live telemetry and keeps the stable fields", () => {
+    const base = { ok: true, module: "mod-wrathbench", worldStopped: false, sessions: 3, droppedPackets: 9 };
+    expect(healthDigest(base)).toBe(healthDigest({ ...base, sessions: 41, droppedPackets: 12, worldStopped: true }));
+    expect(healthDigest(base)).not.toBe(healthDigest({ ...base, build: "abc123" }));
+  });
+});
+
+describe("gateDecision", () => {
+  test("disabled skips — the mechanism stays installed and the gate stays open", () => {
+    expect(gateDecision({ enabled: false, identity: "i", last: undefined })).toBe("skip");
+    expect(gateOpen("skip", undefined)).toBe(true);
+  });
+
+  test("an unreachable or stopping server is waited on, not smoked", () => {
+    expect(gateDecision({ enabled: true, identity: undefined, last: rec() })).toBe("wait");
+    expect(gateOpen("wait", rec())).toBe(false);
+  });
+
+  test("no record yet: run the smokes before anything spawns", () => {
+    expect(gateDecision({ enabled: true, identity: "i", last: undefined })).toBe("run");
+  });
+
+  test("a pass for this identity spawns once and is not re-run", () => {
+    const last = rec({ serverIdentity: "i" });
+    expect(gateDecision({ enabled: true, identity: "i", last })).toBe("pass");
+    expect(gateOpen("pass", last)).toBe(true);
+  });
+
+  test("an identity change re-gates", () => {
+    expect(gateDecision({ enabled: true, identity: "i2", last: rec({ serverIdentity: "i" }) })).toBe("run");
+  });
+
+  test("a failure blocks spawning and is re-checked every tick so a fix unblocks it", () => {
+    const failed = rec({ serverIdentity: "i", ok: false });
+    expect(gateDecision({ enabled: true, identity: "i", last: failed })).toBe("run");
+    expect(gateOpen("run", failed)).toBe(false);
+    expect(gateOpen("run", rec({ serverIdentity: "i" }))).toBe(true);
+  });
+
+  test("a skipped record never counts as a pass once the gate is armed", () => {
+    expect(gateDecision({ enabled: true, identity: "i", last: rec({ serverIdentity: "i", skipped: true }) })).toBe("run");
+  });
+});
+
+describe("gate record and rendering", () => {
+  test("the record carries what a deploy needs: when, against what, and per-script detail", () => {
+    const r = rec({
+      at: 1_700_000_000_000,
+      ok: false,
+      results: [
+        { script: "infra/smoke/module-quest.ts", ok: true, ms: 61_000, tail: "done" },
+        { script: "infra/smoke/quest-status.ts", ok: false, ms: 2_000, tail: "FAIL: unsupported_action" },
+      ],
+    });
+    expect(Object.keys(r).sort()).toEqual(["at", "ok", "results", "serverIdentity"]);
+    const out = formatGate(r, pf()).join("\n");
+    expect(out).toContain("FAIL — lanes blocked");
+    expect(out).toContain("FAIL infra/smoke/quest-status.ts (2s)");
+    expect(out).toContain("unsupported_action");
+  });
+
+  test("status renders the disabled case and the never-run case", () => {
+    expect(formatGate(undefined, pf({ enabled: false })).join("\n")).toContain("preflight disabled");
+    expect(formatGate(undefined, pf()).join("\n")).toContain("no gate result recorded yet");
+    expect(formatGate(rec({ skipped: true }), pf({ enabled: false })).join("\n")).toContain("SKIPPED (gate open)");
+  });
+
+  test("tails are the last lines, bounded", () => {
+    expect(tailOf("a\nb\n\nc\n")).toBe("a | b | c");
+    expect(tailOf("x".repeat(900)).length).toBe(500);
+  });
+
+  test("smoke paths resolve against the repo, absolutes pass through", () => {
+    expect(smokePath("infra/smoke/module-quest.ts", "/wrathbench")).toBe("/wrathbench/infra/smoke/module-quest.ts");
+    expect(smokePath("/tmp/s.ts", "/wrathbench")).toBe("/tmp/s.ts");
   });
 });
