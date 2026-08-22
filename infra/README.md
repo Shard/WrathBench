@@ -203,9 +203,43 @@ models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
 free lanes exist because OpenRouter's and OpenCode Zen's free tiers are
 pooled per upstream provider: a single sequential stream per pool is both the
 polite and the effective shape — two streams on one pool just trip the same
-rate limits twice. The roster's own account-busy guard still runs under every
-lane, so a lane pointed at an account a hand-started run holds waits rather
-than clobbering.
+rate limits twice. So an openai lane on a **shared free-cloud pool**
+(`openrouter.ai` / `opencode.ai`, or no `apiBase` at all, which defaults to
+OpenRouter) must carry free model ids only — ending `-free` or `:free`. The
+roster's own account-busy guard still runs under every lane, so a lane pointed
+at an account a hand-started run holds waits rather than clobbering.
+
+### Local (self-hosted) lanes
+
+An openai lane may point `apiBase` at a self-hosted OpenAI-compatible endpoint
+instead of a cloud pool — the shipped `local-qwen` lane targets an LM Studio box
+on the LAN (`http://192.168.1.20:1234/v1`, model `qwen/qwen3.8-27b`). A local
+apiBase is a distinct category in the lane policy:
+
+- **Exempt from the free-suffix rule.** There is no shared free tier to meter,
+  so the model id need not end `-free`/`:free`. The guard treats any apiBase
+  that is not an `openrouter.ai`/`opencode.ai` host as local.
+- **Still claude-barred.** No `claude-*` id ever rides an openai lane, local or
+  cloud; claude runs only on the `claude-subscription` driver.
+- **`apiKeyEnv` names a dummy key.** LM Studio ignores the bearer value, but the
+  pipeline needs the env var to exist, so `.env` carries a non-secret
+  `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud lanes
+  exactly: the key travels only in `.env` (Bun autoloads `/wrathbench/.env`
+  inside the runner container), never through argv. The adapter still sends its
+  attribution headers unconditionally; a local server just ignores them.
+
+Before enabling a local lane, prove the endpoint can drive the tool loop:
+
+    bun infra/smoke/local-model.ts
+
+It hits the endpoint directly with one tool definition and no `tool_choice`
+(mirroring the adapter), and asserts the model *elects* a tool call whose shape
+satisfies the adapter's exact contract — `id` a non-empty string, `arguments` a
+JSON string. It prints the round-trip latency and `finish_reason`, and reports a
+clear no-go if the model answers in prose or returns a shape the adapter would
+reject. No game account or module needed. `local-qwen` ships `enabled: false`
+until `RUNNER6` enters the running module allowlist at the next worldserver
+recreate.
 
 `--status` reads `data/runs/fleet-state.json` plus each lane's logs and
 sqlite: per lane it prints enabled, roster pid liveness, the current run id

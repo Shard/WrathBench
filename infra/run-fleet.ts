@@ -26,8 +26,11 @@
  *    account; the second lane would spend the night in account_in_use).
  *  - lane-policy: claude-family models (opus/sonnet/haiku/claude-*) run only
  *    via the claude-subscription driver, and that driver runs only claude
- *    models. OpenRouter/OpenCode lanes carry free models; keeping a single
- *    stream per provider pool is the whole point of the lane shape.
+ *    models. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
+ *    only; keeping a single stream per provider pool is the whole point of the
+ *    lane shape. A local/self-hosted openai apiBase is a distinct category:
+ *    exempt from the free-suffix rule (no shared pool to meter), still barred
+ *    from claude-* ids.
  *
  * The roster's own account-busy guard still runs under every lane: a lane
  * pointed at an account something else is using waits, it does not clobber.
@@ -82,6 +85,21 @@ export function isClaudeFamily(model: string): boolean {
 }
 
 /**
+ * True when an openai lane points at a shared free-cloud pool — OpenRouter or
+ * OpenCode Zen. Those pools are what the free-suffix rule polices: their free
+ * tiers are metered per upstream provider, so only free model ids belong there.
+ * An absent apiBase means the run-roster default (OpenRouter), so it counts as
+ * a shared pool too. A local/self-hosted OpenAI-compatible endpoint (e.g. an
+ * LM Studio box on the LAN) is NOT a shared pool: it has no free tier to abuse,
+ * so it is exempt from the free-suffix rule — but still bound by every other
+ * lane-policy check, the claude bar included.
+ */
+export function isSharedFreePool(apiBase: string | undefined): boolean {
+  if (apiBase === undefined) return true;
+  return /(^|\/\/|\.)(openrouter\.ai|opencode\.ai)(\/|:|$)/i.test(apiBase);
+}
+
+/**
  * Lane-policy and shape checks for one lane's entries. Used for inline
  * entries at parse time and for rosterFile contents at load time.
  */
@@ -112,6 +130,17 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
       fail(
         `lane ${lane.name}: entry ${e.model} pins account ${e.account} but the lane owns ` +
           `${lane.account} — one lane, one account`,
+      );
+    }
+    // Shared free-cloud pools (OpenRouter, OpenCode Zen) carry free models
+    // only; the suffix is how we keep a lane off a paid tier. Local/self-hosted
+    // openai lanes have no such pool and are exempt — but still claude-barred
+    // above.
+    if (driver === "openai" && isSharedFreePool(e.apiBase) && !/(-free$|:free$)/.test(e.model)) {
+      fail(
+        `lane ${lane.name}: entry ${e.model}: lane-policy — a shared free-cloud pool ` +
+          `(OpenRouter/OpenCode) carries free models only (id must end -free or :free); ` +
+          `a local/self-hosted apiBase is exempt`,
       );
     }
     out.push(e);

@@ -26,8 +26,14 @@
     "",
     "Accounts RUNNER3-RUNNER6 exist in auth but enter AC_WRATH_BENCH_ACCOUNTS only when",
     "the worldserver container is next recreated (compose.yml already lists them).",
-    "Until then the free-b/c/d lanes stay enabled:false — flipping one on earlier just",
-    "gets account_not_permitted from the module."
+    "Until then the free-b/c/d and local-qwen lanes stay enabled:false — flipping one",
+    "on earlier just gets account_not_permitted from the module.",
+    "",
+    "Local lanes: an openai lane may point apiBase at a self-hosted OpenAI-compatible",
+    "endpoint (e.g. LM Studio on the LAN). That is NOT a shared free-cloud pool, so it",
+    "is exempt from the free-model-suffix rule — but the claude bar still holds: no",
+    "claude-* id ever rides an openai lane. Its apiKeyEnv (LMSTUDIO_KEY) is a dummy the",
+    "server ignores; the pipeline just needs the var to exist in .env."
   ],
   "lanes": [
     {
@@ -110,6 +116,17 @@
       "entries": [
         { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
+      ]
+    },
+    {
+      "name": "local-qwen",
+      "enabled": false,
+      "_why_disabled": "needs RUNNER6 in the running module allowlist — flip on after the next worldserver recreate",
+      "account": "RUNNER6",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
+        { "model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "episodeMs": 5400000 }
       ]
     }
   ]

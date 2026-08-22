@@ -3,6 +3,7 @@ import {
   diffLanes,
   fillEntries,
   isClaudeFamily,
+  isSharedFreePool,
   laneArgv,
   laneUntilOrFail,
   parseFleet,
@@ -96,12 +97,50 @@ describe("lane-policy", () => {
     );
   });
 
+  test.each([
+    [undefined, true], // absent -> run-roster's OpenRouter default -> shared pool
+    ["https://openrouter.ai/api/v1", true],
+    ["https://opencode.ai/zen/v1", true],
+    ["http://192.168.1.20:1234/v1", false], // local LM Studio box on the LAN
+    ["http://localhost:1234/v1", false],
+  ] as const)("isSharedFreePool(%s) === %s", (base, expected) => {
+    expect(isSharedFreePool(base)).toBe(expected);
+  });
+
+  test("a shared free-cloud pool still requires a free model id", () => {
+    // No apiBase -> OpenRouter default -> shared pool -> suffix required.
+    expect(() => validateEntries(lane(), [{ model: "z-ai/glm-5.2" }])).toThrow(/free models only/);
+    expect(() =>
+      validateEntries(lane(), [{ model: "deepseek-v4-flash", apiBase: "https://opencode.ai/zen/v1" }]),
+    ).toThrow(/free models only/);
+    // A properly suffixed model on the pool is fine.
+    expect(validateEntries(lane(), [{ model: "z-ai/glm-5.2:free" }])).toHaveLength(1);
+  });
+
+  test("a local/self-hosted openai lane is exempt from the free-suffix rule", () => {
+    const local = lane({ account: "RUNNER6" });
+    expect(
+      validateEntries(local, [
+        { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a claude-* id is barred on any openai lane, local or shared", () => {
+    // Shared pool.
+    expect(() => validateEntries(lane(), [{ model: "anthropic/claude-3.5-sonnet:free" }])).toThrow(/lane-policy/);
+    // Local lane: exempt from the free-suffix rule but never from the claude bar.
+    expect(() =>
+      validateEntries(lane(), [{ model: "claude-4-opus", apiBase: "http://192.168.1.20:1234/v1" }]),
+    ).toThrow(/lane-policy/);
+  });
+
   test("an entry pinned to a different account than its lane is refused", () => {
     expect(() => validateEntries(lane({ account: "RUNNER" }), [{ model: "m", account: "RUNNER2" }])).toThrow(
       /one lane, one account/,
     );
-    // same account, any case: fine
-    expect(validateEntries(lane({ account: "RUNNER" }), [{ model: "m", account: "runner" }])).toHaveLength(1);
+    // same account, any case: fine (free-suffixed so it clears the pool rule too)
+    expect(validateEntries(lane({ account: "RUNNER" }), [{ model: "m:free", account: "runner" }])).toHaveLength(1);
   });
 });
 
@@ -241,10 +280,15 @@ describe("the shipped fleet.json", () => {
     expect(byName["free-or-b"]).toMatchObject({ enabled: false, account: "RUNNER3" });
     expect(byName["free-or-c"]).toMatchObject({ enabled: false, account: "RUNNER4" });
     expect(byName["free-oc-b"]).toMatchObject({ enabled: false, account: "RUNNER5" });
+    // Staged local lane: LM Studio on the LAN, exempt from the free-suffix rule.
+    expect(byName["local-qwen"]).toMatchObject({ enabled: false, account: "RUNNER6" });
     for (const l of config.lanes) {
       for (const e of l.entries ?? []) {
         if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
-        else expect(e.model).toMatch(/(-free$|:free$)/);
+        // The suffix rule applies to shared free-cloud pools, not to a
+        // local/self-hosted apiBase (local-qwen) — key it on the pool, not the
+        // lane name, so a future local lane with any name is judged correctly.
+        else if (isSharedFreePool(e.apiBase)) expect(e.model).toMatch(/(-free$|:free$)/);
       }
     }
     // One stream per model config: no model appears in two lanes.
