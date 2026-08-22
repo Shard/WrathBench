@@ -289,3 +289,23 @@ describe("parseIdQuery leading numbers", () => {
     });
   });
 });
+
+describe("the id band is bounded", () => {
+  test("ids sharing a number cannot crowd the text half of a query out", () => {
+    const db = createMemoryBundle();
+    const writer = makeWriter(db, 2);
+    for (let i = 0; i < 12; i++) {
+      writer.addPage(`Example Shared Id Page ${i}`, 0, `A page about lorem number ${i}.`, undefined, [
+        { kind: "npc", id: 12 },
+      ]);
+    }
+    writer.addPage("Example Zone Beta", 0, "Example Zone Beta is a starting region.");
+    writer.flush();
+    const hits = searchReference(db, "Example Zone Beta npc entry 12", { limit: 8 });
+    expect(hits.filter((h) => h.matchedId !== undefined).length).toBeLessThanOrEqual(4);
+    expect(hits.some((h) => h.title === "Example Zone Beta")).toBe(true);
+    // A query that is nothing but the id may still have the whole slate.
+    expect(searchReference(db, "npc 12", { limit: 8 }).length).toBe(8);
+    db.close();
+  });
+});

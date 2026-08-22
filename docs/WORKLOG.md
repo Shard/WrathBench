@@ -101,9 +101,12 @@ quest 783"` led with a damage-comparison page and now leads with the quest page;
 `"entry 721 Northshire"` and `"Northshire Valley NPC entry 299 69"` now lead with
 the zone page instead of a room article; `"creature entry 721"` and `"npc entry
 883"` return nothing plus the no-id-index note instead of three unrelated pages.
-Those last two resolve to the NPC page once the bundle is rebuilt — the deployed
-bundle is still schema 1, which is FOLLOW-UPS 30 and the reason the coordinate
-channel has been silently empty since it shipped.
+Those last two stop returning unrelated pages today and will resolve to the entity
+page once the bundle is rebuilt *and* the page states that id — the wiki does not
+state one for every entity (415 npc ids across 3297 pages in the probe build), and
+the tool result says so rather than letting an unrecorded id read as "no such NPC".
+The deployed bundle is still schema 1, which is FOLLOW-UPS 30 and the reason the
+coordinate channel has been silently empty since it shipped.
 
 ### Ergonomics pass on five roster trajectories: closest filters, measured silences, shape docs
 
