@@ -320,6 +320,17 @@ export class OpenAiChatAdapter implements ChatAdapter {
 
     // The run is suspendable and resumable, not broken.
     if (budget !== null) return { kind: "pause", ...budget };
+    // Attempts exhausted on nothing but 5xx: the provider is down, not the
+    // harness. Terminating here threw away a level-3 hy3 episode on five
+    // consecutive 500s (fleet-free-oc-a, 2026-08-22); pausing lets the
+    // roster defer the model and come back when the pool recovers.
+    if (lastStatus !== undefined && lastStatus >= 500) {
+      return {
+        kind: "pause",
+        reason: "rate-limited",
+        detail: `persistent 5xx after ${this.maxAttempts} attempts: ${lastError}`,
+      };
+    }
     throw new AdapterError(`model API failed after ${this.maxAttempts} attempts: ${lastError}`, lastStatus);
   }
 }

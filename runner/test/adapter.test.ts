@@ -209,11 +209,29 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.reason).toBe("rate-limited");
   });
 
-  test("a 2xx error body without budget shape retries and then hard-errors", async () => {
+  test("a 2xx error body that is only ever 5xx-shaped pauses instead of hard-erroring", async () => {
+    // Provider-down weather: the run is resumable, the roster defers it.
     const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
+    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.detail).toContain("persistent 5xx");
+  });
+
+  test("a 2xx error body without any status shape still hard-errors", async () => {
+    const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
     await expect(
       adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req),
     ).rejects.toThrow(/after 2 attempts/);
+  });
+
+  test("persistent HTTP 500s pause as rate-limited instead of terminating", async () => {
+    // fleet-free-oc-a 2026-08-22: five consecutive 500s ended a level-3 run.
+    const out = await adapterPlaying([
+      status(500, "Internal server error"),
+      status(500, "Internal server error"),
+    ]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
   });
 
   test("a 2xx error body followed by a good response succeeds", async () => {
