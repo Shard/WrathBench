@@ -156,7 +156,7 @@ const CLIENT_INTERNAL = new Set([
  * unobserved, never zero.
  */
 const STATE_ROWS: readonly Row[] = [
-  { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: \"available\" offers a quest, \"reward\" takes a turn-in now, \"incomplete\" ends a quest not yet done). Rows carry questGiver / questGiverStatus." },
+  { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: \"available\" offers a quest, \"reward\" takes a turn-in now, \"incomplete\" ends a quest not yet done; true means any marker but \"none\"). Rows carry questGiver / questGiverStatus." },
   {
     name: "closest",
     sig: "state.closest(filter?): NearbyObject | undefined",
@@ -217,6 +217,7 @@ const STATE_INTERNAL = new Set([
 /** The event stream, accessed as `sdk.events` (aliased as `events` in a snippet). */
 const EVENT_ROWS: readonly Row[] = [
   { name: "on", sig: "events.on(opcode, fn): Unsubscribe", purpose: "Subscribe to an SMSG_* opcode; returns a function that unsubscribes." },
+  { name: "off", sig: "events.off(opcode, fn): boolean", purpose: "Remove a handler added with on() (or once()) for that opcode; returns whether one was found. Removing something already gone is a no-op. For onAny(), call the unsubscribe it returned." },
   { name: "onAny", sig: "events.onAny(fn): Unsubscribe", purpose: "Subscribe to every event." },
   { name: "once", sig: "events.once(opcode, fn): Unsubscribe", purpose: "Subscribe to the next single event of an opcode." },
   { name: "waitFor", sig: "events.waitFor(predicate, options?): Promise<StreamEvent>", purpose: "Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires." },
