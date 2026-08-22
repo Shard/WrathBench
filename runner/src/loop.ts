@@ -175,8 +175,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     sessionLive: () => builder.sessionLive,
-    onEventsServed: (events) =>
-      trajectory.append({ t: "events_served", via: "tool", count: events.length, events }),
+    onEventsServed: (events, folded) =>
+      trajectory.append({
+        t: "events_served",
+        via: "tool",
+        count: events.length,
+        events,
+        ...(folded !== undefined && folded > 0 ? { folded } : {}),
+      }),
   };
 
   const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {

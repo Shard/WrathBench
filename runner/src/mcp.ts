@@ -158,7 +158,13 @@ async function main(): Promise<void> {
     scratchpad,
     wiki,
     sessionLive: () => true, // MCP mode has no loop-side session tracking
-    onEventsServed: (events) => trajectory.append({ t: "events_served", count: events.length, events }),
+    onEventsServed: (events, folded) =>
+      trajectory.append({
+        t: "events_served",
+        count: events.length,
+        events,
+        ...(folded !== undefined && folded > 0 ? { folded } : {}),
+      }),
   };
   const server = new McpServer(ctx, {
     serverVersion: harnessVersion(),
