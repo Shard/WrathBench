@@ -40,6 +40,16 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
    model summarization ever": that holds for unlabeled changes to the current
    engine, not for a future labeled one.
 
+8c. **The nav-probe lane is the first multi-hour subscription run, and it will
+   exercise exactly this.** Shipped armed-off 2026-08-22 (ADR-0024): one 6h
+   claude-subscription episode with an operator travel objective, `no-xp`
+   disabled, tool calls capped at 2500. Nothing in this item is fixed by it —
+   the CLI still owns its conversation and still grows linearly — but a 6h run
+   is roughly four times the longest sample we have (111k tokens at 40 min in
+   morning-opus-1), so it is the first run that can say whether the growth ends
+   in the CLI's own compaction, a `quota-exhausted` pause, or neither. Read its
+   token curve before drafting either half of item 8's fix.
+
 14. *(Closed 2026-08-22 — death recovery fixed and verified end to end; see WORKLOG.
    Referenced from item 18. The character-delete auth residual moved to item 19.)*
 

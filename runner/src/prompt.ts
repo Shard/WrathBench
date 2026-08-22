@@ -5,11 +5,16 @@
  * else. No strategy hints beyond what the tools themselves imply.
  */
 
-export const SYSTEM_PROMPT = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
+/**
+ * The standing goal. Fixed, identical for every model and every run: it names
+ * no formula and no named task (ADR-0018).
+ */
+export const GOAL_SECTION = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
 
-You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.
+You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.`;
 
-## The snippet runtime
+/** Everything from the runtime surface down. Never varies. */
+const BODY = `## The snippet runtime
 
 Snippets run in one long-lived process. Top-level const/let/var/function/class declarations persist across snippets (destructured declarations may not persist; prefer simple names or assign to globalThis). Background routines persist too: a setInterval, or an async function you call without awaiting, keeps running between snippets and after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. import is not available — everything you need is ambient:
 
@@ -47,3 +52,34 @@ A raw action's { ok: true } means the opcode was dispatched, not that it worked:
 ## Each turn
 
 Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history. Act through tools every turn; text without a tool call does nothing in the world.`;
+
+/**
+ * The fixed system prompt, exactly as it has always read: goal, then body.
+ * Defined as the join of the two halves so that "no objective" is byte-identical
+ * to the old single string by construction, not by test.
+ */
+export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${BODY}`;
+
+/**
+ * The delimited block an operator objective is rendered into. One shape, one
+ * place, verbatim text: the prompt a model sees for a given objective does not
+ * depend on which model or which driver it is (ADR-0024).
+ */
+export function objectiveSection(objective: string): string {
+  return (
+    `--- Operator objective for this run ---\n` +
+    `${objective}\n` +
+    `This objective is set by the operator for this run only. It is in addition to the standing goal above, not a replacement for it.\n` +
+    `--- end operator objective ---`
+  );
+}
+
+/**
+ * The system prompt for a run. With no objective this returns `SYSTEM_PROMPT`
+ * unchanged; with one, the delimited block sits between the standing goal and
+ * the runtime description.
+ */
+export function buildSystemPrompt(objective?: string | undefined): string {
+  if (objective === undefined || objective.trim().length === 0) return SYSTEM_PROMPT;
+  return `${GOAL_SECTION}\n\n${objectiveSection(objective.trim())}\n\n${BODY}`;
+}

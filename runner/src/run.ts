@@ -7,6 +7,12 @@
  *   bun runner/src/run.ts --driver claude-subscription --model opus  [SHAKEOUT ONLY]
  *   bun runner/src/run.ts --resume <run-id>
  *
+ * Two run dimensions are recorded and never model-specific (ADR-0024):
+ * `--objective "<text>"` renders one delimited operator objective into the
+ * fixed prompt and stamps the run unscored, and `--watchdogs-json '{...}'`
+ * (or the individual `--idle-ms`/`--no-xp-ms`/`--episode-ms` flags) overrides
+ * watchdog thresholds, where `null`/`0` disables one.
+ *
  * `--adapter` is the old name for `--driver` and still works.
  *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
@@ -28,7 +34,9 @@ import {
   newSessionToken,
   resolveSessionToken,
   shakeoutStamp,
+  watchdogOverrideSchema,
   type RunConfig,
+  type WatchdogOverride,
 } from "./config";
 import { runLoop } from "./loop";
 import { SandboxHost } from "./sandbox/host";
@@ -55,6 +63,30 @@ function parseArgs(argv: string[]): Record<string, string | boolean> {
 
 function num(v: string | boolean | undefined): number | undefined {
   return typeof v === "string" ? Number(v) : undefined;
+}
+
+/**
+ * `--watchdogs-json '{"noXpMs":null,"idleMs":1200000}'` — the whole override
+ * object in one flag. The individual `--idle-ms`/`--no-xp-ms`/`--episode-ms`
+ * flags still work and are applied first; this one wins where they overlap,
+ * because it is the only spelling that can carry `null` (disable) through
+ * argv, and the roster emits it for exactly that reason (ADR-0024).
+ */
+function watchdogOverrides(v: string | boolean | undefined): WatchdogOverride {
+  if (typeof v !== "string") return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(v);
+  } catch {
+    console.error(`--watchdogs-json is not valid JSON: ${v}`);
+    process.exit(2);
+  }
+  const parsed = watchdogOverrideSchema.safeParse(raw);
+  if (!parsed.success) {
+    console.error(`--watchdogs-json rejected: ${parsed.error.message}`);
+    process.exit(2);
+  }
+  return parsed.data;
 }
 
 async function main(): Promise<void> {
@@ -91,6 +123,7 @@ async function main(): Promise<void> {
         ...(num(args["idle-ms"]) !== undefined ? { idleMs: num(args["idle-ms"])! } : {}),
         ...(num(args["no-xp-ms"]) !== undefined ? { noXpMs: num(args["no-xp-ms"])! } : {}),
         ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"])! } : {}),
+        ...watchdogOverrides(args["watchdogs-json"]),
       },
     };
     // A stored token shorter than the module's floor is a pre-hardening run's
@@ -124,6 +157,9 @@ async function main(): Promise<void> {
       // Identity, like model and driver: a resumed run keeps the effort it was
       // launched with, so --effort is not an override on --resume.
       effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
+      // Identity, like model and effort: an objective steers what the whole
+      // run was for, so a resumed run keeps the one it was launched with.
+      objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
       stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
       maxTurns: num(args["max-turns"]),
       maxToolCallsPerEpisode: num(args["max-tool-calls"]),
@@ -136,6 +172,7 @@ async function main(): Promise<void> {
         ...(num(args["idle-ms"]) !== undefined ? { idleMs: num(args["idle-ms"]) } : {}),
         ...(num(args["no-xp-ms"]) !== undefined ? { noXpMs: num(args["no-xp-ms"]) } : {}),
         ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
+        ...watchdogOverrides(args["watchdogs-json"]),
       },
     });
     config = { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
@@ -194,7 +231,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const shakeout = shakeoutStamp(config.driver);
+  const shakeout = shakeoutStamp(config.driver, config.objective);
   const version = harnessVersion();
   if (!resumed) {
     trajectory.writeMeta({

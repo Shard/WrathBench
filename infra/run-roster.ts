@@ -46,6 +46,10 @@
  */
 
 import { Database } from "bun:sqlite";
+// The one zod schema for a watchdog override lives with the run config it
+// overrides (runner/src/config.ts). Importing it keeps roster, fleet and
+// runner validating the same shape instead of three hand-rolled copies.
+import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -68,6 +72,18 @@ export interface RosterSpec {
   race?: number;
   class?: number;
   episodeMs?: number;
+  /**
+   * Run dimensions (ADR-0024), both optional and both recorded in the run's
+   * metadata. `objective` is one operator-authored line rendered into the
+   * fixed prompt for every model alike, and stamps the run unscored;
+   * `watchdogs` is a partial threshold override where `null`/`0` disables one.
+   * `maxToolCalls` bounds the whole episode's tool calls — the runner's 500
+   * default is a runaway guard sized for a 90-minute episode, so a multi-hour
+   * entry has to raise it or it terminates `tool-call-limit` mid-probe.
+   */
+  objective?: string;
+  watchdogs?: WatchdogOverride;
+  maxToolCalls?: number;
 }
 
 export interface Resolved {
@@ -81,7 +97,11 @@ export interface Resolved {
   character: string;
   race: number;
   class: number;
-  episodeMs: number;
+  /** Null when the episode watchdog is disabled outright. */
+  episodeMs: number | null;
+  objective: string | undefined;
+  watchdogs: WatchdogOverride;
+  maxToolCalls: number | undefined;
 }
 
 type Outcome =
@@ -301,6 +321,11 @@ export function slug(model: string): string {
     .replace(/^-|-$/g, "");
 }
 
+/** `0` is the argv-expressible spelling of "disabled"; `null` is the internal one. */
+function normalizeMs(v: number | null | undefined): number | null | undefined {
+  return v === 0 ? null : v;
+}
+
 function dateStamp(d: Date = new Date()): string {
   const p = (n: number): string => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
@@ -331,6 +356,14 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (driver !== "openai" && driver !== "claude-subscription") {
       throw new Error(`roster entry ${s.model}: unknown driver ${String(driver)}`);
     }
+    const parsedWatchdogs = watchdogOverrideSchema.safeParse(s.watchdogs ?? {});
+    if (!parsedWatchdogs.success) {
+      throw new Error(`roster entry ${s.model}: watchdogs — ${parsedWatchdogs.error.message}`);
+    }
+    const watchdogs = parsedWatchdogs.data;
+    if (s.objective !== undefined && (typeof s.objective !== "string" || s.objective.length === 0)) {
+      throw new Error(`roster entry ${s.model}: objective must be a non-empty string`);
+    }
     const character = s.character ?? deriveCharacter(s.model, taken);
     taken.add(character.toLowerCase());
     out.push({
@@ -347,7 +380,17 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       character,
       race: s.race ?? 1,
       class: s.class ?? 2,
-      episodeMs: s.episodeMs ?? DEFAULT_EPISODE_MS,
+      // Precedence, fixed and tested: `watchdogs.episodeMs` wins over the
+      // entry's own `episodeMs`, which wins over the roster default. They are
+      // the same threshold under two names, and only the watchdog spelling can
+      // say `null` (no wall clock at all).
+      episodeMs:
+        watchdogs.episodeMs !== undefined
+          ? normalizeMs(watchdogs.episodeMs) ?? null
+          : s.episodeMs ?? DEFAULT_EPISODE_MS,
+      objective: s.objective,
+      watchdogs,
+      maxToolCalls: s.maxToolCalls,
     });
   }
   return out;
@@ -358,6 +401,22 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
  * driver (it authenticates through the `claude` CLI's own OAuth token), so a
  * claude entry gets neither flag. Everything else is driver-independent.
  */
+/**
+ * The watchdog overrides that cannot ride their own flag: everything but
+ * `episodeMs` (which has `--episode-ms`), plus `episodeMs: null` when the wall
+ * clock is disabled. Undefined when there is nothing to say.
+ */
+export function watchdogsJson(spec: Resolved): string | undefined {
+  const out: WatchdogOverride = {};
+  if (spec.watchdogs.idleMs !== undefined) out.idleMs = normalizeMs(spec.watchdogs.idleMs) ?? null;
+  if (spec.watchdogs.noXpMs !== undefined) out.noXpMs = normalizeMs(spec.watchdogs.noXpMs) ?? null;
+  if (spec.watchdogs.maxSandboxRestarts !== undefined) {
+    out.maxSandboxRestarts = spec.watchdogs.maxSandboxRestarts;
+  }
+  if (spec.episodeMs === null) out.episodeMs = null;
+  return Object.keys(out).length === 0 ? undefined : JSON.stringify(out);
+}
+
 export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?: boolean } = {}): string[] {
   // Everything after the launcher is identical: run-episode.sh passes its
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
@@ -370,16 +429,14 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   }
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
-  argv.push(
-    "--character",
-    spec.character,
-    "--race",
-    String(spec.race),
-    "--class",
-    String(spec.class),
-    "--episode-ms",
-    String(spec.episodeMs),
-  );
+  if (spec.objective !== undefined) argv.push("--objective", spec.objective);
+  if (spec.maxToolCalls !== undefined) argv.push("--max-tool-calls", String(spec.maxToolCalls));
+  argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
+  // The wall clock keeps its own flag when it is a number (that is what every
+  // existing lane emits); a disabled one can only travel in the JSON.
+  if (spec.episodeMs !== null) argv.push("--episode-ms", String(spec.episodeMs));
+  const watchdogs = watchdogsJson(spec);
+  if (watchdogs !== undefined) argv.push("--watchdogs-json", watchdogs);
   return argv;
 }
 
@@ -1317,7 +1374,10 @@ async function main(): Promise<void> {
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
           `   character ${s.character} (race ${s.race}, class ${s.class})\n` +
           endpoint +
-          `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
+          `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
+          (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
+          (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
+          (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
       console.log(
         `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
       );

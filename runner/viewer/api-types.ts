@@ -18,6 +18,8 @@ export interface RunRow {
   driver: string | null;
   adapter: string | null;
   shakeout: string | null;
+  /** The operator objective this run was steered with (ADR-0024), or null. */
+  objective: string | null;
   character: string | null;
   /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
   platform: string | null;

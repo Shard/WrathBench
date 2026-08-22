@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS run (
   driver TEXT,
   shakeout TEXT,
   model TEXT,
+  -- The operator objective this run was steered with, if any (ADR-0024). Its
+  -- own column for the same reason the driver has one: a cross-run SELECT must
+  -- be able to exclude steered runs without parsing config_json.
+  objective TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
@@ -98,6 +102,11 @@ const STATE_ADDED_COLUMNS: Record<string, string> = {
   quests_completed: "INTEGER",
 };
 
+/** The same, for `run`: a resumed pre-ADR-0024 run.sqlite has no `objective`. */
+const RUN_ADDED_COLUMNS: Record<string, string> = {
+  objective: "TEXT",
+};
+
 export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
@@ -113,6 +122,7 @@ export class Trajectory {
     this.db = new Database(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
     this.migrateState();
+    this.migrateRun();
   }
 
   /** Additive, idempotent: add any `state` column this build knows and the file lacks. */
@@ -122,6 +132,16 @@ export class Trajectory {
     );
     for (const [name, type] of Object.entries(STATE_ADDED_COLUMNS)) {
       if (!have.has(name)) this.db.exec(`ALTER TABLE state ADD COLUMN ${name} ${type}`);
+    }
+  }
+
+  /** Additive, idempotent: add any `run` column this build knows and the file lacks. */
+  private migrateRun(): void {
+    const have = new Set(
+      (this.db.query(`PRAGMA table_info(run)`).all() as { name: string }[]).map((c) => c.name),
+    );
+    for (const [name, type] of Object.entries(RUN_ADDED_COLUMNS)) {
+      if (!have.has(name)) this.db.exec(`ALTER TABLE run ADD COLUMN ${name} ${type}`);
     }
   }
 
@@ -147,8 +167,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, objective, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -159,6 +179,7 @@ export class Trajectory {
         meta.config.driver,
         meta.shakeout ?? null,
         meta.config.model ?? null,
+        meta.config.objective ?? null,
         this.scrub(jsonLine(meta.config)),
       );
     this.append({ t: "meta", ...meta });

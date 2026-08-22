@@ -65,7 +65,7 @@ import { z } from "zod";
 import { SHAKEOUT_STAMP, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
-import { SYSTEM_PROMPT } from "./prompt";
+import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
 import { TOOLS, type ToolContext } from "./tools";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -585,8 +585,10 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // A cwd outside the repo: `claude` walks parents for CLAUDE.md, and the run
   // directory lives under a checkout that has one.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-claude-"));
+  const systemPrompt = buildSystemPrompt(config.objective);
   const args = claudeArgs({
     mcpConfigPath,
+    systemPrompt,
     model: config.model,
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
@@ -605,7 +607,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     configDir,
     mcpConfigPath,
     mcpPort: listener.port,
-    systemPromptChars: SYSTEM_PROMPT.length,
+    systemPromptChars: systemPrompt.length,
+    ...(config.objective !== undefined ? { objective: config.objective } : {}),
   });
 
   /**

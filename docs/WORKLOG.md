@@ -6,6 +6,48 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Objective and watchdog overrides become run dimensions (ADR-0024)
+
+The operator wants a long, unscored navigation probe: sonnet on the
+subscription driver, a multi-hour episode, and an explicit travel objective, to
+find out whether the navigation surface is usable unprompted. That needs two
+things the harness did not have, and both had to be built so they could never
+become per-model prompts or per-model tuning.
+
+`objective` is now an optional run config value (`--objective`, roster entry
+field, fleet lane default), recorded in meta.json, the `run` row and the
+trajectory, and rendered into the fixed system prompt between the standing goal
+and the runtime description as a delimited `--- Operator objective for this run
+---` block that says in the prompt itself that it adds to the goal rather than
+replacing it. The prompt is now the join of two constants with the block
+between them, so a run with no objective is byte-identical to what shipped
+before by construction rather than by test; a test asserts the claude CLI's
+`--system-prompt` value equals the fixed loop's system message for the same
+objective, across different models and effort levels. A run that carries an
+objective is stamped `unscored (operator objective)` in the same `shakeout`
+field the external-scaffold drivers use, stacking behind the driver's own
+stamp, and the viewer's `/api/runs` row and the dashboard now carry it.
+
+Watchdog thresholds gained per-entry and per-lane overrides, validated with the
+one zod schema in `runner/src/config.ts` that roster, fleet and runner all
+import. `null` — or `0`, the only spelling argv can carry — disables a watchdog,
+which meant fixing the semantics as well as the schema: `check()` now guards on
+`!== null` per threshold, because a zero left as a zero trips on the first check
+instead of disabling. Overrides ride argv as `--watchdogs-json`, which is the
+only flag that can carry a null; `--episode-ms` still carries a numeric wall
+clock and `watchdogs.episodeMs` wins over an entry's `episodeMs` when both are
+set.
+
+The lane shipped armed-off as `nav-probe`: account SHAKEOUT (shared with
+sub-sonnet, which is why they are alternatives — only one may be enabled),
+loop:false so an enable buys exactly one episode, Dwarf Paladin as sub-sonnet
+runs, 6h wall clock, `no-xp` disabled because travel earns nothing for hours,
+20m idle. Its `maxToolCalls` is raised to 2500 from the 500 default: the claude
+driver has been observed at ~4 tool calls a minute, so the default would have
+ended the probe as `tool-call-limit` about two hours in and the trajectory would
+have read like a harness fault. Roster entries and lanes can set it now.
+
+
 ### `/health` names its build (FOLLOW-UPS 41)
 
 The fleet gate had to infer server identity from a log file's birth time because

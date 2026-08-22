@@ -317,13 +317,27 @@ describe("the shipped fleet.json", () => {
     expect(byName["free-oc-a"]).toMatchObject({ account: "RUNNER2" });
     expect(byName["free-oc-b"]).toMatchObject({ account: "RUNNER5" });
     expect(byName["local-qwen"]).toMatchObject({ account: "RUNNER6" });
+    // nav-probe: the unscored navigation probe (ADR-0024). One 6h subscription
+    // episode per enable, no-xp disabled, an operator objective on the lane.
+    expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: false });
+    expect(byName["nav-probe"].objective).toContain("Travel from your starting zone");
+    expect(byName["nav-probe"].watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
     // One account, one lane — asserted over the file as written, not just over
-    // the enabled subset parseFleet already guards.
-    const accounts = config.lanes.map((l) => l.account.toUpperCase());
+    // the enabled subset parseFleet already guards. The one deliberate
+    // exception is nav-probe, which borrows sub-sonnet's SHAKEOUT (the module
+    // allowlist is fixed at deploy time and has no spare shakeout account):
+    // the two are alternatives, and parseFleet still refuses to have both
+    // enabled at once.
+    const accounts = config.lanes
+      .filter((l) => l.name !== "nav-probe")
+      .map((l) => l.account.toUpperCase());
     expect(new Set(accounts).size).toBe(accounts.length);
     for (const l of config.lanes) {
       for (const e of l.entries ?? []) {
+        // Keyed on the driver, not the lane name: nav-probe is a subscription
+        // lane too and the free-suffix rule below is meaningless for it.
         if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
+        else if (e.driver === "claude-subscription") expect(isClaudeFamily(e.model)).toBe(true);
         // The suffix rule applies to shared free-cloud pools, not to a
         // local/self-hosted apiBase (local-qwen) — key it on the pool, not the
         // lane name, so a future local lane with any name is judged correctly.
@@ -332,8 +346,13 @@ describe("the shipped fleet.json", () => {
           expect(e.model).toMatch(/(-free$|:free$)/);
       }
     }
-    // One stream per model config: no model appears in two lanes.
-    const models = config.lanes.flatMap((l) => (l.entries ?? []).map((e) => `${e.model}|${e.effort ?? ""}`));
+    // One stream per model config: no model appears in two lanes. The
+    // objective is part of that config — sonnet-with-a-travel-objective is a
+    // different stream from free-play sonnet, and the two lanes are never
+    // enabled together anyway (they share an account).
+    const models = config.lanes.flatMap((l) =>
+      (l.entries ?? []).map((e) => `${e.model}|${e.effort ?? ""}|${e.objective ?? l.objective ?? ""}`),
+    );
     expect(new Set(models).size).toBe(models.length);
   });
 });
@@ -560,5 +579,59 @@ describe("gate record and rendering", () => {
   test("smoke paths resolve against the repo, absolutes pass through", () => {
     expect(smokePath("infra/smoke/module-quest.ts", "/wrathbench")).toBe("/wrathbench/infra/smoke/module-quest.ts");
     expect(smokePath("/tmp/s.ts", "/wrathbench")).toBe("/tmp/s.ts");
+  });
+});
+
+/**
+ * Lane-level run dimensions (ADR-0024): a lane may default an objective, a
+ * watchdog override and a tool-call ceiling for every entry it carries.
+ */
+describe("lane-level run dimensions", () => {
+  const OBJECTIVE = "Travel to the nearest capital city.";
+
+  test("a lane default reaches every entry that does not set its own", () => {
+    const l = lane({
+      objective: OBJECTIVE,
+      watchdogs: { noXpMs: null, episodeMs: 21_600_000 },
+      maxToolCalls: 2500,
+      entries: [{ model: "a:free" }, { model: "b:free", objective: "Something else", maxToolCalls: 10 }],
+    });
+    const filled = fillEntries(l, l.entries!, "20260101");
+    expect(filled[0]).toMatchObject({
+      objective: OBJECTIVE,
+      watchdogs: { noXpMs: null, episodeMs: 21_600_000 },
+      maxToolCalls: 2500,
+    });
+    // Entry wins over the lane, key by key.
+    expect(filled[1]).toMatchObject({ objective: "Something else", maxToolCalls: 10 });
+  });
+
+  test("entry watchdogs merge onto the lane's rather than replacing them", () => {
+    const l = lane({
+      watchdogs: { noXpMs: null, episodeMs: 21_600_000 },
+      entries: [{ model: "a:free", watchdogs: { idleMs: 60_000 } }],
+    });
+    expect(fillEntries(l, l.entries!, "20260101")[0]!.watchdogs).toEqual({
+      noXpMs: null,
+      episodeMs: 21_600_000,
+      idleMs: 60_000,
+    });
+  });
+
+  test("a lane with none of them is untouched", () => {
+    const l = lane();
+    const filled = fillEntries(l, l.entries!, "20260101")[0]!;
+    expect(filled.objective).toBeUndefined();
+    expect(filled.watchdogs).toBeUndefined();
+    expect(filled.maxToolCalls).toBeUndefined();
+  });
+
+  test("malformed dimensions are refused, naming the lane", () => {
+    expect(() => parseFleet(fleetJson([lane({ objective: "" })]))).toThrow(/objective/);
+    expect(() => parseFleet(fleetJson([lane({ watchdogs: { noXpMS: 1 } as never })]))).toThrow(/watchdogs/);
+    expect(() => parseFleet(fleetJson([lane({ maxToolCalls: 0 })]))).toThrow(/maxToolCalls/);
+    expect(() =>
+      parseFleet(fleetJson([lane({ entries: [{ model: "a:free", watchdogs: { idleMs: -5 } }] })])),
+    ).toThrow(/watchdogs/);
   });
 });

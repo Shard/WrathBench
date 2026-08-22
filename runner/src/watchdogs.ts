@@ -11,6 +11,11 @@
  *   snippet-runaway maxSandboxRestarts consecutive sandbox kills without an
  *                   intervening successful snippet.
  *
+ * A threshold of `null` (which is what `0` normalises to at the config
+ * boundary) disables that watchdog outright: it is checked for `null` here,
+ * never compared, so a long-running probe lane can turn off `no-xp` without
+ * the threshold quietly firing on its first check.
+ *
  * `environment-defect` is deliberately not detected here: it is a human
  * classification applied after reading a trajectory (classify.ts), because a
  * broken quest looks exactly like a stuck model until someone checks.
@@ -78,13 +83,17 @@ export class Watchdogs {
         detail: `${this.sandboxRestarts} consecutive sandbox restarts`,
       };
     }
-    if (t - this.startedAt >= this.cfg.episodeMs) {
+    if (this.cfg.episodeMs !== null && t - this.startedAt >= this.cfg.episodeMs) {
       return { reason: "episode-limit", detail: `episode wall clock ${t - this.startedAt}ms` };
     }
-    if (t - this.lastModelOutputAt >= this.cfg.idleMs) {
+    if (this.cfg.idleMs !== null && t - this.lastModelOutputAt >= this.cfg.idleMs) {
       return { reason: "idle", detail: `no model output for ${t - this.lastModelOutputAt}ms` };
     }
-    if (this.lastProgressAt !== null && t - this.lastProgressAt >= this.cfg.noXpMs) {
+    if (
+      this.cfg.noXpMs !== null &&
+      this.lastProgressAt !== null &&
+      t - this.lastProgressAt >= this.cfg.noXpMs
+    ) {
       return {
         reason: "no-xp",
         detail: `no level/XP progress for ${t - this.lastProgressAt}ms (last: level ${this.lastProgress?.level ?? "?"}, xp ${this.lastProgress?.xp ?? "?"})`,
