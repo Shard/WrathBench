@@ -1746,9 +1746,28 @@ namespace WrathBench
             return;
         }
         Player* player = s.ws->GetPlayer();
-        if (!player || !player->IsInWorld())
+        if (!player)
         {
             m.active = false;
+            return;
+        }
+
+        // A map transfer or a teleport ends the move: the server discards
+        // every movement opcode until the ack (TickTeleportAcks) and applies the
+        // destination itself. `transferred` rather than `interrupted`, so the
+        // agent knows a portal took it (FOLLOW-UPS 38 N1); the SDK then waits
+        // for SMSG_NEW_WORLD and resolves on the new map. The 15y desync guard
+        // below must not run here: the far-teleport position jump would race it.
+        if (s.pendingTransferMap.load() != 0 || player->IsBeingTeleported())
+        {
+            FinishMove(s, "transferred");
+            return;
+        }
+        if (!player->IsInWorld())
+        {
+            // Removed from the map for a reason that is not a teleport (logout
+            // in flight): the move has no server verdict left to wait for.
+            FinishMove(s, "interrupted");
             return;
         }
 
@@ -3837,6 +3856,50 @@ namespace WrathBench
                     name = "SMSG_CHAR_DELETE";
                     uint8 result = 0; if (p.size() >= 1) p >> result;
                     w.Add("result", (uint32)result);
+                    break;
+                }
+                // ------------------------------------------- map transfers
+                case SMSG_TRANSFER_PENDING:
+                {
+                    // Player::TeleportTo (far): u32 mapId, then (u32
+                    // transportEntry, u32 oldMapId) only when the character is
+                    // being carried across by a transport.
+                    name = "SMSG_TRANSFER_PENDING";
+                    uint32 mapId; p >> mapId;
+                    w.Add("map", mapId);
+                    if (p.rpos() + 8 <= p.size())
+                    {
+                        uint32 transportEntry, oldMap; p >> transportEntry >> oldMap;
+                        w.Add("transportEntry", transportEntry).Add("oldMap", oldMap);
+                    }
+                    s.pendingTransferMap.store(mapId);
+                    break;
+                }
+                case SMSG_NEW_WORLD:
+                {
+                    // Player::TeleportTo (far): u32 mapId, xyzo of the arrival
+                    // point (transport-local when aboard one). This is the
+                    // client's only map id after login (SMSG_LOGIN_VERIFY_WORLD
+                    // is never re-sent), so the SDK keys self.position.map on it.
+                    name = "SMSG_NEW_WORLD";
+                    uint32 mapId; float x, y, z, o; p >> mapId >> x >> y >> z >> o;
+                    w.Add("map", mapId).Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Add("o", (double)o);
+                    s.pendingTransferMap.store(0);
+                    break;
+                }
+                case SMSG_TRANSFER_ABORTED:
+                {
+                    // Player::SendTransferAborted: u32 mapId, u8 reason, u8 arg
+                    // only for INSUF_EXPAN_LVL / DIFFICULTY / UNIQUE_MESSAGE.
+                    name = "SMSG_TRANSFER_ABORTED";
+                    uint32 mapId; uint8 reason; p >> mapId >> reason;
+                    w.Add("map", mapId).Add("reason", (uint32)reason);
+                    if (p.rpos() + 1 <= p.size())
+                    {
+                        uint8 arg; p >> arg;
+                        w.Add("arg", (uint32)arg);
+                    }
+                    s.pendingTransferMap.store(0);
                     break;
                 }
                 // ---------------------------------------- creature movement

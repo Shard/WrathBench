@@ -125,6 +125,11 @@ namespace WrathBench
         MoveState move;
         uint64_t moveIdGen{0};
 
+        // Map transfer in flight: the destination map from SMSG_TRANSFER_PENDING,
+        // cleared by SMSG_NEW_WORLD / SMSG_TRANSFER_ABORTED. Set on tap threads,
+        // read by the mover on the world thread, hence atomic.
+        std::atomic<uint32> pendingTransferMap{0};
+
         // Teleport-ack pacing (world thread only): when the last ack for a
         // still-pending teleport was queued, 0 when none is pending. See
         // TickTeleportAcks.
