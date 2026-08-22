@@ -673,6 +673,12 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   };
 
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
+  // The CLI emits one `assistant` envelope per content block, so a text+tool_use
+  // reply arrives as several envelopes sharing one message.id and carrying the
+  // SAME message.usage. Attaching usage to every response entry double-counts a
+  // single API call for any consumer that sums the entries (viewer/tail.ts does).
+  // Track seen ids and attach usage only to the first envelope of each message.
+  const usageCountedMessageIds = new Set<string>();
 
   try {
     for (;;) {
@@ -745,11 +751,17 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             if (text.length > 0 || toolUses.length > 0) {
               sawOutput = true;
               watchdogs.noteModelOutput();
-              // One `assistant` envelope is one API call, so its usage belongs
-              // to this response entry — the `result` envelope's session total
-              // only lands at the end of an episode, which a run cut short by
-              // the wall clock never reaches.
-              const usage = assistantUsage(msg);
+              // One API reply can span several `assistant` envelopes (one per
+              // content block), all sharing message.id and message.usage. Attach
+              // the call's usage to the first envelope of that id only, so a
+              // consumer summing the response entries counts each call once. The
+              // `result` envelope's session total only lands at end of episode,
+              // which a run cut short by the wall clock never reaches.
+              const messageId = (msg["message"] as { id?: unknown } | undefined)?.id;
+              const idKey = typeof messageId === "string" ? messageId : undefined;
+              const alreadyCounted = idKey !== undefined && usageCountedMessageIds.has(idKey);
+              const usage = alreadyCounted ? undefined : assistantUsage(msg);
+              if (idKey !== undefined && usage !== undefined) usageCountedMessageIds.add(idKey);
               trajectory.append({
                 t: "response",
                 turn,

@@ -217,6 +217,43 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
 
+    // One API reply split across two assistant envelopes sharing a message.id
+    // and the SAME usage — the real CLI's shape for a text+tool_use turn. The
+    // usage must be counted once, not once per envelope.
+    if (mode === "split-usage") {
+      const usage = {
+        input_tokens: 12,
+        output_tokens: 7,
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 100,
+      };
+      emit({
+        type: "assistant",
+        message: { id: `msg-${turn}`, role: "assistant", content: [{ type: "text", text: "thinking" }], usage },
+        session_id: "fake-session",
+      });
+      emit({
+        type: "assistant",
+        message: {
+          id: `msg-${turn}`,
+          role: "assistant",
+          content: [{ type: "tool_use", id: `tu-${turn}`, name: "mcp__wrathbench__run_snippet", input: { code: "1" } }],
+          usage,
+        },
+        session_id: "fake-session",
+      });
+      emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: `turn ${turn} done`,
+        num_turns: 1,
+        usage,
+        session_id: "fake-session",
+      });
+      continue;
+    }
+
     emit({
       type: "assistant",
       // The real CLI hangs the usage of the API call that produced this message
