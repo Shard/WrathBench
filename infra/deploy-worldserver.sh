@@ -286,12 +286,16 @@ fi
 
 # ------------------------------------------------------------------- 5. verify
 # 0 = a gate result recorded after this deploy and PASSING; 1 = none yet;
-# 2 = one recorded after this deploy and FAILING.
+# 2 = one recorded after this deploy and FAILING; 3 = none yet, but the
+# supervisor reports a sequence IN FLIGHT that started after this deploy (the
+# record is only written when the sequence ends, so "no record" alone says
+# nothing — see the 2026-08-23 false rollback in docs/WORKLOG.md).
 gate_verdict() {
   "${BUN_PLAIN_ENV[@]}" bun -e '
     const [p,since]=process.argv.slice(1);
-    try{const s=await Bun.file(p).json();const g=s.preflight;
-      if(!g||typeof g.at!=="number"||g.at<Number(since)||g.skipped===true)process.exit(1);
+    try{const s=await Bun.file(p).json();const g=s.preflight;const f=s.preflightInFlight;
+      const fresh=g&&typeof g.at==="number"&&g.at>=Number(since)&&g.skipped!==true;
+      if(!fresh){ if(f&&typeof f.since==="number"&&f.since>=Number(since))process.exit(3); process.exit(1); }
       if(g.ok===true)process.exit(0);
       console.error((g.results??[]).filter(r=>!r.ok).map(r=>`${r.script}: ${r.tail}`).join("\n"));
       process.exit(2);}
@@ -306,18 +310,21 @@ if [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then
   say "fleet supervisor is up (container running, heartbeat $(heartbeat_age_s)s ago) and gating — waiting for its gate result on the new server"
   gate_deadline=$(( HEALTHY_AT_S + GATE_GRACE_S + PREFLIGHT_TIMEOUT_S ))
   grace_deadline=$(( HEALTHY_AT_S + GATE_GRACE_S ))
+  seen_in_flight=0
   while [[ "$(date +%s)" -lt "${gate_deadline}" ]]; do
     if gate_verdict; then rc=0; else rc=$?; fi
     case "${rc}" in
       0) say "fleet gate PASSED on the new server"; VERIFIED_BY="fleet gate"; break ;;
       2) say "fleet gate FAILED on the new server"; trap - ERR; rollback; exit 1 ;;
+      3) if [[ "${seen_in_flight}" -eq 0 ]]; then seen_in_flight=1; say "fleet gate is smoking the new server now — waiting up to ${PREFLIGHT_TIMEOUT_S}s for its verdict (never smoking alongside it: two smokes reclaim the same account from each other)"; fi ;;
       1) ;;
       *) say "gate check errored (exit ${rc})"; trap - ERR; rollback; exit 1 ;;
     esac
-    # No record yet. If the supervisor has had its grace and written nothing, it
-    # is not gating (old code): stop waiting and smoke the server ourselves.
-    if [[ "$(date +%s)" -ge "${grace_deadline}" ]]; then
-      say "no gate result after ${GATE_GRACE_S}s — the supervisor predates the gate; smoking directly"
+    # No record and no sequence in flight. If the supervisor has had its grace
+    # and started nothing, it is not gating (old code): smoke the server
+    # ourselves. Once a sequence has been seen in flight we wait for its verdict.
+    if [[ "${seen_in_flight}" -eq 0 ]] && [[ "$(date +%s)" -ge "${grace_deadline}" ]]; then
+      say "no gate activity after ${GATE_GRACE_S}s — the supervisor is not gating this server; smoking directly"
       break
     fi
     sleep 10
