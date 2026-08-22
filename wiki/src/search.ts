@@ -20,8 +20,9 @@
  */
 
 import { Database } from "bun:sqlite";
-import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds } from "./bundle";
+import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds, bundleHasQuest } from "./bundle";
 import type { IdKind } from "./ids";
+import type { WikiQuest } from "./quests";
 
 export interface SearchOptions {
   /** Max results. Default 8. */
@@ -63,6 +64,16 @@ export interface SearchResult {
    * boundary on its way to the model.
    */
   coords?: { zone?: string; x: number; y: number }[];
+  /**
+   * What the page's quest infobox states about the quest: the NPC that gives
+   * it, the NPC it is turned in to, and the category (usually a zone). Absent
+   * when the page is not a quest page, or when the bundle predates the channel.
+   *
+   * `end` absent means the page does not say — never that the ender is the
+   * giver. Giver and ender differ often enough that guessing is the bug this
+   * field exists to fix (night-report 2026-08-23 §2a).
+   */
+  quest?: WikiQuest;
 }
 
 /** Sorts ahead of any bm25 score and survives JSON.stringify. */
@@ -147,6 +158,54 @@ function coordsForPage(
     .filter((r) => Number.isFinite(r.x) && Number.isFinite(r.y))
     .map((r) => (r.zone !== null && r.zone !== "" ? { zone: r.zone, x: r.x, y: r.y } : { x: r.x, y: r.y }));
   return coords.length > 0 ? coords : undefined;
+}
+
+interface QuestRow {
+  start: string | null;
+  end: string | null;
+  category: string | null;
+}
+
+/**
+ * The quest infobox facts for a page, or undefined when it has none. Returns
+ * undefined (not a throw) on a pre-quest bundle, so a stale bundle degrades to
+ * "no quest channel" rather than crashing search.
+ */
+function questForPage(db: Database, hasQuest: boolean, pageId: number): WikiQuest | undefined {
+  if (!hasQuest) return undefined;
+  const row = db
+    .query<QuestRow, [number]>(
+      "SELECT start, end, category FROM page_quest WHERE page_id = ? LIMIT 1",
+    )
+    .get(pageId);
+  if (row === null) return undefined;
+  const quest: WikiQuest = {};
+  if (row.start !== null && row.start !== "") quest.start = row.start;
+  if (row.end !== null && row.end !== "") quest.end = row.end;
+  if (row.category !== null && row.category !== "") quest.category = row.category;
+  return quest.start === undefined && quest.end === undefined && quest.category === undefined
+    ? undefined
+    : quest;
+}
+
+/**
+ * The one line of prose that puts giver and ender in front of the model.
+ *
+ * It leads the snippet rather than riding beside it because the snippet is
+ * what the runner renders, and because a model that reads "turn in to" before
+ * the quest text does not have to ask a second question. When the page does not
+ * state an ender the line says so explicitly: silence there used to read as
+ * "turn it back in to whoever gave it", which is the failure being fixed.
+ */
+export function questPrefix(quest: WikiQuest | undefined): string {
+  if (quest === undefined) return "";
+  const parts: string[] = [];
+  if (quest.start !== undefined) parts.push(`starts at ${quest.start}`);
+  if (quest.end !== undefined) parts.push(`turn in to ${quest.end}`);
+  else if (quest.start !== undefined) parts.push("turn-in NPC not stated on this page");
+  if (quest.category !== undefined) parts.push(`category ${quest.category}`);
+  if (parts.length === 0) return "";
+  return `[quest infobox: ${parts.join("; ")}]\n`;
 }
 
 /**
@@ -320,6 +379,7 @@ export function searchReference(
   const serveCoords = opts.coords ?? true;
   const hasCoords = serveCoords && bundleHasCoords(db);
   const hasIds = bundleHasIds(db);
+  const hasQuest = bundleHasQuest(db);
   const snip = (text: string): string => (serveCoords ? text : stripProseCoords(text));
   const parsed = parseIdQuery(query);
   const inNamespace = (ns: number): boolean => namespaces === undefined || namespaces.includes(ns);
@@ -339,14 +399,16 @@ export function searchReference(
     const direct = resolveTitle(db, candidate);
     if (direct === null || !inNamespace(direct.page.ns)) continue;
     const coords = coordsForPage(db, hasCoords, direct.page.id);
+    const quest = questForPage(db, hasQuest, direct.page.id);
     push(BAND.title, {
       title: direct.page.title,
       ns: direct.page.ns,
-      snippet: snip(headSnippet(direct.page.text)),
+      snippet: snip(questPrefix(quest) + headSnippet(direct.page.text)),
       rank: EXACT_TITLE_RANK,
       exactTitle: true,
       ...(direct.via !== null ? { redirectedFrom: direct.via } : {}),
       ...(coords !== undefined ? { coords } : {}),
+      ...(quest !== undefined ? { quest } : {}),
     });
     break;
   }
@@ -377,13 +439,15 @@ export function searchReference(
         if (idBudget <= 0) break;
         idBudget--;
         const coords = coordsForPage(db, hasCoords, row.id);
+        const quest = questForPage(db, hasQuest, row.id);
         push(BAND.id, {
           title: row.title,
           ns: row.ns,
-          snippet: snip(headSnippet(row.text)),
+          snippet: snip(questPrefix(quest) + headSnippet(row.text)),
           rank: ID_MATCH_RANK,
           matchedId: { kind: row.kind as IdKind, id: row.entity_id },
           ...(coords !== undefined ? { coords } : {}),
+          ...(quest !== undefined ? { quest } : {}),
         });
       }
     }
@@ -428,12 +492,14 @@ export function searchReference(
         for (const row of stmt.all(...params)) {
           matched++;
           const coords = coordsForPage(db, hasCoords, row.id);
+          const quest = questForPage(db, hasQuest, row.id);
           push(titleCoversTokens(row.title, parsed.text) ? BAND.titleTokens : BAND.body, {
             title: row.title,
             ns: row.ns,
-            snippet: snip(row.snippet.replace(/\s+/g, " ").trim()),
+            snippet: snip(questPrefix(quest) + row.snippet.replace(/\s+/g, " ").trim()),
             rank: row.rank,
             ...(coords !== undefined ? { coords } : {}),
+            ...(quest !== undefined ? { quest } : {}),
           });
         }
       } catch {
