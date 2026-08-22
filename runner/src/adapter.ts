@@ -142,6 +142,17 @@ const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*limit|paym
 // separate from EXHAUSTION_HINTS so it reads as rate-limited, not quota-spent,
 // and so the HTTP-429 path's quota-vs-rate decision is unaffected.
 const RATE_LIMIT_HINTS = /rate.?limit|too many requests/i;
+// Transient upstream-provider failures that aggregators wrap in 4xx bodies:
+// OpenRouter's 404 "Provider returned error" (with provider_name metadata)
+// mid-episode, OpenCode Zen's 400 type:"server_error" "Upstream request
+// failed: Model is unavailable". Pool weather, not a harness bug — these
+// retry, and if they persist, pause as rate-limited so the roster defers and
+// comes back later instead of terminating a healthy episode (fleet-free-or-a
+// lost a 60-turn nemotron episode to a single such 404, 2026-08-22).
+// Deliberately does NOT match "No endpoints found": a bad model slug must
+// still fail fast as an AdapterError.
+const PROVIDER_BLIP_HINTS =
+  /provider returned error|upstream request failed|model is unavailable|provider_name|"server_error"|no instances available/i;
 
 export class OpenAiChatAdapter implements ChatAdapter {
   readonly label: string;
@@ -258,6 +269,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
               if (budget === null || (quota && budget.reason === "rate-limited")) {
                 budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
               }
+            } else if (PROVIDER_BLIP_HINTS.test(lastError) && budget === null) {
+              budget = { reason: "rate-limited", detail: lastError };
             }
             continue;
           }
@@ -292,7 +305,13 @@ export class OpenAiChatAdapter implements ChatAdapter {
           budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
         }
       }
-      const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+      const providerBlip =
+        res.status >= 400 && res.status < 500 && PROVIDER_BLIP_HINTS.test(lastError);
+      if (providerBlip && budget === null) {
+        budget = { reason: "rate-limited", detail: lastError };
+      }
+      const retryable =
+        res.status === 408 || res.status === 429 || res.status >= 500 || providerBlip;
       if (!retryable && res.status !== 402) {
         throw new AdapterError(lastError, res.status);
       }
