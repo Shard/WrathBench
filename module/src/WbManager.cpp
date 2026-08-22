@@ -166,6 +166,13 @@ namespace WrathBench
             LOG_WARN("module", "wrathbench: could not create audit dir '{}': {}", _auditDir, e.what());
         }
 
+        // The client's own AreaTrigger.dbc, read from the data volume the
+        // worldserver already mounts (DataDir). A missing file disables
+        // automatic areatrigger dispatch and says so; it never stops the module.
+        std::string dbcPath = sWorld->GetDataPath() + "dbc/AreaTrigger.dbc";
+        if (!LoadAreaTriggerDbc(dbcPath))
+            LOG_ERROR("module", "wrathbench: AreaTrigger.dbc not loaded from '{}'; portals and explore triggers will not fire for bench characters", dbcPath);
+
         _http = std::make_unique<HttpServer>(_bindAddress, _port, this, _threads);
         try
         {
@@ -1719,6 +1726,108 @@ namespace WrathBench
         ack->set_value({200, Json::Writer().Add("ok", true).Add("action", action).Add("token", token).Str()});
     }
 
+    // WDBC reader for AreaTrigger.dbc (3.3.5a: 10 fields of 4 bytes — id,
+    // mapId, x, y, z, radius, boxLength, boxWidth, boxHeight, boxYaw). Header:
+    // "WDBC", u32 recordCount, u32 fieldCount, u32 recordSize, u32 stringBlock.
+    bool Manager::LoadAreaTriggerDbc(std::string const& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+            return false;
+        char magic[4];
+        uint32 recordCount = 0, fieldCount = 0, recordSize = 0, stringSize = 0;
+        in.read(magic, 4);
+        in.read(reinterpret_cast<char*>(&recordCount), 4);
+        in.read(reinterpret_cast<char*>(&fieldCount), 4);
+        in.read(reinterpret_cast<char*>(&recordSize), 4);
+        in.read(reinterpret_cast<char*>(&stringSize), 4);
+        if (!in || std::memcmp(magic, "WDBC", 4) != 0 || fieldCount < 10 || recordSize < 40)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' is not a 3.3.5a AreaTrigger.dbc (fields {}, record size {})", path, fieldCount, recordSize);
+            return false;
+        }
+        std::vector<char> rec(recordSize);
+        size_t loaded = 0;
+        for (uint32 i = 0; i < recordCount; ++i)
+        {
+            in.read(rec.data(), recordSize);
+            if (!in)
+                break;
+            uint32 id, map;
+            float f[8];
+            std::memcpy(&id, rec.data(), 4);
+            std::memcpy(&map, rec.data() + 4, 4);
+            std::memcpy(f, rec.data() + 8, sizeof(f));
+            AreaTriggerRec r;
+            r.id = id;
+            r.x = f[0]; r.y = f[1]; r.z = f[2];
+            r.radius = f[3];
+            r.boxLength = f[4]; r.boxWidth = f[5]; r.boxHeight = f[6]; r.boxYaw = f[7];
+            _areaTriggers[map].push_back(r);
+            ++loaded;
+        }
+        _areaTriggersLoaded = loaded > 0;
+        LOG_INFO("module", "wrathbench: loaded {} areatriggers across {} maps from '{}'", loaded, _areaTriggers.size(), path);
+        return _areaTriggersLoaded;
+    }
+
+    // Same geometry as Player::IsInAreaTriggerRadius with delta 0 (the 5y
+    // tavern delta is server-side only): a sphere when radius > 0, otherwise
+    // an oriented box with half-extents length/2, width/2, height/2 around
+    // (x, y, z, yaw).
+    static bool InsideAreaTrigger(AreaTriggerRec const& t, float x, float y, float z)
+    {
+        if (t.radius > 0.0f)
+        {
+            float dx = x - t.x, dy = y - t.y, dz = z - t.z;
+            return dx * dx + dy * dy + dz * dz <= t.radius * t.radius;
+        }
+        Position center(t.x, t.y, t.z, t.boxYaw);
+        Position p(x, y, z, 0.0f);
+        return p.IsWithinBox(center, t.boxLength / 2.0f, t.boxWidth / 2.0f, t.boxHeight / 2.0f);
+    }
+
+    void Manager::CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t nowMs)
+    {
+        if (!_areaTriggersLoaded)
+            return;
+        auto it = _areaTriggers.find(player->GetMapId());
+        if (it == _areaTriggers.end())
+            return;
+        uint32 inside = 0;
+        for (AreaTriggerRec const& t : it->second)
+        {
+            if (InsideAreaTrigger(t, x, y, z))
+            {
+                inside = t.id;
+                break;
+            }
+        }
+        if (inside == 0)
+        {
+            s.lastTriggerId = 0; // left every volume: re-arm
+            return;
+        }
+        // Fire once on entry. Re-send while still inside if nothing happened
+        // within 1.5s: the server checks the *applied* position, the module the
+        // interpolated one, and a heartbeat can lag by up to 500ms.
+        if (inside == s.lastTriggerId && nowMs - s.lastTriggerSentMs < 1500)
+            return;
+        if (inside == s.lastTriggerId && s.pendingTransferMap.load() != 0)
+            return; // the server acted on it; a transfer is in flight
+        s.lastTriggerId = inside;
+        s.lastTriggerSentMs = nowMs;
+
+        WorldPacket* p = new WorldPacket(CMSG_AREATRIGGER, 4);
+        *p << uint32(inside);
+        s.ws->QueuePacket(p);
+        Audit(s, "action", Json::Writer().Add("op", "areatrigger").Add("triggerId", inside).Add("moveId", s.move.moveId).Str());
+        Json::Writer w;
+        w.Add("triggerId", inside).Add("moveId", s.move.moveId);
+        w.Raw("pos", PosJson(x, y, z, s.move.curO));
+        EmitEvent(s, "WB_AREATRIGGER", 0xFF04, w.Str());
+    }
+
     void Manager::TickMovers(int64_t nowMs)
     {
         std::vector<std::shared_ptr<BenchSession>> sessions;
@@ -1854,6 +1963,14 @@ namespace WrathBench
             Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_HEARTBEAT")
                 .Add("moveId", m.moveId).Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
         }
+
+        // Areatrigger volumes, as a client: the movement engine knows its own
+        // position and the DBC, and fires CMSG_AREATRIGGER on entering one
+        // without the player choosing to. After the heartbeat, so the server's
+        // applied position is as close as possible to the one tested here.
+        CheckAreaTriggers(s, player, m.curX, m.curY, m.curZ, nowMs);
+        if (!m.active)
+            return; // (defensive: a synchronous finish is not expected here)
 
         // Progress events: the position the module's client-side movement engine
         // is at — knowledge a real client has locally.

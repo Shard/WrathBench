@@ -53,6 +53,16 @@ namespace WrathBench
         float x{0}, y{0}, z{0};
     };
 
+    // One AreaTrigger.dbc record (3.3.5a). Client-side knowledge: the volumes
+    // a client tests its own position against to send CMSG_AREATRIGGER.
+    struct AreaTriggerRec
+    {
+        uint32 id{0};
+        float x{0}, y{0}, z{0};
+        float radius{0};            // > 0: sphere; else oriented box below
+        float boxLength{0}, boxWidth{0}, boxHeight{0}, boxYaw{0};
+    };
+
     // Per-session synthesized-movement state (ADR-0010). Touched only on the
     // world thread (DoMoveTo/DoStop/DoFace and the Update tick), so unlocked.
     struct MoveState
@@ -124,6 +134,14 @@ namespace WrathBench
         // Movement synthesis (world thread only).
         MoveState move;
         uint64_t moveIdGen{0};
+
+        // Areatrigger edge detection (world thread only): the trigger volume the
+        // mover last reported being inside (0 = none), and when the module last
+        // queued CMSG_AREATRIGGER for it, so a trigger the server did not act on
+        // (heartbeat lag: the server checks its applied position, the module its
+        // interpolated one) is re-sent while the character is still inside.
+        uint32 lastTriggerId{0};
+        int64_t lastTriggerSentMs{0};
 
         // Map transfer in flight: the destination map from SMSG_TRANSFER_PENDING,
         // cleared by SMSG_NEW_WORLD / SMSG_TRANSFER_ABORTED. Set on tap threads,
@@ -224,6 +242,19 @@ namespace WrathBench
             float reachedX{0}, reachedY{0}, reachedZ{0};
         };
         PathResolve ResolvePath(Player* player, float x, float y, float z);
+
+        // AreaTrigger.dbc as the client ships it (FOLLOW-UPS 38 N1): the
+        // module reads the DBC from the server data volume so the mover can
+        // send CMSG_AREATRIGGER on entering a volume, exactly as a client does
+        // without the player choosing to. The server still applies its own
+        // IsInAreaTriggerRadius check, so a wrong client-side hit is harmless.
+        bool LoadAreaTriggerDbc(std::string const& path);
+        // Edge-triggered: queues CMSG_AREATRIGGER (and emits WB_AREATRIGGER)
+        // when the interpolated position enters a volume the session was not
+        // already inside. World thread only.
+        void CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t nowMs);
+        std::unordered_map<uint32, std::vector<AreaTriggerRec>> _areaTriggers; // by map
+        bool _areaTriggersLoaded{false};
 
         // Mover (world thread only; see ADR-0010).
         void TickMovers(int64_t nowMs);
