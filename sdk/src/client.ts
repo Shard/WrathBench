@@ -2126,7 +2126,10 @@ export class WrathClient {
       // the packet, and per-session packets are processed in order, so awaiting
       // is what puts the stop ahead of the caller's next action. Never a sleep.
       // A refusal (`no_session`, `not_in_world`) has nothing to add to a move
-      // verdict that already failed.
+      // verdict that already failed. If a *concurrent* moveTo started walking
+      // while this probe was failing, this stop ends it and that caller reads
+      // a typed `stopped` — visible, never a silent wrong value, and cheaper
+      // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
     const hint = MOVE_HINTS[status]?.(point, data);

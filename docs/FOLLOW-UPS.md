@@ -490,9 +490,10 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     later cast fails `SPELL_FAILED_MOVING` (result 51) — observed as ~10
     minutes of Hearthstone casts failing while the character stood still. The
     SDK now sends that stop after any status meaning nothing moved
-    (`MOVE_LEAVES_NO_STOP`), which covers `moveTo` but not a raw `move_to`
-    action or the stop-deadline `interrupted` branch; the module should send
-    it at the source.
+    (`MOVE_LEAVES_NO_STOP`), which covers `moveTo` but not `moveToAsync`,
+    which never reads a verdict; the module should send it at the source.
+    That SDK repair changes which actions are dispatched, so it is a harness
+    change and not score-comparable across the boundary (ADR-0016).
 
 ## Ladder work (harness-0.3 / 0.4)
 
