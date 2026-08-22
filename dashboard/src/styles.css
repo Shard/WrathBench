@@ -1,0 +1,134 @@
+/*
+ * One hand-written stylesheet, no framework. The palette is the viewer's, kept
+ * as custom properties so the canvas map can read the same values through
+ * getComputedStyle and follow the light/dark switch without a second source.
+ */
+
+:root {
+  color-scheme: dark light;
+  --bg: #14161a;
+  --fg: #d8dee6;
+  --dim: #8a94a3;
+  --line: #2b3038;
+  --panel: #1b1e24;
+  --accent: #7aa2f7;
+  --err: #f7768e;
+  --ok: #9ece6a;
+  --warn: #e0af68;
+  --grid: #1a1d22;
+  --gridline: #23272e;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbfbfc;
+    --fg: #1e2229;
+    --dim: #5d6673;
+    --line: #dde1e7;
+    --panel: #f2f3f6;
+    --accent: #2f5fd0;
+    --err: #b3283c;
+    --ok: #3f7a24;
+    --warn: #8a5d00;
+    --grid: #e9ebef;
+    --gridline: #d5d9e0;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+header.top {
+  display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg);
+  flex: none;
+}
+header.top h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header.top nav { display: inline-flex; gap: 10px; }
+header.top nav a.on { color: var(--fg); font-weight: 700; }
+header.top .spacer { flex: 1; }
+
+main { flex: 1; min-height: 0; overflow: auto; }
+main.flush { overflow: hidden; }
+.page { padding: 16px; }
+
+.dim { color: var(--dim); }
+.err { color: var(--err); }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.mono { font-variant-numeric: tabular-nums; }
+.right { text-align: right; }
+.nowrap { white-space: nowrap; }
+
+h2.section { font-size: 13px; margin: 20px 0 8px; font-weight: 700;
+             text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+h2.section:first-child { margin-top: 0; }
+
+.cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.card .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.card .v { font-size: 18px; font-weight: 600; }
+.card .sub { color: var(--dim); font-size: 12px; }
+
+.scroller { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+tbody tr:hover { background: var(--panel); }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+       vertical-align: middle; background: var(--dim); }
+.dot.live { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+.dot.dead { background: var(--err); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+          margin-right: 6px; vertical-align: middle; }
+
+button, .btn {
+  font: inherit; background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.on { border-color: var(--accent); font-weight: 700; }
+
+.banner { border: 1px solid var(--line); border-left-width: 3px; border-radius: 4px;
+          padding: 8px 12px; margin: 10px 0; background: var(--panel); }
+.banner.bad { border-left-color: var(--err); }
+.banner.good { border-left-color: var(--ok); }
+.banner.warn { border-left-color: var(--warn); }
+
+/* --- the run feed --- */
+.feed { display: flex; flex-direction: column; gap: 8px; }
+.entry { border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.entry > .head { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px;
+                 border-bottom: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+.entry > .head .t { color: var(--fg); font-weight: 700; }
+.entry.bad { border-left: 3px solid var(--err); }
+.entry .body { padding: 8px 10px; }
+pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
+pre.block.fold { max-height: 4.5em; overflow: hidden; }
+.toggle { background: none; border: none; color: var(--accent); padding: 0; font-size: 12px; }
+
+/* --- the map --- */
+.map-wrap { display: flex; height: 100%; }
+.map-stage { position: relative; flex: 1; min-width: 0; }
+.map-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.map-stage canvas.drag { cursor: grabbing; }
+.map-chips { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.map-hint { position: absolute; bottom: 10px; left: 10px; color: var(--dim); font-size: 12px; }
+.side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
+        padding: 12px 14px; overflow-y: auto; }
+.side h3 { font-size: 14px; margin: 0 0 8px; font-weight: 700; }
+.side .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.side .v { margin-bottom: 8px; word-break: break-word; }

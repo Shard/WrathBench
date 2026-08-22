@@ -1,13 +1,16 @@
 {
   "name": "wrathbench",
   "private": true,
-  "workspaces": ["sdk", "runner", "wiki", "minimap"],
+  "workspaces": ["sdk", "runner", "wiki", "minimap", "dashboard"],
   "engines": {
     "bun": "1.4.0"
   },
   "scripts": {
     "test": "bun test",
     "docs:api": "bun run sdk/generate-api-docs.ts",
+    "dashboard:dev": "bun run --cwd dashboard dev",
+    "dashboard:build": "bun run --cwd dashboard build",
+    "viewer": "bun runner/viewer/serve.ts",
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md"
   },
   "devDependencies": {
