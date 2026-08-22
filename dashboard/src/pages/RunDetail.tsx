@@ -45,6 +45,17 @@ export default function RunDetail() {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     onCleanup(() => clearInterval(clock));
 
+    /*
+     * The tail is opened from an async continuation, so its cleanup cannot be
+     * registered there: Solid tracks the owner through a synchronous global,
+     * and an `onCleanup` called after the first await attaches to nothing. The
+     * handle is registered now and filled in later. Leaking it would be worse
+     * than a stray EventSource — the server clears the stream's 1 Hz rescan in
+     * `cancel()`, which only fires when the client closes.
+     */
+    let stop: (() => void) | undefined;
+    onCleanup(() => stop?.());
+
     void api
       .run(params.id)
       .then(async (d) => {
@@ -56,7 +67,7 @@ export default function RunDetail() {
         setTotal(page.total);
         if (d.run.terminationReason !== null) return;
         // Only a live run needs the tail; a finished one never grows again.
-        const stop = subscribeTail(api.streamUrl(params.id), {
+        stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {
             setEntries((prev) => [...prev, ...added]);
             setTotal((t) => t + added.length);
@@ -68,7 +79,6 @@ export default function RunDetail() {
           onTick: () => setDisconnected(false),
           onError: () => setDisconnected(true),
         });
-        onCleanup(stop);
       })
       .catch((e: unknown) => setError(String(e)));
   });

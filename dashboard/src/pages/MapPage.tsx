@@ -38,12 +38,11 @@ const TILE_CACHE_MAX = 512;
 interface Pip {
   runId: string;
   data: AgentPosition;
-  /** Drawn position, walking toward (tx, ty). */
-  px: number;
-  py: number;
-  tx: number;
-  ty: number;
-  /** What `hitTest` reads: the pip's *current* drawn spot in world coords. */
+  /**
+   * Where the pip is *drawn*, in world yards — walking toward `data.x/y` rather
+   * than jumping to it. One coordinate system throughout: `project()` and
+   * `hitTest()` both read these, so what the eye picks is what the click gets.
+   */
   x: number;
   y: number;
 }
@@ -140,7 +139,7 @@ export default function MapPage() {
       seen.add(p.runId);
       const existing = pips.get(p.runId);
       if (existing === undefined) {
-        pips.set(p.runId, { runId: p.runId, data: p, px: 0, py: 0, tx: 0, ty: 0, x: p.x, y: p.y });
+        pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y });
       } else {
         existing.data = p;
       }
@@ -241,13 +240,11 @@ export default function MapPage() {
   function step(list: Pip[]): boolean {
     let moving = false;
     for (const pip of list) {
-      pip.tx = pip.data.x;
-      pip.ty = pip.data.y;
-      const dx = pip.tx - pip.x;
-      const dy = pip.ty - pip.y;
+      const dx = pip.data.x - pip.x;
+      const dy = pip.data.y - pip.y;
       if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) {
-        pip.x = pip.tx;
-        pip.y = pip.ty;
+        pip.x = pip.data.x;
+        pip.y = pip.data.y;
         continue;
       }
       pip.x += dx * 0.18;
