@@ -52,6 +52,12 @@ export interface TokenUsage {
    * `prompt_tokens_details.cached_tokens` (OpenAI-compat) or a top-level
    * `cached_tokens`. Absent when the provider reports nothing. */
   cached_tokens?: number;
+  /** Reasoning tokens, flattened from `completion_tokens_details`. The only
+   * counter that shows whether an effort level actually moved anything. */
+  reasoning_tokens?: number;
+  /** Provider-reported cost in credits (OpenRouter sends this when the usage
+   * opt-in is on). The provider's own number, never our estimate. */
+  cost?: number;
 }
 
 export interface AssistantTurn {
@@ -65,6 +71,12 @@ export interface AssistantTurn {
    * use. Absent when the provider identifies nothing.
    */
   providerRequestId?: string;
+  /**
+   * The provider's `finish_reason` for the chosen choice. "length" means the
+   * provider truncated the turn — possibly mid tool-call JSON — and the turn
+   * must not be scored as a model failure. Absent when not reported.
+   */
+  finishReason?: string;
   raw?: unknown;
 }
 
@@ -105,6 +117,10 @@ const completionSchema = z.looseObject({
             )
             .nullish(),
         }),
+        // "length" means the provider truncated the turn — possibly mid
+        // tool-call JSON. Without it a truncation is indistinguishable from a
+        // clean stop and gets scored as a model failure (2026-08-22 review).
+        finish_reason: z.string().nullish(),
       }),
     )
     .min(1),
@@ -116,7 +132,9 @@ const completionSchema = z.looseObject({
       completion_tokens: z.number().nullish(),
       total_tokens: z.number().nullish(),
       cached_tokens: z.number().nullish(),
+      cost: z.number().nullish(),
       prompt_tokens_details: z.looseObject({ cached_tokens: z.number().nullish() }).nullish(),
+      completion_tokens_details: z.looseObject({ reasoning_tokens: z.number().nullish() }).nullish(),
     })
     .nullish(),
 });
@@ -375,7 +393,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
           }
           throw new AdapterError(`model API response did not match schema: ${parsed.error.message}`);
         }
-        const msg = parsed.data.choices[0]!.message;
+        const choice = parsed.data.choices[0]!;
+        const msg = choice.message;
+        const finishReason = choice.finish_reason ?? undefined;
         const usage = toUsage(parsed.data.usage);
         // Header first, body `id` as the fallback: OpenRouter puts the same
         // generation id in both, plain OpenAI only in the header.
@@ -387,6 +407,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
           turn: {
             content: msg.content ?? null,
             ...(turnRequestId !== undefined ? { providerRequestId: turnRequestId } : {}),
+            ...(finishReason !== undefined ? { finishReason } : {}),
             toolCalls: (msg.tool_calls ?? []).map((tc) => ({
               id: tc.id,
               name: tc.function.name,

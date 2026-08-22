@@ -269,6 +269,33 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a length finish is recorded and raises a provider_truncated notice next turn", async () => {
+    let call = 0;
+    const truncating: ChatAdapter = {
+      label: "trunc",
+      complete: (): Promise<AdapterOutcome> => {
+        call++;
+        if (call > 2) return Promise.resolve({ kind: "stub-complete" });
+        return Promise.resolve({
+          kind: "ok",
+          // first turn truncates; second is clean, and must carry the notice
+          // the first turn's truncation raised.
+          turn: { content: "ok", toolCalls: [], ...(call === 1 ? { finishReason: "length" } : {}) },
+        });
+      },
+    };
+    const { dir, options } = setup(truncating);
+    await runLoop(options);
+    const records = readTrajectory(dir);
+    const responses = records.filter((r) => r.t === "response");
+    expect(responses[0]!["finishReason"]).toBe("length");
+    expect("finishReason" in responses[1]!).toBe(false);
+    // the notice reaches the next turn's context, not scored as a model error
+    const req2 = records.filter((r) => r.t === "request")[1];
+    expect(JSON.stringify(req2)).toContain("finish_reason: length");
+    options.trajectory.close();
+  });
+
   test("every request contains the system prompt plus a fresh context message", async () => {
     const seen: ChatRequest[] = [];
     const recording: ChatAdapter = {
