@@ -125,6 +125,90 @@ describe("no endpoint serves the bearer token", () => {
   });
 });
 
+/**
+ * A runs directory holding a resumed run that ended, and one that is still
+ * being driven. No sqlite: `readRun` degrades to meta + mtime, which is exactly
+ * the path a live run's liveness takes.
+ */
+function pausedFixture(now: number): string {
+  const runs = mkdtempSync(join(tmpdir(), "viewer-playtime-"));
+  const write = (id: string, startedAt: number, lines: object[]): void => {
+    const dir = join(runs, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: id, startedAt, config: {} }));
+    writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  };
+  // Ended after two pause/resume gaps: 1s + 1s + 1s driven out of a 10s span.
+  write("resumed-run", 1000, [
+    { ts: 1000, t: "meta", runId: "resumed-run" },
+    { ts: 2000, t: "pause", reason: "rate-limited" },
+    { ts: 5000, t: "resume" },
+    { ts: 6000, t: "pause", reason: "rate-limited" },
+    { ts: 9000, t: "resume" },
+    { ts: 10000, t: "termination", reason: "episode-limit" },
+  ]);
+  // Live, driving: one open segment a minute old.
+  write("live-run", now - 60_000, [
+    { ts: now - 60_000, t: "meta", runId: "live-run" },
+    { ts: now - 1_000, t: "state", level: 2 },
+  ]);
+  // Live by mtime, but paused half a minute ago: the pause must not count.
+  write("live-paused-run", now - 60_000, [
+    { ts: now - 60_000, t: "meta", runId: "live-paused-run" },
+    { ts: now - 30_000, t: "pause", reason: "rate-limited" },
+  ]);
+  return runs;
+}
+
+describe("playtime", () => {
+  test("the listing reports active time, not the span the trajectory covers", async () => {
+    const now = Date.now();
+    const runs = pausedFixture(now);
+    const res = await api(runs)(new Request("http://x/api/runs"));
+    const b = (await res.json()) as { runs: { runId: string; playtimeMs: number | null; live: boolean }[] };
+    const by = new Map(b.runs.map((r) => [r.runId, r]));
+
+    // Span 9000ms, of which 6000ms was spent paused.
+    expect(by.get("resumed-run")!.playtimeMs).toBe(3000);
+
+    const live = by.get("live-run")!;
+    expect(live.live).toBe(true);
+    expect(live.playtimeMs).toBeGreaterThanOrEqual(60_000);
+    expect(live.playtimeMs).toBeLessThan(75_000);
+
+    // Fresh files, but the run sits inside a pause: playtime stops at the pause.
+    const paused = by.get("live-paused-run")!;
+    expect(paused.live).toBe(true);
+    expect(paused.playtimeMs).toBe(30_000);
+  });
+
+  test("the run page agrees with the listing", async () => {
+    const now = Date.now();
+    const runs = pausedFixture(now);
+    const handle = api(runs);
+    for (const id of ["resumed-run", "live-paused-run"]) {
+      const list = (await (await handle(new Request("http://x/api/runs"))).json()) as {
+        runs: { runId: string; playtimeMs: number | null }[];
+      };
+      const detail = (await (await handle(new Request(`http://x/api/run/${id}`))).json()) as {
+        playtimeMs: number | null;
+      };
+      expect(detail.playtimeMs).toBe(list.runs.find((r) => r.runId === id)!.playtimeMs);
+    }
+  });
+
+  test("a run with no pauses is unchanged: its whole span", async () => {
+    const runs = fixture();
+    const detail = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      run: { live: boolean };
+      playtimeMs: number | null;
+    };
+    // The fixture's files are fresh, so it reads live and counts to now.
+    expect(detail.run.live).toBe(true);
+    expect(detail.playtimeMs).toBeGreaterThan(Date.now() - 1000 - 5_000);
+  });
+});
+
 describe("routes", () => {
   test("the run listing carries totals alongside the row", async () => {
     const runs = fixture();

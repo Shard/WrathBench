@@ -172,12 +172,12 @@ function LaneRow(props: { lane: FleetLaneView; now: number }) {
 
 function RunRowView(props: { row: RunListRow; now: number }) {
   const r = (): RunListRow => props.row;
-  /* Playtime is the wall clock the trajectory spans; a live run keeps counting. */
-  const playtime = (): number | null => {
-    const first = r().firstTs;
-    if (first === null) return null;
-    return (r().live ? props.now : (r().lastTs ?? first)) - first;
-  };
+  /*
+   * Playtime is the API's: cumulative time the run spent being driven, with the
+   * stretches between a `pause` and its `resume` taken out. Server-side so this
+   * table and the run page cannot drift apart.
+   */
+  const playtime = (): number | null => r().playtimeMs ?? null;
   return (
     <tr>
       <td>

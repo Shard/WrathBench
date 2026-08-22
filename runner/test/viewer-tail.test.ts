@@ -4,7 +4,15 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformOf, readRun } from "../viewer/runs";
-import { TrajectoryTail, scanRunTotals, splitLines, summarize, tokenTotals } from "../viewer/tail";
+import {
+  TrajectoryTail,
+  playtimeMs,
+  scanRunTotals,
+  segmentsFrom,
+  splitLines,
+  summarize,
+  tokenTotals,
+} from "../viewer/tail";
 
 function tempFile(): string {
   return join(mkdtempSync(join(tmpdir(), "wrathbench-viewer-")), "trajectory.jsonl");
@@ -329,6 +337,7 @@ describe("scanRunTotals", () => {
     );
     const totals = await scanRunTotals(path);
     expect(totals.entries).toBe(4);
+    expect(totals.segments).toEqual([{ start: 1000, end: null }]);
     expect(totals.firstTs).toBe(1000);
     expect(totals.lastTs).toBe(5000);
     expect(totals.tokens.source).toBe("reported");
@@ -343,6 +352,65 @@ describe("scanRunTotals", () => {
     expect(totals.entries).toBe(0);
     expect(totals.firstTs).toBeNull();
     expect(totals.tokens.totalTokens).toBe(0);
+  });
+});
+
+describe("active segments and playtime", () => {
+  const marks = (...pairs: [string, number][]): { t: string; ts: number }[] =>
+    pairs.map(([t, ts]) => ({ t, ts }));
+
+  test("two pause/resume gaps sum to the active stretches only", () => {
+    const segs = segmentsFrom(
+      marks(
+        ["meta", 500],
+        ["pause", 1_000],
+        ["resume", 10_000],
+        ["pause", 11_500],
+        ["resume", 20_000],
+        ["termination", 22_000],
+      ),
+    );
+    expect(segs).toEqual([
+      { start: 500, end: 1_000 },
+      { start: 10_000, end: 11_500 },
+      { start: 20_000, end: 22_000 },
+    ]);
+    // Span is 21.5s; 9s + 8.5s of it was paused.
+    expect(playtimeMs(segs, { lastTs: 22_000, live: false, now: 99_999 })).toBe(4_000);
+  });
+
+  test("a live run's open segment counts to now", () => {
+    const segs = segmentsFrom(marks(["meta", 1_000], ["pause", 2_000], ["resume", 5_000]));
+    expect(playtimeMs(segs, { lastTs: 6_000, live: true, now: 9_000 })).toBe(1_000 + 4_000);
+    // Not live: the last entry closes it, not the clock.
+    expect(playtimeMs(segs, { lastTs: 6_000, live: false, now: 9_000 })).toBe(1_000 + 1_000);
+  });
+
+  test("a run that is paused right now does not count the pause it sits in", () => {
+    const segs = segmentsFrom(marks(["meta", 1_000], ["resume", 1_000], ["pause", 4_000]));
+    expect(playtimeMs(segs, { lastTs: 4_000, live: true, now: 99_000 })).toBe(3_000);
+  });
+
+  test("a run without pauses is its whole span", () => {
+    const segs = segmentsFrom(marks(["meta", 1_000], ["termination", 8_000]));
+    expect(playtimeMs(segs, { lastTs: 8_000, live: false, now: 50_000 })).toBe(7_000);
+  });
+
+  test("a second meta mid-file (a resume that regenerated its token) opens nothing", () => {
+    const segs = segmentsFrom(
+      marks(["meta", 1_000], ["pause", 2_000], ["resume", 5_000], ["meta", 5_100], ["termination", 6_000]),
+    );
+    expect(segs).toEqual([
+      { start: 1_000, end: 2_000 },
+      { start: 5_000, end: 6_000 },
+    ]);
+  });
+
+  test("a trajectory with no meta falls back to its first record", () => {
+    expect(segmentsFrom(marks(["state", 3_000], ["termination", 4_000]))).toEqual([
+      { start: 3_000, end: 4_000 },
+    ]);
+    expect(playtimeMs([], { lastTs: null, live: false, now: 1 })).toBeNull();
   });
 });
 

@@ -182,6 +182,12 @@ export interface RunListRow extends RunRow {
   tokens: TokenTotals | null;
   firstTs: number | null;
   lastTs: number | null;
+  /**
+   * Cumulative time the run spent being driven: the wall clock span minus the
+   * stretches it sat paused between a `pause` and its `resume`. Computed
+   * server-side so the fleet listing and the run page cannot disagree.
+   */
+  playtimeMs: number | null;
 }
 
 export interface RunsResponse {
@@ -197,6 +203,8 @@ export interface RunDetailResponse {
   states: StatePoint[];
   total: number;
   tokens: TokenTotals;
+  /** Cumulative active time; see `RunListRow.playtimeMs`. */
+  playtimeMs: number | null;
 }
 
 export interface EntriesResponse {
