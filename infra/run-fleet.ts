@@ -42,6 +42,15 @@
  *
  * The roster's own account-busy guard still runs under every lane: a lane
  * pointed at an account something else is using waits, it does not clobber.
+ *
+ * Preflight gate (ADR-0023): the top-level `preflight` block in fleet.json is
+ * the deploy-window smoke, made a normal part of fleet operation. The
+ * supervisor runs those scripts against the live server before it spawns any
+ * lane, and again whenever the server identity changes (a recreate, or a
+ * restart the container did by itself). A failure spawns nothing, complains
+ * once, and is re-checked every tick; only `start` is ever suppressed, so
+ * drains keep working while the gate is shut. `enabled:false` records a
+ * "skipped" result and opens the gate.
  */
 
 import { Database } from "bun:sqlite";
@@ -53,6 +62,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -73,10 +83,46 @@ export interface FleetLane {
   rosterFile?: string;
 }
 
+/**
+ * The deploy-window smoke, as a normal part of fleet operation. The supervisor
+ * runs these scripts against the live server before it spawns anything, and
+ * again whenever the server identity changes (a worldserver recreate or
+ * restart). `enabled:false` keeps the mechanism installed and disarmed.
+ *
+ * `timeoutMs` is the budget for the WHOLE sequence, not per script; the
+ * per-script `ms` in the recorded results is the breakdown.
+ */
+export interface FleetPreflight {
+  enabled: boolean;
+  /** Game account the smokes log in as — its own, never a lane's, never PROBE. */
+  account: string;
+  /** Repo-relative (or absolute) smoke scripts, run sequentially in order. */
+  smokes: string[];
+  timeoutMs: number;
+}
+
+/** One recorded gate attempt. Written into fleet-state.json; read by --status. */
+export interface PreflightRecord {
+  at: number;
+  serverIdentity: string;
+  ok: boolean;
+  /** True when preflight.enabled is false: the gate is open, nothing ran. */
+  skipped?: boolean;
+  results: { script: string; ok: boolean; ms: number; tail: string }[];
+}
+
 export interface FleetConfig {
   notes: string[];
   lanes: FleetLane[];
+  preflight: FleetPreflight;
 }
+
+export const DEFAULT_PREFLIGHT: FleetPreflight = {
+  enabled: false,
+  account: "SMOKE",
+  smokes: [],
+  timeoutMs: 900_000,
+};
 
 const TICK_MS = 60_000;
 /** A heartbeat older than this means the supervisor is gone, not merely quiet. */
@@ -187,12 +233,35 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
   return out;
 }
 
+/**
+ * Parse the optional top-level `preflight` block. Absent means "disabled with
+ * no smokes" — an older fleet.json keeps working unchanged.
+ */
+export function parsePreflight(raw: unknown): FleetPreflight {
+  if (raw === undefined) return DEFAULT_PREFLIGHT;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    fail("fleet config: preflight must be a JSON object");
+  }
+  const o = raw as Partial<FleetPreflight>;
+  if (typeof o.enabled !== "boolean") fail("preflight: enabled must be true or false");
+  if (typeof o.account !== "string" || o.account.length === 0) fail("preflight: account is required");
+  if (!Array.isArray(o.smokes) || o.smokes.some((x) => typeof x !== "string" || x.length === 0)) {
+    fail("preflight: smokes must be an array of script paths");
+  }
+  const timeoutMs = o.timeoutMs ?? DEFAULT_PREFLIGHT.timeoutMs;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    fail("preflight: timeoutMs must be a positive number of milliseconds");
+  }
+  if (o.enabled && o.smokes.length === 0) fail("preflight: enabled with no smokes to run");
+  return { enabled: o.enabled, account: o.account, smokes: [...o.smokes], timeoutMs };
+}
+
 /** Parse + validate a fleet config. Throws with a config-error message. */
 export function parseFleet(raw: unknown): FleetConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config must be a JSON object with a lanes array");
   }
-  const o = raw as { _notes?: unknown; lanes?: unknown };
+  const o = raw as { _notes?: unknown; lanes?: unknown; preflight?: unknown };
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   if (!Array.isArray(o.lanes)) fail("fleet config: lanes must be an array");
   const lanes: FleetLane[] = [];
@@ -235,7 +304,15 @@ export function parseFleet(raw: unknown): FleetConfig {
     }
     byAccount.set(key, lane.name);
   }
-  return { notes, lanes };
+  const preflight = parsePreflight(o.preflight);
+  // The smokes hold a live session for their whole arc. Sharing an account with
+  // an enabled lane would mean the gate and the lane reclaiming the account from
+  // each other all night, so it is a config error, not a race to discover live.
+  const clash = byAccount.get(preflight.account.toUpperCase());
+  if (preflight.enabled && clash !== undefined) {
+    fail(`preflight account ${preflight.account} is also lane ${clash}'s — the gate needs its own account`);
+  }
+  return { notes, lanes, preflight };
 }
 
 /**
@@ -385,6 +462,223 @@ export function fleetComplete(opts: { running: number; toStart: number; hasDeadl
   return opts.hasDeadline && opts.running === 0 && opts.toStart === 0;
 }
 
+// --------------------------------------------------------------- preflight
+//
+// The deploy-window smoke as a supervisor gate. The rule the operator wants is
+// simple: never launch episodes against a server nobody has smoked. So the
+// supervisor runs the configured smokes before it spawns anything, and again
+// whenever the server it is pointed at is no longer the same server.
+//
+// SERVER IDENTITY. The module's /health tells non-loopback callers liveness
+// only — no build id, no uptime (FOLLOW-UPS: add one) — and the supervisor is a
+// container without a docker socket, so it cannot ask the daemon for an image
+// id either. What it does share with the worldserver is the logs volume, and a
+// worldserver boot is visible there: the appender opens a fresh Server.log
+// (creation time = boot) after renaming the previous one aside. So identity is
+// "which boot of the world is this", plus a digest of /health's stable fields
+// so a module whose health surface changes also re-gates. That is weaker than
+// an image id and it is deliberately allowed to be: everything downstream keys
+// on the RECORDED TIME of a gate result, never on matching an identity string,
+// so a marker that fails to change can only ever cost an extra smoke run — it
+// can never greenlight an unsmoked server.
+
+/** Where the module answers. Same default the runner and roster use. */
+const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
+/** The worldserver's log directory as seen from this side of the mounts. */
+const SERVER_LOG_DIR = join(REPO_ROOT, "data", "logs");
+/** Coarse bucket for an unreadable boot marker: re-gate every 10 minutes, loudly. */
+const UNKNOWN_MARKER_BUCKET_MS = 10 * 60_000;
+
+/**
+ * A string that changes when the worldserver boots. Primary signal is the live
+ * Server.log's creation time; the timestamped backups are the fallback for a
+ * filesystem without birthtime. An unreadable log directory yields a bucketed
+ * "unknown" that changes on its own every 10 minutes — the gate must fail
+ * toward re-running the smokes, never toward a frozen identity that is treated
+ * as "already smoked" forever. Pure: all IO is injected.
+ */
+export function bootMarker(
+  birthtimeMs: number | undefined,
+  backups: string[] | undefined,
+  nowMs: number,
+): string {
+  if (birthtimeMs !== undefined && birthtimeMs > 0) return `boot:${Math.round(birthtimeMs)}`;
+  const rotated = (backups ?? []).filter((f) => f.startsWith("Server.log.")).sort();
+  if (rotated.length > 0) return `logs:${rotated.length}:${rotated[rotated.length - 1]}`;
+  return `unknown:${Math.floor(nowMs / UNKNOWN_MARKER_BUCKET_MS)}`;
+}
+
+/**
+ * A digest of the stable fields of a /health body. Session counts and drop
+ * counters are live telemetry, not identity, so they are dropped; everything
+ * else (today: `module`; tomorrow, one hopes, a build id) is kept.
+ */
+export function healthDigest(body: unknown): string {
+  if (typeof body !== "object" || body === null) return "health:unparsed";
+  const volatile = new Set(["sessions", "droppedPackets", "droppedPacketsLive", "worldStopped", "ok"]);
+  const parts = Object.entries(body as Record<string, unknown>)
+    .filter(([k]) => !volatile.has(k))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${k}=${String(v)}`);
+  return parts.length === 0 ? "health:bare" : parts.join(",");
+}
+
+/** Read the boot marker off the shared logs volume. */
+function readBootMarker(dir: string = SERVER_LOG_DIR): string {
+  let birth: number | undefined;
+  let backups: string[] | undefined;
+  try {
+    birth = statSync(join(dir, "Server.log")).birthtimeMs;
+  } catch {
+    birth = undefined;
+  }
+  try {
+    backups = readdirSync(dir);
+  } catch {
+    backups = undefined;
+  }
+  return bootMarker(birth, backups, Date.now());
+}
+
+/**
+ * The server as the supervisor currently sees it: `undefined` when the module
+ * does not answer or the world is stopping, which is "not ready" — neither
+ * smoke it nor spawn against it.
+ */
+async function readServerIdentity(): Promise<string | undefined> {
+  let body: unknown;
+  try {
+    const res = await fetch(`${MODULE_URL}/health`, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return undefined;
+    body = await res.json();
+  } catch {
+    return undefined;
+  }
+  const o = body as { ok?: unknown; worldStopped?: unknown };
+  if (o.ok !== true || o.worldStopped === true) return undefined;
+  return `${readBootMarker()}|${healthDigest(body)}`;
+}
+
+export type GateAction = "skip" | "wait" | "pass" | "run";
+
+/**
+ * What the gate should do this tick. Pure — the whole point of the gate is that
+ * its decision is testable without a live server.
+ *
+ *  - disabled            -> skip (record it once, spawn freely)
+ *  - server not ready    -> wait (spawn nothing; there is nothing to smoke yet)
+ *  - a passing record for exactly this identity -> pass (spawn)
+ *  - anything else (no record, a different identity, or a FAILED record for this
+ *    identity) -> run the smokes. Re-running after a failure every tick is what
+ *    makes a fix or a rollback unblock the fleet with no operator action.
+ */
+export function gateDecision(opts: {
+  enabled: boolean;
+  identity: string | undefined;
+  last: PreflightRecord | undefined;
+}): GateAction {
+  if (!opts.enabled) return "skip";
+  if (opts.identity === undefined) return "wait";
+  const last = opts.last;
+  if (last !== undefined && last.skipped !== true && last.ok && last.serverIdentity === opts.identity) return "pass";
+  return "run";
+}
+
+/** May lanes be spawned given the gate's own last word? Pure. */
+export function gateOpen(action: GateAction, record: PreflightRecord | undefined): boolean {
+  if (action === "skip") return true;
+  if (action === "pass") return true;
+  if (action === "wait") return false;
+  return record !== undefined && record.ok;
+}
+
+/** Last few non-empty lines of a smoke's output, for the state file and --status. */
+export function tailOf(text: string, lines = 3, maxChars = 500): string {
+  const kept = text.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim().length > 0).slice(-lines).join(" | ");
+  return kept.length > maxChars ? kept.slice(kept.length - maxChars) : kept;
+}
+
+/** Resolve a configured smoke path against the repo. */
+export function smokePath(script: string, root: string = REPO_ROOT): string {
+  return isAbsolute(script) ? script : join(root, script);
+}
+
+/**
+ * Run the configured smokes sequentially as children of this supervisor, with
+ * the account env they read (`MODULE_ACCOUNT`). The budget is for the whole
+ * sequence: what is left of it becomes each child's own kill deadline, and a
+ * timed-out child is SIGKILLed and recorded as a failure. A killed smoke can
+ * leak its module session; the module reclaims a permitted account's stale
+ * session on the next create (commit 9bba93b), so the next attempt is not stuck
+ * behind it.
+ */
+async function runPreflight(pf: FleetPreflight, identity: string): Promise<PreflightRecord> {
+  const started = Date.now();
+  const deadline = started + pf.timeoutMs;
+  const results: PreflightRecord["results"] = [];
+  let ok = true;
+  for (const script of pf.smokes) {
+    const path = smokePath(script);
+    const t0 = Date.now();
+    if (!existsSync(path)) {
+      results.push({ script, ok: false, ms: 0, tail: `no such smoke script: ${path}` });
+      ok = false;
+      break;
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      results.push({ script, ok: false, ms: 0, tail: "preflight budget exhausted before this script ran" });
+      ok = false;
+      break;
+    }
+    say(`preflight: ${script} (account ${pf.account})`);
+    const proc = Bun.spawn(["bun", path], {
+      cwd: REPO_ROOT,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, MODULE_ACCOUNT: pf.account },
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, left);
+    const [code, out, err] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    clearTimeout(timer);
+    const ms = Date.now() - t0;
+    const passed = code === 0 && !timedOut;
+    results.push({
+      script,
+      ok: passed,
+      ms,
+      tail: timedOut ? `TIMEOUT after ${ms}ms: ${tailOf(out + "\n" + err)}` : tailOf(out + "\n" + err),
+    });
+    if (!passed) {
+      ok = false;
+      break;
+    }
+  }
+  return { at: Date.now(), serverIdentity: identity, ok, results };
+}
+
+/** --status / --dry-run rendering of a gate record. Pure. */
+export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight): string[] {
+  const head = `preflight ${pf.enabled ? "enabled" : "disabled"} (account ${pf.account}, ${pf.smokes.length} smoke(s), budget ${Math.round(pf.timeoutMs / 1000)}s)`;
+  if (rec === undefined) return [head, "  no gate result recorded yet"];
+  const when = new Date(rec.at).toLocaleString();
+  const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — lanes blocked";
+  const out = [head, `  last gate ${verdict} at ${when}, identity ${rec.serverIdentity}`];
+  for (const r of rec.results) {
+    out.push(`    ${r.ok ? "ok  " : "FAIL"} ${r.script} (${Math.round(r.ms / 1000)}s)${r.tail === "" ? "" : ` — ${r.tail}`}`);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ output
 
 let fleetLog = "";
@@ -461,6 +755,8 @@ interface FleetState {
   containerized?: boolean;
   stamp: string;
   fleetConfig: string;
+  /** The last deploy-window gate result; absent for a pre-gate supervisor. */
+  preflight?: PreflightRecord;
   lanes: Record<
     string,
     {
@@ -504,7 +800,13 @@ export function resolveStatePath(
 
 const START_AT = Date.now();
 
-function writeState(configPath: string, stampToday: string, procs: Map<string, LaneProc>, draining: Set<string>): void {
+function writeState(
+  configPath: string,
+  stampToday: string,
+  procs: Map<string, LaneProc>,
+  draining: Set<string>,
+  preflight?: PreflightRecord,
+): void {
   const state: FleetState = {
     fleetPid: process.pid,
     startedAt: START_AT,
@@ -512,6 +814,7 @@ function writeState(configPath: string, stampToday: string, procs: Map<string, L
     containerized: CONTAINER,
     stamp: stampToday,
     fleetConfig: configPath,
+    ...(preflight !== undefined ? { preflight } : {}),
     lanes: {},
   };
   for (const [name, p] of procs) {
@@ -609,6 +912,26 @@ function laneDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
   }
 }
 
+/**
+ * Live episodes across every lane account, for scripts that must not run while
+ * the world is busy (infra/deploy-worldserver.sh). Same signal --status shows:
+ * the roster's own account-busy inference over the trajectory stores. Exit code
+ * carries the answer so bash never parses this text.
+ */
+function printLiveRuns(configPath: string): number {
+  const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
+  const accounts = [...new Set(config.lanes.map((l) => l.account))];
+  let live = 0;
+  for (const account of accounts) {
+    const holder = accountHeldBy(account, "");
+    if (holder === undefined) continue;
+    live++;
+    console.log(`live: account ${account} held by run ${holder}`);
+  }
+  console.log(`${live} live run(s)`);
+  return live;
+}
+
 function printStatus(configPath: string): void {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
   let state: FleetState | undefined;
@@ -643,6 +966,7 @@ function printStatus(configPath: string): void {
   if (state?.containerized === true) {
     console.log("  logs: docker compose -f infra/compose.yml logs -f fleet");
   }
+  for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
   for (const lane of config.lanes) {
     const ls = state?.lanes[lane.name];
     // The supervisor publishes each lane's liveness; only fall back to a pid
@@ -729,6 +1053,17 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     console.log(`  stdout    ${laneStdoutPath(lane.name, stampToday)}`);
     console.log(`  argv      ${laneArgv(lane, { stamp: stampToday, until: cliUntil }).join(" ")}`);
   }
+  console.log("");
+  for (const line of formatGate(undefined, config.preflight)) console.log(line);
+  if (config.preflight.enabled) {
+    for (const script of config.preflight.smokes) console.log(`  would run: bun ${smokePath(script)}`);
+    console.log(
+      "  gate: run before the first spawn and again whenever the server identity changes;\n" +
+        "  a failure spawns nothing and is re-checked every tick, so a fix or rollback unblocks it.",
+    );
+  } else {
+    console.log("  gate open: lanes spawn without smoking the server first");
+  }
   const enabled = config.lanes.filter((l) => l.enabled);
   console.log(
     `\n${enabled.length} lane(s) would run in parallel (${enabled.map((l) => `${l.name}=${l.account}`).join(", ")}).` +
@@ -745,11 +1080,13 @@ function parseArgs(argv: string[]): {
   config: string;
   dryRun: boolean;
   status: boolean;
+  liveRuns: boolean;
   until: string | undefined;
 } {
   let config = join(REPO_ROOT, "infra", "fleet.json");
   let dryRun = false;
   let status = false;
+  let liveRuns = false;
   let until: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -759,6 +1096,9 @@ function parseArgs(argv: string[]): {
         break;
       case "--status":
         status = true;
+        break;
+      case "--live-runs":
+        liveRuns = true;
         break;
       case "--until":
         until = argv[++i];
@@ -774,6 +1114,8 @@ function parseArgs(argv: string[]): {
             "  --dry-run       print the lane plan; spawn nothing",
             "  --status        read-only: per-lane process/run/progress report. Works from the",
             "                  host against a containerized supervisor (heartbeat, not kill -0)",
+            "  --live-runs     read-only: list live episodes across the lane accounts and exit",
+            "                  non-zero if there are any (the deploy window's refusal check)",
             "",
             "The supervisor's normal home is the `fleet` compose service (ADR-0020):",
             "  docker compose -f infra/compose.yml up -d --no-deps fleet",
@@ -789,7 +1131,7 @@ function parseArgs(argv: string[]): {
         config = isAbsolute(a) ? a : join(process.cwd(), a);
     }
   }
-  return { config, dryRun, status, until };
+  return { config, dryRun, status, liveRuns, until };
 }
 
 async function main(): Promise<void> {
@@ -801,6 +1143,9 @@ async function main(): Promise<void> {
   if (args.status) {
     printStatus(args.config);
     return;
+  }
+  if (args.liveRuns) {
+    process.exit(printLiveRuns(args.config) === 0 ? 0 : 1);
   }
   // The stamp is a supervisor EPOCH, not a date. It is taken once, here, and
   // every run id, lane roster, lane log and defer sidecar hangs off it for the
@@ -892,8 +1237,62 @@ async function main(): Promise<void> {
       `, stamp ${stampToday}${CONTAINER ? " (compose service `fleet`)" : ""}` +
       `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer with fleet.json"}`,
   );
-  for (const lane of diffLanes(config.lanes, sets).start) spawnLane(lane);
-  writeState(args.config, stampToday, procs, sets.draining);
+  // The gate: nothing is spawned against a server nobody has smoked. Held
+  // across ticks so a passing result is not re-run for the same identity.
+  let gate: PreflightRecord | undefined;
+  let complainedFor: string | undefined;
+
+  /**
+   * Evaluate (and if needed run) the gate. Returns whether lanes may spawn.
+   * Only `start` is ever suppressed: drains, undrains and rearms must keep
+   * working while the gate is shut, or an operator could not park a lane during
+   * a bad deploy.
+   */
+  const checkGate = async (pf: FleetPreflight): Promise<boolean> => {
+    const identity = await readServerIdentity();
+    const action = gateDecision({ enabled: pf.enabled, identity, last: gate });
+    if (action === "skip") {
+      if (gate?.skipped !== true) {
+        gate = { at: Date.now(), serverIdentity: identity ?? "unknown", ok: true, skipped: true, results: [] };
+        say("preflight: disabled in fleet.json — gate open, lanes spawn unsmoked");
+        record({ lane: "-", event: "preflight-skipped" });
+      }
+      return true;
+    }
+    if (action === "wait") {
+      if (complainedFor !== "unready") {
+        complainedFor = "unready";
+        say(`preflight: ${MODULE_URL}/health is not answering ready — spawning nothing until it does`);
+        record({ lane: "-", event: "preflight-waiting" });
+      }
+      return false;
+    }
+    if (action === "pass") return true;
+    say(`preflight: smoking the server (identity ${identity!})`);
+    record({ lane: "-", event: "preflight-start", detail: identity });
+    gate = await runPreflight(pf, identity!);
+    if (gate.ok) {
+      complainedFor = undefined;
+      say(`preflight: PASS in ${Math.round(gate.results.reduce((a, r) => a + r.ms, 0) / 1000)}s — lanes may spawn`);
+      record({ lane: "-", event: "preflight-pass", detail: identity });
+    } else {
+      const failed = gate.results.find((r) => !r.ok);
+      if (complainedFor !== identity) {
+        complainedFor = identity;
+        say(
+          `preflight: FAIL — ${failed?.script ?? "?"}: ${failed?.tail ?? "no output"}\n` +
+            `           NO LANES WILL SPAWN against this server. Fix or roll back the ` +
+            `worldserver; the gate re-runs every ${TICK_MS / 1000}s.`,
+        );
+      }
+      record({ lane: "-", event: "preflight-fail", detail: `${failed?.script ?? "?"}: ${failed?.tail ?? ""}` });
+    }
+    return gate.ok;
+  };
+
+  let mayStart = await checkGate(config.preflight);
+  if (mayStart) for (const lane of diffLanes(config.lanes, sets).start) spawnLane(lane);
+  writeState(args.config, stampToday, procs, sets.draining, gate);
 
   for (;;) {
     await new Promise((res) => setTimeout(res, TICK_MS));
@@ -937,7 +1336,14 @@ async function main(): Promise<void> {
       say(`lane ${name}: disabled — draining (SIGTERM at the next episode boundary)`);
       record({ lane: name, event: "draining" });
     }
-    for (const lane of actions.start) spawnLane(lane);
+    // The gate runs after the drain/undrain/rearm actions above precisely so a
+    // shut gate never blocks the operator from parking a lane.
+    mayStart = await checkGate(config.preflight);
+    if (mayStart) {
+      for (const lane of actions.start) spawnLane(lane);
+    } else if (actions.start.length > 0) {
+      record({ lane: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
+    }
 
     // Drains: only SIGTERM a roster with no episode child.
     for (const name of [...sets.draining]) {
@@ -954,7 +1360,7 @@ async function main(): Promise<void> {
       }
     }
 
-    writeState(args.config, stampToday, procs, sets.draining);
+    writeState(args.config, stampToday, procs, sets.draining, gate);
     const toStart = diffLanes(config.lanes, sets).start.length;
     if (fleetComplete({ running: sets.running.size, toStart, hasDeadline: args.until !== undefined })) {
       say("all lanes have exited and nothing is left to spawn — fleet complete");
@@ -971,7 +1377,7 @@ async function main(): Promise<void> {
       }
     }
   }
-  writeState(args.config, stampToday, procs, sets.draining);
+  writeState(args.config, stampToday, procs, sets.draining, gate);
   say("fleet exit");
 }
 

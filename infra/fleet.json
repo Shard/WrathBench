@@ -47,12 +47,32 @@
     "OpenRouter (verified 2026-08-22, pricing 0/0). Given the ~1-week stealth window it gets",
     "its own account (RUNNER) and a solo lane for clean continuous data — do not pad it.",
     "",
+    "preflight: the deploy-window smoke, as a normal part of fleet operation. The supervisor runs",
+    "these scripts against the live server before it spawns ANY lane, and again whenever the server",
+    "identity changes (a worldserver recreate or restart). A failure spawns nothing and is re-checked",
+    "every tick, so a fix or a rollback unblocks the fleet with no operator action; --status shows the",
+    "last gate result. timeoutMs is the budget for the WHOLE sequence, not per script.",
+    "",
+    "SHIPPED ARMED-OFF. Two one-time steps before flipping enabled:true, in this order:",
+    "  1. create the account:  docker compose -f infra/compose.yml run --rm --no-deps \\",
+    "       -e WRATHBENCH_ACCOUNT_USER=SMOKE -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE bootstrap",
+    "  2. recreate the worldserver so it picks up SMOKE in AC_WRATH_BENCH_ACCOUNTS (compose.yml) —",
+    "     i.e. the next deploy window; until then the module answers 403 account_not_permitted and",
+    "     the gate would block every lane. Never point it at PROBE: that account is the ad-hoc",
+    "     debugging account and the gate would fight whoever is using it.",
+    "",
     "Local lanes: an openai lane may point apiBase at a self-hosted OpenAI-compatible",
     "endpoint (e.g. LM Studio on the LAN). That is NOT a shared free-cloud pool, so it",
     "is exempt from the free-model-suffix rule — but the claude bar still holds: no",
     "claude-* id ever rides an openai lane. Its apiKeyEnv (LMSTUDIO_KEY) is a dummy the",
     "server ignores; the pipeline just needs the var to exist in .env."
   ],
+  "preflight": {
+    "enabled": false,
+    "account": "SMOKE",
+    "smokes": ["infra/smoke/module-quest.ts", "infra/smoke/quest-status.ts"],
+    "timeoutMs": 900000
+  },
   "lanes": [
     {
       "name": "sub-sonnet",

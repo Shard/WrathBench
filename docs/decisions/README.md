@@ -24,3 +24,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0020: The fleet supervisor is a compose service, not a host process
 - ADR-0021: Client-parity queries live in the SDK, except cache-miss lookups
 - ADR-0022: Dashboard as a SolidJS SPA over a read-only viewer API
+- ADR-0023: The deploy-window smoke is a supervisor gate, not a deploy step

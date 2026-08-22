@@ -175,7 +175,14 @@ services:
       # one live session per account). It exists in auth already; this line only
       # takes effect when the worldserver container is next recreated, and until
       # then the module answers 403 account_not_permitted for it.
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,SHAKEOUT,SHAKEOUT2,PROBE"
+      # SMOKE is the fleet's preflight-gate account (infra/fleet.json preflight):
+      # the deploy-window smokes log in as it, so they never contend with a lane
+      # or with PROBE (the ad-hoc debugging account). Same caveat as SHAKEOUT2 —
+      # effective at the next recreate, i.e. the next deploy window — and it must
+      # exist in auth first: `docker compose -f infra/compose.yml run --rm
+      # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE
+      # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE bootstrap`.
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc
