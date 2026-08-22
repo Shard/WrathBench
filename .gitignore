@@ -4,3 +4,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Claude Code session worktrees (never part of the repo)
+.claude/worktrees/
