@@ -102,34 +102,50 @@ cd "${REPO_ROOT}"
 # ------------------------------------------------------------------ 0. config
 # One bun call, plain text out, KEY<TAB>VALUE lines — no console.log of a
 # number anywhere on a path bash will do arithmetic on.
+# Smokes are `script<TAB>account` pairs (SMOKES / SMOKE_ACCOUNTS index-aligned):
+# fleet.json entries may be a bare script (on preflight.account) or
+# { script, account }. `deploySmokes` is the deploy-time full arc the
+# supervisor never runs (ADR-0023 amendment); it has its own budget.
 PREFLIGHT_ENABLED=""
 PREFLIGHT_ACCOUNT=""
 PREFLIGHT_TIMEOUT_S=""
+DEPLOY_TIMEOUT_S=""
 SMOKES=()
+SMOKE_ACCOUNTS=()
+DEPLOY_SMOKES=()
+DEPLOY_SMOKE_ACCOUNTS=()
 read_preflight() {
-  local key value
-  while IFS=$'\t' read -r key value; do
+  local key value account
+  while IFS=$'\t' read -r key value account; do
     case "${key}" in
       enabled) PREFLIGHT_ENABLED="${value}" ;;
       account) PREFLIGHT_ACCOUNT="${value}" ;;
       timeout) PREFLIGHT_TIMEOUT_S="${value}" ;;
-      smoke) SMOKES+=("${value}") ;;
+      deploytimeout) DEPLOY_TIMEOUT_S="${value}" ;;
+      smoke) SMOKES+=("${value}"); SMOKE_ACCOUNTS+=("${account}") ;;
+      deploysmoke) DEPLOY_SMOKES+=("${value}"); DEPLOY_SMOKE_ACCOUNTS+=("${account}") ;;
     esac
   done < <(
     "${BUN_PLAIN_ENV[@]}" bun -e '
       const c = await Bun.file(process.argv[1]).json();
       const pf = c.preflight ?? {};
+      const account = pf.account ?? "SMOKE";
+      const entry = (kind) => (s) =>
+        typeof s === "string" ? `${kind}\t${s}\t${account}` : `${kind}\t${s.script}\t${s.account ?? account}`;
       const lines = [
         `enabled\t${pf.enabled === true ? 1 : 0}`,
-        `account\t${pf.account ?? "SMOKE"}`,
+        `account\t${account}`,
         `timeout\t${Math.ceil((Number(pf.timeoutMs) || 900000) / 1000)}`,
-        ...(pf.smokes ?? []).map((s) => `smoke\t${s}`),
+        `deploytimeout\t${Math.ceil((Number(pf.deployTimeoutMs) || 900000) / 1000)}`,
+        ...(pf.smokes ?? []).map(entry("smoke")),
+        ...(pf.deploySmokes ?? []).map(entry("deploysmoke")),
       ];
       process.stdout.write(lines.join("\n") + "\n");
     ' "${FLEET_JSON}" | strip_ansi
   )
   require_num "preflight.enabled" "${PREFLIGHT_ENABLED}"
   require_num "preflight.timeoutMs (seconds)" "${PREFLIGHT_TIMEOUT_S}"
+  require_num "preflight.deployTimeoutMs (seconds)" "${DEPLOY_TIMEOUT_S}"
   [[ -n "${PREFLIGHT_ACCOUNT}" ]] || die "preflight.account is empty in ${FLEET_JSON}"
 }
 read_preflight
@@ -181,6 +197,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  preflight account  ${PREFLIGHT_ACCOUNT}"
   say "  preflight budget   ${PREFLIGHT_TIMEOUT_S}s for the whole smoke sequence"
   say "  smokes (${#SMOKES[@]})       ${SMOKES[*]-none}"
+  say "  deploy smokes (${#DEPLOY_SMOKES[@]}) ${DEPLOY_SMOKES[*]-none} (budget ${DEPLOY_TIMEOUT_S}s, run after the gate)"
   say "  fleet container    $(fleet_container_running && echo running || echo "not running")"
   say "  fleet heartbeat    $(heartbeat_age_s)s ago (stale at ${HEARTBEAT_STALE_S}s)"
   say "  verification path  $(if [[ "${RUN_SMOKE}" -eq 0 ]]; then echo "none (--no-smoke)"; elif [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then echo "wait for the fleet gate, then direct smokes if it never records"; elif [[ "${#SMOKES[@]}" -eq 0 ]]; then echo "NONE — preflight has no smokes; the deploy would exit non-zero unverified"; else echo "direct smokes via docker compose exec runner"; fi)"
@@ -351,35 +368,36 @@ elif [[ "${PREFLIGHT_ENABLED}" -eq 1 ]]; then
   say "preflight is enabled but the fleet supervisor is not gating (container $(fleet_container_running && echo running || echo "not running"), heartbeat $(heartbeat_age_s)s ago) — smoking directly"
 fi
 
-if [[ -z "${VERIFIED_BY}" ]]; then
-  if [[ "${#SMOKES[@]}" -eq 0 ]]; then
-    trap - ERR
-    say "no smokes configured in fleet.json preflight — DEPLOYED UNVERIFIED, and that was not asked for."
-    say "Nothing has driven this server end to end. Configure preflight.smokes, or say so with --no-smoke."
-    exit 1
-  fi
-  say "running the preflight smokes directly as ${PREFLIGHT_ACCOUNT} (docker compose exec runner)"
-  # timeoutMs is the budget for the WHOLE sequence, same as the supervisor's
-  # gate, so each script gets what is left of it. Note that `timeout` kills the
-  # `docker compose exec` CLIENT: the smoke keeps running inside the runner and
-  # keeps its session (the module reclaims that on the next create) — so a
-  # timeout here is a hard stop, not something to continue past.
-  smoke_deadline=$(( $(date +%s) + PREFLIGHT_TIMEOUT_S ))
-  ran=0
-  for smoke in "${SMOKES[@]}"; do
+# Run smokes directly, sequentially, through `docker compose exec runner`,
+# against one shared budget. Args: budget seconds, label, then script/account
+# pairs (script1 account1 script2 account2 ...). Sets RAN to the count that
+# passed; rolls back and exits on the first failure. The budget is for the
+# WHOLE sequence, same as the supervisor's gate, so each script gets what is
+# left of it. Note that `timeout` kills the `docker compose exec` CLIENT: the
+# smoke keeps running inside the runner and keeps its session (the module
+# reclaims that on the next create) — so a timeout here is a hard stop, not
+# something to continue past.
+RAN=0
+run_smokes_directly() {
+  local budget="$1" label="$2"; shift 2
+  local smoke account left started src took
+  local smoke_deadline=$(( $(date +%s) + budget ))
+  RAN=0
+  while [[ "$#" -ge 2 ]]; do
+    smoke="$1"; account="$2"; shift 2
     left=$(( smoke_deadline - $(date +%s) ))
     if [[ "${left}" -le 0 ]]; then
-      say "preflight budget exhausted before ${smoke} ran"
+      say "${label} budget exhausted before ${smoke} ran"
       trap - ERR
       rollback
       exit 1
     fi
-    say "smoke ${smoke} — starting (${left}s left of the sequence budget)"
+    say "smoke ${smoke} — starting as ${account} (${left}s left of the ${label} budget)"
     started=$(date +%s)
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # even with errexit off, and only a tested command is exempt from both.
     if timeout "${left}" "${COMPOSE[@]}" exec -T \
-        -e "MODULE_ACCOUNT=${PREFLIGHT_ACCOUNT}" runner bun "${smoke}"; then
+        -e "MODULE_ACCOUNT=${account}" runner bun "${smoke}"; then
       src=0
     else
       src=$?
@@ -392,15 +410,45 @@ if [[ -z "${VERIFIED_BY}" ]]; then
       exit 1
     fi
     say "smoke ${smoke} — PASSED in ${took}s (exit 0)"
-    ran=$(( ran + 1 ))
+    RAN=$(( RAN + 1 ))
   done
-  if [[ "${ran}" -eq 0 ]]; then
+}
+
+# Interleave two index-aligned arrays into script/account pairs.
+pairs() {
+  local -n _scripts="$1" _accounts="$2"
+  local i
+  for (( i = 0; i < ${#_scripts[@]}; i++ )); do printf '%s\n%s\n' "${_scripts[$i]}" "${_accounts[$i]}"; done
+}
+
+if [[ -z "${VERIFIED_BY}" ]]; then
+  if [[ "${#SMOKES[@]}" -eq 0 ]]; then
+    trap - ERR
+    say "no smokes configured in fleet.json preflight — DEPLOYED UNVERIFIED, and that was not asked for."
+    say "Nothing has driven this server end to end. Configure preflight.smokes, or say so with --no-smoke."
+    exit 1
+  fi
+  say "running the preflight smokes directly (docker compose exec runner)"
+  mapfile -t gate_pairs < <(pairs SMOKES SMOKE_ACCOUNTS)
+  run_smokes_directly "${PREFLIGHT_TIMEOUT_S}" "gate" "${gate_pairs[@]}"
+  if [[ "${RAN}" -eq 0 ]]; then
     say "no smoke actually executed — refusing to call this verified"
     trap - ERR
     rollback
     exit 1
   fi
-  VERIFIED_BY="${ran} direct smoke(s)"
+  VERIFIED_BY="${RAN} direct smoke(s)"
+fi
+
+# The deploy-time full arc (preflight.deploySmokes): the per-tick gate is the
+# fast proof; this is the long one, run once per deploy, after the gate has
+# passed — so the accounts it uses are idle, and a gate failure never pays for
+# it. A failure here rolls back exactly like a gate failure.
+if [[ "${#DEPLOY_SMOKES[@]}" -gt 0 ]]; then
+  say "running the deploy-time full arc (${#DEPLOY_SMOKES[@]} smoke(s), budget ${DEPLOY_TIMEOUT_S}s)"
+  mapfile -t deploy_pairs < <(pairs DEPLOY_SMOKES DEPLOY_SMOKE_ACCOUNTS)
+  run_smokes_directly "${DEPLOY_TIMEOUT_S}" "full-arc" "${deploy_pairs[@]}"
+  VERIFIED_BY="${VERIFIED_BY} + ${RAN} full-arc smoke(s)"
 fi
 
 trap - ERR

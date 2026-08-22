@@ -99,16 +99,42 @@ export interface FleetLane {
  * again whenever the server identity changes (a worldserver recreate or
  * restart). `enabled:false` keeps the mechanism installed and disarmed.
  *
- * `timeoutMs` is the budget for the WHOLE sequence, not per script; the
- * per-script `ms` in the recorded results is the breakdown.
+ * `timeoutMs` is the budget for the WHOLE gate, not per script: every child
+ * gets the same deadline and the per-script `ms` in the recorded results is
+ * the breakdown.
+ *
+ * Smokes fan out: entries with distinct accounts run concurrently (one live
+ * session per account is the module's rule, so the account IS the lane), and
+ * entries that share an account run one after the other in list order. A bare
+ * string entry in fleet.json is the pre-2026-08-23 form and means "on the
+ * default `account`".
+ *
+ * `deploySmokes` is the deploy-time full arc (module-quest.ts, minutes long):
+ * run by infra/deploy-worldserver.sh once per deploy, never by the per-tick
+ * gate. It is config here so the deploy script and the supervisor read the
+ * same file and the same accounts clash-check.
  */
 export interface FleetPreflight {
   enabled: boolean;
-  /** Game account the smokes log in as — its own, never a lane's, never PROBE. */
+  /** Default game account for string-form smokes — its own, never a lane's, never PROBE. */
   account: string;
-  /** Repo-relative (or absolute) smoke scripts, run sequentially in order. */
-  smokes: string[];
+  /** Repo-relative (or absolute) smoke scripts, each bound to the account it logs in as. */
+  smokes: PreflightSmoke[];
   timeoutMs: number;
+  /** Deploy-only smokes (deploy-worldserver.sh), same entry forms as `smokes`. */
+  deploySmokes: PreflightSmoke[];
+  /** Budget for the whole deploySmokes sequence. */
+  deployTimeoutMs: number;
+}
+
+export interface PreflightSmoke {
+  script: string;
+  account: string;
+}
+
+/** Every account the gate logs in as, de-duplicated, in first-seen order. */
+export function preflightAccounts(pf: FleetPreflight): string[] {
+  return [...new Set([pf.account, ...pf.smokes.map((s) => s.account), ...pf.deploySmokes.map((s) => s.account)])];
 }
 
 /** One recorded gate attempt. Written into fleet-state.json; read by --status. */
@@ -134,6 +160,8 @@ export const DEFAULT_PREFLIGHT: FleetPreflight = {
   account: "SMOKE",
   smokes: [],
   timeoutMs: 900_000,
+  deploySmokes: [],
+  deployTimeoutMs: 900_000,
 };
 
 const TICK_MS = 60_000;
@@ -269,18 +297,35 @@ export function parsePreflight(raw: unknown): FleetPreflight {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config: preflight must be a JSON object");
   }
-  const o = raw as Partial<FleetPreflight>;
+  const o = raw as Omit<Partial<FleetPreflight>, "smokes" | "deploySmokes"> & { smokes?: unknown; deploySmokes?: unknown };
   if (typeof o.enabled !== "boolean") fail("preflight: enabled must be true or false");
   if (typeof o.account !== "string" || o.account.length === 0) fail("preflight: account is required");
-  if (!Array.isArray(o.smokes) || o.smokes.some((x) => typeof x !== "string" || x.length === 0)) {
-    fail("preflight: smokes must be an array of script paths");
-  }
-  const timeoutMs = o.timeoutMs ?? DEFAULT_PREFLIGHT.timeoutMs;
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    fail("preflight: timeoutMs must be a positive number of milliseconds");
-  }
-  if (o.enabled && o.smokes.length === 0) fail("preflight: enabled with no smokes to run");
-  return { enabled: o.enabled, account: o.account, smokes: [...o.smokes], timeoutMs };
+  const defaultAccount = o.account;
+  const parseSmokes = (list: unknown, key: string): PreflightSmoke[] => {
+    if (!Array.isArray(list)) fail(`preflight: ${key} must be an array of script paths`);
+    return list.map((x: unknown) => {
+      if (typeof x === "string" && x.length > 0) return { script: x, account: defaultAccount };
+      if (typeof x === "object" && x !== null && !Array.isArray(x)) {
+        const e = x as Partial<PreflightSmoke>;
+        if (typeof e.script !== "string" || e.script.length === 0) fail(`preflight: ${key} entry needs a script path`);
+        const account = e.account ?? defaultAccount;
+        if (typeof account !== "string" || account.length === 0) fail(`preflight: ${key} ${e.script} needs an account`);
+        return { script: e.script, account };
+      }
+      fail(`preflight: ${key} must be an array of script paths`);
+    });
+  };
+  const parseBudget = (v: unknown, key: string, fallback: number): number => {
+    const ms = v ?? fallback;
+    if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) fail(`preflight: ${key} must be a positive number of milliseconds`);
+    return ms;
+  };
+  const smokes = parseSmokes(o.smokes, "smokes");
+  const deploySmokes = o.deploySmokes === undefined ? [] : parseSmokes(o.deploySmokes, "deploySmokes");
+  const timeoutMs = parseBudget(o.timeoutMs, "timeoutMs", DEFAULT_PREFLIGHT.timeoutMs);
+  const deployTimeoutMs = parseBudget(o.deployTimeoutMs, "deployTimeoutMs", DEFAULT_PREFLIGHT.deployTimeoutMs);
+  if (o.enabled && smokes.length === 0) fail("preflight: enabled with no smokes to run");
+  return { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
 }
 
 /** Parse + validate a fleet config. Throws with a config-error message. */
@@ -351,9 +396,11 @@ export function parseFleet(raw: unknown): FleetConfig {
   // The smokes hold a live session for their whole arc. Sharing an account with
   // an enabled lane would mean the gate and the lane reclaiming the account from
   // each other all night, so it is a config error, not a race to discover live.
-  const clash = byAccount.get(preflight.account.toUpperCase());
-  if (preflight.enabled && clash !== undefined) {
-    fail(`preflight account ${preflight.account} is also lane ${clash}'s — the gate needs its own account`);
+  if (preflight.enabled) {
+    for (const account of preflightAccounts(preflight)) {
+      const clash = byAccount.get(account.toUpperCase());
+      if (clash !== undefined) fail(`preflight account ${account} is also lane ${clash}'s — the gate needs its own account`);
+    }
   }
   return { notes, lanes, preflight };
 }
@@ -681,71 +728,97 @@ export function smokePath(script: string, root: string = REPO_ROOT): string {
 }
 
 /**
- * Run the configured smokes sequentially as children of this supervisor, with
- * the account env they read (`MODULE_ACCOUNT`). The budget is for the whole
- * sequence: what is left of it becomes each child's own kill deadline, and a
- * timed-out child is SIGKILLed and recorded as a failure. A killed smoke can
- * leak its module session; the module reclaims a permitted account's stale
- * session on the next create (commit 9bba93b), so the next attempt is not stuck
- * behind it.
+ * One smoke as a child of this supervisor, with the account env it reads
+ * (`MODULE_ACCOUNT`), killed at `deadline`. A timed-out child is SIGKILLed and
+ * recorded as a failure. A killed smoke can leak its module session; the
+ * module reclaims a permitted account's stale session on the next create
+ * (commit 9bba93b), so the next attempt is not stuck behind it.
  */
-async function runPreflight(pf: FleetPreflight, server: ServerIdentity): Promise<PreflightRecord> {
-  const started = Date.now();
-  const deadline = started + pf.timeoutMs;
-  const results: PreflightRecord["results"] = [];
-  let ok = true;
-  for (const script of pf.smokes) {
-    const path = smokePath(script);
-    const t0 = Date.now();
-    if (!existsSync(path)) {
-      results.push({ script, ok: false, ms: 0, tail: `no such smoke script: ${path}` });
-      ok = false;
-      break;
-    }
-    const left = deadline - Date.now();
-    if (left <= 0) {
-      results.push({ script, ok: false, ms: 0, tail: "preflight budget exhausted before this script ran" });
-      ok = false;
-      break;
-    }
-    say(`preflight: ${script} (account ${pf.account})`);
-    const proc = Bun.spawn(["bun", path], {
-      cwd: REPO_ROOT,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, MODULE_ACCOUNT: pf.account },
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill("SIGKILL");
-    }, left);
-    const [code, out, err] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    clearTimeout(timer);
-    const ms = Date.now() - t0;
-    const passed = code === 0 && !timedOut;
-    results.push({
-      script,
-      ok: passed,
-      ms,
-      tail: timedOut ? `TIMEOUT after ${ms}ms: ${tailOf(out + "\n" + err)}` : tailOf(out + "\n" + err),
-    });
-    if (!passed) {
-      ok = false;
-      break;
-    }
+export type SmokeRunner = (smoke: PreflightSmoke, deadline: number) => Promise<PreflightRecord["results"][number]>;
+
+async function spawnSmoke(smoke: PreflightSmoke, deadline: number): Promise<PreflightRecord["results"][number]> {
+  const { script, account } = smoke;
+  const path = smokePath(script);
+  if (!existsSync(path)) return { script, ok: false, ms: 0, tail: `no such smoke script: ${path}` };
+  const left = deadline - Date.now();
+  if (left <= 0) return { script, ok: false, ms: 0, tail: "preflight budget exhausted before this script ran" };
+  say(`preflight: ${script} (account ${account})`);
+  const t0 = Date.now();
+  const proc = Bun.spawn(["bun", path], {
+    cwd: REPO_ROOT,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, MODULE_ACCOUNT: account },
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill("SIGKILL");
+  }, left);
+  const [code, out, err] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  clearTimeout(timer);
+  const ms = Date.now() - t0;
+  return {
+    script,
+    ok: code === 0 && !timedOut,
+    ms,
+    tail: timedOut ? `TIMEOUT after ${ms}ms: ${tailOf(out + "\n" + err)}` : tailOf(out + "\n" + err),
+  };
+}
+
+/**
+ * Run the configured smokes: one sequential chain per account, all chains
+ * concurrently, every child against the same shared deadline. Within a chain
+ * a failure stops the rest of that chain (they would be logging into the same
+ * account the failed one may have left mid-arc); other chains run to their own
+ * end so the record names every script that failed, not just the first.
+ * Results are reported in config order. Pure apart from the injected runner.
+ */
+export async function runPreflight(
+  pf: FleetPreflight,
+  server: ServerIdentity,
+  run: SmokeRunner = spawnSmoke,
+  clock: () => number = Date.now,
+): Promise<PreflightRecord> {
+  const deadline = clock() + pf.timeoutMs;
+  const chains = new Map<string, PreflightSmoke[]>();
+  for (const s of pf.smokes) {
+    const key = s.account.toUpperCase();
+    chains.set(key, [...(chains.get(key) ?? []), s]);
   }
-  return { at: Date.now(), serverIdentity: server.identity, ...(server.build !== undefined ? { build: server.build } : {}), ok, results };
+  const results = new Map<PreflightSmoke, PreflightRecord["results"][number]>();
+  await Promise.all(
+    [...chains.values()].map(async (chain) => {
+      for (const smoke of chain) {
+        const r = await run(smoke, deadline);
+        results.set(smoke, r);
+        if (!r.ok) break;
+      }
+    }),
+  );
+  const ordered = pf.smokes.map(
+    (s) => results.get(s) ?? { script: s.script, ok: false, ms: 0, tail: `not run: an earlier smoke on account ${s.account} failed` },
+  );
+  return {
+    at: clock(),
+    serverIdentity: server.identity,
+    ...(server.build !== undefined ? { build: server.build } : {}),
+    ok: ordered.every((r) => r.ok),
+    results: ordered,
+  };
 }
 
 /** --status / --dry-run rendering of a gate record. Pure. */
 export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight): string[] {
-  const head = `preflight ${pf.enabled ? "enabled" : "disabled"} (account ${pf.account}, ${pf.smokes.length} smoke(s), budget ${Math.round(pf.timeoutMs / 1000)}s)`;
+  const accounts = preflightAccounts(pf);
+  const head =
+    `preflight ${pf.enabled ? "enabled" : "disabled"} (${pf.smokes.length} smoke(s) on ${accounts.join(",")}, ` +
+    `budget ${Math.round(pf.timeoutMs / 1000)}s; ${pf.deploySmokes.length} deploy-only smoke(s), budget ${Math.round(pf.deployTimeoutMs / 1000)}s)`;
   if (rec === undefined) return [head, "  no gate result recorded yet"];
   const when = new Date(rec.at).toLocaleString();
   const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — lanes blocked";
@@ -1012,7 +1085,7 @@ function printLiveRuns(configPath: string): number {
   // Lane accounts plus the gate's own and the ad-hoc debugging account: the
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a lane's does.
-  const accounts = [...new Set([...config.lanes.map((l) => l.account), config.preflight.account, "PROBE"])];
+  const accounts = [...new Set([...config.lanes.map((l) => l.account), ...preflightAccounts(config.preflight), "PROBE"])];
   let live = 0;
   for (const account of accounts) {
     const holder = accountHeldBy(account, "");
@@ -1148,7 +1221,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   console.log("");
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
   if (config.preflight.enabled) {
-    for (const script of config.preflight.smokes) console.log(`  would run: bun ${smokePath(script)}`);
+    for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
+    for (const s of config.preflight.deploySmokes) console.log(`  deploy-worldserver.sh only: bun ${smokePath(s.script)} (account ${s.account})`);
     console.log(
       "  gate: run before the first spawn and again whenever the server identity changes;\n" +
         "  a failure spawns nothing and is re-checked every tick, so a fix or rollback unblocks it.",
@@ -1379,7 +1453,7 @@ async function main(): Promise<void> {
     }
     if (gate.ok) {
       complainedFor = undefined;
-      say(`preflight: PASS in ${Math.round(gate.results.reduce((a, r) => a + r.ms, 0) / 1000)}s — lanes may spawn`);
+      say(`preflight: PASS in ${Math.round(Math.max(0, ...gate.results.map((r) => r.ms)) / 1000)}s wall — lanes may spawn`);
       record({ lane: "-", event: "preflight-pass", detail: identity });
     } else {
       const failed = gate.results.find((r) => !r.ok);
