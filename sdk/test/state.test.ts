@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { parseEventFrame, type GameEvent } from "../src/protocol";
 import { STREAM_GAP, type StreamEvent, type StreamGapEvent } from "../src/events";
-import { pointOf, StateCache } from "../src/state";
+import { pointOf, StateCache, type UnitFilter } from "../src/state";
 import {
   addKill,
   auraRemoved,
@@ -779,5 +779,267 @@ describe("ADR-0017: guids are opaque decimal strings at the model surface", () =
     expect(unit).toBeDefined();
     const byGuid = new Map(cache.nearbyUnits().map((u) => [u.guid, u]));
     expect(byGuid.get(CREATURE_GUID)).toBe(unit!);
+  });
+});
+
+// ---------------------------------------------------------------- state.units
+//
+// The scan helper (ADR-0015, earned by roster-opus-low-20260822 turn 15, where
+// `u.fields.entry?.value` on the raw Map made a populated world look empty).
+// Fixtures here are local because they exist to make one query answer
+// interesting: several objects at known distances, in known conditions.
+
+const FAR_GUID = "1001";
+const DEAD_GUID = "1002";
+const OBJECT_GUID = "1003";
+const GHOST_GUID = "1004";
+const VENDOR_GUID = "1005";
+const FAR_ENTRY = 4242;
+const VENDOR_ENTRY = 4243;
+
+/** A create block at a chosen offset from our own login position. */
+function unitAt(
+  guid: string,
+  seq: number,
+  opts: {
+    objectType?: string;
+    dx?: number;
+    entry?: number;
+    health?: number;
+    maxHealth?: number;
+    level?: number;
+    npcFlags?: number;
+    pos?: boolean;
+  } = {},
+): unknown {
+  const fields: Record<string, number> = {};
+  if (opts.entry !== undefined) fields["entry"] = opts.entry;
+  if (opts.health !== undefined) fields["health"] = opts.health;
+  if (opts.maxHealth !== undefined) fields["maxHealth"] = opts.maxHealth;
+  if (opts.level !== undefined) fields["level"] = opts.level;
+  if (opts.npcFlags !== undefined) fields["npcFlags"] = opts.npcFlags;
+  return {
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      blocks: 1,
+      objects: [
+        {
+          update: "create",
+          guid,
+          objectType: opts.objectType ?? "unit",
+          ...(opts.pos === false
+            ? {}
+            : { pos: { x: -1234.5 + (opts.dx ?? 0), y: 987.25, z: 42.125, o: 0 } }),
+          fields,
+        },
+      ],
+    },
+  };
+}
+
+/** A creature query answer for one invented entry. */
+function namedEntry(entry: number, name: string, seq: number): unknown {
+  return {
+    seq,
+    opcode: "SMSG_CREATURE_QUERY_RESPONSE",
+    opcodeId: 0x061,
+    ts: 1_700_000_000_000 + seq,
+    data: { entry, found: true, name, subname: "", type: 1, rank: 0 },
+  };
+}
+
+/** worldStream (self + Thistlebore at ~35y) plus a populated neighbourhood. */
+const scanStream: unknown[] = [
+  ...worldStream,
+  unitAt(FAR_GUID, 30, { dx: 100, entry: FAR_ENTRY, health: 50, maxHealth: 50, level: 9 }),
+  namedEntry(FAR_ENTRY, "Ridgeback Boar", 31),
+  unitAt(DEAD_GUID, 32, { dx: 5, entry: FAR_ENTRY, health: 0, maxHealth: 50 }),
+  unitAt(OBJECT_GUID, 33, { dx: 10, objectType: "gameObject", entry: 7777 }),
+  unitAt(GHOST_GUID, 34, { dx: 0, entry: FAR_ENTRY, pos: false }),
+  unitAt(VENDOR_GUID, 35, { dx: 2, entry: VENDOR_ENTRY, health: 900, maxHealth: 900, npcFlags: 129 }),
+];
+
+describe("state.units(): the flat scan helper", () => {
+  const cache = () => StateCache.replay(toEvents(scanStream), { seed: SEED });
+
+  test("returns flat plain objects: no Observed wrappers, no Maps, JSON round-trips", () => {
+    const rows = cache().units();
+    expect(rows.length).toBeGreaterThan(3);
+    const json = JSON.stringify(rows);
+    expect(json).not.toContain('"value"');
+    expect(json).not.toContain('"seq"');
+    expect(json).not.toContain('"fields"');
+    expect(JSON.parse(json)).toEqual(JSON.parse(JSON.stringify(rows)));
+    const one = rows.find((r) => r.guid === CREATURE_GUID)!;
+    expect(one.entry).toBe(CREATURE_ENTRY);
+    expect(one.name).toBe("Thistlebore");
+    expect(one.type).toBe("unit");
+    expect(one.level).toBe(4);
+    expect(one.health).toBe(60);
+    expect(one.maxHealth).toBe(120);
+    expect(one.dead).toBe(false);
+    expect(typeof one.distance).toBe("number");
+    expect(typeof one.x).toBe("number");
+  });
+
+  test("never invents: unobserved fields stay undefined", () => {
+    const ghost = cache().units().find((r) => r.guid === GHOST_GUID)!;
+    expect(ghost.health).toBeUndefined();
+    expect(ghost.maxHealth).toBeUndefined();
+    expect(ghost.dead).toBeUndefined();
+    expect(ghost.level).toBeUndefined();
+    expect(ghost.distance).toBeUndefined();
+    expect(ghost.x).toBeUndefined();
+  });
+
+  test("sorted by distance ascending, unknown distances last", () => {
+    const rows = cache().units();
+    const known = rows.filter((r) => r.distance !== undefined).map((r) => r.distance!);
+    expect(known).toEqual([...known].sort((a, b) => a - b));
+    expect(rows.at(-1)!.guid).toBe(GHOST_GUID);
+    expect(rows[0]!.guid).toBe(VENDOR_GUID);
+  });
+
+  test("no self position means no distances, and the objects still list in first-sight order", () => {
+    // Every row unknown: the comparator must still be a total order, or replay
+    // would not sort the same way twice.
+    const rows = StateCache.replay(
+      toEvents([
+        creatureCreate,
+        creatureQuery,
+        unitAt(FAR_GUID, 30, { dx: 100, entry: FAR_ENTRY }),
+        unitAt(DEAD_GUID, 32, { dx: 5, entry: FAR_ENTRY }),
+      ]),
+      {},
+    ).units();
+    expect(rows.map((r) => r.guid)).toEqual([CREATURE_GUID, FAR_GUID, DEAD_GUID]);
+    expect(rows.every((r) => r.distance === undefined)).toBe(true);
+    expect(rows[0]!.name).toBe("Thistlebore");
+  });
+
+  test("items and containers are excluded; untyped objects are not", () => {
+    const withItem = StateCache.replay(toEvents([...worldStream, itemCreate, itemQuery]), { seed: SEED });
+    expect(withItem.units().map((r) => r.guid)).not.toContain(ITEM_GUID);
+    const untyped = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        {
+          seq: 40,
+          opcode: "SMSG_UPDATE_OBJECT",
+          opcodeId: 0x0a9,
+          ts: 1_700_000_000_400,
+          data: { blocks: 1, objects: [{ update: "values", guid: "2002", fields: { health: 5 } }] },
+        },
+      ]),
+      { seed: SEED },
+    );
+    const row = untyped.units().find((r) => r.guid === "2002")!;
+    expect(row).toBeDefined();
+    expect(row.type).toBeUndefined();
+  });
+
+  test("entry filter takes one id or a list, and a numeric string is repaired", () => {
+    const c = cache();
+    expect(c.units({ entry: CREATURE_ENTRY }).map((r) => r.guid)).toEqual([CREATURE_GUID]);
+    expect(c.units({ entry: [CREATURE_ENTRY, VENDOR_ENTRY] }).map((r) => r.guid)).toEqual([
+      VENDOR_GUID,
+      CREATURE_GUID,
+    ]);
+    // ADR-0016 deterministic repair: "90210" has exactly one valid reading.
+    expect(c.units({ entry: String(CREATURE_ENTRY) as unknown as number })).toEqual(
+      c.units({ entry: CREATURE_ENTRY }),
+    );
+    expect(c.units({ entry: [String(FAR_ENTRY) as unknown as number] }).length).toBe(3);
+  });
+
+  test("name is a case-insensitive substring; unnamed objects never match", () => {
+    const c = cache();
+    expect(c.units({ name: "thistle" }).map((r) => r.guid)).toEqual([CREATURE_GUID]);
+    expect(c.units({ name: "BOAR" }).every((r) => r.name === "Ridgeback Boar")).toBe(true);
+    expect(c.units({ name: "boar" }).map((r) => r.guid)).not.toContain(OBJECT_GUID);
+    expect(c.units({ name: "nothing here" })).toEqual([]);
+  });
+
+  test("type filters on the observed create-block type", () => {
+    const c = cache();
+    expect(c.units({ type: "gameObject" }).map((r) => r.guid)).toEqual([OBJECT_GUID]);
+    expect(c.units({ type: "player" })).toEqual([]);
+    expect(c.units({ type: "unit" }).map((r) => r.guid)).not.toContain(OBJECT_GUID);
+  });
+
+  test("alive: true drops only the known dead; alive: false needs the observation", () => {
+    const c = cache();
+    const alive = c.units({ alive: true }).map((r) => r.guid);
+    expect(alive).not.toContain(DEAD_GUID);
+    // Health never observed is not evidence of death — the footgun this exists to kill.
+    expect(alive).toContain(GHOST_GUID);
+    expect(c.units({ alive: false }).map((r) => r.guid)).toEqual([DEAD_GUID]);
+  });
+
+  test("maxDistance is in yards and drops what has no known distance", () => {
+    const c = cache();
+    const near = c.units({ maxDistance: 20 });
+    expect(near.map((r) => r.guid)).not.toContain(FAR_GUID);
+    expect(near.map((r) => r.guid)).not.toContain(GHOST_GUID);
+    expect(near.every((r) => r.distance! <= 20)).toBe(true);
+    expect(c.units({ maxDistance: 500 }).length).toBe(c.units().length - 1);
+    expect(c.units({ maxDistance: "20" as unknown as number })).toEqual(near);
+  });
+
+  test("npc: npcFlags > 0, and unobserved flags are not an npc", () => {
+    const c = cache();
+    expect(c.units({ npc: true }).map((r) => r.guid)).toEqual([VENDOR_GUID]);
+    expect(c.units({ npc: false }).map((r) => r.guid)).not.toContain(VENDOR_GUID);
+  });
+
+  test("criteria are AND-ed", () => {
+    const c = cache();
+    expect(c.units({ entry: FAR_ENTRY, alive: true, maxDistance: 50 }).map((r) => r.guid)).toEqual([]);
+    expect(c.units({ entry: FAR_ENTRY, alive: false }).map((r) => r.guid)).toEqual([DEAD_GUID]);
+    expect(c.units({ type: "unit", name: "boar", alive: true, maxDistance: 200 }).map((r) => r.guid)).toEqual([
+      FAR_GUID,
+    ]);
+  });
+
+  test("targetGuid is flat, and no-target reads as undefined", () => {
+    const c = StateCache.replay(toEvents([...worldStream, selfTarget]), { seed: SEED });
+    const row = c.units().find((r) => r.guid === CREATURE_GUID)!;
+    expect(row.targetGuid).toBeUndefined();
+    const targeting = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        {
+          seq: 41,
+          opcode: "SMSG_UPDATE_OBJECT",
+          opcodeId: 0x0a9,
+          ts: 1_700_000_000_410,
+          data: {
+            blocks: 1,
+            objects: [{ update: "values", guid: CREATURE_GUID, fields: { targetGuid: "7" } }],
+          },
+        },
+      ]),
+      { seed: SEED },
+    );
+    expect(targeting.units().find((r) => r.guid === CREATURE_GUID)!.targetGuid).toBe("7");
+  });
+
+  test("bad filter values are rejected with an actionable TypeError (ADR-0016)", () => {
+    const c = cache();
+    expect(() => c.units({ entry: "boar" as unknown as number })).toThrow(TypeError);
+    expect(() => c.units({ entry: "boar" as unknown as number })).toThrow(/received "boar" \(string\)/);
+    expect(() => c.units({ entry: 69.5 })).toThrow(/whole template id/);
+    // An enum near-miss has two readings, so it is rejected rather than picked.
+    expect(() => c.units({ type: "gameobject" as "gameObject" })).toThrow(/expected one of/);
+    expect(() => c.units({ alive: "true" as unknown as boolean })).toThrow(/expected true or false/);
+    expect(() => c.units({ minLevel: 5 } as unknown as UnitFilter)).toThrow(/unknown key "minLevel"/);
+    expect(() => c.units({ minLevel: 5 } as unknown as UnitFilter)).toThrow(/Valid keys are entry, name/);
+    expect(() => c.units(((u: unknown) => u) as unknown as UnitFilter)).toThrow(
+      /criteria object, not a predicate/,
+    );
+    expect(() => c.units({ maxDistance: -1 })).toThrow(/expected a distance >= 0/);
   });
 });

@@ -307,6 +307,55 @@ export interface NearbyObject extends UnitFieldsState {
 }
 
 /**
+ * One object as `units()` reports it: flat, plain, JSON-safe — no `Observed`
+ * wrappers and no `Map`s, so `console.log`/`JSON.stringify` show the whole
+ * thing and a property access reaches a value rather than a wrapper.
+ *
+ * Every field is `undefined` until an event carried it (docs/CONTRACTS.md rule
+ * 1). `undefined` means unobserved, never zero and never a guess.
+ */
+export interface UnitView {
+  /** Opaque decimal-string guid (ADR-0017). */
+  readonly guid: GuidKey;
+  /** Creature/gameobject template id, from `OBJECT_FIELD_ENTRY`. */
+  readonly entry: number | undefined;
+  /** Joined from a creature or name query. Never guessed. */
+  readonly name: string | undefined;
+  /** `unit`, `player`, `gameObject`, … Only a `create` block carries it. */
+  readonly type: string | undefined;
+  readonly level: number | undefined;
+  readonly health: number | undefined;
+  readonly maxHealth: number | undefined;
+  /** `true` only when health was observed *and* is 0. Unobserved stays undefined. */
+  readonly dead: boolean | undefined;
+  /** Straight-line yards from our own last observed position. */
+  readonly distance: number | undefined;
+  readonly x: number | undefined;
+  readonly y: number | undefined;
+  readonly z: number | undefined;
+  /** What it is targeting, when observed. `"0"` (no target) reads as undefined. */
+  readonly targetGuid: GuidKey | undefined;
+}
+
+/**
+ * Criteria for `units()`. All present criteria are AND-ed; an absent one does
+ * not filter. Anything else is rejected loudly (ADR-0016).
+ */
+export interface UnitFilter {
+  /** One template id or a list of them. */
+  entry?: number | number[];
+  /** Case-insensitive substring of the joined name. Unnamed objects never match. */
+  name?: string;
+  type?: "unit" | "player" | "gameObject";
+  /** `true` drops the known-dead; `false` keeps only them. Unknown health passes `true`. */
+  alive?: boolean;
+  /** Yards. Objects with no known distance are dropped: the criterion cannot be evaluated. */
+  maxDistance?: number;
+  /** `npcFlags > 0` — a gossip/vendor/questgiver NPC, as observed. */
+  npc?: boolean;
+}
+
+/**
  * Something the stream said that the cache could not reconcile. Recorded rather
  * than resolved: silently picking a winner would make the cache disagree with
  * the trajectory log.
@@ -960,6 +1009,83 @@ export class StateCache {
     );
   }
 
+  /**
+   * Everything in view, flattened, sorted by distance — the scan helper.
+   *
+   * Earned surface (ADR-0015). Models kept hand-rolling this over `nearby` and
+   * tripping on the two shapes underneath it: roster-opus-low-20260822 turn 15
+   * filtered `nearbyUnits()` on `u.fields.entry?.value`, and because `fields`
+   * is a `Map` every filter returned `[]` while units stood in view — the model
+   * concluded the area was empty. roster-sonnet-20260822 re-scanned with
+   * ad-hoc filter chains 18 times. This returns plain objects with plain
+   * values, so neither footgun is reachable.
+   *
+   * A query over what the cache already holds: nothing is observed here that
+   * `nearby` did not already carry, and nothing is invented. Items and
+   * containers (our own inventory) are left out; everything else in view is
+   * included, *untyped objects too* — an object we have seen but whose create
+   * block we missed is still in view, and hiding it would make the world look
+   * emptier than it is.
+   *
+   * Positions come from `pointOf`, the same resolution `closest()` uses, so a
+   * creature mid-spline reports where it is heading. `distance` is `undefined`
+   * when either side has no known position.
+   */
+  units(filter?: UnitFilter): UnitView[] {
+    const f = normalizeUnitFilter(filter);
+    const from = this.self.position?.value;
+    const out: UnitView[] = [];
+    for (const obj of this.nearby.values()) {
+      const type = obj.objectType?.value;
+      if (type === "item" || type === "container") continue;
+
+      const point = pointOf(obj)?.value;
+      const distance =
+        from && point
+          ? Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100
+          : undefined;
+      const health = obj.fields.get("health")?.value;
+      const target = obj.targetGuid?.value;
+      const view: UnitView = {
+        guid: obj.guid,
+        entry: obj.entry?.value,
+        name: obj.name?.value,
+        type,
+        level: obj.level?.value,
+        health,
+        maxHealth: obj.fields.get("maxHealth")?.value,
+        dead: health === undefined ? undefined : health === 0,
+        distance,
+        x: point?.x,
+        y: point?.y,
+        z: point?.z,
+        targetGuid: target === undefined || target === "0" ? undefined : target,
+      };
+
+      if (f.entries && (view.entry === undefined || !f.entries.has(view.entry))) continue;
+      if (f.name !== undefined && !(view.name ?? "").toLowerCase().includes(f.name)) continue;
+      if (f.type !== undefined && view.type !== f.type) continue;
+      // Asymmetric on purpose: `alive: true` excludes only the *known* dead, so
+      // a unit whose health we have never seen still shows up. `alive: false`
+      // is a positive claim and needs the observation.
+      if (f.alive === true && view.dead === true) continue;
+      if (f.alive === false && view.dead !== true) continue;
+      if (f.maxDistance !== undefined && (distance === undefined || distance > f.maxDistance)) continue;
+      if (f.npc !== undefined) {
+        const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
+        if (isNpc !== f.npc) continue;
+      }
+      out.push(view);
+    }
+    // Nearest first; unknown distance last. Stable, so unknowns keep first-sight
+    // order and a replay of the same events sorts the same way.
+    return out.sort((a, b) => {
+      if (a.distance === undefined) return b.distance === undefined ? 0 : 1;
+      if (b.distance === undefined) return -1;
+      return a.distance - b.distance;
+    });
+  }
+
   /** Units in view whose observed template entry is `entry`. */
   creaturesByEntry(entry: number): NearbyObject[] {
     return this.nearbyUnits().filter((o) => o.entry?.value === entry);
@@ -1267,6 +1393,153 @@ export class StateCache {
     obj.lastSeq = Math.max(obj.lastSeq, seq);
     return obj;
   }
+}
+
+// ------------------------------------------------------ units() filter input
+//
+// ADR-0016: repair only what has exactly one valid reading (a numeric string
+// where a number is expected), reject everything else with a message that says
+// what arrived, what was expected, and what to do. A silently ignored key is
+// the forbidden outcome — it returns a wrong-but-plausible answer, which is the
+// very failure this helper exists to remove.
+
+const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc"] as const;
+const UNIT_FILTER_TYPES = ["unit", "player", "gameObject"] as const;
+
+interface NormalizedUnitFilter {
+  entries: Set<number> | undefined;
+  name: string | undefined;
+  type: string | undefined;
+  alive: boolean | undefined;
+  maxDistance: number | undefined;
+  npc: boolean | undefined;
+}
+
+const EMPTY_UNIT_FILTER: NormalizedUnitFilter = {
+  entries: undefined,
+  name: undefined,
+  type: undefined,
+  alive: undefined,
+  maxDistance: undefined,
+  npc: undefined,
+};
+
+/** How a rejected value is quoted back to the caller. */
+function showValue(v: unknown): string {
+  if (typeof v === "string") return JSON.stringify(v);
+  if (typeof v === "function") return "a function";
+  if (Array.isArray(v)) return `[${v.map(showValue).join(", ")}]`;
+  if (v === null) return "null";
+  if (typeof v === "object") return JSON.stringify(v) ?? "an object";
+  return String(v);
+}
+
+function filterError(detail: string): TypeError {
+  return new TypeError(`state.units() filter: ${detail}`);
+}
+
+/** A finite number, repairing the one unambiguous reading: a numeric string. */
+function coerceNumber(value: unknown, key: string, expected: string): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  throw filterError(
+    `${key} received ${showValue(value)} (${typeof value}), expected ${expected}. ` +
+      `Example: state.units({ ${key}: ${key === "entry" ? "69" : "50"} }).`,
+  );
+}
+
+function coerceBoolean(value: unknown, key: string): boolean {
+  if (typeof value === "boolean") return value;
+  throw filterError(
+    `${key} received ${showValue(value)} (${typeof value}), expected true or false. ` +
+      `Example: state.units({ ${key}: true }).`,
+  );
+}
+
+/**
+ * Validate and canonicalize a filter. Returns a shape the scan can apply
+ * without re-checking anything.
+ */
+function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilter {
+  if (filter === undefined || filter === null) return EMPTY_UNIT_FILTER;
+  if (typeof filter === "function") {
+    throw filterError(
+      "received a function. This takes a criteria object, not a predicate: " +
+        'state.units({ entry: 69, alive: true, maxDistance: 50 }). For a predicate, use state.closest(fn).',
+    );
+  }
+  if (typeof filter !== "object" || Array.isArray(filter)) {
+    throw filterError(
+      `received ${showValue(filter)} (${typeof filter}), expected an object such as ` +
+        "{ entry: 69, alive: true, maxDistance: 50 }.",
+    );
+  }
+
+  const unknown = Object.keys(filter).filter(
+    (k) => !(UNIT_FILTER_KEYS as readonly string[]).includes(k),
+  );
+  if (unknown.length > 0) {
+    throw filterError(
+      `unknown ${unknown.length === 1 ? "key" : "keys"} ${unknown.map(showValue).join(", ")}. ` +
+        `Valid keys are ${UNIT_FILTER_KEYS.join(", ")}. Drop the key or use one of those.`,
+    );
+  }
+
+  const out: NormalizedUnitFilter = { ...EMPTY_UNIT_FILTER };
+
+  if (filter.entry !== undefined) {
+    const raw = Array.isArray(filter.entry) ? filter.entry : [filter.entry];
+    if (raw.length === 0) {
+      throw filterError("entry received an empty array; pass a template id such as 69, or omit entry.");
+    }
+    const entries = new Set<number>();
+    for (const item of raw) {
+      const n = coerceNumber(item, "entry", "a creature/gameobject template id, or an array of them");
+      if (!Number.isInteger(n) || n < 0) {
+        throw filterError(
+          `entry received ${showValue(item)}, expected a non-negative whole template id such as 69.`,
+        );
+      }
+      entries.add(n);
+    }
+    out.entries = entries;
+  }
+
+  if (filter.name !== undefined) {
+    if (typeof filter.name !== "string") {
+      throw filterError(
+        `name received ${showValue(filter.name)} (${typeof filter.name}), expected a string to match as a ` +
+          'case-insensitive substring, such as { name: "boar" }.',
+      );
+    }
+    out.name = filter.name.toLowerCase();
+  }
+
+  if (filter.type !== undefined) {
+    // An enum near-miss ("gameobject", "npc") has more than one plausible
+    // reading, so ADR-0016 says reject rather than pick. No case folding here.
+    if (!(UNIT_FILTER_TYPES as readonly string[]).includes(filter.type as string)) {
+      throw filterError(
+        `type received ${showValue(filter.type)}, expected one of ${UNIT_FILTER_TYPES.map(showValue).join(", ")} ` +
+          "(exact, case-sensitive).",
+      );
+    }
+    out.type = filter.type;
+  }
+
+  if (filter.alive !== undefined) out.alive = coerceBoolean(filter.alive, "alive");
+  if (filter.npc !== undefined) out.npc = coerceBoolean(filter.npc, "npc");
+
+  if (filter.maxDistance !== undefined) {
+    const n = coerceNumber(filter.maxDistance, "maxDistance", "a distance in yards");
+    if (n < 0) throw filterError(`maxDistance received ${showValue(filter.maxDistance)}, expected a distance >= 0.`);
+    out.maxDistance = n;
+  }
+
+  return out;
 }
 
 /** Drop everything but x/y/z/o: the wire gives a nearby object nothing else. */

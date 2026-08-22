@@ -70,7 +70,9 @@ export type {
   StateSeed,
   StateSnapshot,
   UnitFieldsState,
+  UnitFilter,
   UnitPosition,
+  UnitView,
   WorldPosition,
 } from "./state";
 
