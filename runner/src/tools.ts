@@ -155,10 +155,51 @@ export function normalizeToolArgs(name: string, args: unknown): unknown {
 }
 
 /**
+ * Strip trailing commas before `}` or `]`, but ONLY outside JSON string
+ * literals. A naive global regex (the previous implementation) also rewrote
+ * `,}`/`,]` sequences that occur *inside* a string value — so when the outer
+ * JSON needed repair, a snippet whose `code` string contained e.g. `', ]'`
+ * had that string silently mutated before execution, falsifying the trajectory.
+ * A one-pass tokenizer that tracks whether we are inside a string (and honours
+ * backslash escapes) keeps the repair to structural commas only.
+ */
+export function stripTrailingCommas(s: string): string {
+  let out = "";
+  let inString = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inString) {
+      out += ch;
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      // Look past whitespace: if the next non-space char closes an object or
+      // array, this comma is trailing — drop it, keep the whitespace.
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j]!)) j++;
+      if (j < s.length && (s[j] === "}" || s[j] === "]")) {
+        continue; // skip the comma; whitespace emits on its own iterations
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
  * Parse a tool-arguments *string* leniently, in this order: (a) plain
  * JSON.parse; (b) strip one wrapping markdown code fence and re-parse; (c) one
- * conservative repair pass — trailing commas before `}` or `]` — and re-parse.
- * On final failure the error echoes what was received (first ~200 chars).
+ * conservative repair pass — trailing commas before `}` or `]`, outside string
+ * literals — and re-parse. On final failure the error echoes what was received.
  */
 export function parseToolArgsText(raw: string): { ok: true; args: unknown } | { ok: false; error: string } {
   const trimmed = raw.trim();
@@ -167,7 +208,7 @@ export function parseToolArgsText(raw: string): { ok: true; args: unknown } | { 
   const fence = /^```[A-Za-z]*\s*\n?([\s\S]*?)\n?\s*```$/.exec(trimmed);
   if (fence?.[1] !== undefined) candidates.push(fence[1].trim());
   for (const c of [...candidates]) {
-    const repaired = c.replace(/,\s*([}\]])/g, "$1");
+    const repaired = stripTrailingCommas(c);
     if (repaired !== c) candidates.push(repaired);
   }
   let lastError: unknown;
