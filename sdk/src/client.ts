@@ -1011,6 +1011,41 @@ const TRAINER_BUY_FAIL_HINTS: Record<number, string> = {
   2: "not enough skill (or level, or a missing prerequisite)",
 };
 
+/**
+ * `SMSG_INVENTORY_CHANGE_FAILURE.result` — `InventoryResult` in the pinned
+ * core — for the codes an equip refusal actually produces, rendered the way
+ * `TRAINER_BUY_FAIL_HINTS` renders trainer refusals: the number is the
+ * server's word and is always reported; this is the client-visible sentence
+ * for it. An unknown code renders without one.
+ */
+const EQUIP_FAIL_HINTS: Record<number, string> = {
+  1: "your level is too low for that item",
+  2: "you do not have the skill it requires",
+  3: "that item does not go in that slot",
+  8: "your class has no proficiency for that weapon or armour type — a weapon master can teach some of them",
+  9: "no equipment slot is free for it",
+  10: "this character can never use that item",
+  11: "this character can never use that item",
+  13: "a two-handed weapon is equipped — that blocks an off-hand or shield until you equip a one-hander instead",
+  14: "you cannot dual wield",
+  20: "that item cannot be equipped",
+  22: "that inventory slot is empty",
+  23: "no item was found at that address",
+  36: "the item is locked",
+  37: "you are stunned",
+  38: "you are dead",
+  39: "you cannot do that right now",
+  50: "your bags are full",
+  60: "not while in combat",
+  61: "not while disarmed",
+  63: "your rank is too low",
+  64: "your reputation is too low",
+  88: "it needs a talent you have not taken",
+};
+
+/** Inventory slots below this are equipment and bag slots; 23-38 are backpack. */
+const BACKPACK_FIRST_SLOT = 23;
+
 /** One row of a trainer's list, plus what the SDK could derive about it. */
 export interface TrainerSpell extends TrainerSpellData {
   /** True when `state` is green: the server will teach this right now. */
@@ -1049,6 +1084,62 @@ export type BuySpellResult =
 export interface TrainerOptions {
   timeout?: number;
 }
+
+export interface EquipOptions {
+  /**
+   * How long to wait for the server's verdict before answering
+   * `unconfirmed`. Default 3000 — the server answers `CMSG_AUTOEQUIP_ITEM`
+   * within a round trip, and a loop over several items should not be able to
+   * eat a snippet's whole budget.
+   */
+  timeout?: number;
+}
+
+/**
+ * The outcome of one equip, as a value (ADR-0011). The server answers
+ * `CMSG_AUTOEQUIP_ITEM` either by moving the item into an equipment slot —
+ * visible as the character's own `invSlot` update fields — or with
+ * `SMSG_INVENTORY_CHANGE_FAILURE` carrying an `InventoryResult` code, and
+ * `equipItem` reports which of those happened rather than that the packet was
+ * sent (fleet-nav-probe-sonnet-20260822-c3: a level-5 paladin got `ok: true`
+ * six times for an axe and a shield that never left the bag).
+ *
+ * `unconfirmed` is the honest third answer: neither signal arrived in time, so
+ * nothing was observed — re-read `state.bag()` rather than assume either way.
+ */
+export type EquipItemResult =
+  | {
+      readonly ok: true;
+      readonly status: "equipped";
+      readonly bag: number;
+      readonly slot: number;
+      readonly itemId: number | undefined;
+      readonly name: string | undefined;
+      /** The equipment slot it landed in, when the cache saw it arrive. */
+      readonly equippedSlot: number | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "not_equipped";
+      readonly bag: number;
+      readonly slot: number;
+      readonly itemId: number | undefined;
+      readonly name: string | undefined;
+      /** Raw `InventoryResult` code from `SMSG_INVENTORY_CHANGE_FAILURE`. */
+      readonly reason: number;
+      /** The level the item needs, when the refusal named one. */
+      readonly requiredLevel: number | undefined;
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "unconfirmed";
+      readonly bag: number;
+      readonly slot: number;
+      readonly itemId: number | undefined;
+      readonly name: string | undefined;
+      readonly hint: string;
+    };
 
 /**
  * The outcome of `learnTalent`, as a value (ADR-0011). The server always
@@ -1550,9 +1641,103 @@ export class WrathClient {
     return this.action({ action: "repair_all", guid: guidArg(guid, "repairAll(guid)") });
   }
 
-  /** `CMSG_AUTOEQUIP_ITEM`; bag 255 is the backpack, slots 23-38. */
-  equipItem(bag: number, slot: number): Promise<ActionResponse> {
-    return this.action({ action: "equip_item", bag, slot });
+  /**
+   * `CMSG_AUTOEQUIP_ITEM` — equip what is at `bag`/`slot` (bag 255 is the
+   * backpack, slots 23-38) and wait for the server's verdict.
+   *
+   * Races the item arriving in an equipment slot (the character's own
+   * `invSlot0..22` update fields) against `SMSG_INVENTORY_CHANGE_FAILURE`, so
+   * a refusal is returned as `status: "not_equipped"` with the server's
+   * `InventoryResult` code and a hint, not as success. The refusal is a value,
+   * not a throw: it is the game answering (ADR-0011).
+   */
+  async equipItem(bag: number, slot: number, options: EquipOptions = {}): Promise<EquipItemResult> {
+    const before = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
+    const guid = before?.guid;
+    const item = { bag, slot, itemId: before?.itemId, name: before?.name };
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+
+    // Where the cache says our item is now: an equipment slot means the server
+    // moved it. Without a guid (the slot was never observed) neither this nor
+    // `leftSource` can speak, and the answer is `unconfirmed`.
+    const equippedSlot = (): number | undefined => {
+      if (guid === undefined) return undefined;
+      const at = this.state.inventory.find((i) => i.guid === guid);
+      return at !== undefined && at.slot < BACKPACK_FIRST_SLOT ? at.slot : undefined;
+    };
+    const leftSource = (): boolean =>
+      guid !== undefined &&
+      !this.state.bag().items.some((i) => i.bag === bag && i.slot === slot && i.guid === guid);
+
+    await this.action({ action: "equip_item", bag, slot });
+
+    let failure: InventoryChangeFailureData | undefined;
+    const settled = (): boolean => equippedSlot() !== undefined || leftSource();
+    if (!settled()) {
+      try {
+        await this.waitEvent(
+          (e) => {
+            if (
+              isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") &&
+              !isDecodeError(e.data) &&
+              (sinceSeq === undefined || e.seq > sinceSeq)
+            ) {
+              const d = e.data as InventoryChangeFailureData;
+              // result 0 is EQUIP_ERR_OK, and a refusal that names a different
+              // item (a background loot's bag-full) is not this equip's answer.
+              const mine =
+                d.itemGuid === undefined || guid === undefined || guidKey(d.itemGuid) === guid;
+              if (d.result !== 0 && mine) {
+                failure = d;
+                return true;
+              }
+            }
+            return settled();
+          },
+          {
+            timeout: options.timeout ?? 3000,
+            includeBuffered: false,
+            description:
+              `the verdict for equipping bag ${bag} slot ${slot} ` +
+              `(the item in an equipment slot, or SMSG_INVENTORY_CHANGE_FAILURE)`,
+          },
+        );
+      } catch (e) {
+        // A timeout is the `unconfirmed` answer below; anything else (abort,
+        // transport loss) is not this call's to swallow.
+        if (!(e instanceof EventTimeoutError)) throw e;
+      }
+    }
+
+    const landed = equippedSlot();
+    if (landed !== undefined) return { ok: true, status: "equipped", ...item, equippedSlot: landed };
+    if (failure !== undefined) {
+      const named = EQUIP_FAIL_HINTS[failure.result];
+      const level = failure.requiredLevel;
+      return {
+        ok: false,
+        status: "not_equipped",
+        ...item,
+        reason: failure.result,
+        requiredLevel: level,
+        hint:
+          `the server refused to equip ${item.name ?? `item ${item.itemId ?? "?"}`} ` +
+          `(InventoryResult ${failure.result}${named ? `: ${named}` : ""}` +
+          `${level === undefined ? "" : `, needs level ${level}`}) — the item is still at bag ${bag} slot ${slot}`,
+      };
+    }
+    if (leftSource()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
+    return {
+      ok: false,
+      status: "unconfirmed",
+      ...item,
+      hint:
+        guid === undefined
+          ? `nothing was observed at bag ${bag} slot ${slot} before the equip, so neither outcome could be ` +
+            `confirmed — re-read state.bag() and check whether the item moved`
+          : `no equipment-slot update and no refusal arrived for bag ${bag} slot ${slot} — re-read ` +
+            `state.bag() to see whether the item moved before trying again`,
+    };
   }
 
   /** `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell. */

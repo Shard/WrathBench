@@ -5,6 +5,7 @@ import { EventAbortedError, EventTimeoutError } from "../src/events";
 import {
   addKill,
   attackStopped,
+  BACKPACK_SLOT,
   chatEcho,
   CREATURE_GUID,
   creatureCreate,
@@ -14,8 +15,12 @@ import {
   frames,
   gossipWithQuests,
   inventoryChangeFailure,
+  inventorySlot,
+  inventorySlotMove,
   ITEM_ENTRY,
+  itemCreate,
   itemPushed,
+  itemQuery,
   loginSequence,
   lootRelease,
   lootResponse,
@@ -1574,6 +1579,111 @@ describe("client: trainers", () => {
     const err = await client.buySpell(CREATURE_GUID, 100, { timeout: 40 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EventTimeoutError);
     expect((err as EventTimeoutError).waitingFor).toContain("SMSG_TRAINER_BUY_SUCCEEDED");
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: equipItem", () => {
+  // A world where backpack slot 23 holds the fixture item, named and all.
+  const bagWorld = () =>
+    frames([...loginSequence, selfCreate, inventorySlot, itemCreate, itemQuery]);
+
+  test("an item that reaches an equipment slot is equipped, with the slot it landed in", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    // 15 is EQUIPMENT_SLOT_MAINHAND: the item leaves the backpack for it.
+    stub.push(JSON.stringify(inventorySlotMove(70, BACKPACK_SLOT, 15)));
+    const result = await pending;
+    expect(result).toEqual({
+      ok: true,
+      status: "equipped",
+      bag: 255,
+      slot: BACKPACK_SLOT,
+      itemId: ITEM_ENTRY,
+      name: "Gritstone Charm",
+      equippedSlot: 15,
+    });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a refusal is not ok: it carries the server's InventoryResult and a hint", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    // 8 is EQUIP_ERR_NO_REQUIRED_PROFICIENCY — the paladin-with-an-axe refusal
+    // that fleet-nav-probe-sonnet-20260822-c3 saw reported as ok: true.
+    stub.push(JSON.stringify(inventoryChangeFailure(71, 8)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("not_equipped");
+    if (result.status !== "not_equipped") throw new Error("unreachable");
+    expect(result.reason).toBe(8);
+    expect(result.hint).toContain("proficiency");
+    expect(result.hint).toContain("Gritstone Charm");
+    expect(result.hint).toContain(`bag 255 slot ${BACKPACK_SLOT}`);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a level refusal reports the level the server named", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    stub.push(JSON.stringify(inventoryChangeFailure(72, 1, { requiredLevel: 6 })));
+    const result = await pending;
+    if (result.ok || result.status !== "not_equipped") throw new Error("unreachable");
+    expect(result.reason).toBe(1);
+    expect(result.requiredLevel).toBe(6);
+    expect(result.hint).toContain("needs level 6");
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unknown code still reports the number", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    stub.push(JSON.stringify(inventoryChangeFailure(73, 99)));
+    const result = await pending;
+    if (result.ok || result.status !== "not_equipped") throw new Error("unreachable");
+    expect(result.reason).toBe(99);
+    expect(result.hint).toContain("InventoryResult 99");
+    client.close();
+    await stub.stop();
+  });
+
+  test("another item's refusal does not settle this equip", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    // A background loot's bag-full names a different item guid: not our answer.
+    stub.push(JSON.stringify(inventoryChangeFailure(74, 50, { itemGuid: "12345" })));
+    stub.push(JSON.stringify(inventorySlotMove(75, BACKPACK_SLOT, 15)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.equippedSlot).toBe(15);
+    client.close();
+    await stub.stop();
+  });
+
+  test("silence is unconfirmed, not success", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const result = await client.equipItem(255, BACKPACK_SLOT, { timeout: 60 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("unconfirmed");
+    expect(result.hint).toContain("state.bag()");
     client.close();
     await stub.stop();
   });

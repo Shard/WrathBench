@@ -18,6 +18,8 @@ export type {
   BuySpellResult,
   ConnectOptions,
   DeleteCharacterOptions,
+  EquipItemResult,
+  EquipOptions,
   ErrorCode,
   GuidArg,
   GuidOrUnit,
