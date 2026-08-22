@@ -22,7 +22,7 @@ bun minimap/src/extract.ts --limit 20      # first N tiles per map (smoke test)
 
 Flags: `--map <ids>`, `--force`, `--limit <n>`, `--out <dir>` (default
 `data/minimap`), `--client <dir>` (default
-`data/client-source/ChromieCraft_3.3.5a/Data`).
+`data/client-source/Data`).
 
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of all four default maps takes about 17 s and produces 3636 tiles /
@@ -32,7 +32,7 @@ Tests: `bun test minimap/`. Typecheck: `bun run --cwd minimap typecheck`.
 
 ## Inputs
 
-- `data/client-source/ChromieCraft_3.3.5a/Data/*.MPQ`, opened in client load
+- `data/client-source/Data/*.MPQ`, opened in client load
   order — `common`, `common-2`, `expansion`, `lichking`, `patch`, `patch-2`,
   `patch-3` — with later archives winning. `md5translate.trs` resolves to
   `patch-3.MPQ`; the hashed tile BLPs themselves resolve to `common.MPQ`.

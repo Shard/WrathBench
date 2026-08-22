@@ -2,8 +2,8 @@
  * Operator spectator account.
  *
  * Idempotently ensures the SPECTATOR account exists with the given password
- * and full GM (gmlevel 3 on every realm), so the operator can log in with
- * their own client and watch benchmark characters. See infra/SPECTATOR.md.
+ * and full GM (gmlevel 3 on every realm), for operator inspection of the
+ * world.
  *
  * This is operator tooling, outside the agent path: the observation/action
  * contracts in docs/CONTRACTS.md bind the benchmark agent, not the human at

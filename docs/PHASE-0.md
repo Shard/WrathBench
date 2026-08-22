@@ -29,7 +29,7 @@ Roughly in order. Each item is small enough to be a day or two; the module is th
 ### Infra
 - [x] Compose: authserver, worldserver, database, runner. Volumes for `data/client`, `data/wiki`, `data/runs`.
 - [x] Worldserver image that builds `module/` in.
-- [x] Extraction script for maps, vmaps, mmaps, DBCs from a local 3.3.5a client into `data/client`. Documented, idempotent, host-side.
+- [x] Server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`, supplied by the operator; production of it is out of repo scope.
 - [x] Realm and account bootstrap so a session can create a character without manual steps.
 
 ### Module
