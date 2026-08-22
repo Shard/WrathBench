@@ -12,9 +12,13 @@
  * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
  *
- * One episode at a time, in roster order, each launched through
+ * One episode at a time, in roster order. On the host each is launched through
  * `infra/run-episode.sh` (so its preflight, .env handling and harness version
- * stamping all still apply — nothing here reimplements it).
+ * stamping all still apply — nothing here reimplements it). Inside the runner
+ * image — where the fleet supervisor now lives, ADR-0020 — there is no docker
+ * to exec with, so the episode is spawned as a direct `bun runner/src/run.ts`
+ * child and the few things run-episode.sh contributed (harness stamp, claude
+ * token check) are done here. See `inContainer()`.
  *
  * Why this exists: OpenRouter free-tier limits are per *upstream provider*, not
  * per account. When one model's pool is saturated the useful move is not to sit
@@ -131,6 +135,52 @@ const ACCOUNT_WAIT_MAX_MS = 30 * 60_000;
 const REPO_ROOT = dirname(import.meta.dir);
 const COMPOSE_FILE = join(REPO_ROOT, "infra", "compose.yml");
 const EPISODE_SH = join(REPO_ROOT, "infra", "run-episode.sh");
+const RUNNER_ENTRY = join(REPO_ROOT, "runner", "src", "run.ts");
+
+// --------------------------------------------------------------- where am I
+//
+// Two homes, one code path. On the HOST the roster shells out to
+// `infra/run-episode.sh`, which docker-compose-execs the runner container —
+// that is how it has always worked and it stays byte-identical. Inside the
+// runner image (the `fleet` compose service, ADR-0020) there is no docker CLI
+// and no container to exec into: the runner is a sibling process, so the
+// roster spawns `bun runner/src/run.ts` directly, talks to the module over the
+// compose network itself, and signals its own child.
+//
+// The flag is explicit rather than sniffed (`command -v docker` would also be
+// absent on a host without Docker, which is a different situation and deserves
+// a different error).
+
+/** True when this process runs inside the runner image, not on the host. */
+export function inContainer(env: Record<string, string | undefined> = process.env): boolean {
+  return env["WRATHBENCH_IN_CONTAINER"] === "1";
+}
+
+const CONTAINER = inContainer();
+
+/**
+ * The honest version marker, computed the way infra/run-episode.sh computes it
+ * on the host — same command, same fallback, so a stamp does not depend on
+ * which side launched the episode. Per-episode, not once at supervisor start:
+ * a supervisor that has been up for a week must still stamp `-dirty` the moment
+ * someone edits a tracked file. `--no-optional-locks` keeps `git describe` from
+ * refreshing (and writing) the index under the operator's feet.
+ */
+function harnessVersion(): string {
+  try {
+    const p = Bun.spawnSync(
+      ["git", "--no-optional-locks", "-C", REPO_ROOT, "describe", "--tags", "--always", "--dirty"],
+      { stdout: "pipe", stderr: "ignore" },
+    );
+    if (p.exitCode === 0) {
+      const out = p.stdout.toString().trim();
+      if (out.length > 0) return out;
+    }
+  } catch {
+    // no git: fall through
+  }
+  return "0.0.0-phase0";
+}
 
 // ------------------------------------------------------------------ args
 
@@ -221,7 +271,8 @@ function usage(): void {
       "                       starting; a run id is resolved to its stored token —",
       "                       a hand-started paused run still holds the shared game account",
       "  --loop               when the roster is exhausted, start over (cycle 2+ run ids get a",
-      "                       -cN suffix so each pass is its own run). Requires --until/--max-hours",
+      "                       -cN suffix so each pass is its own run). With no --until/--max-hours",
+      "                       it loops until stopped — that is the fleet-service shape (ADR-0020)",
       "  --resume-roster      continue a partially completed roster",
       "  --date YYYYMMDD      the stamp in derived run ids and the log name. Defaults to today —",
       "                       pass the ORIGINAL date when resuming a roster after midnight, or the",
@@ -307,9 +358,13 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
  * driver (it authenticates through the `claude` CLI's own OAuth token), so a
  * claude entry gets neither flag. Everything else is driver-independent.
  */
-export function episodeArgv(spec: Resolved, resume: boolean): string[] {
-  if (resume) return [EPISODE_SH, "--resume", spec.runId];
-  const argv = [EPISODE_SH, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
+export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?: boolean } = {}): string[] {
+  // Everything after the launcher is identical: run-episode.sh passes its
+  // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
+  // are interchangeable and only one of them needs docker.
+  const head = opts.container === true ? ["bun", RUNNER_ENTRY] : [EPISODE_SH];
+  if (resume) return [...head, "--resume", spec.runId];
+  const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
   }
@@ -812,8 +867,13 @@ const wakeups: (() => void)[] = [];
  * and would be orphaned. So the signal has to be delivered on the other side.
  * Scoped to the run id (which appears in the runner's argv as `--run-id` or
  * `--resume`) so a parallel shakeout run in the same container is never hit.
+ *
+ * A no-op when the roster is itself inside the container: there the episode is
+ * our direct child, so `child.kill()` reaches it and there is no docker CLI to
+ * exec with anyway.
  */
 function signalInContainer(runId: string, signal: "TERM" | "KILL"): void {
+  if (CONTAINER) return;
   const sh =
     `for d in /proc/[0-9]*; do c=$(tr "\\0" " " < $d/cmdline 2>/dev/null); ` +
     `case "$c" in *run.ts*${runId}*) kill -${signal} "\${d#/proc/}" 2>/dev/null ;; esac; done`;
@@ -866,13 +926,17 @@ async function nap(ms: number, deadline: number | undefined, why: string): Promi
 }
 
 async function runEpisode(spec: Resolved, resume: boolean): Promise<number> {
-  const argv = episodeArgv(spec, resume);
+  const argv = episodeArgv(spec, resume, { container: CONTAINER });
   childRunId = spec.runId;
   child = Bun.spawn(argv, {
     cwd: REPO_ROOT,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit", // the runner's operator lines all go to stderr
+    // On the host run-episode.sh stamps this; in the container we are the
+    // launcher, so we stamp it. Secrets still never travel via argv or env
+    // from here: Bun loads /wrathbench/.env in the child itself.
+    ...(CONTAINER ? { env: { ...process.env, WRATHBENCH_HARNESS_VERSION: harnessVersion() } } : {}),
   });
   const code = await child.exited;
   child = undefined;
@@ -889,6 +953,27 @@ async function freeSession(spec: { runId: string; model: string }, why: string, 
     say(`dry-run: would free module session for ${spec.runId} (${why})`);
     return;
   }
+  // Inside the container the module is one fetch away; on the host it is only
+  // reachable from the compose network, hence the exec hop.
+  if (CONTAINER) {
+    const url = (process.env.WRATHBENCH_MODULE_URL ?? "http://worldserver:8086") + "/session";
+    try {
+      const r = await fetch(url, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: tokenOfRun(spec.runId) }),
+      });
+      const detail = `delete-session ${r.status} ${(await r.text()).trim()}`;
+      say(`freed session for ${spec.runId} (${why}) — ${detail}`);
+      record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `${why}; ${detail}` });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      say(`could not free session for ${spec.runId}: ${detail}`);
+      record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `failed: ${detail}` });
+    }
+    return;
+  }
+
   const code = `const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/session";
 const r=await fetch(url,{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify({token:process.env.WB_TOKEN})});
 console.log("delete-session",r.status,await r.text());`;
@@ -974,6 +1059,20 @@ async function attemptSpec(
   opts: { resume: boolean; deadline: number | undefined; dryRun: boolean },
 ): Promise<"done" | "defer"> {
   let resume = opts.resume;
+  // run-episode.sh's driver preflight does not run on the in-container path, and
+  // its one load-bearing check is this: without the token every claude episode
+  // burns a session setup to fail at the first turn.
+  if (CONTAINER && spec.driver === "claude-subscription" && !opts.dryRun) {
+    const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
+    if (token === undefined || token.trim().length === 0) {
+      const detail =
+        "CLAUDE_CODE_OAUTH_TOKEN is not visible to the fleet container — put it in /wrathbench/.env " +
+        "(`claude setup-token`), it is loaded by Bun there and never passed via argv";
+      say(`launch-failed ${spec.runId}: ${detail}`);
+      record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
+      return "done";
+    }
+  }
   for (let retry = 0; ; retry++) {
     if (!(await awaitAccount(spec, opts.deadline, opts.dryRun))) return "done";
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
@@ -1145,9 +1244,13 @@ async function main(): Promise<void> {
     say(`skipping ${before - specs.length} model(s): ${[...skip].join(", ")}`);
   }
   const deadline = computeDeadline(args.until, args.maxHours);
+  // --loop with no deadline used to be refused, on the theory that an
+  // unbounded loop is always an operator mistake. The fleet-as-a-service shape
+  // (ADR-0020) makes it the normal case: the supervisor is up while the machine
+  // is up and steering is done by editing fleet.json, not by a wall clock. The
+  // stop conditions remain available as optional caps.
   if (args.loop && deadline === undefined) {
-    console.error("run-roster: --loop needs a stop condition (--until HH:MM or --max-hours N)");
-    process.exit(2);
+    say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the lane is disabled)");
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
 
@@ -1216,7 +1319,7 @@ async function main(): Promise<void> {
           endpoint +
           `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
       console.log(
-        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
+        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {

@@ -6,7 +6,9 @@ import {
   isClaudeFamily,
   isSharedFreePool,
   laneArgv,
-  laneUntilOrFail,
+  fleetComplete,
+  laneUntil,
+  resolveStatePath,
   parseFleet,
   rereadFleet,
   validateEntries,
@@ -226,10 +228,12 @@ describe("laneArgv", () => {
     expect(argv).not.toContain("--loop");
   });
 
-  test("a loop lane with no stop condition anywhere is refused", () => {
-    expect(() => laneUntilOrFail(lane({ loop: true }), undefined)).toThrow(/stop condition/);
-    expect(laneUntilOrFail(lane({ loop: true }), "07:00")).toBe("07:00");
-    expect(laneUntilOrFail(lane({ loop: false }), undefined)).toBeUndefined();
+  test("a loop lane with no stop condition loops forever — the fleet-service shape", () => {
+    // ADR-0020: the supervisor has no deadline; steering is fleet.json.
+    expect(laneUntil(lane({ loop: true }), undefined)).toBeUndefined();
+    expect(laneArgv(lane({ loop: true }), { stamp: "20260822", until: undefined })).not.toContain("--until");
+    expect(laneUntil(lane({ loop: true }), "07:00")).toBe("07:00");
+    expect(laneUntil(lane({ loop: false }), undefined)).toBeUndefined();
   });
 });
 
@@ -282,22 +286,29 @@ describe("the shipped fleet.json", () => {
     const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
     const byName = Object.fromEntries(config.lanes.map((l) => [l.name, l]));
+    // `enabled` is deliberately NOT asserted here. It is the operator's live
+    // steering knob — the supervisor re-reads this file every 60s and, since
+    // ADR-0020, never exits — so a lane parked at 02:00 because a provider's
+    // daily quota reset is pending must not turn the test suite red. What is
+    // durable is the lane-to-account map (one account per lane is the whole
+    // safety property) and the driver/pool policy below.
     expect(byName["sub-sonnet"]).toMatchObject({ account: "SHAKEOUT", loop: true });
-    expect(byName["sub-opus"]).toMatchObject({ enabled: false, account: "SHAKEOUT2" });
+    expect(byName["sub-opus"]).toMatchObject({ account: "SHAKEOUT2" });
     // ox-alpha: the Phase-0-passing stealth model, its own account and a solo
     // lane. Free despite the suffixless id (see FREE_SUFFIXLESS_ALLOWLIST).
-    expect(byName["ox-alpha"]).toMatchObject({ enabled: true, account: "RUNNER" });
+    expect(byName["ox-alpha"]).toMatchObject({ account: "RUNNER" });
     expect(byName["ox-alpha"].entries).toHaveLength(1);
-    // Post-reset live free lanes (accounts RUNNER2-RUNNER6 are in the module
-    // allowlist on the reclaim image).
-    expect(byName["free-or-a"]).toMatchObject({ enabled: true, account: "RUNNER3" });
-    expect(byName["free-or-b"]).toMatchObject({ enabled: true, account: "RUNNER4" });
-    expect(byName["free-oc-a"]).toMatchObject({ enabled: true, account: "RUNNER2" });
-    expect(byName["free-oc-b"]).toMatchObject({ enabled: true, account: "RUNNER5" });
-    // Local lane: LM Studio on the LAN, exempt from the free-suffix rule.
-    // Re-enabled now the account is harness-bound (a model can no longer land on
-    // the wrong account by omitting it from createSession).
-    expect(byName["local-qwen"]).toMatchObject({ enabled: true, account: "RUNNER6" });
+    // Post-reset free lanes (accounts RUNNER2-RUNNER6 are in the module
+    // allowlist on the reclaim image); local-qwen is LM Studio on the LAN.
+    expect(byName["free-or-a"]).toMatchObject({ account: "RUNNER3" });
+    expect(byName["free-or-b"]).toMatchObject({ account: "RUNNER4" });
+    expect(byName["free-oc-a"]).toMatchObject({ account: "RUNNER2" });
+    expect(byName["free-oc-b"]).toMatchObject({ account: "RUNNER5" });
+    expect(byName["local-qwen"]).toMatchObject({ account: "RUNNER6" });
+    // One account, one lane — asserted over the file as written, not just over
+    // the enabled subset parseFleet already guards.
+    const accounts = config.lanes.map((l) => l.account.toUpperCase());
+    expect(new Set(accounts).size).toBe(accounts.length);
     for (const l of config.lanes) {
       for (const e of l.entries ?? []) {
         if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
@@ -312,5 +323,51 @@ describe("the shipped fleet.json", () => {
     // One stream per model config: no model appears in two lanes.
     const models = config.lanes.flatMap((l) => (l.entries ?? []).map((e) => `${e.model}|${e.effort ?? ""}`));
     expect(new Set(models).size).toBe(models.length);
+  });
+});
+
+describe("resolveStatePath", () => {
+  // fleet-state.json is written by a supervisor in the container and read by
+  // `--status` on the host. An absolute /wrathbench/... path in that file makes
+  // every existsSync on the host false, which silently empties most of the
+  // report (no run id, no `last:` line, no defer rows).
+  const fallback = "/repo/data/runs/fleet-a-20260822.log";
+
+  test("a repo-relative path resolves against the local repo root", () => {
+    expect(
+      resolveStatePath("data/runs/fleet-a-20260822.log", fallback, (p) => p === "/repo/data/runs/fleet-a-20260822.log", "/repo"),
+    ).toBe("/repo/data/runs/fleet-a-20260822.log");
+  });
+
+  test("an absolute path from an older host-side supervisor is honoured when it exists", () => {
+    const host = "/home/mark/git/wrathbench/data/runs/fleet-a-20260822.log";
+    expect(resolveStatePath(host, fallback, (p) => p === host, "/repo")).toBe(host);
+  });
+
+  test("a container-absolute path that does not exist here falls back to the recomputed path", () => {
+    expect(resolveStatePath("/wrathbench/data/runs/fleet-a-20260822.log", fallback, () => false, "/repo")).toBe(fallback);
+  });
+
+  test("a state with no path recorded at all falls back", () => {
+    expect(resolveStatePath(undefined, fallback, () => true, "/repo")).toBe(fallback);
+  });
+});
+
+describe("fleetComplete", () => {
+  // The fleet service runs under restart:unless-stopped, which restarts on a
+  // clean exit too. Exiting because every lane happens to be disabled — the
+  // documented first step of a deploy window — would restart the supervisor
+  // every 60s and take a new epoch stamp each time.
+  test("a deadline-bounded run still ends when nothing is left", () => {
+    expect(fleetComplete({ running: 0, toStart: 0, hasDeadline: true })).toBe(true);
+  });
+
+  test("a run with no deadline idles instead of exiting", () => {
+    expect(fleetComplete({ running: 0, toStart: 0, hasDeadline: false })).toBe(false);
+  });
+
+  test("work in flight or waiting is never complete either way", () => {
+    expect(fleetComplete({ running: 1, toStart: 0, hasDeadline: true })).toBe(false);
+    expect(fleetComplete({ running: 0, toStart: 1, hasDeadline: true })).toBe(false);
   });
 });

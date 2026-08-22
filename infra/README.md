@@ -39,6 +39,10 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 - **authserver** / **worldserver** — AzerothCore, built from
   `infra/docker/server.Dockerfile` with `module/` compiled in.
 - **runner** — placeholder today (`sleep infinity`). Becomes the agent loop.
+- **fleet** — the fleet supervisor (`infra/run-fleet.ts`) as a long-lived
+  service, same image and mounts as `runner`. Behind the `fleet` compose profile
+  so it only starts when named. See `docs/OPERATIONS.md` ("Running the fleet as
+  a service") and ADR-0020.
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
 published to the host are 3724 (authserver) and 8085 (worldserver), bound

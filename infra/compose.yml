@@ -225,6 +225,58 @@ services:
       worldserver:
         condition: service_started
 
+  # ------------------------------------------------------------------- fleet
+  # The fleet supervisor (infra/run-fleet.ts) as a long-lived service: up while
+  # the dev machine is up, steered by editing infra/fleet.json, no deadline.
+  # See docs/decisions/ADR-0020-fleet-as-a-service.md and docs/OPERATIONS.md.
+  #
+  # Same image and mounts as `runner` by design: the supervisor's children are
+  # run-roster processes whose children are `bun runner/src/run.ts` episodes, so
+  # everything the runner needs must be here. WRATHBENCH_IN_CONTAINER switches
+  # run-roster off the docker-compose-exec path (there is no docker CLI in this
+  # image) and onto direct child processes.
+  #
+  # `profiles` keeps a bare `docker compose up -d` from starting a SECOND
+  # supervisor against the same fleet.json (two lanes on one account is a night
+  # of account_in_use). Naming the service activates the profile, so
+  #   docker compose -f infra/compose.yml up -d --no-deps fleet
+  # still works — and --no-deps is not optional: without it compose may decide a
+  # dependency is out of date and recreate the worldserver under live episodes.
+  fleet:
+    image: wrathbench/runner
+    build:
+      context: ..
+      dockerfile: infra/docker/runner.Dockerfile
+    profiles: [fleet]
+    working_dir: /wrathbench
+    command: ["bun", "infra/run-fleet.ts", "infra/fleet.json"]
+    environment:
+      WRATHBENCH_IN_CONTAINER: "1"
+      # git lives in the image and the repo mount carries .git, so every episode
+      # is stamped with a real `git describe` (dirty trees included) rather than
+      # a version frozen at `up` time. The repo is uid 1000 and so is `bun`, but
+      # be explicit so a uid-shifted checkout does not silently lose the stamp.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /wrathbench
+    volumes:
+      - ..:/wrathbench
+      - ../data/wiki:/wrathbench/data/wiki
+      - ../data/runs:/wrathbench/data/runs
+    networks: [wrathbench]
+    # Reaps the orphaned grandchildren an episode can leave behind; bun as pid 1
+    # would not.
+    init: true
+    # `docker compose stop fleet` must be a DRAIN, not a kill: SIGTERM to the
+    # supervisor SIGTERMs each lane, run-roster gives its episode 30s of grace,
+    # and the supervisor only notices the exits on its next 60s tick. 180s is
+    # that floor plus margin — a shorter grace means SIGKILL mid-episode.
+    stop_grace_period: 180s
+    restart: unless-stopped
+    depends_on:
+      worldserver:
+        condition: service_started
+
 volumes:
   db-data:
 

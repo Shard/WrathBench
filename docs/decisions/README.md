@@ -16,3 +16,9 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0012: Runner context policy
 - ADR-0013: Quest/combat action and observation surface
 - ADR-0014: Synthetic session-state event on WebSocket reattach
+- ADR-0015: SDK surface philosophy — simple by default, raw-action escape hatch
+- ADR-0016: API surface softening
+- ADR-0017: GUIDs are strings
+- ADR-0018: Measure signals, not scores
+- ADR-0019: Map view — minimap tiles from the client, one renderer for live and replay
+- ADR-0020: The fleet supervisor is a compose service, not a host process
