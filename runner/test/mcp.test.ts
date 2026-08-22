@@ -167,6 +167,50 @@ describe("McpServer", () => {
     expect((parseErr["error"] as { code: number }).code).toBe(-32700);
   });
 
+  test("tools/call accepts arguments as a JSON string, a fenced string, and repairs trailing commas", async () => {
+    // Some MCP clients send `arguments` as a JSON *string* (sometimes fenced);
+    // mcp.ts routes them through coerceToolArgs. Exercise that wiring, which the
+    // unit-level toolargs tests never drove through the protocol.
+    for (const raw of [
+      '{"code":"1+1"}',
+      '```json\n{"code":"1+1"}\n```',
+      '{"code":"1+1",}',
+    ]) {
+      const { server } = makeServer();
+      await initialized(server);
+      const res = await call(server, {
+        jsonrpc: "2.0",
+        id: 20,
+        method: "tools/call",
+        params: { name: "run_snippet", arguments: raw },
+      });
+      const result = res?.["result"] as { content: { text: string }[]; isError: boolean };
+      expect(result.isError).toBe(false);
+      expect(result.content[0]!.text).toContain("evaluated:1+1");
+    }
+  });
+
+  test("the recorded tool-call args are the parsed object, not the raw string", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
+    const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
+    const ctx: ToolContext = { sandbox: fakeSandbox(), scratchpad, wiki: undefined, sessionLive: () => true };
+    let recorded: unknown;
+    const server = new McpServer(ctx, {
+      serverVersion: "test",
+      onToolCall: (_name, args) => {
+        recorded = args;
+      },
+    });
+    await initialized(server);
+    await call(server, {
+      jsonrpc: "2.0",
+      id: 21,
+      method: "tools/call",
+      params: { name: "run_snippet", arguments: '{"code":"1+1"}' },
+    });
+    expect(recorded).toEqual({ code: "1+1" });
+  });
+
   test("search_reference without a bundle reports unavailability", async () => {
     const { server } = makeServer();
     await initialized(server);
