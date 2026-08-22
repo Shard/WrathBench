@@ -55,6 +55,15 @@ export const episodeBudgetSchema = z.object({
 });
 export type EpisodeBudget = z.infer<typeof episodeBudgetSchema>;
 
+/** The module's own build identity, as `/health` reported it at launch/resume. */
+export const serverBuildSchema = z
+  .object({
+    build: z.string(),
+    startedAtMs: z.number(),
+  })
+  .nullable();
+export type ServerBuild = z.infer<typeof serverBuildSchema>;
+
 export const comparabilitySchema = z.object({
   /** `git describe` of the harness, as `version.ts` resolved it. */
   harnessVersion: z.string(),
@@ -73,16 +82,55 @@ export const comparabilitySchema = z.object({
    * with an objective is unscored whatever the objective said.
    */
   objective: z.boolean(),
+  /**
+   * The worldserver's own build identity, off its `/health` at launch (or
+   * resume-restamp) time. Null when the module was unreachable — this must
+   * never block a launch, so a failed fetch reads the same as "not recorded"
+   * rather than failing the run.
+   */
+  serverBuild: serverBuildSchema,
 });
 export type Comparability = z.infer<typeof comparabilitySchema>;
+
+/**
+ * Read the worldserver's build identity off its `/health`, for the tuple.
+ *
+ * Mirrors `runner/viewer/api.ts`'s `worldserverIdentity` read, one layer down:
+ * this one is not cached (it runs once per launch or resume, not once per
+ * poll) and never throws — an unreachable module, a timeout, or a module that
+ * predates the field all read as `null`, and the caller never awaits longer
+ * than `timeoutMs`.
+ */
+export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Promise<ServerBuild> {
+  try {
+    const res = await fetch(`${moduleUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
+    if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;
+    return { build: o.build, startedAtMs: o.startedAtMs };
+  } catch {
+    return null;
+  }
+}
 
 /** `sha256:<16 hex>` of a string. Truncated: this identifies, it does not seal. */
 export function promptHash(text: string): string {
   return `sha256:${new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 16)}`;
 }
 
-/** The tuple for a run about to start (or resume) under `config`. */
-export function comparabilityOf(config: RunConfig, harnessVersion: string): Comparability {
+/**
+ * The tuple for a run about to start (or resume) under `config`.
+ *
+ * `serverBuild` is passed in rather than fetched here: this function stays a
+ * pure projection of `config`, testable without a network, and the caller
+ * (`run.ts`) is the one place that actually has a launch or resume to gate on
+ * `fetchServerBuild`'s timeout. Omit it (or pass `null`) for "not recorded".
+ */
+export function comparabilityOf(
+  config: RunConfig,
+  harnessVersion: string,
+  serverBuild: ServerBuild = null,
+): Comparability {
   const prompt = buildSystemPrompt(config.objective);
   return {
     harnessVersion,
@@ -99,6 +147,7 @@ export function comparabilityOf(config: RunConfig, harnessVersion: string): Comp
       maxSandboxRestarts: config.watchdogs.maxSandboxRestarts,
     },
     objective: config.objective !== undefined,
+    serverBuild,
   };
 }
 

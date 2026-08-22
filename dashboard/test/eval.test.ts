@@ -32,6 +32,7 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     effort: null,
     contextEngine: "harness-fixed-window",
     promptHash: "sha256:aaaa",
+    serverBuild: null,
     unscored: null,
     startedAt: 0,
     terminationReason: null,

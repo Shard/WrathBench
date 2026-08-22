@@ -199,6 +199,7 @@ describe("evalRunOf", () => {
             maxSandboxRestarts: 3,
           },
           objective: false,
+          serverBuild: { build: "harness-0.2-1-gabc", startedAtMs: 1 },
         },
       }),
       [state({ ts: 1000, level: 1, turn: 1, map: 0 }), state({ ts: 2000, level: 5, turn: 9, map: 0 })],
@@ -207,6 +208,7 @@ describe("evalRunOf", () => {
     expect(e.effort).toBe("high");
     expect(e.contextEngine).toBe("harness-fixed-window");
     expect(e.promptHash).toBe("sha256:abc");
+    expect(e.serverBuild).toBe("harness-0.2-1-gabc");
     expect(e.unscored).toBeNull();
     expect(e.maxLevel).toBe(5);
     expect(e.maps).toEqual([0]);
