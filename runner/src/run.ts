@@ -144,6 +144,14 @@ async function main(): Promise<void> {
   // with the same secret list, and a redacted token could never be read back by
   // `--resume`. Trajectories are gitignored and stay on the operator's disk.
 
+  // Before the run directory, the trajectory and the session: a stale bundle is
+  // a deploy mistake, and failing here leaves no half-run behind — the roster
+  // sees an exit with no run.sqlite and calls it `launch-failed`.
+  const wiki = openWikiBundle(config.wikiBundle);
+  if (wiki === undefined) {
+    console.error(`warning: wiki bundle not found at ${config.wikiBundle}; search_reference will report unavailable`);
+  }
+
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
@@ -223,11 +231,6 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
-  const wiki = openWikiBundle(config.wikiBundle);
-  if (wiki === undefined) {
-    console.error(`warning: wiki bundle not found at ${config.wikiBundle}; search_reference will report unavailable`);
-  }
-
   const watchdogs = new Watchdogs(config.watchdogs);
 
   // A killed runner must still leave a finalised run. SIGTERM matters as much

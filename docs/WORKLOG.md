@@ -36,7 +36,7 @@ deployment that does not exist yet.
 Parity is close but not complete: the cost estimate, the whole-feed expand
 preset, and distinct styling for state samples and harness notices did not port,
 each for a reason recorded in FOLLOW-UPS 32. The old pages keep serving at
-`/legacy/…` so the two can be compared on real runs, and FOLLOW-UPS 31 deletes
+`/legacy/…` so the two can be compared on real runs, and FOLLOW-UPS 34 deletes
 them after a week. Deleting them also removes the last hand-copied duplicate of
 the ADR-0019 coordinate transform — the SPA imports `worldmap.ts` directly,
 which the string pages could not.
@@ -73,15 +73,16 @@ cd data/wiki \
 
 The swap is **blocking**, not optional: the fleet bind-mounts the repo, so the
 fail-closed guard is live the moment the edit lands, and until the rename every
-newly launched episode exits at startup (`launch-failed`, one per spec per
-roster cycle) instead of running coordless.
+newly launched episode exits at startup instead of running coordless. The guard
+sits ahead of the run directory, the trajectory and the session on purpose, so
+there is no run.sqlite and `run-roster`'s `classify` calls it `launch-failed`:
+the spec is finished with, not retried, and no account is burned. One such exit
+per spec per roster cycle until the rename.
 
-Known residual, not fixed here: `extractIds` tags an id by the nearest
-preceding template opening, and a `{{questbox}}` whose `start`/`end` fields hold
-nested `{{npc||…}}` calls puts an `{{npc` opening between the brace and the
-`| id =` field — so `Quest:A Threat Within` states id 783 under kind `npc`. The
-page is still found by an id query for 783; it just does not win the
-kind-matches-the-word preference for "quest 783".
+Known residual, tracked as FOLLOW-UPS 31: nested templates defeat `extractIds`'
+nearest-preceding-opening heuristic, so a quest page can state its own id under
+kind `npc`. It costs a ranking preference, not the match, and the next rebuild
+is another `mv` — no second drain.
 
 ### Questgiver markers and quest objectives (FOLLOW-UPS 27, 28) — NEEDS DEPLOY
 

@@ -279,3 +279,14 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
       fleet has ever produced, shakeouts and failed lanes included. Decide what
       the public listing selects before pointing a domain at it.
 
+34. **Nested templates mislabel the kind of an extracted entity id**
+    (2026-08-22). `extractIds` decides an id's kind by the nearest preceding
+    `{{template` opening, which a nested call defeats: `Quest:A Threat Within`
+    writes `{{questbox | … | start = {{npc||Deputy Willem}} | end =
+    {{npc||Marshal McBride}} | id = 783 }}`, so the opening nearest `| id =` is
+    an `{{npc`, and the page states quest 783 under kind `npc`. Cost is a
+    ranking preference, not a match: an id query for 783 still finds the page,
+    it just does not win the kind-matches-the-word band FOLLOW-UPS 25 shipped
+    ("quest 783"). Fix is brace-matching the openings so a closed template stops
+    counting as enclosing, then a rebuild — which is another `mv` into place,
+    not another drain.
