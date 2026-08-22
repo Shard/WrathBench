@@ -199,9 +199,13 @@ describe("client: movement", () => {
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
     await client.createSession({ character: "Fenwick" });
 
-    // A move that never gets its result before the session goes away.
-    const stale = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 900 });
-    await untilAction(stub, "move_to");
+    // A move that never gets its result before the session goes away. Settle
+    // is captured eagerly so the rejection is never left unhandled.
+    const stale = client
+      .moveTo({ x: 1, y: 2, z: 3 }, { timeout: 900 })
+      .then((r) => ({ settled: "resolved" as const, r }), (e: unknown) => ({ settled: "rejected" as const, e }));
+    // Let the ack land so the waiter is registered before the recreate.
+    await Bun.sleep(30);
 
     // Recreate the session; seq and moveId both restart.
     await client.logout();
@@ -211,7 +215,9 @@ describe("client: movement", () => {
     // The NEW session's result for ITS moveId 1 arrives while the old waiter
     // is still pending. The old moveTo must time out, not claim this verdict.
     stub.push(JSON.stringify(moveResult("arrived", 1, 5)));
-    await expect(stale).rejects.toBeInstanceOf(EventTimeoutError);
+    const outcome = await stale;
+    expect(outcome.settled).toBe("rejected");
+    if (outcome.settled === "rejected") expect(outcome.e).toBeInstanceOf(EventTimeoutError);
 
     // The new session's own moveTo still sees that (buffered) result.
     const fresh = await client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
