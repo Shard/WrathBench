@@ -406,6 +406,11 @@ priority. Items graduate out of this file into commits; the dev loop
     token-bearing call (`/action`, `DELETE /session`, `/events`). Module and
     runner change together, backward compat off — they ship from the same
     tree. Related but distinct from item 10 (per-character credentials).
+    Related residual (2026-08-22): the sandbox child no longer inherits or
+    auto-loads host env (--env-file=/dev/null + allowlist), but a snippet can
+    still fs-read `.env` by absolute path — closing that needs filesystem
+    sandboxing and joins this item as a pre-public blocker. Trajectory audit
+    2026-08-22: no historical run ever read env or the file.
 
 ## Surface candidates (add when a run makes them the obstacle)
 
