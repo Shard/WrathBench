@@ -48,3 +48,12 @@ Read `docs/FOLLOW-UPS.md` and `git log --oneline -10`, check
 is live (no termination row in its run.sqlite) before touching anything. Then
 report state and proceed with the highest-priority open item, delegating per
 the policy above.
+
+## Learned 2026-08-22 (0.2 ship day)
+- Effort is a run dimension: roster entries take `effort`; recorded in run config; score turns-to-level, never tokens.
+- Kill runs via `pgrep -f "run.ts.*<run-id>"` + SIGTERM; TaskStop on wrapper shells does not reach the bun process. Force-kill leaves no termination row — write one into run.sqlite.
+- Subscription lane (claude driver) has no context policy: one growing CLI conversation; never compare its costs against API-driver runs.
+- Deploy windows: module image builds are safe anytime; `up -d worldserver` only with zero live runs. Full smoke = module-slice, module-session-state, module-accounts, death-recovery, travel (optional, exploratory).
+- Multi-agent same-worktree: instruct agents to stage by explicit path (never `git add -A`) — sweep commits misattributed work twice today.
+- Viewer LAN: WRATHBENCH_VIEWER_LAN=1 opt-in; firewalld rich rule for 8090 was runtime-only.
+- SHAKEOUT2 exists and is allowlisted; two roster processes (one per account) is the parallel-burn pattern.
