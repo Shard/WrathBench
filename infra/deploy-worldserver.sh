@@ -203,18 +203,9 @@ fi
 
 # -------------------------------------------------------------------- 2. tags
 docker image inspect "${NEXT_TAG}" >/dev/null 2>&1 || die "no such image: ${NEXT_TAG} (build it first)"
-# A gate sequence in flight against the CURRENT server would be killed by the
-# recreate below, and its FAIL record would then be mistaken for a verdict on
-# the new one (2026-08-23, docs/WORKLOG.md). Wait for it to finish first.
-if [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then
-  waited=0
-  while "${BUN_PLAIN_ENV[@]}" bun -e 'try{const s=await Bun.file(process.argv[1]).json();process.exit(s.preflightInFlight?0:1)}catch{process.exit(1)}' "${STATE_JSON}"; do
-    if [[ "${waited}" -eq 0 ]]; then say "the fleet gate is smoking the current server — waiting for that sequence to end before touching anything (up to ${PREFLIGHT_TIMEOUT_S}s)"; fi
-    waited=$(( waited + 10 ))
-    if [[ "${waited}" -ge "${PREFLIGHT_TIMEOUT_S}" ]]; then die "gate sequence still in flight after ${PREFLIGHT_TIMEOUT_S}s; not deploying over it"; fi
-    sleep 10
-  done
-fi
+# A gate sequence in flight against the CURRENT server simply dies with the
+# recreate; its record carries the old identity and gate_verdict ignores it.
+# Nothing to wait for here.
 HAVE_PREV=0
 if docker image inspect "${IMAGE}:latest" >/dev/null 2>&1; then
   docker tag "${IMAGE}:latest" "${IMAGE}:prev"
