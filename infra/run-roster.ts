@@ -42,7 +42,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // ------------------------------------------------------------------ types
@@ -90,12 +90,34 @@ type Outcome =
   | "unknown"
   | "session-freed"
   | "skipped"
+  | "tainted"
   | "budget-stop";
 
 const DEFAULT_API_BASE = "https://openrouter.ai/api/v1";
 const DEFAULT_API_KEY_ENV = "OPENROUTER_KEY";
 const DEFAULT_EPISODE_MS = 5_400_000; // 90 minutes
-const RETRY_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 10 * 60_000];
+// Two ladders, deliberately different shapes.
+//
+//  - RESUME_BACKOFF_MS is the *mid-episode* pause retry: a run with real turns
+//    on the board paused; we want it back quickly, and after three tries it
+//    goes to the defer queue. Unchanged from the original behaviour.
+//  - DEFER_BACKOFF_MS is the *per-spec* cooling ladder for a model whose pool
+//    is saturated. It used to be the same three steps, which clamped at 10m
+//    forever: a fully saturated free model (z-ai/glm-5.2:free, 2026-08-22) was
+//    relaunched 17 times in one day, each a 0-turn rate-limited stub. It now
+//    escalates to 6h and then taints the spec out of the rotation.
+const RESUME_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 10 * 60_000];
+const DEFER_BACKOFF_MS = [
+  1 * 60_000,
+  3 * 60_000,
+  5 * 60_000,
+  10 * 60_000,
+  15 * 60_000,
+  30 * 60_000,
+  60 * 60_000,
+  3 * 60 * 60_000,
+  6 * 60 * 60_000,
+];
 const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
@@ -206,6 +228,13 @@ function usage(): void {
       "                       derived run ids change and every model relaunches from scratch",
       "  --dry-run            print the plan and the exact argv per episode; launch nothing",
       "  --log <path>         roster JSONL (default data/runs/roster-<YYYYMMDD>.jsonl)",
+      "",
+      `  backoff: a spec that defers (pool saturated) cools for ${DEFER_LADDER} on`,
+      `           consecutive defers, then is TAINTED — dropped from the rotation for the rest of`,
+      `           this process — on defer ${DEFER_TAINT_AFTER}. A mid-episode pause is retried in place first`,
+      `           (${RESUME_LADDER}). A successful episode clears the count.`,
+      `  defer state is persisted next to --log as <log>.defer.json and reloaded under`,
+      `  --resume-roster, so a supervisor restart does not reset a ${DEFER_LADDER.split("/").pop()} backoff to ${DEFER_LADDER.split("/")[0]}.`,
     ].join("\n"),
   );
 }
@@ -330,36 +359,67 @@ function freeCycle(specs: Resolved[], cycle: number): number {
 // A deferred spec therefore stays in the rotation but carries a `notBefore`:
 // cycles before it are skipped with no launch and no session churn; the first
 // cycle after it *resumes the same run id* rather than spawning a fresh L1
-// `-cN`. Backoff escalates through RETRY_BACKOFF_MS on consecutive defers and
-// is cleared the moment the spec finishes (`done`).
+// `-cN`. Backoff escalates through DEFER_BACKOFF_MS on consecutive defers and
+// is cleared the moment the spec finishes (`done`). After the whole ladder is
+// spent the spec is TAINTED: dropped from the rotation for the rest of this
+// process, because a pool that has refused for 6h is not coming back today.
 
 export interface DeferEntry {
   /** The run id that actually paused — resume targets this, never a new -cN. */
   runId: string;
   /** now + backoff; cycles before this skip the spec without launching. */
   notBefore: number;
-  /** Consecutive defers, indexes RETRY_BACKOFF_MS (clamped to the last step). */
+  /** Consecutive defers, indexes DEFER_BACKOFF_MS (clamped to the last step). */
   defers: number;
   /** The pause reason carried for the log and operator lines. */
   reason: string;
+  /**
+   * Out of rungs: the spec is removed from the rotation for the rest of this
+   * roster process. `notBefore` is meaningless once this is set (and must not
+   * be Infinity — JSON round-trips that to null), so every read gates on this
+   * flag first.
+   */
+  tainted?: boolean;
 }
 
 export type AttemptPlan =
   | { kind: "skip"; until: number; reason: string }
   | { kind: "resume"; runId: string; reason: string }
+  | { kind: "tainted"; reason: string; defers: number }
   | { kind: "fresh" };
 
 /** Escalating backoff for the Nth consecutive defer (1-based), clamped. */
 export function backoffMs(defers: number): number {
-  const i = Math.min(Math.max(defers, 1) - 1, RETRY_BACKOFF_MS.length - 1);
-  return RETRY_BACKOFF_MS[i]!;
+  const i = Math.min(Math.max(defers, 1) - 1, DEFER_BACKOFF_MS.length - 1);
+  return DEFER_BACKOFF_MS[i]!;
 }
+
+/**
+ * True once a spec has deferred more times than there are rungs — i.e. it sat
+ * out the whole ladder up to 6h and still could not get a turn on the board.
+ * At that point relaunching is pure noise: the pool is not coming back today.
+ */
+export function isTainted(defers: number): boolean {
+  return defers > DEFER_BACKOFF_MS.length;
+}
+
+/** Human-readable rungs for --help and the dry-run plan ("1m/3m/.../6h"). */
+export function ladder(rungs: number[]): string {
+  return rungs
+    .map((m) => (m >= 60 * 60_000 ? `${m / (60 * 60_000)}h` : `${m / 60_000}m`))
+    .join("/");
+}
+
+export const DEFER_LADDER = ladder(DEFER_BACKOFF_MS);
+export const RESUME_LADDER = ladder(RESUME_BACKOFF_MS);
+export const DEFER_TAINT_AFTER = DEFER_BACKOFF_MS.length + 1;
 
 /**
  * What a loop cycle should do with one spec, given its defer state.
  *
  *  - no entry            -> `fresh` (a healthy spec; the caller applies forCycle
  *                           for its own -cN burn sample, preserving loop semantics)
+ *  - tainted entry        -> `tainted` (never launch again this process)
  *  - entry, still cooling -> `skip` (do not launch; this is what kills hammering,
  *                           and it is per-spec so a lane-mate failing in seconds
  *                           cannot drag this spec back into a fast relaunch)
@@ -367,8 +427,141 @@ export function backoffMs(defers: number): number {
  */
 export function planAttempt(entry: DeferEntry | undefined, now: number): AttemptPlan {
   if (entry === undefined) return { kind: "fresh" };
+  if (entry.tainted === true) return { kind: "tainted", reason: entry.reason, defers: entry.defers };
   if (now < entry.notBefore) return { kind: "skip", until: entry.notBefore, reason: entry.reason };
   return { kind: "resume", runId: entry.runId, reason: entry.reason };
+}
+
+export type CyclePlan = AttemptPlan | { kind: "already-done" };
+
+/**
+ * planAttempt plus the one thing that is cycle-dependent: a spec whose cycle-1
+ * run was already terminated when --resume-roster started. That is a statement
+ * about cycle 1 only — the spec stays in the rotation and cycle 2+ launches it
+ * fresh under a -cN id. Dropping it instead is what idled the lanes.
+ */
+export function planCycle(
+  entry: DeferEntry | undefined,
+  doneCycle1: boolean,
+  cycle: number,
+  now: number,
+): CyclePlan {
+  if (cycle === 1 && doneCycle1) return { kind: "already-done" };
+  return planAttempt(entry, now);
+}
+
+/**
+ * Record one defer against a spec's existing state and return the new entry.
+ * Pure so the ladder and the taint threshold are testable without a live run.
+ */
+export function nextDefer(
+  prev: DeferEntry | undefined,
+  now: number,
+  runId: string,
+  reason: string,
+): DeferEntry {
+  const defers = (prev?.defers ?? 0) + 1;
+  if (isTainted(defers)) return { runId, notBefore: now, defers, reason, tainted: true };
+  return { runId, notBefore: now + backoffMs(defers), defers, reason };
+}
+
+// ------------------------------------------------------------ defer sidecar
+//
+// Defer state has to outlive the process: a supervisor restart or a fleet.json
+// edit respawns the lane, and without this a spec sitting on a 6h backoff would
+// come back as `fresh` and start hammering again from rung 1. The sidecar sits
+// next to the roster's --log jsonl and is keyed on the SPEC's stable cycle-1
+// run id — NOT on DeferEntry.runId, which may be a -cN from a mid-loop defer.
+
+export function deferSidecarPath(log: string): string {
+  return `${log}.defer.json`;
+}
+
+export function serializeDefers(map: Map<string, DeferEntry>): string {
+  return JSON.stringify({ version: 1, entries: Object.fromEntries(map) }, null, 2);
+}
+
+/** Tolerant by design: a truncated or foreign sidecar means "no state", never a crash. */
+export function parseDefers(text: string): Map<string, DeferEntry> {
+  const out = new Map<string, DeferEntry>();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  const entries = (raw as { entries?: unknown } | null)?.entries;
+  if (entries === null || typeof entries !== "object") return out;
+  for (const [key, v] of Object.entries(entries as Record<string, unknown>)) {
+    const e = v as Partial<DeferEntry>;
+    if (typeof e?.runId !== "string" || typeof e.defers !== "number") continue;
+    out.set(key, {
+      runId: e.runId,
+      notBefore: typeof e.notBefore === "number" ? e.notBefore : 0,
+      defers: e.defers,
+      reason: typeof e.reason === "string" ? e.reason : "unknown",
+      ...(e.tainted === true ? { tainted: true } : {}),
+    });
+  }
+  return out;
+}
+
+function loadDefers(log: string): Map<string, DeferEntry> {
+  const path = deferSidecarPath(log);
+  if (!existsSync(path)) return new Map();
+  try {
+    return parseDefers(readFileSync(path, "utf8"));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Written via tmp+rename: `--status` may read this while a lane is writing it. */
+function saveDefers(log: string, map: Map<string, DeferEntry>, dryRun: boolean): void {
+  if (dryRun || log === "") return;
+  const path = deferSidecarPath(log);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, serializeDefers(map));
+    renameSync(tmp, path);
+  } catch (e) {
+    say(`warning: could not write defer sidecar ${path}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// -------------------------------------------------------------- cycle gap
+//
+// Three distinct reasons a cycle can end, and they want different waits.
+
+export type GapPlan =
+  | { kind: "gap"; ms: number; why: string }
+  | { kind: "cooling"; ms: number; why: string }
+  | { kind: "none"; why: string };
+
+/**
+ * `launched` episodes ran this cycle; `cooling` specs were held on a backoff
+ * with the earliest due at `earliest`. Nothing launched AND nothing cooling
+ * means the cycle was a no-op (every entry already terminated under
+ * --resume-roster, or tainted out) — sleeping 10m there just wastes the night,
+ * and the old code printed "all models backing off", which was a lie.
+ */
+export function planGap(
+  launched: number,
+  cooling: number,
+  earliest: number | undefined,
+  now: number,
+  nextCycle: number,
+): GapPlan {
+  if (launched > 0) return { kind: "gap", ms: CYCLE_GAP_MS, why: `gap before cycle ${nextCycle}` };
+  if (cooling > 0 && earliest !== undefined) {
+    return {
+      kind: "cooling",
+      ms: Math.max(0, earliest - now),
+      why: `all remaining models backing off before cycle ${nextCycle}`,
+    };
+  }
+  return { kind: "none", why: `nothing launched and nothing cooling — starting cycle ${nextCycle} immediately` };
 }
 
 // ------------------------------------------------------------------- run state
@@ -765,6 +958,14 @@ const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhauste
 interface Attempt {
   spec: Resolved;
   resume: boolean;
+  /**
+   * --resume-roster found this spec's cycle-1 run already terminated. Cycle 1
+   * is done for it; later loop cycles still give it a fresh -cN. It used to be
+   * dropped from `pending` outright, which idled a whole lane: five of six
+   * fleet lanes spent 2026-08-22 16:48-17:01 logging "restarting the roster
+   * (0 episode(s))" every cycle because every entry had finished cycle 1.
+   */
+  doneCycle1?: boolean;
 }
 
 /** @returns true when the spec is finished with (done or given up on). */
@@ -852,7 +1053,7 @@ async function attemptSpec(
     }
 
     const early = turns < EARLY_TURN_THRESHOLD;
-    const outOfRetries = retry >= RETRY_BACKOFF_MS.length;
+    const outOfRetries = retry >= RESUME_BACKOFF_MS.length;
     if (early || outOfRetries || stopping) {
       const why = stopping
         ? "stopping"
@@ -873,16 +1074,16 @@ async function attemptSpec(
       return "defer";
     }
 
-    const backoff = RETRY_BACKOFF_MS[retry]!;
+    const backoff = RESUME_BACKOFF_MS[retry]!;
     say(
-      `retry ${spec.runId} in ${backoff / 60_000}m (${verdict.reason} mid-episode, ${turns} turns this attempt, attempt ${retry + 1}/${RETRY_BACKOFF_MS.length})`,
+      `retry ${spec.runId} in ${backoff / 60_000}m (${verdict.reason} mid-episode, ${turns} turns this attempt, attempt ${retry + 1}/${RESUME_BACKOFF_MS.length})`,
     );
     record({
       runId: spec.runId,
       model: spec.model,
       outcome: "retry",
       ...(level !== undefined ? { level } : {}),
-      detail: `${verdict.reason}; backoff ${backoff}ms; attempt ${retry + 1}/${RETRY_BACKOFF_MS.length}`,
+      detail: `${verdict.reason}; backoff ${backoff}ms; attempt ${retry + 1}/${RESUME_BACKOFF_MS.length}`,
     });
     await nap(backoff, opts.deadline, `backoff before resuming ${spec.runId}`);
     if (stopping || (opts.deadline !== undefined && Date.now() >= opts.deadline)) {
@@ -950,21 +1151,25 @@ async function main(): Promise<void> {
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
 
-  const pending: Attempt[] = [];
+  let pending: Attempt[] = [];
   for (const spec of specs) {
     const row = readRunRow(spec.runId);
     if (args.resumeRoster && row !== undefined) {
       if (row.termination_reason !== null && row.termination_reason !== "") {
-        say(`skip ${spec.model} (${spec.runId}): already terminated ${row.termination_reason}`);
+        say(
+          `skip ${spec.model} (${spec.runId}): already terminated ${row.termination_reason}` +
+            ` (cycle 1 only — under --loop it gets a fresh -cN next cycle)`,
+        );
         if (!args.dryRun) {
           record({
             runId: spec.runId,
             model: spec.model,
             outcome: "skipped",
             ...(readLevel(spec.runId) !== undefined ? { level: readLevel(spec.runId)! } : {}),
-            detail: `resume-roster: already terminated ${row.termination_reason}`,
+            detail: `resume-roster: already terminated ${row.termination_reason}; kept in the rotation for later loop cycles`,
           });
         }
+        pending.push({ spec, resume: false, doneCycle1: true });
         continue;
       }
       say(`resume-roster: ${spec.model} (${spec.runId}) will continue with --resume`);
@@ -985,8 +1190,11 @@ async function main(): Promise<void> {
     pending.push({ spec, resume: false });
   }
 
+  const doneAlready = pending.filter((a) => a.doneCycle1 === true).length;
   say(
-    `roster ${rosterPath}: ${pending.length} episode(s), log ${logPath}` +
+    `roster ${rosterPath}: ${pending.length} episode(s)` +
+      (doneAlready > 0 ? ` (${doneAlready} already done for cycle 1; kept for later --loop cycles)` : "") +
+      `, log ${logPath}` +
       (deadline !== undefined ? `, stop launching at ${new Date(deadline).toLocaleString()}` : ", no wall-clock budget"),
   );
 
@@ -1000,6 +1208,7 @@ async function main(): Promise<void> {
         s.driver === "openai"
           ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n`
           : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
+      const cycle1 = a.doneCycle1 === true ? " [cycle 1 already terminated — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
@@ -1007,7 +1216,7 @@ async function main(): Promise<void> {
           endpoint +
           `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
       console.log(
-        `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
+        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {
@@ -1020,7 +1229,8 @@ async function main(): Promise<void> {
           `\n      A HEALTHY spec gets a fresh burn sample under a -cN run id each cycle:` +
           `\n      ${pending.map((a) => forCycle(a.spec, 2).runId).join(", ")}` +
           `\n      A spec that deferred rate-limited does NOT get a fresh -cN: it is skipped while` +
-          `\n      cooling and then RESUMED on its own run id in place (backoff ${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, escalating).`,
+          `\n      cooling and then RESUMED on its own run id in place (backoff ${DEFER_LADDER}, escalating;` +
+          `\n      tainted out of the rotation after ${DEFER_TAINT_AFTER} consecutive defers).`,
       );
     }
     console.log(
@@ -1032,9 +1242,10 @@ async function main(): Promise<void> {
     console.log(
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
         `\n        claude-subscription entries never defer (no per-provider pools to wait on)` +
-        `\n        mid-episode pause -> --resume with backoff ${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, then defer` +
-        `\n        deferred spec -> per-spec backoff (${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, escalating): skipped while cooling,` +
-        `\n        then RESUMED in place on its own run id (never relaunched fresh at L1). Resume` +
+        `\n        mid-episode pause -> --resume with backoff ${RESUME_LADDER}, then defer` +
+        `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +
+        `\n        then RESUMED in place on its own run id (never relaunched fresh at L1); TAINTED` +
+        `\n        (dropped from the rotation) on consecutive defer ${DEFER_TAINT_AFTER}. Resume` +
         `\n        restores trajectory + scratchpad but NOT level — a lane-mate's fresh launch wipes` +
         `\n        the shared account, so a resumed character is recreated at level 1.` +
         `\n        non-loop retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each (loop mode` +
@@ -1057,7 +1268,47 @@ async function main(): Promise<void> {
   // from it at loop exit, so a spec can never be both relaunched fresh AND
   // retried (the old code pushed to `queue` while the spec also stayed in the
   // rotation — double-booking that spawned a fresh L1 -cN every cycle).
-  const deferred = new Map<string, DeferEntry>();
+  // Persisted across process restarts (see the defer sidecar section): without
+  // this, a supervisor restart or a fleet.json edit would hand a spec sitting
+  // on a 6h backoff a `fresh` plan and start the hammering over at rung 1.
+  const deferred = args.resumeRoster ? loadDefers(logPath) : new Map<string, DeferEntry>();
+  if (deferred.size > 0) {
+    say(
+      `resume-roster: reloaded defer state for ${deferred.size} spec(s) from ${deferSidecarPath(logPath)}` +
+        ` (${[...deferred.values()].filter((e) => e.tainted === true).length} tainted)`,
+    );
+  }
+  const roster: Attempt[] = [...pending];
+  /** Dropped from the rotation this process; reported at exit. */
+  const taintedModels = new Set<string>();
+
+  /** Prune tainted specs out of the rotation, once, loudly. */
+  const pruneTainted = (): void => {
+    const keep: Attempt[] = [];
+    for (const a of pending) {
+      const entry = deferred.get(a.spec.runId);
+      if (entry?.tainted === true) {
+        if (!taintedModels.has(a.spec.model)) {
+          taintedModels.add(a.spec.model);
+          say(
+            `TAINTED ${a.spec.model} (${a.spec.runId}): ${entry.defers} consecutive defers (${entry.reason})` +
+              ` — the whole ${DEFER_LADDER} ladder is spent, dropping it from the rotation for this roster process`,
+          );
+          record({
+            runId: entry.runId,
+            model: a.spec.model,
+            outcome: "tainted",
+            detail: `${entry.defers} consecutive defers; last reason ${entry.reason}; removed from the rotation`,
+          });
+        }
+        continue;
+      }
+      keep.push(a);
+    }
+    pending = keep;
+  };
+
+  pruneTainted();
   for (let cycle = 1; ; cycle++) {
     // Cycle 1 is the roster as written (so a non-loop run is byte-identical to
     // before; the map is empty, so every spec plans `fresh`). Later cycles give
@@ -1074,11 +1325,20 @@ async function main(): Promise<void> {
     const n = cycle === 1 ? 1 : freeCycle(freshBases.length > 0 ? freshBases : pending.map((a) => a.spec), cycle);
     if (cycle > 1) say(`loop cycle ${n}: restarting the roster (${pending.length} episode(s))`);
     let launched = 0;
+    let cooling = 0;
     let earliest: number | undefined;
     for (const a of pending) {
       if (stopping) break;
-      const plan = planAttempt(deferred.get(a.spec.runId), Date.now());
+      const plan = planCycle(deferred.get(a.spec.runId), a.doneCycle1 === true, cycle, Date.now());
+      // Cycle 1 already ran for this spec (--resume-roster found it terminated).
+      // No nap is owed for it either: planGap only counts cooling specs.
+      if (plan.kind === "already-done") continue;
+      // Belt and braces: pruneTainted() normally removes these before the cycle
+      // starts, but an explicit guard here means a tainted plan can never fall
+      // through the fresh/resume ternary below and launch the model anyway.
+      if (plan.kind === "tainted") continue;
       if (plan.kind === "skip") {
+        cooling++;
         earliest = earliest === undefined ? plan.until : Math.min(earliest, plan.until);
         say(`hold ${a.spec.model} (${a.spec.runId}): ${plan.reason}, backing off until ${stamp(plan.until)}`);
         // Positive evidence in the log that the spec was HELD (not silently
@@ -1123,26 +1383,31 @@ async function main(): Promise<void> {
       launched++;
       const res = await attemptSpec(target, { resume, deadline, dryRun: false });
       if (res === "defer") {
-        const defers = (deferred.get(a.spec.runId)?.defers ?? 0) + 1;
         const reason = readRunRow(target.runId)?.pause_reason ?? "rate-limited";
-        deferred.set(a.spec.runId, {
-          runId: target.runId,
-          notBefore: Date.now() + backoffMs(defers),
-          defers,
-          reason,
-        });
+        deferred.set(a.spec.runId, nextDefer(deferred.get(a.spec.runId), Date.now(), target.runId, reason));
       } else {
+        // A completed episode clears the count: the ladder measures CONSECUTIVE
+        // defers, so a model that gets one turn on the board starts over at 1m.
         deferred.delete(a.spec.runId);
       }
+      saveDefers(logPath, deferred, false);
     }
+    pruneTainted();
     if (!args.loop || stopping) break;
     if (deadline !== undefined && Date.now() >= deadline) break;
+    if (pending.length === 0) {
+      say("nothing left to run (every entry already terminated or tainted) — ending the loop");
+      break;
+    }
     // A gap between cycles so the main loop can never spin faster than the
     // backoff: without it, a whole roster of saturated free models would 429 in
-    // seconds and immediately loop. When nothing launched (every spec is still
-    // cooling) sleep exactly until the earliest spec is due instead.
-    const gap = launched === 0 && earliest !== undefined ? Math.max(0, earliest - Date.now()) : CYCLE_GAP_MS;
-    await nap(gap, deadline, launched === 0 ? `all models backing off before cycle ${cycle + 1}` : `gap before cycle ${cycle + 1}`);
+    // seconds and immediately loop. When every remaining spec is cooling, sleep
+    // exactly until the earliest is due; when the cycle was a pure no-op (every
+    // entry skipped as already-terminated) there is nothing to wait FOR, so go
+    // straight round again instead of napping 10m against a lie.
+    const gap = planGap(launched, cooling, earliest, Date.now(), cycle + 1);
+    if (gap.kind === "none") say(gap.why);
+    else await nap(gap.ms, deadline, gap.why);
     if (stopping || (deadline !== undefined && Date.now() >= deadline)) break;
   }
 
@@ -1151,9 +1416,10 @@ async function main(): Promise<void> {
   // of which disable the loop below); a looped run has already been resuming
   // these in place, cycle after cycle. Resume targets the stored run id.
   let queue: Attempt[] = [];
-  for (const a of pending) {
+  for (const a of roster) {
     const entry = deferred.get(a.spec.runId);
-    if (entry !== undefined) queue.push({ spec: { ...a.spec, runId: entry.runId }, resume: true });
+    if (entry === undefined || entry.tainted === true) continue;
+    queue.push({ spec: { ...a.spec, runId: entry.runId }, resume: true });
   }
 
   for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping; cycle++) {
@@ -1178,8 +1444,15 @@ async function main(): Promise<void> {
     queue = next;
   }
 
+  saveDefers(logPath, deferred, false);
   if (queue.length > 0) {
     say(`still deferred at exit: ${queue.map((a) => a.spec.model).join(", ")}`);
+  }
+  if (taintedModels.size > 0) {
+    say(
+      `tainted at exit (out of the rotation after ${DEFER_TAINT_AFTER} consecutive defers each): ` +
+        [...taintedModels].join(", "),
+    );
   }
   say("roster complete");
 }

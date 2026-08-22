@@ -6,6 +6,51 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Roster defer ladder, taint, and the idle-lane fix (`infra/run-roster.ts`)
+
+Two failures observed live on the same afternoon, both in the roster's loop
+scheduler, both fixed together because they share the cycle bookkeeping.
+
+- **The backoff clamped.** The per-spec defer ladder shared `RETRY_BACKOFF_MS`
+  with the mid-episode pause retry: `2m/5m/10m`, clamped at 10m forever. A model
+  whose upstream free pool is saturated for the day therefore got retried every
+  10m indefinitely — `z-ai/glm-5.2:free` reached `-c17`, seventeen 0-turn
+  rate-limited stubs polluting the run directory for no signal. The ladder is now
+  its own constant and escalates `1m/3m/5m/10m/15m/30m/1h/3h/6h`; the 10th
+  consecutive defer marks the spec **tainted** and drops it from the rotation for
+  the rest of the process (`say()` line, a JSONL row with outcome `tainted`
+  carrying the defer count and last reason, and a tainted line in the exit
+  summary). A successful episode still clears the count, as before. The
+  mid-episode pause retry keeps the old `2m/5m/10m` under its own name: a run
+  with real turns on the board wants to come back fast, and the two decisions
+  were never the same decision.
+- **Defer state died with the process.** A supervisor restart or a `fleet.json`
+  edit respawned the lane with an empty defer map, so a spec sitting on a 6h
+  backoff came back as a fresh launch at rung 1 — the escalation could never
+  actually be reached in a fleet that gets edited. State now persists to
+  `<--log>.defer.json` (tmp+rename, keyed on the stable cycle-1 spec id, *not* on
+  `DeferEntry.runId`, which may be a `-cN`) and reloads under `--resume-roster`.
+  `run-fleet.sh --status` reads the same sidecar and prints tainted and cooling
+  specs per lane.
+- **Resumed lanes idled forever.** Under `--resume-roster --loop`, an entry whose
+  cycle-1 run was already terminated was skipped *and removed from* the roster.
+  With a whole roster in that state — five of six lanes at 16:48–17:01 — every
+  later cycle logged "restarting the roster (0 episode(s))" and the lane did
+  nothing for the rest of its budget. Being terminated is a statement about cycle
+  1 only: the spec now stays in the rotation and cycle 2+ launches it fresh under
+  a `-cN` id.
+- **The gap lied.** A cycle that launched nothing slept the flat 10m announcing
+  "all models backing off" even when nothing was backing off. The gap decision is
+  now an explicit three-way (`planGap`): flat gap when episodes ran, sleep until
+  the earliest `notBefore` when specs are genuinely cooling, and no sleep at all
+  when the cycle was a pure no-op. The loop also exits cleanly when the rotation
+  empties (everything terminated or tainted) instead of spinning.
+
+The scheduling decisions are pure functions — `backoffMs`, `isTainted`,
+`nextDefer`, `planAttempt`, `planCycle`, `planGap`, `serializeDefers`/`parseDefers`
+— and `infra/roster-backoff.test.ts` pins each one (76 tests across `infra/`),
+so none of this needs a live run to verify.
+
 ### API ergonomics pass: HUD, generated API.md, UnitView/gossip-by-text, wiki coords (issue #2, items 1–4)
 
 A four-part harness-surface change to make the existing two-tier API usable the way

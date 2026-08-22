@@ -124,3 +124,19 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     same exposure. ADR-0018 is the decision of record and claims to supersede this
     item; kept open until it is confirmed that it covers the grind-collapse exposure
     and that the ADR is written before the first scored run, not after.
+
+14. ~~**Roster defer backoff clamps at 10m and idles resumed lanes.**~~ Shipped
+    2026-08-22. Two observed failures in one afternoon: (a) the per-spec defer
+    ladder was `2m/5m/10m` clamped forever, so a saturated free model
+    (`z-ai/glm-5.2:free`) was relaunched 17 times in a day, every one a 0-turn
+    rate-limited stub; (b) under `--resume-roster --loop`, a spec whose cycle-1
+    run had already terminated was dropped from the roster entirely, so five of
+    six fleet lanes spent 16:48–17:01 logging "restarting the roster
+    (0 episode(s))" and idling. Fixed: escalating ladder
+    `1m/3m/5m/10m/15m/30m/1h/3h/6h` then TAINT out of the rotation on the 10th
+    consecutive defer, defer state persisted in `<log>.defer.json` across lane
+    restarts, an already-terminated entry kept in the rotation for later cycles,
+    and no cycle nap when nothing launched *and* nothing was cooling. Left open
+    for a future pass: taint is per-process, not per-day — a lane restarted after
+    a taint gets the tainted specs back only if the sidecar survives, and there
+    is no operator command to un-taint one without editing the sidecar.

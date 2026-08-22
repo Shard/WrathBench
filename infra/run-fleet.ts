@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { accountHeldBy, slug, type RosterSpec } from "./run-roster";
+import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 
 // ------------------------------------------------------------------ types
 
@@ -523,6 +523,24 @@ function foreignRosters(managedPids: Set<number>): { pid: number; argv: string }
   return out;
 }
 
+/**
+ * Backed-off / tainted specs for one lane, straight off the roster's defer
+ * sidecar. Read-only and tolerant: a lane mid-write (or no sidecar at all)
+ * must degrade to "no rows", never break the status report for other lanes.
+ */
+function laneDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
+  const path = deferSidecarPath(jsonl);
+  if (!existsSync(path)) return [];
+  try {
+    return [...parseDefers(readFileSync(path, "utf8"))].map(([specRunId, entry]) => ({
+      spec: specRunId,
+      entry,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function printStatus(configPath: string): void {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
   let state: FleetState | undefined;
@@ -560,6 +578,19 @@ function printStatus(configPath: string): void {
       }
       const tail = lastLine(ls.stdoutLog);
       if (tail !== undefined) console.log(`                   last: ${tail}`);
+      const defers = laneDefers(ls.jsonl);
+      const tainted = defers.filter((d) => d.entry.tainted === true);
+      const cooling = defers.filter((d) => d.entry.tainted !== true);
+      if (tainted.length > 0) {
+        console.log(
+          `                   tainted: ${tainted.map((d) => `${d.spec} (${d.entry.defers} defers, ${d.entry.reason})`).join(", ")}`,
+        );
+      }
+      if (cooling.length > 0) {
+        console.log(
+          `                   cooling: ${cooling.map((d) => `${d.spec} until ${new Date(d.entry.notBefore).toLocaleTimeString()}`).join(", ")}`,
+        );
+      }
     }
     // Honesty about the account itself: a hand-started run holds it just as
     // hard as a fleet one would. Same liveness inference as the roster guard.
