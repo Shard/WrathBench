@@ -27,7 +27,10 @@ import {
   questAccepted,
   questComplete,
   questGiverList,
+  questGiverStatus,
+  questGiverStatusMultiple,
   questProgress,
+  questQueryResponse,
   questRewarded,
   requestItems,
   SELF_GUID,
@@ -1588,6 +1591,165 @@ describe("client: gossipSelect by observed option text (item 3c)", () => {
     stub.push(gossipComplete(201));
     await client.events.waitForOpcode("SMSG_GOSSIP_COMPLETE", { timeout: 2000 });
     await expect(client.gossipSelect(CREATURE_GUID, "Train me")).rejects.toThrow(/no gossip menu/);
+    client.close();
+    await stub.stop();
+  });
+});
+
+// ------------------------------------------------ client-parity queries (27/28)
+
+describe("client: questgiver status and quest query, issued the way a client does", () => {
+  /** A questgiver-flagged create block for a fresh guid, near our own position. */
+  function questGiverCreate(guid: string, seq: number, fields: Record<string, number> = { npcFlags: 2 }) {
+    const block = structuredClone(creatureCreate);
+    (block.data.objects[0] as { guid: string }).guid = guid;
+    (block.data.objects[0] as { fields: Record<string, number> }).fields = { entry: 823, ...fields };
+    block.seq = seq;
+    return block;
+  }
+  const GIVER = "17365880163140632801";
+  const GUARD = "17365880163140632802";
+
+  test("a questgiver-flagged unit coming into view is queried once; a guard is not", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 91)));
+    stub.push(JSON.stringify(questGiverCreate(GUARD, 92, { npcFlags: 0 })));
+    const at = await untilAction(stub, "questgiver_status_query");
+    expect(stub.actions[at]).toMatchObject({ action: "questgiver_status_query", guid: GIVER });
+    await Bun.sleep(200);
+    expect(stub.actions.filter((a) => a.action === "questgiver_status_query")).toHaveLength(1);
+    // The answer folds onto the unit.
+    stub.push(JSON.stringify(questGiverStatus(GIVER, 8, 93)));
+    await Bun.sleep(20);
+    expect(client.state.units({ questGiver: "available" }).map((r) => r.guid)).toEqual([GIVER]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a questgiver gameobject is queried too; a status already in the burst suppresses the query", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const GO = "17365880163140632803";
+    stub.push(JSON.stringify(questGiverCreate(GO, 91, { goType: 2 })));
+    // The login STATUS_MULTIPLE names GIVER in the same burst as its create.
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 92)));
+    stub.push(JSON.stringify(questGiverStatusMultiple([{ guid: GIVER, status: 10 }], 93)));
+    await untilAction(stub, "questgiver_status_query");
+    await Bun.sleep(200);
+    const sent = stub.actions.filter((a) => a.action === "questgiver_status_query").map((a) => a.guid);
+    expect(sent).toEqual([GO]);
+    expect(client.state.units({ questGiver: "reward" }).map((r) => r.guid)).toEqual([GIVER]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a unit that leaves view and returns is queried again", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 91)));
+    await untilAction(stub, "questgiver_status_query");
+    const gone = structuredClone(creatureOutOfRange) as { seq: number; data: { objects: { guids: string[] }[] } };
+    gone.seq = 92;
+    gone.data.objects[0]!.guids = [GIVER];
+    stub.push(JSON.stringify(gone));
+    await Bun.sleep(20);
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 93)));
+    await untilAction(stub, "questgiver_status_query", 1);
+    expect(stub.actions.filter((a) => a.action === "questgiver_status_query")).toHaveLength(2);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a quest entering the log is queried once; completion refreshes every marker; re-accept re-queries", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // The login fold of the (empty) quest log does not ask for markers: the
+    // core sends STATUS_MULTIPLE unprompted at login.
+    await Bun.sleep(200);
+    expect(stub.actions.map((a) => a.action)).not.toContain("questgiver_status_multiple_query");
+
+    stub.push(JSON.stringify(questAccepted));
+    const q = await untilAction(stub, "quest_query");
+    expect(stub.actions[q]).toMatchObject({ action: "quest_query", questId: QUEST_ID });
+    await untilAction(stub, "questgiver_status_multiple_query");
+    stub.push(JSON.stringify(questQueryResponse()));
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)?.title).toBe("Kobold Camp Cleanup");
+
+    // Counters moving do not refresh markers; the complete bit does.
+    const before = stub.actions.length;
+    stub.push(JSON.stringify(questProgress));
+    await Bun.sleep(200);
+    expect(stub.actions.length).toBe(before);
+    stub.push(JSON.stringify(questComplete));
+    await untilAction(stub, "questgiver_status_multiple_query", before);
+    expect(stub.actions.filter((a) => a.action === "quest_query")).toHaveLength(1);
+
+    // Abandon (slot emptied) then re-accept: the template is cached, so no
+    // second quest_query — but the marker refresh fires for each log change.
+    const empty = structuredClone(questAccepted) as { seq: number; data: { objects: { fields: Record<string, number> }[] } };
+    empty.seq = 40;
+    empty.data.objects[0]!.fields = { quest0Id: 0, quest0State: 0 };
+    stub.push(JSON.stringify(empty));
+    await Bun.sleep(200);
+    const re = structuredClone(questAccepted) as { seq: number };
+    re.seq = 41;
+    stub.push(JSON.stringify(re));
+    await Bun.sleep(200);
+    expect(stub.actions.filter((a) => a.action === "quest_query")).toHaveLength(1);
+    expect(client.state.quest(QUEST_ID)?.objectives).toHaveLength(4);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a turn-in silence names the observed marker when it is not `reward`", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const self = client.state.self.position?.value;
+    if (!self) throw new Error("no login position");
+    const near = questGiverCreate(GIVER, 91);
+    (near.data.objects[0] as { pos: { x: number; y: number; z: number; o: number } }).pos = { x: self.x + 0.8, y: self.y, z: self.z, o: 0 };
+    stub.push(JSON.stringify(near));
+    stub.push(JSON.stringify(questGiverStatus(GIVER, 8, 92)));
+    await Bun.sleep(20);
+    const err = (await client.turnInQuest(GIVER, QUEST_ID, 0, { timeout: 150 }).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("range is NOT the cause");
+    expect(err.message).toContain("questgiver status is `available`, not `reward`");
+    expect(err.message).toContain(`not quest ${QUEST_ID}'s ender`);
+    expect(err.message).toContain('state.units({ questGiver: "reward" })');
+    client.close();
+    await stub.stop();
+  });
+
+  test("a quest-list silence names a `none` marker, and says nothing when no marker was observed", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 91)));
+    await Bun.sleep(20);
+    const err = (await client.questsAvailableFrom(CREATURE_GUID, { timeout: 150 }).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("questgiver status is `none`");
+    const bare = (await client.questsAvailableFrom(PLAYER_GUID, { timeout: 150 }).catch((e: unknown) => e)) as Error;
+    expect(bare.message).not.toContain("questgiver status");
+    client.close();
+    await stub.stop();
+  });
+
+  test("the raw queries are on the client for a caller who wants one now", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await client.questQuery(QUEST_ID);
+    await client.questGiverStatusQuery(CREATURE_GUID);
+    await client.questGiverStatusQuery();
+    expect(stub.actions.map((a) => a.action)).toEqual([
+      "quest_query",
+      "questgiver_status_query",
+      "questgiver_status_multiple_query",
+    ]);
+    expect(stub.actions[0]).toMatchObject({ questId: QUEST_ID });
+    expect(stub.actions[1]).toMatchObject({ guid: CREATURE_GUID });
     client.close();
     await stub.stop();
   });

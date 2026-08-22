@@ -25,6 +25,12 @@ import {
   questComplete,
   questProgress,
   questRewarded,
+  questGiverStatus,
+  questGiverStatusMultiple,
+  questQueryResponse,
+  KOBOLD_ENTRY,
+  GO_ENTRY,
+  REQUIRED_ITEM,
   selfProgress,
   selfTarget,
   CREATURE_ENTRY,
@@ -1202,5 +1208,159 @@ describe("state cache: the gossip menu fold (item 3c)", () => {
     // "2002" is already canonical here; the fold keys by the schema-canonical
     // guid, which is what gossipSelect looks up with guidKey(...).
     expect(c.lastGossip("2002")?.menuId).toBe(5);
+  });
+});
+
+describe("state cache: questgiver markers (FOLLOW-UPS 27)", () => {
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("a unit has no marker until a status packet names it", () => {
+    const c = withWorld([]);
+    const row = c.units().find((r) => r.guid === CREATURE_GUID)!;
+    expect(row.questGiver).toBeUndefined();
+    expect(row.questGiverStatus).toBeUndefined();
+    expect(c.nearby.get(CREATURE_GUID)?.questGiver).toBeUndefined();
+  });
+
+  test("SMSG_QUESTGIVER_STATUS folds onto the unit, named and raw", () => {
+    const c = withWorld([questGiverStatus(CREATURE_GUID, 10, 60)]);
+    const row = c.units().find((r) => r.guid === CREATURE_GUID)!;
+    expect(row.questGiver).toBe("reward");
+    expect(row.questGiverStatus).toBe(10);
+    expect(c.nearby.get(CREATURE_GUID)?.questGiver).toEqual({ value: 10, seq: 60, ts: 1_700_000_000_060 });
+  });
+
+  test("the latest status per guid wins, and STATUS_MULTIPLE covers several guids at once", () => {
+    const c = withWorld([
+      questGiverStatus(CREATURE_GUID, 8, 60),
+      questGiverStatusMultiple(
+        [
+          { guid: CREATURE_GUID, status: 5 },
+          { guid: PLAYER_GUID, status: 0 },
+        ],
+        61,
+      ),
+    ]);
+    const byGuid = new Map(c.units().map((r) => [r.guid, r]));
+    expect(byGuid.get(CREATURE_GUID)?.questGiver).toBe("incomplete");
+    expect(byGuid.get(PLAYER_GUID)?.questGiver).toBe("none");
+    expect(byGuid.get(PLAYER_GUID)?.questGiverStatus).toBe(0);
+  });
+
+  test("every DIALOG_STATUS byte has a name; out-of-range bytes are unknown", () => {
+    const names = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(
+      (n) => withWorld([questGiverStatus(CREATURE_GUID, n, 60)]).units().find((r) => r.guid === CREATURE_GUID)!.questGiver,
+    );
+    expect(names).toEqual([
+      "none",
+      "unavailable",
+      "low_level_available",
+      "low_level_reward_rep",
+      "low_level_available_rep",
+      "incomplete",
+      "reward_rep",
+      "available_rep",
+      "available",
+      "reward2",
+      "reward",
+      "unknown",
+    ]);
+  });
+
+  test("a status for a guid with no create block still puts it in view, untyped", () => {
+    const GHOST = "17365880163140639999";
+    const c = withWorld([questGiverStatus(GHOST, 8, 60)]);
+    const row = c.units().find((r) => r.guid === GHOST)!;
+    expect(row.type).toBeUndefined();
+    expect(row.questGiver).toBe("available");
+  });
+
+  test("the marker leaves with the object, and a replay is identical", () => {
+    const frames = [questGiverStatus(CREATURE_GUID, 10, 60), creatureOutOfRange];
+    const c = withWorld(frames);
+    expect(c.nearby.has(CREATURE_GUID)).toBe(false);
+    const live = new StateCache({ seed: SEED });
+    for (const e of toEvents([...worldStream, ...frames])) live.apply(e);
+    expect(live.snapshot()).toEqual(c.snapshot());
+  });
+
+  test("units({ questGiver }) filters by one name or a list; unobserved never matches", () => {
+    const c = withWorld([
+      playerCreate,
+      questGiverStatusMultiple(
+        [
+          { guid: CREATURE_GUID, status: 10 },
+          { guid: PLAYER_GUID, status: 8 },
+        ],
+        60,
+      ),
+    ]);
+    expect(c.units({ questGiver: "reward" }).map((r) => r.guid)).toEqual([CREATURE_GUID]);
+    expect(c.units({ questGiver: ["reward", "available"] }).map((r) => r.guid).sort()).toEqual(
+      [CREATURE_GUID, PLAYER_GUID].sort(),
+    );
+    expect(c.units({ questGiver: "incomplete" })).toEqual([]);
+    expect(withWorld([]).units({ questGiver: "none" })).toEqual([]);
+    expect(c.closest({ questGiver: "available" })?.guid).toBe(PLAYER_GUID);
+  });
+
+  test("units({ questGiver }) rejects a name it cannot read, and says what it takes", () => {
+    const c = withWorld([]);
+    expect(() => c.units({ questGiver: "?" as never })).toThrow(/questGiver received "\?", expected one of "none", .*"reward"/);
+    expect(() => c.units({ questGiver: "Reward" as never })).toThrow(/exact, case-sensitive/);
+    expect(() => c.units({ questGiver: [] })).toThrow(/empty array/);
+    expect(() => c.units({ questGiver: 10 as never })).toThrow(/questGiver received 10/);
+  });
+});
+
+describe("state cache: quest objectives from the quest query (FOLLOW-UPS 28)", () => {
+  const withWorld = (extra: readonly unknown[]) =>
+    StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
+
+  test("before the query answers, the entry has no title and objectives are undefined, not []", () => {
+    const q = withWorld([questAccepted]).quest(QUEST_ID)!;
+    expect(q.title).toBeUndefined();
+    expect(q.objectives).toBeUndefined();
+    expect(q.counts).toEqual([0, 0, 0, 0]);
+  });
+
+  test("SMSG_QUEST_QUERY_RESPONSE lands in state.quests and joins onto the log entry", () => {
+    const c = withWorld([questAccepted, questQueryResponse()]);
+    expect(c.quests.get(QUEST_ID)?.value.title).toBe("Kobold Camp Cleanup");
+    expect(c.quests.get(QUEST_ID)?.value.level).toBe(3);
+    const q = c.quest(QUEST_ID)!;
+    expect(q.title).toBe("Kobold Camp Cleanup");
+    expect(q.objectives).toEqual([
+      { kind: "kill", entry: KOBOLD_ENTRY, text: undefined, required: 8, have: 0, done: false },
+      { kind: "interact", entry: GO_ENTRY, text: "Unlock the chest", required: 1, have: 0, done: false },
+      { kind: "event", entry: undefined, text: "Investigate the vineyard", required: 1, have: 0, done: false },
+      { kind: "collect", entry: REQUIRED_ITEM, text: undefined, required: 4, have: 0, done: false },
+    ]);
+  });
+
+  test("have comes from the log counters per slot, and from the backpack for items", () => {
+    const c = withWorld([questAccepted, questQueryResponse(), questProgress, inventorySlot, itemCreate, itemQuery]);
+    const obj = c.quest(QUEST_ID)!.objectives!;
+    // counts [3, 5, 7, 9]: slot 0 kill 3/8, slot 1 go 5/1 (done), slot 2 event 7/1 (done)
+    expect(obj.map((o) => [o.kind, o.have, o.done])).toEqual([
+      ["kill", 3, false],
+      ["interact", 5, true],
+      ["event", 7, true],
+      ["collect", 5, true], // one stack of 5 Gritstone Charms in the backpack
+    ]);
+  });
+
+  test("the answer arriving before the log entry still joins; the template is never pruned", () => {
+    const c = withWorld([questQueryResponse(), questAccepted]);
+    expect(c.quest(QUEST_ID)?.title).toBe("Kobold Camp Cleanup");
+    const after = withWorld([questQueryResponse(), questAccepted, questRewarded(QUEST_ID), selfProgress]);
+    expect(after.quests.has(QUEST_ID)).toBe(true);
+  });
+
+  test("a second quest in the log without an answer stays undecorated", () => {
+    const c = withWorld([questAccepted, questChained, questQueryResponse()]);
+    expect(c.quest(OTHER_QUEST_ID)?.objectives).toBeUndefined();
+    expect(c.quest(QUEST_ID)?.objectives).toHaveLength(4);
   });
 });

@@ -57,7 +57,7 @@ export type {
   WaitForOptions,
 } from "./events";
 
-export { pointOf, StateCache } from "./state";
+export { pointOf, questGiverStatusName, StateCache } from "./state";
 export type {
   Anomaly,
   AuraEntry,
@@ -78,7 +78,10 @@ export type {
   Observed,
   Point3,
   QuestCompletion,
+  QuestGiverStatusName,
+  QuestInfo,
   QuestLogEntry,
+  QuestObjective,
   SelfState,
   StateCacheOptions,
   StateSeed,
@@ -143,6 +146,8 @@ export type {
   QuestGiverQuestListData,
   QuestGiverRequestItemsData,
   QuestGiverStatusData,
+  QuestGiverStatusMultipleData,
+  QuestQueryResponseData,
   QuestRewardItem,
   QuestUpdateAddItemData,
   QuestUpdateAddKillData,
