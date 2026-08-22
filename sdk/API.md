@@ -115,7 +115,7 @@ zero.
 | Method | Signature | Purpose |
 | --- | --- | --- |
 | `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc. |
-| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object matching a filter. |
+| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
 | `bag` | `state.bag(): BagContents` | The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }. |

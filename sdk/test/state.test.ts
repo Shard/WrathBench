@@ -1090,6 +1090,68 @@ describe("state.units(): the flat scan helper", () => {
   });
 });
 
+describe("state.closest(): criteria object or predicate", () => {
+  const cache = () => StateCache.replay(toEvents(scanStream), { seed: SEED });
+
+  test("takes a units() criteria object, the analogy four of five models drew", () => {
+    // roster 2026-08-22: state.closest({entry:196}) / {name:"Deputy Willem"}
+    // threw a bare "filter is not a function" for hy3, nemotron, laguna and
+    // ox-alpha. It now means what it means in units().
+    const c = cache();
+    expect(c.closest({ entry: VENDOR_ENTRY })?.guid).toBe(VENDOR_GUID);
+    expect(c.closest({ npc: true })?.guid).toBe(VENDOR_GUID);
+    expect(c.closest({ type: "gameObject" })?.guid).toBe(OBJECT_GUID);
+    // alive:true drops only the known-dead; the positionless ghost is not a
+    // candidate for a distance question at all.
+    expect(c.closest({ entry: FAR_ENTRY, alive: true })?.guid).toBe(FAR_GUID);
+    expect(c.closest({ entry: FAR_ENTRY, alive: false })?.guid).toBe(DEAD_GUID);
+    // maxDistance is evaluated against the same distance units() reports.
+    expect(c.closest({ entry: FAR_ENTRY, maxDistance: 1 })).toBeUndefined();
+    expect(c.closest({ entry: 999_999 })).toBeUndefined();
+  });
+
+  test("orders by distance, not by units()'s name tier", () => {
+    // units({name}) ranks an exact match ahead of a longer substring match
+    // regardless of distance; closest answers "nearest", which is the whole
+    // question it is asked.
+    const NEAR = "2001";
+    const FAR = "2002";
+    const NEAR_ENTRY = 5252;
+    const FAR_NAME_ENTRY = 5253;
+    const c = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        unitAt(FAR, 40, { dx: 100, entry: FAR_NAME_ENTRY, health: 50, maxHealth: 50 }),
+        namedEntry(FAR_NAME_ENTRY, "Boar", 41),
+        unitAt(NEAR, 42, { dx: 5, entry: NEAR_ENTRY, health: 50, maxHealth: 50 }),
+        namedEntry(NEAR_ENTRY, "Boar Cub", 43),
+      ]),
+      { seed: SEED },
+    );
+    expect(c.units({ name: "boar" }).map((u) => u.guid)).toEqual([FAR, NEAR]);
+    expect(c.closest({ name: "boar" })?.guid).toBe(NEAR);
+  });
+
+  test("a predicate still works and still sees the raw object", () => {
+    const c = cache();
+    expect(c.closest((o) => o.objectType?.value === "gameObject")?.guid).toBe(OBJECT_GUID);
+    expect(c.closest()?.guid).toBeDefined();
+  });
+
+  test("a bad key is rejected with the same message units() gives", () => {
+    const c = cache();
+    expect(() => c.closest({ minLevel: 5 } as unknown as UnitFilter)).toThrow(
+      /unknown key "minLevel"/,
+    );
+    expect(() => c.closest({ minLevel: 5 } as unknown as UnitFilter)).toThrow(
+      /Valid keys are entry, name/,
+    );
+    expect(() => c.closest({ alive: "true" as unknown as boolean })).toThrow(
+      /expected true or false/,
+    );
+  });
+});
+
 describe("state cache: the gossip menu fold (item 3c)", () => {
   const gossipMsg = (guid: string, seq: number) => ({
     seq,
