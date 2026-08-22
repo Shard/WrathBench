@@ -2,10 +2,10 @@
  * Probe for the navigation status vocabulary (FOLLOW-UPS item 38 N1).
  *
  * End to end against a booted worldserver, from inside the compose network:
- * session in world (Human in Northshire) -> a `move_to` whose z is 30y above
+ * session in world (Human in Northshire) -> a `move_to` whose z is 5y above
  * the ground arrives and reports `meshZ` (the mesh owns z; no z-ladder) -> a
- * `move_to` whose z is 100y above the ground (outside the mesh's ±50y poly
- * search) is `target_off_mesh`, nothing moved -> a 300y request is `too_far`
+ * `move_to` whose z is 100y above the ground (far outside the navmesh's
+ * vertical poly search) is `target_off_mesh`, nothing moved -> a 300y request is `too_far`
  * -> a plain walk still arrives with no `meshZ` -> logout. No dependencies;
  * Bun built-ins only.
  *
@@ -165,13 +165,20 @@ async function main() {
     here = home.pos;
   }
 
-  // 2. Wrong z, right x/y: the mesh owns z. Arrives, and says which z it used.
-  const high = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z + 30 });
-  if (high.status !== "arrived") fail(`z+30 request should arrive (mesh resolves z), got ${JSON.stringify(high)}`);
-  if (dist2d(high.pos, COURTYARD) > 4) fail(`z+30 arrived ${dist2d(high.pos, COURTYARD).toFixed(1)}m from target`);
-  if (typeof high.meshZ !== "number") fail(`z+30 arrival carries no meshZ: ${JSON.stringify(high)}`);
+  // 2. Wrong z, right x/y: the mesh owns z, within the navmesh's own vertical
+  //    poly search. The module sets no extents of its own — it takes
+  //    PathGenerator's default box — so the usable slack is single-digit
+  //    yards, not the tens this probe once assumed. Measured at this exact
+  //    point on 2026-08-23: +2 and +5 arrive with meshZ, +10 and +30 are
+  //    target_off_mesh (+15/+20 come back path_incomplete off a nearby roof
+  //    poly). See FOLLOW-UPS.
+  const high = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z + 5 });
+  if (high.status !== "arrived") fail(`z+5 request should arrive (mesh resolves z), got ${JSON.stringify(high)}`);
+  if (dist2d(high.pos, COURTYARD) > 4) fail(`z+5 arrived ${dist2d(high.pos, COURTYARD).toFixed(1)}m from target`);
+  if (typeof high.meshZ !== "number") fail(`z+5 arrival carries no meshZ: ${JSON.stringify(high)}`);
+  // endpointOk is 2D only, so this is what keeps a rooftop poly from passing.
   if (Math.abs(high.meshZ - COURTYARD.z) > 3) fail(`meshZ ${high.meshZ} is not the courtyard ground (${COURTYARD.z})`);
-  log(`PASS z+30 -> arrived with meshZ ${high.meshZ.toFixed(1)} (requested ${(COURTYARD.z + 30).toFixed(1)})`);
+  log(`PASS z+5 -> arrived with meshZ ${high.meshZ.toFixed(1)} (requested ${(COURTYARD.z + 5).toFixed(1)})`);
 
   // 3. Far outside the poly search box (±50y vertically): no polygon under the
   //    target. Typed target_off_mesh, and the character did not move.
