@@ -6,6 +6,46 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### The release-point dashboard: comparability, turns-to-level, ladder, replay
+
+Track C. The eval charts' integrity claim is that two rows beside each other
+were given the same thing, and nothing recorded what that was: `git describe`
+does not distinguish an effort level, a tool-call ceiling, a disabled watchdog,
+an operator objective, or the claude CLI's own context engine. ADR-0026 names
+the tuple, stamps it into meta.json at launch, and refuses to recompute it for
+older runs — an absent tuple reads "not recorded", because a prompt hash taken
+against today's prompt would assert a comparability that was never established.
+A resume re-stamps, since `--resume` can tighten the leash and a launch-time
+budget would then describe a run that no longer exists.
+
+The prompt hash is of the *rendered* prompt. With no objective that equals the
+fixed prompt's hash by construction (ADR-0024 renders both drivers through one
+function), so every scored run shares one hash and a steered run visibly does
+not.
+
+Turns-to-level needed a turn index, which state rows did not have: a `turn`
+column, additive like `money` before it, stamped by the driver rather than
+counted by the sampler — the fixed loop and the claude driver own different
+counters, and one claude turn has held 168 tool calls. That last fact is why
+the charts exclude the claude driver whether or not the shakeout stamp is
+there: its turns and the fixed loop's turns are different units. Because samples
+are taken every 60s and not once per turn, every surface says "first
+observation" rather than implying a precision the sampling does not have. Time
+is active time, integrated over the same segments the run page's playtime comes
+from, so a run that sat quota-exhausted is not charged for it.
+
+The ladder derives five of eight rungs and prints the rule beside each one.
+Rungs 2, 4 and 6 read "not instrumented" rather than being approximated by a
+level threshold: zone changes, taxi use and group joins are none of them
+recorded, and inventing a proxy would be the one failure mode a public ladder
+cannot recover from. Map replay turned out to cost almost nothing, which is
+ADR-0019 paying off: the renderer already consumed a position feed, so replay
+is a cursor over a recorded track producing the same shape, not a second
+renderer.
+
+Not done: per-run server build (which worldserver a trajectory ran against),
+which wants the runner to log `/health`'s build and would then join the tuple.
+
 ### The deploy script reported "DEPLOYED and verified" having smoked nothing
 
 The first real use of `infra/deploy-worldserver.sh` printed

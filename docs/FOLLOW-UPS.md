@@ -95,12 +95,16 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     2026-08-22 and is not sufficient); and a snippet can still fs-read `.env` by
     absolute path, which needs filesystem sandboxing. Distinct from item 10.
 
-22. **Map replay of historical runs** (Mark, 2026-08-22). The live map view
-    (ADR-0019) renders a position-feed interface, not the live store — replay is a
-    trajectory reader plus a time cursor plugged into the same renderer: route
-    lines, death sites, zone coverage per run. Deliberately deferred; the seam is
-    the position-feed type in runner/viewer. Anything that makes the renderer
-    live-only regresses ADR-0019.
+22. ~~**Map replay of historical runs**~~ Shipped 2026-08-22. `/map?run=<id>`,
+    linked from the run page, scrubs one run's recorded track through the live
+    renderer: `/api/run/<id>/track` serves the positions, `dashboard/src/lib/replay.ts`
+    turns a time cursor into the same `AgentPosition[]` the live poll produces,
+    and the route walked so far is drawn behind the pip, split per map so a
+    continent change is not a line nobody walked. ADR-0019's seam held — no draw
+    path asks which mode it is in; the only mode-aware line places a scrubbed pip
+    instead of walking it there. Still open, and deliberately not invented here:
+    death sites and zone coverage, both of which need the milestone records of
+    item 35.
 
 23. **Helm chart for the fleet** (2026-08-22). ADR-0020 made the supervisor a
     compose service deliberately shaped as the chart's rehearsal: Deployment
@@ -335,6 +339,13 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     derivation over these records plus the run's model label, so it needs
     nothing that is not already recorded once this lands.
 
+    Still fully open. Note (2026-08-22): turns-to-level became derivable without
+    it — state rows gained a `turn` column and the eval charts read it — but that
+    is the one derivation levels alone could answer. The ladder page shows rungs
+    2, 4 and 6 as "not instrumented" for exactly the records listed above: zone
+    and area change, capital entry, taxi use, group join. Deaths, spells learned
+    and talents spent remain unrecorded too.
+
 36. **Run metadata is scattered and `platform` is derived, not stored**
     (2026-08-22). `model` is a column; `character` is only inside
     `config_json`; `platform` is computed at read time by `platformOf()` in
@@ -376,7 +387,17 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     (null when unreachable). Becomes true of the running server when
     `./infra/deploy-worldserver.sh` promotes `wrathbench/worldserver:next`.
 
-42. **Dashboard shows no server identity** (2026-08-22, from item 41). The
+42. ~~**Dashboard shows no server identity**~~ Footer shipped 2026-08-22; the
+    reachability half is unchanged. The fleet page now renders `worldserver
+    <build> · up <duration>` off `/api/info`, and `null` reads as "unreachable
+    from the viewer (set WRATHBENCH_MODULE_URL to name it)" rather than as a
+    blank — which is still what a host-side viewer sees, because compose does not
+    publish 8086. Per-run server build (which build a trajectory ran against)
+    remains not done: it wants the runner to log `/health`'s `build` in its run
+    header, and would then belong in the comparability tuple (ADR-0026).
+    Original note follows.
+
+    **Dashboard shows no server identity** (2026-08-22, from item 41). The
     viewer's `/api/info` now serves `worldserver: { build, startedAtMs } | null`
     off the module's `/health`, and the fleet gate record carries `build`, but
     no page renders either. A one-line footer ("server harness-0.3-41-gabc123,
