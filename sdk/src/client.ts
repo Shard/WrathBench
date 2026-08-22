@@ -171,6 +171,30 @@ function showTarget(target: object): string {
   return Array.isArray(target) ? "an array" : "an object";
 }
 
+/**
+ * Deterministic repair (ADR-0016) for `moveTo(x, y, z)` written as three
+ * positional numbers instead of one `{ x, y, z }`. That shape has exactly one
+ * valid reading, and weak models write it across every family (nemotron, hy3,
+ * gpt-oss trajectories 2026-08-22). Returns the repaired point, or null when
+ * the call is not that shape — every other bad shape still hits the loud
+ * assertMovePoint reject. Only the helper `moveTo` repairs; raw `moveToAsync`
+ * stays strict (ADR-0015: raw actions do not soften).
+ */
+function repairThreeArgMove(
+  point: unknown,
+  options: unknown,
+  rest: unknown[],
+): { point: MovePoint; options: MoveToOptions } | null {
+  // point=x, options=y, rest[0]=z. A trailing rest[1] object is the real
+  // options (moveTo(x, y, z, { timeout })); anything else is ignored.
+  if (typeof point === "number" && typeof options === "number" && typeof rest[0] === "number") {
+    const trailing = rest[1];
+    const opts = trailing !== null && typeof trailing === "object" ? (trailing as MoveToOptions) : {};
+    return { point: { x: point, y: options, z: rest[0] }, options: opts };
+  }
+  return null;
+}
+
 /** Client-side position validation for move_to: each axis a finite number. */
 function assertMovePoint(point: unknown, method: string): asserts point is MovePoint {
   if (point === null || typeof point !== "object") {
@@ -1263,7 +1287,14 @@ export class WrathClient {
    * A `moveTo` issued while another is running supersedes it; the older call
    * resolves with `status: "superseded"`.
    */
-  async moveTo(point: MovePoint, options: MoveToOptions = {}): Promise<MoveResult> {
+  async moveTo(point: MovePoint, options: MoveToOptions = {}, ...rest: unknown[]): Promise<MoveResult> {
+    // Repair moveTo(x, y, z) → moveTo({ x, y, z }) before anything else; a
+    // legitimate two-arg call passes rest empty and is untouched.
+    const repaired = repairThreeArgMove(point, options, rest);
+    if (repaired !== null) {
+      point = repaired.point;
+      options = repaired.options;
+    }
     const epoch = this.events.epoch;
     const ack = await this.moveToAsync(point);
     // The match is the moveId within the current session epoch, and the buffer
@@ -1843,7 +1874,10 @@ export class WrathClient {
           (sinceSeq === undefined || e.seq > sinceSeq),
         {
           timeout,
-          description: `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS)`,
+          description:
+            `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS) — ` +
+            `the server stays silent when the NPC is out of interact range (~5y), is not this quest's ` +
+            `ender, or the objectives are not complete; moveTo the NPC and check state.quest(${questId})`,
         },
       );
       if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
@@ -2002,7 +2036,13 @@ export class WrathClient {
         (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
         !isDecodeError(e.data) &&
         (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout, description: "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE)" },
+      {
+        timeout,
+        description:
+          "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE) — " +
+          "the server stays silent when the NPC is out of interact range (~5y), is not a questgiver, " +
+          "or has nothing for this character; moveTo the NPC first",
+      },
     );
     return (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
   }

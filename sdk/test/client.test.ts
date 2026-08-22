@@ -133,6 +133,31 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("moveTo(x, y, z) as three positional numbers is repaired to a point", async () => {
+    // ADR-0016 deterministic repair: weak models write moveTo this way across
+    // every family (nemotron/hy3/gpt-oss, 2026-08-22). Same outcome as the
+    // object form; every other bad shape still throws.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    // @ts-expect-error — the repaired call is untyped JS as a model writes it
+    const pending = client.moveTo(-1205, 981, 42, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 1, 31)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.position).toEqual({ x: -1205, y: 981, z: 42, o: 1.2 });
+
+    // A genuinely broken shape is still rejected loudly.
+    // @ts-expect-error — deliberately wrong
+    await expect(client.moveTo(-1205, 981)).rejects.toBeInstanceOf(TypeError);
+    // @ts-expect-error — deliberately wrong
+    await expect(client.moveTo("here")).rejects.toBeInstanceOf(TypeError);
+
+    client.close();
+    await stub.stop();
+  });
+
   test("a game-level failure comes back as a result, not an exception", async () => {
     for (const status of ["no_path", "too_far", "interrupted", "stopped", "superseded"] as const) {
       const stub = startStub({ onConnect: () => frames(loginSequence) });
