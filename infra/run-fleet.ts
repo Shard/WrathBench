@@ -430,6 +430,60 @@ export function rereadFleet(
   }
 }
 
+/** A live rejection of the config file. Written into fleet-state.json. */
+export interface ConfigRejection {
+  /** First tick the file stopped loading; kept across later, different errors. */
+  since: number;
+  error: string;
+  /** mtime of the file that failed, so a status reader can tell edits apart. */
+  mtime: number;
+}
+
+/**
+ * Fold one re-read attempt into the rejection state. Only call it for a tick
+ * that actually attempted a parse: a successful attempt clears the rejection,
+ * so a skipped tick must not be reported as success.
+ */
+export function nextConfigRejection(
+  prev: ConfigRejection | undefined,
+  attempt: { error?: string; mtime: number },
+  now: number,
+): ConfigRejection | undefined {
+  if (attempt.error === undefined) return undefined;
+  return { since: prev?.since ?? now, error: attempt.error, mtime: attempt.mtime };
+}
+
+/**
+ * The first thing `--status` prints while the file is rejected. The failure it
+ * covers is silent by construction — the operator's edit parses for THEM and is
+ * ignored by the supervisor — so the banner says both halves: rejected since
+ * when, and that the file's enabled flags are not what is running.
+ */
+export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: number | undefined): string[] {
+  if (rej === undefined) return [];
+  return [
+    `!! fleet.json REJECTED since ${new Date(rej.since).toLocaleString()}: ${rej.error}` +
+      ` — running on config loaded at ${loadedAt === undefined ? "an unrecorded time" : new Date(loadedAt).toLocaleString()};` +
+      ` lane enabled flags in the file are NOT in effect`,
+    `   fix the file (or roll it back) — the supervisor retries every ${TICK_MS / 1000}s and clears this by itself`,
+  ];
+}
+
+/**
+ * Load a config for a read-only reader (`--status`), which must survive a file
+ * the supervisor already rejected instead of dying on it.
+ */
+export function loadConfigForRead(
+  path: string,
+  read: (p: string) => string = (p) => readFileSync(p, "utf8"),
+): { config?: FleetConfig; error?: string } {
+  try {
+    return { config: parseFleet(JSON.parse(read(path))) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ------------------------------------------------------------- materialize
 
 /**
@@ -926,6 +980,14 @@ interface FleetState {
   preflightInFlight?: { identity: string; since: number };
   stamp: string;
   fleetConfig: string;
+  /** When the config the supervisor is actually running was last parsed. */
+  configLoadedAt?: number;
+  /**
+   * Present while the file on disk cannot be loaded. The supervisor keeps its
+   * last good config, which means every `enabled` flag in the file is inert —
+   * so `--status` must say so loudly. Cleared by a successful re-read.
+   */
+  configRejected?: ConfigRejection;
   /** The last deploy-window gate result; absent for a pre-gate supervisor. */
   preflight?: PreflightRecord;
   lanes: Record<
@@ -972,6 +1034,10 @@ export function resolveStatePath(
 const START_AT = Date.now();
 
 let preflightInFlight: { identity: string; since: number } | undefined;
+/** Set while the file on disk will not load; every writeState carries it. */
+let configRejected: ConfigRejection | undefined;
+/** When the config actually in force was parsed. Set on load and on re-read. */
+let configLoadedAt: number | undefined;
 
 function writeState(
   configPath: string,
@@ -987,6 +1053,8 @@ function writeState(
     containerized: CONTAINER,
     stamp: stampToday,
     fleetConfig: configPath,
+    ...(configLoadedAt !== undefined ? { configLoadedAt } : {}),
+    ...(configRejected !== undefined ? { configRejected } : {}),
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     lanes: {},
@@ -1110,7 +1178,10 @@ function printLiveRuns(configPath: string): number {
 }
 
 function printStatus(configPath: string): void {
-  const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
+  // State first, and the banner before anything else: the file may not parse
+  // here either, and even when it does, this reader can be a different code
+  // version than the supervisor (that is how the shape-change incident hid).
+  // The verdict that matters is the supervisor's, carried in the state file.
   let state: FleetState | undefined;
   if (existsSync(STATE_PATH)) {
     try {
@@ -1118,6 +1189,15 @@ function printStatus(configPath: string): void {
     } catch {
       state = undefined;
     }
+  }
+  const rejected = state?.configRejected;
+  for (const line of formatConfigBanner(rejected, state?.configLoadedAt)) console.log(line);
+  const { config, error: configError } = loadConfigForRead(configPath);
+  if (config === undefined) {
+    console.log(
+      `!! ${configPath} does not load: ${configError}` +
+        " — lane rows below are the ones the supervisor last ran, not the file's",
+    );
   }
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
@@ -1143,8 +1223,15 @@ function printStatus(configPath: string): void {
   if (state?.containerized === true) {
     console.log("  logs: docker compose -f infra/compose.yml logs -f fleet");
   }
-  for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
-  for (const lane of config.lanes) {
+  if (config !== undefined) {
+    for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
+  }
+  // Lanes from the file when it loads, else the ones the supervisor last ran.
+  const laneRows: { name: string; account: string; enabled?: boolean }[] =
+    config !== undefined
+      ? config.lanes.map((l) => ({ name: l.name, account: l.account, enabled: l.enabled }))
+      : Object.entries(state?.lanes ?? {}).map(([name, l]) => ({ name, account: l.account }));
+  for (const lane of laneRows) {
     const ls = state?.lanes[lane.name];
     // The supervisor publishes each lane's liveness; only fall back to a pid
     // probe for a pre-heartbeat (host) state, where the pid is ours to check.
@@ -1153,7 +1240,11 @@ function printStatus(configPath: string): void {
     const stdoutLog = ls === undefined ? "" : resolveStatePath(ls.stdoutLog, laneStdoutPath(lane.name, state!.stamp));
     const jsonl = ls === undefined ? "" : resolveStatePath(ls.jsonl, laneJsonlPath(lane.name, state!.stamp));
     const head =
-      `  ${lane.name.padEnd(16)} enabled=${lane.enabled ? "true " : "false"} account=${lane.account.padEnd(9)} ` +
+      `  ${lane.name.padEnd(16)} ` +
+      (lane.enabled === undefined
+        ? "enabled=?     "
+        : `enabled=${lane.enabled ? "true " : "false"}${rejected !== undefined ? " (FILE, NOT in effect)" : ""}`) +
+      ` account=${lane.account.padEnd(9)} ` +
       (ls === undefined
         ? "never spawned by this fleet"
         : `pid ${ls.pid} ${alive ? "ALIVE" : ls.exitCode !== null ? `exited ${ls.exitCode}` : "dead"}${ls.draining ? " (draining)" : ""}`);
@@ -1334,6 +1425,7 @@ async function main(): Promise<void> {
   // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
   let config = parseFleet(JSON.parse(readFileSync(args.config, "utf8")));
+  configLoadedAt = Date.now();
   // Fail fast on anything that would fail at spawn time.
   for (const lane of config.lanes) {
     if (!lane.enabled) continue;
@@ -1505,11 +1597,35 @@ async function main(): Promise<void> {
       continue;
     }
 
-    // Re-read the config: the operator's tuning knob.
+    // Re-read the config: the operator's tuning knob. Unconditionally, every
+    // tick — mtime gating would add a second way for an edit to go silently
+    // unapplied, which is the failure this whole path exists to make loud.
+    // mtime is only recorded, and used to dedupe the complaint in the log.
+    let mtime = 0;
+    try {
+      mtime = statSync(args.config).mtimeMs;
+    } catch {
+      // Unreadable stat is itself an attempt failure; rereadFleet reports it.
+    }
     const { config: next, error } = rereadFleet(args.config, config);
+    const wasRejected = configRejected;
+    configRejected = nextConfigRejection(wasRejected, { error, mtime }, Date.now());
     if (error !== undefined) {
-      say(`fleet config error — keeping the last good config: ${error}`);
-      record({ lane: "-", event: "config-error", detail: error });
+      // The state field persists for --status; the log complains only when the
+      // error or the file changed, so a rejected file does not spam all night.
+      if (wasRejected?.error !== error || wasRejected.mtime !== mtime) {
+        say(
+          `fleet config REJECTED — keeping the last good config; the enabled flags in ` +
+            `${args.config} are NOT in effect: ${error}`,
+        );
+        record({ lane: "-", event: "config-error", detail: error });
+      }
+    } else {
+      configLoadedAt = Date.now();
+      if (wasRejected !== undefined) {
+        say("fleet config loads again — the file is back in effect");
+        record({ lane: "-", event: "config-recovered" });
+      }
     }
     config = next;
 
