@@ -21,11 +21,20 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
-import { DRIVERS, loadRunConfig, newRunId, shakeoutStamp, type RunConfig } from "./config";
+import {
+  DRIVERS,
+  loadRunConfig,
+  MIN_TOKEN_LENGTH,
+  newRunId,
+  newSessionToken,
+  resolveSessionToken,
+  shakeoutStamp,
+  type RunConfig,
+} from "./config";
 import { runLoop } from "./loop";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
-import { Trajectory, readMeta } from "./trajectory";
+import { Trajectory, readMeta, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 
@@ -59,6 +68,9 @@ async function main(): Promise<void> {
 
   let config: RunConfig & { runId: string; token: string };
   let resumed = false;
+  /** The meta.json a resume loaded, kept so a regenerated token can be persisted. */
+  let resumedMeta: RunMeta | undefined;
+  let tokenRegenerated = false;
   if (resumeId !== undefined) {
     const runsDir = typeof args["runs-dir"] === "string" ? args["runs-dir"] : "data/runs";
     const meta = readMeta(join(runsDir, resumeId));
@@ -82,7 +94,12 @@ async function main(): Promise<void> {
         ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"])! } : {}),
       },
     };
-    config = { ...c, ...overrides, runId: resumeId, token: c.token ?? resumeId };
+    // A stored token shorter than the module's floor is a pre-hardening run's
+    // (it was the run id): replace it and persist the replacement below.
+    const session = resolveSessionToken(c.token);
+    config = { ...c, ...overrides, runId: resumeId, token: session.token };
+    resumedMeta = meta;
+    tokenRegenerated = session.regenerated;
     resumed = true;
   } else {
     const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
@@ -92,7 +109,7 @@ async function main(): Promise<void> {
         typeof args["module-url"] === "string"
           ? args["module-url"]
           : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
-      token: typeof args["token"] === "string" ? args["token"] : runId,
+      token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
       character: typeof args["character"] === "string" ? args["character"] : undefined,
       account: typeof args["account"] === "string" ? args["account"] : undefined,
       race: num(args["race"]),
@@ -122,8 +139,11 @@ async function main(): Promise<void> {
         ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
       },
     });
-    config = { ...c, runId: c.runId ?? runId, token: c.token ?? runId };
+    config = { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
   }
+  // Deliberately NOT registered with `trajectory.redact`: meta.json is scrubbed
+  // with the same secret list, and a redacted token could never be read back by
+  // `--resume`. Trajectories are gitignored and stay on the operator's disk.
 
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
@@ -180,6 +200,19 @@ async function main(): Promise<void> {
   } else {
     trajectory.clearPause(config.runId);
     trajectory.append({ t: "resume", harnessVersion: version });
+    if (tokenRegenerated && resumedMeta !== undefined) {
+      // Persist the new secret, or the next resume would regenerate again and
+      // orphan this one. Everything else about the stored meta is preserved:
+      // only `config` is replaced, and only its token differs.
+      console.error(
+        `[wrathbench] session token regenerated: the stored one was shorter than ` +
+          `${MIN_TOKEN_LENGTH} chars (a pre-hardening run id, which the module now refuses as ` +
+          `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
+          `every module session.`,
+      );
+      trajectory.writeMeta({ ...resumedMeta, config });
+      trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
+    }
   }
 
   const sandbox = new SandboxHost({
@@ -240,7 +273,10 @@ async function main(): Promise<void> {
       const listRes = await fetch(`${config.moduleUrl}/characters`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: `${config.runId}-hygiene`, account: config.account }),
+        // Derived from the session secret, as `deleteCharacter` does: these are
+        // throwaway tokens for one call each, but they still have to clear the
+        // module's `weak_token` floor.
+        body: JSON.stringify({ token: `${config.token}-hygiene`, account: config.account }),
       });
       const list = (await listRes.json()) as {
         ok?: boolean;
@@ -252,7 +288,7 @@ async function main(): Promise<void> {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            token: `${config.runId}-hygiene-del-${name}`,
+            token: `${config.token}-hygiene-del-${name}`,
             account: config.account,
             character: name,
           }),

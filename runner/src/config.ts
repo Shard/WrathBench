@@ -15,6 +15,7 @@
  * harness version, not a knob.
  */
 
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 // ---------------------------------------------------------------- watchdogs
@@ -77,7 +78,15 @@ export const runConfigSchema = z.object({
   runId: z.string().min(1).optional(),
   /** Module base URL; the compose network name is the default. */
   moduleUrl: z.string().default("http://worldserver:8086"),
-  /** Session token. Defaults to the run id so a resume reattaches. */
+  /**
+   * Session token — the bearer secret for `POST /action`, `DELETE /session`
+   * and `/events`. Generated random when absent (see `resolveSessionToken`)
+   * and persisted through meta.json so a resume reattaches.
+   *
+   * Deliberately still `min(1)`: this schema also parses *stored* meta.json on
+   * `--resume`, and a length floor here would refuse to load every run created
+   * before token hardening instead of letting run.ts regenerate theirs.
+   */
   token: z.string().min(1).optional(),
 
   // Character (PHASE-0: run config, default forgiving solo class — Human Paladin).
@@ -183,6 +192,42 @@ export function newRunId(now: Date = new Date()): string {
     .replace(/\..+$/, "")
     .replace("T", "-");
   return `run-${stamp}`;
+}
+
+/**
+ * The minimum length of a session token the module will accept. Shorter tokens
+ * are refused with `weak_token`, because a token *is* the authentication for
+ * `POST /action` and `DELETE /session` (FOLLOW-UPS 19): the old default — the
+ * run id, a second-granularity timestamp — was enumerable, so a snippet in one
+ * run could drive or tear down a concurrent one.
+ */
+export const MIN_TOKEN_LENGTH = 32;
+
+/** A fresh session secret: 16 random bytes, 32 hex characters. */
+export function newSessionToken(): string {
+  return randomBytes(16).toString("hex");
+}
+
+/**
+ * Decide the session token for a run, given whatever was stored or passed.
+ *
+ * A token shorter than `MIN_TOKEN_LENGTH` is a pre-hardening run id (or a
+ * hand-passed placeholder): it is replaced rather than carried forward, and
+ * the caller is expected to persist the replacement and log why. Swapping the
+ * token on resume cannot strand a live module session in practice — the 18:00
+ * worldserver recreate clears every module session nightly, so by the time any
+ * run is resumed across that boundary there is no session left to reattach to,
+ * and a same-day resume of a weak-token run loses at most one still-parked
+ * session that the module frees on its own account timeout.
+ */
+export function resolveSessionToken(stored: string | undefined): {
+  token: string;
+  regenerated: boolean;
+} {
+  if (stored !== undefined && stored.length >= MIN_TOKEN_LENGTH) {
+    return { token: stored, regenerated: false };
+  }
+  return { token: newSessionToken(), regenerated: true };
 }
 
 /**

@@ -21,7 +21,7 @@ import { TOOLS, callTool, coerceToolArgs, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
-import { newRunId, loadRunConfig } from "./config";
+import { newRunId, newSessionToken, loadRunConfig } from "./config";
 import { harnessVersion } from "./version";
 
 interface JsonRpcRequest {
@@ -130,9 +130,12 @@ async function main(): Promise<void> {
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const runId = flag("run-id") ?? newRunId();
+  // Random by default, never the run id: the token is the only thing
+  // authenticating `POST /action` and `DELETE /session` (FOLLOW-UPS 19).
+  const token = flag("token") ?? newSessionToken();
   const config = loadRunConfig({
     runId,
-    token: flag("token") ?? runId,
+    token,
     moduleUrl: process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
   });
   const runDir = join(config.runsDir, runId);
@@ -142,7 +145,7 @@ async function main(): Promise<void> {
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
-    token: config.token ?? runId,
+    token: config.token ?? token,
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,

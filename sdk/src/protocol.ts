@@ -21,7 +21,7 @@ import { z } from "zod";
  * The protocol revision this file was written against. Bump deliberately: the
  * SDK surface is part of the harness surface (see sdk/README.md).
  */
-export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat";
+export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat+trainer";
 
 // ---------------------------------------------------------------- primitives
 
@@ -241,6 +241,9 @@ export type ActionRequest =
   | { token: string; action: "equip_item"; bag: number; slot: number }
   | { token: string; action: "use_item"; bag: number; slot: number; targetGuid?: string }
   | { token: string; action: "destroy_item"; bag: number; slot: number; count?: number }
+  // trainer extension
+  | { token: string; action: "trainer_list"; guid: string }
+  | { token: string; action: "trainer_buy_spell"; guid: string; spellId: number }
   | { token: string; action: "repop" }
   | { token: string; action: "reclaim_corpse"; guid?: string }
   | { token: string; action: "spirit_healer_activate"; guid: string };
@@ -884,6 +887,46 @@ export const sellItemDataSchema = z.looseObject({
 });
 export type SellItemData = z.infer<typeof sellItemDataSchema>;
 
+/**
+ * One row of a trainer's spell list. `cost` is copper, already discounted by
+ * the server for reputation; `reqSkill` is a skill-line id (0 = none).
+ * `state` is the availability the server computed — see
+ * `TRAINER_SPELL_STATE` in client.ts for the mapping, and note that it says
+ * nothing about affordability.
+ */
+export const trainerSpellSchema = z.looseObject({
+  spellId: z.number(),
+  state: z.number(),
+  cost: z.number(),
+  reqLevel: z.number(),
+  reqSkill: z.number(),
+  reqSkillValue: z.number(),
+});
+export type TrainerSpellData = z.infer<typeof trainerSpellSchema>;
+
+/** `trainerType` 0 class, 1 mount, 2 tradeskill, 3 pet. */
+export const trainerListDataSchema = z.looseObject({
+  guid: guidSchema,
+  trainerType: z.number(),
+  spells: z.array(trainerSpellSchema),
+  greeting: z.string().optional(),
+});
+export type TrainerListData = z.infer<typeof trainerListDataSchema>;
+
+export const trainerBuySucceededDataSchema = z.looseObject({
+  guid: guidSchema,
+  spellId: z.number(),
+});
+export type TrainerBuySucceededData = z.infer<typeof trainerBuySucceededDataSchema>;
+
+/** `reason` is a `Trainer::FailReason`; `TRAINER_BUY_FAIL_HINTS` renders it. */
+export const trainerBuyFailedDataSchema = z.looseObject({
+  guid: guidSchema,
+  spellId: z.number(),
+  reason: z.number(),
+});
+export type TrainerBuyFailedData = z.infer<typeof trainerBuyFailedDataSchema>;
+
 /** `result` is an InventoryResult code; the SDK does not name them. */
 export const inventoryChangeFailureDataSchema = z.looseObject({
   result: z.number(),
@@ -1003,6 +1046,10 @@ export const eventDataSchemas = {
   SMSG_BUY_ITEM: buyItemDataSchema,
   SMSG_BUY_FAILED: buyFailedDataSchema,
   SMSG_SELL_ITEM: sellItemDataSchema,
+  // trainers
+  SMSG_TRAINER_LIST: trainerListDataSchema,
+  SMSG_TRAINER_BUY_SUCCEEDED: trainerBuySucceededDataSchema,
+  SMSG_TRAINER_BUY_FAILED: trainerBuyFailedDataSchema,
   SMSG_INVENTORY_CHANGE_FAILURE: inventoryChangeFailureDataSchema,
   SMSG_ITEM_QUERY_SINGLE_RESPONSE: itemQueryResponseDataSchema,
   // death

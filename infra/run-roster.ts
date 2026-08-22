@@ -30,7 +30,9 @@
  *    whole roster shares RUNNER, so the next episode would fail every
  *    createSession with `account_in_use`. Whenever the roster advances past a
  *    paused run, and defensively before every launch, we DELETE /session for
- *    that run's token (token == runId). The *character* survives, so a later
+ *    that run's token, read back from its meta.json (`tokenOfRun`) now that
+ *    tokens are random secrets rather than the run id. The *character*
+ *    survives, so a later
  *    `--resume` still works.
  *  - A fresh (non-resumed) run wipes every character on its account first
  *    (runner/src/run.ts episode hygiene). So a run deferred to the end of the
@@ -193,7 +195,8 @@ function usage(): void {
       "  --until HH:MM        stop launching after this local time (tomorrow if already past)",
       "  --max-hours N        stop launching after N hours from now",
       "  --skip <model-id>    omit a model from the roster (repeatable)",
-      "  --free-tokens a,b    DELETE /session for these tokens (run ids) before starting —",
+      "  --free-tokens a,b    DELETE /session for these run ids (or literal tokens) before",
+      "                       starting; a run id is resolved to its stored token —",
       "                       a hand-started paused run still holds the shared game account",
       "  --loop               when the roster is exhausted, start over (cycle 2+ run ids get a",
       "                       -cN suffix so each pass is its own run). Requires --until/--max-hours",
@@ -356,6 +359,24 @@ function metaCharacter(runId: string): string | undefined {
   }
 }
 
+/**
+ * The session token a run actually holds. Tokens used to equal the run id;
+ * since token hardening (FOLLOW-UPS 19) they are random secrets, so the only
+ * way to address a run's module session is to read the token back out of the
+ * meta.json the runner persisted. The run-id fallback covers pre-hardening
+ * runs, whose token *was* the run id.
+ */
+function tokenOfRun(runId: string): string {
+  const path = join(runDir(runId), "meta.json");
+  if (!existsSync(path)) return runId;
+  try {
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { token?: string } };
+    return meta.config?.token ?? runId;
+  } catch {
+    return runId;
+  }
+}
+
 function readLevel(runId: string): number | undefined {
   const path = join(runDir(runId), "run.sqlite");
   if (!existsSync(path)) return undefined;
@@ -408,8 +429,8 @@ function turnsSince(runId: string, sinceTs: number): number {
  * two-wide pattern) or a hand-started run therefore have to stay off each
  * other's account.
  *
- * `freeSession` cannot be the answer here: it is keyed on `token == runId`, so
- * it only ever frees the session of the very run the roster is about to launch
+ * `freeSession` cannot be the answer here: it is keyed on the run's own stored
+ * token, so it only ever frees the session of the very run the roster is about to launch
  * or resume — never someone else's. Freeing another run's session would kick a
  * *running* process out of the world. So the guard only reads, and waits.
  *
@@ -634,7 +655,7 @@ console.log("delete-session",r.status,await r.text());`;
         "exec",
         "-T",
         "-e",
-        `WB_TOKEN=${spec.runId}`,
+        `WB_TOKEN=${tokenOfRun(spec.runId)}`,
         "runner",
         "bun",
         "-e",
@@ -932,7 +953,7 @@ async function main(): Promise<void> {
           endpoint +
           `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
       console.log(
-        `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session token=${s.runId} via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
+        `\n${i + 1}. ${s.model}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token via docker compose exec -T runner\n   argv      ${episodeArgv(s, a.resume).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {

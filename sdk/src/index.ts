@@ -6,8 +6,16 @@
  * a major one and wants an ADR under docs/decisions/.
  */
 
-export { connect, KNOWN_ERROR_CODES, WrathClient, WrathRequestError, WrathTransportError } from "./client";
+export {
+  connect,
+  KNOWN_ERROR_CODES,
+  TRAINER_SPELL_STATE,
+  WrathClient,
+  WrathRequestError,
+  WrathTransportError,
+} from "./client";
 export type {
+  BuySpellResult,
   ConnectOptions,
   DeleteCharacterOptions,
   ErrorCode,
@@ -24,6 +32,9 @@ export type {
   QuestOptions,
   QuestTurnInResult,
   StoredLootItem,
+  TrainerListResult,
+  TrainerOptions,
+  TrainerSpell,
   WaitForChatOptions,
   WaitForNearbyOptions,
 } from "./client";
@@ -137,6 +148,10 @@ export type {
   SpellFailureData,
   SpellGoData,
   SpellStartData,
+  TrainerBuyFailedData,
+  TrainerBuySucceededData,
+  TrainerListData,
+  TrainerSpellData,
   VendorItem,
   CreateSessionRequest,
   CreatureQueryResponseData,

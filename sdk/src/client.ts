@@ -57,6 +57,9 @@ import {
   type QuestGiverQuestListData,
   type QuestGiverRequestItemsData,
   type SessionResponse,
+  type TrainerBuyFailedData,
+  type TrainerListData,
+  type TrainerSpellData,
 } from "./protocol";
 import {
   EventStream,
@@ -296,6 +299,9 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   timeout: "the module's internal wait ran out — the world may be busy; retry once before assuming failure",
   invalid_guid:
     "the guid did not parse as a decimal u64 string — pass unit.guid exactly as the state cache gave it, never a rounded number",
+  weak_token:
+    "the session token is shorter than 32 characters — the module refuses guessable tokens; " +
+    "the runner issues a random one per run, so this means a hand-passed token needs replacing",
   item_not_usable:
     "the server refused CMSG_USE_ITEM for that bag/slot — the item there has no on-use effect, " +
     "or the slot is empty or shifted (slots move after looting/selling); check state.bag()",
@@ -626,6 +632,75 @@ export type QuestTurnInResult =
       readonly hint: string;
     };
 
+// ------------------------------------------------------------------ trainers
+
+/**
+ * `SMSG_TRAINER_LIST.state`, as `Trainer::SpellState` in the pinned core.
+ *
+ * The single place the numbers are interpreted, deliberately: the module
+ * serves the server's byte verbatim, so if that enum is ever read differently
+ * a correction is this one object.
+ */
+export const TRAINER_SPELL_STATE = {
+  /** Green in a client's trainer window: the server will teach it now. */
+  learnable: 0,
+  /** Red: level, skill, prerequisite or class blocks it. */
+  unavailable: 1,
+  /** Gray: already known. */
+  known: 2,
+} as const;
+
+/**
+ * `SMSG_TRAINER_BUY_FAILED.reason`, as `Trainer::FailReason` in the pinned
+ * core, rendered the way `CHAR_RESPONSE_HINTS` renders char-create codes: the
+ * numeric reason is the server's word and always reported; this is the
+ * client-visible sentence for it. An unknown reason renders without one.
+ */
+const TRAINER_BUY_FAIL_HINTS: Record<number, string> = {
+  0: "the trainer will not teach it — wrong class or trainer, or a prerequisite is missing",
+  1: "not enough money",
+  2: "not enough skill (or level, or a missing prerequisite)",
+};
+
+/** One row of a trainer's list, plus what the SDK could derive about it. */
+export interface TrainerSpell extends TrainerSpellData {
+  /** True when `state` is green: the server will teach this right now. */
+  readonly learnable: boolean;
+  /**
+   * Whether the observed money covers `cost`. `undefined` while money is
+   * unobserved (it is a self-only PRIVATE update field, so it is absent until
+   * an update block has carried it) — never guessed.
+   */
+  readonly affordable: boolean | undefined;
+}
+
+/** What a trainer teaches. An empty `spells` is an answer, not a failure. */
+export interface TrainerListResult {
+  readonly ok: true;
+  /** 0 class, 1 mount, 2 tradeskill, 3 pet — the server's own classification. */
+  readonly trainerType: number;
+  readonly spells: readonly TrainerSpell[];
+}
+
+/**
+ * The outcome of buying one spell, as a value (ADR-0011): `buy_failed` is the
+ * server answering the question that was asked, not the call being wrong.
+ * `reason` is the raw `SMSG_TRAINER_BUY_FAILED` code.
+ */
+export type BuySpellResult =
+  | { readonly ok: true; readonly status: "learned"; readonly spellId: number }
+  | {
+      readonly ok: false;
+      readonly status: "buy_failed";
+      readonly spellId: number;
+      readonly reason: number;
+      readonly hint: string;
+    };
+
+export interface TrainerOptions {
+  timeout?: number;
+}
+
 /**
  * Connect to the module and (by default) subscribe to the event stream.
  *
@@ -941,6 +1016,26 @@ export class WrathClient {
       }
       throw err;
     }
+  }
+
+  /**
+   * `CMSG_TRAINER_LIST` — ask a trainer what it teaches (`SMSG_TRAINER_LIST`).
+   * Prefer `trainerList`, which waits for the answer.
+   */
+  trainerListAsync(guid: GuidArg): Promise<ActionResponse> {
+    return this.action({ action: "trainer_list", guid: guidArg(guid, "trainerList(npcGuid)") });
+  }
+
+  /**
+   * `CMSG_TRAINER_BUY_SPELL` — learn one spell, paid for out of the
+   * character's own money. Prefer `buySpell`, which waits for the verdict.
+   */
+  trainerBuySpellAsync(guid: GuidArg, spellId: number): Promise<ActionResponse> {
+    return this.action({
+      action: "trainer_buy_spell",
+      guid: guidArg(guid, "buySpell(npcGuid, spellId)"),
+      spellId,
+    });
   }
 
   /** `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. */
@@ -1492,16 +1587,7 @@ export class WrathClient {
       return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
     }
 
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.questList(npcGuid);
-    const menu = await this.events.waitFor(
-      (e) =>
-        (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
-        !isDecodeError(e.data) &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout, description: "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE)" },
-    );
-    const offered = (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
+    const offered = await this.questOffer(npcGuid, timeout);
     const wanted = offered.find((q) => q.questId === questId);
     if (!wanted) return { ok: false, status: "not_offered", questId, offered };
 
@@ -1512,6 +1598,120 @@ export class WrathClient {
       `quest ${questId} to appear in the quest log after accept`,
     );
     return { ok: true, status: "accepted", questId, quest, title: wanted.title };
+  }
+
+  /**
+   * Ask an NPC what quests it is offering, and return the list.
+   *
+   * The same `quest_list` send-and-wait `acceptQuestFrom` does — including
+   * accepting *either* answer shape, since a gossip-flagged questgiver replies
+   * with `SMSG_GOSSIP_MESSAGE` carrying the quests instead of
+   * `SMSG_QUESTGIVER_QUEST_LIST` — with none of the accepting. Models kept
+   * rebuilding exactly this by hand over `questList` plus event scraping and
+   * getting confused by their own nulls (FOLLOW-UPS 9a).
+   *
+   * An empty `quests` is an answer: the NPC has nothing for this character
+   * right now. Silence is not, so it still throws `EventTimeoutError`.
+   */
+  async questsAvailableFrom(
+    npcGuid: GuidArg,
+    options: QuestOptions = {},
+  ): Promise<{ ok: true; quests: readonly OfferedQuest[] }> {
+    const quests = await this.questOffer(npcGuid, options.timeout ?? 10_000);
+    return { ok: true, quests };
+  }
+
+  /**
+   * Ask a trainer what it teaches.
+   *
+   * Two derived fields per row, because both are questions a caller always has
+   * and neither is on the wire: `learnable` is the server's own green/red/gray
+   * state reduced to the one bit that matters, and `affordable` compares the
+   * cost against *observed* money — `undefined` while money is unobserved, not
+   * guessed. The two are independent: the server's state says nothing about
+   * money, so a green spell can still fail to buy.
+   *
+   * The core's handler returns silently when the NPC is out of interaction
+   * range, is not a trainer, or trains another class, so nothing distinguishes
+   * those from a slow answer: they all surface as `EventTimeoutError`.
+   */
+  async trainerList(npcGuid: GuidArg, options: TrainerOptions = {}): Promise<TrainerListResult> {
+    const id = guidKey(guidArg(npcGuid, "trainerList(npcGuid)"));
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.trainerListAsync(id);
+    const event = await this.events.waitFor(
+      (e) =>
+        isEvent(e, "SMSG_TRAINER_LIST") &&
+        !isDecodeError(e.data) &&
+        (e.data as TrainerListData).guid === id &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout: options.timeout ?? 10_000,
+        description:
+          `the SMSG_TRAINER_LIST for ${id} — the server stays silent when the NPC is out of ` +
+          `interact range (~5y), is not a trainer, or trains another class`,
+      },
+    );
+    const data = event.data as TrainerListData;
+    const money = this.state.money?.value;
+    return {
+      ok: true,
+      trainerType: data.trainerType,
+      spells: data.spells.map((s) => ({
+        ...s,
+        learnable: s.state === TRAINER_SPELL_STATE.learnable,
+        affordable: money === undefined ? undefined : money >= s.cost,
+      })),
+    };
+  }
+
+  /**
+   * Buy one spell from a trainer and wait for the server's verdict.
+   *
+   * Races `SMSG_TRAINER_BUY_SUCCEEDED` against `SMSG_TRAINER_BUY_FAILED` for
+   * this spell id, so a refusal costs one round trip rather than the whole
+   * timeout. The refusal is returned, not thrown: it is the game answering
+   * (ADR-0011), and `hint` names the likely causes and points back at
+   * `trainerList` (ADR-0016).
+   */
+  async buySpell(
+    npcGuid: GuidArg,
+    spellId: number,
+    options: TrainerOptions = {},
+  ): Promise<BuySpellResult> {
+    const id = guidKey(guidArg(npcGuid, "buySpell(npcGuid, spellId)"));
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.trainerBuySpellAsync(id, spellId);
+    const isFor = (e: StreamEvent, opcode: "SMSG_TRAINER_BUY_SUCCEEDED" | "SMSG_TRAINER_BUY_FAILED") =>
+      isEvent(e, opcode) &&
+      !isDecodeError(e.data) &&
+      (e.data as { spellId: number }).spellId === spellId;
+    const event = await this.events.waitFor(
+      (e) =>
+        (isFor(e, "SMSG_TRAINER_BUY_SUCCEEDED") || isFor(e, "SMSG_TRAINER_BUY_FAILED")) &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout: options.timeout ?? 10_000,
+        description:
+          `the verdict for buying spell ${spellId} from ${id} ` +
+          `(SMSG_TRAINER_BUY_SUCCEEDED or SMSG_TRAINER_BUY_FAILED)`,
+      },
+    );
+    if (event.opcode === "SMSG_TRAINER_BUY_SUCCEEDED") {
+      return { ok: true, status: "learned", spellId };
+    }
+    const reason = (event.data as TrainerBuyFailedData).reason;
+    const named = TRAINER_BUY_FAIL_HINTS[reason];
+    return {
+      ok: false,
+      status: "buy_failed",
+      spellId,
+      reason,
+      hint:
+        `the trainer refused (reason ${reason}${named ? `: ${named}` : ""}) — the usual causes are ` +
+        `too little money and a spell that is not learnable yet; sdk.trainerList(npcGuid) reports ` +
+        `each spell's cost, learnable and affordable`,
+    };
   }
 
   /**
@@ -1663,6 +1863,31 @@ export class WrathClient {
   /** One `POST /action`, with the session token filled in. */
   private action(body: ActionBody): Promise<ActionResponse> {
     return this.request("POST", "/action", { token: this.token, ...body }, actionResponseSchema);
+  }
+
+  /**
+   * Send `quest_list` and return the offer the NPC answered with.
+   *
+   * The one place the two answer shapes are reconciled — a gossip-flagged
+   * questgiver replies `SMSG_GOSSIP_MESSAGE` with the quests embedded — shared
+   * by `questsAvailableFrom` and `acceptQuestFrom` so they can never drift.
+   *
+   * The match is on opcode and a `sinceSeq` floor, not on the event's guid:
+   * that is how `acceptQuestFrom` has always behaved, and narrowing it here
+   * would change a shipped helper. Two overlapping calls against *different*
+   * NPCs can therefore cross answers; one at a time is the contract.
+   */
+  private async questOffer(npcGuid: GuidArg, timeout: number): Promise<readonly OfferedQuest[]> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.questList(npcGuid);
+    const menu = await this.events.waitFor(
+      (e) =>
+        (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
+        !isDecodeError(e.data) &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout, description: "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE)" },
+    );
+    return (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
   }
 
   /**
