@@ -99,10 +99,14 @@ export class SandboxHost {
   /** Consecutive restarts without an intervening successful snippet. */
   consecutiveRestarts = 0;
   totalRestarts = 0;
-  /** Rolling tail of the current child's stderr, for crash diagnosis. */
-  private stderrTail = "";
-  /** Resolves when the current child's stderr stream has drained. */
-  private stderrDone: Promise<void> = Promise.resolve();
+  /**
+   * Per-child stderr holder. A fresh one is allocated in start() and closed over
+   * by that child's onExit/emit, so a crash notice reads the crashed child's
+   * tail even if the replacement child has already started and is refilling its
+   * own buffer (a shared field would be reset to "" by start() before emit ran,
+   * losing or polluting the "Last stderr" diagnostic).
+   */
+  private stderr: { tail: string; done: Promise<void> } = { tail: "", done: Promise.resolve() };
 
   constructor(private readonly opts: SandboxHostOptions) {}
 
@@ -128,6 +132,10 @@ export class SandboxHost {
       this.markReady = r;
     });
     const markReady = this.markReady;
+    // Own this child's stderr in a fresh holder; onExit/emit close over it, not
+    // over the mutable field, so the next child's start() cannot clear it.
+    const stderr = { tail: "", done: Promise.resolve() };
+    this.stderr = stderr;
     this.proc = Bun.spawn(["bun", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
@@ -152,7 +160,7 @@ export class SandboxHost {
           // into the notice — Bun prints the fatal error just before exiting.
           const emit = (): void => {
             const cause = `exit code ${exitCode ?? "?"}, signal ${signalCode ?? "none"}`;
-            const tail = this.stderrTail.trim().slice(-600);
+            const tail = stderr.tail.trim().slice(-600);
             this.notice(
               "sandbox_restarted",
               `sandbox process exited unexpectedly (${cause}).` +
@@ -161,20 +169,19 @@ export class SandboxHost {
             );
             this.markReady(); // never leave a start() awaiting a dead child
           };
-          void Promise.race([this.stderrDone, new Promise((r) => setTimeout(r, 100))]).then(emit);
+          void Promise.race([stderr.done, new Promise((r) => setTimeout(r, 100))]).then(emit);
         }
         for (const [, p] of this.pending) p.reject(new SandboxExitedError());
         this.pending.clear();
         this.abandonedEvals.clear();
       },
     });
-    this.stderrTail = "";
-    this.stderrDone = this.pumpStderr(this.proc);
+    stderr.done = this.pumpStderr(this.proc, stderr);
     await this.ready;
   }
 
   /** Mirror the child's stderr to ours while keeping a tail for crash notices. */
-  private async pumpStderr(proc: Subprocess): Promise<void> {
+  private async pumpStderr(proc: Subprocess, stderr: { tail: string }): Promise<void> {
     const stream = proc.stderr;
     if (!(stream instanceof ReadableStream)) return;
     const decoder = new TextDecoder();
@@ -182,7 +189,7 @@ export class SandboxHost {
       for await (const chunk of stream) {
         const text = decoder.decode(chunk as Uint8Array, { stream: true });
         process.stderr.write(text);
-        this.stderrTail = (this.stderrTail + text).slice(-4_000);
+        stderr.tail = (stderr.tail + text).slice(-4_000);
       }
     } catch {
       // stream torn down with the process; the tail keeps what we saw

@@ -82,6 +82,21 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("snippet trajectory entry logs the normalized code when an alias key was used", async () => {
+    const adapter = new StubAdapter([
+      { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { snippet: "await connect()" } }] },
+    ]);
+    const { dir, options } = setup(adapter);
+    await runLoop(options);
+    const snippet = readTrajectory(dir).find((r) => r.t === "snippet");
+    // The alias (snippet->code) is normalized before dispatch; the record must
+    // carry the real source, not "".
+    expect(snippet?.["code"]).toBe("await connect()");
+    const result = readTrajectory(dir).find((r) => r.t === "snippet_result");
+    expect(result?.["text"]).toContain("ran:await connect()");
+    options.trajectory.close();
+  });
+
   test("money and quest turn-ins reach the state row and the trajectory", async () => {
     const adapter = new StubAdapter([{ content: "acting", toolCalls: [] }]);
     const { dir, options } = setup(
