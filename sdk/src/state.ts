@@ -1382,6 +1382,7 @@ export class StateCache {
         return;
       }
       case "WB_MOVE_PROGRESS":
+      case "WB_RIDE_PROGRESS":
       case "WB_MOVE_RESULT": {
         // Our own position while moving: the module's movement engine knows it
         // locally, exactly as a running client does. `WB_MOVE_RESULT.pos` is

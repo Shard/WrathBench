@@ -97,6 +97,7 @@ describe("event frames", () => {
       "WB_MOVE_PROGRESS",
     "WB_SESSION_STATE",
       "WB_MOVE_RESULT",
+      "WB_RIDE_PROGRESS",
       ...MOVE_OPCODES,
       // map transfers
       "SMSG_TRANSFER_PENDING",

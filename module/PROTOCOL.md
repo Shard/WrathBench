@@ -628,7 +628,8 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | opcode | id | `data` fields |
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
-| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` only on `path_incomplete` |
+| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` only on `path_incomplete`; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
+| `WB_RIDE_PROGRESS` | 0xFF05 | `{ "transportGuid": <guid-string>, "transportEntry": <u32>, "pos": { "x","y","z","o" } }` — at most 1/s while the character rides a transport and is not walking; the server-side position the transport carried it to |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
 
@@ -672,6 +673,22 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
 `WB_MOVE_PROGRESS.pos` is the engine's interpolated position (what a client
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an
 `arrived` result is proof the server accepted the synthesized movement.
+
+Transports (2026-08, FOLLOW-UPS 38 N1). A client standing on a tram car or
+boat sends movement packets flagged `MOVEMENTFLAG_ONTRANSPORT` with the
+transport guid and its transport-relative offset, because its physics put it
+on the transport's model; the server then carries it as a passenger and
+nothing else does. The module does the same from the same knowledge: when
+the mover's interpolated point lies inside a transport's model bounds (the
+`GameObjectModel` the server keeps current as the transport moves), every
+synthesized packet carries the transport block. Transports have no navmesh,
+so a `move_to` within 30y whose start or destination is on one is a straight
+line (boarding or disembarking, as a client walks it); anything longer goes
+through the mesh and answers `start_off_mesh` / `target_off_mesh`. A move
+that ends aboard reports `onTransport`; while aboard and idle, the server
+moves the character and the module reports where it is as
+`WB_RIDE_PROGRESS`. No "activate transport" action exists: boarding is
+walking onto the car.
 
 Areatriggers (2026-08, FOLLOW-UPS 38 N1). A real client tests its own position
 against the `AreaTrigger.dbc` volumes it ships and sends `CMSG_AREATRIGGER`

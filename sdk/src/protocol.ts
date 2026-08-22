@@ -679,8 +679,22 @@ export const moveResultDataSchema = z.looseObject({
   meshZ: z.number().optional(),
   /** `path_incomplete` only: how far the mesh could get toward the request. */
   reachedPos: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+  /** Present when the character ended the move aboard a transport the server is carrying it on. */
+  onTransport: z.looseObject({ guid: guidSchema, entry: z.number() }).optional(),
 });
 export type MoveResultData = z.infer<typeof moveResultDataSchema>;
+
+/**
+ * Module-synthesized: own position while riding a transport and not walking.
+ * The server tells a client nothing here (the client animates the transport
+ * itself), so this is the riding counterpart of `WB_MOVE_PROGRESS`.
+ */
+export const rideProgressDataSchema = z.looseObject({
+  transportGuid: guidSchema,
+  transportEntry: z.number(),
+  pos: positionSchema,
+});
+export type RideProgressData = z.infer<typeof rideProgressDataSchema>;
 
 // ---------------------------------------------------------- map transfers
 //
@@ -1250,6 +1264,7 @@ export const eventDataSchemas = {
   WB_MOVE_PROGRESS: moveProgressDataSchema,
   WB_SESSION_STATE: sessionStateDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
+  WB_RIDE_PROGRESS: rideProgressDataSchema,
   ...moveOpcodeSchemas,
   // map transfers
   SMSG_TRANSFER_PENDING: transferPendingDataSchema,

@@ -37,6 +37,8 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "Timer.h"
+#include "Transport.h"
+#include "GameObjectModel.h"
 #include "UpdateData.h"
 #include "UpdateFields.h"
 #include "World.h"
@@ -224,6 +226,7 @@ namespace WrathBench
         // Drive synthesized movement (ADR-0010). World thread: maps are not
         // mid-update here, so reading player state and QueuePacket are both safe.
         TickMovers(nowMs);
+        TickRiders(nowMs);
 
         // Answer pending teleports; without this every teleport (repop's
         // graveyard port included) freezes movement forever.
@@ -1048,20 +1051,62 @@ namespace WrathBench
         return Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Add("o", (double)o).Str();
     }
 
+    // Which transport (tram car, boat, zeppelin) is this point standing on, if
+    // any? A client's physics puts it on the transport's model; the module uses
+    // the same model's world-space bounds (GameObjectModel::GetBounds, kept
+    // current by UpdateModelPosition as the transport moves). When the model is
+    // not loaded for a transport, a coarse radius around the transport's
+    // position stands in (documented in ADR-0026). World thread only.
+    static Transport* FindTransportAt(Map* map, float x, float y, float z)
+    {
+        if (!map)
+            return nullptr;
+        for (Transport* t : map->GetAllTransports())
+        {
+            if (!t || !t->IsInWorld())
+                continue;
+            if (t->m_model)
+            {
+                G3D::AABox const& b = t->m_model->GetBounds();
+                if (x >= b.low().x - 0.5f && x <= b.high().x + 0.5f
+                    && y >= b.low().y - 0.5f && y <= b.high().y + 0.5f
+                    && z >= b.low().z - 2.0f && z <= b.high().z + 2.0f)
+                    return t;
+            }
+            else if (t->GetExactDist2d(x, y) <= 12.0f && std::fabs(t->GetPositionZ() - z) <= 20.0f)
+                return t;
+        }
+        return nullptr;
+    }
+
     // Synthesize one client movement packet (MovementInfo layout mirrors
     // WorldSession::ReadMovementInfo: flags u32, flags2 u16, time u32, xyzo,
-    // fallTime u32; no transport/swim/fall extras for ground movement). The
-    // module's clock doubles as the "client" clock; CMSG_TIME_SYNC_RESP below
-    // keeps the session's clock delta near zero so these timestamps are accepted.
+    // [ONTRANSPORT: packGUID transport, local xyzo, u32 transport time, i8 seat,]
+    // fallTime u32; no swim/fall extras for ground movement). The module's
+    // clock doubles as the "client" clock; CMSG_TIME_SYNC_RESP below keeps the
+    // session's clock delta near zero so these timestamps are accepted. When
+    // the point is on a transport the packet says so the way a client's would:
+    // the server then carries the character as a passenger (FOLLOW-UPS 38 N1).
     static void SendMovePacket(BenchSession& s, Player* player, uint16 opcode, uint32 moveFlags,
-        float x, float y, float z, float o)
+        float x, float y, float z, float o, Transport* transport = nullptr)
     {
-        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 2 + 4 + 16 + 4);
+        if (transport)
+            moveFlags |= MOVEMENTFLAG_ONTRANSPORT;
+        WorldPacket* p = new WorldPacket(opcode, 8 + 4 + 2 + 4 + 16 + 8 + 16 + 4 + 1 + 4);
         *p << player->GetPackGUID();
         *p << uint32(moveFlags);
         *p << uint16(0);            // flags2
         *p << uint32(getMSTime());
         *p << float(x) << float(y) << float(z) << float(o);
+        if (transport)
+        {
+            float lx = x, ly = y, lz = z, lo = o;
+            transport->CalculatePassengerOffset(lx, ly, lz, &lo);
+            *p << transport->GetPackGUID();
+            *p << float(lx) << float(ly) << float(lz) << float(lo);
+            *p << uint32(transport->GetPathProgress());
+            *p << int8(-1);         // seat: none (not a vehicle)
+        }
         *p << uint32(0);            // fallTime
         s.ws->QueuePacket(p);
     }
@@ -1221,7 +1266,14 @@ namespace WrathBench
         // ground truth that the synthesized movement was actually applied.
         Player* player = (s.ws && sWorldSessionMgr->FindSession(s.accountId) == s.ws) ? s.ws->GetPlayer() : nullptr;
         if (player)
+        {
             w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+            // Aboard a transport at the end of the move: the server is carrying
+            // the character (it accepted ONTRANSPORT packets), so say which.
+            if (Transport* t = player->GetTransport())
+                w.Raw("onTransport", Json::Writer().AddGuid("guid", (uint64_t)t->GetGUID().GetRawValue())
+                    .Add("entry", t->GetEntry()).Str());
+        }
         // The z the mesh resolved the request to, when it differed from the
         // request by more than 1y: the honest signal that the agent's z was off
         // and the module walked to the ground instead.
@@ -1268,7 +1320,30 @@ namespace WrathBench
         // polyline or one typed cause. FOLLOW-UPS item 38 N1: the old single
         // `no_path` hid four different failures, and one of them (a 3D endpoint
         // check against a request whose z was merely stale) was self-inflicted.
-        PathResolve r = ResolvePath(player, x, y, z);
+        // Transports have no navmesh: a client walks straight onto (or off) a
+        // docked tram car or boat. When either end of a short move is on a
+        // transport's model, the path is that straight line and the movement
+        // packets carry the transport offset (SendMovePacket). Longer moves
+        // go through the mesh and fail with the honest start_off_mesh /
+        // target_off_mesh, whose hints say to board or disembark first.
+        PathResolve r;
+        {
+            Map* map = player->GetMap();
+            Transport* startT = player->GetTransport();
+            if (!startT)
+                startT = FindTransportAt(map, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+            Transport* targetT = FindTransportAt(map, x, y, z);
+            if ((startT || targetT) && player->GetExactDist2d(x, y) <= 30.0f)
+            {
+                r.points.push_back({player->GetPositionX(), player->GetPositionY(), player->GetPositionZ()});
+                r.points.push_back({x, y, z});
+                Audit(*s, "action", Json::Writer().Add("op", "move_transport_leg")
+                    .Add("moveId", moveId)
+                    .Add("boarding", targetT != nullptr).Add("leaving", startT != nullptr && !targetT).Str());
+            }
+            else
+                r = ResolvePath(player, x, y, z);
+        }
         if (r.status != nullptr)
         {
             Json::Writer w;
@@ -1297,7 +1372,8 @@ namespace WrathBench
         m.stopping = false;
         m.active = true;
 
-        SendMovePacket(*s, player, MSG_MOVE_START_FORWARD, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO);
+        SendMovePacket(*s, player, MSG_MOVE_START_FORWARD, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO,
+            FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
         Audit(*s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_START_FORWARD")
             .Add("moveId", moveId).Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
     }
@@ -1316,13 +1392,15 @@ namespace WrathBench
             MoveState& m = s->move;
             // Stop where the "client" is (the interpolated position); the server
             // accepts it the same way it accepts any client stop mid-run.
-            SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO);
+            SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO,
+                FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
             FinishMove(*s, "stopped");
         }
         else
         {
             SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
-                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                player->GetTransport());
         }
         ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "stop").Add("token", token).Str()});
     }
@@ -1898,7 +1976,8 @@ namespace WrathBench
         if (!player->IsAlive() && !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
         {
             SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
-                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                player->GetTransport());
             FinishMove(s, "interrupted");
             return;
         }
@@ -1938,7 +2017,8 @@ namespace WrathBench
             // Geometric end of path: send the stop at the exact destination and
             // wait for the server to confirm.
             m.curX = m.destX; m.curY = m.destY; m.curZ = m.destZ;
-            SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.destX, m.destY, m.destZ, m.curO);
+            SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.destX, m.destY, m.destZ, m.curO,
+                FindTransportAt(player->GetMap(), m.destX, m.destY, m.destZ));
             Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_STOP")
                 .Add("moveId", m.moveId).Raw("pos", PosJson(m.destX, m.destY, m.destZ, m.curO)).Str());
             m.stopping = true;
@@ -1954,11 +2034,13 @@ namespace WrathBench
             if (player->GetExactDist2d(m.curX, m.curY) > 15.0f)
             {
                 SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
-                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                    player->GetTransport());
                 FinishMove(s, "interrupted");
                 return;
             }
-            SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO);
+            SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, m.curX, m.curY, m.curZ, m.curO,
+                FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
             m.lastPacketMs = nowMs;
             Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_HEARTBEAT")
                 .Add("moveId", m.moveId).Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
@@ -1981,6 +2063,42 @@ namespace WrathBench
             w.Add("moveId", m.moveId);
             w.Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO));
             EmitEvent(s, "WB_MOVE_PROGRESS", 0xFF02, w.Str());
+        }
+    }
+
+    // While a character rides a transport and is not walking, the server moves
+    // it (StaticTransport/MotionTransport::UpdatePassengerPositions) and tells
+    // the client nothing — a client computes its own position from the
+    // transport's animation. The module has the same knowledge server-side, so
+    // it reports the character's own position once a second as WB_RIDE_PROGRESS,
+    // the riding counterpart of WB_MOVE_PROGRESS. World thread only.
+    void Manager::TickRiders(int64_t nowMs)
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load() && s->phase.load() == BenchSession::P_INWORLD && !s->move.active)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            Player* player = s->ws->GetPlayer();
+            Transport* t = (player && player->IsInWorld()) ? player->GetTransport() : nullptr;
+            if (!t)
+            {
+                s->lastRideEmitMs = 0;
+                continue;
+            }
+            if (s->lastRideEmitMs && nowMs - s->lastRideEmitMs < 1000)
+                continue;
+            s->lastRideEmitMs = nowMs;
+            Json::Writer w;
+            w.AddGuid("transportGuid", (uint64_t)t->GetGUID().GetRawValue()).Add("transportEntry", t->GetEntry());
+            w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
+            EmitEvent(*s, "WB_RIDE_PROGRESS", 0xFF05, w.Str());
         }
     }
 
