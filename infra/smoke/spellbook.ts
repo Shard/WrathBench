@@ -14,8 +14,9 @@
  *      whose rows carry rank and name, and SMSG_TALENTS_INFO (player form)
  *      arrives with 0 unspent points at level 1;
  *   2. cast Seal of Righteousness (21084, a level-1 paladin spell that is in
- *      the initial book) on self -> SMSG_SPELL_COOLDOWN for our guid (the
- *      GCD-only marker is enough: the packet shape is what is probed);
+ *      the initial book) on self -> SMSG_SPELL_GO naming us as caster and as
+ *      the hit target (no SMSG_SPELL_COOLDOWN: a GCD-only spell never sends
+ *      one in 3.3.5 — see the comment at the cast);
  *   3. learn_talent at level 1 -> SMSG_TALENTS_INFO answers (nothing
  *      learned: no points), proving the handler round-trip;
  *   4. raw CMSG_TEXT_EMOTE (wave, 0x16) is acked 200; raw with a movement
@@ -124,13 +125,28 @@ async function main() {
   if (!Array.isArray(talents.data.specs)) fail(`TALENTS_INFO lacks specs[]: ${JSON.stringify(talents.data)}`);
   log(`TALENTS_INFO: unspent=${talents.data.unspentPoints} specs=${talents.data.specs.length} active=${talents.data.activeSpec}`);
 
-  // 2. Cast a known spell -> SMSG_SPELL_COOLDOWN for our guid.
+  // 2. Cast a known spell -> SMSG_SPELL_GO naming us as caster.
+  //    Deliberately NOT SMSG_SPELL_COOLDOWN: in 3.3.5 the server only sends
+  //    that packet for a cooldown the client cannot derive itself, so a
+  //    GCD-only spell never produces one. Measured 2026-08-23 on a level-1
+  //    Human Paladin: neither 21084 (Seal of Righteousness) nor 59752 (Every
+  //    Man for Himself, a real 2-minute racial) emits SMSG_SPELL_COOLDOWN or
+  //    SMSG_COOLDOWN_EVENT, and no other spell in the level-1 book has an
+  //    observable cooldown. The decode of SMSG_SPELL_COOLDOWN is still
+  //    covered by the login-time `cooldowns[]` assertion above; the running
+  //    cooldown assertion is a FOLLOW-UP for a character that has one.
   let mark = events.length;
   await action("cast_spell", { spellId: SEAL_OF_RIGHTEOUSNESS });
-  const cd = await waitFor((e) => e.opcode === "SMSG_SPELL_COOLDOWN" && e.data?.guid === selfGuid, 5000, "SMSG_SPELL_COOLDOWN", mark);
-  if (!Array.isArray(cd.data.cooldowns) || !cd.data.cooldowns.some((c: any) => c.spellId === SEAL_OF_RIGHTEOUSNESS))
-    fail(`SPELL_COOLDOWN does not name ${SEAL_OF_RIGHTEOUSNESS}: ${JSON.stringify(cd.data)}`);
-  log(`SPELL_COOLDOWN: flags=${cd.data.flags} ${JSON.stringify(cd.data.cooldowns)}`);
+  const go = await waitFor(
+    (e) => e.opcode === "SMSG_SPELL_GO" && e.data?.spellId === SEAL_OF_RIGHTEOUSNESS,
+    5000,
+    "SMSG_SPELL_GO",
+    mark,
+  );
+  if (go.data.casterGuid !== selfGuid) fail(`SPELL_GO caster ${go.data.casterGuid} is not us (${selfGuid})`);
+  if (!Array.isArray(go.data.hitGuids) || !go.data.hitGuids.includes(selfGuid))
+    fail(`self-cast SPELL_GO does not hit us: ${JSON.stringify(go.data)}`);
+  log(`SPELL_GO: ${SEAL_OF_RIGHTEOUSNESS} cast by us, hit us`);
 
   // 3. learn_talent round-trip (no points at level 1: answered, not learned).
   mark = events.length;

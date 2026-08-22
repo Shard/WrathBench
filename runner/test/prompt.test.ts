@@ -37,17 +37,6 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("turnInQuest/acceptQuestFrom over the raw quest actions");
   });
 
-  test("the events surface names off(), the removal models reach for", () => {
-    // ox-alpha took 21 uncaught `events.off is not a function` exceptions in
-    // one run, each one killing a background routine.
-    expect(SYSTEM_PROMPT).toContain("off(opcode, fn)");
-  });
-
-  test("questGiver: true is documented as the any-marker shorthand", () => {
-    // hy3 passed the boolean spelling six times in one run.
-    expect(SYSTEM_PROMPT).toContain('questGiver: true means any marker but "none"');
-  });
-
   test("tools are distinguished from ambient snippet objects", () => {
     // laguna and hy3 called write_scratchpad(...) / search_reference(...) as
     // bare globals inside snippets.

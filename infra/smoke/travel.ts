@@ -51,7 +51,12 @@ const LEGS: { name: string; waypoints: Waypoint[] }[] = [
     waypoints: [
       { name: "valley road (Coldridge Mountaineer)", x: -6115.1, y: 372.3, z: 395.6 },
       { name: "tunnel south mouth (Wren Darkspring)", x: -6049.4, y: 383.6, z: 399.0 },
-      { name: "tunnel interior (interpolated)", x: -6055.0, y: 210.0, z: 403.0 },
+      // Tunnel corridor, from `creature` spawn rows on map 0 between the two
+      // mouths (verified 2026-08-23): a straight interpolated midpoint is off
+      // the mesh because the pass bends west. Every hop below is < 250y.
+      { name: "tunnel bend west (Ragged Young Wolf)", x: -6144.1, y: 268.4, z: 393.6 },
+      { name: "tunnel mid (Rockjaw Raider)", x: -6137.6, y: 122.9, z: 420.8 },
+      { name: "tunnel north bend (Rockjaw Raider)", x: -6111.4, y: 48.0, z: 412.9 },
       { name: "tunnel north exit (Battlemaster)", x: -6033.9, y: 47.5, z: 406.4 },
       { name: "road east of tunnel (Mountaineer)", x: -5907.9, y: 27.7, z: 367.4 },
       { name: "road descent (Crag Boar)", x: -5774.2, y: -142.6, z: 354.2 },
