@@ -59,6 +59,13 @@ function stopParent(): void {
   }, 2_000);
 }
 
+/**
+ * Set when the CLI closes our stdin and we end the socket ourselves. That is
+ * the CLI's own orderly teardown of its MCP server, not the runner going away,
+ * and killing the CLI for it would be a self-inflicted wound.
+ */
+let weClosedIt = false;
+
 const socket = await Bun.connect({
   hostname: "127.0.0.1",
   port,
@@ -67,6 +74,7 @@ const socket = await Bun.connect({
       process.stdout.write(data);
     },
     close() {
+      if (weClosedIt) process.exit(0);
       stopParent();
     },
     error(_s, err) {
@@ -77,4 +85,5 @@ const socket = await Bun.connect({
 });
 
 for await (const chunk of Bun.stdin.stream()) socket.write(chunk);
+weClosedIt = true;
 socket.end();
