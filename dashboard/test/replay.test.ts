@@ -1,0 +1,75 @@
+/**
+ * Map replay's cursor maths (FOLLOW-UPS 22).
+ *
+ * The property that keeps ADR-0019 intact is that a cursor produces the same
+ * `AgentPosition[]` shape the live feed produces — these pin that, plus the
+ * two things a scrubber gets wrong: a cursor before the first sample, and a
+ * route drawn across a continent change.
+ */
+
+import { describe, expect, test } from "bun:test";
+import type { TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
+import { indexAt, mapsVisited, positionsAt, routeUpTo, trackSpan } from "../src/lib/replay";
+
+function point(ts: number, map: number, x: number, y: number): TrackPoint {
+  return { ts, map, x, y, level: 5, xp: 100, money: null, questsCompleted: null, turn: ts };
+}
+
+const TRACK: TrackResponse = {
+  runId: "run-1",
+  character: "Benchy",
+  model: "test/model",
+  harnessVersion: "harness-0.2",
+  points: [point(100, 0, 1, 1), point(200, 0, 2, 2), point(300, 530, 9, 9)],
+};
+
+describe("indexAt", () => {
+  test("finds the last sample at or before the cursor", () => {
+    expect(indexAt(TRACK.points, 99)).toBe(-1);
+    expect(indexAt(TRACK.points, 100)).toBe(0);
+    expect(indexAt(TRACK.points, 250)).toBe(1);
+    expect(indexAt(TRACK.points, 10_000)).toBe(2);
+    expect(indexAt([], 5)).toBe(-1);
+  });
+});
+
+describe("positionsAt", () => {
+  test("produces the live feed's shape at the cursor", () => {
+    const [p] = positionsAt(TRACK, 250);
+    expect(p).toMatchObject({
+      runId: "run-1",
+      character: "Benchy",
+      model: "test/model",
+      map: 0,
+      x: 2,
+      y: 2,
+      ts: 200,
+      harnessVersion: "harness-0.2",
+    });
+  });
+
+  test("before the first recorded position there is nothing to draw", () => {
+    expect(positionsAt(TRACK, 1)).toEqual([]);
+  });
+});
+
+describe("trackSpan / routeUpTo / mapsVisited", () => {
+  test("the span is first to last sample", () => {
+    expect(trackSpan(TRACK.points)).toEqual({ from: 100, to: 300 });
+    expect(trackSpan([])).toBeNull();
+  });
+
+  test("the route stops at the cursor and never crosses maps", () => {
+    expect(routeUpTo(TRACK.points, 0, 250)).toEqual([
+      { x: 1, y: 1 },
+      { x: 2, y: 2 },
+    ]);
+    // The Outland sample is on another map: it must not join the first route.
+    expect(routeUpTo(TRACK.points, 0, 10_000)).toHaveLength(2);
+    expect(routeUpTo(TRACK.points, 530, 10_000)).toEqual([{ x: 9, y: 9 }]);
+  });
+
+  test("maps come back in visit order", () => {
+    expect(mapsVisited(TRACK.points)).toEqual([0, 530]);
+  });
+});
