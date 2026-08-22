@@ -628,21 +628,38 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | opcode | id | `data` fields |
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
-| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" } }` |
+| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` only on `path_incomplete` |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
 2^53, so it falls under the counter exemption to the u64-as-string rule stated
 at the top of this document.
 
-`WB_MOVE_RESULT.status` is one of:
+`WB_MOVE_RESULT.status` is one of (navigation vocabulary of 2026-08, FOLLOW-UPS
+item 38 N1; the former undifferentiated `no_path` no longer exists):
 - `arrived` — the server-side character reached the destination; `pos` is the
-  server-confirmed position.
-- `no_path` — the navmesh has no complete walkable path to the point.
+  server-confirmed position. When the navmesh resolved the request to a ground
+  z more than 1y from the requested z, the result also carries `meshZ` (the z
+  actually walked to): the request's z was off, the mesh's z was used, and the
+  agent should quote `meshZ` next time.
 - `too_far` — destination beyond the single-move cap (~250yd straight-line);
   issue intermediate `move_to`s.
-- `interrupted` — the move stopped early (death, root, teleport, rejection);
-  `pos` is where the character actually is.
+- `no_mesh` — no navmesh tile is loaded under the character or under the
+  destination. A harness/data limitation, not a route problem; nothing to
+  retry from the agent's side.
+- `target_off_mesh` — the destination has no walkable polygon within the
+  mesh's search box (4y in 2D; z is searched ±50y, so a stale z alone never
+  produces this), or it sits inside geometry. Pick a point on a road, a floor,
+  or where an NPC stands.
+- `start_off_mesh` — the character itself is standing somewhere the mesh does
+  not cover (a transport deck, a bad landing). Recovery is different from
+  `target_off_mesh`: a few yards of movement, or a disembark, fixes the start.
+- `path_incomplete` — the mesh has no continuous walkable route to the
+  destination. The module already tried once to subdivide (path to where the
+  mesh got, then onward); `reachedPos` is how far the mesh could get, so the
+  agent can route around or approach from another side. Nothing moved.
+- `interrupted` — the move stopped early (death, root, rejection); `pos` is
+  where the character actually is.
 - `stopped` — a `stop` action ended the move.
 - `superseded` — a newer `move_to` replaced this move.
 

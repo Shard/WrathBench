@@ -69,6 +69,8 @@ namespace WrathBench
         int64_t stopDeadlineMs{0};  // arrival-confirm timeout once stopping
         float curX{0}, curY{0}, curZ{0}, curO{0}; // interpolated client-side position
         float destX{0}, destY{0}, destZ{0};
+        bool hasMeshZ{false};       // the mesh resolved the request to a different z
+        float meshZ{0};
     };
 
     // Per-token headless session. See ADR-0009 for the parked-socket design.
@@ -203,6 +205,20 @@ namespace WrathBench
         void DoMoveTo(std::string token, float x, float y, float z, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoStop(std::string token, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoFace(std::string token, bool hasO, float o, bool hasXY, float x, float y, std::shared_ptr<std::promise<HttpReply>> ack);
+
+        // Outcome of resolving a move_to against the navmesh (world thread).
+        // status is nullptr on success, else one of the typed causes in
+        // PROTOCOL.md (WB_MOVE_RESULT.status).
+        struct PathResolve
+        {
+            char const* status{nullptr};
+            std::vector<WbVec> points;
+            bool hasMeshZ{false};
+            float meshZ{0};
+            bool hasReached{false};     // path_incomplete: how far the mesh got
+            float reachedX{0}, reachedY{0}, reachedZ{0};
+        };
+        PathResolve ResolvePath(Player* player, float x, float y, float z);
 
         // Mover (world thread only; see ADR-0010).
         void TickMovers(int64_t nowMs);
