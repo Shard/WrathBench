@@ -428,6 +428,15 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     run pauses in place and resumes when the window reopens, instead of
     exiting.
 
+44. **Abandoned snippets keep driving the character** (2026-08-22, nav-probe
+    `fleet-nav-probe-sonnet-20260822` scratchpad). A snippet that exceeds the
+    tool time limit is abandoned by design (runtime survives, host.ts), but its
+    loop of `moveTo` calls keeps running and moves the character while the
+    model has already been handed control back. The model's own workaround was
+    "fewer iterations per snippet". Want: a cooperative abort — each eval gets
+    a signal that SDK waits honor, abandonment aborts it (pending move stopped
+    deterministically), and the result says so. No new helper beyond that.
+
 ## Ladder work (harness-0.3 / 0.4)
 
 The eight-rung ladder in `docs/VISION.md` is the guide; rung 4 (a capital, the
