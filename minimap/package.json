@@ -1,0 +1,13 @@
+{
+  "name": "@wrathbench/minimap",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "module": "src/extract.ts",
+  "scripts": {
+    "extract": "bun src/extract.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

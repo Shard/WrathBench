@@ -1,7 +1,7 @@
 {
   "name": "wrathbench",
   "private": true,
-  "workspaces": ["sdk", "runner", "wiki"],
+  "workspaces": ["sdk", "runner", "wiki", "minimap"],
   "engines": {
     "bun": "1.4.0"
   },

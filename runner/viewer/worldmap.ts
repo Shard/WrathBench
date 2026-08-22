@@ -63,9 +63,9 @@ export function tileToWorld(row: number, col: number): { x: number; y: number } 
  *
  * Rows stack downward (screen Y) and columns run rightward (screen X): the
  * minimap tiles are stored north-up and west-left, so growing row is south and
- * growing column is east. ADR-0019 flags this orientation as unverified until
- * the extraction renders a known zone; if the tiles disagree, this is the one
- * place that changes.
+ * growing column is east. ADR-0019 required this to be verified against a
+ * rendered known zone before it was trusted: the extraction did that (see
+ * `minimap/README.md`) and the tiles agree, so this stands as written.
  */
 export function worldToPixel(x: number, y: number): PixelPoint {
   const t = worldToTile(x, y);
