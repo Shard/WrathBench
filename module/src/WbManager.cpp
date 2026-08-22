@@ -25,6 +25,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Log.h"
+#include "LootMgr.h"
 #include "QuestDef.h"
 #include "ObjectGuid.h"
 #include "Opcodes.h"
@@ -2808,7 +2809,16 @@ namespace WrathBench
                         items += Json::Writer().Add("slot", (uint32)slot).Add("itemId", itemId)
                             .Add("count", cnt).Add("slotType", (uint32)slotType).Str();
                         itemEntries.push_back(itemId);
-                        if (slotType == 0)              // LOOT_SLOT_TYPE_ALLOW_LOOT
+                        // A solo looter's slots arrive as LOOT_SLOT_TYPE_OWNER,
+                        // not ALLOW_LOOT: the core marks every slot OWNER when
+                        // the looter owns the corpse outright (LootMgr.cpp,
+                        // PERMISSION_OWNER). Gating on ALLOW_LOOT alone meant
+                        // solo auto-loot released the window without storing a
+                        // single item (morning-opus-1). MASTER, ROLL_ONGOING
+                        // and LOCKED stay excluded deliberately: they are
+                        // group-distribution states a client cannot auto-store
+                        // from, and this benchmark is solo.
+                        if (slotType == LOOT_SLOT_TYPE_ALLOW_LOOT || slotType == LOOT_SLOT_TYPE_OWNER)
                             slots.push_back(slot);
                     }
                     items += "]";
