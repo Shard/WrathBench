@@ -463,7 +463,10 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     rung-4 run; either keep and label, or drop from the scored lane.
 
 39. **Spellbook, cooldowns, and the raw-action escape hatch** (2026-08-22;
-    harness-0.3, cross-cutting). The agent cannot observe what it can cast:
+    harness-0.3, cross-cutting). SHIPPED 2026-08-22 in the `:next` module
+    build + SDK (taps, `state.spells()/cooldowns()/talents()`,
+    `learnTalent`, `raw` per ADR-0025; CONTRACTS drift corrected). Still
+    open from this item: equipped-bag contents. The agent cannot observe what it can cast:
     `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`, `SMSG_REMOVED_SPELL`,
     `SMSG_SPELL_COOLDOWN`, `SMSG_COOLDOWN_EVENT` are not tapped, so models
     guess spell ids from the wiki and loop on cast-failed. Tap them, add
