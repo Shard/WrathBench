@@ -5,9 +5,11 @@
  * Semantics, exactly:
  *  - `evalSnippet` resolves with the child's result, or with a timeout result.
  *  - A timeout does NOT kill the runtime. The evaluation is abandoned (its
- *    late result is discarded) and the child is pinged; only if the ping also
- *    goes unanswered (the event loop is blocked) is the child killed and
- *    respawned. The loss is recorded as a harness notice the model will see.
+ *    late result is discarded), its abort signal is fired in the child (so the
+ *    SDK waits it left behind settle and an in-flight move is stopped —
+ *    FOLLOW-UPS 44), and the child is pinged; only if the ping also goes
+ *    unanswered (the event loop is blocked) is the child killed and respawned.
+ *    The loss is recorded as a harness notice the model will see.
  *  - Consecutive restarts are counted for the `snippet-runaway` watchdog; a
  *    successful evaluation resets the count.
  */
@@ -317,19 +319,28 @@ export class SandboxHost {
       // abandoned snippet printed so far, so the model is not shown `logs: []`
       // for code that was in fact talking.
       this.abandonedEvals.add(id);
+      // Cooperative abort first, then the liveness ping: the pong then carries
+      // whatever the abort made the snippet print.
+      try {
+        this.send({ t: "abort", id });
+      } catch {
+        // not started / already gone — the ping path reports that
+      }
       const ping = await this.pingAlive();
       if (ping.alive) {
         return {
           ok: false,
           timedOut: true,
           error:
-            `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned; ` +
-            `the runtime (bindings, routines, session) is still alive. ` +
+            `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned: its \`signal\` was ` +
+            `aborted, so pending SDK waits (moveTo, killTarget, waitForTransfer, …) rejected with ` +
+            `EventAbortedError and any move in flight was stopped. ` +
+            `The runtime (bindings, routines, session) is still alive. ` +
             `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
             `routine (launch it without awaiting, e.g. ` +
-            `\`globalThis.trip = (async () => { for (const p of waypoints) await sdk.moveTo(p); return "done"; })().catch(String)\` ` +
-            `— returns instantly, then a later snippet checks \`await Promise.race([trip, "running"])\`); ` +
-            `the abandoned code may still be running, so check state/events before assuming it failed.`,
+            `\`globalThis.trip = (async () => { for (const p of waypoints) await sdk.moveTo(p); return "done"; })().catch(String); "started"\` ` +
+            `— the trailing value keeps the snippet from awaiting the promise REPL-style; it returns instantly, then a later snippet checks \`await Promise.race([trip, "running"])\`); ` +
+            `code that was not awaiting the SDK may still be running, so check state/events before assuming it failed.`,
           logs: ping.logs,
           durationMs: this.opts.snippetTimeoutMs,
         };

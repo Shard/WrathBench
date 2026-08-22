@@ -25,7 +25,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "run_snippet",
     description:
-      "Execute a TypeScript snippet in the persistent game sandbox. Top-level bindings persist across snippets; `sdk`, `state`, `events`, `connect()`, `sleep(ms)` and `scratchpad` are ambient. A single expression returns its value. This is the only way to act in the world.",
+      "Execute a TypeScript snippet in the persistent game sandbox. Top-level bindings persist across snippets; `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` and `signal` (aborted if this snippet is abandoned) are ambient. A single expression returns its value. This is the only way to act in the world.",
     inputSchema: {
       type: "object",
       properties: {

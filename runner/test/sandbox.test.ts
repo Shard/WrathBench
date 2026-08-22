@@ -255,6 +255,115 @@ describe("sandbox evaluation", () => {
   });
 });
 
+describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
+  /**
+   * A stand-in module: acks `move_to` with a moveId and never sends the
+   * verdict, so a `moveTo` hangs until something settles it; records every
+   * action so the test can count the `stop`.
+   */
+  function startModuleStub(): { url: string; actions: string[]; stop(): Promise<void> } {
+    const actions: string[] = [];
+    let moveId = 0;
+    const server = Bun.serve<{ token: string }, never>({
+      port: 0,
+      fetch(req, srv) {
+        const url = new URL(req.url);
+        if (url.pathname === "/events") {
+          return srv.upgrade(req, { data: { token: "" } }) ? undefined : new Response("no", { status: 400 });
+        }
+        if (url.pathname === "/session" && req.method === "POST") {
+          return Response.json({ ok: true, token: "t", account: "RUNNER", character: "Fenwick", guid: 7, inWorld: true });
+        }
+        if (url.pathname === "/action") {
+          return req.json().then((body) => {
+            const action = String((body as { action?: string }).action);
+            actions.push(action);
+            return Response.json(
+              action === "move_to" ? { ok: true, action, token: "t", moveId: ++moveId } : { ok: true, action, token: "t" },
+            );
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+      websocket: { message() {} },
+    });
+    return {
+      url: `http://127.0.0.1:${server.port}`,
+      actions,
+      stop: () => server.stop(true),
+    };
+  }
+
+  test("signal is ambient, per-eval, and unfired while the snippet runs", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet("[signal instanceof AbortSignal, signal.aborted]");
+    expect(res.value).toBe("[ true, false ]");
+    // A snippet's own `const signal` copy-back must not throw (defineProperty setter).
+    const own = await host.evalSnippet("const signal = 1; signal");
+    expect(own.ok).toBe(true);
+  });
+
+  test("timeout aborts the signal, stops one in-flight move, drops the late result, keeps the runtime", async () => {
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const timed = await host.evalSnippet(
+      "globalThis.fired = false; signal.addEventListener('abort', () => { globalThis.fired = true; });" +
+        " globalThis.walk = sdk.moveTo({ x: 1, y: 2, z: 3 });" +
+        " await walk; globalThis.reached = 'after the wall';",
+    );
+    expect(timed.timedOut).toBe(true);
+    const after = await host.evalSnippet("[fired, await walk.catch((e) => e.name), globalThis.reached]");
+    expect(after.value).toBe('[ true, "EventAbortedError", undefined ]');
+    // Exactly one stop followed the move_to; a later snippet's work is unaffected.
+    expect(stub.actions).toEqual(["move_to", "stop"]);
+    expect(host.totalRestarts).toBe(0);
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("the abandonment message states the abort and the stop; the late result never reaches the model", async () => {
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const res = await host.evalSnippet("await sdk.moveTo({ x: 1, y: 2, z: 3 }); 'walked'");
+    expect(res.ok).toBe(false);
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("`signal` was aborted");
+    expect(res.error).toContain("move in flight was stopped");
+    expect(res.error).toContain("EventAbortedError");
+    // The aborted eval settled (rejected) before the ping; its result was
+    // discarded and the next eval gets a clean answer, not "walked".
+    const next = await host.evalSnippet("'next'");
+    expect(next.ok).toBe(true);
+    expect(next.value).toBe(JSON.stringify("next"));
+    expect(stub.actions.filter((a) => a === "stop")).toHaveLength(1);
+    await host.stop();
+    await stub.stop();
+  });
+
+  test("a routine launched by a snippet that returned normally is never aborted by a later timeout", async () => {
+    const host = makeHost({ snippetTimeoutMs: 300 });
+    // The trailing value matters: a lone expression is awaited REPL-style,
+    // which would make the *launching* snippet wait on the trip and time out.
+    await host.evalSnippet("globalThis.trip = (async () => { await sleep(600); return 'done'; })().catch((e) => 'aborted:' + e.message); 'started'");
+    const timed = await host.evalSnippet("await sleep(5_000);");
+    expect(timed.timedOut).toBe(true);
+    const trip = await host.evalSnippet("await trip");
+    expect(trip.value).toBe(JSON.stringify("done"));
+  });
+
+  test("sleep() in an abandoned snippet rejects with the abort reason", async () => {
+    const host = makeHost({ snippetTimeoutMs: 300 });
+    const timed = await host.evalSnippet(
+      "globalThis.outcome = 'pending'; try { await sleep(5_000); globalThis.outcome = 'slept'; } catch (e) { globalThis.outcome = 'rejected: ' + e.message; }",
+    );
+    expect(timed.timedOut).toBe(true);
+    const outcome = await host.evalSnippet("outcome");
+    expect(outcome.value).toContain("rejected: snippet abandoned by the harness");
+  });
+});
+
 describe("error rendering (2026-08 audit fixes)", () => {
   test("multi-error parse failure flattens sub-errors with wrapper-corrected line numbers", async () => {
     const host = makeHost();

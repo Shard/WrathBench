@@ -8,7 +8,9 @@
  *   state       alias for sdk.state (the StateCache)
  *   events      alias for sdk.events (the EventStream)
  *   connect()   open the event stream (idempotent); call before createSession
- *   sleep(ms)   Promise timer
+ *   sleep(ms)   Promise timer; rejects with the abort reason if this snippet is abandoned
+ *   signal      AbortSignal for the *current* snippet; fires when the host
+ *               abandons it (timeout). Every SDK wait honors it by default.
  *   scratchpad  { read(), write(content), append(text) } — the run's markdown
  *               scratchpad, bridged to the host process which owns the file
  *   API_MD_PATH absolute path to the generated SDK reference (sdk/API.md);
@@ -33,11 +35,20 @@
  *
  * The per-snippet timeout lives in the host. A timed-out evaluation is
  * abandoned (its eventual result discarded) but the runtime, its bindings and
- * its routines survive. A snippet that blocks the event loop makes this
- * process unresponsive to pings; the host kills and respawns it, and the state
- * loss is surfaced to the model as a harness notice.
+ * its routines survive. Abandonment is cooperative (FOLLOW-UPS 44): each eval
+ * runs under its own AbortController, reachable as `signal` and threaded into
+ * the SDK client through AsyncLocalStorage, so the waits the abandoned code
+ * left behind (`moveTo`, `killTarget`, `waitForTransfer`, …) reject with
+ * `EventAbortedError` and an in-flight move is stopped. Code the snippet
+ * launched without awaiting shares its async context and therefore its
+ * signal: a routine started by a snippet that later times out is aborted with
+ * it; one started by a snippet that returned normally is never aborted.
+ * A snippet that blocks the event loop makes this process unresponsive to
+ * pings; the host kills and respawns it, and the state loss is surfaced to
+ * the model as a harness notice.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
@@ -156,7 +167,19 @@ function drainLogs(): LogEntry[] {
 
 // -------------------------------------------------------- ambient snippet API
 
-const client = new WrathClient({ baseUrl: MODULE_URL, token: TOKEN, account: ACCOUNT, subscribeEvents: false });
+/** The eval whose async context we are in, if any. Set by `evaluate`. */
+const evalContext = new AsyncLocalStorage<{ signal: AbortSignal }>();
+const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
+/** Live controllers by eval id, for the host's `abort`. */
+const evalControllers = new Map<number, AbortController>();
+
+const client = new WrathClient({
+  baseUrl: MODULE_URL,
+  token: TOKEN,
+  account: ACCOUNT,
+  subscribeEvents: false,
+  signal: currentSignal,
+});
 
 let hostcallId = 0;
 const hostcallPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -187,7 +210,23 @@ const ambient: Record<string, unknown> = {
     await client.events.connect();
     eventsConnected = true;
   },
-  sleep: (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)),
+  sleep: (ms: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const signal = currentSignal();
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      function onAbort(): void {
+        clearTimeout(timer);
+        reject(signal?.reason);
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+    }),
   scratchpad: {
     read: (): Promise<unknown> => hostcall("scratchpad_read"),
     write: (content: string): Promise<unknown> => hostcall("scratchpad_write", { content }),
@@ -195,6 +234,16 @@ const ambient: Record<string, unknown> = {
   },
 };
 Object.assign(globalThis, ambient);
+// `signal` is per-eval, so it is a getter over the async context rather than a
+// value: an abandoned snippet keeps seeing its own (aborted) signal after the
+// next eval has started. The setter keeps a snippet's own `const signal = …`
+// copy-back (rewrite.ts) from throwing; it has no effect.
+Object.defineProperty(globalThis, "signal", {
+  get: currentSignal,
+  set: () => {},
+  configurable: true,
+  enumerable: true,
+});
 
 // ---------------------------------------------------------------- evaluate
 
@@ -263,9 +312,12 @@ export function renderError(err: unknown): string {
 }
 
 // A timed-out evaluation's late result is discarded host-side (the host
-// abandons the id), so the child always reports and never tracks abandonment.
+// abandons the id), so the child always reports. What it does track is the
+// eval's AbortController, so a host `abort` can fire the snippet's signal.
 async function evaluate(id: number, code: string): Promise<void> {
   const started = Date.now();
+  const controller = new AbortController();
+  evalControllers.set(id, controller);
   try {
     const compiled = compileSnippet(code);
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
@@ -278,7 +330,8 @@ async function evaluate(id: number, code: string): Promise<void> {
       }
     }
     fn ??= new AsyncFunction(compiled.statementsBody);
-    const value: unknown = await fn.call(globalThis);
+    const run = fn;
+    const value: unknown = await evalContext.run({ signal: controller.signal }, () => run.call(globalThis));
     const msg: ChildToHost = {
       t: "result",
       id,
@@ -289,15 +342,27 @@ async function evaluate(id: number, code: string): Promise<void> {
     if (value !== undefined) msg.value = Bun.inspect(value, { depth: 4 }).slice(0, VALUE_MAX_CHARS);
     send(msg);
   } catch (err) {
+    // An aborted eval's result is discarded host-side; its logs must not go
+    // with it — leave them in the buffer for the liveness pong that follows.
     send({
       t: "result",
       id,
       ok: false,
       error: renderError(err),
-      logs: drainLogs(),
+      logs: controller.signal.aborted ? [] : drainLogs(),
       durationMs: Date.now() - started,
     });
+  } finally {
+    evalControllers.delete(id);
   }
+}
+
+/** Host abandoned this eval: fire its signal. Idempotent; unknown ids are ignored. */
+function abortEval(id: number): void {
+  const controller = evalControllers.get(id);
+  if (controller === undefined) return;
+  evalControllers.delete(id);
+  controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
 
 // --------------------------------------------------------------------- rpc
@@ -344,6 +409,9 @@ function handle(msg: HostToChild | HostcallResult): void {
   switch (msg.t) {
     case "eval":
       void evaluate(msg.id, msg.code);
+      return;
+    case "abort":
+      abortEval(msg.id);
       return;
     case "ping":
       // Pings carry any buffered console output home: the host pings after a
