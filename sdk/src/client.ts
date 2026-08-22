@@ -580,6 +580,26 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `then retry from where you are.`,
 };
 
+/**
+ * The move statuses that mean *nothing moved and no movement packet was sent*.
+ * After one of these the server's last word about the character can still be a
+ * `MOVEMENTFLAG_FORWARD` heartbeat from a move this request superseded, which
+ * keeps `isMoving()` true and fails every later cast with
+ * `SPELL_FAILED_MOVING`. `moveTo` sends the stop a client would; see the call
+ * site for the trajectory this was earned from.
+ *
+ * Not in the set, and why: `arrived` and `interrupted` (the module sent the
+ * stop itself), `stopped` (a stop is what ended it), `superseded` (a newer move
+ * is walking now), `transferred` (the teleport clears the flags).
+ */
+const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
+  "too_far",
+  "no_mesh",
+  "target_off_mesh",
+  "start_off_mesh",
+  "path_incomplete",
+]);
+
 function fmtXY(p: { x: number; y: number }): string {
   return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
 }
@@ -2085,6 +2105,29 @@ export class WrathClient {
         };
       }
       return { ok: false, status: "transferred", ...common, hint: transfer.hint };
+    }
+    if (MOVE_LEAVES_NO_STOP.has(status)) {
+      // Nothing moved — and that is exactly when the character can be left
+      // *flagged* as moving. `DoMoveTo` finishes an in-flight move with
+      // `superseded` without sending `MSG_MOVE_STOP`, and a request that fails
+      // at planning time sends no packet at all, so the server's last movement
+      // word stays `MSG_MOVE_HEARTBEAT | MOVEMENTFLAG_FORWARD`: `isMoving()`
+      // remains true and every subsequent cast answers `SMSG_CAST_FAILED`
+      // result 51 (SPELL_FAILED_MOVING), forever. Observed in
+      // fleet-nav-probe-sonnet-20260822-c3: a walking move superseded by a
+      // 200-point sweep that all failed `start_off_mesh`, then ~10 minutes of
+      // Hearthstone `use_item` answering 51 while stationary, ended by one
+      // `stop`. The repair is deterministic (ADR-0016 rule 1): after a move
+      // that did not move, "stop walking" has exactly one reading, it is what a
+      // client sends when its run ends, and it is a no-op if the character was
+      // already still. `superseded` is deliberately not in the set — a newer
+      // move is walking by then, and stopping it would change game semantics.
+      // Awaited, not fired-and-forgotten: the ack means the module has queued
+      // the packet, and per-session packets are processed in order, so awaiting
+      // is what puts the stop ahead of the caller's next action. Never a sleep.
+      // A refusal (`no_session`, `not_in_world`) has nothing to add to a move
+      // verdict that already failed.
+      await this.stop().catch(() => {});
     }
     const hint = MOVE_HINTS[status]?.(point, data);
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
