@@ -501,6 +501,12 @@ export type MoveResult =
       readonly meshZ?: number;
       /** Present with a hint only when `meshZ` is: what the z difference means. */
       readonly hint?: string;
+      /**
+       * Present when the move ended aboard a transport (tram car, boat) that
+       * the server is now carrying the character on. `state.self.position`
+       * keeps updating from `WB_RIDE_PROGRESS` for the ride.
+       */
+      readonly onTransport?: { readonly guid: string; readonly entry: number };
     }
   | {
       readonly ok: true;
@@ -1837,11 +1843,13 @@ export class WrathClient {
     };
     const common = { moveId: data.moveId, position, seq: event.seq, ts: event.ts } as const;
     if (status === "arrived") {
-      if (data.meshZ === undefined) return { ok: true, status: "arrived", ...common };
+      const aboard = data.onTransport !== undefined ? { onTransport: data.onTransport } : {};
+      if (data.meshZ === undefined) return { ok: true, status: "arrived", ...common, ...aboard };
       return {
         ok: true,
         status: "arrived",
         ...common,
+        ...aboard,
         meshZ: data.meshZ,
         hint:
           `arrived at (${fmtXY(point)}), but the ground there is at z ${data.meshZ.toFixed(1)}, not ` +

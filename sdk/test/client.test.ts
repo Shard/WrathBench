@@ -303,9 +303,18 @@ describe("client: movement", () => {
     expect(r2.meshZ).toBeUndefined();
     expect(r2.hint).toBeUndefined();
 
+    // Aboard a transport at the end of the move: the module says which.
+    const p4 = client.moveTo({ x: 4.5, y: 8.4, z: -4.3 }, { timeout: 2000 });
+    const aboard = moveResult("arrived", 3, 33) as { data: Record<string, unknown> };
+    aboard.data.onTransport = { guid: "12345", entry: 176081 };
+    stub.push(JSON.stringify(aboard));
+    const r4 = await p4;
+    if (!r4.ok || r4.status !== "arrived") throw new Error("unreachable");
+    expect(r4.onTransport).toEqual({ guid: "12345", entry: 176081 });
+
     // A status the SDK has no recipe for passes through with no hint invented.
     const p3 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
-    stub.push(JSON.stringify(moveResult("stopped", 3, 32)));
+    stub.push(JSON.stringify(moveResult("stopped", 4, 34)));
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
     expect(r3.hint).toBeUndefined();

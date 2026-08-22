@@ -143,6 +143,9 @@ namespace WrathBench
         uint32 lastTriggerId{0};
         int64_t lastTriggerSentMs{0};
 
+        // WB_RIDE_PROGRESS pacing while aboard a transport (world thread only).
+        int64_t lastRideEmitMs{0};
+
         // Map transfer in flight: the destination map from SMSG_TRANSFER_PENDING,
         // cleared by SMSG_NEW_WORLD / SMSG_TRANSFER_ABORTED. Set on tap threads,
         // read by the mover on the world thread, hence atomic.
@@ -259,6 +262,7 @@ namespace WrathBench
         // Mover (world thread only; see ADR-0010).
         void TickMovers(int64_t nowMs);
         void TickMover(BenchSession& s, int64_t nowMs);
+        void TickRiders(int64_t nowMs);
         void FinishMove(BenchSession& s, char const* status);
 
         // Answer pending teleports the way a real client does (world thread
