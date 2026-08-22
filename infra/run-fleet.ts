@@ -91,6 +91,8 @@ export interface FleetLane {
   objective?: string;
   watchdogs?: WatchdogOverride;
   maxToolCalls?: number;
+  /** Lane default for the wiki-coordinates tier (ADR-0028); entry wins. */
+  wikiCoords?: boolean;
 }
 
 /**
@@ -276,6 +278,9 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
     if (e.objective !== undefined && (typeof e.objective !== "string" || e.objective.length === 0)) {
       fail(`lane ${lane.name}: entry ${e.model}: objective must be a non-empty string`);
     }
+    if (e.wikiCoords !== undefined && typeof e.wikiCoords !== "boolean") {
+      fail(`lane ${lane.name}: entry ${e.model}: wikiCoords must be a boolean`);
+    }
     if (
       e.maxToolCalls !== undefined &&
       (typeof e.maxToolCalls !== "number" || !Number.isInteger(e.maxToolCalls) || e.maxToolCalls <= 0)
@@ -356,6 +361,9 @@ export function parseFleet(raw: unknown): FleetConfig {
     if (l.objective !== undefined && (typeof l.objective !== "string" || l.objective.length === 0)) {
       fail(`lane ${l.name}: objective must be a non-empty string`);
     }
+    if (l.wikiCoords !== undefined && typeof l.wikiCoords !== "boolean") {
+      fail(`lane ${l.name}: wikiCoords must be a boolean`);
+    }
     if (l.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(l.watchdogs);
       if (!parsed.success) fail(`lane ${l.name}: watchdogs — ${parsed.error.message}`);
@@ -376,6 +384,7 @@ export function parseFleet(raw: unknown): FleetConfig {
       ...(l.objective !== undefined ? { objective: l.objective } : {}),
       ...(l.watchdogs !== undefined ? { watchdogs: l.watchdogs } : {}),
       ...(l.maxToolCalls !== undefined ? { maxToolCalls: l.maxToolCalls } : {}),
+      ...(l.wikiCoords !== undefined ? { wikiCoords: l.wikiCoords } : {}),
     };
     if (hasEntries) lane.entries = validateEntries(lane, l.entries);
     lanes.push(lane);
@@ -442,6 +451,9 @@ export function fillEntries(lane: FleetLane, entries: RosterSpec[], stamp: strin
       : {}),
     ...((e.maxToolCalls ?? lane.maxToolCalls) !== undefined
       ? { maxToolCalls: (e.maxToolCalls ?? lane.maxToolCalls)! }
+      : {}),
+    ...((e.wikiCoords ?? lane.wikiCoords) !== undefined
+      ? { wikiCoords: (e.wikiCoords ?? lane.wikiCoords)! }
       : {}),
     runId:
       e.runId ??
