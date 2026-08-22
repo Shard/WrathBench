@@ -83,14 +83,16 @@ namespace WrathBench
         _bindAddress = sConfigMgr->GetOption<std::string>("WrathBench.BindAddress", "0.0.0.0");
         _port = static_cast<uint16_t>(sConfigMgr->GetOption<uint32>("WrathBench.Port", 8086));
         _threads = std::max<unsigned>(1, sConfigMgr->GetOption<uint32>("WrathBench.Threads", 2));
-        _account = sConfigMgr->GetOption<std::string>("WrathBench.Account", "RUNNER");
+        std::string account = sConfigMgr->GetOption<std::string>("WrathBench.Account", "RUNNER");
         _auditDir = sConfigMgr->GetOption<std::string>("WrathBench.AuditDir", "/azerothcore/env/dist/logs/wrathbench");
 
         // Account allowlist: the accounts this module serves at all. Comma
         // separated; defaults to the single default account, so an unset
-        // option behaves as before.
-        _accounts.clear();
-        std::string accounts = sConfigMgr->GetOption<std::string>("WrathBench.Accounts", _account);
+        // option behaves as before. Built into a local first: Configure()
+        // re-runs on `.reload config` while HTTP threads read the list, so
+        // the published fields are only ever touched under _accountMutex.
+        std::vector<std::string> parsed;
+        std::string accounts = sConfigMgr->GetOption<std::string>("WrathBench.Accounts", account);
         for (size_t start = 0; start <= accounts.size();)
         {
             size_t end = accounts.find(',', start);
@@ -101,19 +103,32 @@ namespace WrathBench
             while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
             while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
             if (!name.empty())
-                _accounts.push_back(name);
+                parsed.push_back(name);
             start = end + 1;
         }
-        if (_accounts.empty())
-            _accounts.push_back(_account);
+        if (parsed.empty())
+            parsed.push_back(account);
+
+        {
+            std::lock_guard<std::mutex> lock(_accountMutex);
+            _account = std::move(account);
+            _accounts = std::move(parsed);
+        }
     }
 
     bool Manager::AccountPermitted(std::string const& account) const
     {
+        std::lock_guard<std::mutex> lock(_accountMutex);
         for (std::string const& allowed : _accounts)
             if (strcasecmp(account.c_str(), allowed.c_str()) == 0)
                 return true;
         return false;
+    }
+
+    std::string Manager::DefaultAccount() const
+    {
+        std::lock_guard<std::mutex> lock(_accountMutex);
+        return _account;
     }
 
     void Manager::Start()
@@ -215,12 +230,12 @@ namespace WrathBench
     }
 
     // ------------------------------------------------------------- HTTP
-    HttpReply Manager::HandleHttp(std::string const& method, std::string const& target, std::string const& body)
+    HttpReply Manager::HandleHttp(std::string const& method, std::string const& target, std::string const& body, bool loopbackPeer)
     {
         try
         {
             if (method == "GET" && target == "/health")
-                return HttpHealth();
+                return HttpHealth(loopbackPeer);
             if (method == "POST" && target == "/session")
                 return HttpCreateSession(body);
             if (method == "POST" && target == "/action")
@@ -252,8 +267,26 @@ namespace WrathBench
         return buf;
     }
 
-    HttpReply Manager::HttpHealth()
+    HttpReply Manager::HttpHealth(bool operatorView)
     {
+        // Non-loopback callers (runner, snippet sandbox) get liveness only:
+        // the global session count and the drop census describe module
+        // internals and other runs' sessions, which the observation contract
+        // never serves to a snippet. The counter fields stay present, zeroed,
+        // so the SDK's health schema keeps parsing; the census is read
+        // by operators via loopback curl inside the worldserver container.
+        if (!operatorView)
+        {
+            Json::Writer w;
+            w.Add("ok", true);
+            w.Add("module", "mod-wrathbench");
+            w.Add("worldStopped", World::IsStopped());
+            w.Add("sessions", 0);
+            w.Add("droppedPackets", 0);
+            w.Add("droppedPacketsLive", 0);
+            return {200, w.Str()};
+        }
+
         uint64_t sessions;
         uint64_t liveDrops = 0;
         {
@@ -299,7 +332,7 @@ namespace WrathBench
 
         auto s = std::make_shared<BenchSession>();
         s->token = token;
-        s->account = req.GetString("account", _account);
+        s->account = req.GetString("account", DefaultAccount());
         // Same allowlist as /character-delete: the module serves only its
         // configured bench accounts, on every surface.
         if (!AccountPermitted(s->account))
@@ -492,7 +525,7 @@ namespace WrathBench
         if (FindByToken(token))
             return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
 
-        std::string account = req.GetString("account", _account);
+        std::string account = req.GetString("account", DefaultAccount());
 
         // Minimal ownership gate for the current per-run account scheme
         // (FOLLOW-UPS 14; per-character credentials are the real Phase-1 fix,
@@ -541,7 +574,7 @@ namespace WrathBench
 
         auto s = std::make_shared<BenchSession>();
         s->token = token;
-        s->account = req.GetString("account", _account);
+        s->account = req.GetString("account", DefaultAccount());
         if (!AccountPermitted(s->account))
             return {403, Json::Writer().Add("ok", false).Add("error", "account_not_permitted").Str()};
         s->listMode = true;
@@ -562,9 +595,9 @@ namespace WrathBench
     // ---------------------------------------------------- world-thread work
     void Manager::DoCreateSession(std::shared_ptr<BenchSession> s, std::shared_ptr<std::promise<HttpReply>> ack)
     {
-        auto fail = [&](std::string const& err) {
+        auto fail = [&](std::string const& err, int status = 400) {
             if (!s->ackFired.exchange(true))
-                ack->set_value({400, Json::Writer().Add("ok", false).Add("error", err).Add("token", s->token).Str()});
+                ack->set_value({status, Json::Writer().Add("ok", false).Add("error", err).Add("token", s->token).Str()});
         };
 
         uint32 accountId = AccountMgr::GetId(s->account);
@@ -572,8 +605,29 @@ namespace WrathBench
             return fail("unknown_account");
         s->accountId = accountId;
 
-        // One session per account. The core's AddSession_ would otherwise kick and
-        // delete the existing session, leaving us with a dangling WorldSession*.
+        // One bench session per account, decided here on the world thread where
+        // creates are serialized. The HTTP-side scans (token_in_use, the
+        // /character-delete ownership gate) are only fast-path pre-filters:
+        // two requests for the same account arriving within one world tick
+        // both pass them, because a racing session only lands in _byToken
+        // below, and the core-side FindSession check further down cannot see
+        // it either (AddSession only queues; _sessions is drained in
+        // UpdateSessions, which runs before our task drain). Without this
+        // check a /character-delete racing a /session create could delete the
+        // character out from under the episode being created, and the core's
+        // AddSession_ would kick-and-delete one of the two WorldSessions
+        // while we still hold the pointer.
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [otherToken, other] : _byToken)
+                if (!other->tearingDown.load() && otherToken != s->token && other->accountId == accountId)
+                    return s->deleteMode ? fail("account_owned_by_other_token", 409)
+                                         : fail("account_in_use");
+        }
+
+        // One session per account, against the core's map too. AddSession_ would
+        // otherwise kick and delete the existing session, leaving us with a
+        // dangling WorldSession*.
         if (sWorldSessionMgr->FindSession(accountId))
             return fail("account_in_use");
 

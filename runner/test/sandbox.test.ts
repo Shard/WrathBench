@@ -190,6 +190,28 @@ describe("sandbox evaluation", () => {
     expect(res.error).toContain("not permitted");
   });
 
+  test("the child env is a minimal allowlist: host credentials never reach a snippet", async () => {
+    // A canary secret in the runner's own env, plus a real provider key name.
+    // Neither must be visible to a snippet dumping process.env — the model
+    // authors snippets and its exfil channel is the result stream itself.
+    process.env["WB_CANARY_SECRET"] = "canary-do-not-leak-42";
+    process.env["OPENROUTER_KEY"] = "sk-or-must-not-leak";
+    try {
+      const host = makeHost();
+      const res = await host.evalSnippet("JSON.stringify(process.env)");
+      // Positive control: the snippet ran and the allowlisted var IS present,
+      // so absence of the secrets means the allowlist works, not that we threw.
+      expect(res.ok).toBe(true);
+      expect(res.value).toContain("WRATHBENCH_TOKEN");
+      expect(res.value).not.toContain("canary-do-not-leak-42");
+      expect(res.value).not.toContain("sk-or-must-not-leak");
+      expect(res.value).not.toContain("OPENROUTER_KEY");
+    } finally {
+      delete process.env["WB_CANARY_SECRET"];
+      delete process.env["OPENROUTER_KEY"];
+    }
+  });
+
   test("sdk and state are ambient without a connection", async () => {
     const host = makeHost();
     const res = await host.evalSnippet("[typeof sdk, typeof state, typeof events, state.self.name]");

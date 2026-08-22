@@ -393,6 +393,20 @@ priority. Items graduate out of this file into commits; the dev loop
       coordinates are the contract-clean equivalent. Transport (boat/tram/
       zeppelin) semantics stay unknown until (1) and (2) land.
 
+19. **Unguessable session tokens — pre-public/MCP blocker** (fan-out review
+    2026-08; accepted-risk statement in docs/CONTRACTS.md). `POST /action`
+    and `DELETE /session` authenticate by bearer token alone, and the runner
+    defaults tokens to the run id — a second-granularity timestamp — so a
+    snippet in one run can enumerate and drive/tear down a concurrent run
+    through the one host its egress allowlist permits (the module).
+    Accepted while every lane is operator-launched on the private compose
+    network. Before any public or MCP-exposed deployment, or before trusting
+    any adversarial multi-run result: issue a random secret at session
+    create, return it only to the creator, require it on every subsequent
+    token-bearing call (`/action`, `DELETE /session`, `/events`). Module and
+    runner change together, backward compat off — they ship from the same
+    tree. Related but distinct from item 10 (per-character credentials).
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed

@@ -162,7 +162,7 @@ namespace WrathBench
         bool OnPacketSend(WorldSession* ws, WorldPacket const& packet);
 
         // IHttpSink (io_context threads).
-        HttpReply HandleHttp(std::string const& method, std::string const& target, std::string const& body) override;
+        HttpReply HandleHttp(std::string const& method, std::string const& target, std::string const& body, bool loopbackPeer) override;
         void OnWsOpen(std::string const& token, std::shared_ptr<IWsConn> conn) override;
         void OnWsClose(std::string const& token, IWsConn* conn) override;
 
@@ -179,7 +179,11 @@ namespace WrathBench
         HttpReply HttpDeleteSession(std::string const& body);
         HttpReply HttpCharacterDelete(std::string const& body);
         HttpReply HttpCharacterList(std::string const& body);
-        HttpReply HttpHealth();
+        // operatorView (loopback caller): include the session count and the
+        // packet-drop census. Network callers (runner, snippet sandbox) get a
+        // liveness-only view — the census is module-internal state no client
+        // could observe (docs/CONTRACTS.md).
+        HttpReply HttpHealth(bool operatorView);
 
         void DoCreateSession(std::shared_ptr<BenchSession> s, std::shared_ptr<std::promise<HttpReply>> ack);
         void DoSay(std::string token, std::string text, std::shared_ptr<std::promise<HttpReply>> ack);
@@ -237,15 +241,27 @@ namespace WrathBench
         std::shared_ptr<BenchSession> FindByWs(WorldSession* ws);
 
         // Is this account on the WrathBench.Accounts allowlist
-        // (case-insensitive)? io/world threads; the list is set once in
-        // Configure and read-only afterwards.
+        // (case-insensitive)? io/world threads. Guarded by _accountMutex:
+        // Configure() rewrites the list on every config load, and the
+        // worldserver `.reload config` command re-fires that while HTTP
+        // worker threads are serving requests.
         bool AccountPermitted(std::string const& account) const;
+
+        // The configured default account (WrathBench.Account), for requests
+        // that omit "account". io threads; guarded by _accountMutex (same
+        // reload race as the allowlist).
+        std::string DefaultAccount() const;
 
         // config
         bool _enabled{false};
         std::string _bindAddress{"0.0.0.0"};
         uint16_t _port{8086};
         unsigned _threads{2};
+        // _account/_accounts are written by Configure() (world thread, re-run
+        // on `.reload config`) and read from HTTP worker threads — always
+        // through _accountMutex. The other config fields are only consumed at
+        // Start() and are not re-applied on reload.
+        mutable std::mutex _accountMutex;
         std::string _account{"RUNNER"};
         std::vector<std::string> _accounts; // allowlist; defaults to {_account}
         std::string _auditDir;

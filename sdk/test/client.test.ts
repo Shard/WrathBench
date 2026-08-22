@@ -186,6 +186,42 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("a moveTo left pending across a recreate cannot resolve against the new session's colliding moveId", async () => {
+    // The forward twin of the stale-buffer test above: the epoch guard must be
+    // an *exact* match, not a floor. A move still pending when its session is
+    // torn down and recreated has no verdict — the new session's first move
+    // also carries moveId 1 (the module's generator is per-session), and it
+    // must not settle the old waiter with the wrong session's position.
+    const stub = startStub({
+      onConnect: () => frames(loginSequence),
+      routes: { action: () => json({ ok: true, action: "move_to", token: "stub", moveId: 1 }, 200) },
+    });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    // A move that never gets its result before the session goes away.
+    const stale = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 900 });
+    await untilAction(stub, "move_to");
+
+    // Recreate the session; seq and moveId both restart.
+    await client.logout();
+    await client.createSession({ character: "Fenwick" });
+    for (const f of frames(loginSequence)) stub.push(f);
+
+    // The NEW session's result for ITS moveId 1 arrives while the old waiter
+    // is still pending. The old moveTo must time out, not claim this verdict.
+    stub.push(JSON.stringify(moveResult("arrived", 1, 5)));
+    await expect(stale).rejects.toBeInstanceOf(EventTimeoutError);
+
+    // The new session's own moveTo still sees that (buffered) result.
+    const fresh = await client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    expect(fresh.status).toBe("arrived");
+    expect(fresh.seq).toBe(5);
+
+    client.close();
+    await stub.stop();
+  });
+
   test("a request the module refuses still throws; a missing result times out", async () => {
     const refusing = startStub({
       routes: { action: () => json({ ok: false, error: "missing_position" }, 400) },

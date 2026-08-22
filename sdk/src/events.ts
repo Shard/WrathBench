@@ -90,10 +90,22 @@ export interface WaitForOptions {
   /** Only consider events with `seq >= sinceSeq`. Default: consider all. */
   sinceSeq?: number;
   /**
-   * Only consider events ingested at or after this session epoch (see
+   * Only consider events ingested at *exactly* this session epoch (see
    * `EventStream.epoch`). The guard for per-session correlation ids (`moveId`,
    * `seq`) that restart when the module recreates the session: a stale buffered
-   * event from a previous session can carry the same id as a fresh request.
+   * event from a previous session can carry the same id as a fresh request —
+   * and, in the other direction, a *later* session's event can carry the same
+   * id as a request left pending across a teardown/recreate. An exact match
+   * excludes both; the pending waiter then times out, which is the honest
+   * answer (the session that issued the request never produced the event).
+   */
+  epoch?: number;
+  /**
+   * Only consider events ingested at or after this session epoch. A one-sided
+   * floor: it excludes earlier sessions' events but still admits *later*
+   * sessions', so it is the wrong guard for per-session correlation ids — use
+   * `epoch` for those. Kept for waits that mean "anything from this boundary
+   * on", where later epochs are legitimately acceptable.
    */
   sinceEpoch?: number;
   /** Search the retained buffer before waiting. Default true. */
@@ -207,8 +219,9 @@ export class EventStream implements AsyncIterable<StreamEvent> {
    * The current session epoch. Advances whenever the stream detects a session
    * boundary (the module's `seq` restarting) and whenever `advanceEpoch()`
    * marks one explicitly. Capture it before issuing a request and pass it as
-   * `waitFor`'s `sinceEpoch` to keep a per-session correlation id (`moveId`)
-   * from matching a stale buffered event of an earlier session.
+   * `waitFor`'s `epoch` to keep a per-session correlation id (`moveId`) from
+   * matching an event of any *other* session — a stale buffered result from an
+   * earlier one, or a colliding fresh result from a later one.
    */
   get epoch(): number {
     return this.epochCounter;
@@ -421,11 +434,12 @@ export class EventStream implements AsyncIterable<StreamEvent> {
    * the login events that arrived during the call.
    */
   waitFor(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
-    const { timeout = 10_000, sinceSeq, sinceEpoch, includeBuffered = true, description, signal } = options;
+    const { timeout = 10_000, sinceSeq, epoch, sinceEpoch, includeBuffered = true, description, signal } = options;
     // A live event is always tested at its own epoch: `emit` runs synchronously
     // inside `ingest`, after any epoch bump, so `epochCounter` is exact here.
     const matches = (e: StreamEvent): boolean =>
       (sinceSeq === undefined || e.seq >= sinceSeq) &&
+      (epoch === undefined || this.epochCounter === epoch) &&
       (sinceEpoch === undefined || this.epochCounter >= sinceEpoch) &&
       predicate(e);
 
@@ -433,6 +447,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
       // Buffered events were ingested at earlier epochs; test the recorded one.
       const idx = this.buffer.findIndex(
         (e, i) =>
+          (epoch === undefined || (this.bufferEpochs[i] ?? this.epochCounter) === epoch) &&
           (sinceEpoch === undefined || (this.bufferEpochs[i] ?? this.epochCounter) >= sinceEpoch) &&
           (sinceSeq === undefined || e.seq >= sinceSeq) &&
           predicate(e),

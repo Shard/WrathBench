@@ -987,7 +987,11 @@ export class WrathClient {
     // result from the previous session (observed in night-opus-1: 8s-timeout
     // probes "resolving" in 59ms against pre-relog payloads). The epoch,
     // advanced on every session boundary, is what scopes the match to the
-    // session that issued this ack.
+    // session that issued this ack — and the match is *exact*, not a floor:
+    // a floor would still let a waiter left pending across a teardown/recreate
+    // resolve against a LATER session's colliding moveId (the module's
+    // generator restarts at 1 per session). A move whose session is gone has
+    // no verdict; timing out is the honest outcome.
     const event = await this.events.waitFor(
       (e) =>
         isEvent(e, "WB_MOVE_RESULT") &&
@@ -995,7 +999,7 @@ export class WrathClient {
         (e.data as MoveResultData).moveId === ack.moveId,
       {
         timeout: options.timeout ?? 90_000,
-        sinceEpoch: epoch,
+        epoch,
         description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
       },
     );

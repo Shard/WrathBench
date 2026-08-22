@@ -33,7 +33,17 @@ Two error channels, deliberately separated (docs/CONTRACTS.md):
 
 Module and world status. No auth, no body.
 
-Response `200`:
+Two views (2026-08). Callers on the compose network — the runner and, through
+it, the snippet sandbox — get liveness only: `ok`, `module`, `worldStopped`,
+with `sessions` / `droppedPackets` / `droppedPacketsLive` present but zeroed
+(kept so the SDK response schema parses) and no `droppedByOpcode`. The global
+session count and the drop census describe module internals and other runs'
+sessions, which the observation contract never serves to a snippet. The full
+view below is served only to loopback callers — an operator inside the
+worldserver container, e.g.
+`docker compose -f infra/compose.yml exec worldserver curl -s localhost:8086/health`.
+
+Operator (loopback) response `200`:
 ```json
 {
   "ok": true,
@@ -293,8 +303,13 @@ Request:
 stream; `account` optional as in `POST /session`, but must be on the module's
 configured account allowlist (`WrathBench.Accounts`, defaulting to the single
 `WrathBench.Account`) — deletes are refused for any other account, and refused
-while a different token holds a live bench session on it. `POST /session` and
-`POST /characters` apply the same allowlist. Minimal ownership gate for the
+while a different token holds a live bench session on it. The ownership check
+is decided on the world thread where session creates are serialized (the HTTP
+thread's scan is only a fast-path pre-filter), so a delete racing a
+`POST /session` for the same account within one world tick loses: one of the
+two gets `409 account_owned_by_other_token` (delete mode) or
+`400 account_in_use` (create mode) instead of both proceeding. `POST /session`
+and `POST /characters` apply the same allowlist. Minimal ownership gate for the
 per-run account scheme; per-character credentials are the Phase-1 fix.)
 
 Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
