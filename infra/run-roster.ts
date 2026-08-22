@@ -1271,10 +1271,15 @@ async function main(): Promise<void> {
   // Persisted across process restarts (see the defer sidecar section): without
   // this, a supervisor restart or a fleet.json edit would hand a spec sitting
   // on a 6h backoff a `fresh` plan and start the hammering over at rung 1.
-  const deferred = args.resumeRoster ? loadDefers(logPath) : new Map<string, DeferEntry>();
+  // Loaded unconditionally, not just under --resume-roster: the sidecar is
+  // scoped by the --log path (which carries the date stamp), so it can only
+  // exist if a previous process for THIS roster and date wrote it — and the
+  // fleet's respawn path decides --resume-roster from the jsonl's existence,
+  // which is exactly the case we must not miss.
+  const deferred = loadDefers(logPath);
   if (deferred.size > 0) {
     say(
-      `resume-roster: reloaded defer state for ${deferred.size} spec(s) from ${deferSidecarPath(logPath)}` +
+      `reloaded defer state for ${deferred.size} spec(s) from ${deferSidecarPath(logPath)}` +
         ` (${[...deferred.values()].filter((e) => e.tainted === true).length} tainted)`,
     );
   }

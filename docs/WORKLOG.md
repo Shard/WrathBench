@@ -29,7 +29,7 @@ scheduler, both fixed together because they share the cycle bookkeeping.
   backoff came back as a fresh launch at rung 1 — the escalation could never
   actually be reached in a fleet that gets edited. State now persists to
   `<--log>.defer.json` (tmp+rename, keyed on the stable cycle-1 spec id, *not* on
-  `DeferEntry.runId`, which may be a `-cN`) and reloads under `--resume-roster`.
+  `DeferEntry.runId`, which may be a `-cN`) and reloads on start (scoped by the `--log` path, so it can only belong to this roster and date).
   `run-fleet.sh --status` reads the same sidecar and prints tainted and cooling
   specs per lane.
 - **Resumed lanes idled forever.** Under `--resume-roster --loop`, an entry whose
