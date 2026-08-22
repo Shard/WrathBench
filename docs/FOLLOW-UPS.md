@@ -87,6 +87,25 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     the position-feed type in runner/viewer. Anything that makes the renderer
     live-only regresses ADR-0019.
 
+23. **Helm chart for the fleet** (2026-08-22). ADR-0020 made the supervisor a
+    compose service deliberately shaped as the chart's rehearsal: Deployment
+    (the `fleet` service, `restart: unless-stopped` → a restartPolicy),
+    ConfigMap (`infra/fleet.json`, mounted read-only and hot-reloaded — a
+    ConfigMap remount is the same edit-the-file steering), PVC (`data/`, which
+    already holds every piece of state the supervisor owns: run dirs,
+    `fleet-state.json`, lane logs, defer sidecars). Two things do not port as
+    they stand and are the actual work: the repo bind mount (the chart wants the
+    harness baked into the image, which also means the `git describe` stamp has
+    to come from a build arg rather than a mounted `.git`), and `.env` (a Secret,
+    mounted at the same path so the "never via argv" property survives).
+
+24. **`accountHeldBy` rescans every run directory** (2026-08-22). It
+    `readdirSync`s `data/runs/` and reads a `meta.json` per entry on every
+    episode launch and every `--status`. Under a forever-running supervisor with
+    a fixed epoch that set only grows. Not a problem yet; noted so it is not a
+    mystery slowdown in three weeks. An index keyed on account, or a scan capped
+    to recently-modified directories, is the fix.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed for a

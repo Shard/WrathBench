@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { episodeArgv, forCycle, resolve, type RosterSpec } from "./run-roster";
+import { episodeArgv, forCycle, inContainer, resolve, type RosterSpec } from "./run-roster";
 
 /**
  * The roster is config, and the config's whole job is to become an argv for
@@ -81,6 +81,25 @@ describe("episodeArgv", () => {
       "20260101",
     );
     expect(specs.map((s) => s.runId)).toEqual(["roster-opus-20260101", "roster-opus-low-20260101"]);
+  });
+
+  // ADR-0020: the fleet supervisor runs inside the runner image, where there is
+  // no docker CLI to exec with. Only the launcher head changes; every flag after
+  // it is identical, because run-episode.sh passes them through verbatim.
+  test("in the container the episode is a direct bun runner/src/run.ts child", () => {
+    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
+    const host = episodeArgv(s!, false);
+    const inside = episodeArgv(s!, false, { container: true });
+    expect(host[0]).toMatch(/run-episode\.sh$/);
+    expect(inside[0]).toBe("bun");
+    expect(inside[1]).toMatch(/runner\/src\/run\.ts$/);
+    expect(inside.slice(2)).toEqual(host.slice(1));
+  });
+
+  test("inContainer reads the explicit flag, never a docker sniff", () => {
+    expect(inContainer({})).toBe(false);
+    expect(inContainer({ WRATHBENCH_IN_CONTAINER: "0" })).toBe(false);
+    expect(inContainer({ WRATHBENCH_IN_CONTAINER: "1" })).toBe(true);
   });
 
   test("a resume passes only the run id — identity comes from meta.json", () => {

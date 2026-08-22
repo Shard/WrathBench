@@ -2,9 +2,17 @@
 /**
  * Fleet orchestrator: one run-roster process per enabled lane in fleet.json.
  *
- *   ./infra/run-fleet.sh infra/fleet.json --until 18:00
+ *   docker compose -f infra/compose.yml up -d --no-deps fleet   (the normal shape)
+ *   ./infra/run-fleet.sh infra/fleet.json --until 18:00         (ad-hoc, host)
  *   ./infra/run-fleet.sh infra/fleet.json --dry-run
- *   ./infra/run-fleet.sh --status
+ *   ./infra/run-fleet.sh --status                               (host, read-only)
+ *
+ * The supervisor's home is the `fleet` compose service — same image and mounts
+ * as `runner`, `restart: unless-stopped`, no deadline (ADR-0020). It therefore
+ * cannot assume the reader of `--status` shares its PID namespace: liveness is
+ * published as a heartbeat in fleet-state.json and per-lane `alive` flags, not
+ * inferred with kill(pid, 0). Paths in that state file are repo-relative for
+ * the same reason.
  *
  * The fleet is the config file. Each lane is one sequential episode stream on
  * one game account; parallelism is exactly the set of enabled lanes. The
@@ -39,13 +47,16 @@
 import { Database } from "bun:sqlite";
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 
 // ------------------------------------------------------------------ types
@@ -68,6 +79,10 @@ export interface FleetConfig {
 }
 
 const TICK_MS = 60_000;
+/** A heartbeat older than this means the supervisor is gone, not merely quiet. */
+const HEARTBEAT_STALE_MS = 3 * TICK_MS;
+/** Set by the `fleet` compose service; see ADR-0020 and run-roster's inContainer(). */
+const CONTAINER = process.env["WRATHBENCH_IN_CONTAINER"] === "1";
 const REPO_ROOT = dirname(import.meta.dir);
 const RUNS_DIR = join(REPO_ROOT, "data", "runs");
 const ROSTER_SH = join(REPO_ROOT, "infra", "run-roster.sh");
@@ -302,13 +317,14 @@ export function laneArgv(
   return argv;
 }
 
-/** A loop lane with no stop condition would run forever; refuse up front. */
-export function laneUntilOrFail(lane: FleetLane, cliUntil: string | undefined): string | undefined {
-  const until = cliUntil ?? lane.untilDefault;
-  if (lane.loop && until === undefined) {
-    fail(`lane ${lane.name}: loop needs a stop condition — pass --until or set untilDefault`);
-  }
-  return until;
+/**
+ * The stop condition for one lane, or none. A loop lane without one used to be
+ * refused; under the fleet service that is the normal case — the supervisor is
+ * up while the machine is up and lanes are steered by editing fleet.json, not
+ * by a wall clock. `--until` and `untilDefault` remain as optional caps.
+ */
+export function laneUntil(lane: FleetLane, cliUntil: string | undefined): string | undefined {
+  return cliUntil ?? lane.untilDefault;
 }
 
 // ------------------------------------------------------------------ diffing
@@ -350,6 +366,23 @@ export function diffLanes(lanes: FleetLane[], sets: LaneSets): LaneActions {
     if ((lane === undefined || !lane.enabled) && !sets.draining.has(name)) actions.drain.push(name);
   }
   return actions;
+}
+
+/**
+ * Should the tick loop end? Only when a deadline was asked for.
+ *
+ * "Nothing running and nothing to start" is a terminal state for a one-shot
+ * host run (`--until 18:00`, lanes finish, exit). It is NOT one for the fleet
+ * SERVICE: the config is hot, so a lane can be enabled on any tick, and
+ * `restart: unless-stopped` restarts on exit 0 as readily as on a crash. A
+ * supervisor that exited when the operator parked every lane — which is exactly
+ * what docs/OPERATIONS.md tells them to do before a deploy window — would be
+ * restarted every 60s, taking a new epoch stamp each time. So with no deadline
+ * the supervisor idles instead, which is also the honest reading of a control
+ * plane that is only ever as finished as its config says.
+ */
+export function fleetComplete(opts: { running: number; toStart: number; hasDeadline: boolean }): boolean {
+  return opts.hasDeadline && opts.running === 0 && opts.toStart === 0;
 }
 
 // ------------------------------------------------------------------ output
@@ -422,6 +455,10 @@ function pidAlive(pid: number): boolean {
 interface FleetState {
   fleetPid: number;
   startedAt: number;
+  /** Refreshed every tick. The only honest liveness signal across a namespace. */
+  heartbeatAt?: number;
+  /** True when the supervisor is the `fleet` compose service, not a host process. */
+  containerized?: boolean;
   stamp: string;
   fleetConfig: string;
   lanes: Record<
@@ -429,20 +466,50 @@ interface FleetState {
     {
       pid: number;
       account: string;
+      /** Repo-relative since ADR-0020; older states carry absolute host paths. */
       rosterPath: string;
       jsonl: string;
       stdoutLog: string;
       spawnedAt: number;
       exitCode: number | null;
       draining: boolean;
+      /** The supervisor's own view of the lane process; see resolveStatePath. */
+      alive?: boolean;
     }
   >;
 }
 
+/**
+ * Resolve a path recorded in fleet-state.json against THIS side of the mount.
+ *
+ * The supervisor writes repo-relative paths so `--status` works from the host
+ * while the state was written in the container (where REPO_ROOT is
+ * /wrathbench). A state written by an older, host-side supervisor carries
+ * absolute host paths: honour those when they exist, otherwise fall back to the
+ * path recomputed locally from the lane name and stamp. Pure, so the mapping is
+ * testable without a live fleet.
+ */
+export function resolveStatePath(
+  stored: string | undefined,
+  fallback: string,
+  exists: (p: string) => boolean = existsSync,
+  root: string = REPO_ROOT,
+): string {
+  if (stored !== undefined && stored.length > 0) {
+    const p = isAbsolute(stored) ? stored : join(root, stored);
+    if (exists(p)) return p;
+  }
+  return fallback;
+}
+
+const START_AT = Date.now();
+
 function writeState(configPath: string, stampToday: string, procs: Map<string, LaneProc>, draining: Set<string>): void {
   const state: FleetState = {
     fleetPid: process.pid,
-    startedAt: Date.now(),
+    startedAt: START_AT,
+    heartbeatAt: Date.now(),
+    containerized: CONTAINER,
     stamp: stampToday,
     fleetConfig: configPath,
     lanes: {},
@@ -451,12 +518,13 @@ function writeState(configPath: string, stampToday: string, procs: Map<string, L
     state.lanes[name] = {
       pid: p.pid,
       account: p.lane.account,
-      rosterPath: laneRosterPath(name, stampToday),
-      jsonl: laneJsonlPath(name, stampToday),
-      stdoutLog: laneStdoutPath(name, stampToday),
+      rosterPath: relative(REPO_ROOT, laneRosterPath(name, stampToday)),
+      jsonl: relative(REPO_ROOT, laneJsonlPath(name, stampToday)),
+      stdoutLog: relative(REPO_ROOT, laneStdoutPath(name, stampToday)),
       spawnedAt: p.spawnedAt,
       exitCode: p.exitCode,
       draining: draining.has(name),
+      alive: !p.exited,
     };
   }
   mkdirSync(RUNS_DIR, { recursive: true });
@@ -551,16 +619,38 @@ function printStatus(configPath: string): void {
       state = undefined;
     }
   }
-  const fleetUp = state !== undefined && pidAlive(state.fleetPid);
+  // Liveness, honestly, from either side of a container boundary: a heartbeat
+  // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
+  // in another PID namespace — it either says "no such process" for a healthy
+  // fleet or, worse, hits an unrelated host process with the same number. It is
+  // still the right check for a state file written by a host supervisor, which
+  // has no heartbeat field at all.
+  const hb = state?.heartbeatAt;
+  const hbAgeMs = hb === undefined ? undefined : Date.now() - hb;
+  const fleetUp =
+    state === undefined ? false : hbAgeMs !== undefined ? hbAgeMs < HEARTBEAT_STALE_MS : pidAlive(state.fleetPid);
+  const where = state?.containerized === true ? "compose service `fleet`" : "host process";
   console.log(
     `fleet ${configPath}` +
       (state === undefined
         ? " — no fleet-state.json: the fleet has never run here"
-        : ` — supervisor pid ${state.fleetPid} ${fleetUp ? "ALIVE" : "not running"} (state from ${new Date(state.startedAt).toLocaleString()})`),
+        : ` — supervisor pid ${state.fleetPid} (${where}) ${fleetUp ? "ALIVE" : "NOT RUNNING"}` +
+          (hbAgeMs !== undefined
+            ? `, heartbeat ${Math.round(hbAgeMs / 1000)}s ago`
+            : ", no heartbeat in state (pre-ADR-0020 supervisor)") +
+          `, up since ${new Date(state.startedAt).toLocaleString()}, stamp ${state.stamp}`),
   );
+  if (state?.containerized === true) {
+    console.log("  logs: docker compose -f infra/compose.yml logs -f fleet");
+  }
   for (const lane of config.lanes) {
     const ls = state?.lanes[lane.name];
-    const alive = ls !== undefined && pidAlive(ls.pid);
+    // The supervisor publishes each lane's liveness; only fall back to a pid
+    // probe for a pre-heartbeat (host) state, where the pid is ours to check.
+    const alive =
+      ls === undefined ? false : hbAgeMs !== undefined ? fleetUp && ls.alive === true : pidAlive(ls.pid);
+    const stdoutLog = ls === undefined ? "" : resolveStatePath(ls.stdoutLog, laneStdoutPath(lane.name, state!.stamp));
+    const jsonl = ls === undefined ? "" : resolveStatePath(ls.jsonl, laneJsonlPath(lane.name, state!.stamp));
     const head =
       `  ${lane.name.padEnd(16)} enabled=${lane.enabled ? "true " : "false"} account=${lane.account.padEnd(9)} ` +
       (ls === undefined
@@ -568,7 +658,7 @@ function printStatus(configPath: string): void {
         : `pid ${ls.pid} ${alive ? "ALIVE" : ls.exitCode !== null ? `exited ${ls.exitCode}` : "dead"}${ls.draining ? " (draining)" : ""}`);
     console.log(head);
     if (ls !== undefined) {
-      const runId = lastLaunchedRunId(ls.stdoutLog);
+      const runId = lastLaunchedRunId(stdoutLog);
       if (runId !== undefined) {
         const prog = runProgress(runId);
         console.log(
@@ -576,9 +666,9 @@ function printStatus(configPath: string): void {
             (prog !== undefined ? ` — level ${prog.level}, ${prog.xp} xp` : " — no state rows yet"),
         );
       }
-      const tail = lastLine(ls.stdoutLog);
+      const tail = lastLine(stdoutLog);
       if (tail !== undefined) console.log(`                   last: ${tail}`);
-      const defers = laneDefers(ls.jsonl);
+      const defers = laneDefers(jsonl);
       const tainted = defers.filter((d) => d.entry.tainted === true);
       const cooling = defers.filter((d) => d.entry.tainted !== true);
       if (tainted.length > 0) {
@@ -600,11 +690,17 @@ function printStatus(configPath: string): void {
       console.log(
         `                   account ${lane.account} currently held by run ${holder}` +
           (prog !== undefined ? ` (level ${prog.level}, ${prog.xp} xp)` : "") +
-          (ls !== undefined && pidAlive(ls.pid) ? "" : " — not fleet-managed"),
+          (alive ? "" : " — not fleet-managed"),
       );
     }
   }
-  const foreign = foreignRosters(new Set(Object.values(state?.lanes ?? {}).map((l) => l.pid)));
+  // A /proc scan only means anything when the supervisor shares this namespace.
+  // Against a containerized fleet every lane would show up here as "hand
+  // started" (host pids, container pids in the state file) — pure noise.
+  const foreign =
+    state?.containerized === true
+      ? []
+      : foreignRosters(new Set(Object.values(state?.lanes ?? {}).map((l) => l.pid)));
   if (foreign.length > 0) {
     console.log("  not fleet-managed (hand-started run-roster processes):");
     for (const f of foreign) console.log(`    pid ${f.pid}: ${f.argv}`);
@@ -621,7 +717,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       continue;
     }
     const entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
-    const until = laneUntilOrFail(lane, cliUntil);
+    const until = laneUntil(lane, cliUntil);
     console.log(`\nlane ${lane.name}: account ${lane.account}, ${entries.length} entr(ies), loop=${lane.loop}, until=${until ?? "none"}`);
     for (const e of entries) {
       console.log(
@@ -637,7 +733,9 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   console.log(
     `\n${enabled.length} lane(s) would run in parallel (${enabled.map((l) => `${l.name}=${l.account}`).join(", ")}).` +
       `\nsupervision: re-read fleet.json every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
-      `\nboundary; enabled:true/new lanes spawn; a malformed edit keeps the last good config.`,
+      `\nboundary; enabled:true/new lanes spawn; a malformed edit keeps the last good config.` +
+      `\nstamp ${stampToday} is fixed for the life of the supervisor (ADR-0020), not rolled at midnight.` +
+      `\nrunning as: ${CONTAINER ? "the `fleet` compose service (episodes spawn in-process)" : "a host process (episodes go through docker compose exec)"}.`,
   );
 }
 
@@ -674,7 +772,11 @@ function parseArgs(argv: string[]): {
             "  --until HH:MM   stop condition passed to every lane (overridden by nothing;",
             "                  a lane's untilDefault applies when this is absent)",
             "  --dry-run       print the lane plan; spawn nothing",
-            "  --status        read-only: per-lane process/run/progress report",
+            "  --status        read-only: per-lane process/run/progress report. Works from the",
+            "                  host against a containerized supervisor (heartbeat, not kill -0)",
+            "",
+            "The supervisor's normal home is the `fleet` compose service (ADR-0020):",
+            "  docker compose -f infra/compose.yml up -d --no-deps fleet",
           ].join("\n"),
         );
         process.exit(0);
@@ -700,13 +802,19 @@ async function main(): Promise<void> {
     printStatus(args.config);
     return;
   }
+  // The stamp is a supervisor EPOCH, not a date. It is taken once, here, and
+  // every run id, lane roster, lane log and defer sidecar hangs off it for the
+  // life of the process — which under `restart: unless-stopped` is "until the
+  // machine reboots". Rolling it at midnight would rename every lane's roster
+  // and jsonl underneath a running lane and hand --resume-roster/freeCycle a
+  // fresh namespace mid-flight; keeping it fixed leaves both semantics exactly
+  // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
   let config = parseFleet(JSON.parse(readFileSync(args.config, "utf8")));
   // Fail fast on anything that would fail at spawn time.
   for (const lane of config.lanes) {
     if (!lane.enabled) continue;
     loadLaneEntries(lane);
-    laneUntilOrFail(lane, args.until);
   }
 
   if (args.dryRun) {
@@ -718,12 +826,13 @@ async function main(): Promise<void> {
   const procs = new Map<string, LaneProc>();
   const sets: LaneSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
+  let wasIdle = false;
 
   const spawnLane = (lane: FleetLane): void => {
     let until: string | undefined;
     let entries: RosterSpec[];
     try {
-      until = laneUntilOrFail(lane, args.until);
+      until = laneUntil(lane, args.until);
       entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -739,8 +848,16 @@ async function main(): Promise<void> {
     const resumeRoster = existsSync(laneJsonlPath(lane.name, stampToday));
     const argv = laneArgv(lane, { stamp: stampToday, until: args.until, resumeRoster });
     const stdoutLog = laneStdoutPath(lane.name, stampToday);
-    const out = Bun.file(stdoutLog);
-    const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: out, stderr: out });
+    // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
+    // respawned lane used to overwrite the head of its own log and leave the
+    // dead process's tail behind it — which is exactly what `--status` reads.
+    // The shared offset an append fd gives both streams also keeps stdout and
+    // stderr from clobbering each other.
+    mkdirSync(dirname(stdoutLog), { recursive: true });
+    const fd = openSync(stdoutLog, "a");
+    const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
+    writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
+    closeSync(fd);
     const lp: LaneProc = { lane, proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
@@ -770,7 +887,11 @@ async function main(): Promise<void> {
   process.on("SIGINT", requestStop);
   process.on("SIGTERM", requestStop);
 
-  say(`fleet ${args.config}: ${config.lanes.filter((l) => l.enabled).length} enabled lane(s), log ${fleetLog}`);
+  say(
+    `fleet ${args.config}: ${config.lanes.filter((l) => l.enabled).length} enabled lane(s), log ${fleetLog}` +
+      `, stamp ${stampToday}${CONTAINER ? " (compose service `fleet`)" : ""}` +
+      `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer with fleet.json"}`,
+  );
   for (const lane of diffLanes(config.lanes, sets).start) spawnLane(lane);
   writeState(args.config, stampToday, procs, sets.draining);
 
@@ -834,9 +955,20 @@ async function main(): Promise<void> {
     }
 
     writeState(args.config, stampToday, procs, sets.draining);
-    if (sets.running.size === 0 && diffLanes(config.lanes, sets).start.length === 0) {
+    const toStart = diffLanes(config.lanes, sets).start.length;
+    if (fleetComplete({ running: sets.running.size, toStart, hasDeadline: args.until !== undefined })) {
       say("all lanes have exited and nothing is left to spawn — fleet complete");
       break;
+    }
+    const idle = sets.running.size === 0 && toStart === 0;
+    if (idle !== wasIdle) {
+      wasIdle = idle;
+      if (idle) {
+        say("no lanes running and none to spawn — idling; enable a lane in fleet.json (or stop the service)");
+        record({ lane: "-", event: "idle" });
+      } else {
+        record({ lane: "-", event: "unidle" });
+      }
     }
   }
   writeState(args.config, stampToday, procs, sets.draining);
