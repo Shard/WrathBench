@@ -7,10 +7,13 @@
     "lane spawns one. A malformed edit never kills running lanes: the fleet complains and",
     "keeps the last good config.",
     "",
-    "Lane policy: OpenCode Zen and OpenRouter lanes carry FREE models only, one stream",
-    "per provider (their free tiers are pooled per upstream provider — two streams just",
-    "starve each other and trip the same rate limits twice). claude models run ONLY via",
-    "the claude-subscription driver, never through an openai-driver lane.",
+    "Lane policy: OpenCode Zen and OpenRouter lanes carry FREE models only. One stream",
+    "per MODEL config: a model appears in at most one lane, so no single model pool is",
+    "ever hit concurrently. Several lanes may share a provider (they share that API",
+    "key's account-wide rate limits — the adapter's 429/backoff handling is what keeps",
+    "that polite; if a provider starts daily-capping, disable lanes rather than retry",
+    "harder). claude models run ONLY via the claude-subscription driver, never through",
+    "an openai-driver lane.",
     "",
     "Entries use the exact per-entry schema of roster JSONs (model, driver, effort,",
     "character, race, class, episodeMs, ...). account comes from the lane. A lane may",
@@ -19,12 +22,18 @@
     "hand-launched rosters.",
     "",
     "sub-opus is the burn switch: flip it to true when there is subscription budget to",
-    "burn, back to false to stop after the episode in flight."
+    "burn, back to false to stop after the episode in flight.",
+    "",
+    "Accounts RUNNER3-RUNNER6 exist in auth but enter AC_WRATH_BENCH_ACCOUNTS only when",
+    "the worldserver container is next recreated (compose.yml already lists them).",
+    "Until then the free-b/c/d lanes stay enabled:false — flipping one on earlier just",
+    "gets account_not_permitted from the module."
   ],
   "lanes": [
     {
       "name": "sub-sonnet",
-      "enabled": true,
+      "enabled": false,
+      "_why_disabled": "2026-08-22: hand-launched burn rosters hold SHAKEOUT/SHAKEOUT2 until 18:00; enable from the next session onward",
       "account": "SHAKEOUT",
       "loop": true,
       "untilDefault": "18:00",
@@ -45,22 +54,42 @@
       ]
     },
     {
-      "name": "free-openrouter",
+      "name": "free-or-a",
       "enabled": true,
       "account": "RUNNER",
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
         { "model": "z-ai/glm-5.2:free" },
-        { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
+        { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" }
+      ]
+    },
+    {
+      "name": "free-or-b",
+      "enabled": false,
+      "_why_disabled": "needs RUNNER3 in the module allowlist — flip on after the next worldserver recreate",
+      "account": "RUNNER3",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
         { "model": "google/gemma-4-31b-it:free" },
+        { "model": "openai/gpt-oss-20b:free" }
+      ]
+    },
+    {
+      "name": "free-or-c",
+      "enabled": false,
+      "_why_disabled": "needs RUNNER4 in the module allowlist — flip on after the next worldserver recreate",
+      "account": "RUNNER4",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
         { "model": "poolside/laguna-s-2.1:free" },
-        { "model": "openai/gpt-oss-20b:free" },
         { "model": "nvidia/nemotron-nano-9b-v2:free" }
       ]
     },
     {
-      "name": "free-opencode",
+      "name": "free-oc-a",
       "enabled": true,
       "account": "RUNNER2",
       "loop": true,
@@ -68,8 +97,18 @@
       "entries": [
         { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
+      ]
+    },
+    {
+      "name": "free-oc-b",
+      "enabled": false,
+      "_why_disabled": "needs RUNNER5 in the module allowlist — flip on after the next worldserver recreate",
+      "account": "RUNNER5",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
         { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
-        { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
       ]
     }

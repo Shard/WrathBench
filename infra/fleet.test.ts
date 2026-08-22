@@ -232,15 +232,23 @@ describe("the shipped fleet.json", () => {
     const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
     const byName = Object.fromEntries(config.lanes.map((l) => [l.name, l]));
-    expect(byName["sub-sonnet"]).toMatchObject({ enabled: true, account: "SHAKEOUT", loop: true });
+    expect(byName["sub-sonnet"]).toMatchObject({ account: "SHAKEOUT", loop: true });
     expect(byName["sub-opus"]).toMatchObject({ enabled: false, account: "SHAKEOUT2" });
-    expect(byName["free-openrouter"]).toMatchObject({ enabled: true, account: "RUNNER" });
-    expect(byName["free-opencode"]).toMatchObject({ enabled: true, account: "RUNNER2" });
+    expect(byName["free-or-a"]).toMatchObject({ enabled: true, account: "RUNNER" });
+    expect(byName["free-oc-a"]).toMatchObject({ enabled: true, account: "RUNNER2" });
+    // Staged lanes for the wider free ramp: parked until their accounts enter
+    // the module allowlist at the next worldserver recreate.
+    expect(byName["free-or-b"]).toMatchObject({ enabled: false, account: "RUNNER3" });
+    expect(byName["free-or-c"]).toMatchObject({ enabled: false, account: "RUNNER4" });
+    expect(byName["free-oc-b"]).toMatchObject({ enabled: false, account: "RUNNER5" });
     for (const l of config.lanes) {
       for (const e of l.entries ?? []) {
         if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
         else expect(e.model).toMatch(/(-free$|:free$)/);
       }
     }
+    // One stream per model config: no model appears in two lanes.
+    const models = config.lanes.flatMap((l) => (l.entries ?? []).map((e) => `${e.model}|${e.effort ?? ""}`));
+    expect(new Set(models).size).toBe(models.length);
   });
 });
