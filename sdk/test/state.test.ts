@@ -564,6 +564,34 @@ describe("state cache: self progress, target and inventory", () => {
     expect(cache.inventory[0]?.name).toBeUndefined();
   });
 
+  test("bag() shapes the backpack for the item actions", () => {
+    const cache = withWorld([inventorySlot, itemCreate, itemQuery]);
+    const bag = cache.bag();
+    expect(bag.items).toEqual([
+      {
+        bag: 255,
+        slot: BACKPACK_SLOT,
+        guid: ITEM_GUID,
+        itemId: ITEM_ENTRY,
+        name: "Gritstone Charm",
+        count: 5,
+      },
+    ]);
+    expect(bag.freeSlots).toBe(15);
+  });
+
+  test("bag() reports an unjoined slot as occupied, and equipment stays out", () => {
+    // The slot's guid halves arrived but the item's create block has not:
+    // occupied is the observation, itemId/name honestly undefined.
+    const cache = withWorld([inventorySlot]);
+    const bag = cache.bag();
+    expect(bag.items).toHaveLength(1);
+    expect(bag.items[0]?.itemId).toBeUndefined();
+    expect(bag.freeSlots).toBe(15);
+    // No inventory fields at all: nothing occupied has been observed.
+    expect(withWorld([]).bag()).toEqual({ items: [], freeSlots: 16 });
+  });
+
   test("a zeroed slot is empty, not an item with guid 0", () => {
     const cache = withWorld([inventorySlot]);
     // `invSlot24Lo/Hi` were served as 0/0 in the same block.
