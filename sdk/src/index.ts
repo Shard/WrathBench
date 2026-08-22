@@ -68,6 +68,8 @@ export type {
   CreatureInfo,
   GapRecord,
   Gauge,
+  GossipMenu,
+  GossipMenuOption,
   InventoryItem,
   ItemInfo,
   Motion,

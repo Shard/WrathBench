@@ -283,6 +283,26 @@ export interface CreatureInfo {
   readonly rank: number | undefined;
 }
 
+/** One selectable row of an open gossip menu, as `gossipSelect` resolves against. */
+export interface GossipMenuOption {
+  readonly optionId: number;
+  readonly text: string;
+}
+
+/**
+ * The gossip menu last observed open for one NPC: the fold of the last
+ * `SMSG_GOSSIP_MESSAGE` for that guid with no `SMSG_GOSSIP_COMPLETE` after it.
+ * Flat and JSON-safe. `menuId` is what a `gossip_select` must echo back, and
+ * `options` is what `gossipSelect(guid, "text")` matches text against.
+ */
+export interface GossipMenu {
+  readonly guid: GuidKey;
+  readonly menuId: number;
+  readonly options: readonly GossipMenuOption[];
+  readonly seq: number;
+  readonly ts: number;
+}
+
 /**
  * A world object the update stream has put in view: created by a `create`
  * block, refreshed by `values`/`movement` blocks and `MSG_MOVE_*`, removed by
@@ -419,6 +439,8 @@ export interface StateSnapshot {
   readonly motd: Observed<string[]> | undefined;
   readonly gaps: readonly GapRecord[];
   readonly anomalies: readonly Anomaly[];
+  /** guid -> the gossip menu last observed open for that NPC (none after a close). */
+  readonly gossip: ReadonlyMap<GuidKey, GossipMenu>;
   readonly lastSeq: number;
   readonly eventCount: number;
 }
@@ -469,6 +491,14 @@ export class StateCache {
   private readonly auraSlots = new Map<GuidKey, Map<number, AuraEntry>>();
 
   motd: Observed<string[]> | undefined;
+
+  /**
+   * guid -> the gossip menu last opened for that NPC. Set by
+   * `SMSG_GOSSIP_MESSAGE`, cleared wholesale by `SMSG_GOSSIP_COMPLETE` — which
+   * carries no guid, so the honest reading of a close is "no menu is open".
+   * Populated from that one opcode pair only; nothing here queries the server.
+   */
+  private readonly gossipMenus = new Map<GuidKey, GossipMenu>();
 
   /** The one input that did not come from an event. */
   readonly seed: StateSeed;
@@ -694,6 +724,15 @@ export class StateCache {
     return [...slots.values()].sort((a, b) => a.slot - b.slot);
   }
 
+  /**
+   * The gossip menu last observed open for `guid`, or `undefined` if none has
+   * been seen or a `SMSG_GOSSIP_COMPLETE` has since closed it. What
+   * `gossipSelect(guid, option)` resolves an option name or id against.
+   */
+  lastGossip(guid: GuidKey): GossipMenu | undefined {
+    return this.gossipMenus.get(guid);
+  }
+
   /** Name for a guid, if a name query ever returned one. Never guessed. */
   nameOf(guid: GuidKey): string | undefined {
     if (this.self.guid !== undefined && guid === this.self.guid) return this.self.name;
@@ -723,6 +762,7 @@ export class StateCache {
       motd: this.motd,
       gaps: [...this.gapBuf],
       anomalies: [...this.anomalyBuf],
+      gossip: new Map(this.gossipMenus),
       lastSeq: this.lastSeq,
       eventCount: this.eventCount,
     };
@@ -979,6 +1019,31 @@ export class StateCache {
       case "SMSG_MOTD": {
         const d = event.data as { lines: string[] };
         this.motd = { value: [...d.lines], seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_GOSSIP_MESSAGE": {
+        // The open menu for this NPC. Only `optionId`/`text` are folded — the
+        // two fields `gossipSelect` resolves against; the quests ride the same
+        // packet and are read straight off the event by the quest helpers.
+        const d = event.data as {
+          guid: GuidKey;
+          menuId: number;
+          options: readonly { optionId: number; text: string }[];
+        };
+        this.gossipMenus.set(d.guid, {
+          guid: d.guid,
+          menuId: d.menuId,
+          options: d.options.map((o) => ({ optionId: o.optionId, text: o.text })),
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_GOSSIP_COMPLETE": {
+        // The client's gossip window closed. The packet names no guid, so the
+        // only honest fold is "nothing is open" — keeping a per-guid menu alive
+        // past this would let a select fire against a stale menu.
+        this.gossipMenus.clear();
         return;
       }
       default:
