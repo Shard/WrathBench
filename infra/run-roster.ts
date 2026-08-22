@@ -462,10 +462,15 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
     if (acct === undefined || acct.toUpperCase() !== want) continue;
     const row = readRunRow(id);
     if (row !== undefined && row.termination_reason !== null && row.termination_reason !== "") continue;
-    // Deliberately NOT "has a pause row": every path in attemptSpec that leaves
-    // a paused run behind frees its session first, and pause_reason is only
-    // cleared by --resume. Treating a pause row as a held account would park
-    // the rest of the roster behind a run whose session is already gone.
+    // A pause row means the session is already gone: every path in attemptSpec
+    // that leaves a paused run behind frees its session first, and
+    // pause_reason is only cleared by --resume. Without this skip, the
+    // activity-age check below parks the lane for LIVE_TRAJECTORY_MS behind
+    // its own just-deferred run's still-warm trajectory (fleet-free-or-a
+    // waited 3m behind its deferred glm run, 2026-08-22). A hand-paused run
+    // whose operator kept the session alive is the module's to defend: the
+    // next createSession fails loudly with account_owned_by_other_token.
+    if (row !== undefined && row.pause_reason !== null && row.pause_reason !== "") continue;
     const age = activityAgeMs(id);
     if (age !== undefined && age < LIVE_TRAJECTORY_MS) return id;
   }
