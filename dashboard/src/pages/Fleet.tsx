@@ -13,7 +13,7 @@
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
-import { api, type FleetResponse, type RunListRow } from "../api/client";
+import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
 import type { FleetLaneView } from "@viewer/api-types";
 import { FLEET_COLUMNS, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtWhen, num, shortHarness, stamp } from "../lib/format";
@@ -25,6 +25,12 @@ const HEARTBEAT_STALE_MS = 120_000;
 export default function Fleet() {
   const runs = poll(() => api.runs().then((r) => r.runs), 10_000);
   const fleet = poll(() => api.fleet(), 5_000);
+  /*
+   * Server identity (FOLLOW-UPS 42). Slow on purpose: a build stamp changes on
+   * a deploy, not on a tick, and the viewer caches the module's /health for ten
+   * seconds behind this anyway.
+   */
+  const info = poll(() => api.info(), 60_000);
 
   // One clock for the whole page, so every relative time ticks together.
   const [now, setNow] = createSignal(Date.now());
@@ -126,7 +132,41 @@ export default function Fleet() {
           </table>
         </div>
       </Show>
+
+      <ServerIdentity info={info.latest} now={now()} />
     </div>
+  );
+}
+
+/**
+ * Which worldserver these runs were driven against (FOLLOW-UPS 41/42).
+ *
+ * `null` is the normal answer on the host: compose does not publish the
+ * module's port, so the viewer cannot reach /health unless it is given a URL.
+ * It says so rather than showing an empty stamp, because "unknown build" and
+ * "no server" are different facts.
+ */
+function ServerIdentity(props: { info: ApiInfoResponse | undefined; now: number }) {
+  const ws = (): ApiInfoResponse["worldserver"] | undefined => props.info?.worldserver ?? undefined;
+  return (
+    <footer class="identity">
+      <Show when={props.info !== undefined} fallback={<>viewer: —</>}>
+        <Show
+          when={ws()}
+          fallback={
+            <>worldserver: unreachable from the viewer (set WRATHBENCH_MODULE_URL to name it)</>
+          }
+        >
+          {(w) => (
+            <>
+              worldserver <span class="mono">{w().build}</span> · up {fmtDuration(props.now - w().startedAtMs)}{" "}
+              (since <span title={stamp(w().startedAtMs)}>{stamp(w().startedAtMs)}</span>)
+            </>
+          )}
+        </Show>
+        <Show when={props.info?.publicMode === true}> · public mode</Show>
+      </Show>
+    </footer>
   );
 }
 

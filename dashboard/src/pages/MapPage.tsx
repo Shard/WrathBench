@@ -9,16 +9,23 @@
  * than copied; the old page copied it only because a template string cannot
  * import.
  *
+ * Replay (`/map?run=<id>`) is a *feed swap*, not a second renderer: the same
+ * `AgentPosition[]` the live poll produces is produced instead by a time cursor
+ * over one run's recorded track (FOLLOW-UPS 22). Nothing in the draw path asks
+ * which mode it is in — the two differences are that a scrubbed pip is placed
+ * rather than walked (the lerp would trail the cursor and read as a bug), and
+ * that the route walked so far is drawn behind it.
+ *
  * Canvas drawing sits outside Solid's reactivity on purpose. Pips interpolate
  * toward their newest reading every frame, so the draw loop is a
  * requestAnimationFrame with its own mutable state; Solid owns the sidebar, the
  * chips and the header, which change once per poll.
  */
 
-import { A } from "@solidjs/router";
+import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { api, type AgentPosition } from "../api/client";
-import { fmtAge, fmtMoney, num, shortHarness } from "../lib/format";
+import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { fmtAge, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
   STALE_MS,
   TILE_MIN_PX,
@@ -31,6 +38,7 @@ import {
   type View,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
+import { mapsVisited, positionsAt, routeUpTo, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
 const TILE_CACHE_MAX = 512;
@@ -53,7 +61,21 @@ interface TileEntry {
 }
 
 export default function MapPage() {
-  const feed = poll(() => api.positions().then((p) => p.positions), POLL_MS);
+  const [params] = useSearchParams();
+  const replayId = (): string | undefined =>
+    typeof params.run === "string" && params.run.length > 0 ? params.run : undefined;
+
+  const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
+  const [cursor, setCursor] = createSignal(0);
+  const [playing, setPlaying] = createSignal(false);
+  const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
+
+  // The live feed keeps its 5s poll, and answers with nothing while a replay
+  // owns the map — one feed reaches `ingest`, never two.
+  const feed = poll(
+    () => (replayId() === undefined ? api.positions().then((p) => p.positions) : Promise.resolve([])),
+    POLL_MS,
+  );
 
   let canvas!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
@@ -133,7 +155,7 @@ export default function MapPage() {
 
   const onMap = (): Pip[] => [...pips.values()].filter((p) => p.data.map === activeMap());
 
-  function ingest(list: AgentPosition[]): void {
+  function ingest(list: AgentPosition[], snap = false): void {
     const seen = new Set<string>();
     for (const p of list) {
       seen.add(p.runId);
@@ -142,6 +164,12 @@ export default function MapPage() {
         pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y });
       } else {
         existing.data = p;
+        // Scrubbing: the pip belongs where the cursor says, now. Walking there
+        // at 0.18/frame would trail every drag of the slider.
+        if (snap) {
+          existing.x = p.x;
+          existing.y = p.y;
+        }
       }
     }
     for (const id of [...pips.keys()]) if (!seen.has(id)) pips.delete(id);
@@ -200,6 +228,22 @@ export default function MapPage() {
         }
       }
     }
+  }
+
+  /** The path walked so far on this map, behind the pip. Replay only. */
+  function drawRoute(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]): void {
+    if (points.length < 2) return;
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const p = project(view, points[i]!.x, points[i]!.y);
+      if (i === 0) ctx.moveTo(p.sx, p.sy);
+      else ctx.lineTo(p.sx, p.sy);
+    }
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.65;
+    ctx.strokeStyle = colorOf(replayId() ?? "");
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   function drawPips(ctx: CanvasRenderingContext2D, list: Pip[]): void {
@@ -275,6 +319,8 @@ export default function MapPage() {
           const map = activeMap();
           if (map !== null) {
             drawGrid(ctx, map);
+            const t = track();
+            if (t !== undefined) drawRoute(ctx, routeUpTo(t.points, map, cursor()));
             drawPips(ctx, list);
           } else {
             ctx.fillStyle = theme.grid;
@@ -296,9 +342,67 @@ export default function MapPage() {
     });
   });
 
+  /* Loading a run's track: the replay's own fit, and the cursor at the start. */
   createEffect(() => {
+    const id = replayId();
+    if (id === undefined) {
+      setTrack(undefined);
+      setPlaying(false);
+      return;
+    }
+    setReplayError(undefined);
+    void api
+      .track(id)
+      .then((t) => {
+        setTrack(t);
+        const span = trackSpan(t.points);
+        setCursor(span?.from ?? 0);
+        pips.clear();
+        fitted = false;
+        setMaps(mapsVisited(t.points).map((m) => [m, 1] as [number, number]));
+        setActiveMap(t.points[0]?.map ?? null);
+        needsDraw = true;
+      })
+      .catch((e: unknown) => setReplayError(String(e)));
+  });
+
+  /* The one place a feed reaches the renderer, live or replayed. */
+  createEffect(() => {
+    const t = track();
+    if (t !== undefined) {
+      const list = positionsAt(t, cursor());
+      ingest(list, true);
+      const here = list[0];
+      // Following the cursor across a continent is the honest behaviour: the
+      // character is not on the map the user was looking at any more.
+      if (here !== undefined && here.map !== activeMap()) {
+        setActiveMap(here.map);
+        view = fitTo({ w: W, h: H }, [here]);
+      }
+      setSelected(here ?? null);
+      return;
+    }
     const list = feed.latest;
     if (list !== undefined) ingest(list);
+  });
+
+  /* Playback: one recorded sample per tick, so a 6h run scrubs in ~30s. */
+  createEffect(() => {
+    if (!playing()) return;
+    const t = track();
+    if (t === undefined) return;
+    const timer = setInterval(() => {
+      const points = t.points;
+      const span = trackSpan(points);
+      if (span === null) return;
+      const next = points.find((p) => p.ts > cursor());
+      if (next === undefined) {
+        setPlaying(false);
+        return;
+      }
+      setCursor(next.ts);
+    }, 250);
+    onCleanup(() => clearInterval(timer));
   });
 
   /* --- interaction --- */
@@ -367,8 +471,38 @@ export default function MapPage() {
             </For>
           </Show>
         </div>
+        <Show when={track()}>
+          {(t) => {
+            const span = (): { from: number; to: number } | null => trackSpan(t().points);
+            return (
+              <div class="map-chips" style={{ top: "auto", bottom: "34px", right: "10px" }}>
+                <div class="scrub">
+                  <button onClick={() => setPlaying(!playing())}>{playing() ? "pause" : "play"}</button>
+                  <input
+                    type="range"
+                    min={span()?.from ?? 0}
+                    max={span()?.to ?? 0}
+                    value={cursor()}
+                    onInput={(e) => {
+                      setPlaying(false);
+                      setCursor(Number(e.currentTarget.value));
+                    }}
+                  />
+                  <span class="dim mono">{stamp(cursor())}</span>
+                  <A href="/map">live</A>
+                </div>
+              </div>
+            );
+          }}
+        </Show>
         <div class="map-hint">
-          {feed.error !== undefined ? (
+          {replayError() !== undefined ? (
+            <span class="err">{replayError()}</span>
+          ) : track() !== undefined ? (
+            <>
+              replay of {track()!.runId} · {track()!.points.length} recorded positions · drag to pan
+            </>
+          ) : feed.error !== undefined ? (
             <span class="err">{String(feed.error)}</span>
           ) : (
             <>
