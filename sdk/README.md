@@ -149,9 +149,11 @@ the served quest-log state field.
 in a caller: for up to about a minute after logout the core still tracks an
 offline session for the character and silently ignores `CMSG_CHAR_DELETE`,
 which surfaces as `504 timeout` (or as an aborted request, if the module's
-internal wait outlasts `requestTimeoutMs`). Both mean "not released yet" and
-are retried with a fresh throwaway token each time; anything else the module
-says is a real answer and is thrown.
+internal wait outlasts `requestTimeoutMs`). `account_in_use` is the same
+not-yet-released transient seen from the other side. All three mean "not
+released yet" and are retried with a fresh throwaway token each time; anything
+else the module says (`character_not_found`, a `char_delete_failed_code_<N>`)
+is a real answer and is thrown.
 
 `ConnectOptions`: `baseUrl`, `token`, and optionally `eventsUrl`,
 `subscribeEvents` (default true), `requestTimeoutMs` (default 30000 — the
