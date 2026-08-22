@@ -549,6 +549,38 @@ describe("client: killTarget", () => {
     await stub.stop();
   });
 
+  test("a UnitView from state.units(...) can be passed straight in (item 3b)", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const unit = client.state.units().find((u) => u.guid === CREATURE_GUID)!;
+    expect(unit).toBeDefined();
+    const fight = client.killTarget(unit, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
+    await untilAction(stub, "attack_start");
+    stub.push(JSON.stringify(creatureHealth(0, 61)));
+    const result = await fight;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("killed");
+    expect(result.guid).toBe(CREATURE_GUID);
+    expect(stub.actions[0]?.guid).toBe(CREATURE_GUID);
+    client.close();
+    await stub.stop();
+  });
+
+  test("passing a plain object with no .guid is rejected with a pointer to state.units", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await expect(client.killTarget({ name: "boar" } as never)).rejects.toThrow(
+      /killTarget\(guid\).*no usable \.guid.*state\.units/s,
+    );
+    expect(stub.actions).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
   test("a target that will not die times out as a value, not a throw", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);

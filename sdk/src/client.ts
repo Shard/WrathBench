@@ -75,6 +75,7 @@ import {
   type Point3,
   type QuestLogEntry,
   type UnitPosition,
+  type UnitView,
 } from "./state";
 import type { z } from "zod";
 
@@ -129,6 +130,45 @@ function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint
 function guidArg(guid: GuidArg, arg: string): string {
   assertGuid(guid, arg);
   return typeof guid === "bigint" ? guidKey(guid) : guid;
+}
+
+/**
+ * What a composed helper accepts for the thing it acts on: the opaque guid
+ * string, or a whole unit from `state.units(...)` / `state.closest(...)`.
+ * Passing the unit is the common case — the model just found it — so the
+ * helpers read `.guid` off it rather than making the model destructure.
+ */
+export type GuidOrUnit = GuidArg | UnitView;
+
+/**
+ * Resolve a helper's target to a guid string. A `UnitView` (or any object) has
+ * its `.guid` taken; a missing or unusable one is rejected loudly with a
+ * pointer back to where units come from (ADR-0016). A non-object falls through
+ * to `guidArg`, so a bare guid string keeps its exact existing validation — and
+ * raw actions (`setTarget`, `attackStart`, `gossipSelect`) still take only that
+ * string form, on purpose: referent selection is what this bench measures.
+ */
+function guidOf(target: GuidOrUnit, arg: string): string {
+  if (target !== null && typeof target === "object") {
+    const guid = (target as { guid?: unknown }).guid;
+    if (typeof guid === "string" && guid.length > 0) return guidArg(guid, arg);
+    throw new TypeError(
+      `${arg} got an object with no usable .guid (received ${showTarget(target)}) — pass a unit from ` +
+        `state.units(...) or state.closest(...) (each carries a .guid), or the guid string itself`,
+    );
+  }
+  return guidArg(target, arg);
+}
+
+/** A one-line description of a rejected target object, for the error message. */
+function showTarget(target: object): string {
+  try {
+    const json = JSON.stringify(target);
+    if (json !== undefined) return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+  } catch {
+    /* circular or otherwise unserialisable */
+  }
+  return Array.isArray(target) ? "an array" : "an object";
 }
 
 /** Client-side position validation for move_to: each axis a finite number. */
@@ -888,9 +928,12 @@ export class WrathClient {
     return this.action({ action: "cancel_cast", spellId });
   }
 
-  /** `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. */
-  interact(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "interact", guid: guidArg(guid, "interact(guid)") });
+  /**
+   * `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. Takes the guid string or
+   * a unit from `state.units(...)` / `state.closest(...)`.
+   */
+  interact(target: GuidOrUnit): Promise<ActionResponse> {
+    return this.action({ action: "interact", guid: guidOf(target, "interact(guid)") });
   }
 
   /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
@@ -1325,8 +1368,8 @@ export class WrathClient {
    * request. The caller is expected to loot afterwards: `killTarget` does not,
    * because a fight and a corpse are two decisions.
    */
-  async killTarget(guid: GuidArg, options: KillTargetOptions = {}): Promise<KillResult> {
-    const raw = guidArg(guid, "killTarget(guid)");
+  async killTarget(target: GuidOrUnit, options: KillTargetOptions = {}): Promise<KillResult> {
+    const raw = guidOf(target, "killTarget(guid)");
     // Canonicalised ("007" -> "7"), because it is used as the nearby-cache map
     // key and the cache's own keys are canonical (guidSchema round-trips every
     // wire guid). A raw string that does not parse names nothing and would
@@ -1508,8 +1551,8 @@ export class WrathClient {
    * is `{ ok: false, status: "empty" }` — an answer, not a failure. Silence is
    * neither, so it still throws `EventTimeoutError`.
    */
-  async lootCorpse(guid: GuidArg, options: LootOptions = {}): Promise<LootResult> {
-    const id = guidArg(guid, "lootCorpse(guid)");
+  async lootCorpse(target: GuidOrUnit, options: LootOptions = {}): Promise<LootResult> {
+    const id = guidOf(target, "lootCorpse(guid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     // Collected live from before the action goes out, so a push can never slip
@@ -1577,21 +1620,22 @@ export class WrathClient {
    * turn-in chain may already have added the quest for us.
    */
   async acceptQuestFrom(
-    npcGuid: GuidArg,
+    npcGuid: GuidOrUnit,
     questId: number,
     options: QuestOptions = {},
   ): Promise<QuestAcceptResult> {
+    const npc = guidOf(npcGuid, "acceptQuestFrom(npcGuid, questId)");
     const timeout = options.timeout ?? 10_000;
     const inLog = this.state.quest(questId);
     if (inLog) {
       return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
     }
 
-    const offered = await this.questOffer(npcGuid, timeout);
+    const offered = await this.questOffer(npc, timeout);
     const wanted = offered.find((q) => q.questId === questId);
     if (!wanted) return { ok: false, status: "not_offered", questId, offered };
 
-    await this.questAccept(npcGuid, questId);
+    await this.questAccept(npc, questId);
     const quest = await this.waitForState(
       () => this.state.quest(questId),
       timeout,
@@ -1614,10 +1658,11 @@ export class WrathClient {
    * right now. Silence is not, so it still throws `EventTimeoutError`.
    */
   async questsAvailableFrom(
-    npcGuid: GuidArg,
+    npcGuid: GuidOrUnit,
     options: QuestOptions = {},
   ): Promise<{ ok: true; quests: readonly OfferedQuest[] }> {
-    const quests = await this.questOffer(npcGuid, options.timeout ?? 10_000);
+    const npc = guidOf(npcGuid, "questsAvailableFrom(npcGuid)");
+    const quests = await this.questOffer(npc, options.timeout ?? 10_000);
     return { ok: true, quests };
   }
 
@@ -1635,8 +1680,8 @@ export class WrathClient {
    * range, is not a trainer, or trains another class, so nothing distinguishes
    * those from a slow answer: they all surface as `EventTimeoutError`.
    */
-  async trainerList(npcGuid: GuidArg, options: TrainerOptions = {}): Promise<TrainerListResult> {
-    const id = guidKey(guidArg(npcGuid, "trainerList(npcGuid)"));
+  async trainerList(npcGuid: GuidOrUnit, options: TrainerOptions = {}): Promise<TrainerListResult> {
+    const id = guidKey(guidOf(npcGuid, "trainerList(npcGuid)"));
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.trainerListAsync(id);
     const event = await this.events.waitFor(
@@ -1675,11 +1720,11 @@ export class WrathClient {
    * `trainerList` (ADR-0016).
    */
   async buySpell(
-    npcGuid: GuidArg,
+    npcGuid: GuidOrUnit,
     spellId: number,
     options: TrainerOptions = {},
   ): Promise<BuySpellResult> {
-    const id = guidKey(guidArg(npcGuid, "buySpell(npcGuid, spellId)"));
+    const id = guidKey(guidOf(npcGuid, "buySpell(npcGuid, spellId)"));
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.trainerBuySpellAsync(id, spellId);
     const isFor = (e: StreamEvent, opcode: "SMSG_TRAINER_BUY_SUCCEEDED" | "SMSG_TRAINER_BUY_FAILED") =>
@@ -1726,11 +1771,12 @@ export class WrathClient {
    * done — that refusal means another NPC ends this quest.
    */
   async turnInQuest(
-    npcGuid: GuidArg,
+    npcGuid: GuidOrUnit,
     questId: number,
     rewardIndex = 0,
     options: QuestOptions = {},
   ): Promise<QuestTurnInResult> {
+    const npcId = guidOf(npcGuid, "turnInQuest(npcGuid, questId)");
     const timeout = options.timeout ?? 10_000;
     const isFor = (e: StreamEvent, opcode: "SMSG_QUESTGIVER_OFFER_REWARD" | "SMSG_QUESTGIVER_REQUEST_ITEMS") =>
       isEvent(e, opcode) &&
@@ -1743,7 +1789,7 @@ export class WrathClient {
     // leaves cached-position staleness no room to reject a legitimate call
     // (ADR-0016); borderline cases still get the honest timeout.
     {
-      const npc = this.state.nearby.get(guidKey(guidArg(npcGuid, "turnInQuest(npcGuid)")));
+      const npc = this.state.nearby.get(guidKey(npcId));
       const self = this.state.self.position;
       const pos = npc?.position?.value;
       if (npc && pos && self) {
@@ -1762,7 +1808,7 @@ export class WrathClient {
 
     {
       const sinceSeq = this.events.recent(1)[0]?.seq;
-      await this.questComplete(npcGuid, questId);
+      await this.questComplete(npcId, questId);
       const answer = await this.events.waitFor(
         (e) =>
           (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
@@ -1793,7 +1839,7 @@ export class WrathClient {
         }
         // completable REQUEST_ITEMS: fall through and choose the reward.
       }
-      await this.questChooseReward(npcGuid, questId, rewardIndex);
+      await this.questChooseReward(npcId, questId, rewardIndex);
       // Raced against the completion: a reward that does not fit answers the
       // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
       // this race, a full bag was indistinguishable from silence and burned

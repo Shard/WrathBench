@@ -20,6 +20,7 @@ export type {
   DeleteCharacterOptions,
   ErrorCode,
   GuidArg,
+  GuidOrUnit,
   KillResult,
   KillTargetOptions,
   KnownErrorCode,
