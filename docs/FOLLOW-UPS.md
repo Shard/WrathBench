@@ -65,7 +65,8 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     now returns wowwiki `{{coords}}`/infobox coordinates as reference hints — so (4)
     is done; a *live-observed* position source is still open under (1)/(2). Transport
     (boat, tram, zeppelin) semantics stay unknown and untested until (1) and (2) land.
-    Depended on the item-14 teleport ack, which has shipped.
+    Depended on the item-14 teleport ack, which has shipped. **Sequenced into
+    item 38 (2026-08-22), which is the plan of record for this surface.**
 
 19. **Unguessable session tokens — pre-public/MCP blocker** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). `POST /action` and
@@ -357,3 +358,98 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     deferred only because it needs a worldserver rebuild and recreate to become
     true of the running server, and `healthDigest()` already folds any new
     stable field into the identity the moment it appears.
+
+## Ladder work (harness-0.3 / 0.4)
+
+The eight-rung ladder in `docs/VISION.md` is the guide; rung 4 (a capital, the
+tram, one flight — unaided) is the public release trigger. Items 38–40 are the
+surface work that gets there. Source for 38: the 2026-08-22 spatial-delivery
+research synthesis (operator's notes) and the travel probe (WORKLOG).
+
+38. **Navigation plan — rungs 2–4** (2026-08-22). Supersedes the ordering in
+    item 18; the probe already made travel the obstacle, so Layer A is earned.
+    Scoped to what a capital needs: walking, the Deeprun Tram, flight masters.
+    Boats, zeppelins and elevators are rung-7 work and stay out.
+
+    **N1 — actions and statuses** (gate for everything below)
+    - `no_path` split into distinguishable causes (`target_off_mesh`,
+      `path_incomplete`, `no_mesh`), with the z-ladder / subdivision retry done
+      by the module itself: it is a pathing detail, the same layer as obstacle
+      avoidance, not a decision the model should have to make.
+    - `CMSG_AREATRIGGER` dispatched automatically inside `move_to` when the
+      character enters a DBC trigger volume — client parity, not an agent
+      action. A real client fires it without the player choosing to; the
+      agent observes the consequence (transfer, quest credit, inn).
+    - Map change observed: tap `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`,
+      update `state.self.position.map`; SDK `moveTo` resolves on a
+      server-confirmed postcondition (map + position), never on dispatch.
+    - Bounded waits on transfers with typed results (`waiting`, `wrong_map`,
+      `stuck`) instead of sleeping.
+    - Gate: the travel probe rides the tram end to end with a typed success and
+      no undifferentiated `no_path`. Then write the navigation ADR from that run.
+
+    **N2 — field-level observations** (each small, each earned, each logged)
+    - Zone / area name on self, derived from position and the same DBC the
+      client ships; a `milestone` record (item 35) on change. No packet carries
+      this; the client computes it, so the module may.
+    - NPC role on nearby units from `UNIT_NPC_FLAGS` (flight master, innkeeper,
+      trainer, vendor) — the same field family as the questgiver status.
+      Role, not recommendation.
+    - Innkeeper bind (`CMSG_BINDER_ACTIVATE`, `SMSG_BINDPOINTUPDATE`) so the
+      hearthstone is a real connector.
+    - Log the exact model-facing payload for each so the later
+      text-vs-other-channel experiment is honest.
+
+    **N3 — flight paths** (the first real destination-choice surface)
+    - Gossip a visible flight master → tap `SMSG_SHOWTAXINODES` (current node
+      and known-node mask, exactly what the client receives) → `activate_taxi`
+      → on-taxi movement state in the cache so the loop does not fight the
+      flight → arrival as a postcondition. Never the TaxiPath catalogue.
+    - Gate: the probe flies one hop; a model discovers and uses a flight
+      master unaided.
+
+    **N4 — rung-4 attempts**
+    - Opus / Fable runs with milestone records on. Score destination choice from
+      the records: destination chosen → connector chosen → action dispatched →
+      transfer confirmed / not_visited / waiting / wrong_map / stuck → arrival at
+      server-confirmed map+xyz. Never "ended near the coordinate"; that scores
+      `move_to`.
+
+    **Not in 0.3, by decision:** a `here()` / `goTo(name)` helper, rendered
+    minimap as a model observation (ADR-0019 stays operator-only), the
+    TaxiPath / areatrigger_teleport tables, walkability masks, a persistent
+    map notebook (a labeled context-engine change under item 8b if ever).
+
+    **Open decision:** item 18(4) shipped wowwiki infobox coordinates into
+    `search_reference` on 2026-08-22. The research verdict is that exact yards
+    are an answer key for the scored lane and should be names-first unless a
+    held-out / perturbed-twin protocol exists. Decide before the first scored
+    rung-4 run; either keep and label, or drop from the scored lane.
+
+39. **Spellbook, cooldowns, and the raw-action escape hatch** (2026-08-22;
+    harness-0.3, cross-cutting). The agent cannot observe what it can cast:
+    `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`, `SMSG_REMOVED_SPELL`,
+    `SMSG_SPELL_COOLDOWN`, `SMSG_COOLDOWN_EVENT` are not tapped, so models
+    guess spell ids from the wiki and loop on cast-failed. Tap them, add
+    `state.self.spells` and cooldowns to the cache; rung 3 ("spells trained")
+    is unverifiable without it. Talents ride along: `CMSG_LEARN_TALENT`,
+    `SMSG_TALENTS_INFO`. Equipped-bag contents are the other blind spot
+    (backpack only today). Separately, ADR-0015 promises a raw-action escape
+    hatch and `WrathClient.action()` is private: expose a whitelisted-opcode
+    passthrough so a trajectory can demonstrate need for a surface before the
+    module and SDK grow a helper for it — that is the ADR's own rule. Doc
+    drift to fix in the same change: `docs/CONTRACTS.md` lists trainers as
+    deferred (shipped) and `whisper` as present (never implemented).
+
+40. **Group tier — rung 6** (2026-08-22; harness-0.4, after 38/39). Party
+    actions (`CMSG_GROUP_INVITE` / `ACCEPT` / `DECLINE` / `UNINVITE` /
+    `DISBAND`, `CMSG_LOOT_METHOD`), taps (`SMSG_GROUP_INVITE`,
+    `SMSG_GROUP_LIST`, `SMSG_PARTY_MEMBER_STATS`,
+    `SMSG_PARTY_COMMAND_RESULT`), `state.group` in the cache, party chat and
+    `whisper`, quest sharing (`CMSG_PUSHQUESTTOPARTY`). Harness side:
+    per-character credentials (item 10) and a multi-session runner.
+    Consider 3.3.5's Dungeon Finder (`CMSG_LFG_JOIN` family): it teleports a
+    formed party into the instance, which is a client-legal way to attempt
+    Deadmines before cross-continent travel and instance-portal triggers are
+    reliable. Trade, mail, bank, auction house and guilds stay behind the
+    earned-by-need rule until a freeplay run asks for them.
