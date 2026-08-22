@@ -30,7 +30,7 @@ export interface SnippetResult {
 
 export interface HarnessNotice {
   ts: number;
-  kind: "sandbox_restarted" | "sandbox_started" | "session_note";
+  kind: "sandbox_restarted" | "sandbox_started" | "session_note" | "provider_truncated";
   text: string;
 }
 

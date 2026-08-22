@@ -239,8 +239,25 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // Only when the provider reported it; absent otherwise, so the viewer
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
+        ...(outcome.turn.providerRequestId !== undefined
+          ? { providerRequestId: outcome.turn.providerRequestId }
+          : {}),
+        ...(outcome.turn.finishReason !== undefined ? { finishReason: outcome.turn.finishReason } : {}),
       });
       history.push(assistant);
+
+      // A "length" finish is the provider truncating the turn, possibly mid
+      // tool-call JSON — which would otherwise reach the model as an ordinary
+      // argument error and be scored as its mistake (2026-08-22 API review).
+      // Tell the model plainly so a retry with less output is its own choice,
+      // not a mystery.
+      if (outcome.turn.finishReason === "length") {
+        pendingNotices.push({
+          ts: o.now?.() ?? Date.now(),
+          kind: "provider_truncated",
+          text: "your last turn was cut off by the provider's output limit (finish_reason: length) — any tool call in it may be incomplete; keep replies shorter, and re-issue anything that did not take effect",
+        });
+      }
 
       // 5. execute tool calls in order
       for (const tc of outcome.turn.toolCalls) {
