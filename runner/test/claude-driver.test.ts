@@ -219,22 +219,26 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
-  test("usage is counted once when one API reply spans multiple assistant envelopes", async () => {
+  test("usage is counted once per API reply, from the LAST envelope of the message", async () => {
     const { runDir, trajectory, options } = setupEpisode("split-usage", { maxTurns: 1 });
     await runClaudeEpisode(options);
     const responses = readTrajectory(runDir).filter((r) => r.t === "response");
     // Two assistant envelopes (text + tool_use) share one message.id, so two
-    // response entries are written but only the first carries usage.
+    // response entries are written and exactly one carries usage — the last,
+    // whose running total is the whole reply. The fixture's envelopes report
+    // 1 and then 7 output tokens for the same message.
     expect(responses).toHaveLength(2);
     const withUsage = responses.filter((r) => r["usage"] !== undefined);
     expect(withUsage).toHaveLength(1);
+    expect(withUsage[0]).toBe(responses[1]!);
+    expect((withUsage[0]!["usage"] as { completion_tokens?: number }).completion_tokens).toBe(7);
     // Summing usage across response entries (what viewer/tail.ts does) equals a
-    // single API call's tokens, not double.
+    // single API call's tokens: not doubled, and not the partial first count.
     const sum = responses.reduce((acc, r) => {
       const u = r["usage"] as { total_tokens?: number } | undefined;
       return acc + (u?.total_tokens ?? 0);
     }, 0);
-    expect(sum).toBe(122); // (12 + 3 + 100) + 7, counted once
+    expect(sum).toBe(122); // (12 + 3 + 100) + 7, counted once, from the last
     trajectory.close();
   }, 20_000);
 
