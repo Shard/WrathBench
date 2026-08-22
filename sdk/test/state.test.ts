@@ -564,6 +564,31 @@ describe("state cache: self progress, target and inventory", () => {
     expect(cache.inventory[0]?.name).toBeUndefined();
   });
 
+  test("a map change evicts old-map objects but keeps own items", () => {
+    const cache = withWorld([inventorySlot, itemCreate, itemQuery]);
+    expect(cache.nearby.get(CREATURE_GUID)).toBeDefined();
+    const verify = (seq: number, map: number) =>
+      toEvents([
+        {
+          seq,
+          opcode: "SMSG_LOGIN_VERIFY_WORLD",
+          opcodeId: 0x236,
+          ts: 1_700_000_000_900,
+          data: { map, x: 10, y: 20, z: 30, o: 0 },
+        },
+      ])[0]!;
+    // Same map: a re-verify is not a teleport, nothing is evicted.
+    cache.apply(verify(90, 0));
+    expect(cache.nearby.get(CREATURE_GUID)).toBeDefined();
+    // New map: the old visibility set is gone — but items travel with us,
+    // so the inventory join keeps working.
+    cache.apply(verify(91, 1));
+    expect(cache.nearby.get(CREATURE_GUID)).toBeUndefined();
+    expect(cache.nearby.get(ITEM_GUID)).toBeDefined();
+    expect(cache.inventory).toHaveLength(1);
+    expect(cache.inventory[0]?.name).toBe("Gritstone Charm");
+  });
+
   test("bag() shapes the backpack for the item actions", () => {
     const cache = withWorld([inventorySlot, itemCreate, itemQuery]);
     const bag = cache.bag();

@@ -729,6 +729,7 @@ export class StateCache {
           return;
         }
         if (this.seed.guid === undefined) this.seedSelf({ guid: d.guid, name: d.character });
+        this.evictOnMapChange(d.map);
         this.selfMap = d.map;
         this.self.position = {
           value: { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o },
@@ -740,6 +741,7 @@ export class StateCache {
       }
       case "SMSG_LOGIN_VERIFY_WORLD": {
         const d = event.data as WorldPosition;
+        this.evictOnMapChange(d.map);
         this.selfMap = d.map;
         this.self.position = {
           value: { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o },
@@ -1085,6 +1087,22 @@ export class StateCache {
   private forget(guid: GuidKey): void {
     this.nearby.delete(guid);
     this.auraSlots.delete(guid);
+  }
+
+  /**
+   * A new map means a new visibility set: nothing seen on the old map is in
+   * view, and a client would have received out-of-range/destroy for all of it.
+   * Without this, cross-map gameObjects lingered in `nearby` at absurd
+   * distances (d≈8063 in morning-opus-1). Own items and containers are kept —
+   * they travel with the character, and the inventory join reads them.
+   */
+  private evictOnMapChange(newMap: number): void {
+    if (this.selfMap === undefined || this.selfMap === newMap) return;
+    for (const [guid, obj] of this.nearby) {
+      const t = obj.objectType?.value;
+      if (t === "item" || t === "container") continue;
+      this.forget(guid);
+    }
   }
 
   private isSelfGuid(guid: GuidKey): boolean {
