@@ -117,6 +117,30 @@ against the new server. On a smoke failure it retags `:prev`, recreates, and
 exits non-zero. `--no-smoke` deploys unverified and says so; `--allow-live`
 skips the refusal and kills whatever is running.
 
+`--dry-run` prints the plan and every resolved value — which config and state
+files it will read, the rollback target, the preflight account, budget and
+smoke list, whether the fleet supervisor is gating, and which verification path
+it would take — and executes nothing. Run it first if the deploy window
+matters; it is read-only and safe while the fleet is up.
+
+Verification is **fail-closed**: the closing line names what verified the
+deploy (`DEPLOYED and verified by fleet gate` or `by N direct smoke(s)`), and
+it can only be reached by a step that actually ran and exited zero. Each direct
+smoke logs its start, its duration and its exit code. Anything else — a failed
+smoke, a failing gate record, an unexpected error anywhere after the promote —
+rolls back and exits non-zero. The two paths that verify nothing say
+`DEPLOYED UNVERIFIED` and never `verified`: `--no-smoke` (exit 0, you asked for
+it) and an enabled preflight with no `smokes` configured (exit 1, you did not).
+
+"Is the supervisor gating?" needs both halves: the `fleet` container running
+*and* a heartbeat newer than 180s. A stopped fleet leaves a fresh heartbeat
+behind for three minutes, and trusting it alone is what produced the incident
+below.
+
+`infra/deploy-worldserver.test.ts` covers this without a daemon: it runs the
+real script with `docker` replaced by a PATH shim, under `FORCE_COLOR=3`, and
+asserts the rollback branch and the exit codes.
+
 Getting to zero live runs is still yours to do, and it is the same drain as
 ever: set every lane in `infra/fleet.json` to `"enabled": false` and wait until
 `./infra/run-fleet.sh --status` shows no lane with a live run (an episode can

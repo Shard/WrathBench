@@ -6,6 +6,55 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### The deploy script reported "DEPLOYED and verified" having smoked nothing
+
+The first real use of `infra/deploy-worldserver.sh` printed
+`DEPLOYED and verified` and exited 0 without executing a single smoke, in a
+window where the fleet service was stopped and there were zero live runs.
+Three independent defects lined up, and each is worth remembering separately.
+
+**A number arrived wearing colour.** The preflight timeout was read with
+`bun -e 'console.log(Math.ceil(...))'`. Bun colourises *inspected values* —
+`console.log` of a number, not of a string — and it does so into a pipe when
+`FORCE_COLOR` is set, which the operator's shell exports. So bash got
+`ESC[0mESC[33m900ESC[0m` where it wanted `900`, and both `$(( ))` deadlines
+died with `arithmetic syntax error`. The sibling reads survived only because
+they happened to log strings. Machine-read helpers now run under
+`NO_COLOR=1 FORCE_COLOR=0 TERM=dumb`, write with `process.stdout.write` rather
+than `console.log`, get piped through an ANSI strip anyway, and every numeric
+is regex-validated before it reaches arithmetic — one bun call now emits the
+whole preflight block as `KEY<TAB>VALUE`.
+
+**`set -e` does not cover an arithmetic assignment.** `x=$(( bad ))` fails,
+prints its error, and neither exits under `errexit` nor fires an `ERR` trap: to
+bash it is an assignment, not a failed command. That is how a script with
+`set -euo pipefail` at the top walked past two hard errors into its success
+line. The general lesson is that `set -e` is a backstop, never the mechanism:
+verification now hangs off an explicit `VERIFIED_BY` string that only an
+actually-executed, zero-exit step sets, the success line is unreachable without
+it, and an `ERR` trap installed after the promote rolls back on anything
+unexpected. (`set +e` does not silence an `ERR` trap either — only a tested
+command is exempt, so the smokes and the gate check are `if cmd; then` now.)
+Each smoke logs its name, duration and exit code, so "no smoke was executed" is
+visible in the transcript rather than inferred from its absence.
+
+**A stopped supervisor still had a fresh heartbeat.** `fleet_alive()` asked only
+whether `fleet-state.json`'s heartbeat was under three minutes old, so a fleet
+stopped seconds earlier read as "up and gating" and the script settled in to
+wait for a gate result nobody would ever write. Liveness from the host now
+requires the container to be running (`docker compose ps --status running
+fleet`) *and* the heartbeat to be fresh, and the log line names both.
+
+Shipped alongside: `--dry-run` (resolved values and the verification path it
+would take, executing nothing) and `infra/deploy-worldserver.test.ts`, which
+runs the real script against a `docker` PATH shim under `FORCE_COLOR=3` and
+pins the properties that failed — a failing smoke rolls back and exits
+non-zero, a failing gate record rolls back, and no path prints "verified"
+without a step that ran.
+
+Lesson: a verification step that reports success by falling off the end of the
+script is not a verification step. It has to name what verified it.
+
 ### Objective and watchdog overrides become run dimensions (ADR-0024)
 
 The operator wants a long, unscored navigation probe: sonnet on the
