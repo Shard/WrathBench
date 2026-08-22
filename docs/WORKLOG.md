@@ -6,6 +6,51 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### `search_reference`: banded ranking, an id channel, and a repeat memo (FOLLOW-UPS 25)
+
+laguna issued 11 searches and nemotron 13 near-identical ones inside one episode,
+and the top hits were pages whose only connection to the query was digits in
+prose. Two causes, both harness-side, both fixed.
+
+- **Ranking is banded now, and bm25 only decides inside a band**: exact title,
+  entity id, title tokens, body. bm25 with the title column weighted was not
+  enough — a page mentioning an entity thirty times outranks the page named for
+  it, and a damage-comparison page whose arithmetic contained "783" outranked the
+  quest page the model was after. The full-text candidate set is fetched far wider than
+  `limit` before banding, because a title match twentieth by bm25 has to be in the
+  candidate set to be promoted at all; a band sort over the old narrow fetch would
+  have passed every unit test and changed nothing on the real bundle.
+- **An id query is answered only from id-shaped fields.** `parseIdQuery` treats a
+  numeric token as an id when it is the whole query, when an id word precedes it
+  (`quest 783`, `npc entry 197`), or when the number opens the query and an id
+  word follows (`721 npc entry Northshire`) — the id word is consumed with it,
+  since leaving "quest" in the text query matches every quest page. `level 5
+  quests` is deliberately untouched. The id is looked up in the new `page_ids`
+  table (bundle schema 3), which `extractIds` lifts off the raw wikitext before
+  the strip, exactly as coords are: `{{questbox|…|id=…}}`, `{{npcbox|…|id=…}}`,
+  `|itemid=`, `|questid=`, `|entry=`, tagged with the kind the enclosing template
+  implies. Verified against the real dump (a 4000-page probe build yields 1014 id
+  rows: 415 npc, 276 item, 242 unknown, 81 quest), not just synthetic fixtures.
+  An id token never reaches the text index, so prose can no longer answer an id
+  question — and where the bundle has no id table, the tool says the bundle has
+  no id index rather than letting "no results" read as "no such quest".
+- **Repetition is visible.** A repeated query (normalized for case, punctuation
+  and whitespace) comes back prefixed with one line: how many tool calls ago it
+  was asked, how many times this episode, and whether the top titles are the same
+  or changed. Across the run corpus 44 of 542 searches were exact normalized
+  repeats. The state is a `WeakMap` keyed on the `ToolContext`, which every driver
+  constructs once per episode, so it lives exactly as long as the episode, never
+  touches disk, and needed no change in `loop.ts` or `adapter-claude.ts`.
+
+Measured against the real bundle (top-3 titles, before → after): `"A Threat Within
+quest 783"` led with a damage-comparison page and now leads with the quest page;
+`"entry 721 Northshire"` and `"Northshire Valley NPC entry 299 69"` now lead with
+the zone page instead of a room article; `"creature entry 721"` and `"npc entry
+883"` return nothing plus the no-id-index note instead of three unrelated pages.
+Those last two resolve to the NPC page once the bundle is rebuilt — the deployed
+bundle is still schema 1, which is FOLLOW-UPS 30 and the reason the coordinate
+channel has been silently empty since it shipped.
+
 ### Ergonomics pass on five roster trajectories: closest filters, measured silences, shape docs
 
 A review of five 2026-08-22 episodes (hy3, nemotron, laguna, ox-alpha, qwen)

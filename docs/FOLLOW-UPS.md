@@ -110,17 +110,15 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     mystery slowdown in three weeks. An index keyed on account, or a scan capped
     to recently-modified directories, is the fix.
 
-25. **`search_reference` ranks id noise above the entity page, and never says
-    "you already asked this"** (2026-08-22 review). laguna issued 11 searches and
-    nemotron 13 *identical* queries in one episode; the top hits were pages whose
-    only match was a numeric-id substring, with the actual NPC/quest page below
-    them. Two changes, both harness-side: rank an exact title/entity match above a
-    body substring, and de-noise bare-number matches (an id match should require the
-    id to be in an id-shaped field, not anywhere in the text). Then make repetition
-    visible — a per-episode memo of "this query returned these titles N turns ago"
-    in the tool result, so a model re-asking sees it is re-asking rather than
-    reading the same list as if it were new. The second half is the cheaper of the
-    two and probably the one that saves turns.
+25. ~~**`search_reference` ranks id noise above the entity page, and never says
+    "you already asked this"**~~ Shipped 2026-08-22. Search now ranks in bands
+    (exact title, entity id, title tokens, body), an id query is answered only
+    from id-shaped fields (`page_ids`, bundle schema 3, lifted from infobox
+    templates at build time) and never from body prose, and a repeated query
+    comes back with a one-line per-episode memo naming how many tool calls ago
+    it was asked and whether the top titles changed. See WORKLOG. One residual,
+    tracked as item 30: the deployed bundle predates the schema, so the id band
+    is inert until it is rebuilt.
 
 26. **A silent turn-in cannot be told from "this NPC has nothing to offer"**
     (2026-08-22 review; investigated and deliberately not implemented). The
@@ -221,3 +219,15 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     distance in questgiver timeouts, `no_path` hints) buy that lane almost nothing —
     read its results as a throughput measurement of the local box, and do not use it
     to judge whether a harness change helped.
+
+30. **The deployed wiki bundle is schema 1, so two shipped channels are inert**
+    (2026-08-22). `data/wiki/bundle.sqlite` was built 2026-08-21 and reports
+    `schema_version = 1`: it has neither `page_coords` (shipped as schema 2 with
+    the coordinate channel) nor `page_ids` (schema 3, FOLLOW-UPS 25). Consumers
+    degrade rather than fail — `run.ts` opens the file directly and bypasses
+    `openBundle`'s fail-closed check — so nothing broke, but every run since the
+    coordinate channel shipped has silently returned no coordinates, and id
+    queries will keep returning nothing until a rebuild. Rebuild when no fleet
+    lane is mid-episode (`bun wiki/src/build.ts data/wiki/<dump>.7z --out
+    data/wiki/bundle.sqlite`, a few minutes, atomic rename), then spot-check
+    `schema_version`, `coord_rows` and `id_rows` in `meta`.

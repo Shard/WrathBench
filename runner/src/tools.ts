@@ -8,7 +8,8 @@
 
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
-import { searchReference } from "@wrathbench/wiki/search";
+import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
+import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
 import type { EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
@@ -329,6 +330,84 @@ function renderIssues(name: keyof typeof argSchemas, error: z.ZodError): string 
 const RECENT_EVENTS_SCAN_FACTOR = 8;
 const RECENT_EVENTS_SCAN_MAX = 500;
 
+/**
+ * Per-episode memory of what has already been searched.
+ *
+ * laguna issued 11 searches and nemotron 13 near-identical ones inside a single
+ * episode, reading the same list each time as if it were new (FOLLOW-UPS 25).
+ * The memo says so in the result: same query, this many tool calls ago, and
+ * whether anything actually changed.
+ *
+ * Keyed on the ToolContext, which is constructed once per episode by the loop,
+ * the claude driver and the MCP server alike — so this state lives exactly as
+ * long as the episode and is never written to disk. A restarted episode starts
+ * with an empty memo, which is the honest thing: the model's context restarted
+ * with it.
+ */
+interface SearchMemoEntry {
+  /** Tool-call ordinal of the last time this query was asked. */
+  at: number;
+  /** How many times it has been asked this episode. */
+  count: number;
+  /** Top titles it returned, for the "did anything change" comparison. */
+  titles: string[];
+}
+
+interface EpisodeToolState {
+  /** Tool calls dispatched this episode; the memo's unit of elapsed activity. */
+  calls: number;
+  searches: Map<string, SearchMemoEntry>;
+}
+
+const EPISODE_STATE = new WeakMap<ToolContext, EpisodeToolState>();
+
+function episodeState(ctx: ToolContext): EpisodeToolState {
+  let state = EPISODE_STATE.get(ctx);
+  if (state === undefined) {
+    state = { calls: 0, searches: new Map() };
+    EPISODE_STATE.set(ctx, state);
+  }
+  return state;
+}
+
+/** Case, punctuation and whitespace are not what makes two searches different. */
+export function normalizeSearchQuery(query: string): string {
+  return query
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** How many titles the memo remembers and quotes back. */
+const MEMO_TITLES = 3;
+
+/**
+ * The repeat note, or undefined the first time a query is asked. Records the
+ * new result either way. A signal, not a lecture: at most two lines.
+ */
+function searchRepeatNote(ctx: ToolContext, query: string, titles: string[]): string | undefined {
+  const state = episodeState(ctx);
+  const key = normalizeSearchQuery(query);
+  const top = titles.slice(0, MEMO_TITLES);
+  const previous = state.searches.get(key);
+  state.searches.set(key, {
+    at: state.calls,
+    count: (previous?.count ?? 0) + 1,
+    titles: top,
+  });
+  if (previous === undefined) return undefined;
+  const ago = Math.max(0, state.calls - previous.at);
+  const times = previous.count === 1 ? "" : ` (${previous.count + 1} times this episode)`;
+  const head =
+    `note: you already ran this search ${ago} tool call${ago === 1 ? "" : "s"} ago${times}.`;
+  const same =
+    previous.titles.length === top.length && previous.titles.every((t, i) => t === top[i]);
+  const list = (ts: string[]): string => (ts.length === 0 ? "(no results)" : ts.join("; "));
+  return same
+    ? `${head} Same top results: ${list(top)}.`
+    : `${head} The results changed — then: ${list(previous.titles)}; now: ${list(top)}.`;
+}
+
 export interface ToolContext {
   sandbox: SandboxHost;
   scratchpad: Scratchpad;
@@ -354,6 +433,8 @@ export function isKnownTool(name: string): name is keyof typeof argSchemas {
 
 /** Dispatch one tool call. Never throws: errors come back as `isError` text. */
 export async function callTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
+  const state = episodeState(ctx);
+  state.calls++;
   try {
     if (!isKnownTool(name)) {
       const suggestion = nearestTool(name);
@@ -439,9 +520,25 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
           return { text: "reference bundle unavailable (data/wiki/bundle.sqlite not found)", isError: true };
         }
         const hits = searchReference(ctx.wiki, query, { limit });
-        if (hits.length === 0) return { text: "no results" };
+        const note = searchRepeatNote(ctx, query, hits.map((h) => h.title));
+        const prefix = note === undefined ? "" : `${note}\n\n`;
+        if (hits.length === 0) {
+          // An id query the bundle cannot answer says why, rather than letting
+          // the model read "no results" as "no such quest".
+          const askedForIds = parseIdQuery(query).ids.length > 0;
+          const noIndex = askedForIds && !bundleHasIds(ctx.wiki);
+          return {
+            text:
+              `${prefix}no results` +
+              (noIndex
+                ? " (this reference bundle has no entity-id index — ids resolve only after it is rebuilt)"
+                : ""),
+          };
+        }
         return {
-          text: hits
+          text:
+            prefix +
+            hits
             .map((h) => {
               const via = h.redirectedFrom !== undefined ? ` (redirected from ${h.redirectedFrom})` : "";
               const coordLine =
@@ -450,7 +547,11 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
                       .map((c) => `${c.zone !== undefined ? `${c.zone} ` : ""}(${c.x}, ${c.y})`)
                       .join("; ")}`
                   : "";
-              return `# ${h.title}${via}\n${h.snippet}${coordLine}`;
+              const idLine =
+                h.matchedId !== undefined
+                  ? `\nmatched ${h.matchedId.kind} id ${h.matchedId.id}`
+                  : "";
+              return `# ${h.title}${via}${idLine}\n${h.snippet}${coordLine}`;
             })
             .join("\n\n"),
         };

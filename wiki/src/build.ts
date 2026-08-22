@@ -22,6 +22,7 @@ import {
   setMeta,
 } from "./bundle";
 import { extractCoords } from "./coords";
+import { extractIds } from "./ids";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats } from "./parse";
 import { redirectTarget, stripWikitext } from "./strip";
 
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
   let bytes = 0;
   let charsKept = 0;
   let coordRows = 0;
+  let idRows = 0;
   let stoppedEarly = false;
   const parseStats: ParseStats = { pagesSkipped: 0 };
 
@@ -156,16 +158,19 @@ async function main(): Promise<void> {
         redirects++;
         writer.addRedirect(page.title, target, page.ns);
       } else {
-        // Coords come off the RAW wikitext before the strip destroys templates.
+        // Coords and ids come off the RAW wikitext before the strip destroys
+        // the templates that carry them.
         const coords = extractCoords(page.wikitext);
+        const ids = extractIds(page.wikitext);
         const text = stripWikitext(page.wikitext);
         if (text.length === 0) {
           empties++;
         } else {
-          writer.addPage(page.title, page.ns, text, coords);
+          writer.addPage(page.title, page.ns, text, coords, ids);
           pagesKept++;
           charsKept += text.length;
           coordRows += coords.length;
+          idRows += ids.length;
           perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
         }
       }
@@ -206,9 +211,10 @@ async function main(): Promise<void> {
     redirects: String(redirects),
     empty_pages: String(empties),
     coord_rows: String(coordRows),
+    id_rows: String(idRows),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
-    schema_version: "2",
+    schema_version: "3",
   });
   db.run("PRAGMA optimize");
   db.close();
@@ -224,6 +230,7 @@ async function main(): Promise<void> {
   console.log(`  dropped:   ${parseStats.pagesSkipped} (namespace)`);
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
   console.log(`coord rows:  ${coordRows}`);
+  console.log(`id rows:     ${idRows}`);
   console.log(`redirects:   ${redirects}`);
   console.log(`empty:       ${empties}`);
   for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {

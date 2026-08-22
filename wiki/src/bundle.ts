@@ -8,6 +8,7 @@
 
 import { Database } from "bun:sqlite";
 import type { WikiCoord } from "./coords";
+import type { WikiId } from "./ids";
 
 export const DEFAULT_BUNDLE_PATH = "data/wiki/bundle.sqlite";
 
@@ -66,10 +67,23 @@ export function createSchema(db: Database): void {
       raw     TEXT NOT NULL
     );
   `);
+  // Numeric entity ids the page states about itself, lifted from infobox
+  // templates before the strip (schema 3). Without them a query for an id can
+  // only be answered by body prose, which is what FOLLOW-UPS 25 was about.
+  db.run(`
+    CREATE TABLE page_ids (
+      page_id INTEGER NOT NULL,
+      kind    TEXT NOT NULL,
+      id      INTEGER NOT NULL
+    );
+  `);
 }
 
 /** Name of the coords table, so callers can probe for it on older bundles. */
 export const COORDS_TABLE = "page_coords";
+
+/** Name of the entity-id table, so callers can probe for it on older bundles. */
+export const IDS_TABLE = "page_ids";
 
 /**
  * True if this bundle was built with the coordinate channel (schema >= 2).
@@ -85,11 +99,28 @@ export function bundleHasCoords(db: Database): boolean {
   return (row?.n ?? 0) > 0;
 }
 
+/**
+ * True if this bundle was built with the entity-id channel (schema >= 3).
+ * Consumers degrade — an id query on an older bundle simply finds nothing and
+ * says so — rather than throwing: a live episode must not lose search because
+ * the deployed bundle is a version behind.
+ */
+export function bundleHasIds(db: Database): boolean {
+  const row = db
+    .query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?",
+    )
+    .get(IDS_TABLE);
+  return (row?.n ?? 0) > 0;
+}
+
 /** Indexes that only pay off once the table is full. */
 export function createIndexes(db: Database): void {
   db.run("CREATE INDEX pages_title ON pages(title)");
   db.run("CREATE INDEX pages_ns ON pages(ns)");
   db.run("CREATE INDEX page_coords_page_id ON page_coords(page_id)");
+  db.run("CREATE INDEX page_ids_page_id ON page_ids(page_id)");
+  db.run("CREATE INDEX page_ids_lookup ON page_ids(id, kind)");
 }
 
 export function applyBuildPragmas(db: Database): void {
@@ -100,8 +131,14 @@ export function applyBuildPragmas(db: Database): void {
 }
 
 export interface Writer {
-  /** `coords` is optional so pre-coords callers (and tests) still pass three args. */
-  addPage(title: string, ns: number, text: string, coords?: readonly WikiCoord[]): void;
+  /** `coords`/`ids` are optional so older callers (and tests) still pass three args. */
+  addPage(
+    title: string,
+    ns: number,
+    text: string,
+    coords?: readonly WikiCoord[],
+    ids?: readonly WikiId[],
+  ): void;
   addRedirect(source: string, target: string, ns: number): void;
   flush(): void;
 }
@@ -117,6 +154,7 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
   const insertCoord = db.prepare(
     "INSERT INTO page_coords (page_id, zone, x, y, raw) VALUES (?, ?, ?, ?, ?)",
   );
+  const insertId = db.prepare("INSERT INTO page_ids (page_id, kind, id) VALUES (?, ?, ?)");
   const insertRedirect = db.prepare(
     "INSERT OR REPLACE INTO redirects (source, target, ns) VALUES (?, ?, ?)",
   );
@@ -142,7 +180,7 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
   };
 
   return {
-    addPage(title, ns, text, coords) {
+    addPage(title, ns, text, coords, ids) {
       begin();
       const id = nextId++;
       insertPage.run(id, title, ns, text, text.length);
@@ -151,6 +189,9 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
         for (const c of coords) {
           insertCoord.run(id, c.zone ?? null, c.x, c.y, c.raw);
         }
+      }
+      if (ids !== undefined) {
+        for (const e of ids) insertId.run(id, e.kind, e.id);
       }
       tick();
     },

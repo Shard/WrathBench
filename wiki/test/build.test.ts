@@ -23,7 +23,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
           {
             id: 2,
             timestamp: "2015-01-01T00:00:00Z",
-            text: "{{questbox|level=5}}'''Example Quest Alpha''' sends you to [[Example Zone Beta|the beta zone]].",
+            text: "{{questbox|level=5|id=4242}}'''Example Quest Alpha''' sends you to [[Example Zone Beta|the beta zone]].",
           },
           { id: 1, timestamp: "2009-01-01T00:00:00Z", text: "An older draft, lorem ipsum." },
         ],
@@ -91,7 +91,16 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
   const coordRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_coords").get()!;
   expect(coordRows.n).toBe(1);
-  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("2");
+  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("3");
+
+  // Ids were lifted off the raw wikitext too, and an id query finds the page
+  // through the id table rather than through body prose.
+  const idRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_ids").get()!;
+  expect(idRows.n).toBe(1);
+  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("id_rows")!.value).toBe("1");
+  const byId = searchReference(db, "quest 4242")[0]!;
+  expect(byId.title).toBe("Example Quest Alpha");
+  expect(byId.matchedId).toEqual({ kind: "quest", id: 4242 });
 
   // The dropped namespace is really absent.
   expect(searchReference(db, "chatter")).toEqual([]);
