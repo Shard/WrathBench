@@ -15,6 +15,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentPosition } from "./api-types";
 import { listRuns } from "./runs";
 
 /**
@@ -29,21 +30,8 @@ export const POSITION_WINDOW_MS = 600_000;
  * the client ages pips off it, and a replay feed will supply the sample time
  * from the trajectory in exactly the same way.
  */
-export interface AgentPosition {
-  runId: string;
-  character: string | null;
-  model: string | null;
-  map: number;
-  x: number;
-  y: number;
-  /** Epoch ms of the state sample this position came from. */
-  ts: number;
-  level: number | null;
-  xp: number | null;
-  money: number | null;
-  questsCompleted: number | null;
-  harnessVersion: string | null;
-}
+/* The shape lives in `api-types.ts`, the contract the dashboard imports too. */
+export type { AgentPosition } from "./api-types";
 
 /** Which columns a run's `state` table actually has (schema drift is normal). */
 function stateColumns(db: Database): Set<string> {

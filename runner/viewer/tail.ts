@@ -12,6 +12,7 @@
  * as long as the bytes after the last newline are carried over untouched.
  */
 
+import type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
 
@@ -22,18 +23,11 @@ export const MAX_TEXT = 2000;
 /** Max array elements kept in a generic summary. */
 const MAX_ARRAY = 8;
 
-export interface EntrySummary {
-  /** Index of this entry in the file, 0-based. Stable; used to fetch the raw line. */
-  i: number;
-  t: string;
-  ts: number;
-  /** Byte range of the raw line, newline excluded. */
-  start: number;
-  end: number;
-  /** True when anything in this entry was dropped or cut for display. */
-  clipped?: boolean;
-  [key: string]: unknown;
-}
+/*
+ * The summary, usage and totals shapes live in `api-types.ts` — the type-only
+ * contract the dashboard imports too — and are re-exported here unchanged.
+ */
+export type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -122,13 +116,6 @@ function messageChars(m: unknown): number {
  * on both the OpenAI-compat shape and the claude CLI shape the runner
  * normalises to, so prompt is always the whole input for the turn.
  */
-export interface ReportedUsage {
-  prompt: number;
-  completion: number;
-  cachedRead?: number;
-  cacheWrite?: number;
-}
-
 function reportedUsage(rec: Record<string, unknown>): ReportedUsage | null {
   const candidates = [rec["usage"], (rec["message"] as Record<string, unknown> | undefined)?.["usage"]];
   for (const u of candidates) {
@@ -164,6 +151,48 @@ function toolCallNames(message: unknown): string[] {
     const n = c.function?.name ?? c.name;
     return typeof n === "string" ? n : "?";
   });
+}
+
+/**
+ * Field names whose *values* are secrets, wherever they appear.
+ *
+ * The `meta` entry embeds the run's whole config, and that config carries the
+ * module bearer `token`. Nothing in the viewer needs it and the API is meant to
+ * be safe to expose read-only, so it is stripped at the two places a raw record
+ * can reach a client: the generic summariser below and `TrajectoryTail.raw`.
+ * `apiKeyEnv` deliberately stays — it names an environment variable, and the
+ * value of that variable is never written to the trajectory in the first place.
+ */
+const SECRET_KEYS = new Set(["token", "apiKey", "api_key", "password", "secret"]);
+
+/** The placeholder a stripped value leaves behind, so its absence is visible. */
+export const REDACTED = "[redacted]";
+
+/** Deep copy with every secret-named value replaced. Arrays and depth included. */
+export function redactSecrets(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(redactSecrets);
+  if (v === null || typeof v !== "object") return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    out[k] = SECRET_KEYS.has(k) ? REDACTED : redactSecrets(val);
+  }
+  return out;
+}
+
+/**
+ * Redact a raw JSONL line without reshaping it. A line that will not parse is
+ * returned as-is only when it demonstrably carries no secret key name — an
+ * unparseable line we cannot inspect is safer withheld than forwarded.
+ */
+export function redactRawLine(line: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    for (const k of SECRET_KEYS) if (line.includes(`"${k}"`)) return JSON.stringify({ error: "unparseable entry withheld" });
+    return line;
+  }
+  return JSON.stringify(redactSecrets(parsed));
 }
 
 /**
@@ -254,32 +283,13 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
     default: {
       for (const [k, v] of Object.entries(rec)) {
         if (k === "t" || k === "ts" || k === "turn") continue;
-        base[k] = shrink(v, flag);
+        // `meta` lands here carrying the run config, bearer token and all.
+        base[k] = SECRET_KEYS.has(k) ? REDACTED : shrink(redactSecrets(v), flag);
       }
       if (flag.clipped) base["clipped"] = true;
       return base;
     }
   }
-}
-
-export interface TokenTotals {
-  /** "reported" only when a driver actually logged provider usage. */
-  source: "reported" | "estimated";
-  /** Prompt size of the most recent turn: what the model is carrying right now. */
-  contextTokens: number;
-  /** The whole input, cached part included — the openai-compat `prompt_tokens`. */
-  promptTokens: number;
-  completionTokens: number;
-  /** Prompt + completion summed over every turn — cumulative, as billed. */
-  totalTokens: number;
-  /**
-   * Cache reads and writes, `null` when the provider never said. A compat
-   * endpoint reports `cached_tokens` and nothing about writes, so writes stay
-   * unknown there — which is not the same as none, and must not show as 0.
-   */
-  cacheReadTokens: number | null;
-  cacheWriteTokens: number | null;
-  turns: number;
 }
 
 /**
@@ -492,7 +502,7 @@ export class TrajectoryTail {
   async raw(i: number): Promise<string | null> {
     const e = this.entries[i];
     if (e === undefined) return null;
-    return await Bun.file(this.path).slice(e.start, e.end).text();
+    return redactRawLine(await Bun.file(this.path).slice(e.start, e.end).text());
   }
 }
 

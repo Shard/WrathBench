@@ -7,6 +7,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { RunRow, StatePoint } from "./api-types";
 import { normalizePauseReason } from "../src/index";
 
 /**
@@ -17,44 +18,12 @@ import { normalizePauseReason } from "../src/index";
  */
 export const LIVE_WINDOW_MS = 120_000;
 
-export interface RunRow {
-  runId: string;
-  model: string | null;
-  driver: string | null;
-  adapter: string | null;
-  shakeout: string | null;
-  character: string | null;
-  /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
-  platform: string | null;
-  apiBase: string | null;
-  harnessVersion: string | null;
-  startedAt: number | null;
-  endedAt: number | null;
-  terminationReason: string | null;
-  terminationDetail: string | null;
-  pauseReason: string | null;
-  level: number | null;
-  xp: number | null;
-  /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
-  money: number | null;
-  questsCompleted: number | null;
-  mtime: number | null;
-  bytes: number | null;
-  live: boolean;
-  error?: string;
-}
-
-export interface StatePoint {
-  ts: number;
-  level: number | null;
-  xp: number | null;
-  map: number | null;
-  x: number | null;
-  y: number | null;
-  z: number | null;
-  eventCount: number | null;
-  lastSeq: number | null;
-}
+/*
+ * The row and sample shapes live in `api-types.ts` — the type-only contract the
+ * dashboard imports too — and are re-exported here so every existing importer
+ * of this module keeps working.
+ */
+export type { RunRow, StatePoint } from "./api-types";
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 

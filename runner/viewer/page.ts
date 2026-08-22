@@ -207,7 +207,7 @@ async function renderIndex() {
   const ticking = [];
   for (const r of runs) {
     const tr = el("tr");
-    const c1 = el("td"); const a = el("a", "", r.runId); a.href = "/run/" + encodeURIComponent(r.runId); c1.append(a);
+    const c1 = el("td"); const a = el("a", "", r.runId); a.href = BASE + "/run/" + encodeURIComponent(r.runId); c1.append(a);
     if (r.shakeout) { c1.append(document.createTextNode(" ")); c1.append(el("span", "warn", "[" + r.shakeout + "]")); }
     tr.append(c1);
     tr.append(el("td", r.live ? "live" : "dim", r.live ? "● LIVE" : (r.pauseReason ? "paused" : (r.terminationReason ? "done" : "cold"))));
@@ -732,7 +732,19 @@ async function renderRun(runId) {
   };
 }
 
-const path = decodeURIComponent(location.pathname);
+/*
+ * These pages moved under /legacy when the SPA took over "/" (ADR-0021), and
+ * they are served at both paths meanwhile. Deriving the prefix from the URL is
+ * what lets one document work at either, with no build step and no rewriting on
+ * the way out.
+ */
+const BASE = location.pathname.startsWith("/legacy") ? "/legacy" : "";
+for (const a of document.querySelectorAll("header a")) {
+  const href = a.getAttribute("href");
+  if (href && href.startsWith("/")) a.setAttribute("href", BASE + (href === "/" ? "/" : href));
+}
+
+const path = decodeURIComponent(location.pathname).slice(BASE.length);
 if (path.startsWith("/run/")) renderRun(path.slice(5)).catch((e) => { $("#main").textContent = String(e); });
 else renderIndex().catch((e) => { $("#main").textContent = String(e); });
 </script>

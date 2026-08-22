@@ -4,6 +4,9 @@
  *
  *   bun runner/viewer/serve.ts            # from the repo root, on the host
  *
+ * This file is only the bind: environment in, `createApi` out. The routes and
+ * everything they are allowed to serve live in `api.ts`.
+ *
  * Loopback by default. Trajectory content carries game-derived text; the
  * DATA-AND-LEGAL.md posture is no public endpoint and no distribution, so a
  * non-loopback bind is a startup failure unless the operator explicitly opts
@@ -14,20 +17,9 @@
  * run.sqlite is opened readonly so a live writer is untouched.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { MAP_PAGE } from "./map-page";
-import { PAGE } from "./page";
-import { readPositions } from "./positions";
-import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
-import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
-import {
-  TrajectoryTail,
-  scanRunTotals,
-  tokenTotals,
-  type EntrySummary,
-  type RunTotals,
-} from "./tail";
+import { createApi, json } from "./api";
 
 const REQUIRED_HOST = "127.0.0.1";
 const lanOptIn = process.env["WRATHBENCH_VIEWER_LAN"] === "1";
@@ -45,205 +37,29 @@ const port = Number(process.env["WRATHBENCH_VIEWER_PORT"] ?? 8090);
 const runsDir = process.env["WRATHBENCH_RUNS_DIR"] ?? "data/runs";
 /*
  * Minimap tiles, written by the extraction in `minimap/`. Its absence is a
- * normal state, not a startup failure: the map page draws a labelled grid where
- * a tile is missing, so it works on a machine that has never run the extraction.
+ * normal state, not a startup failure: the map draws a labelled grid where a
+ * tile is missing, so it works on a machine that has never run the extraction.
  */
 const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
+/*
+ * The built SPA. Also a normal absence: without it the viewer serves the
+ * hand-written pages it always did, so a fresh checkout needs no build step.
+ */
+const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist";
+const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
+
 if (!existsSync(runsDir)) {
   console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
   process.exit(1);
 }
 
-const POLL_MS = 1000;
-const WINDOW_MAX = 500;
-
-/** One tail per run, shared by every reader; scans are serialised per run. */
-const tails = new Map<string, TrajectoryTail>();
-const scans = new Map<string, Promise<EntrySummary[]>>();
-
-function tailFor(runId: string, dir: string): TrajectoryTail {
-  let t = tails.get(runId);
-  if (t === undefined) {
-    t = new TrajectoryTail(join(dir, "trajectory.jsonl"));
-    tails.set(runId, t);
-  }
-  return t;
-}
-
-/** Serialise scans: two concurrent readers must not both consume the same bytes. */
-function scan(runId: string, tail: TrajectoryTail): Promise<EntrySummary[]> {
-  const prev = scans.get(runId) ?? Promise.resolve([] as EntrySummary[]);
-  const next = prev.then(
-    () => tail.scan(),
-    () => tail.scan(),
-  );
-  scans.set(runId, next);
-  return next;
-}
-
-/**
- * Per-run totals for the listing, memoised on (size, mtime).
- *
- * The listing wants tokens and a wall clock for every run, which means reading
- * every trajectory. A finished run's file never changes, so it is read once per
- * process; a live run is re-read only as it grows. The full-fidelity scan lives
- * in `scanRunTotals` and keeps nothing per entry, so this stays a few numbers
- * per run rather than a second copy of every feed.
- */
-const totalsCache = new Map<string, { size: number; mtime: number; totals: RunTotals }>();
-
-async function runTotals(runId: string, dir: string): Promise<RunTotals | null> {
-  const path = join(dir, "trajectory.jsonl");
-  let st: ReturnType<typeof statSync>;
-  try {
-    st = statSync(path);
-  } catch {
-    return null;
-  }
-  const hit = totalsCache.get(runId);
-  if (hit !== undefined && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.totals;
-  const totals = await scanRunTotals(path);
-  totalsCache.set(runId, { size: st.size, mtime: st.mtimeMs, totals });
-  return totals;
-}
-
-async function listWithTotals(): Promise<unknown[]> {
-  const rows = listRuns(runsDir);
-  const out: unknown[] = [];
-  for (const row of rows) {
-    const dir = runDir(runsDir, row.runId);
-    const totals = dir === null ? null : await runTotals(row.runId, dir);
-    out.push({
-      ...row,
-      tokens: totals?.tokens ?? null,
-      firstTs: totals?.firstTs ?? null,
-      lastTs: totals?.lastTs ?? null,
-    });
-  }
-  return out;
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
-}
-
-function page(body: string): Response {
-  return new Response(body, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
-}
-
-function html(): Response {
-  return page(PAGE);
-}
-
-function notFound(msg: string): Response {
-  return json({ error: msg }, 404);
-}
-
-async function handle(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const path = decodeURIComponent(url.pathname);
-
-  if (path === "/" || path.startsWith("/run/")) return html();
-  if (path === "/map") return page(MAP_PAGE);
-  if (path === "/api/runs") return json({ runs: await listWithTotals() });
-  if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
-
-  if (path.startsWith("/tiles/")) {
-    const file = resolveTilePath(tilesDir, path);
-    // A tile that was never extracted is a 404 the client expects and draws
-    // around; it is not an error worth a body.
-    if (file === null) return new Response("no such tile", { status: 404 });
-    return new Response(Bun.file(file), {
-      headers: { "content-type": "image/png", "cache-control": TILE_CACHE_CONTROL },
-    });
-  }
-
-  const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
-  if (m === null) return notFound("no such path");
-  const runId = m[1]!;
-  const rest = m[2] ?? "";
-  const dir = runDir(runsDir, runId);
-  if (dir === null) return notFound(`no such run: ${runId}`);
-  const tail = tailFor(runId, dir);
-
-  if (rest === "" || rest === "/") {
-    await scan(runId, tail);
-    return json({
-      run: readRun(runsDir, runId),
-      states: readStates(runsDir, runId),
-      total: tail.entries.length,
-      tokens: tokenTotals(tail.entries),
-    });
-  }
-
-  if (rest === "/entries") {
-    await scan(runId, tail);
-    const total = tail.entries.length;
-    const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? 200)));
-    const fromParam = url.searchParams.get("from");
-    const from = fromParam === null ? Math.max(0, total - limit) : Math.max(0, Number(fromParam));
-    return json({ from, total, entries: tail.entries.slice(from, from + limit) });
-  }
-
-  const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
-  if (rawMatch !== null) {
-    await scan(runId, tail);
-    const raw = await tail.raw(Number(rawMatch[1]));
-    if (raw === null) return notFound("no such entry");
-    return new Response(raw, {
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-    });
-  }
-
-  if (rest === "/scratchpad") {
-    const text = readScratchpad(runsDir, runId);
-    if (text === null) return notFound("no scratchpad");
-    return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
-  }
-
-  if (rest === "/stream") {
-    await scan(runId, tail);
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const stream = new ReadableStream({
-      start(controller) {
-        const enc = new TextEncoder();
-        const send = (data: unknown): void => {
-          controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
-        };
-        send({ hello: runId, total: tail.entries.length });
-        timer = setInterval(() => {
-          void scan(runId, tail)
-            .then((added) => {
-              // A heartbeat keeps proxies and fetch timeouts from calling it dead.
-              send(
-                added.length > 0
-                  ? { entries: added, tokens: tokenTotals(tail.entries) }
-                  : { tick: Date.now() },
-              );
-            })
-            .catch(() => undefined);
-        }, POLL_MS);
-      },
-      cancel() {
-        if (timer !== undefined) clearInterval(timer);
-      },
-    });
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      },
-    });
-  }
-
-  return notFound("no such path");
-}
+const built = existsSync(join(dashboardDir, "index.html"));
+const handle = createApi({
+  runsDir,
+  tilesDir,
+  dashboardDir: built ? dashboardDir : undefined,
+  publicMode,
+});
 
 const server = Bun.serve({
   hostname: host,
@@ -255,4 +71,8 @@ const server = Bun.serve({
     ),
 });
 
-console.log(`wrathbench viewer: http://${REQUIRED_HOST}:${server.port}  (runs: ${runsDir})`);
+console.log(
+  `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir})` +
+    (built ? "" : "  [dashboard not built — legacy pages at /]") +
+    (publicMode ? "  [public mode: raw, scratchpads and tiles withheld]" : ""),
+);

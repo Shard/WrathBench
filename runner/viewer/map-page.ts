@@ -82,6 +82,8 @@ export const MAP_PAGE = String.raw`<!doctype html>
   <div id="side"><span class="dim">no agent selected</span></div>
 </div>
 <script>
+/* Served at both "/map" and "/legacy/map" while the SPA owns "/" — see page.ts. */
+const BASE = location.pathname.startsWith("/legacy") ? "/legacy" : "";
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text; return n; };
@@ -440,7 +442,7 @@ function drawSide() {
   side.append(el("div", "k", "last update"), age);
   row("harness", shortHarness(p.harnessVersion));
   const a = el("a", "", "open run →");
-  a.href = "/run/" + encodeURIComponent(p.runId);
+  a.href = BASE + "/run/" + encodeURIComponent(p.runId);
   side.append(a);
   // The age is the only thing that moves on its own; it ticks in place.
   clearInterval(drawSide.timer);
@@ -484,6 +486,11 @@ async function poll() {
     feedError = err;
   }
   drawChips(); drawHeader(); drawSide();
+}
+
+for (const a of document.querySelectorAll("header a")) {
+  const href = a.getAttribute("href");
+  if (href && href.startsWith("/")) a.setAttribute("href", BASE + (href === "/" ? "/" : href));
 }
 
 resize();
