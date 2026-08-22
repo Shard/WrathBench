@@ -17,6 +17,7 @@ import {
   itemQuery,
   monsterMove,
   monsterStopped,
+  newWorld,
   OTHER_QUEST_ID,
   QUEST_ID,
   questAccepted,
@@ -24,6 +25,8 @@ import {
   questCombatStream,
   questComplete,
   questProgress,
+  transferAborted,
+  transferPending,
   questRewarded,
   questGiverStatus,
   questGiverStatusMultiple,
@@ -315,6 +318,36 @@ describe("state cache: self, from the wire", () => {
     );
     expect(cache.self.position?.value).toEqual({ map: 0, x: -1205, y: 981, z: 42, o: 1.2 });
     expect(cache.self.position?.seq).toBe(19);
+  });
+
+  test("SMSG_NEW_WORLD moves self to the new map and evicts the old map's objects", () => {
+    // FOLLOW-UPS 38 N1: SMSG_LOGIN_VERIFY_WORLD is login-only, so before this
+    // a tram ride left self.position.map at the login map forever and the
+    // Ironforge crowd lingered in `nearby` on map 369.
+    const cache = StateCache.replay(
+      toEvents([...loginSequence, selfCreate, creatureCreate, transferPending(369), newWorld(369)]),
+      { seed: SEED },
+    );
+    expect(cache.self.position?.value).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
+    expect(cache.self.position?.seq).toBe(41);
+    expect(cache.self.transfer).toBeUndefined();
+    expect(cache.nearbyUnits()).toEqual([]);
+    // Later own positions pair with the new map.
+    cache.apply(toEvents([moveProgress])[0]!);
+    expect(cache.self.position?.value.map).toBe(369);
+  });
+
+  test("a pending transfer is visible until NEW_WORLD completes or ABORTED cancels it", () => {
+    const pending = StateCache.replay(toEvents([...loginSequence, transferPending(369)]), { seed: SEED });
+    expect(pending.self.transfer?.value).toEqual({ toMap: 369 });
+    expect(pending.self.position?.value.map).toBe(0);
+
+    const aborted = StateCache.replay(
+      toEvents([...loginSequence, transferPending(369), transferAborted(369, 1)]),
+      { seed: SEED },
+    );
+    expect(aborted.self.transfer).toBeUndefined();
+    expect(aborted.self.position?.value.map).toBe(0);
   });
 
   test("own position with no map ever observed is refused, not defaulted", () => {

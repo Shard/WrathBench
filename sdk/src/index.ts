@@ -38,8 +38,10 @@ export type {
   TrainerListResult,
   TrainerOptions,
   TrainerSpell,
+  TransferResult,
   WaitForChatOptions,
   WaitForNearbyOptions,
+  WaitForTransferOptions,
 } from "./client";
 
 export {

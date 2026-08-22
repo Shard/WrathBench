@@ -649,6 +649,7 @@ export const MOVE_STATUSES = [
   "target_off_mesh",
   "start_off_mesh",
   "path_incomplete",
+  "transferred",
   "interrupted",
   "stopped",
   "superseded",
@@ -680,6 +681,34 @@ export const moveResultDataSchema = z.looseObject({
   reachedPos: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
 });
 export type MoveResultData = z.infer<typeof moveResultDataSchema>;
+
+// ---------------------------------------------------------- map transfers
+//
+// Navigation (FOLLOW-UPS 38 N1). `SMSG_NEW_WORLD` is the only map id a client
+// receives after login, so state.ts keys self position's `map` on it.
+
+export const transferPendingDataSchema = z.looseObject({
+  map: z.number(),
+  transportEntry: z.number().optional(),
+  oldMap: z.number().optional(),
+});
+export type TransferPendingData = z.infer<typeof transferPendingDataSchema>;
+
+export const newWorldDataSchema = z.looseObject({
+  map: z.number(),
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+  o: z.number(),
+});
+export type NewWorldData = z.infer<typeof newWorldDataSchema>;
+
+export const transferAbortedDataSchema = z.looseObject({
+  map: z.number(),
+  reason: z.number(),
+  arg: z.number().optional(),
+});
+export type TransferAbortedData = z.infer<typeof transferAbortedDataSchema>;
 
 // ----------------------------------------------- quest / combat extension
 //
@@ -1222,6 +1251,10 @@ export const eventDataSchemas = {
   WB_SESSION_STATE: sessionStateDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
   ...moveOpcodeSchemas,
+  // map transfers
+  SMSG_TRANSFER_PENDING: transferPendingDataSchema,
+  SMSG_NEW_WORLD: newWorldDataSchema,
+  SMSG_TRANSFER_ABORTED: transferAbortedDataSchema,
   // quest/combat extension — combat
   SMSG_ATTACKSTART: attackStartDataSchema,
   SMSG_ATTACKSTOP: attackStopDataSchema,
