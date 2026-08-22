@@ -32,6 +32,8 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "SharedDefines.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Timer.h"
 #include "UpdateData.h"
 #include "UpdateFields.h"
@@ -421,6 +423,105 @@ namespace WrathBench
         try { (void)std::stoull(v); return true; } catch (...) { return false; }
     }
 
+    // The raw-action allowlist (ADR-0025, PROTOCOL.md "raw"). Every entry is a
+    // client opcode a stock 3.3.5a client sends from ordinary play, whose
+    // handler does nothing a non-GM client could not do, and which has NO
+    // dedicated action yet — the hatch exists so a trajectory can show the
+    // need for a surface before the module and SDK grow one (ADR-0015).
+    // Deliberately absent: movement (the module drives it; a stray packet
+    // desyncs the mover), session lifecycle (login/logout/char create), every
+    // opcode that already has an action (one audited path per opcode), and
+    // anything GM-gated or teleport-shaped.
+    struct RawOpcode { char const* name; uint16 op; };
+    static RawOpcode const kRawAllowlist[] = {
+        // talents (also first-class actions; listed so a caller can build the
+        // preview packet by hand)
+        { "CMSG_LEARN_TALENT", CMSG_LEARN_TALENT },
+        { "CMSG_LEARN_PREVIEW_TALENTS", CMSG_LEARN_PREVIEW_TALENTS },
+        // chat and emotes (whisper/party/yell ride CMSG_MESSAGECHAT)
+        { "CMSG_MESSAGECHAT", CMSG_MESSAGECHAT },
+        { "CMSG_EMOTE", CMSG_EMOTE },
+        { "CMSG_TEXT_EMOTE", CMSG_TEXT_EMOTE },
+        // inventory management (bags, splitting, swapping)
+        { "CMSG_SPLIT_ITEM", CMSG_SPLIT_ITEM },
+        { "CMSG_SWAP_ITEM", CMSG_SWAP_ITEM },
+        { "CMSG_SWAP_INV_ITEM", CMSG_SWAP_INV_ITEM },
+        { "CMSG_AUTOSTORE_BAG_ITEM", CMSG_AUTOSTORE_BAG_ITEM },
+        { "CMSG_AUTOEQUIP_ITEM_SLOT", CMSG_AUTOEQUIP_ITEM_SLOT },
+        { "CMSG_READ_ITEM", CMSG_READ_ITEM },
+        { "CMSG_OPEN_ITEM", CMSG_OPEN_ITEM },
+        { "CMSG_BUYBACK_ITEM", CMSG_BUYBACK_ITEM },
+        // spell/aura control
+        { "CMSG_CANCEL_AURA", CMSG_CANCEL_AURA },
+        { "CMSG_CANCEL_AUTO_REPEAT_SPELL", CMSG_CANCEL_AUTO_REPEAT_SPELL },
+        { "CMSG_CANCEL_CHANNELLING", CMSG_CANCEL_CHANNELLING },
+        { "CMSG_SET_SHEATHED", CMSG_SET_SHEATHED },
+        { "CMSG_STANDSTATECHANGE", CMSG_STANDSTATECHANGE },
+        { "CMSG_RESURRECT_RESPONSE", CMSG_RESURRECT_RESPONSE },
+        // flight paths
+        { "CMSG_TAXINODE_STATUS_QUERY", CMSG_TAXINODE_STATUS_QUERY },
+        { "CMSG_TAXIQUERYAVAILABLENODES", CMSG_TAXIQUERYAVAILABLENODES },
+        { "CMSG_ACTIVATETAXI", CMSG_ACTIVATETAXI },
+        { "CMSG_ACTIVATETAXIEXPRESS", CMSG_ACTIVATETAXIEXPRESS },
+        // bank
+        { "CMSG_BANKER_ACTIVATE", CMSG_BANKER_ACTIVATE },
+        { "CMSG_AUTOBANK_ITEM", CMSG_AUTOBANK_ITEM },
+        { "CMSG_AUTOSTORE_BANK_ITEM", CMSG_AUTOSTORE_BANK_ITEM },
+        { "CMSG_BUY_BANK_SLOT", CMSG_BUY_BANK_SLOT },
+        // mail
+        { "CMSG_SEND_MAIL", CMSG_SEND_MAIL },
+        { "CMSG_GET_MAIL_LIST", CMSG_GET_MAIL_LIST },
+        { "CMSG_MAIL_TAKE_ITEM", CMSG_MAIL_TAKE_ITEM },
+        { "CMSG_MAIL_TAKE_MONEY", CMSG_MAIL_TAKE_MONEY },
+        { "CMSG_MAIL_MARK_AS_READ", CMSG_MAIL_MARK_AS_READ },
+        { "CMSG_MAIL_DELETE", CMSG_MAIL_DELETE },
+        // party
+        { "CMSG_GROUP_INVITE", CMSG_GROUP_INVITE },
+        { "CMSG_GROUP_ACCEPT", CMSG_GROUP_ACCEPT },
+        { "CMSG_GROUP_DECLINE", CMSG_GROUP_DECLINE },
+        { "CMSG_GROUP_UNINVITE_GUID", CMSG_GROUP_UNINVITE_GUID },
+        { "CMSG_GROUP_DISBAND", CMSG_GROUP_DISBAND },
+        { "CMSG_GROUP_SET_LEADER", CMSG_GROUP_SET_LEADER },
+        { "CMSG_LOOT_METHOD", CMSG_LOOT_METHOD },
+        // trade
+        { "CMSG_INITIATE_TRADE", CMSG_INITIATE_TRADE },
+        { "CMSG_BEGIN_TRADE", CMSG_BEGIN_TRADE },
+        { "CMSG_ACCEPT_TRADE", CMSG_ACCEPT_TRADE },
+        { "CMSG_CANCEL_TRADE", CMSG_CANCEL_TRADE },
+        { "CMSG_SET_TRADE_ITEM", CMSG_SET_TRADE_ITEM },
+        { "CMSG_CLEAR_TRADE_ITEM", CMSG_CLEAR_TRADE_ITEM },
+        { "CMSG_SET_TRADE_GOLD", CMSG_SET_TRADE_GOLD },
+        // client-cache queries a real client issues on its own
+        { "CMSG_NAME_QUERY", CMSG_NAME_QUERY },
+        { "CMSG_CREATURE_QUERY", CMSG_CREATURE_QUERY },
+        { "CMSG_GAMEOBJECT_QUERY", CMSG_GAMEOBJECT_QUERY },
+        { "CMSG_ITEM_QUERY_SINGLE", CMSG_ITEM_QUERY_SINGLE },
+        { "CMSG_NPC_TEXT_QUERY", CMSG_NPC_TEXT_QUERY },
+        { "CMSG_PAGE_TEXT_QUERY", CMSG_PAGE_TEXT_QUERY },
+        { "CMSG_PLAYED_TIME", CMSG_PLAYED_TIME },
+        { "CMSG_QUERY_TIME", CMSG_QUERY_TIME },
+        { "CMSG_SET_WATCHED_FACTION", CMSG_SET_WATCHED_FACTION },
+        { "CMSG_SET_ACTION_BUTTON", CMSG_SET_ACTION_BUTTON },
+        { nullptr, 0 },
+    };
+    static constexpr size_t kRawPayloadMaxBytes = 512;
+
+    static bool RawOpcodeAllowed(std::string const& name)
+    {
+        for (RawOpcode const* e = kRawAllowlist; e->name; ++e)
+            if (name == e->name)
+                return true;
+        return false;
+    }
+
+    static uint16 RawOpcodeValue(std::string const& name)
+    {
+        for (RawOpcode const* e = kRawAllowlist; e->name; ++e)
+            if (name == e->name)
+                return e->op;
+        return 0;
+    }
+
     // Every missing/invalid-param reply names the action and the param it was
     // about: a bare "missing_guid" cost live-run turns to diagnose.
     static HttpReply MissingParam(std::string const& action, char const* code, char const* param)
@@ -505,7 +606,8 @@ namespace WrathBench
             if (!known)
                 known = action == "cast_spell" || action == "cancel_cast" || action == "quest_abandon"
                      || action == "loot_item" || action == "equip_item" || action == "use_item"
-                     || action == "destroy_item" || action == "quest_query";
+                     || action == "destroy_item" || action == "quest_query"
+                     || action == "learn_talent" || action == "learn_preview_talents" || action == "raw";
             if (!known)
                 return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
 
@@ -531,6 +633,32 @@ namespace WrathBench
             if ((action == "equip_item" || action == "use_item" || action == "destroy_item")
                 && (!req.Has("bag") || !req.Has("slot")))
                 return MissingParam(action, "missing_bag_slot", !req.Has("bag") ? "bag" : "slot");
+            if (action == "learn_talent" && (!req.Has("talentId") || !req.Has("rank")))
+                return MissingParam(action, "missing_talent", !req.Has("talentId") ? "talentId" : "rank");
+            if (action == "learn_preview_talents" && !req.Has("talents"))
+                return MissingParam(action, "missing_talents", "talents");
+            if (action == "raw")
+            {
+                // The escape hatch (ADR-0025): an allowlisted client opcode by
+                // name plus a caller-built hex payload. Everything about it is
+                // checked here so a bad request never reaches the world thread.
+                std::string opcode = req.GetString("opcode");
+                if (opcode.empty())
+                    return MissingParam(action, "missing_opcode", "opcode");
+                if (!RawOpcodeAllowed(opcode))
+                    return {400, Json::Writer().Add("ok", false).Add("error", "opcode_not_allowed")
+                        .Add("action", action).Add("opcode", opcode)
+                        .Add("hint", "only the CMSG_* names in PROTOCOL.md's raw allowlist can be sent; opcodes that already have an action must use that action").Str()};
+                std::string payload = req.GetString("payload");
+                if (payload.size() % 2 != 0 || payload.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+                    return {400, Json::Writer().Add("ok", false).Add("error", "invalid_payload")
+                        .Add("action", action).Add("param", "payload")
+                        .Add("hint", "payload is a hex string of the packet body bytes, little-endian per field, even length; empty for a bodiless opcode").Str()};
+                if (payload.size() > kRawPayloadMaxBytes * 2)
+                    return {400, Json::Writer().Add("ok", false).Add("error", "payload_too_large")
+                        .Add("action", action).Add("received", (uint64_t)(payload.size() / 2))
+                        .Add("maximum", (uint64_t)kRawPayloadMaxBytes).Str()};
+            }
 
             PushTask([this, token, action, body, ack]() { DoGameAction(token, action, body, ack); });
         }
@@ -1374,6 +1502,67 @@ namespace WrathBench
             // corpse guid a real client echoes (optional here).
             p = new WorldPacket(CMSG_RECLAIM_CORPSE, 8);
             *p << uint64(guid);
+        }
+        else if (action == "learn_talent")
+        {
+            // uint32 talent id (Talent.dbc) + uint32 requested rank (0-based),
+            // exactly what HandleLearnTalentOpcode reads. The handler answers
+            // with SMSG_TALENTS_INFO whether or not the talent was learned; the
+            // spell it grants arrives as SMSG_LEARNED_SPELL.
+            uint32 talentId = static_cast<uint32>(req.GetInt("talentId"));
+            uint32 rank = static_cast<uint32>(req.GetInt("rank"));
+            p = new WorldPacket(CMSG_LEARN_TALENT, 8);
+            *p << uint32(talentId) << uint32(rank);
+            auditW.Add("talentId", talentId).Add("rank", rank);
+        }
+        else if (action == "learn_preview_talents")
+        {
+            // uint32 count, then (uint32 talentId, uint32 rank) pairs — the
+            // client's "learn" button in preview mode. `talents` is the raw
+            // JSON array text [[id, rank], ...] (the flat parser keeps nested
+            // values verbatim); the module only reads digit pairs out of it.
+            std::string raw = req.GetString("talents");
+            std::vector<std::pair<uint32, uint32>> pairs;
+            std::vector<uint32> nums;
+            size_t i = 0;
+            while (i < raw.size())
+            {
+                if (std::isdigit(static_cast<unsigned char>(raw[i])))
+                {
+                    size_t j = i;
+                    while (j < raw.size() && std::isdigit(static_cast<unsigned char>(raw[j]))) ++j;
+                    try { nums.push_back(static_cast<uint32>(std::stoul(raw.substr(i, j - i)))); } catch (...) {}
+                    i = j;
+                }
+                else
+                    ++i;
+            }
+            if (nums.empty() || nums.size() % 2 != 0 || nums.size() / 2 > 150)
+                return err(400, "invalid_talents");
+            for (size_t k = 0; k < nums.size(); k += 2)
+                pairs.emplace_back(nums[k], nums[k + 1]);
+            p = new WorldPacket(CMSG_LEARN_PREVIEW_TALENTS, 4 + 8 * pairs.size());
+            *p << uint32(pairs.size());
+            for (auto const& [id, rank] : pairs)
+                *p << uint32(id) << uint32(rank);
+            auditW.Add("count", (uint64_t)pairs.size()).Raw("talents", raw.empty() ? "[]" : raw);
+        }
+        else if (action == "raw")
+        {
+            // The escape hatch (ADR-0025): validated on the io thread (opcode
+            // on the allowlist, payload well-formed hex, size-capped); here it
+            // is only decoded and queued into the stock handler like any other
+            // client packet. The audit record carries opcode and payload so
+            // the exact bytes "the client" sent are reconstructable.
+            std::string opcode = req.GetString("opcode");
+            std::string payload = req.GetString("payload");
+            uint16 op = RawOpcodeValue(opcode);
+            if (!op)
+                return err(400, "opcode_not_allowed");
+            p = new WorldPacket(op, payload.size() / 2);
+            for (size_t i = 0; i + 1 < payload.size(); i += 2)
+                *p << uint8(std::stoul(payload.substr(i, 2), nullptr, 16));
+            auditW.Add("opcode", opcode).Add("payload", payload);
         }
         else
             return err(400, "unsupported_action");
@@ -2409,6 +2598,27 @@ namespace WrathBench
         }
     }
 
+    // What a client reads from its own Spell.dbc for a spell id: the rank in
+    // the chain (1 when unranked) and the display name. Client-cache knowledge,
+    // exactly like the item-template fields on CMSG_ITEM_QUERY_SINGLE.
+    static void AddSpellFields(Json::Writer& w, uint32 spellId)
+    {
+        SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId);
+        if (!info)
+            return;
+        w.Add("rank", (uint32)info->GetRank());
+        if (info->SpellName[0])
+            w.Add("name", info->SpellName[0]);
+    }
+
+    static std::string SpellJson(uint32 spellId)
+    {
+        Json::Writer w;
+        w.Add("spellId", spellId);
+        AddSpellFields(w, spellId);
+        return w.Str();
+    }
+
     // =================================================================
     // Whitelisted SMSG decoders. Field layouts mirror the server-side
     // builders in AzerothCore at the pinned commit; see module/PROTOCOL.md.
@@ -2754,6 +2964,140 @@ namespace WrathBench
                     }
                     auras += "]";
                     w.AddGuid("targetGuid", (uint64_t)target).Raw("auras", auras);
+                    break;
+                }
+                // ------------------------------------------- spellbook/talents
+                case SMSG_INITIAL_SPELLS:
+                {
+                    // Player::SendInitialSpells: u8 0, u16 count, (u32 spellId,
+                    // u16 0) x count, u16 cooldownCount, (u32 spellId, u16
+                    // itemId, u16 category, u32 cooldownMs, u32
+                    // categoryCooldownMs) x cooldownCount. Rank and name are
+                    // what a client reads from its own Spell.dbc for each id.
+                    name = "SMSG_INITIAL_SPELLS";
+                    uint8 unk; p >> unk;
+                    uint16 count; p >> count;
+                    std::string spells = "[";
+                    for (uint16 i = 0; i < count; ++i)
+                    {
+                        uint32 spellId; uint16 slot; p >> spellId >> slot;
+                        if (i) spells += ',';
+                        spells += SpellJson(spellId);
+                    }
+                    spells += "]";
+                    uint16 cdCount = 0;
+                    if (p.rpos() + 2 <= p.size()) p >> cdCount;
+                    std::string cds = "[";
+                    bool firstCd = true;
+                    for (uint16 i = 0; i < cdCount && p.rpos() + 16 <= p.size(); ++i)
+                    {
+                        uint32 spellId, cd, catCd; uint16 itemId, category;
+                        p >> spellId >> itemId >> category >> cd >> catCd;
+                        if (!firstCd) cds += ',';
+                        firstCd = false;
+                        cds += Json::Writer().Add("spellId", spellId).Add("itemId", (uint32)itemId)
+                            .Add("category", (uint32)category).Add("cooldownMs", cd).Add("categoryCooldownMs", catCd).Str();
+                    }
+                    cds += "]";
+                    w.Raw("spells", spells).Raw("cooldowns", cds);
+                    break;
+                }
+                case SMSG_LEARNED_SPELL:
+                {
+                    name = "SMSG_LEARNED_SPELL";
+                    uint32 spellId; p >> spellId;
+                    w.Add("spellId", spellId);
+                    AddSpellFields(w, spellId);
+                    break;
+                }
+                case SMSG_REMOVED_SPELL:
+                {
+                    name = "SMSG_REMOVED_SPELL";
+                    uint32 spellId; p >> spellId;
+                    w.Add("spellId", spellId);
+                    break;
+                }
+                case SMSG_SUPERCEDED_SPELL:
+                {
+                    // Player::addSpell: the old (lower-rank) id, then the new
+                    // one that replaces it in the spellbook.
+                    name = "SMSG_SUPERCEDED_SPELL";
+                    uint32 oldId, newId; p >> oldId >> newId;
+                    w.Add("supersededSpellId", oldId).Add("spellId", newId);
+                    AddSpellFields(w, newId);
+                    break;
+                }
+                case SMSG_SPELL_COOLDOWN:
+                {
+                    // Unit::BuildCooldownPacket: u64 guid, u8 flags (1 =
+                    // include GCD), then (u32 spellId, u32 cooldownMs) pairs.
+                    name = "SMSG_SPELL_COOLDOWN";
+                    uint64 guid; uint8 flags; p >> guid >> flags;
+                    std::string cds = "[";
+                    bool first = true;
+                    while (p.rpos() + 8 <= p.size())
+                    {
+                        uint32 spellId, cd; p >> spellId >> cd;
+                        if (!first) cds += ',';
+                        first = false;
+                        cds += Json::Writer().Add("spellId", spellId).Add("cooldownMs", cd).Str();
+                    }
+                    cds += "]";
+                    w.AddGuid("guid", (uint64_t)guid).Add("flags", (uint32)flags).Raw("cooldowns", cds);
+                    break;
+                }
+                case SMSG_COOLDOWN_EVENT:
+                {
+                    // Player::SendCooldownEvent: the client starts the
+                    // cooldown timer it already knows for this spell.
+                    name = "SMSG_COOLDOWN_EVENT";
+                    uint32 spellId; uint64 guid; p >> spellId >> guid;
+                    w.Add("spellId", spellId).AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_CLEAR_COOLDOWN:
+                {
+                    name = "SMSG_CLEAR_COOLDOWN";
+                    uint32 spellId; uint64 guid; p >> spellId >> guid;
+                    w.Add("spellId", spellId).AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_TALENTS_INFO:
+                {
+                    // Player::BuildPlayerTalentsInfoData (pet variant is
+                    // served as { pet: true } only — no pet surface yet):
+                    // u32 unspent, u8 specCount, u8 activeSpec, per spec: u8
+                    // talentCount, (u32 talentId, u8 rank) x count, u8
+                    // glyphCount, u16 x glyphCount.
+                    name = "SMSG_TALENTS_INFO";
+                    uint8 pet; p >> pet;
+                    if (pet)
+                    {
+                        w.Add("pet", true);
+                        break;
+                    }
+                    uint32 unspent; uint8 specCount, activeSpec;
+                    p >> unspent >> specCount >> activeSpec;
+                    std::string specs = "[";
+                    for (uint8 si = 0; si < specCount && si < 2; ++si)
+                    {
+                        uint8 talentCount; p >> talentCount;
+                        std::string talents = "[";
+                        for (uint8 ti = 0; ti < talentCount; ++ti)
+                        {
+                            uint32 talentId; uint8 rank; p >> talentId >> rank;
+                            if (ti) talents += ',';
+                            talents += Json::Writer().Add("talentId", talentId).Add("rank", (uint32)rank).Str();
+                        }
+                        talents += "]";
+                        uint8 glyphCount; p >> glyphCount;
+                        for (uint8 gi = 0; gi < glyphCount; ++gi) { uint16 g; p >> g; }
+                        if (si) specs += ',';
+                        specs += Json::Writer().Raw("talents", talents).Str();
+                    }
+                    specs += "]";
+                    w.Add("pet", false).Add("unspentPoints", unspent).Add("specCount", (uint32)specCount)
+                     .Add("activeSpec", (uint32)activeSpec).Raw("specs", specs);
                     break;
                 }
                 // -------------------------------------------------- progress
