@@ -54,7 +54,8 @@ interface Case {
   smokeRc?: number;
   fleetRunning?: boolean;
   heartbeatAgeMs?: number;
-  smokes?: string[];
+  smokes?: (string | { script: string; account?: string })[];
+  deploySmokes?: (string | { script: string; account?: string })[];
   args?: string[];
   /** A gate record the supervisor "wrote" after this deploy started. */
   gate?: "pass" | "fail";
@@ -83,6 +84,7 @@ function runDeploy(c: Case = {}): Result {
         account: "SMOKE",
         smokes: c.smokes ?? ["infra/smoke/module-quest.ts"],
         timeoutMs: 900_000,
+        ...(c.deploySmokes !== undefined ? { deploySmokes: c.deploySmokes, deployTimeoutMs: 600_000 } : {}),
       },
     }),
   );
@@ -166,6 +168,31 @@ describe("deploy-worldserver.sh", () => {
     expect(smokeCalls[0]).toContain("infra/smoke/a.ts");
     expect(smokeCalls[1]).toContain("infra/smoke/b.ts");
     expect(r.out).toContain("DEPLOYED and verified by 2 direct smoke(s)");
+  });
+
+  test("per-entry accounts reach each smoke; the deploy-only full arc runs after the gate, on its own account", () => {
+    const r = runDeploy({
+      smokes: [{ script: "infra/smoke/quest-accept-status.ts", account: "SMOKE" }, { script: "infra/smoke/kill-credit.ts", account: "SMOKE2" }],
+      deploySmokes: [{ script: "infra/smoke/module-quest.ts", account: "SMOKE3" }],
+    });
+    expect(r.exitCode).toBe(0);
+    const smokeCalls = r.dockerCalls.filter((l) => l.includes("MODULE_ACCOUNT="));
+    expect(smokeCalls.map((l) => /MODULE_ACCOUNT=(\S+)/.exec(l)![1])).toEqual(["SMOKE", "SMOKE2", "SMOKE3"]);
+    expect(smokeCalls[2]).toContain("infra/smoke/module-quest.ts");
+    expect(r.out).toContain("running the deploy-time full arc (1 smoke(s), budget 600s)");
+    expect(r.out).toContain("DEPLOYED and verified by 2 direct smoke(s) + 1 full-arc smoke(s)");
+  });
+
+  test("the full arc runs after a fleet-gate pass too, and its failure rolls back", () => {
+    const ok = runDeploy({ fleetRunning: true, gate: "pass", deploySmokes: ["infra/smoke/module-quest.ts"] });
+    expect(ok.exitCode).toBe(0);
+    expect(ok.out).toContain("fleet gate PASSED");
+    expect(ok.out).toContain("DEPLOYED and verified by fleet gate + 1 full-arc smoke(s)");
+    const bad = runDeploy({ fleetRunning: true, gate: "pass", deploySmokes: ["infra/smoke/module-quest.ts"], smokeRc: 1 });
+    expect(bad.exitCode).not.toBe(0);
+    expect(bad.out).toContain("smoke infra/smoke/module-quest.ts — FAILED");
+    expect(bad.out).not.toContain("DEPLOYED and verified");
+    expect(bad.dockerCalls).toContain("tag wrathbench/worldserver:prev wrathbench/worldserver:latest");
   });
 
   test("preflight with no smokes is UNVERIFIED and non-zero, never 'verified'", () => {

@@ -8,6 +8,8 @@ import {
   gateOpen,
   healthDigest,
   parsePreflight,
+  preflightAccounts,
+  runPreflight,
   serverIdentity,
   smokePath,
   tailOf,
@@ -27,6 +29,7 @@ import {
   type FleetPreflight,
   type LaneSets,
   type PreflightRecord,
+  type PreflightSmoke,
 } from "./run-fleet";
 
 /**
@@ -317,9 +320,10 @@ describe("the shipped fleet.json", () => {
     expect(byName["free-oc-a"]).toMatchObject({ account: "RUNNER2" });
     expect(byName["free-oc-b"]).toMatchObject({ account: "RUNNER5" });
     expect(byName["local-qwen"]).toMatchObject({ account: "RUNNER6" });
-    // nav-probe: the unscored navigation probe (ADR-0024). One 6h subscription
-    // episode per enable, no-xp disabled, an operator objective on the lane.
-    expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: false });
+    // nav-probe: the unscored navigation probe (ADR-0024). 6h subscription
+    // episodes, looping since 6443a36 so a terminated cycle does not park the
+    // lane; no-xp disabled, an operator objective on the lane.
+    expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: true });
     expect(byName["nav-probe"].objective).toContain("Ironforge"); // the objective text changes per probe episode; only the destination is pinned
     expect(byName["nav-probe"].watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
     // One account, one lane — asserted over the file as written, not just over
@@ -406,7 +410,15 @@ describe("fleetComplete", () => {
 // ------------------------------------------------------------- preflight gate
 
 function pf(over: Partial<FleetPreflight> = {}): FleetPreflight {
-  return { enabled: true, account: "SMOKE", smokes: ["infra/smoke/module-quest.ts"], timeoutMs: 900_000, ...over };
+  return {
+    enabled: true,
+    account: "SMOKE",
+    smokes: [{ script: "infra/smoke/module-quest.ts", account: "SMOKE" }],
+    timeoutMs: 900_000,
+    deploySmokes: [],
+    deployTimeoutMs: 900_000,
+    ...over,
+  };
 }
 function rec(over: Partial<PreflightRecord> = {}): PreflightRecord {
   return { at: 1000, serverIdentity: "boot:1|module=mod-wrathbench", ok: true, results: [], ...over };
@@ -418,7 +430,7 @@ describe("parsePreflight", () => {
     expect(parseFleet(fleetJson([lane()])).preflight.enabled).toBe(false);
   });
 
-  test("the shipped shape parses", () => {
+  test("the pre-2026-08-23 string form parses: every script on the default account", () => {
     const p = parsePreflight({
       enabled: true,
       account: "SMOKE",
@@ -426,8 +438,34 @@ describe("parsePreflight", () => {
       timeoutMs: 900000,
     });
     expect(p.account).toBe("SMOKE");
-    expect(p.smokes).toHaveLength(2);
+    expect(p.smokes).toEqual([
+      { script: "infra/smoke/module-quest.ts", account: "SMOKE" },
+      { script: "infra/smoke/quest-status.ts", account: "SMOKE" },
+    ]);
     expect(p.timeoutMs).toBe(900000);
+    expect(p.deploySmokes).toEqual([]);
+    expect(p.deployTimeoutMs).toBe(DEFAULT_PREFLIGHT.deployTimeoutMs);
+  });
+
+  test("the shipped shape parses: per-entry accounts, deploy-only smokes, both forms mixed", () => {
+    const p = parsePreflight({
+      enabled: true,
+      account: "SMOKE",
+      smokes: [
+        { script: "infra/smoke/quest-accept-status.ts", account: "SMOKE" },
+        { script: "infra/smoke/kill-credit.ts", account: "SMOKE2" },
+        { script: "infra/smoke/no-account.ts" },
+        "infra/smoke/string-form.ts",
+      ],
+      timeoutMs: 130000,
+      deploySmokes: [{ script: "infra/smoke/module-quest.ts", account: "SMOKE" }],
+      deployTimeoutMs: 600000,
+    });
+    expect(p.smokes.map((s) => s.account)).toEqual(["SMOKE", "SMOKE2", "SMOKE", "SMOKE"]);
+    expect(p.deploySmokes).toEqual([{ script: "infra/smoke/module-quest.ts", account: "SMOKE" }]);
+    expect(p.deployTimeoutMs).toBe(600000);
+    expect(preflightAccounts(p)).toEqual(["SMOKE", "SMOKE2"]);
+    expect(preflightAccounts(pf({ account: "A", smokes: [], deploySmokes: [{ script: "x.ts", account: "B" }] }))).toEqual(["A", "B"]);
   });
 
   test("enabled with no smokes is a config error, not a silently open gate", () => {
@@ -439,6 +477,10 @@ describe("parsePreflight", () => {
     expect(() => parsePreflight({ enabled: false, smokes: [] })).toThrow(/account is required/);
     expect(() => parsePreflight({ enabled: false, account: "S", smokes: "x" })).toThrow(/array of script paths/);
     expect(() => parsePreflight({ enabled: false, account: "S", smokes: [], timeoutMs: 0 })).toThrow(/positive number/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: [{ account: "X" }] })).toThrow(/needs a script path/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: [{ script: "a.ts", account: "" }] })).toThrow(/needs an account/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: [], deploySmokes: "x" })).toThrow(/deploySmokes must be/);
+    expect(() => parsePreflight({ enabled: false, account: "S", smokes: [], deployTimeoutMs: -1 })).toThrow(/deployTimeoutMs/);
   });
 
   test("the gate account may not be an enabled lane's — they would evict each other", () => {
@@ -446,10 +488,89 @@ describe("parsePreflight", () => {
     expect(() =>
       parseFleet(withPf([lane({ account: "SMOKE" })], { enabled: true, account: "smoke", smokes: ["a.ts"] })),
     ).toThrow(/needs its own account/);
+    // Every per-entry account is checked, not just the default one.
+    expect(() =>
+      parseFleet(
+        withPf([lane({ account: "SMOKE2" })], { enabled: true, account: "SMOKE", smokes: [{ script: "a.ts", account: "smoke2" }] }),
+      ),
+    ).toThrow(/smoke2 is also lane/);
+    expect(() =>
+      parseFleet(withPf([lane({ account: "SMOKE9" })], { enabled: true, account: "SMOKE", smokes: ["a.ts"], deploySmokes: [{ script: "b.ts", account: "SMOKE9" }] })),
+    ).toThrow(/SMOKE9 is also lane/);
     // Disabled gate, or a disabled lane, is no clash.
     expect(() =>
       parseFleet(withPf([lane({ account: "SMOKE", enabled: false })], { enabled: true, account: "SMOKE", smokes: ["a.ts"] })),
     ).not.toThrow();
+  });
+});
+
+describe("runPreflight fan-out", () => {
+  const server = { identity: "boot:1|module=x", ready: true } as Parameters<typeof runPreflight>[1];
+  /** A mock runner that records start order and overlap, and sleeps `ms` per script. */
+  function mockRunner(plan: Record<string, { ms: number; ok: boolean }>) {
+    const started: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const run = async (smoke: PreflightSmoke, deadline: number) => {
+      started.push(`${smoke.script}@${smoke.account}`);
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const p = plan[smoke.script] ?? { ms: 1, ok: true };
+      await Bun.sleep(p.ms);
+      inFlight--;
+      expect(deadline).toBeGreaterThan(Date.now() - 1);
+      return { script: smoke.script, ok: p.ok, ms: p.ms, tail: p.ok ? "PASS" : "FAIL" };
+    };
+    return { run, started, max: () => maxInFlight };
+  }
+
+  test("distinct accounts run concurrently; results come back in config order", async () => {
+    const m = mockRunner({ "a.ts": { ms: 40, ok: true }, "b.ts": { ms: 10, ok: true } });
+    const p = pf({
+      smokes: [
+        { script: "a.ts", account: "SMOKE" },
+        { script: "b.ts", account: "SMOKE2" },
+      ],
+    });
+    const t0 = Date.now();
+    const r = await runPreflight(p, server, m.run);
+    expect(Date.now() - t0).toBeLessThan(80);
+    expect(m.max()).toBe(2);
+    expect(r.ok).toBe(true);
+    expect(r.results.map((x) => x.script)).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("a shared account serialises, and a failure stops only that account's chain", async () => {
+    const m = mockRunner({ "a.ts": { ms: 5, ok: false }, "b.ts": { ms: 5, ok: true }, "c.ts": { ms: 5, ok: true } });
+    const p = pf({
+      smokes: [
+        { script: "a.ts", account: "SMOKE" },
+        { script: "b.ts", account: "smoke" },
+        { script: "c.ts", account: "SMOKE2" },
+      ],
+    });
+    const r = await runPreflight(p, server, m.run);
+    expect(r.ok).toBe(false);
+    expect(m.started).toEqual(expect.arrayContaining(["a.ts@SMOKE", "c.ts@SMOKE2"]));
+    expect(m.started).not.toContain("b.ts@smoke");
+    expect(r.results.map((x) => [x.script, x.ok])).toEqual([
+      ["a.ts", false],
+      ["b.ts", false],
+      ["c.ts", true],
+    ]);
+    expect(r.results[1]!.tail).toMatch(/not run: an earlier smoke on account smoke failed/);
+  });
+
+  test("every child gets the one shared deadline, and the record carries the server identity", async () => {
+    const seen: number[] = [];
+    const run = async (smoke: PreflightSmoke, deadline: number) => {
+      seen.push(deadline);
+      return { script: smoke.script, ok: true, ms: 1, tail: "" };
+    };
+    const p = pf({ timeoutMs: 5000, smokes: [{ script: "a.ts", account: "A" }, { script: "b.ts", account: "B" }] });
+    const r = await runPreflight(p, { ...server, build: "b1" }, run, () => 1_000_000);
+    expect(seen).toEqual([1_005_000, 1_005_000]);
+    expect(r).toMatchObject({ at: 1_000_000, serverIdentity: "boot:1|module=x", build: "b1", ok: true });
   });
 });
 
