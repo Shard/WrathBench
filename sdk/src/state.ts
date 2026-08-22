@@ -344,8 +344,18 @@ export interface UnitView {
 export interface UnitFilter {
   /** One template id or a list of them. */
   entry?: number | number[];
-  /** Case-insensitive substring of the joined name. Unnamed objects never match. */
-  name?: string;
+  /**
+   * Match the joined name, case-insensitively. Unnamed objects never match.
+   *
+   * A plain string matches as a substring, but the results are then ordered by
+   * how well each name fits the query — exact equal first, then whole-word
+   * match, then any other substring — and, within a tier, by shortest name and
+   * then nearest. So `{ name: "tree" }` returns a unit named `"tree"` ahead of
+   * `"tree stump"`, even if the stump is closer. A `RegExp`, or a string that
+   * looks like a regex literal (`"/^tree$/i"`), is matched with `RegExp.test`
+   * and the results stay in nearest-first order.
+   */
+  name?: string | RegExp;
   type?: "unit" | "player" | "gameObject";
   /** `true` drops the known-dead; `false` keeps only them. Unknown health passes `true`. */
   alive?: boolean;
@@ -1063,7 +1073,16 @@ export class StateCache {
       };
 
       if (f.entries && (view.entry === undefined || !f.entries.has(view.entry))) continue;
-      if (f.name !== undefined && !(view.name ?? "").toLowerCase().includes(f.name)) continue;
+      if (f.name !== undefined) {
+        // Unnamed objects never match: a name criterion cannot be evaluated
+        // against a name we have not observed.
+        if (view.name === undefined) continue;
+        if (f.name.kind === "regex") {
+          if (!f.name.re.test(view.name)) continue;
+        } else if (!view.name.toLowerCase().includes(f.name.query)) {
+          continue;
+        }
+      }
       if (f.type !== undefined && view.type !== f.type) continue;
       // Asymmetric on purpose: `alive: true` excludes only the *known* dead, so
       // a unit whose health we have never seen still shows up. `alive: false`
@@ -1079,7 +1098,23 @@ export class StateCache {
     }
     // Nearest first; unknown distance last. Stable, so unknowns keep first-sight
     // order and a replay of the same events sorts the same way.
+    //
+    // A plain-string name query adds two keys ahead of distance: the match tier
+    // (exact, then whole-word, then any other substring) and the shorter name.
+    // That is what makes `{ name: "tree" }` return `"tree"` before `"tree
+    // stump"` regardless of which is nearer. Regex and non-name queries keep the
+    // pure distance order.
+    const nameQuery = f.name?.kind === "text" ? f.name.query : undefined;
     return out.sort((a, b) => {
+      if (nameQuery !== undefined) {
+        // Both names are defined here: the filter dropped every unnamed object.
+        const ta = nameTier(a.name as string, nameQuery);
+        const tb = nameTier(b.name as string, nameQuery);
+        if (ta !== tb) return ta - tb;
+        const la = (a.name as string).length;
+        const lb = (b.name as string).length;
+        if (la !== lb) return la - lb;
+      }
       if (a.distance === undefined) return b.distance === undefined ? 0 : 1;
       if (b.distance === undefined) return -1;
       return a.distance - b.distance;
@@ -1406,9 +1441,16 @@ export class StateCache {
 const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc"] as const;
 const UNIT_FILTER_TYPES = ["unit", "player", "gameObject"] as const;
 
+/**
+ * How a `name` criterion is matched, resolved once at normalization. `text`
+ * carries the lowercased query for substring matching and tier ranking; `regex`
+ * carries a compiled matcher whose results stay in nearest-first order.
+ */
+type NameMatcher = { kind: "text"; query: string } | { kind: "regex"; re: RegExp };
+
 interface NormalizedUnitFilter {
   entries: Set<number> | undefined;
-  name: string | undefined;
+  name: NameMatcher | undefined;
   type: string | undefined;
   alive: boolean | undefined;
   maxDistance: number | undefined;
@@ -1457,6 +1499,81 @@ function coerceBoolean(value: unknown, key: string): boolean {
     `${key} received ${showValue(value)} (${typeof value}), expected true or false. ` +
       `Example: state.units({ ${key}: true }).`,
   );
+}
+
+/** `/pat/flags` — a string spelled as a JS regex literal. Flags are the real set. */
+const REGEX_LITERAL = /^\/(.*)\/([dgimsuy]*)$/s;
+
+/**
+ * Resolve a `name` criterion into a matcher.
+ *
+ * A `RegExp`, or a string spelled as a regex literal (`"/^tree$/i"`), matches
+ * with `RegExp.test`; the caller's own flags decide case-sensitivity. Anything
+ * else is a plain case-insensitive substring query. A string that starts with
+ * `/` but is not a valid `/pat/flags` (a bad flag, a dangling slash) is a
+ * literal name, not an error — but a well-formed literal whose pattern does not
+ * compile (`"/tree(/"`) is rejected, because it has exactly one reading and
+ * that reading is broken (ADR-0016).
+ */
+function compileNameMatcher(value: unknown): NameMatcher {
+  if (value instanceof RegExp) return { kind: "regex", re: value };
+  if (typeof value === "string") {
+    const m = REGEX_LITERAL.exec(value);
+    if (m) {
+      try {
+        return { kind: "regex", re: new RegExp(m[1] as string, m[2]) };
+      } catch (e) {
+        throw filterError(
+          `name received ${showValue(value)}, which reads as a regex but did not compile ` +
+            `(${e instanceof Error ? e.message : String(e)}). Fix the pattern, or pass a plain ` +
+            'name string such as { name: "boar" }.',
+        );
+      }
+    }
+    return { kind: "text", query: value.toLowerCase() };
+  }
+  throw filterError(
+    `name received ${showValue(value)} (${typeof value}), expected a string (matched as a ` +
+      'case-insensitive substring, such as { name: "boar" }) or a RegExp (such as { name: /^tree$/i }).',
+  );
+}
+
+/** Alphanumeric runs, lowercased: splits creature names on spaces, apostrophes, hyphens. */
+function tokenize(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 0);
+}
+
+/** Whether `query`'s tokens appear as a contiguous run of whole words in `name`. */
+function wholeWordMatch(name: string, query: string): boolean {
+  const nt = tokenize(name);
+  const qt = tokenize(query);
+  if (qt.length === 0 || qt.length > nt.length) return false;
+  for (let i = 0; i + qt.length <= nt.length; i++) {
+    let hit = true;
+    for (let j = 0; j < qt.length; j++) {
+      if (nt[i + j] !== qt[j]) {
+        hit = false;
+        break;
+      }
+    }
+    if (hit) return true;
+  }
+  return false;
+}
+
+/**
+ * How well `name` fits a plain-string `query`, lowest is best: 0 exact,
+ * 1 whole-word, 2 any other substring. Only called for names the substring
+ * filter already admitted, so 2 is the floor.
+ */
+function nameTier(name: string, query: string): number {
+  const n = name.toLowerCase();
+  if (n === query) return 0;
+  if (wholeWordMatch(n, query)) return 1;
+  return 2;
 }
 
 /**
@@ -1508,15 +1625,7 @@ function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilt
     out.entries = entries;
   }
 
-  if (filter.name !== undefined) {
-    if (typeof filter.name !== "string") {
-      throw filterError(
-        `name received ${showValue(filter.name)} (${typeof filter.name}), expected a string to match as a ` +
-          'case-insensitive substring, such as { name: "boar" }.',
-      );
-    }
-    out.name = filter.name.toLowerCase();
-  }
+  if (filter.name !== undefined) out.name = compileNameMatcher(filter.name);
 
   if (filter.type !== undefined) {
     // An enum near-miss ("gameobject", "npc") has more than one plausible
