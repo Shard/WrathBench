@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UNBUILT_NOTICE, createApi, readFleet } from "../viewer/api";
@@ -427,5 +427,110 @@ describe("fleet state", () => {
     const runs = fixture();
     writeFileSync(join(runs, "fleet-state.json"), '{"lanes": {');
     expect(readFleet(runs).present).toBe(false);
+  });
+});
+
+/**
+ * The release-point surface: the comparability tuple on a run, and the two
+ * derived routes the eval charts and the map replay read.
+ *
+ * The fixture writes an old-shape `state` table with no `turn` column on
+ * purpose — that is what every run recorded before this change looks like, and
+ * both routes have to keep answering for it.
+ */
+describe("comparability, /api/eval and /api/run/<id>/track", () => {
+  const TUPLE = {
+    harnessVersion: "harness-test",
+    promptHash: "sha256:0123456789abcdef",
+    promptChars: 4242,
+    contextEngine: "harness-fixed-window",
+    effort: "high",
+    budget: {
+      maxTurns: null,
+      maxToolCalls: 500,
+      idleMs: 600_000,
+      noXpMs: null,
+      episodeMs: 21_600_000,
+      maxSandboxRestarts: 3,
+    },
+    objective: false,
+  };
+
+  function stamped(runs: string, tuple: unknown): void {
+    const path = join(runs, RUN_ID, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...meta, comparability: tuple }));
+  }
+
+  test("a stamped tuple reaches the run row; an unstamped run reads as null", async () => {
+    const runs = fixture();
+    const handle = api(runs);
+    const before = (await (await handle(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      run: { comparability: unknown };
+    };
+    expect(before.run.comparability).toBeNull();
+
+    stamped(runs, TUPLE);
+    const after = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      run: { comparability: typeof TUPLE };
+    };
+    expect(after.run.comparability).toEqual(TUPLE);
+  });
+
+  test("a tuple this build cannot validate reads as not recorded, not as an error", async () => {
+    const runs = fixture();
+    stamped(runs, { harnessVersion: "v" });
+    const res = await api(runs)(new Request(`http://x/api/run/${RUN_ID}`));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { run: { comparability: unknown } }).run.comparability).toBeNull();
+  });
+
+  test("states carry a turn index, null on a database written without the column", async () => {
+    const runs = fixture();
+    const d = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      states: { turn: number | null }[];
+    };
+    expect(d.states).toHaveLength(1);
+    expect(d.states[0]!.turn).toBeNull();
+  });
+
+  test("/api/eval projects each run with its level marks and scorability", async () => {
+    const runs = fixture();
+    stamped(runs, TUPLE);
+    const body = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+      runs: {
+        runId: string;
+        effort: string | null;
+        unscored: string | null;
+        maxLevel: number | null;
+        levels: { level: number; playtimeMs: number | null }[];
+      }[];
+    };
+    const row = body.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.effort).toBe("high");
+    expect(row.unscored).toBeNull();
+    expect(row.maxLevel).toBe(3);
+    expect(row.levels).toHaveLength(1);
+    // Active time is integrated over the trajectory's own segments, not wall clock.
+    expect(row.levels[0]!.playtimeMs).not.toBeNull();
+  });
+
+  test("/api/run/<id>/track serves the recorded positions", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
+      character: string | null;
+      points: { map: number; x: number; y: number }[];
+    };
+    expect(body.character).toBe("Fixturely");
+    expect(body.points).toHaveLength(1);
+    expect(body.points[0]).toMatchObject({ map: 0, x: -6240, y: 380 });
+  });
+
+  test("the new routes leak no secret either", async () => {
+    const runs = fixture();
+    stamped(runs, TUPLE);
+    for (const p of ["/api/eval", `/api/run/${RUN_ID}/track`]) {
+      expect(await body(await api(runs)(new Request(`http://x${p}`)))).not.toContain(SENTINEL);
+    }
   });
 });

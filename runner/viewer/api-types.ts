@@ -11,6 +11,36 @@
  * to declare, so nothing that imported them before has to move.
  */
 
+/**
+ * The comparability tuple a run was stamped with (ADR-0026).
+ *
+ * Structurally identical to `Comparability` in `runner/src/comparability.ts`,
+ * which is where it is defined and validated. It is mirrored rather than
+ * imported because this module is import-free by construction (ADR-0022) —
+ * the dashboard bundles it for a browser and must not pull `zod`, `bun:sqlite`
+ * or the prompt text in behind it. `runner/test/comparability.test.ts` pins
+ * the two shapes to each other.
+ */
+export interface EpisodeBudgetView {
+  maxTurns: number | null;
+  maxToolCalls: number;
+  idleMs: number | null;
+  noXpMs: number | null;
+  episodeMs: number | null;
+  maxSandboxRestarts: number;
+}
+
+export interface ComparabilityView {
+  harnessVersion: string;
+  promptHash: string;
+  promptChars: number;
+  contextEngine: string;
+  effort: string | null;
+  budget: EpisodeBudgetView;
+  /** True when an operator objective steered the run, which makes it unscored. */
+  objective: boolean;
+}
+
 /** One run, as the listing and the detail endpoint report it. */
 export interface RunRow {
   runId: string;
@@ -25,6 +55,12 @@ export interface RunRow {
   platform: string | null;
   apiBase: string | null;
   harnessVersion: string | null;
+  /**
+   * The stamped comparability tuple, or null for a run whose metadata predates
+   * the stamp. Null reads as "not recorded": nothing recomputes it, because a
+   * prompt hash taken against today's prompt would be a fabricated claim.
+   */
+  comparability: ComparabilityView | null;
   startedAt: number | null;
   endedAt: number | null;
   terminationReason: string | null;
@@ -52,6 +88,12 @@ export interface StatePoint {
   z: number | null;
   eventCount: number | null;
   lastSeq: number | null;
+  /**
+   * The driver turn in flight when the sample was taken; null on runs written
+   * before the column existed, and on samples taken before the first turn.
+   * Samples are taken on a clock, so this is first-observation, not first-reach.
+   */
+  turn: number | null;
 }
 
 /** Provider-reported usage for one turn, normalised across driver shapes. */
@@ -279,6 +321,70 @@ export interface ApiInfoResponse {
    */
   worldserver: { build: string; startedAtMs: number } | null;
   now: number;
+}
+
+/**
+ * One level a run was observed to reach, with the cost of reaching it.
+ *
+ * "Observed": state samples are taken on `stateIntervalMs`, so both numbers are
+ * of the first sample that *showed* the level, never of the moment it was
+ * reached. `playtimeMs` is the pause-corrected active time (the same figure the
+ * run page shows), so a run that sat quota-exhausted for two hours is not
+ * charged for them.
+ */
+export interface LevelMark {
+  level: number;
+  ts: number;
+  /** Turn at first observation. Null when the run recorded no turn index. */
+  turn: number | null;
+  /** Active time from the run's start to that sample. */
+  playtimeMs: number | null;
+}
+
+/** One run as the eval charts read it: identity, comparability, level marks. */
+export interface EvalRun {
+  runId: string;
+  model: string | null;
+  platform: string | null;
+  harnessVersion: string | null;
+  effort: string | null;
+  contextEngine: string | null;
+  promptHash: string | null;
+  /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
+  unscored: string | null;
+  startedAt: number | null;
+  terminationReason: string | null;
+  levels: LevelMark[];
+  maxLevel: number | null;
+  questsCompleted: number | null;
+  /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
+  maps: number[];
+}
+
+export interface EvalResponse {
+  runs: EvalRun[];
+  now: number;
+}
+
+/** A run's whole recorded track, for map replay (FOLLOW-UPS 22). */
+export interface TrackPoint {
+  ts: number;
+  map: number;
+  x: number;
+  y: number;
+  level: number | null;
+  xp: number | null;
+  money: number | null;
+  questsCompleted: number | null;
+  turn: number | null;
+}
+
+export interface TrackResponse {
+  runId: string;
+  character: string | null;
+  model: string | null;
+  harnessVersion: string | null;
+  points: TrackPoint[];
 }
 
 export interface ApiError {

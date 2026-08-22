@@ -7,8 +7,8 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { RunRow, StatePoint } from "./api-types";
-import { normalizePauseReason } from "../src/index";
+import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
+import { normalizePauseReason, parseComparability } from "../src/index";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -23,7 +23,7 @@ export const LIVE_WINDOW_MS = 120_000;
  * dashboard imports too — and are re-exported here so every existing importer
  * of this module keeps working.
  */
-export type { RunRow, StatePoint } from "./api-types";
+export type { ComparabilityView, RunRow, StatePoint } from "./api-types";
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 
@@ -54,6 +54,7 @@ interface MetaShape {
   harnessVersion?: string;
   startedAt?: number;
   shakeout?: string;
+  comparability?: unknown;
   config?: {
     model?: string;
     driver?: string;
@@ -129,6 +130,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     adapter: null,
     shakeout: null,
     objective: null,
+    comparability: null,
     character: null,
     platform: null,
     apiBase: null,
@@ -159,6 +161,12 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.adapter = str(meta.config?.adapter);
     row.character = str(meta.config?.character);
     row.apiBase = str(meta.config?.apiBase);
+    /*
+     * Validated, not trusted: meta.json is written by whatever build launched
+     * the run, and a shape this build does not recognise reads as "not
+     * recorded" rather than reaching a chart as a half-filled tuple.
+     */
+    row.comparability = parseComparability(meta.comparability) as ComparabilityView | null;
   }
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -274,6 +282,9 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       z: num(r["z"]),
       eventCount: num(r["event_count"]),
       lastSeq: num(r["last_seq"]),
+      // `SELECT *` on a database that predates the column simply has no key
+      // here, which `num` turns into null — no schema guard needed.
+      turn: num(r["turn"]),
     }));
   } catch {
     return [];
