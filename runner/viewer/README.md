@@ -103,6 +103,33 @@ The last 200 entries load first; **load earlier** walks backwards a window at a
 time. On a live run the page follows the file over SSE and appends new entries as
 they land, with an auto-scroll toggle.
 
+## The map tab
+
+`/map` (linked from the runs table, and back) draws every live agent on the
+actual world map: minimap tiles under a plain canvas, pan by dragging, zoom on
+the wheel around the cursor, one coloured pip per run with the character's name.
+A pip whose position is more than two minutes old is dimmed; clicking one opens
+a sidebar with model, level, XP, money, quests, map and coordinates, the age of
+the reading, and a link to that run's page. The view auto-fits the agents on
+first load; when they are spread over several maps a chip row picks one,
+defaulting to the map with the most agents.
+
+`/api/positions` is the feed behind it: for every run with no termination reason,
+the newest `state` row that actually carried `map, x, y` — not simply the newest
+row, since a level-only sample would otherwise blink an agent off the map —
+dropped if that reading is more than ten minutes old. Per ADR-0019 the renderer
+consumes only that array and never touches the run store, which is what lets a
+replay mode plug a trajectory reader into the same shape later. The coordinate
+transform lives on its own in `worldmap.ts` (`tile = 32 − coord/533.33325`,
+world X → tile row, world Y → tile column) with no imports, for the same reason.
+
+Tiles come from the minimap extraction in `minimap/`, which writes
+`data/minimap/<mapId>/<row>_<col>.png`; `/tiles/<mapId>/<row>_<col>.png` serves
+them straight from there, integers only and cached for a year since they never
+change. Nothing extracted yet is a normal state, not an error: a missing tile
+draws as a labelled grid square, so the page works on a machine that has never
+run the extraction. `WRATHBENCH_MINIMAP_DIR` overrides the tile root.
+
 ## How it handles big files
 
 `request` entries embed the whole model message array and `events_served`
@@ -118,11 +145,16 @@ entry is re-read from disk on demand behind a click.
 | path | what |
 | --- | --- |
 | `/`, `/run/<id>` | the single-page client |
+| `/map` | the live map |
 | `/api/runs` | run listing |
+| `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
+| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted) |
 | `/api/run/<id>` | run row, state series, entry count |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md |
 | `/api/run/<id>/stream` | SSE: new entries as they are appended |
 
-Tail and summariser logic is tested in `runner/test/viewer-tail.test.ts`.
+Tail and summariser logic is tested in `runner/test/viewer-tail.test.ts`; the
+coordinate transform, the position feed and tile path validation in
+`runner/test/viewer-map.test.ts`.
