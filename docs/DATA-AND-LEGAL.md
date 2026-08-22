@@ -1,32 +1,40 @@
-# Data Handling and Legal Posture
+# Data Handling and Legal Red Lines
 
-This is a summary of the project's posture, not legal advice. Get a lawyer's view before anything becomes public.
+These are the lines the project does not cross. They are rules, not arguments; they are not legal advice, and they are not relaxed without a qualified opinion first.
 
-## Posture
+## Never in git or any published artefact
 
-- The repository contains no Blizzard-owned material: no client files, no MPQ or DBC data, no extracted maps, no game text, no trajectory logs (which contain game text).
-- Contributors supply their own 3.3.5a client for data extraction. The extraction runs on the host and writes into `data/`, which is gitignored at the directory level and mounted into containers as volumes.
-- No public play endpoint. The server is reachable only from the runner on a private network.
-- No recruited human players, no money, no distribution of a client or a server.
-- Research framing: the output is findings, tooling, and eventually a write-up, not a playable service.
-- Retail, Warden, and any Blizzard service are never touched.
+- Client files, MPQ archives, DBC data, or anything extracted from them (maps, vmaps, mmaps). Contributors supply their own 3.3.5a client; extraction runs on the host into `data/`, which is gitignored at the directory level and mounted into containers at run time.
+- The wiki dump or the bundle built from it. Each operator builds their own.
+- Trajectory logs. They contain verbatim game text. If any are ever published, it is as ids and coded names with prose redacted.
+- The worldserver image never contains client data.
 
-This differs materially from the cases Blizzard has pursued (public servers at scale, commercial bot vendors against retail). It is not zero risk.
+## Never a way for a human to play
 
-## Repository hygiene
+- No game client can connect. The game protocol is never exposed; the only outside surface is the MCP, and it is private until the community-access prerequisites in `docs/VISION.md` are met.
+- No web client, no spectate-and-type, no interface that amounts to a person playing through an agent.
+- No recruited players, no public realm listing, no advertised server.
 
-- `data/` is gitignored. Everything Blizzard-derived goes there: client extracts, the wiki dump and bundle, runs and trajectories, sqlite stores.
-- The worldserver image contains AzerothCore and our module. It never contains client data; that is mounted at run time.
-- Before any part of the monorepo is split out for publication, the history of that part is checked for accidental data. Directory-level gitignore is the first line of defence; the split is the second.
+## Never money
 
-## Publishing, later
+- Nothing is sold, rented, or gated on payment. No subscriptions, no paid access, no paid priority.
+- Inference donations are accepted only for the operator's own runs and never purchase access to anything.
 
-- Metrics, harness code, and documentation: fine.
-- Trajectory logs: contain quest text, NPC names, and item names. If published, minimise verbatim game text: IDs and coded names rather than titles and descriptions, or redaction. Decide with legal input.
-- The wiki bundle: never published. Each contributor builds their own from their own dump.
-- The write-up should state plainly that the benchmark runs on the community reconstruction of 3.3.5a and that no Blizzard material is distributed.
+## Never Blizzard's services
+
+- Retail, Battle.net, Warden, and any Blizzard-operated service are never touched or tested against.
+
+## Scale and framing
+
+- Stays small, private, non-commercial, and framed as research: the output is findings, tooling, and write-ups, not a playable service.
+- Public write-ups state plainly that the harness runs on the community reconstruction of 3.3.5a (AzerothCore) and that nothing Blizzard-owned is distributed.
+
+## Before publication
+
+- The history of anything split out for publication is audited for accidental data.
+- A qualified opinion on the shared-world (community agent) surface is obtained before the first outside agent connects.
 
 ## Licences
 
 - `module/`: AGPL-3.0, inherited from AzerothCore.
-- `sdk/`, `runner/`, `wiki/`, `infra/`: MIT. These communicate with the module over a network boundary and do not link against it.
+- `sdk/`, `runner/`, `wiki/`, `infra/`: MIT. They communicate with the module over a network boundary and do not link against it.
