@@ -25,6 +25,7 @@ import { buildSystemPrompt, SYSTEM_PROMPT } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
+import { configFromArgs } from "../src/run";
 import { readRun } from "../viewer/runs";
 import { Watchdogs } from "../src/watchdogs";
 
@@ -202,6 +203,60 @@ describe("watchdog overrides", () => {
       maxSandboxRestarts: 3,
     });
     trajectory.close();
+  });
+});
+
+describe("argv -> run config", () => {
+  test("the nav-probe lane's generated argv lands as the config the probe needs", () => {
+    // Verbatim what `episodeArgv` produces for the nav-probe lane entry. If any
+    // of it silently failed to land, the 6h probe would die at 45 minutes as
+    // `no-xp` and read like a harness fault.
+    const config = configFromArgs([
+      "--driver", "claude-subscription",
+      "--model", "sonnet",
+      "--run-id", "fleet-nav-probe-sonnet-20260822",
+      "--account", "SHAKEOUT",
+      "--objective", OBJECTIVE,
+      "--max-tool-calls", "2500",
+      "--character", "Navprobe",
+      "--race", "3",
+      "--class", "2",
+      "--episode-ms", "21600000",
+      "--watchdogs-json", JSON.stringify({ idleMs: 1_200_000, noXpMs: null }),
+    ]);
+    expect(config.objective).toBe(OBJECTIVE);
+    expect(config.maxToolCallsPerEpisode).toBe(2500);
+    expect(config.watchdogs).toEqual({
+      idleMs: 1_200_000,
+      noXpMs: null,
+      episodeMs: 21_600_000,
+      maxSandboxRestarts: 3,
+    });
+    expect(config).toMatchObject({
+      driver: "claude-subscription",
+      model: "sonnet",
+      account: "SHAKEOUT",
+      character: "Navprobe",
+      race: 3,
+      class: 2,
+    });
+    expect(shakeoutStamp(config.driver, config.objective)).toContain(OBJECTIVE_STAMP);
+  });
+
+  test("no dimensions on the command line means the shipped defaults", () => {
+    const config = configFromArgs(["--driver", "openai", "--model", "m:free"]);
+    expect(config.objective).toBeUndefined();
+    expect(config.watchdogs).toEqual({
+      idleMs: 10 * 60_000,
+      noXpMs: 45 * 60_000,
+      episodeMs: 6 * 60 * 60_000,
+      maxSandboxRestarts: 3,
+    });
+    expect(config.maxToolCallsPerEpisode).toBe(500);
+  });
+
+  test("--no-xp-ms 0 is the command-line spelling of disabled", () => {
+    expect(configFromArgs(["--model", "m", "--no-xp-ms", "0"]).watchdogs.noXpMs).toBeNull();
   });
 });
 

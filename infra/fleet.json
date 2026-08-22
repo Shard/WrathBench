@@ -98,7 +98,9 @@
         "the claude driver has been observed at ~4 tool calls/minute — 500 would end the run about",
         "two hours in, as tool-call-limit, and the trajectory would read like a harness fault.",
         "Account SHAKEOUT, shared with sub-sonnet: the one-lane-per-account check only binds",
-        "ENABLED lanes, so enable exactly one of the two at a time."
+        "ENABLED lanes. Enabling this one while sub-sonnet is still enabled does not skip a lane —",
+        "the whole file is rejected and the supervisor keeps the last good config, so flip both in",
+        "the SAME save."
       ],
       "name": "nav-probe",
       "enabled": false,
