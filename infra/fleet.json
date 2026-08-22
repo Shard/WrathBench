@@ -32,13 +32,15 @@
     "sub-opus is the burn switch: flip it to true when there is subscription budget to",
     "burn, back to false to stop after the episode in flight.",
     "",
-    "Model curation (2026-08-22 evening, from provider-body evidence): the ONLY model",
-    "pruned as genuinely no-longer-free is openai/gpt-oss-20b:free — its provider returns",
-    "an explicit 404 'unavailable for free, use the paid slug openai/gpt-oss-20b'. The",
-    "paid slug is a separate decision (lane policy keeps these lanes free-only). glm-5.2,",
-    "gemma-4-31b, mimo, deepseek all only returned recoverable upstream-pool 429s (NOT a",
-    "payment error, NOT an account-wide daily cap) so they stay, paired behind a proven",
-    "worker; the loop fix keeps them from hammering when their pool is saturated.",
+    "Model curation (2026-08-22 evening, from provider-body evidence): openai/gpt-oss-20b:free",
+    "pruned as genuinely no-longer-free (provider 404 'use the paid slug openai/gpt-oss-20b';",
+    "paid slug is a separate free-only-lane-policy decision). gemma-4-31b dropped too — tapped",
+    "out, 0 turns all day, same upstream-pool saturation as glm. Added four fresh capable free",
+    "OpenRouter models (verified 0/0 pricing 2026-08-22): thinkingmachines/inkling:free and",
+    "nvidia/nemotron-3-super-120b-a12b:free (large agentic MoEs), cohere/north-mini-code:free",
+    "(agentic coding), dots-studio/dots-3-note-preview:free (512k ctx). glm-5.2 kept as a tail",
+    "filler; mimo/deepseek stay (recoverable upstream-pool 429s, not payment errors). The loop",
+    "fix keeps any saturated model from hammering.",
     "",
     "ox-alpha lane: stealth/ox-alpha is the model that PASSED the Phase 0 gate (gate2-ox-4).",
     "It fell out of the fleet when the fleet became the launch path. Still live and free on",
@@ -91,8 +93,10 @@
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
+        { "model": "thinkingmachines/inkling:free" },
         { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
-        { "model": "nvidia/nemotron-nano-9b-v2:free" }
+        { "model": "cohere/north-mini-code:free" },
+        { "model": "z-ai/glm-5.2:free" }
       ]
     },
     {
@@ -102,9 +106,10 @@
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
+        { "model": "nvidia/nemotron-3-super-120b-a12b:free" },
+        { "model": "nvidia/nemotron-nano-9b-v2:free" },
         { "model": "poolside/laguna-s-2.1:free" },
-        { "model": "z-ai/glm-5.2:free" },
-        { "model": "google/gemma-4-31b-it:free" }
+        { "model": "dots-studio/dots-3-note-preview:free" }
       ]
     },
     {
