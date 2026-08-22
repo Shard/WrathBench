@@ -121,7 +121,7 @@ zero.
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done). Rows carry questGiver / questGiverStatus. |
+| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done; true means any marker but "none"). Rows carry questGiver / questGiverStatus. |
 | `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, questGiver }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
@@ -155,6 +155,7 @@ Events are the server's `SMSG_*` packets as JSON.
 | Method | Signature | Purpose |
 | --- | --- | --- |
 | `on` | `events.on(opcode, fn): Unsubscribe` | Subscribe to an SMSG_* opcode; returns a function that unsubscribes. |
+| `off` | `events.off(opcode, fn): boolean` | Remove a handler added with on() (or once()) for that opcode; returns whether one was found. Removing something already gone is a no-op. For onAny(), call the unsubscribe it returned. |
 | `onAny` | `events.onAny(fn): Unsubscribe` | Subscribe to every event. |
 | `once` | `events.once(opcode, fn): Unsubscribe` | Subscribe to the next single event of an opcode. |
 | `waitFor` | `events.waitFor(predicate, options?): Promise<StreamEvent>` | Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires. |

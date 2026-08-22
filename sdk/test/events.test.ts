@@ -239,3 +239,63 @@ describe("event stream: over a real socket", () => {
     await stub.stop();
   });
 });
+
+describe("events.off (2026-08-23 softening: EventEmitter-shaped removal)", () => {
+  /** One chat frame at `seq`, so a test can drive delivery without the fixtures' order. */
+  function chatAt(seq: number): string {
+    return JSON.stringify({ ...chatEcho, seq });
+  }
+
+  test("off removes a handler registered with on", () => {
+    const stream = offlineStream();
+    const seen: number[] = [];
+    const h = (e: StreamEvent) => seen.push(e.seq);
+    stream.on("SMSG_MESSAGECHAT", h);
+    stream.ingest(chatAt(0));
+    expect(stream.off("SMSG_MESSAGECHAT", h)).toBe(true);
+    stream.ingest(chatAt(1));
+    expect(seen).toEqual([0]);
+  });
+
+  test("off finds the wrapper a once() registration installed", () => {
+    const stream = offlineStream();
+    const seen: number[] = [];
+    const h = (e: StreamEvent) => seen.push(e.seq);
+    stream.once("SMSG_MESSAGECHAT", h);
+    expect(stream.off("SMSG_MESSAGECHAT", h)).toBe(true);
+    stream.ingest(chatAt(0));
+    expect(seen).toEqual([]);
+  });
+
+  test("removing something already gone is a no-op, not an error", () => {
+    const stream = offlineStream();
+    const h = (): void => {};
+    expect(stream.off("SMSG_MESSAGECHAT", h)).toBe(false);
+    const unsubscribe = stream.on("SMSG_MESSAGECHAT", h);
+    unsubscribe();
+    expect(stream.off("SMSG_MESSAGECHAT", h)).toBe(false);
+  });
+
+  test("off leaves other handlers on the same opcode alone", () => {
+    const stream = offlineStream();
+    const seen: string[] = [];
+    const a = (): void => void seen.push("a");
+    const b = (): void => void seen.push("b");
+    stream.on("SMSG_MESSAGECHAT", a);
+    stream.on("SMSG_MESSAGECHAT", b);
+    stream.off("SMSG_MESSAGECHAT", a);
+    stream.ingest(chatAt(0));
+    expect(seen).toEqual(["b"]);
+  });
+
+  test("wrong arguments throw a message that says the expected shape", () => {
+    const stream = offlineStream();
+    // The one-argument EventEmitter habit: rejected, never silently ignored.
+    expect(() => (stream as unknown as { off: (h: unknown) => void }).off(() => {})).toThrow(
+      /events\.off\(opcode, handler\)/,
+    );
+    expect(() => (stream as unknown as { off: (o: unknown, h: unknown) => void }).off("SMSG_MESSAGECHAT", "h")).toThrow(
+      /expected an opcode string and the handler/,
+    );
+  });
+});
