@@ -6,6 +6,48 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Reference bundle rebuilt to schema 3; run.ts stops bypassing openBundle (FOLLOW-UPS 30) — SWAP PENDING
+
+`run.ts` and `mcp.ts` each opened `data/wiki/bundle.sqlite` with a bare
+`new Database(path, { readonly: true })`, which walks straight past
+`openBundle`'s schema check. Nothing crashed — `searchReference` treats a
+missing `page_coords` as "no coords" — so the deployed schema-1 bundle (built
+2026-08-21, no `page_coords`, no `page_ids`) silently served every episode since
+the coordinate channel shipped without a coordinate and without an id index,
+and no trajectory said so. Availability was never a code problem: the guard is
+what makes the staleness *loud*, the rebuild is what makes the channels real.
+
+- Both entry points now go through `runner/src/wiki.ts`'s `openWikiBundle`, one
+  seam with two deliberate outcomes: an absent file is `undefined` (a run with
+  no reference is a supported configuration, `search_reference` says so), a
+  present-but-too-old file throws, naming `page_coords`, the build-beside
+  command and the swap. `runner/test/wiki.test.ts` pins all three.
+- A schema-3 bundle is built and verified at `data/wiki/bundle.next.sqlite`
+  (43s, 22.20 GiB of XML, 114494 pages kept, 14386 coord rows, 84262 id rows).
+  It is **not** swapped in: the live bundle is read by running episodes.
+
+**Swap** (deploy window, same filesystem so the rename is atomic; an in-flight
+episode holds an fd on the old inode and is unaffected — only newly launched
+episodes see schema 3):
+
+```
+cd data/wiki \
+  && ln bundle.sqlite bundle.sqlite.bak-$(date +%Y%m%d-%H%M) \
+  && mv -f bundle.next.sqlite bundle.sqlite
+```
+
+The swap is **blocking**, not optional: the fleet bind-mounts the repo, so the
+fail-closed guard is live the moment the edit lands, and until the rename every
+newly launched episode exits at startup (`launch-failed`, one per spec per
+roster cycle) instead of running coordless.
+
+Known residual, not fixed here: `extractIds` tags an id by the nearest
+preceding template opening, and a `{{questbox}}` whose `start`/`end` fields hold
+nested `{{npc||…}}` calls puts an `{{npc` opening between the brace and the
+`| id =` field — so `Quest:A Threat Within` states id 783 under kind `npc`. The
+page is still found by an id query for 783; it just does not win the
+kind-matches-the-word preference for "quest 783".
+
 ### Questgiver markers and quest objectives (FOLLOW-UPS 27, 28) — NEEDS DEPLOY
 
 Both items from the five-trajectory review, built and unit-tested but **not yet

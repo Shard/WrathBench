@@ -151,8 +151,9 @@ describe("bundle schema", () => {
   });
 
   test("searchReference degrades to no coords on a stale bundle without crashing", () => {
-    // The runner opens the bundle with a bare `new Database`, bypassing
-    // openBundle's guard, so search itself must not crash on a missing table.
+    // A consumer that opens the sqlite file directly bypasses openBundle's
+    // guard (the runner no longer does — see runner/src/wiki.ts), so search
+    // itself must still not crash on a missing table.
     const stale = new Database(":memory:");
     stale.run("CREATE TABLE pages (id INTEGER PRIMARY KEY, title TEXT, ns INTEGER, text TEXT, text_len INTEGER)");
     stale.run("CREATE TABLE redirects (source TEXT PRIMARY KEY, target TEXT, ns INTEGER)");

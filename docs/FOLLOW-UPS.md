@@ -222,8 +222,9 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     read its results as a throughput measurement of the local box, and do not use it
     to judge whether a harness change helped.
 
-30. **The deployed wiki bundle is schema 1, so two shipped channels are inert**
-    (2026-08-22). `data/wiki/bundle.sqlite` was built 2026-08-21 and reports
+30. ~~**The deployed wiki bundle is schema 1, so two shipped channels are inert**~~
+    Fixed 2026-08-22; bundle built to `data/wiki/bundle.next.sqlite`, swap pending
+    (see WORKLOG). Original note (2026-08-22): `data/wiki/bundle.sqlite` was built 2026-08-21 and reports
     `schema_version = 1`: it has neither `page_coords` (shipped as schema 2 with
     the coordinate channel) nor `page_ids` (schema 3, FOLLOW-UPS 25). Consumers
     degrade rather than fail — `run.ts` opens the file directly and bypasses

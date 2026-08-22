@@ -14,9 +14,8 @@
  * tools.ts, shared with the agent loop.
  */
 
-import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { openWikiBundle } from "./wiki";
 import { TOOLS, callTool, coerceToolArgs, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
@@ -153,9 +152,7 @@ async function main(): Promise<void> {
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
 
-  const wiki = existsSync(config.wikiBundle)
-    ? new Database(config.wikiBundle, { readonly: true })
-    : undefined;
+  const wiki = openWikiBundle(config.wikiBundle);
 
   const ctx: ToolContext = {
     sandbox,
