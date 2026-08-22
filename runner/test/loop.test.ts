@@ -120,6 +120,47 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
+    // Three samples: the completion list grows [7,9], stays, then SHRINKS to
+    // [11] — the sandbox-restart/cache-rebuild case. Without the reset at
+    // loop.ts:108 the rebuilt completion would never be re-logged.
+    const snapshots: Record<string, unknown>[] = [
+      { self: {}, questCompletions: [{ questId: 7 }, { questId: 9 }] },
+      { self: {}, questCompletions: [{ questId: 7 }, { questId: 9 }] },
+      { self: {}, questCompletions: [{ questId: 11 }] },
+    ];
+    let i = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () =>
+        Promise.resolve({ lastSeq: -1, eventCount: 0, ...(snapshots[Math.min(i++, snapshots.length - 1)]!) }),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+
+    const adapter = new StubAdapter([
+      { content: "t1", toolCalls: [] },
+      { content: "t2", toolCalls: [] },
+      { content: "t3", toolCalls: [] },
+    ]);
+    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    // Advancing clock so each turn's sample clears the stateIntervalMs gate.
+    let clock = 0;
+    (options as { now?: () => number }).now = () => (clock += 1000);
+    await runLoop(options);
+    // Guard: all three samples recorded (each turn cleared the interval gate).
+    expect(options.trajectory.stateRows("run-test").length).toBeGreaterThanOrEqual(3);
+    // 7 and 9 logged once each on growth; 11 logged after the shrink-triggered
+    // reset — not swallowed by the high-water mark.
+    const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
+    expect(done.map((r) => r["questId"])).toEqual([7, 9, 11]);
+    options.trajectory.close();
+  });
+
   test("the new signals survive the real snapshot serializer, not just the stub", async () => {
     // The sandbox answers the state rpc with toJsonSafe(state.snapshot(), 6).
     // Stubbing the payload proves loop.ts reads it; this proves the SDK's own
