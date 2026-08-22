@@ -451,6 +451,12 @@ priority. Items graduate out of this file into commits; the dev loop
    decode + CMSG_TRAINER_BUY_SPELL.
 10. Per-character credentials (PHASE-0 deferred list) — required before any
     run parallelism beyond the current one-account-per-run scheme.
+    Note 2026-08-22: the fleet layer (`infra/fleet.json` + `run-fleet.ts`)
+    stays inside that scheme by construction — one lane = one account, and
+    two enabled lanes sharing an account is a config error — so it does not
+    move this item. It does supersede the hand-launched
+    "two roster processes with `--skip` and `&`" pattern from
+    infra/README.md's Rosters section.
 
 ## Housekeeping
 

@@ -152,17 +152,68 @@ Two rosters ship for the subscription lane:
 
 The roster runs its entries sequentially by design. Two lanes in parallel means
 two roster processes, one per JSON, each with its own account and its own
-`--log` path so the two JSONLs do not interleave:
-
-    ./infra/run-roster.sh infra/roster-claude-2wide.json --skip sonnet \
-      --log data/runs/roster-opus.jsonl --loop --until 07:30 &
-    ./infra/run-roster.sh infra/roster-claude-2wide.json --skip opus \
-      --log data/runs/roster-sonnet.jsonl --loop --until 07:30 &
-
-The account guard is what keeps those two honest if a lane is ever pointed at
-the wrong account. Do not run `roster-claude.json` and `roster-claude-2wide.json`
+`--log` path so the two JSONLs do not interleave. **Superseded by the fleet**
+(next section) — hand-launching parallel rosters with `--skip` and `&` still
+works, but the fleet is the supported way to run more than one lane. If you do
+launch by hand, do not run `roster-claude.json` and `roster-claude-2wide.json`
 on the same day at the same time: both derive their run ids from the model name
-(`roster-opus-<date>`), so the two opus entries would be the same run.
+(`roster-opus-<date>`), so the two opus entries would be the same run. Fleet
+run ids carry the lane name (`fleet-<lane>-...`), which is how the fleet
+sidesteps that collision.
+
+## The fleet
+
+`infra/fleet.json` is the whole answer to "what is running right now": a list
+of **lanes**, where one lane = one sequential episode stream = one game
+account, and parallelism is exactly the number of enabled lanes. Inspect the
+config, and you have inspected the fleet.
+
+    ./infra/run-fleet.sh infra/fleet.json --until 18:00   # run it
+    ./infra/run-fleet.sh infra/fleet.json --dry-run       # print the plan
+    ./infra/run-fleet.sh --status                         # read-only report
+
+Each lane has `name`, `enabled`, `account`, `loop`, an optional
+`untilDefault` (used when no `--until` is passed), and either inline
+`entries` (the exact per-entry schema the roster accepts) or a `rosterFile`
+path. The fleet spawns one `run-roster` process per enabled lane —
+materialized roster at `data/runs/fleet-<lane>-<date>.roster.json`, roster
+JSONL at `fleet-<lane>-<date>.jsonl`, stdout at `fleet-<lane>-<date>.log` —
+and supervises them.
+
+**The tuning knob is the file.** The supervisor re-reads `fleet.json` every
+60 seconds:
+
+- `enabled: false` **drains** the lane: the roster process is only SIGTERMed
+  once it is between episodes (no child process), so the episode in flight
+  finishes. Worst case — an episode spawning in the instant between the idle
+  check and the signal — gets run-roster's own graceful 30s-grace episode
+  termination, never a hard kill. Disable takes effect at the next episode
+  boundary.
+- `enabled: true`, or a newly added lane, spawns on the next tick. A lane
+  respawned the same day gets `--resume-roster` so finished runs are skipped.
+- A malformed or guard-violating edit never touches running lanes: the fleet
+  logs a complaint and keeps the last good config.
+- A lane whose process exits while enabled is *finished*, not respawned; flip
+  it off and on again to re-arm it.
+
+Guards, at startup and on every re-read: two enabled lanes must not share an
+account (one live session per account), and the **lane policy** — claude
+models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
+`claude-subscription` driver, and that driver runs claude models only. The
+free lanes exist because OpenRouter's and OpenCode Zen's free tiers are
+pooled per upstream provider: a single sequential stream per pool is both the
+polite and the effective shape — two streams on one pool just trip the same
+rate limits twice. The roster's own account-busy guard still runs under every
+lane, so a lane pointed at an account a hand-started run holds waits rather
+than clobbering.
+
+`--status` reads `data/runs/fleet-state.json` plus each lane's logs and
+sqlite: per lane it prints enabled, roster pid liveness, the current run id
+with level/xp, the last stdout line, and — honestly — which run currently
+holds the lane's account even when that run is a hand-started roster the
+fleet does not manage. `sub-opus` ships `enabled: false` on purpose: it is
+the "burn subscription budget" switch. Flip it to true when there is budget
+to burn; flip it back and the lane stops after the episode in flight.
 
 ## Where data lives
 
