@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   diffLanes,
   fillEntries,
+  isAllowlistedFree,
   isClaudeFamily,
   isSharedFreePool,
   laneArgv,
@@ -95,6 +96,16 @@ describe("lane-policy", () => {
     expect(() => validateEntries(lane(), [{ model: "z-ai/glm-5.2:free", driver: "claude-subscription" }])).toThrow(
       /lane-policy/,
     );
+  });
+
+  test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
+    // A paid-looking id with no free suffix on OpenRouter is a lane-policy error.
+    expect(() => validateEntries(lane(), [{ model: "z-ai/glm-5.2" }])).toThrow(/lane-policy/);
+    // The verified-free stealth id is allowlisted and passes.
+    expect(isAllowlistedFree("stealth/ox-alpha")).toBe(true);
+    expect(() => validateEntries(lane(), [{ model: "stealth/ox-alpha" }])).not.toThrow();
+    // Allowlist membership does not leak to other suffixless ids.
+    expect(isAllowlistedFree("stealth/anything-else")).toBe(false);
   });
 
   test.each([
@@ -273,22 +284,29 @@ describe("the shipped fleet.json", () => {
     const byName = Object.fromEntries(config.lanes.map((l) => [l.name, l]));
     expect(byName["sub-sonnet"]).toMatchObject({ account: "SHAKEOUT", loop: true });
     expect(byName["sub-opus"]).toMatchObject({ enabled: false, account: "SHAKEOUT2" });
-    expect(byName["free-or-a"]).toMatchObject({ enabled: true, account: "RUNNER" });
+    // ox-alpha: the Phase-0-passing stealth model, its own account and a solo
+    // lane. Free despite the suffixless id (see FREE_SUFFIXLESS_ALLOWLIST).
+    expect(byName["ox-alpha"]).toMatchObject({ enabled: true, account: "RUNNER" });
+    expect(byName["ox-alpha"].entries).toHaveLength(1);
+    // Post-reset live free lanes (accounts RUNNER2-RUNNER6 are in the module
+    // allowlist on the reclaim image).
+    expect(byName["free-or-a"]).toMatchObject({ enabled: true, account: "RUNNER3" });
+    expect(byName["free-or-b"]).toMatchObject({ enabled: true, account: "RUNNER4" });
     expect(byName["free-oc-a"]).toMatchObject({ enabled: true, account: "RUNNER2" });
-    // Staged lanes for the wider free ramp: parked until their accounts enter
-    // the module allowlist at the next worldserver recreate.
-    expect(byName["free-or-b"]).toMatchObject({ enabled: false, account: "RUNNER3" });
-    expect(byName["free-or-c"]).toMatchObject({ enabled: false, account: "RUNNER4" });
-    expect(byName["free-oc-b"]).toMatchObject({ enabled: false, account: "RUNNER5" });
-    // Staged local lane: LM Studio on the LAN, exempt from the free-suffix rule.
-    expect(byName["local-qwen"]).toMatchObject({ enabled: false, account: "RUNNER6" });
+    expect(byName["free-oc-b"]).toMatchObject({ enabled: true, account: "RUNNER5" });
+    // Local lane: LM Studio on the LAN, exempt from the free-suffix rule.
+    // Re-enabled now the account is harness-bound (a model can no longer land on
+    // the wrong account by omitting it from createSession).
+    expect(byName["local-qwen"]).toMatchObject({ enabled: true, account: "RUNNER6" });
     for (const l of config.lanes) {
       for (const e of l.entries ?? []) {
         if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
         // The suffix rule applies to shared free-cloud pools, not to a
         // local/self-hosted apiBase (local-qwen) — key it on the pool, not the
         // lane name, so a future local lane with any name is judged correctly.
-        else if (isSharedFreePool(e.apiBase)) expect(e.model).toMatch(/(-free$|:free$)/);
+        // A verified-free stealth id (ox-alpha) is allowlisted despite no suffix.
+        else if (isSharedFreePool(e.apiBase) && !isAllowlistedFree(e.model))
+          expect(e.model).toMatch(/(-free$|:free$)/);
       }
     }
     // One stream per model config: no model appears in two lanes.

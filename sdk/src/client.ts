@@ -401,6 +401,18 @@ export interface ConnectOptions {
   baseUrl: string;
   /** Opaque session id chosen by the caller; scopes both actions and events. */
   token: string;
+  /**
+   * The game account this run occupies, bound operator-side exactly like
+   * `token` (ADR-0016, addendum 2026-08-22). When set it is authoritative: it
+   * fills an omitted `createSession`/`deleteCharacter` account and overrides any
+   * account the model typed, so a snippet can never land on — or delete on —
+   * the wrong account (the RUNNER6→RUNNER cross-lane corruption this closes).
+   * Which account a run occupies is fleet infra, not a model decision, so the
+   * model is not told it and cannot choose it. Left undefined (standalone /
+   * MCP) the prior behavior stands: the caller's account, else the module
+   * default.
+   */
+  account?: string;
   /** Defaults to `baseUrl` with an `ws://`/`wss://` scheme. */
   eventsUrl?: string;
   /** Open the event stream during `connect`. Default true; see the note below. */
@@ -786,11 +798,14 @@ export class WrathClient {
   readonly events: EventStream;
   readonly state: StateCache;
 
+  /** The operator-bound game account (ADR-0016). Authoritative when set; see ConnectOptions.account. */
+  private readonly boundAccount: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
 
   constructor(options: ConnectOptions) {
     this.token = options.token;
+    this.boundAccount = options.account;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
@@ -840,7 +855,15 @@ export class WrathClient {
     // here on must never match buffered events of an earlier session. Advanced
     // before the POST so the login handshake events land in the new epoch.
     this.events.advanceEpoch();
-    const body: CreateSessionRequest = { token: this.token, ...request };
+    // Account is operator infra, bound like `token`: when the run bound one it
+    // is authoritative and placed *after* the spread, so it fills an omitted
+    // account and overrides one the model typed (which it should never supply —
+    // it is not told the account). Unbound, the request's own account (else the
+    // module default) stands, preserving standalone/MCP behavior. This is what
+    // closes the RUNNER6→RUNNER cross-lane eviction: an omitted-account
+    // createSession can no longer default onto a shared account.
+    const account = this.boundAccount ?? request.account;
+    const body: CreateSessionRequest = { token: this.token, ...request, account };
     const res = await this.request("POST", "/session", body, sessionResponseSchema);
     this.state.seedSelf({ guid: res.guid, name: res.character });
     return res;
@@ -1197,7 +1220,12 @@ export class WrathClient {
             // parked session the previous attempt timed out on.
             token: `${this.token}-del${attempt}`,
             character,
-            account: options.account,
+            // Bound account wins here too (ADR-0016): a run must only ever
+            // delete on its assigned account. Deleting on the wrong (idle)
+            // account is a cross-lane hazard even though character-delete
+            // refuses an account another live token holds. Unbound, the
+            // caller's option (else the module default) stands.
+            account: this.boundAccount ?? options.account,
           },
           characterDeleteResponseSchema,
         );

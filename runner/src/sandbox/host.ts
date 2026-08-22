@@ -37,6 +37,14 @@ export interface HarnessNotice {
 export interface SandboxHostOptions {
   moduleUrl: string;
   token: string;
+  /**
+   * The game account this run occupies, forwarded to the child as
+   * `WRATHBENCH_ACCOUNT` and bound onto the SDK client (ADR-0016). Operator
+   * infra like `token`: it makes `sdk.createSession`/`deleteCharacter` land on
+   * the assigned account regardless of what a snippet passes. Undefined leaves
+   * the client unbound (standalone behavior).
+   */
+  account?: string;
   scratchpad: Scratchpad;
   snippetTimeoutMs: number;
   pingGraceMs: number;
@@ -145,6 +153,11 @@ export class SandboxHost {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
+        // Always set explicitly (empty when unbound) so it wins over any
+        // WRATHBENCH_ACCOUNT that leaked in from the operator's own shell via
+        // sandboxChildEnv's WRATHBENCH_* forwarding — the child must bind only
+        // the account this run was actually assigned, never a stray one.
+        WRATHBENCH_ACCOUNT: this.opts.account ?? "",
       }),
       stdio: ["ignore", "inherit", "pipe"],
       serialization: "json",

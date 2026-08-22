@@ -317,6 +317,60 @@ function freeCycle(specs: Resolved[], cycle: number): number {
   return cycle;
 }
 
+// ------------------------------------------------------------- defer backoff
+//
+// Why a per-spec backoff instead of dropping deferred specs onto the retry
+// queue: the retry queue at the end of main() is only reachable in NON-loop
+// runs — under `--loop` the main cycle loop exits only on stop or deadline, and
+// both disable the retry loop. So an overnight `--loop` fleet has to back a
+// rate-limited model off *within* the rotation, or it either never retries
+// (dropped) or hammers the saturated provider (relaunched fresh every cycle
+// with no gap — the observed mimo-v2.5-free failure: 3 launches/min, all 429).
+//
+// A deferred spec therefore stays in the rotation but carries a `notBefore`:
+// cycles before it are skipped with no launch and no session churn; the first
+// cycle after it *resumes the same run id* rather than spawning a fresh L1
+// `-cN`. Backoff escalates through RETRY_BACKOFF_MS on consecutive defers and
+// is cleared the moment the spec finishes (`done`).
+
+export interface DeferEntry {
+  /** The run id that actually paused — resume targets this, never a new -cN. */
+  runId: string;
+  /** now + backoff; cycles before this skip the spec without launching. */
+  notBefore: number;
+  /** Consecutive defers, indexes RETRY_BACKOFF_MS (clamped to the last step). */
+  defers: number;
+  /** The pause reason carried for the log and operator lines. */
+  reason: string;
+}
+
+export type AttemptPlan =
+  | { kind: "skip"; until: number; reason: string }
+  | { kind: "resume"; runId: string; reason: string }
+  | { kind: "fresh" };
+
+/** Escalating backoff for the Nth consecutive defer (1-based), clamped. */
+export function backoffMs(defers: number): number {
+  const i = Math.min(Math.max(defers, 1) - 1, RETRY_BACKOFF_MS.length - 1);
+  return RETRY_BACKOFF_MS[i]!;
+}
+
+/**
+ * What a loop cycle should do with one spec, given its defer state.
+ *
+ *  - no entry            -> `fresh` (a healthy spec; the caller applies forCycle
+ *                           for its own -cN burn sample, preserving loop semantics)
+ *  - entry, still cooling -> `skip` (do not launch; this is what kills hammering,
+ *                           and it is per-spec so a lane-mate failing in seconds
+ *                           cannot drag this spec back into a fast relaunch)
+ *  - entry, cooled off    -> `resume` the *stored* run id in place
+ */
+export function planAttempt(entry: DeferEntry | undefined, now: number): AttemptPlan {
+  if (entry === undefined) return { kind: "fresh" };
+  if (now < entry.notBefore) return { kind: "skip", until: entry.notBefore, reason: entry.reason };
+  return { kind: "resume", runId: entry.runId, reason: entry.reason };
+}
+
 // ------------------------------------------------------------------- run state
 
 interface RunRow {
@@ -961,8 +1015,12 @@ async function main(): Promise<void> {
     }
     if (args.loop) {
       console.log(
-        `\nloop: after the last entry the roster starts over until the budget is spent.` +
-          `\n      cycle 2 run ids: ${pending.map((a) => forCycle(a.spec, 2).runId).join(", ")}`,
+        `\nloop: after the last entry the roster starts over until the budget is spent, with a` +
+          `\n      ${CYCLE_GAP_MS / 60_000}m gap between cycles (never spins faster than the backoff).` +
+          `\n      A HEALTHY spec gets a fresh burn sample under a -cN run id each cycle:` +
+          `\n      ${pending.map((a) => forCycle(a.spec, 2).runId).join(", ")}` +
+          `\n      A spec that deferred rate-limited does NOT get a fresh -cN: it is skipped while` +
+          `\n      cooling and then RESUMED on its own run id in place (backoff ${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, escalating).`,
       );
     }
     console.log(
@@ -975,7 +1033,12 @@ async function main(): Promise<void> {
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
         `\n        claude-subscription entries never defer (no per-provider pools to wait on)` +
         `\n        mid-episode pause -> --resume with backoff ${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, then defer` +
-        `\n        retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each` +
+        `\n        deferred spec -> per-spec backoff (${RETRY_BACKOFF_MS.map((m) => `${m / 60_000}m`).join("/")}, escalating): skipped while cooling,` +
+        `\n        then RESUMED in place on its own run id (never relaunched fresh at L1). Resume` +
+        `\n        restores trajectory + scratchpad but NOT level — a lane-mate's fresh launch wipes` +
+        `\n        the shared account, so a resumed character is recreated at level 1.` +
+        `\n        non-loop retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each (loop mode` +
+        `\n        resumes in the rotation instead)` +
         `\n        roster log: ${logPath}`,
     );
     return;
@@ -989,29 +1052,108 @@ async function main(): Promise<void> {
     await freeSession({ runId: token, model: "(external)" }, "pre-roster account release", false);
   }
 
-  let queue: Attempt[] = [];
+  // Defer state, keyed on each spec's stable (cycle-1) run id. This is the one
+  // source of truth for what is backed off: the retry queue below is derived
+  // from it at loop exit, so a spec can never be both relaunched fresh AND
+  // retried (the old code pushed to `queue` while the spec also stayed in the
+  // rotation — double-booking that spawned a fresh L1 -cN every cycle).
+  const deferred = new Map<string, DeferEntry>();
   for (let cycle = 1; ; cycle++) {
     // Cycle 1 is the roster as written (so a non-loop run is byte-identical to
-    // before). Later cycles are fresh runs under `-cN` run ids: reusing the run
-    // id would append to one trajectory and overwrite the run row that
-    // classify() reads. Characters are deliberately reused — a fresh episode
-    // wipes the account's characters first, so cycle N starts at level 1 either
+    // before; the map is empty, so every spec plans `fresh`). Later cycles give
+    // each *healthy* spec a fresh run under a -cN run id — reusing the id would
+    // append to one trajectory and overwrite the run row classify() reads.
+    // Characters are deliberately reused; a fresh episode wipes the account's
+    // characters first, so a fresh cycle-N burn sample starts at level 1 either
     // way. Loop mode burns tokens; it does not accumulate progress.
-    const n = cycle === 1 ? 1 : freeCycle(pending.map((a) => a.spec), cycle);
-    const attempts = cycle === 1 ? pending : pending.map((a) => ({ spec: forCycle(a.spec, n), resume: false }));
-    if (cycle > 1) say(`loop cycle ${n}: restarting the roster (${attempts.length} episode(s))`);
-    for (const a of attempts) {
+    //
+    // A spec that deferred (rate-limited) does NOT get a fresh -cN here: it is
+    // either skipped (still cooling) or resumed in place. freeCycle only needs
+    // to dodge collisions among the specs that will actually launch fresh.
+    const freshBases = pending.filter((a) => !deferred.has(a.spec.runId)).map((a) => a.spec);
+    const n = cycle === 1 ? 1 : freeCycle(freshBases.length > 0 ? freshBases : pending.map((a) => a.spec), cycle);
+    if (cycle > 1) say(`loop cycle ${n}: restarting the roster (${pending.length} episode(s))`);
+    let launched = 0;
+    let earliest: number | undefined;
+    for (const a of pending) {
       if (stopping) break;
-      if (deadline !== undefined && Date.now() >= deadline) {
-        say(`wall-clock budget reached — not launching ${a.spec.model}`);
-        record({ runId: a.spec.runId, model: a.spec.model, outcome: "budget-stop", detail: "not launched" });
+      const plan = planAttempt(deferred.get(a.spec.runId), Date.now());
+      if (plan.kind === "skip") {
+        earliest = earliest === undefined ? plan.until : Math.min(earliest, plan.until);
+        say(`hold ${a.spec.model} (${a.spec.runId}): ${plan.reason}, backing off until ${stamp(plan.until)}`);
+        // Positive evidence in the log that the spec was HELD (not silently
+        // dropped, not relaunched) — otherwise the fix is invisible to post-run
+        // analysis, which would only see fewer `deferred` rows than before.
+        record({
+          runId: a.spec.runId,
+          model: a.spec.model,
+          outcome: "skipped",
+          detail: `held ${plan.reason}; backing off until ${stamp(plan.until)}`,
+        });
         continue;
       }
-      const res = await attemptSpec(a.spec, { resume: a.resume, deadline, dryRun: false });
-      if (res === "defer") queue.push({ spec: a.spec, resume: true });
+      // A deferred spec resumes its stored run id in place instead of spawning
+      // a fresh L1 -cN — this is the "resume, don't recreate" Mark asked for.
+      // Honesty (§C): resume restores that run's trajectory and scratchpad, but
+      // NOT its level — a lane-mate's fresh launch wipes every character on the
+      // shared account (run.ts hygiene, which we cannot change from here), so a
+      // resumed run recreates its character at level 1. For a 0-turn rate-limit
+      // there was nothing to preserve anyway; for a real-turns pause the model
+      // keeps its own context but restarts its climb.
+      const target =
+        plan.kind === "resume" ? { ...a.spec, runId: plan.runId } : cycle === 1 ? a.spec : forCycle(a.spec, n);
+      const resume = plan.kind === "resume" ? true : cycle === 1 ? a.resume : false;
+      // The deadline check goes *after* the plan so a budget-stop logs the id
+      // that would actually have launched (the -cN in a later loop cycle), not
+      // the base id.
+      if (deadline !== undefined && Date.now() >= deadline) {
+        say(`wall-clock budget reached — not launching ${a.spec.model}`);
+        record({ runId: target.runId, model: a.spec.model, outcome: "budget-stop", detail: "not launched" });
+        continue;
+      }
+      if (plan.kind === "resume") {
+        say(`resume ${a.spec.model}: retrying paused run ${plan.runId} in place (was ${plan.reason})`);
+        record({
+          runId: target.runId,
+          model: a.spec.model,
+          outcome: "retry",
+          detail: `resuming in place after ${plan.reason}; resume restores trajectory + scratchpad, not level`,
+        });
+      }
+      launched++;
+      const res = await attemptSpec(target, { resume, deadline, dryRun: false });
+      if (res === "defer") {
+        const defers = (deferred.get(a.spec.runId)?.defers ?? 0) + 1;
+        const reason = readRunRow(target.runId)?.pause_reason ?? "rate-limited";
+        deferred.set(a.spec.runId, {
+          runId: target.runId,
+          notBefore: Date.now() + backoffMs(defers),
+          defers,
+          reason,
+        });
+      } else {
+        deferred.delete(a.spec.runId);
+      }
     }
     if (!args.loop || stopping) break;
     if (deadline !== undefined && Date.now() >= deadline) break;
+    // A gap between cycles so the main loop can never spin faster than the
+    // backoff: without it, a whole roster of saturated free models would 429 in
+    // seconds and immediately loop. When nothing launched (every spec is still
+    // cooling) sleep exactly until the earliest spec is due instead.
+    const gap = launched === 0 && earliest !== undefined ? Math.max(0, earliest - Date.now()) : CYCLE_GAP_MS;
+    await nap(gap, deadline, launched === 0 ? `all models backing off before cycle ${cycle + 1}` : `gap before cycle ${cycle + 1}`);
+    if (stopping || (deadline !== undefined && Date.now() >= deadline)) break;
+  }
+
+  // The retry queue is the deferred map, materialised. It is only *reached* in
+  // non-loop runs (a --loop run exits this point only on stop or deadline, both
+  // of which disable the loop below); a looped run has already been resuming
+  // these in place, cycle after cycle. Resume targets the stored run id.
+  let queue: Attempt[] = [];
+  for (const a of pending) {
+    const entry = deferred.get(a.spec.runId);
+    if (entry !== undefined) queue.push({ spec: { ...a.spec, runId: entry.runId }, resume: true });
   }
 
   for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping; cycle++) {

@@ -1,10 +1,12 @@
 {
   "_notes": [
-    "!! STOPPED 2026-08-22 — DO NOT LAUNCH until two run-roster bugs are fixed (see memory",
-    "free-ramp-20260822): (1) --loop recreates fresh L1 runs of the same model instead of",
-    "resuming the paused one, and hammers saturated pools with no backoff; (2) local-qwen's",
-    "account did not propagate (Qwenlocal landed on RUNNER not RUNNER6). Worldserver is up",
-    "and healthy on the reclaim image; the fleet layer itself is fine, the roster loop is not.",
+    "Post-reset layout 2026-08-22 (evening). Two roster bugs that froze this file are FIXED and",
+    "green: (1) run-roster --loop no longer relaunches a rate-limited model fresh every cycle —",
+    "a deferred spec cools off per-spec and RESUMES in place, with a 10m cycle gap, so no more",
+    "3x/min hammering; (2) the session account is now harness-bound (runner/SDK) — the model no",
+    "longer sees or passes an account, so a lane can no longer land on the wrong one by omission.",
+    "Worldserver is up and healthy on the reclaim image; NO rebuild was needed for either fix.",
+    "Safe to launch once the operator confirms.",
     "",
     "The fleet is this file. One lane = one sequential episode stream = one game account;",
     "parallelism is exactly the number of enabled lanes. Edit while run-fleet is up: it",
@@ -30,10 +32,18 @@
     "sub-opus is the burn switch: flip it to true when there is subscription budget to",
     "burn, back to false to stop after the episode in flight.",
     "",
-    "Accounts RUNNER3-RUNNER6 exist in auth but enter AC_WRATH_BENCH_ACCOUNTS only when",
-    "the worldserver container is next recreated (compose.yml already lists them).",
-    "Until then the free-b/c/d and local-qwen lanes stay enabled:false — flipping one",
-    "on earlier just gets account_not_permitted from the module.",
+    "Model curation (2026-08-22 evening, from provider-body evidence): the ONLY model",
+    "pruned as genuinely no-longer-free is openai/gpt-oss-20b:free — its provider returns",
+    "an explicit 404 'unavailable for free, use the paid slug openai/gpt-oss-20b'. The",
+    "paid slug is a separate decision (lane policy keeps these lanes free-only). glm-5.2,",
+    "gemma-4-31b, mimo, deepseek all only returned recoverable upstream-pool 429s (NOT a",
+    "payment error, NOT an account-wide daily cap) so they stay, paired behind a proven",
+    "worker; the loop fix keeps them from hammering when their pool is saturated.",
+    "",
+    "ox-alpha lane: stealth/ox-alpha is the model that PASSED the Phase 0 gate (gate2-ox-4).",
+    "It fell out of the fleet when the fleet became the launch path. Still live and free on",
+    "OpenRouter (verified 2026-08-22, pricing 0/0). Given the ~1-week stealth window it gets",
+    "its own account (RUNNER) and a solo lane for clean continuous data — do not pad it.",
     "",
     "Local lanes: an openai lane may point apiBase at a self-hosted OpenAI-compatible",
     "endpoint (e.g. LM Studio on the LAN). That is NOT a shared free-cloud pool, so it",
@@ -45,7 +55,6 @@
     {
       "name": "sub-sonnet",
       "enabled": false,
-      "_why_disabled": "2026-08-22: hand-launched burn rosters hold SHAKEOUT/SHAKEOUT2 until 18:00; enable from the next session onward",
       "account": "SHAKEOUT",
       "loop": true,
       "untilDefault": "18:00",
@@ -66,36 +75,36 @@
       ]
     },
     {
-      "name": "free-or-a",
+      "name": "ox-alpha",
       "enabled": true,
       "account": "RUNNER",
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
-        { "model": "z-ai/glm-5.2:free" },
-        { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" }
+        { "model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "episodeMs": 5400000 }
       ]
     },
     {
-      "name": "free-or-b",
+      "name": "free-or-a",
       "enabled": true,
       "account": "RUNNER3",
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
-        { "model": "google/gemma-4-31b-it:free" },
-        { "model": "openai/gpt-oss-20b:free" }
+        { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
+        { "model": "nvidia/nemotron-nano-9b-v2:free" }
       ]
     },
     {
-      "name": "free-or-c",
+      "name": "free-or-b",
       "enabled": true,
       "account": "RUNNER4",
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
         { "model": "poolside/laguna-s-2.1:free" },
-        { "model": "nvidia/nemotron-nano-9b-v2:free" }
+        { "model": "z-ai/glm-5.2:free" },
+        { "model": "google/gemma-4-31b-it:free" }
       ]
     },
     {
@@ -105,9 +114,9 @@
       "loop": true,
       "untilDefault": "18:00",
       "entries": [
-        { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
-        { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
+        { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
       ]
     },
     {
@@ -123,8 +132,7 @@
     },
     {
       "name": "local-qwen",
-      "enabled": false,
-      "_why_disabled": "2026-08-22: --account RUNNER6 did NOT propagate to createSession — Qwenlocal was created on RUNNER (default), colliding with free-or-a. Bug under diagnosis; re-enable once account propagation is fixed for a local-apiBase openai lane.",
+      "enabled": true,
       "account": "RUNNER6",
       "loop": true,
       "untilDefault": "18:00",

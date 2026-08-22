@@ -51,6 +51,12 @@ const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8
 // this file by hand, and is random rather than a fixed `"dev"` so it can never
 // collide with — or be guessed alongside — a real run's session (FOLLOW-UPS 19).
 const TOKEN = process.env["WRATHBENCH_TOKEN"] ?? randomBytes(16).toString("hex");
+// The fleet-assigned game account, bound onto the client so a snippet cannot
+// pass (or omit) an account and land on the wrong one (ADR-0016). Empty means
+// unbound (standalone / running this file by hand): the client keeps its prior
+// account behavior.
+const ACCOUNT_ENV = process.env["WRATHBENCH_ACCOUNT"];
+const ACCOUNT = ACCOUNT_ENV !== undefined && ACCOUNT_ENV.length > 0 ? ACCOUNT_ENV : undefined;
 const VALUE_MAX_CHARS = 4_000;
 const LOG_MAX_CHARS = 4_000;
 
@@ -150,7 +156,7 @@ function drainLogs(): LogEntry[] {
 
 // -------------------------------------------------------- ambient snippet API
 
-const client = new WrathClient({ baseUrl: MODULE_URL, token: TOKEN, subscribeEvents: false });
+const client = new WrathClient({ baseUrl: MODULE_URL, token: TOKEN, account: ACCOUNT, subscribeEvents: false });
 
 let hostcallId = 0;
 const hostcallPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();

@@ -146,6 +146,7 @@ async function main(): Promise<void> {
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token ?? token,
+    account: config.account,
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
