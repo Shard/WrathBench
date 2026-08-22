@@ -128,6 +128,24 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("2xx body");
   });
 
+  test("a 2xx error body with a string rate-limit code pauses as rate-limited", async () => {
+    // Providers that send code as a string ("rate_limit_exceeded") with
+    // rate-limit wording used to terminate the run instead of pausing.
+    const errBody = JSON.stringify({
+      error: { message: "Too many requests for this model", code: "rate_limit_exceeded" },
+    });
+    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+  });
+
+  test("a 2xx error body with a numeric-string 429 code pauses as rate-limited", async () => {
+    const errBody = JSON.stringify({ error: { message: "Provider returned error", code: "429" } });
+    const out = await adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+  });
+
   test("a 2xx error body without budget shape retries and then hard-errors", async () => {
     const errBody = JSON.stringify({ error: { message: "upstream exploded", code: 500 } });
     await expect(

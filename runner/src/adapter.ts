@@ -135,6 +135,11 @@ export interface OpenAiAdapterOptions {
 }
 
 const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*limit|payment/i;
+// Rate-limit wording that a provider may send with a 2xx body and a string code
+// ("rate_limit_exceeded", "Rate limit exceeded") instead of a numeric 429. Kept
+// separate from EXHAUSTION_HINTS so it reads as rate-limited, not quota-spent,
+// and so the HTTP-429 path's quota-vs-rate decision is unaffected.
+const RATE_LIMIT_HINTS = /rate.?limit|too many requests/i;
 
 export class OpenAiChatAdapter implements ChatAdapter {
   readonly label: string;
@@ -223,9 +228,20 @@ export class OpenAiChatAdapter implements ChatAdapter {
             lastError = `provider error in 2xx body: ${JSON.stringify(errObj).slice(0, 500)}`;
             const code = (errObj as { code?: unknown; status?: unknown }).code ??
               (errObj as { status?: unknown }).status;
-            const numCode = typeof code === "number" ? code : undefined;
+            // Accept a numeric code or a numeric string ("429"): providers vary.
+            const numCode =
+              typeof code === "number"
+                ? code
+                : typeof code === "string" && /^\d+$/.test(code.trim())
+                  ? Number(code)
+                  : undefined;
             lastStatus = numCode;
-            if (numCode === 429 || numCode === 402 || EXHAUSTION_HINTS.test(lastError)) {
+            if (
+              numCode === 429 ||
+              numCode === 402 ||
+              RATE_LIMIT_HINTS.test(lastError) ||
+              EXHAUSTION_HINTS.test(lastError)
+            ) {
               const quota = numCode === 402 || EXHAUSTION_HINTS.test(lastError);
               if (budget === null || (quota && budget.reason === "rate-limited")) {
                 budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
