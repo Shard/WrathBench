@@ -108,6 +108,63 @@ describe("client: the happy path through the slice", () => {
   });
 });
 
+describe("client: operator-bound account (ADR-0016)", () => {
+  test("a bound account fills an omitted createSession account", async () => {
+    const stub = startStub();
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      account: "RUNNER6",
+      subscribeEvents: false,
+    });
+    // The RUNNER6→RUNNER defect: the model omits the account entirely.
+    await client.createSession({ character: "Qwenlocal", race: 1, class: 2 });
+    expect(stub.sessions).toHaveLength(1);
+    expect(stub.sessions[0]?.account).toBe("RUNNER6");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a bound account overrides an account the model typed", async () => {
+    const stub = startStub();
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      account: "RUNNER6",
+      subscribeEvents: false,
+    });
+    // The model should never pass an account; if it does, the bound one wins so
+    // it cannot land on someone else's lane by typing the default.
+    await client.createSession({ character: "Qwenlocal", account: "RUNNER", race: 1, class: 2 });
+    expect(stub.sessions[0]?.account).toBe("RUNNER6");
+    client.close();
+    await stub.stop();
+  });
+
+  test("with no bound account the request's own account is preserved (standalone)", async () => {
+    const stub = startStub();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", subscribeEvents: false });
+    await client.createSession({ character: "Fenwick", account: "PROBE", race: 1, class: 1 });
+    expect(stub.sessions[0]?.account).toBe("PROBE");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a bound account wins over a deleteCharacter account too", async () => {
+    const stub = startStub();
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      account: "RUNNER6",
+      subscribeEvents: false,
+    });
+    await client.deleteCharacter("Qwenlocal", { account: "RUNNER", retryDelayMs: 5 });
+    expect(stub.characterDeletes[0]?.account).toBe("RUNNER6");
+    client.close();
+    await stub.stop();
+  });
+});
+
 describe("client: movement", () => {
   test("moveTo resolves on the WB_MOVE_RESULT carrying its own moveId", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });

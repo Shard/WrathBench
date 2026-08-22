@@ -100,6 +100,23 @@ export function isSharedFreePool(apiBase: string | undefined): boolean {
 }
 
 /**
+ * Shared-free-pool model ids that are genuinely free but do NOT carry the
+ * `-free`/`:free` suffix the pool convention uses. Stealth/preview models are
+ * the case: OpenRouter lists `stealth/ox-alpha` at pricing 0/0 (verified
+ * 2026-08-22 against /api/v1/models) but the id has no suffix, so the plain
+ * suffix guard would wrongly reject it. Membership here is an explicit operator
+ * assertion that the id was checked free — it is NOT a way to sneak a paid model
+ * onto a free lane; re-verify pricing before adding one, and drop it if the
+ * stealth window closes and it starts billing.
+ */
+const FREE_SUFFIXLESS_ALLOWLIST = new Set<string>(["stealth/ox-alpha"]);
+
+/** True when a shared-free-pool id is free despite lacking the suffix. */
+export function isAllowlistedFree(model: string): boolean {
+  return FREE_SUFFIXLESS_ALLOWLIST.has(model.toLowerCase());
+}
+
+/**
  * Lane-policy and shape checks for one lane's entries. Used for inline
  * entries at parse time and for rosterFile contents at load time.
  */
@@ -136,10 +153,16 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
     // only; the suffix is how we keep a lane off a paid tier. Local/self-hosted
     // openai lanes have no such pool and are exempt — but still claude-barred
     // above.
-    if (driver === "openai" && isSharedFreePool(e.apiBase) && !/(-free$|:free$)/.test(e.model)) {
+    if (
+      driver === "openai" &&
+      isSharedFreePool(e.apiBase) &&
+      !/(-free$|:free$)/.test(e.model) &&
+      !isAllowlistedFree(e.model)
+    ) {
       fail(
         `lane ${lane.name}: entry ${e.model}: lane-policy — a shared free-cloud pool ` +
-          `(OpenRouter/OpenCode) carries free models only (id must end -free or :free); ` +
+          `(OpenRouter/OpenCode) carries free models only (id must end -free or :free, ` +
+          `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST); ` +
           `a local/self-hosted apiBase is exempt`,
       );
     }

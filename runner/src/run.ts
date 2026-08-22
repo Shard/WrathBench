@@ -218,6 +218,7 @@ async function main(): Promise<void> {
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
+    account: config.account,
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
@@ -327,9 +328,11 @@ async function main(): Promise<void> {
             text:
               `your assigned character for this episode: name "${config.character}", race ${config.race}, ` +
               `class ${config.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin). Create it with ` +
-              `\`await sdk.createSession({ character: "${config.character}", account: "${config.account}", race: ${config.race}, class: ${config.class} })\` ` +
+              `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
               `after \`await connect()\`. Use exactly these values: the account's character slots were cleared ` +
-              `for this episode and other combinations may be rejected by the server's race/class rules.`,
+              `for this episode and other combinations may be rejected by the server's race/class rules. ` +
+              `The game account is assigned and bound for you by the harness — do not pass an account; ` +
+              `createSession is issued on the correct one automatically.`,
           } as const,
         ];
 
