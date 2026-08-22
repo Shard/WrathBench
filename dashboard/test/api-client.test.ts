@@ -101,6 +101,7 @@ describe("shapes", () => {
       runs: [
         {
           runId: "r1", model: "m", driver: "openai", adapter: "openai", shakeout: null, objective: null,
+          comparability: null,
           character: "Chr", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
           pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, mtime: 5,

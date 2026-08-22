@@ -13,16 +13,24 @@
 import type {
   ApiInfoResponse,
   EntriesResponse,
+  EvalResponse,
   FleetResponse,
   PositionsResponse,
   RunDetailResponse,
   RunsResponse,
+  TrackResponse,
 } from "@viewer/api-types";
 
 export type {
   AgentPosition,
   ApiInfoResponse,
+  ComparabilityView,
   EntriesResponse,
+  EvalResponse,
+  EvalRun,
+  LevelMark,
+  TrackPoint,
+  TrackResponse,
   FeedEntry,
   FleetLane,
   FleetResponse,
@@ -77,6 +85,11 @@ export function createClient(opts: ClientOptions = {}) {
     runs: (): Promise<RunsResponse> => get<RunsResponse>("/api/runs", opts),
     positions: (): Promise<PositionsResponse> => get<PositionsResponse>("/api/positions", opts),
     fleet: (): Promise<FleetResponse> => get<FleetResponse>("/api/fleet", opts),
+    /** Every run projected onto the eval surface: level marks and comparability. */
+    eval: (): Promise<EvalResponse> => get<EvalResponse>("/api/eval", opts),
+    /** One run's recorded track, for map replay. */
+    track: (id: string): Promise<TrackResponse> =>
+      get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`, opts),
     run: (id: string): Promise<RunDetailResponse> =>
       get<RunDetailResponse>(`/api/run/${encodeURIComponent(id)}`, opts),
     entries: (id: string, from?: number, limit = 200): Promise<EntriesResponse> => {

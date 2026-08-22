@@ -19,6 +19,12 @@ export function Layout(props: ParentProps) {
           <A href="/map" activeClass="on">
             map
           </A>
+          <A href="/eval" activeClass="on">
+            eval
+          </A>
+          <A href="/ladder" activeClass="on">
+            ladder
+          </A>
         </nav>
         <span class="spacer" />
       </header>
