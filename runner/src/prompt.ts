@@ -35,7 +35,7 @@ Errors the server decides after an action is acknowledged arrive as events, not 
 ## Tools
 
 - run_snippet: execute TypeScript in the sandbox. Your only way to act.
-- recent_events: the last events from the server, newest last.
+- recent_events: the last events from the server, newest last. Ambient movement packets (monster moves, your own heartbeats) are folded out with a count — they already feed the state cache; pass {includeMovement: true} if you truly need the raw stream.
 - state_summary: a formatted summary of the state cache.
 - search_reference: full-text search over a game reference wiki (quests, NPCs, zones, items). Use it when you need world knowledge such as where a questgiver stands or what an objective means.
 - read_scratchpad / write_scratchpad: your durable notes. The scratchpad survives restarts and context loss; keep your plan, progress, and hard-won facts (coordinates, quest ids, what failed) there. write_scratchpad replaces the whole document.
