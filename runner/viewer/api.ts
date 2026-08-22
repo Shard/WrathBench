@@ -23,8 +23,6 @@ import type {
   FleetResponse,
   RunListRow,
 } from "./api-types";
-import { MAP_PAGE } from "./map-page";
-import { PAGE } from "./page";
 import { readPositions } from "./positions";
 import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
@@ -42,7 +40,7 @@ export interface ApiOptions {
   /**
    * Withhold raw entries, scratchpads and tiles. Opt-in-to-public rather than
    * opt-in-to-raw: the operator's own run page depends on raw bodies, so
-   * defaulting them off would break the pages this viewer still serves.
+   * defaulting them off would break the working view.
    */
   publicMode?: boolean;
 }
@@ -51,12 +49,6 @@ export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
-}
-
-function page(body: string): Response {
-  return new Response(body, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
@@ -87,8 +79,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * git checkout, so "not built yet" is the common case, not a failure.
  */
 export const UNBUILT_NOTICE =
-  "The dashboard has not been built. Run `bun install && bun run --cwd dashboard build`, " +
-  "or use the legacy pages at /legacy/ and /legacy/map.";
+  "The dashboard has not been built. Run `bun install && bun run --cwd dashboard build`.";
 
 function unbuilt(): Response {
   return new Response(UNBUILT_NOTICE, {
@@ -342,11 +333,6 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       });
     }
 
-    // The hand-written pages the SPA replaces. They keep working at /legacy
-    // until the follow-up deletes them.
-    if (path === "/legacy" || path === "/legacy/" || path.startsWith("/legacy/run/")) return page(PAGE);
-    if (path === "/legacy/map") return page(MAP_PAGE);
-
     if (dashboardDir !== undefined) {
       const hit = staticFile(dashboardDir, path.slice(1));
       if (hit !== null) return hit;
@@ -354,10 +340,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       return dashboardIndex();
     }
 
-    // No build on disk. Serve the legacy pages rather than a 503, so a plain
-    // `bun runner/viewer/serve.ts` on a fresh checkout still shows runs.
-    if (path === "/" || path.startsWith("/run/")) return page(PAGE);
-    if (path === "/map") return page(MAP_PAGE);
-    return notFound("no such path");
+    // No build on disk. There is no fallback UI to serve (ADR-0022): the SPA
+    // is the only UI, so every non-API path gets the notice telling the
+    // operator how to build it.
+    return unbuilt();
   };
 }

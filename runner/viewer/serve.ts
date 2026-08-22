@@ -42,8 +42,9 @@ const runsDir = process.env["WRATHBENCH_RUNS_DIR"] ?? "data/runs";
  */
 const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
 /*
- * The built SPA. Also a normal absence: without it the viewer serves the
- * hand-written pages it always did, so a fresh checkout needs no build step.
+ * The built SPA, and since ADR-0022 the only UI there is. Its absence is not a
+ * startup failure: the API keeps serving, and every page route answers with the
+ * notice that says how to build it.
  */
 const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist";
 const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
@@ -73,6 +74,6 @@ const server = Bun.serve({
 
 console.log(
   `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir})` +
-    (built ? "" : "  [dashboard not built — legacy pages at /]") +
+    (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode ? "  [public mode: raw, scratchpads and tiles withheld]" : ""),
 );

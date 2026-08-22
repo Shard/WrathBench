@@ -27,9 +27,10 @@ bun run dashboard:build             # writes dashboard/dist
 bun runner/viewer/serve.ts          # http://127.0.0.1:8090
 ```
 
-The viewer serves `dashboard/dist` when it exists and falls back to the
-hand-written pages when it does not, so a fresh checkout needs no build step.
-`WRATHBENCH_DASHBOARD_DIR` overrides where it looks.
+The viewer serves `dashboard/dist` when it exists. When it does not there is no
+UI at all — page routes answer with a plain-text notice naming the build command
+— so a checkout that wants the dashboard has to build it.
+`WRATHBENCH_DASHBOARD_DIR` overrides where the viewer looks.
 
 ## Routes
 
@@ -38,7 +39,6 @@ hand-written pages when it does not, so a fresh checkout needs no build step.
 | `/` | fleet overview: lanes, accounts, heartbeat, and every run |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
-| `/legacy/…` | the hand-written pages this replaces, until they are deleted |
 
 ## Structure
 

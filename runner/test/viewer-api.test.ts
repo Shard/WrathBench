@@ -168,11 +168,16 @@ describe("public mode", () => {
 });
 
 describe("static hosting of the dashboard", () => {
-  test("without a build, / falls back to the legacy page", async () => {
+  test("without a build, / is the not-built notice and not a fallback UI", async () => {
     const runs = fixture();
-    const res = await api(runs)(new Request("http://x/"));
-    expect(res.status).toBe(200);
-    expect(await body(res)).toContain("<!doctype html>");
+    const handle = api(runs);
+    for (const path of ["/", "/run/anything", "/map"]) {
+      const res = await handle(new Request(`http://x${path}`));
+      expect(res.status).toBe(503);
+      expect(await body(res)).toBe(UNBUILT_NOTICE);
+    }
+    // The API keeps serving with no build in place.
+    expect((await handle(new Request("http://x/api/runs"))).status).toBe(200);
   });
 
   test("with a build, / serves index.html and unknown paths fall through to it", async () => {
@@ -189,8 +194,6 @@ describe("static hosting of the dashboard", () => {
     const asset = await handle(new Request("http://x/assets/app-abc123.js"));
     expect(asset.headers.get("content-type")).toContain("javascript");
     expect(asset.headers.get("cache-control")).toContain("immutable");
-    // The legacy pages keep serving alongside it.
-    expect(await body(await handle(new Request("http://x/legacy/")))).toContain("<!doctype html>");
     // And nothing under the dist root can be escaped out of.
     const esc = await handle(new Request("http://x/..%2F..%2Fetc%2Fpasswd"));
     expect(await body(esc)).toBe("<html>spa</html>");
