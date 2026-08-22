@@ -16,10 +16,18 @@
  * provides the deck. `WB_AREATRIGGER` is also the gate's: no DBC trigger lies
  * within 400y of either starter zone.
  *
- * Run:
+ * Preflight-gate ready (ADR-0023 amendment, 2026-08-23): reads MODULE_ACCOUNT
+ * the way the supervisor's spawnSmoke injects it, deletes last run's character
+ * through the real CMSG_CHAR_DELETE path before creating this run's (the same
+ * pattern as quest-accept-status.ts / kill-credit.ts), and only logs out at
+ * the end — a disconnected character lingers 60s in the core's
+ * WorldSession::expireTime, during which a delete is silently ignored.
+ *
+ * Run standalone (defaults to the PROBE account):
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-navigation.ts
  *
- * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
+ * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086)
+ * and the login account with MODULE_ACCOUNT (default PROBE).
  */
 
 const HOST = process.env.MODULE_HOST ?? "worldserver";
@@ -30,16 +38,21 @@ const WS = `ws://${HOST}:${PORT}`;
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `probe-nav-${crypto.randomUUID()}`;
-// Fixed name: POST /session reuses an existing character, so repeated probe
-// runs do not eat into the realm's 10-characters-per-account cap.
-const CHARACTER = "Benchnav";
+// Fixed name, deleted at the START of every run and only logged out at the
+// end (see deletePreviousCharacter below). One name per script, so the
+// leftover is always exactly one.
+const CHARACTER = "Smokenav";
+const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 function log(msg: string) {
   console.log(`[nav] ${msg}`);
 }
 function fail(msg: string): never {
   console.error(`[nav] FAIL: ${msg}`);
-  process.exit(1);
+  const bail = () => process.exit(1);
+  setTimeout(bail, 3000);
+  fetch(`${BASE}/session`, { method: "DELETE", body: JSON.stringify({ token: TOKEN }) }).then(bail, bail);
+  throw new Error("unreachable");
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -86,6 +99,24 @@ async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: strin
 
 const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 
+async function deletePreviousCharacter(): Promise<void> {
+  for (let attempt = 0; attempt < 4; ++attempt) {
+    const r = await req("POST", "/character-delete", { token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER });
+    if (r.json?.deleted === true) {
+      log(`deleted last run's ${CHARACTER}: ${JSON.stringify(r.json)}`);
+      return;
+    }
+    if (r.status === 502 && r.json?.error === "character_not_found") {
+      log(`no previous ${CHARACTER} to delete (first run on this realm)`);
+      return;
+    }
+    log(`character-delete attempt ${attempt}: ${r.status} ${JSON.stringify(r.json)}`);
+    if (r.status !== 504) break;
+    await Bun.sleep(2000);
+  }
+  fail(`could not delete last run's ${CHARACTER}`);
+}
+
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */
 async function move(target: { x: number; y: number; z: number }, timeoutMs = 60000): Promise<any> {
   const ack = await req("POST", "/action", { token: TOKEN, action: "move_to", ...target });
@@ -106,13 +137,17 @@ async function move(target: { x: number; y: number; z: number }, timeoutMs = 600
 async function main() {
   const health = await req("GET", "/health");
   if (health.status !== 200 || !health.json?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
-  log(`health ok: build=${health.json.build ?? "?"}`);
+  log(`health ok: build=${health.json.build ?? "?"}, character=${CHARACTER}`);
+
+  // 0. Delete last run's character through the real CMSG_CHAR_DELETE path
+  //    (see deletePreviousCharacter for why this runs first, not last).
+  await deletePreviousCharacter();
 
   const ws = await openEvents();
   await Bun.sleep(200);
 
   // 1. Session in world.
-  const session = await req("POST", "/session", { token: TOKEN, character: CHARACTER, race: 1, class: 1 });
+  const session = await req("POST", "/session", { token: TOKEN, account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
   if (session.status !== 200 || !session.json?.ok || !session.json?.inWorld) {
     fail(`session create failed: ${session.status} ${JSON.stringify(session.json)}`);
   }

@@ -160,7 +160,8 @@ top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the lanes:
   "account": "SMOKE",
   "smokes": [
     { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
-    { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" }
+    { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" },
+    { "script": "infra/smoke/module-navigation.ts", "account": "SMOKE3" }
   ],
   "timeoutMs": 130000,
   "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
@@ -174,16 +175,22 @@ There are two tiers (ADR-0023, amended 2026-08-23):
   and again whenever the server identity changes — which is to say on every
   worldserver recreate *and* on every restart the container does by itself.
   Entries with **distinct accounts run in parallel**; entries sharing an account
-  run in order. A bare string entry means "on `account`". The two shipped
+  run in order. A bare string entry means "on `account`". The three shipped
   smokes split the old arc's claims without losing one:
   `quest-accept-status.ts` (login, questgiver status, quest query, accept,
   the served quest-log complete state, turn-in reward chain, XP, vendor list,
-  ~20s) and `kill-credit.ts` (one kobold: attack stream, kill credit, loot
-  round trip, ~42s). Both delete the previous run's character first (the
-  CMSG_CHAR_DELETE proof) and only log out at the end, because a disconnected
-  character stays in world for the core's 60s `WorldSession::expireTime`
-  during which a delete is silently ignored — deleting last time's character
-  costs nothing, deleting this time's costs a minute.
+  ~20s), `kill-credit.ts` (one kobold: attack stream, kill credit, loot
+  round trip, ~42s), and `module-navigation.ts` (the navigation status
+  vocabulary: a mesh-resolved arrival carries `meshZ`, a target far outside
+  the poly search is `target_off_mesh`, a request beyond the single-move cap
+  is `too_far`, a plain walk arrives with no `meshZ`, and every status on the
+  stream is in the documented vocabulary; ~15s, its own account so it runs
+  in parallel with the other two). All three delete the previous run's
+  character first (the CMSG_CHAR_DELETE proof) and only log out at the end,
+  because a disconnected character stays in world for the core's 60s
+  `WorldSession::expireTime` during which a delete is silently ignored —
+  deleting last time's character costs nothing, deleting this time's costs a
+  minute.
 - **`deploySmokes` is the deploy-time full arc.** `module-quest.ts` — eight
   kills to objective completion and the kill quest's own turn-in, about four
   minutes — is run once per deploy by `infra/deploy-worldserver.sh`, after the
@@ -215,9 +222,14 @@ docker compose -f infra/compose.yml run --rm --no-deps \
 All four are in `AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml`, which the
 module reads **only at worldserver recreate**. Until the next recreate the
 running module permits `SMOKE` alone, so the shipped fleet.json binds both
-smokes to `SMOKE` (sequential, ~62s, `timeoutMs` 190000). After the recreate,
-flip `kill-credit.ts` to `SMOKE2` and `timeoutMs` to 130000 for the parallel
-~42s gate. Never before: a smoke bound to an unpermitted account gets 403
+`quest-accept-status.ts` and `kill-credit.ts` to `SMOKE` (sequential, ~62s,
+`timeoutMs` 190000); `module-navigation.ts` is staged on `SMOKE3` in the same
+`smokes` array but, being unpermitted before the recreate, answers 403 and
+blocks the gate until then (see the `_notes` in `infra/fleet.json`). After the
+recreate, flip `kill-credit.ts` to `SMOKE2` and `timeoutMs` to 130000 for the
+parallel ~42s gate; `module-navigation.ts` on `SMOKE3` becomes live at the same
+recreate and stays its own parallel chain (~15s, well under the budget). Never
+before: a smoke bound to an unpermitted account gets 403
 `account_not_permitted`, the gate fails, and no lane spawns until it is fixed.
 The order of operations at that drain window is therefore: recreate the
 worldserver, then restart the fleet (which is also what picks up the new
