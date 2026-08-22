@@ -16,7 +16,13 @@
 import { A, useParams } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { subscribeTail } from "../api/live";
-import { api, type FeedEntry, type RunDetailResponse, type TokenTotals } from "../api/client";
+import {
+  api,
+  type ComparabilityView,
+  type FeedEntry,
+  type RunDetailResponse,
+  type TokenTotals,
+} from "../api/client";
 import { Sparkline } from "../components/Sparkline";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 
@@ -217,6 +223,12 @@ export default function RunDetail() {
                 </div>
               </div>
 
+              <h2 class="section">
+                comparability{" "}
+                <A href={`/map?run=${encodeURIComponent(run().runId)}`}>replay on map</A>
+              </h2>
+              <Tuple run={run()} />
+
               <Show when={run().terminationReason !== null}>
                 <div class="banner bad">
                   <strong>{run().terminationReason}</strong>
@@ -260,6 +272,60 @@ export default function RunDetail() {
         }}
       </Show>
     </div>
+  );
+}
+
+/**
+ * The comparability tuple: everything that has to match before this run may be
+ * charted beside another (ADR-0026).
+ *
+ * A run whose metadata predates the stamp says "not recorded" and stops there.
+ * Nothing is recomputed from today's harness — a prompt hash taken against the
+ * current prompt would assert a comparability that was never established.
+ */
+function Tuple(props: { run: RunDetailResponse["run"] }) {
+  const c = (): ComparabilityView | null => props.run.comparability;
+  const ms = (v: number | null): string => (v === null ? "disabled" : fmtDuration(v));
+  return (
+    <Show
+      when={c()}
+      fallback={
+        <p class="dim">
+          Not recorded — this run predates the comparability stamp. Its harness version is{" "}
+          {shortHarness(props.run.harnessVersion)}; nothing else about what it was given can be
+          established after the fact.
+        </p>
+      }
+    >
+      {(t) => (
+        <dl class="tuple">
+          <dt>harness</dt>
+          <dd class="mono">{t().harnessVersion}</dd>
+          <dt>prompt</dt>
+          <dd class="mono">
+            {t().promptHash} · {t().promptChars} chars
+          </dd>
+          <dt>context engine</dt>
+          <dd>{t().contextEngine}</dd>
+          <dt>effort</dt>
+          <dd>{t().effort ?? "not sent (provider default)"}</dd>
+          <dt>episode budget</dt>
+          <dd class="mono">
+            {t().budget.maxTurns === null ? "unlimited turns" : `${t().budget.maxTurns} turns`} ·{" "}
+            {t().budget.maxToolCalls} tool calls · idle {ms(t().budget.idleMs)} · no-xp{" "}
+            {ms(t().budget.noXpMs)} · episode {ms(t().budget.episodeMs)}
+          </dd>
+          <dt>scoring</dt>
+          <dd class={t().objective || props.run.shakeout !== null ? "warn" : "ok"}>
+            {props.run.shakeout !== null
+              ? props.run.shakeout
+              : t().objective
+                ? "unscored (operator objective)"
+                : "scorable"}
+          </dd>
+        </dl>
+      )}
+    </Show>
   );
 }
 
