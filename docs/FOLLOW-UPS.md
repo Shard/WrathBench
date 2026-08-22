@@ -412,6 +412,25 @@ priority. Items graduate out of this file into commits; the dev loop
     sandboxing and joins this item as a pre-public blocker. Trajectory audit
     2026-08-22: no historical run ever read env or the file.
 
+20. **Solo auto-loot never stored an item — Fixed 2026-08-22**
+    (morning-opus-1 post-mortem). The module's `loot_all` replay collected
+    only `LOOT_SLOT_TYPE_ALLOW_LOOT` (0) slots, but every solo
+    `SMSG_LOOT_RESPONSE` marks its slots `LOOT_SLOT_TYPE_OWNER` (4)
+    (LootMgr.cpp, PERMISSION_OWNER) — so the module sent only
+    `CMSG_LOOT_RELEASE` and no item ever entered a bag, while the SDK
+    reported `{ ok: true, status: "looted" }` from the window contents.
+    Fixed on both sides: the module accepts ALLOW_LOOT and OWNER (MASTER/
+    ROLL_ONGOING/LOCKED stay excluded — group states a solo benchmark never
+    auto-stores), and `lootCorpse` now derives its result from the
+    `SMSG_ITEM_PUSH_RESULT` receipts, with a distinct `none_stored` status
+    when the window had items but none were stored (the ADR-0016 rule that
+    would have caught this on day one). Shipped alongside, same post-mortem:
+    `turnInQuest` races `SMSG_INVENTORY_CHANGE_FAILURE` and returns
+    `inventory_full` instead of timing out on a full bag; `state.bag()` —
+    the backpack view opus rebuilt by hand from push listeners, invSlot
+    regexes and a forced relog (ADR-0015 bar met); and the prompt now
+    documents both SDK tiers briefly, as ADR-0015 said it should.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
