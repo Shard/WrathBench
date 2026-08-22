@@ -432,6 +432,9 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   on(opcode: string, handler: (event: StreamEvent) => void): Unsubscribe;
   on(opcode: string, handler: (event: never) => void): Unsubscribe {
     const h = handler as AnyHandler;
+    // "*" has exactly one reading (every event): route it to onAny instead of
+    // registering under a literal opcode that can never fire (ADR-0016 rule 1).
+    if (opcode === "*") return this.onAny(h);
     let set = this.opcodeHandlers.get(opcode);
     if (!set) {
       set = new Set();
@@ -487,6 +490,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
       );
     }
     const h = handler as unknown as AnyHandler;
+    if (opcode === "*") return this.anyHandlers.delete(h);
     const set = this.opcodeHandlers.get(opcode);
     if (!set) return false;
     if (set.delete(h)) return true;
