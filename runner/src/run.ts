@@ -23,6 +23,7 @@
  */
 
 import { join } from "node:path";
+import { comparabilityOf, sameComparability } from "./comparability";
 import { openWikiBundle } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
@@ -248,17 +249,38 @@ async function main(): Promise<void> {
 
   const shakeout = shakeoutStamp(config.driver, config.objective);
   const version = harnessVersion();
+  const comparability = comparabilityOf(config, version);
   if (!resumed) {
     trajectory.writeMeta({
       runId: config.runId,
       harnessVersion: version,
       startedAt: Date.now(),
       config,
+      comparability,
       ...(shakeout !== undefined ? { shakeout } : {}),
     });
   } else {
     trajectory.clearPause(config.runId);
     trajectory.append({ t: "resume", harnessVersion: version });
+    /*
+     * A resume may tighten the leash (`--max-turns`, `--watchdogs-json`), and a
+     * budget stamped at launch would then describe a run that no longer exists.
+     * The tuple is re-stamped to what will actually be enforced, and the change
+     * is recorded so the earlier portion is still readable in the trajectory.
+     */
+    if (
+      resumedMeta !== undefined &&
+      (resumedMeta.comparability === undefined ||
+        !sameComparability(resumedMeta.comparability, comparability))
+    ) {
+      trajectory.writeMeta({ ...resumedMeta, config, comparability });
+      trajectory.append({
+        t: "harness",
+        kind: "comparability_restamped",
+        before: resumedMeta.comparability ?? null,
+        after: comparability,
+      });
+    }
     if (tokenRegenerated && resumedMeta !== undefined) {
       // Persist the new secret, or the next resume would regenerate again and
       // orphan this one. Everything else about the stored meta is preserved:
@@ -269,7 +291,7 @@ async function main(): Promise<void> {
           `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
           `every module session.`,
       );
-      trajectory.writeMeta({ ...resumedMeta, config });
+      trajectory.writeMeta({ ...resumedMeta, config, comparability });
       trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
     }
   }

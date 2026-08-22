@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "./jsonsafe";
+import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 
 export interface StateLine {
@@ -35,6 +36,16 @@ export interface StateLine {
   money?: number | undefined;
   /** Turn-ins the server confirmed this session, cumulative. */
   questsCompleted?: number | undefined;
+  /**
+   * Which driver turn was in flight when this sample was taken.
+   *
+   * Samples are taken on `stateIntervalMs`, not once per turn, so this is the
+   * turn a value was *first observed* on, never the turn it was reached on.
+   * Optional: samples written before the column existed have none, and a
+   * sample taken before the first turn (or by a driver with no turn counter)
+   * records nothing rather than a misleading 0.
+   */
+  turn?: number | undefined;
 }
 
 export interface RunMeta {
@@ -42,6 +53,14 @@ export interface RunMeta {
   harnessVersion: string;
   startedAt: number;
   config: RunConfig;
+  /**
+   * Everything that has to match before two runs share a chart: harness
+   * version, prompt hash, episode budget, context engine, effort, and whether
+   * an operator objective steered the run (ADR-0026). Absent on runs written
+   * before the stamp existed, which read as "not recorded" rather than being
+   * recomputed against today's prompt.
+   */
+  comparability?: Comparability;
   /**
    * Set for non-scoring drivers (`SHAKEOUT_STAMP`). Present in meta.json, in
    * the `shakeout` column of run.sqlite and in the timeline header, so a run
@@ -88,7 +107,10 @@ CREATE TABLE IF NOT EXISTS state (
   last_seq INTEGER,
   -- Phase-1 signal vector groundwork: recorded, never scored here.
   money INTEGER,
-  quests_completed INTEGER
+  quests_completed INTEGER,
+  -- The driver turn in flight when the sample was taken, so turns-to-level is
+  -- derivable without replaying the JSONL. Nullable, like StateLine.turn.
+  turn INTEGER
 );
 `;
 
@@ -100,6 +122,7 @@ CREATE TABLE IF NOT EXISTS state (
 const STATE_ADDED_COLUMNS: Record<string, string> = {
   money: "INTEGER",
   quests_completed: "INTEGER",
+  turn: "INTEGER",
 };
 
 /** The same, for `run`: a resumed pre-ADR-0024 run.sqlite has no `objective`. */
@@ -189,8 +212,8 @@ export class Trajectory {
     this.append({ t: "state", ...s });
     this.db
       .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -205,6 +228,7 @@ export class Trajectory {
         s.lastSeq ?? null,
         s.money ?? null,
         s.questsCompleted ?? null,
+        s.turn ?? null,
       );
   }
 
