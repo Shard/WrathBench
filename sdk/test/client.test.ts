@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { connect, WrathRequestError, WrathTransportError } from "../src/client";
-import { EventTimeoutError } from "../src/events";
+import { EventAbortedError, EventTimeoutError } from "../src/events";
 import {
   addKill,
   attackStopped,
@@ -172,6 +172,55 @@ describe("client: operator-bound account (ADR-0016)", () => {
 });
 
 describe("client: movement", () => {
+  test("the default signal aborts a pending moveTo, issues one stop, and leaves later waits alive (FOLLOW-UPS 44)", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    // A provider, as the runner passes it: consulted at the start of each wait.
+    let current: AbortSignal | undefined;
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      events: { reconnect: false },
+      signal: () => current,
+    });
+    await client.createSession({ character: "Fenwick" });
+
+    const ac = new AbortController();
+    current = ac.signal;
+    const walk = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 5000 });
+    await Bun.sleep(20); // let the move_to ack land so the wait is armed
+    ac.abort(new Error("snippet abandoned"));
+    await expect(walk).rejects.toBeInstanceOf(EventAbortedError);
+    await expect(walk).rejects.toThrow(/snippet abandoned/);
+    await Bun.sleep(20);
+    // Exactly one stop, after the move_to — deterministic, no game semantics.
+    expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+
+    // A late verdict for the aborted move is ignored; a fresh eval's signal
+    // does not inherit the old abort.
+    stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
+    current = new AbortController().signal;
+    const again = client.moveTo({ x: 4, y: 5, z: 6 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
+    expect((await again).status).toBe("arrived");
+    expect(stub.actions.filter((a) => a.action === "stop")).toHaveLength(1);
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a wait against an already-aborted default signal settles at once; waitForTransfer rethrows the abort", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const ac = new AbortController();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false }, signal: ac.signal });
+    await client.createSession({ character: "Fenwick" });
+    ac.abort();
+    // Not a TransferResult: an abort is the absence of a verdict, never a status.
+    await expect(client.waitForTransfer({ timeout: 2000 })).rejects.toBeInstanceOf(EventAbortedError);
+    await expect(client.killTarget(CREATURE_GUID, { timeout: 2000 })).rejects.toBeInstanceOf(EventAbortedError);
+    client.close();
+    await stub.stop();
+  });
+
   test("moveTo resolves on the WB_MOVE_RESULT carrying its own moveId", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });

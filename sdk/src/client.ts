@@ -71,10 +71,12 @@ import {
   type TrainerSpellData,
 } from "./protocol";
 import {
+  EventAbortedError,
   EventStream,
   EventTimeoutError,
   type EventStreamOptions,
   type StreamEvent,
+  type WaitForOptions,
 } from "./events";
 import {
   pointOf,
@@ -445,6 +447,16 @@ export interface ConnectOptions {
   fetchImpl?: typeof fetch;
   events?: Omit<EventStreamOptions, "url" | "token">;
   state?: { chatTail?: number; notificationTail?: number };
+  /**
+   * Default abort signal for every wait the client performs (`moveTo`,
+   * `waitForTransfer`, `killTarget`, `turnInQuest`, … — anything that awaits an
+   * event with a deadline). A function is consulted at the start of each wait,
+   * which is how the runner threads the *current snippet's* signal in without
+   * the snippet passing anything: when a snippet is abandoned, the waits it
+   * left behind reject with `EventAbortedError` instead of outliving it. An
+   * explicit `signal` on a call still wins. Undefined means no default.
+   */
+  signal?: AbortSignal | (() => AbortSignal | undefined);
 }
 
 export interface WaitForChatOptions {
@@ -1086,10 +1098,13 @@ export class WrathClient {
   private readonly boundAccount: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
+  private readonly defaultSignal: (() => AbortSignal | undefined) | undefined;
 
   constructor(options: ConnectOptions) {
     this.token = options.token;
     this.boundAccount = options.account;
+    const sig = options.signal;
+    this.defaultSignal = sig === undefined ? undefined : typeof sig === "function" ? sig : () => sig;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
@@ -1761,7 +1776,7 @@ export class WrathClient {
     options: WaitForChatOptions = {},
   ): Promise<ChatEntry> {
     const predicate = typeof match === "string" ? (e: ChatEntry) => e.message === match : match;
-    const event = await this.events.waitFor(
+    const event = await this.waitEvent(
       (e) => {
         if (!isEvent(e, "SMSG_MESSAGECHAT") || isDecodeError(e.data)) return false;
         return predicate(toChatEntry(e.seq, e.ts, e.data));
@@ -1822,17 +1837,28 @@ export class WrathClient {
     // resolve against a LATER session's colliding moveId (the module's
     // generator restarts at 1 per session). A move whose session is gone has
     // no verdict; timing out is the honest outcome.
-    const event = await this.events.waitFor(
-      (e) =>
-        isEvent(e, "WB_MOVE_RESULT") &&
-        !isDecodeError(e.data) &&
-        (e.data as MoveResultData).moveId === ack.moveId,
-      {
-        timeout: options.timeout ?? 90_000,
-        epoch,
-        description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
-      },
-    );
+    let event: StreamEvent;
+    try {
+      event = await this.waitEvent(
+        (e) =>
+          isEvent(e, "WB_MOVE_RESULT") &&
+          !isDecodeError(e.data) &&
+          (e.data as MoveResultData).moveId === ack.moveId,
+        {
+          timeout: options.timeout ?? 90_000,
+          epoch,
+          description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
+        },
+      );
+    } catch (err) {
+      // An abort mid-walk (the runner abandoning the snippet that issued this
+      // move) must not leave the character walking on its own: issue the
+      // existing `stop` — no game semantics beyond "stop walking" — and let
+      // the abort propagate. Its ack is not awaited: the signal holder has
+      // already moved on, and a refusal (`no_session`, …) has nothing to add.
+      if (err instanceof EventAbortedError) void this.stop().catch(() => {});
+      throw err;
+    }
     const data = event.data as MoveResultData;
     const status: MoveStatus = data.status;
     const position: UnitPosition = {
@@ -1906,7 +1932,7 @@ export class WrathClient {
     const after = (e: StreamEvent) => e.seq > sinceSeq && !isDecodeError(e.data);
     let event: StreamEvent;
     try {
-      event = await this.events.waitFor(
+      event = await this.waitEvent(
         (e) => after(e) && (isEvent(e, "SMSG_NEW_WORLD") || isEvent(e, "SMSG_TRANSFER_ABORTED")),
         { timeout, epoch, description: "SMSG_NEW_WORLD or SMSG_TRANSFER_ABORTED (map transfer verdict)" },
       );
@@ -1990,7 +2016,7 @@ export class WrathClient {
     if (already) return already;
 
     let hit: NearbyObject | undefined;
-    await this.events.waitFor(
+    await this.waitEvent(
       () => {
         hit = scan();
         return hit !== undefined;
@@ -2166,6 +2192,7 @@ export class WrathClient {
       let rearms = 0;
       let rearmNotBefore = 0;
       for (;;) {
+        this.throwIfAborted("killTarget's fight loop");
         if (targetDead()) return done("killed");
         if (selfDead()) return done("player_died");
         if (this.state.nearby.has(key)) sawTarget = true;
@@ -2247,7 +2274,7 @@ export class WrathClient {
     });
     try {
       await this.lootAll(id);
-      const first = await this.events.waitFor(
+      const first = await this.waitEvent(
         (e) =>
           (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
           !isDecodeError(e.data) &&
@@ -2262,7 +2289,7 @@ export class WrathClient {
       // or owned outright (4, OWNER — every slot of a solo loot). Group-only
       // slot types are shown but never auto-stored.
       const expected = window.items.filter((i) => i.slotType === 0 || i.slotType === 4).length;
-      const release = await this.events.waitFor((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
+      const release = await this.waitEvent((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
         timeout,
         sinceSeq: first.seq + 1,
         includeBuffered: true,
@@ -2274,7 +2301,7 @@ export class WrathClient {
       let graceSince = release.seq + 1;
       while (stored.length < expected && Date.now() < deadline) {
         try {
-          const push = await this.events.waitFor(
+          const push = await this.waitEvent(
             (e) => isEvent(e, "SMSG_ITEM_PUSH_RESULT") && !isDecodeError(e.data),
             { timeout: Math.max(1, deadline - Date.now()), sinceSeq: graceSince },
           );
@@ -2366,7 +2393,7 @@ export class WrathClient {
     const id = guidKey(guidOf(npcGuid, "trainerList(npcGuid)"));
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.trainerListAsync(id);
-    const event = await this.events.waitFor(
+    const event = await this.waitEvent(
       (e) =>
         isEvent(e, "SMSG_TRAINER_LIST") &&
         !isDecodeError(e.data) &&
@@ -2404,7 +2431,7 @@ export class WrathClient {
   async learnTalent(talentId: number, rank: number, options: TrainerOptions = {}): Promise<LearnTalentResult> {
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.learnTalentAsync(talentId, rank);
-    await this.events.waitFor(
+    await this.waitEvent(
       (e) =>
         isEvent(e, "SMSG_TALENTS_INFO") &&
         !isDecodeError(e.data) &&
@@ -2457,7 +2484,7 @@ export class WrathClient {
       isEvent(e, opcode) &&
       !isDecodeError(e.data) &&
       (e.data as { spellId: number }).spellId === spellId;
-    const event = await this.events.waitFor(
+    const event = await this.waitEvent(
       (e) =>
         (isFor(e, "SMSG_TRAINER_BUY_SUCCEEDED") || isFor(e, "SMSG_TRAINER_BUY_FAILED")) &&
         (sinceSeq === undefined || e.seq > sinceSeq),
@@ -2528,8 +2555,8 @@ export class WrathClient {
     {
       const sinceSeq = this.events.recent(1)[0]?.seq;
       await this.questComplete(npcId, questId);
-      const answer = await this.events
-        .waitFor(
+      const answer = await this
+        .waitEvent(
           (e) =>
             (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
             (sinceSeq === undefined || e.seq > sinceSeq),
@@ -2576,7 +2603,7 @@ export class WrathClient {
       // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
       // this race, a full bag was indistinguishable from silence and burned
       // the whole timeout (morning-opus-1).
-      const complete = await this.events.waitFor(
+      const complete = await this.waitEvent(
         (e) =>
           (isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
             !isDecodeError(e.data) &&
@@ -2702,8 +2729,8 @@ export class WrathClient {
     const sinceSeq = this.events.recent(1)[0]?.seq;
     const distance = distanceToUnit(this.state, npcGuid);
     await this.questList(npcGuid);
-    const menu = await this.events
-      .waitFor(
+    const menu = await this
+      .waitEvent(
         (e) =>
           (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
           !isDecodeError(e.data) &&
@@ -2751,6 +2778,23 @@ export class WrathClient {
     }
   }
 
+  /** The signal in force for a wait started now (see `ConnectOptions.signal`). */
+  private currentSignal(): AbortSignal | undefined {
+    return this.defaultSignal?.();
+  }
+
+  /** `events.waitFor` with the client's default signal threaded in. */
+  private waitEvent(predicate: (event: StreamEvent) => boolean, options: WaitForOptions = {}): Promise<StreamEvent> {
+    const signal = options.signal ?? this.currentSignal();
+    return this.events.waitFor(predicate, signal === undefined ? options : { ...options, signal });
+  }
+
+  /** Throw `EventAbortedError` if the default signal has already fired. */
+  private throwIfAborted(waitingFor: string): void {
+    const signal = this.currentSignal();
+    if (signal?.aborted) throw new EventAbortedError(signal.reason, waitingFor);
+  }
+
   /**
    * Wait until a predicate over the *state cache* holds. Checks immediately,
    * then re-checks on every event, which is exact because the cache is folded
@@ -2764,7 +2808,7 @@ export class WrathClient {
     const already = read();
     if (already !== undefined) return already;
     let hit: T | undefined;
-    await this.events.waitFor(
+    await this.waitEvent(
       () => {
         hit = read();
         return hit !== undefined;

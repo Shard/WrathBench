@@ -33,7 +33,7 @@ import {
   WrathRequestError,
   WrathTransportError,
 } from "./src/index";
-import { EventTimeoutError } from "./src/events";
+import { EventAbortedError, EventTimeoutError } from "./src/events";
 
 /** One documented member: its name (verified against the prototype), signature, and one-line purpose. */
 interface Row {
@@ -75,6 +75,7 @@ const CLIENT_HELPERS: readonly Row[] = [
   { name: "learnTalent", sig: "learnTalent(talentId, rank, options?): Promise<LearnTalentResult>", purpose: "Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents()." },
   { name: "waitForChat", sig: "waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>", purpose: "Wait for a chat line matching a string or predicate." },
   { name: "waitForNearby", sig: "waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>", purpose: "Wait until an object in view satisfies the predicate." },
+  { name: "waitForTransfer", sig: "waitForTransfer({ timeout?, sinceSeq?, expectMap? }): Promise<TransferResult>", purpose: "Wait for a map transfer's server verdict: transferred (SMSG_NEW_WORLD) / aborted / waiting / no_transfer / wrong_map. moveTo already does this when a portal takes the character." },
   { name: "waitForQuestObjective", sig: "waitForQuestObjective(questId, options?): Promise<QuestLogEntry>", purpose: "Wait until the quest log marks a quest's objectives complete." },
 ];
 
@@ -136,6 +137,9 @@ const CLIENT_INTERNAL = new Set([
   "questOffer",
   "faceQuietly",
   "waitForState",
+  "waitEvent",
+  "currentSignal",
+  "throwIfAborted",
   "clientParityQueries",
   "fireAndForget",
   "flushStatusQueries",
@@ -215,7 +219,7 @@ const EVENT_ROWS: readonly Row[] = [
   { name: "on", sig: "events.on(opcode, fn): Unsubscribe", purpose: "Subscribe to an SMSG_* opcode; returns a function that unsubscribes." },
   { name: "onAny", sig: "events.onAny(fn): Unsubscribe", purpose: "Subscribe to every event." },
   { name: "once", sig: "events.once(opcode, fn): Unsubscribe", purpose: "Subscribe to the next single event of an opcode." },
-  { name: "waitFor", sig: "events.waitFor(predicate, options?): Promise<StreamEvent>", purpose: "Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout." },
+  { name: "waitFor", sig: "events.waitFor(predicate, options?): Promise<StreamEvent>", purpose: "Wait for the next event satisfying a predicate; throws EventTimeoutError on timeout, EventAbortedError if options.signal (or the client default) fires." },
   { name: "waitForOpcode", sig: "events.waitForOpcode(opcode, { timeout }): Promise<StreamEvent>", purpose: "Wait for the next event of a given opcode." },
   { name: "recent", sig: "events.recent(n?): StreamEvent[]", purpose: "The most recent buffered events, newest last." },
   { name: "connected", sig: "get events.connected: boolean", purpose: "Whether the event socket is open." },
@@ -301,7 +305,8 @@ and in template literals, and \`JSON.stringify\` them freely; get them from
 
 **Throw vs value (ADR-0011).** A transport or request error always throws
 (\`WrathTransportError\`, \`WrathRequestError\`), and so does the *absence* of an
-outcome (\`EventTimeoutError\` — no result arrived within the timeout). Anything
+outcome (\`EventTimeoutError\` — no result arrived within the timeout;
+\`EventAbortedError\` — the wait was cancelled by its abort signal). Anything
 the *game* decided is a returned value, not an exception: helpers return a
 discriminated union with an \`ok\` boolean and a \`status\`, so \`if (!result.ok)\`
 handles the normal failures (\`target_off_mesh\`, \`buy_failed\`, \`not_complete\`) without a
@@ -354,6 +359,12 @@ ${table(EVENT_ROWS)}
 - \`WrathRequestError\` — the module answered \`{ ok: false }\` (thrown); carries
   \`code\`, \`status\`, and \`kind: "request" | "game"\`.
 - \`EventTimeoutError\` — no event arrived within the timeout (thrown).
+- \`EventAbortedError\` — the wait was cancelled by an \`AbortSignal\` before
+  anything arrived (thrown; \`reason\` is what the signal was aborted with).
+  Every wait honors the client's default signal (\`ConnectOptions.signal\`, a
+  signal or a provider consulted per wait); in the runner sandbox that is the
+  current snippet's ambient \`signal\`, aborted when the snippet is abandoned
+  on timeout. A \`moveTo\` aborted mid-walk also issues \`stop\` before rethrowing.
 - \`KNOWN_ERROR_CODES\`: ${errorCodes}.
 - \`TRAINER_SPELL_STATE\`: ${trainerStates}.
 `;
@@ -367,6 +378,7 @@ function main(): void {
   void WrathTransportError;
   void WrathRequestError;
   void EventTimeoutError;
+  void EventAbortedError;
 
   const out = join(import.meta.dir, "API.md");
   Bun.write(out, render());
