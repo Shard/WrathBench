@@ -16,8 +16,11 @@
 
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { MAP_PAGE } from "./map-page";
 import { PAGE } from "./page";
+import { readPositions } from "./positions";
 import { listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
+import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
 import {
   TrajectoryTail,
   scanRunTotals,
@@ -40,6 +43,12 @@ if (host !== REQUIRED_HOST && !lanOptIn) {
 
 const port = Number(process.env["WRATHBENCH_VIEWER_PORT"] ?? 8090);
 const runsDir = process.env["WRATHBENCH_RUNS_DIR"] ?? "data/runs";
+/*
+ * Minimap tiles, written by the extraction in `minimap/`. Its absence is a
+ * normal state, not a startup failure: the map page draws a labelled grid where
+ * a tile is missing, so it works on a machine that has never run the extraction.
+ */
+const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
 if (!existsSync(runsDir)) {
   console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
   process.exit(1);
@@ -121,10 +130,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function html(): Response {
-  return new Response(PAGE, {
+function page(body: string): Response {
+  return new Response(body, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+function html(): Response {
+  return page(PAGE);
 }
 
 function notFound(msg: string): Response {
@@ -136,7 +149,19 @@ async function handle(req: Request): Promise<Response> {
   const path = decodeURIComponent(url.pathname);
 
   if (path === "/" || path.startsWith("/run/")) return html();
+  if (path === "/map") return page(MAP_PAGE);
   if (path === "/api/runs") return json({ runs: await listWithTotals() });
+  if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
+
+  if (path.startsWith("/tiles/")) {
+    const file = resolveTilePath(tilesDir, path);
+    // A tile that was never extracted is a 404 the client expects and draws
+    // around; it is not an error worth a body.
+    if (file === null) return new Response("no such tile", { status: 404 });
+    return new Response(Bun.file(file), {
+      headers: { "content-type": "image/png", "cache-control": TILE_CACHE_CONTROL },
+    });
+  }
 
   const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
   if (m === null) return notFound("no such path");

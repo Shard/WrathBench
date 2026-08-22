@@ -29,6 +29,8 @@ export const PAGE = String.raw`<!doctype html>
   header { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line);
            padding: 10px 16px; display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; z-index: 5; }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .tabs { display: inline-flex; gap: 10px; }
+  .tabs a.on { color: var(--fg); font-weight: 700; }
   main { padding: 12px 16px 32px; max-width: 1100px; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--line);
@@ -92,6 +94,7 @@ export const PAGE = String.raw`<!doctype html>
 <body>
 <header>
   <h1><a href="/">WrathBench</a> <span id="crumb" class="dim"></span></h1>
+  <span class="tabs"><a href="/" class="on">runs</a><a href="/map">map</a></span>
   <span id="hdr" class="dim"></span>
   <span id="ctrl"></span>
 </header>
