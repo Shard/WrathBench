@@ -84,6 +84,12 @@ export interface RosterSpec {
   objective?: string;
   watchdogs?: WatchdogOverride;
   maxToolCalls?: number;
+  /**
+   * Whether `search_reference` serves wiki coordinates (ADR-0028). Absent or
+   * false is names-first, the scored default; only freeplay/unscored lanes
+   * should set it. Stamped into the run's comparability tuple.
+   */
+  wikiCoords?: boolean;
 }
 
 export interface Resolved {
@@ -102,6 +108,7 @@ export interface Resolved {
   objective: string | undefined;
   watchdogs: WatchdogOverride;
   maxToolCalls: number | undefined;
+  wikiCoords: boolean;
 }
 
 type Outcome =
@@ -364,6 +371,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (s.objective !== undefined && (typeof s.objective !== "string" || s.objective.length === 0)) {
       throw new Error(`roster entry ${s.model}: objective must be a non-empty string`);
     }
+    if (s.wikiCoords !== undefined && typeof s.wikiCoords !== "boolean") {
+      throw new Error(`roster entry ${s.model}: wikiCoords must be a boolean`);
+    }
     const character = s.character ?? deriveCharacter(s.model, taken);
     taken.add(character.toLowerCase());
     out.push({
@@ -391,6 +401,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       objective: s.objective,
       watchdogs,
       maxToolCalls: s.maxToolCalls,
+      wikiCoords: s.wikiCoords === true,
     });
   }
   return out;
@@ -431,6 +442,9 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   if (spec.maxToolCalls !== undefined) argv.push("--max-tool-calls", String(spec.maxToolCalls));
+  // Explicit value rather than a bare flag, so the runner's argv parser never
+  // has to guess whether the next token is this flag's value.
+  if (spec.wikiCoords) argv.push("--wiki-coords", "true");
   argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
   // The wall clock keeps its own flag when it is a number (that is what every
   // existing lane emits); a disabled one can only travel in the JSON.
@@ -1376,6 +1390,7 @@ async function main(): Promise<void> {
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
+          (s.wikiCoords ? `\n   wiki coords served (ADR-0028)` : "") +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
       console.log(

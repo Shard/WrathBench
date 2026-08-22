@@ -326,6 +326,9 @@ describe("the shipped fleet.json", () => {
     expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: true });
     expect(byName["nav-probe"].objective).toContain("Ironforge"); // the objective text changes per probe episode; only the destination is pinned
     expect(byName["nav-probe"].watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
+    // The coordinates tier (ADR-0028): only the unscored probe serves wiki coords.
+    expect(byName["nav-probe"].wikiCoords).toBe(true);
+    for (const l of config.lanes) if (l.name !== "nav-probe") expect(l.wikiCoords).toBeUndefined();
     // One account, one lane — asserted over the file as written, not just over
     // the enabled subset parseFleet already guards. The one deliberate
     // exception is nav-probe, which borrows sub-sonnet's SHAKEOUT (the module
@@ -725,6 +728,19 @@ describe("lane-level run dimensions", () => {
     });
     // Entry wins over the lane, key by key.
     expect(filled[1]).toMatchObject({ objective: "Something else", maxToolCalls: 10 });
+  });
+
+  test("wikiCoords (ADR-0028) defaults from the lane, entry wins, and must be a boolean", () => {
+    const l = lane({ wikiCoords: true, entries: [{ model: "a:free" }, { model: "b:free", wikiCoords: false }] });
+    const filled = fillEntries(l, l.entries!, "20260101");
+    expect(filled[0]!.wikiCoords).toBe(true);
+    expect(filled[1]!.wikiCoords).toBe(false);
+    expect(fillEntries(lane(), lane().entries!, "20260101")[0]!.wikiCoords).toBeUndefined();
+    expect(parseFleet(fleetJson([lane({ wikiCoords: true })])).lanes[0]!.wikiCoords).toBe(true);
+    expect(() => parseFleet(fleetJson([lane({ wikiCoords: "yes" as never })]))).toThrow(/wikiCoords/);
+    expect(() =>
+      parseFleet(fleetJson([lane({ entries: [{ model: "a:free", wikiCoords: 1 as never }] })])),
+    ).toThrow(/wikiCoords/);
   });
 
   test("entry watchdogs merge onto the lane's rather than replacing them", () => {

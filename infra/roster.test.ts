@@ -135,6 +135,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(s).toMatchObject({ objective: undefined, watchdogs: {}, maxToolCalls: undefined, episodeMs: 5_400_000 });
     const argv = episodeArgv(s!, false);
     expect(argv).not.toContain("--objective");
+    expect(argv).not.toContain("--wiki-coords");
     expect(argv).not.toContain("--watchdogs-json");
     expect(argv).not.toContain("--max-tool-calls");
     expect(argv[argv.indexOf("--episode-ms") + 1]).toBe("5400000");
@@ -144,6 +145,15 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     const [s] = resolve([{ model: "z-ai/glm-5.2:free", objective: OBJECTIVE }], "20260101");
     const argv = episodeArgv(s!, false);
     expect(argv[argv.indexOf("--objective") + 1]).toBe(OBJECTIVE);
+  });
+
+  test("wikiCoords reaches argv as an explicit `--wiki-coords true` (ADR-0028)", () => {
+    const [s] = resolve([{ model: "m", wikiCoords: true }], "20260101");
+    expect(s!.wikiCoords).toBe(true);
+    const argv = episodeArgv(s!, false);
+    expect(argv[argv.indexOf("--wiki-coords") + 1]).toBe("true");
+    expect(resolve([{ model: "m", wikiCoords: false }], "20260101")[0]!.wikiCoords).toBe(false);
+    expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
   test("an empty objective or a bad watchdog key is a config error", () => {
