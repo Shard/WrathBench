@@ -103,6 +103,29 @@ function setupEpisode(
   };
 }
 
+/**
+ * Whether a pid is gone, polled: a group SIGKILL reaches the grandchild a beat
+ * after the driver returns, so a single check would race it. A pid that has
+ * exited but not been reaped answers signal 0 while it is a zombie, hence the
+ * kernel-state read rather than kill(pid, 0) alone.
+ */
+async function gone(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let alive: boolean;
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+      alive = state !== "Z";
+    } catch {
+      alive = false;
+    }
+    if (!alive) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 function readRecord(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
@@ -144,6 +167,23 @@ describe("claude-subscription driver", () => {
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("turn-limit");
     trajectory.close();
   }, 20_000);
+
+  test("a CLI that ignores SIGTERM is killed with its MCP child, not orphaned", async () => {
+    // A pause, deliberately: it is the path that does NOT call killClaude, so
+    // shutdown() alone stands between the CLI and an orphan. Without the
+    // escalation there, this hangs on `await proc.exited` forever.
+    const { recordPath, trajectory, options } = setupEpisode("stubborn");
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
+    expect(outcome.kind === "paused" && outcome.reason).toBe("quota-exhausted");
+
+    const record = readRecord(recordPath);
+    const pids = [record["pid"], record["mcpPid"]].filter((p): p is number => typeof p === "number");
+    // the CLI itself and the MCP bridge it spawned — the grandchild is the one
+    // that used to survive, reparented to init
+    expect(pids).toHaveLength(2);
+    for (const pid of pids) expect(await gone(pid)).toBe(true);
+    trajectory.close();
+  }, 30_000);
 
   test("the CLI's per-message usage lands on the response entry, in the shared shape", async () => {
     const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });

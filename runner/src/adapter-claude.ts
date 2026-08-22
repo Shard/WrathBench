@@ -280,6 +280,27 @@ export interface ClaudeArgsOptions {
 }
 
 /**
+ * Signal the CLI's whole process group, falling back to the process itself.
+ *
+ * The group is the point: the CLI spawns the MCP bridge, and killing only the
+ * CLI leaves that grandchild reparented to init. `process.kill(-pid)` needs the
+ * child to lead its own group, which is what `detached` buys.
+ */
+function signalGroup(proc: { pid: number; kill: (sig: NodeJS.Signals) => void }, sig: NodeJS.Signals): void {
+  try {
+    process.kill(-proc.pid, sig);
+    return;
+  } catch {
+    // no such group (already reaped, or not detached): fall through
+  }
+  try {
+    proc.kill(sig);
+  } catch {
+    // already gone
+  }
+}
+
+/**
  * The exact flag set, in one place so the README and the tests can assert it.
  * Every flag here exists in claude 2.1.238 (`claude -p --help`); nothing is
  * invented. Notably absent: `--max-turns` (not in this CLI version — driver
@@ -566,6 +587,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     systemPromptChars: SYSTEM_PROMPT.length,
   });
 
+  /**
+   * `detached` puts the CLI in its own process group, so a signal sent to
+   * -pid reaches the CLI *and* everything it spawned — notably the MCP bridge
+   * (`bun mcp-bridge.ts`), which the CLI starts itself and which would
+   * otherwise be reparented to init and survive. Observed twice: an orphaned
+   * `claude -p` outliving its runner, and one from the day before still
+   * burning CPU 23 hours later.
+   */
   const proc = Bun.spawn({
     cmd: [o.claudeBin ?? "claude", ...args],
     cwd,
@@ -573,22 +602,26 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    detached: true,
   });
+
+  /**
+   * Last net, for the paths that never unwind: an uncaught throw, process.exit
+   * from elsewhere in the runner. Registered before the first await for that
+   * reason, and removed in shutdown() once the child is reaped — the closure
+   * holds a pid, and a reaped pid can be recycled onto someone else's group.
+   */
+  const onProcessExit = (): void => {
+    signalGroup(proc, "SIGKILL");
+  };
+  process.on("exit", onProcessExit);
 
   // SIGTERM first so the CLI can flush its session, SIGKILL if it will not go.
   let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
   killClaude = (): void => {
-    try {
-      proc.kill("SIGTERM");
-    } catch {
-      // already gone
-    }
+    signalGroup(proc, "SIGTERM");
     sigkillTimer = setTimeout(() => {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        // already gone
-      }
+      signalGroup(proc, "SIGKILL");
     }, o.killGraceMs ?? 5_000);
     sigkillTimer.unref?.();
   };
@@ -653,6 +686,27 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       });
   }, o.watchdogTickMs ?? 5_000);
 
+  /**
+   * The end of every path through this function, and the only place the child
+   * is guaranteed to die.
+   *
+   * It used to send one SIGTERM and then `await proc.exited` with no bound. A
+   * CLI that is slow to go, or ignores the signal while deep in its own loop,
+   * parked the runner there forever; the runner was eventually killed from
+   * outside and the CLI outlived it. So: SIGTERM to the group, a bounded wait,
+   * then SIGKILL to the group, then a bounded wait again. Nothing here can
+   * block the episode from finishing.
+   */
+  // A real timer, deliberately not `sleep`: the injected sleep is episode
+  // pacing and tests make it instant, which would turn every SIGTERM into an
+  // immediate SIGKILL and never exercise the graceful path.
+  const waitMs = (ms: number): Promise<void> =>
+    new Promise<void>((r) => {
+      const t = setTimeout(r, ms);
+      t.unref?.();
+    });
+  const reaped = (ms: number): Promise<boolean> =>
+    Promise.race([proc.exited.then(() => true).catch(() => true), waitMs(ms).then(() => false)]);
   const shutdown = async (): Promise<void> => {
     clearInterval(ticker);
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
@@ -661,12 +715,15 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     } catch {
       // already closed
     }
-    proc.kill();
-    try {
-      await proc.exited;
-    } catch {
-      // ignore
+    const grace = o.killGraceMs ?? 5_000;
+    signalGroup(proc, "SIGTERM");
+    if (!(await reaped(grace))) {
+      trajectory.append({ t: "harness", kind: "session_note", text: "claude ignored SIGTERM; killing its process group" });
+      signalGroup(proc, "SIGKILL");
+      await reaped(grace);
     }
+    // Only now: the pid is reaped and could be recycled onto another group.
+    process.off("exit", onProcessExit);
     await stdoutTask.catch(() => undefined);
     await stderrTask.catch(() => undefined);
     listener.stop(true);
