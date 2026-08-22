@@ -487,17 +487,19 @@ function renderEntry(e) {
     }
     case "events_served":
       meta.append(el("span", "", e.count + " events via " + e.via));
+      /*
+       * The record holds the raw batch; the model read the folded window
+       * (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE). Lead with the split so the
+       * operator reads what the model read, not the wall of monster-moves the
+       * "show events" button opens.
+       */
+      if (e.ambient)
+        meta.append(el("span", "", (e.count - e.ambient) + " model-visible, " +
+          e.ambient + " ambient movement folded into state"));
       if (e.opcodes && e.opcodes.length)
         meta.append(el("span", "dim", e.opcodes.join("  ") +
           (e.moreOpcodes ? "  +" + e.moreOpcodes + " more kinds" : "")));
-      /*
-       * The record holds the raw batch; what the model actually read is the
-       * folded window (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE). Say so, or the
-       * wall of monster-moves below the "show events" button reads as context.
-       */
-      if (e.via === "context")
-        meta.append(el("span", "dim", "· ambient movement folded out of the model-visible window"));
-      else if (e.folded)
+      if (e.folded)
         meta.append(el("span", "dim", "· +" + e.folded + " ambient movement folded out"));
       if (e.count > 0) meta.append(rawButton(e.i, "show events"));
       break;
