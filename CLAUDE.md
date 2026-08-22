@@ -25,6 +25,7 @@ Phase 0: build the control surface and get any model to liftoff. See `docs/PHASE
 module/        C++ AzerothCore module: HTTP/WS bridge into WorldSession (AGPL-3.0)
 sdk/           Bun/TypeScript SDK over the module (MIT)
 runner/        Agent loop, snippet sandbox, MCP server, trajectory logging (MIT)
+dashboard/     SolidJS SPA over the viewer's read-only /api; see ADR-0022 (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
 infra/         Compose files, Dockerfiles, extraction scripts
 docs/          Documentation
