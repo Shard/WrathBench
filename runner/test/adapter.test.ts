@@ -153,6 +153,31 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("429");
   });
 
+  test("an OpenRouter 404 provider blip pauses as rate-limited, not adapter-error", async () => {
+    // fleet-free-or-a 2026-08-22: a healthy 60-turn nemotron episode died to
+    // one of these. Transient pool weather, resumable — not a harness bug.
+    const body = JSON.stringify({
+      error: { message: "Provider returned error", code: 404, metadata: { raw: "", provider_name: "Nvidia" } },
+    });
+    const out = await adapterPlaying([status(404, body), status(404, body)]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+  });
+
+  test("an OpenCode 400 upstream-unavailable pauses as rate-limited", async () => {
+    const body = JSON.stringify({
+      error: { type: "server_error", message: "Error from provider (Console): Upstream request failed: Model is unavailable." },
+    });
+    const out = await adapterPlaying([status(400, body), status(400, body)]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+  });
+
+  test("a 404 for a bad model slug still fails fast as an AdapterError", async () => {
+    const body = JSON.stringify({ error: { message: "No endpoints found for zz/not-a-model", code: 404 } });
+    await expect(adapterPlaying([status(404, body)]).complete(req)).rejects.toThrow(/No endpoints found/);
+  });
+
   test("a 2xx body carrying an error object with code 429 pauses instead of adapter-erroring", async () => {
     // The night-nemotron-1 shape: free-tier upstream returns HTTP 200 with
     // {"error": ...} and no choices; this used to terminate as a schema error.
