@@ -136,7 +136,7 @@
     },
     {
       "name": "local-qwen",
-      "enabled": false,
+      "enabled": true,
       "account": "RUNNER6",
       "loop": true,
       "untilDefault": "18:00",
