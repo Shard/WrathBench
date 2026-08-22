@@ -161,28 +161,46 @@ type ActionBody = ActionRequest extends infer T
   : never;
 
 /**
- * Error codes PROTOCOL.md documents today. Widened with `(string & {})` on
- * purpose: a module that adds a code must not break the SDK's parsing, only
- * lose the autocompletion for that one code.
+ * Error codes PROTOCOL.md documents today, as a runtime list so tests can pin
+ * the hint table against it (every code here renders a hint). Widened with
+ * `(string & {})` in `ErrorCode` on purpose: a module that adds a code must
+ * not break the SDK's parsing, only lose the autocompletion for that one code.
+ *
+ * Deliberately absent: the per-parameter `missing_*` family beyond the three
+ * listed (the module's reply echoes `action` and `param`, which is the hint),
+ * the parametric `char_create_failed_code_<N>` / `char_delete_failed_code_<N>`
+ * (hinted via `CHAR_RESPONSE_HINTS`), and the dispatch-level `not_found` /
+ * `internal` (not reachable through the typed client methods).
  */
-export type KnownErrorCode =
-  | "missing_token"
-  | "missing_character"
-  | "token_in_use"
-  | "unknown_account"
-  | "socket_setup_failed"
-  | "login_failed"
-  | "character_missing_after_create"
-  | "timeout"
-  | "unsupported_action"
-  | "no_session"
-  | "not_in_world"
-  | "no_player"
-  | "session_gone"
+export const KNOWN_ERROR_CODES = [
+  "missing_token",
+  "missing_character",
+  "token_in_use",
+  "unknown_account",
+  "account_not_permitted",
+  "account_owned_by_other_token",
+  "account_in_use",
+  "character_not_found",
+  "invalid_race_class",
+  "socket_setup_failed",
+  "login_failed",
+  "character_missing_after_create",
+  "timeout",
+  "unsupported_action",
+  "no_session",
+  "not_in_world",
+  "no_player",
+  "session_gone",
   // movement extension
-  | "missing_position"
-  | "missing_face_target"
-  | "moving";
+  "missing_position",
+  "missing_face_target",
+  "moving",
+  // guid-taking actions
+  "missing_guid",
+  "invalid_guid",
+] as const;
+
+export type KnownErrorCode = (typeof KNOWN_ERROR_CODES)[number];
 
 export type ErrorCode = KnownErrorCode | (string & {});
 
@@ -260,7 +278,16 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   missing_face_target: "face needs either an orientation in radians or an { x, y } point",
   missing_token: "the request body is missing its session token — call through the sdk client methods",
   missing_character: "createSession needs a character name",
-  unknown_account: "the account name is not on the module's allowlist for this realm",
+  unknown_account:
+    "no account with that name exists in the server's auth database — it passed the allowlist, " +
+    "so check the account name itself (or that the account was created on this realm)",
+  account_not_permitted:
+    "the account name is not on the module's WrathBench.Accounts allowlist for this realm — use a permitted account",
+  account_owned_by_other_token:
+    "another live session's token holds a character on this account — wait for that session to end, or use a different account",
+  character_not_found: "no character with that name exists on this account — check the name and the account",
+  invalid_race_class:
+    "that race/class pair is not a legal 3.3.5a combination — pass numeric ids that go together (e.g. race 1 Human, class 1 Warrior)",
   socket_setup_failed: "the module could not open the internal client socket — retry once, then check the server",
   login_failed: "the server refused the login — check the character name and account",
   character_missing_after_create: "the character did not appear after creation — retry createSession once",
