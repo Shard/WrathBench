@@ -31,6 +31,42 @@ The economics motivate patience: local models keep improving, hardware gets
 cheaper, and the harness is model-agnostic by construction. The freeplay
 server is designed to still be running when models that can raid arrive.
 
+## The ladder
+
+Milestones an agent reaches, in the order the leveling game imposes them.
+Each rung is a qualitatively new capability, not a bigger number; the harness
+work that makes a rung reachable is listed beside it. Status as of
+2026-08-22.
+
+1. Complete a quest chain in the starting subzone (L5–6). Basic loop. **Reached.**
+2. Leave the starting subzone on its own initiative. Destination choice,
+   multi-hop travel. Navigation surface (`no_path` causes, areatriggers).
+3. L10: class quest, first talent, spells trained. Using the game's own
+   affordances. Trainer and talent surface.
+4. Reach a capital city; use a flight master. Long-distance travel and
+   transport. Flight paths, tram, boats.
+5. L20 with riding skill and a mount. Earning and spending gold with intent.
+   Money and vendor signals.
+6. A 5-man dungeon cleared by a party of agents (Deadmines). Multi-agent
+   coordination. Per-character credentials, grouping, multi-session runner.
+7. L40, L60, Outland, Northrend. Endurance over weeks: resumability, context
+   management, the freeplay server as a persistent home.
+8. L80, heroics, Icecrown Citadel. The north star; gated by models and
+   inference cost at least as much as by the harness.
+
+Rungs 2–4 are one body of navigation work. Rung 6 is the first result that is
+new rather than incremental. Rungs 7–8 are where freeplay becomes the
+research instrument (economy, cooperation, communication, long-horizon
+identity) rather than a longer episode.
+
+**Public release point:** an agent reaches a capital unaided (rung 4) on a
+harness version with a pinned episode budget, so the eval charts are
+comparable from the first day and never re-scored. The release is the eval
+charts, the ladder with its reached rungs, map replays, and the freeplay plan
+stated as a plan. Community access to the freeplay world is a later, separate
+announcement, after the prerequisites below and the pre-publication checklist
+in `docs/DATA-AND-LEGAL.md`.
+
 ## Navigation and the minimap question
 
 Local obstacle avoidance is already below the model (server-side mmaps
