@@ -143,6 +143,19 @@ describe("summarize", () => {
     expect(s["opcodes"]).toEqual(["SMSG_A×2", "SMSG_B×1"]);
     expect(s["moreOpcodes"]).toBeUndefined();
     expect(s["folded"]).toBeUndefined();
+    expect(s["ambient"]).toBeUndefined();
+  });
+
+  test("splits a context batch into model-visible and ambient movement", () => {
+    const events = [
+      { opcode: "SMSG_MONSTER_MOVE", data: {} },
+      { opcode: "MSG_MOVE_HEARTBEAT", data: {} },
+      { opcode: "SMSG_MONSTER_MOVE", data: {} },
+      { opcode: "SMSG_MESSAGECHAT", data: {} },
+    ];
+    const s = summarize({ t: "events_served", ts: 1, via: "context", count: 4, events }, 0, 0, 10);
+    expect(s["count"]).toBe(4);
+    expect(s["ambient"]).toBe(3); // what the model-visible window dropped
   });
 
   test("cuts the opcode tally at six and carries the folded count", () => {

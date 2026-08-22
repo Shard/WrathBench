@@ -13,6 +13,7 @@
  */
 
 import { statSync } from "node:fs";
+import { CONTEXT_POLICY } from "../src/context";
 
 const NEWLINE = 0x0a;
 
@@ -209,6 +210,12 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       base["count"] = rec["count"] ?? events.length;
       const tally = [...byOpcode.entries()].sort((a, b) => b[1] - a[1]);
       base["opcodes"] = tally.slice(0, 6).map(([op, n]) => `${op}×${n}`);
+      // How much of this batch the model never saw. The record holds the raw
+      // batch; the window it was rendered into drops ambient motion, so the
+      // operator needs the split, not just the total.
+      let ambient = 0;
+      for (const [op, n] of tally) if (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(op)) ambient += n;
+      if (ambient > 0) base["ambient"] = ambient;
       // The tally is cut at six; an operator reading it must know when there
       // were more kinds than that, or the line reads as the whole story.
       if (tally.length > 6) base["moreOpcodes"] = tally.length - 6;
