@@ -35,6 +35,30 @@ The SDK is versioned. Its surface is part of the harness version.
 - Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 
+### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
+
+The operator's read-only window on runs, live and finished. Split in two along
+one line (ADR-0022): the Bun process owns everything that needs the filesystem,
+the SPA owns everything that is UI.
+
+- `runner/viewer/` serves a read-only JSON API under `/api` (run listing, run
+  detail and state series, summarised trajectory entries, the position feed, the
+  fleet supervisor's published lane state), an SSE tail per run, minimap tiles
+  from `data/minimap/`, and the built SPA as static files. Every database is
+  opened readonly, so a run being written inside the container is never
+  disturbed. Bearer tokens are stripped from anything that forwards a raw
+  record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
+  tiles — the three routes that carry verbatim game text or Blizzard bytes.
+- `dashboard/` is a SolidJS SPA: fleet overview, run detail, and the ADR-0019
+  map. It imports two modules from the viewer rather than copying them — the API
+  wire types and the world→tile transform — so drift between the two sides is a
+  compile error. It is the only place in the repository with a dependency graph;
+  the harness itself still runs with no build step.
+- Loopback by default. Trajectories carry game-derived text, so a non-loopback
+  bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
+  network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet
+  decided; ADR-0022 carries the constraints.
+
 ### wiki/ (Bun/TypeScript, MIT)
 
 Tooling to turn a locally held wiki dump into a searchable bundle the runner can serve. The dump and the bundle live in `data/` and are never committed.
@@ -66,4 +90,4 @@ Phase 0: every episode starts with a freshly created character at level 1 in its
 
 ## What is deliberately absent in Phase 0
 
-Results pipeline, viewer beyond a minimal terminal timeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent support, concurrency beyond a few sequential or lightly parallel characters on one server.
+Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent support, concurrency beyond a few sequential or lightly parallel characters on one server.

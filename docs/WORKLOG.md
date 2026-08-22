@@ -6,6 +6,41 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Dashboard: the viewer splits into a read-only API and a SolidJS SPA (ADR-0022)
+
+The viewer's two hand-written HTML pages had reached the end of what a template
+string can carry. The features wanted next are a fleet overview and live state
+across lanes — a dozen values that update independently — which is a component
+model and a reactivity graph, not more string concatenation. The UI moved to
+`dashboard/`, a Bun workspace on SolidJS + Vite; the Bun process kept everything
+that touches the filesystem and became a read-only JSON API plus the static host
+for the built SPA. The dependency is a deliberate exception to "Bun built-ins
+before dependencies" and ADR-0022 says why.
+
+Two leaks turned up on the way and are the substantive fix in this change. The
+`meta` trajectory entry embeds the whole run config, module bearer token
+included, and the generic summariser copied it wholesale — so
+`/api/run/<id>/entries?from=0` served the token, and `/raw/0` served it verbatim.
+Both are now redacted by field name at any depth. The token is loopback-scoped
+and happens to equal the run id today, so nothing was compromised; what makes it
+worth recording is that the test written first — "no field called token" — would
+have passed while the value sat nested inside `config_json`. The test asserts on
+the *value* against every route instead.
+
+`WRATHBENCH_VIEWER_PUBLIC=1` withholds the three routes carrying verbatim game
+text or Blizzard-derived bytes: raw entries, scratchpads, minimap tiles. It is
+opt-in-to-public rather than opt-in-to-raw, because the run page depends on raw
+bodies — defaulting them off would have broken the working view to protect a
+deployment that does not exist yet.
+
+Parity is close but not complete: the cost estimate, the whole-feed expand
+preset, and distinct styling for state samples and harness notices did not port,
+each for a reason recorded in FOLLOW-UPS 32. The old pages keep serving at
+`/legacy/…` so the two can be compared on real runs, and FOLLOW-UPS 31 deletes
+them after a week. Deleting them also removes the last hand-copied duplicate of
+the ADR-0019 coordinate transform — the SPA imports `worldmap.ts` directly,
+which the string pages could not.
+
 ### Reference bundle rebuilt to schema 3; run.ts stops bypassing openBundle (FOLLOW-UPS 30) — SWAP PENDING
 
 `run.ts` and `mcp.ts` each opened `data/wiki/bundle.sqlite` with a bare

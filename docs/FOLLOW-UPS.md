@@ -234,3 +234,48 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     lane is mid-episode (`bun wiki/src/build.ts data/wiki/<dump>.7z --out
     data/wiki/bundle.sqlite`, a few minutes, atomic rename), then spot-check
     `schema_version`, `coord_rows` and `id_rows` in `meta`.
+
+31. **Delete the hand-written viewer pages** (2026-08-22, one week's use — so from
+    2026-08-29). `runner/viewer/page.ts` and `map-page.ts` still serve at
+    `/legacy/…`, kept only so the SPA can be compared against them on real runs.
+    Deleting them also deletes the last hand-copied duplicate of the ADR-0019
+    coordinate transform and the `BASE`-prefix shim both pages carry. Do it once
+    the operator has stopped opening `/legacy` — and take the parity gaps in item
+    32 with it, or accept losing them.
+
+32. **Dashboard parity gaps against the pages it replaced** (2026-08-22). Three
+    things the old run page did that the SPA does not, each deliberate rather
+    than forgotten:
+    - **Cost estimate.** `page.ts` carries a `PRICING` constant (dollars per
+      million tokens, per model) and renders an estimated spend beside the token
+      breakdown. Not ported: a hard-coded price table drifts silently, and the
+      right home for it is probably the roster, next to the model ids it prices.
+    - **Whole-feed expand preset.** The old top bar had a Minimal / Responses /
+      Snippets / All dropdown remembered in `localStorage`; the SPA folds and
+      unfolds per block only.
+    - **Compact one-line state samples and called-out harness notices.** The SPA
+      renders both through the generic-entry path, so they are readable but not
+      styled distinctly.
+
+33. **Public hosting checklist for the dashboard** (2026-08-22, ADR-0022). The
+    dashboard is meant to become a public read-only status page. Before any of it
+    is exposed:
+    - **Legal, first and blocking.** Minimap tiles are Blizzard textures and must
+      not ship; `WRATHBENCH_VIEWER_PUBLIC=1` withholds them and the map degrades
+      to a labelled grid, which is the intended public look until
+      `docs/DATA-AND-LEGAL.md` says otherwise. The same decision governs
+      trajectory text: raw entries and scratchpads are withheld by the same flag,
+      but entry *summaries* still carry model output and snippet code, and
+      whether those are publishable has not been decided.
+    - **Auth-less read-only exposure.** The API takes no bodies and opens every
+      database readonly, and bearer tokens are stripped — but it has no rate
+      limit and no cache, and `/api/runs` reads every trajectory on a cold
+      process. A public deployment needs a caching layer in front of the listing
+      and a per-IP limit, decided with the hosting rather than guessed at now.
+    - **Caching.** Only `/tiles` and the SPA's fingerprinted assets are cacheable
+      today; every `/api` response is `no-store`. Short-TTL caching on the
+      listing and the position feed is the cheap win.
+    - **A public run set.** A public page probably should not list every run the
+      fleet has ever produced, shakeouts and failed lanes included. Decide what
+      the public listing selects before pointing a domain at it.
+

@@ -3,7 +3,7 @@
 The operator SPA over the viewer's read-only API: fleet overview, one page per
 run, and the live map. SolidJS + Vite, TypeScript strict, no CSS framework.
 
-Why an SPA and why a dependency at all: ADR-0021.
+Why an SPA and why a dependency at all: ADR-0022.
 
 ## Running
 
@@ -73,4 +73,4 @@ loops would cost more than it pins.
 - Paths are root-relative, so the same code runs behind the dev proxy and
   same-origin off the viewer. That is why there is no CORS configuration.
 - Polling intervals are stated at each call site, not hidden in `poll()` —
-  ADR-0021 names polling rate as a public-hosting constraint.
+  ADR-0022 names polling rate as a public-hosting constraint.
