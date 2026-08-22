@@ -273,10 +273,24 @@ async function main(): Promise<void> {
       (resumedMeta.comparability === undefined ||
         !sameComparability(resumedMeta.comparability, comparability))
     ) {
-      trajectory.writeMeta({ ...resumedMeta, config, comparability });
+      /*
+       * The harness version moves with the tuple. A resumed run is driven by
+       * the build that resumed it, and leaving the top-level stamp at the
+       * launch build would have the run row and its own tuple naming two
+       * different versions — on charts whose entire claim is comparability.
+       */
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
       trajectory.append({
         t: "harness",
         kind: "comparability_restamped",
+        // Whether anything but the build stamp moved: a resume onto a newer
+        // commit always restamps, and only this says the leash actually changed.
+        leashChanged:
+          resumedMeta.comparability !== undefined &&
+          !sameComparability(
+            { ...resumedMeta.comparability, harnessVersion: version },
+            comparability,
+          ),
         before: resumedMeta.comparability ?? null,
         after: comparability,
       });
@@ -291,10 +305,17 @@ async function main(): Promise<void> {
           `weak_token). No live session is stranded — the nightly worldserver recreate clears ` +
           `every module session.`,
       );
-      trajectory.writeMeta({ ...resumedMeta, config, comparability });
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
       trajectory.append({ t: "harness", kind: "token_regenerated", reason: "weak_stored_token" });
     }
   }
+
+  /*
+   * Where this episode's turn numbering continues from. `maxTurns` still counts
+   * this process's turns; only the recorded index is cumulative, so a resumed
+   * run's turns-to-level is the run's cost and not this episode's.
+   */
+  const turnOffset = resumed ? trajectory.maxTurn(config.runId) : 0;
 
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
@@ -421,6 +442,7 @@ async function main(): Promise<void> {
           trajectory,
           watchdogs,
           initialNotices,
+          turnOffset,
           signal: abort.signal,
         })
       : await runLoop({
@@ -432,6 +454,7 @@ async function main(): Promise<void> {
           trajectory,
           watchdogs,
           initialNotices,
+          turnOffset,
         });
 
   if (outcome.kind === "terminated") {

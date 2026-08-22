@@ -387,8 +387,8 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     (null when unreachable). Becomes true of the running server when
     `./infra/deploy-worldserver.sh` promotes `wrathbench/worldserver:next`.
 
-42. ~~**Dashboard shows no server identity**~~ Footer shipped 2026-08-22; the
-    reachability half is unchanged. The fleet page now renders `worldserver
+42. ~~**Dashboard shows no server identity**~~ Footer shipped 2026-08-22 on the
+    fleet and run pages; the reachability half is unchanged. The pages render `worldserver
     <build> · up <duration>` off `/api/info`, and `null` reads as "unreachable
     from the viewer (set WRATHBENCH_MODULE_URL to name it)" rather than as a
     blank — which is still what a host-side viewer sees, because compose does not

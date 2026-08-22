@@ -258,6 +258,26 @@ export class Trajectory {
     > | null;
   }
 
+  /**
+   * The highest turn this run has already recorded, or 0.
+   *
+   * Read on `--resume` so the recorded turn series keeps climbing across a
+   * restart. A run whose rows predate the column answers 0, which is the same
+   * answer a fresh run gives — a resumed old run then records turns from 1 and
+   * its series is visibly non-monotonic, which the eval side treats as "no
+   * usable turn index" rather than as a fast run.
+   */
+  maxTurn(runId: string): number {
+    try {
+      const r = this.db
+        .query(`SELECT MAX(turn) AS t FROM state WHERE run_id = ?`)
+        .get(runId) as { t?: unknown } | null;
+      return typeof r?.t === "number" ? r.t : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   stateRows(runId: string): Record<string, unknown>[] {
     return this.db
       .query(`SELECT * FROM state WHERE run_id = ? ORDER BY ts`)

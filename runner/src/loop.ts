@@ -33,6 +33,8 @@ export interface LoopOptions {
   watchdogs: Watchdogs;
   /** Shown to the model on the first turn (e.g. "runner restarted, resuming"). */
   initialNotices?: HarnessNotice[];
+  /** Turns this run recorded before this process; see `ContextBuilderOptions`. */
+  turnOffset?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -47,6 +49,16 @@ export interface ContextBuilderOptions {
   scratchpad: Scratchpad;
   trajectory: Trajectory;
   watchdogs: Watchdogs;
+  /**
+   * Turns this run already recorded before this process started.
+   *
+   * A resumed run's driver counts from 1 again — the conversation is gone, and
+   * `maxTurns` bounds this episode, not the run's whole life. The *recorded*
+   * turn must keep climbing, or turns-to-level would credit a resumed run with
+   * the handful of turns since its last pause. `run.ts` reads the high-water
+   * mark off the run's own state rows.
+   */
+  turnOffset?: number;
   now?: () => number;
 }
 
@@ -76,9 +88,13 @@ export class ContextBuilder {
     this.now = o.now ?? Date.now;
   }
 
-  /** Tell the builder which turn is in flight; every later sample carries it. */
+  /**
+   * Tell the builder which turn is in flight; every later sample carries it.
+   * The driver counts this episode's turns; the offset makes the record the
+   * run's, so a resume does not restart the series.
+   */
   noteTurn(turn: number): void {
-    this.turn = turn;
+    this.turn = (this.o.turnOffset ?? 0) + turn;
   }
 
   /** Whether the last snapshot showed a character in the world. */
@@ -183,6 +199,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     scratchpad: o.scratchpad,
     trajectory,
     watchdogs,
+    ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
   });
 

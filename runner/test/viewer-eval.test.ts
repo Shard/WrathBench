@@ -15,6 +15,7 @@ import {
   levelMarks,
   mapsOf,
   trackFrom,
+  turnsUsable,
   unscoredReason,
 } from "../viewer/eval";
 
@@ -122,6 +123,26 @@ describe("levelMarks", () => {
     const marks = levelMarks([state({ ts: 5, level: 2 })]);
     expect(marks[0]!.turn).toBeNull();
     expect(marks[0]!.playtimeMs).toBeNull();
+  });
+});
+
+describe("turnsUsable", () => {
+  test("a series that only climbs is usable, gaps and nulls included", () => {
+    expect(turnsUsable([state({ ts: 1, turn: 1 }), state({ ts: 2 }), state({ ts: 3, turn: 9 })])).toBe(
+      true,
+    );
+    expect(turnsUsable([])).toBe(true);
+  });
+
+  test("a counter that restarted mid-run makes the whole index unusable", () => {
+    // What a resume by a build without the cumulative offset leaves behind.
+    const states = [
+      state({ ts: 1, level: 2, turn: 40 }),
+      state({ ts: 2, level: 3, turn: 3 }),
+    ];
+    expect(turnsUsable(states)).toBe(false);
+    // And the marks say "no turn index" rather than crediting L3 to turn 3.
+    expect(levelMarks(states).map((m) => m.turn)).toEqual([null, null]);
   });
 });
 

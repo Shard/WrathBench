@@ -34,7 +34,12 @@ const CHART_W = 720;
 export default function Eval() {
   const feed = poll(() => api.eval().then((r) => r.runs), POLL_MS);
   const [level, setLevel] = createSignal<number>(5);
-  const [metric, setMetric] = createSignal<"turns" | "time">("turns");
+  /*
+   * Active time by default. Turns only exist for runs recorded after the turn
+   * column landed, so a turns-first page would greet every visitor with the
+   * "no run recorded a turn index" banner until the fleet has cycled.
+   */
+  const [metric, setMetric] = createSignal<"turns" | "time">("time");
 
   const runs = (): EvalRun[] => feed.latest ?? [];
   const groups = createMemo(() => groupsForLevel(runs(), level()));

@@ -349,6 +349,8 @@ export interface ClaudeEpisodeOptions {
   trajectory: Trajectory;
   watchdogs: Watchdogs;
   initialNotices?: HarnessNotice[];
+  /** Turns this run recorded before this process; see `ContextBuilderOptions`. */
+  turnOffset?: number;
   /** Executable to run. Tests point this at a scripted fake. */
   claudeBin?: string;
   /** Parent environment to derive the child environment from. */
@@ -421,6 +423,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     scratchpad: o.scratchpad,
     trajectory,
     watchdogs,
+    ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
   });
 

@@ -16,6 +16,7 @@
  *   playtime comes from is what is integrated here, so the two agree.
  */
 
+import { SHAKEOUT_DRIVERS } from "../src/config";
 import type { EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
 import type { ActiveSegment } from "./tail";
 
@@ -39,6 +40,26 @@ export function activeMsUntil(segments: readonly ActiveSegment[], ts: number): n
 }
 
 /**
+ * Whether a run's recorded turn indices can be read as one series.
+ *
+ * A run resumed by a build that predates the cumulative turn offset restarts
+ * its counter, so its samples descend somewhere in the middle. Charting that
+ * would credit the resumed run with the handful of turns since its last pause —
+ * flattering exactly the runs that had the most trouble. A run whose series
+ * ever goes backwards has no usable turn index at all, which is what the charts
+ * are told rather than being handed a plausible number.
+ */
+export function turnsUsable(states: readonly StatePoint[]): boolean {
+  let last = 0;
+  for (const s of states) {
+    if (s.turn === null) continue;
+    if (s.turn < last) return false;
+    last = s.turn;
+  }
+  return true;
+}
+
+/**
  * The first sample that showed each level, in ascending order.
  *
  * Levels are taken as they first appear, not as a max: a character never
@@ -52,6 +73,7 @@ export function levelMarks(
   segments: readonly ActiveSegment[] = [],
 ): LevelMark[] {
   const out: LevelMark[] = [];
+  const turns = turnsUsable(states);
   let highest = 0;
   for (const s of states) {
     const level = s.level;
@@ -60,7 +82,7 @@ export function levelMarks(
     out.push({
       level,
       ts: s.ts,
-      turn: s.turn,
+      turn: turns ? s.turn : null,
       playtimeMs: activeMsUntil(segments, s.ts),
     });
   }
@@ -112,7 +134,7 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
  */
 export function unscoredReason(run: RunRow): string | null {
   if (run.shakeout !== null) return run.shakeout;
-  if (run.driver === "claude-subscription" || run.driver === "stub") {
+  if (run.driver !== null && (SHAKEOUT_DRIVERS as readonly string[]).includes(run.driver)) {
     return `shakeout driver (${run.driver})`;
   }
   if (run.objective !== null) return "unscored (operator objective)";
