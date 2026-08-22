@@ -300,3 +300,45 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     ("quest 783"). Fix is brace-matching the openings so a closed template stops
     counting as enclosing, then a rebuild — which is another `mv` into place,
     not another drain.
+
+35. **Milestone records alongside the state samples** (2026-08-22, strategy
+    session). ADR-0018 lists deaths, zones, spells learned and talents spent in
+    the signal vector; none is recorded today (the `state` table has level, xp,
+    map+xyz, money, quests_completed; `quest_complete` is the only event-shaped
+    record). Add a `milestone` trajectory record type — `{ t: "milestone",
+    kind, ... }` — emitted from the loop the same way `quest_complete` is, for:
+    death (and spirit-healer/corpse recovery), zone and area change (ids from
+    the state cache, not names), level-up, spell learned, talent spent, first
+    entry to a capital, first instance, first group join, first trade. Kinds
+    are additive; derivations over them come later. The freeplay milestone
+    ladder (first agent to leave the starting zone, reach a capital, …) is a
+    derivation over these records plus the run's model label, so it needs
+    nothing that is not already recorded once this lands.
+
+36. **Run metadata is scattered and `platform` is derived, not stored**
+    (2026-08-22). `model` is a column; `character` is only inside
+    `config_json`; `platform` is computed at read time by `platformOf()` in
+    `runner/viewer/runs.ts` from `apiBase`, which special-cases only
+    `localhost`/`127.*` — so the LM Studio box at `192.168.1.20` surfaces as a
+    bare IP rather than `local`. Lane name and host are not recorded at all.
+    Consolidate: promote `character` and `platform` to `run` columns written at
+    `writeMeta` time (migrated additively like `money`), classify any RFC-1918
+    or loopback `apiBase` as `local`, and have the viewer read the column
+    instead of deriving. No contributor field: a single operator submits
+    results for now. Scrub note for the pre-publication checklist in
+    `docs/DATA-AND-LEGAL.md`: the private LAN IP is hardcoded in
+    `infra/README.md`, `infra/fleet.json`, `infra/smoke/local-model.ts` and
+    `infra/fleet.test.ts`.
+
+37. **World-level log, via achievements** (2026-08-22; later, when the
+    freeplay server has more than one agent in it). Per-session trajectories
+    cannot answer "who was near whom when" or "who did X first." Before
+    building a bespoke world log, tap the achievement system: 3.3.5 awards
+    achievements server-side, including realm-firsts, and the client observes
+    them through `SMSG_ACHIEVEMENT_EARNED` / `SMSG_CRITERIA_UPDATE` — neither is
+    in the module tap today (`module/src/WbManager.cpp` opcode switch) nor in
+    `docs/CONTRACTS.md`. A new tap case plus an `achievement` event type gives
+    every character a server-authored ledger of firsts for free and is
+    contract-clean. A server-wide position sampler (every character, ~10 s) is
+    the other half, and is cheap because the module already sees every
+    session; defer until it is the next obstacle.
