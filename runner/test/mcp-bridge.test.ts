@@ -61,4 +61,31 @@ describe("mcp-bridge", () => {
       // already gone, which is the point
     }
   }, 20_000);
+
+  test("a CLI closing the bridge's stdin is its own teardown, not a reason to kill it", async () => {
+    const listener = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: { data() {}, open() {} },
+    });
+    // The parent shuts the bridge's stdin — the CLI's orderly MCP teardown —
+    // and keeps running. The bridge must not take that as the runner leaving.
+    const parent = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "-e",
+        `const b = Bun.spawn({ cmd: [process.execPath, ${JSON.stringify(BRIDGE)}, "${listener.port}"], stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+         await Bun.sleep(600);
+         b.stdin.end();
+         await new Promise(() => {});`,
+      ],
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+
+    await new Promise((r) => setTimeout(r, 3_500)); // past the 2s SIGKILL window
+    expect(dead(parent.pid)).toBe(false);
+    parent.kill("SIGKILL");
+    listener.stop(true);
+  }, 20_000);
 });
