@@ -55,6 +55,16 @@ shakeout flag, character, harness stamp, latest level, XP, money and completed
 quests from the `state` table, when it started, playtime, total tokens, and how
 it ended.
 
+Playtime (`playtimeMs`, on the listing rows and on `/api/run/<id>`) is *active*
+time, not the span the trajectory covers: a segment opens at the `meta` record
+and at each `resume`, and closes at each `pause` or `termination`, with an open
+segment running to now for a live run and to its last entry otherwise. A run
+that a rate limit paused and `--resume` picked up hours later would otherwise
+read as having played through the gap. It is computed here, once, so the fleet
+table and the run page cannot disagree. Note that this is not the
+`episode-limit` watchdog's clock, which is per-process uptime since the current
+resume and so never sees paused time.
+
 The `state` table gains signals over time and an old run directory never gains
 them retroactively, so the viewer asks each database what columns it has before
 selecting: `money` and `quests_completed` come back null where the schema
@@ -126,10 +136,10 @@ opened readonly, and the runs directory is only ever listed and read.
 | path | what |
 | --- | --- |
 | `/api/info` | what mode the viewer is in: public, dashboard built |
-| `/api/runs` | run listing, with per-run token totals and wall clock |
+| `/api/runs` | run listing, with per-run token totals and active playtime |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
 | `/api/fleet` | the fleet supervisor's lanes, accounts and heartbeat |
-| `/api/run/<id>` | run row, state series, entry count, token totals |
+| `/api/run/<id>` | run row, state series, entry count, token totals, playtime |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md |

@@ -389,7 +389,11 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       const marks: { t: string; ts: number }[] = [];
       for (const e of entries) {
         if (e.ts > 0) lastTs = e.ts;
-        if (SEGMENT_MARKS.has(e.t) || marks.length === 0) marks.push({ t: e.t, ts: e.ts });
+        // `ts > 0` keeps an unparseable first line (which `scanRunTotals` drops
+        // outright) from spending the no-meta bootstrap on a zero timestamp.
+        if (e.ts > 0 && (SEGMENT_MARKS.has(e.t) || marks.length === 0)) {
+          marks.push({ t: e.t, ts: e.ts });
+        }
       }
       return json({
         run,
