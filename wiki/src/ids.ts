@@ -52,17 +52,17 @@ const FIELD_KIND: Record<string, IdKind> = {
   spellid: "spell",
 };
 
-/** `{{templatename` — the opening of a template call. */
-const TEMPLATE_OPEN = /\{\{\s*([A-Za-z][A-Za-z0-9 _/-]{0,40})/g;
+/** `{{templatename` — the opening of a template call, with its name. */
+const TEMPLATE_OPEN = /\{\{\s*([A-Za-z][A-Za-z0-9 _/-]{0,40})?/g;
+
+/** Brace events: every `{{` and `}}` in source order. */
+const BRACE = /\{\{|\}\}/g;
 
 /**
  * `| id = 783` and its named variants. Deliberately not anchored to a line
  * start: real pages write `| name=Foo|id=16123` on one line.
  */
 const ID_FIELD = /\|\s*([A-Za-z]{2,12})\s*=\s*(\d{1,9})\b/g;
-
-/** How far past a `{{template` opening a field still counts as inside it. */
-const TEMPLATE_WINDOW = 2_000;
 
 function kindForTemplate(name: string): IdKind | undefined {
   const n = name.toLowerCase().replace(/[\s_/-]/g, "");
@@ -72,18 +72,61 @@ function kindForTemplate(name: string): IdKind | undefined {
   return undefined;
 }
 
+/** One `{{…}}` call: where it opens, where it closes, and the kind it implies. */
+interface Frame {
+  from: number;
+  /** Exclusive end; `text.length` for a template left unclosed at EOF. */
+  to: number;
+  kind: IdKind | undefined;
+}
+
 /**
- * The kind of the innermost enclosing infobox-ish template at `offset`, by
- * nearest preceding opening within the window. Approximate on purpose: full
- * template parsing buys nothing here, and a wrong *kind* only costs a small
- * ranking preference, never a wrong id.
+ * Every template call in the text, brace-matched, innermost last among the
+ * frames that contain a given offset only by virtue of the stack order they
+ * were closed in — so callers scan the list and keep the *narrowest* match.
+ *
+ * Unbalanced input is tolerated rather than rejected: a `}}` with nothing open
+ * is ignored, and a `{{` never closed runs to the end of the text. No window
+ * clips a frame: a closed frame provably encloses what is inside it however
+ * long its fields run, and real infoboxes do run long before reaching `| id =`.
  */
-function enclosingKind(openings: { at: number; kind: IdKind | undefined }[], offset: number): IdKind {
+function templateFrames(text: string): Frame[] {
+  const frames: Frame[] = [];
+  const stack: { from: number; kind: IdKind | undefined }[] = [];
+  BRACE.lastIndex = 0;
+  for (let m = BRACE.exec(text); m !== null; m = BRACE.exec(text)) {
+    if (m[0] === "{{") {
+      TEMPLATE_OPEN.lastIndex = m.index;
+      const open = TEMPLATE_OPEN.exec(text);
+      const name = open !== null && open.index === m.index ? (open[1] ?? "") : "";
+      stack.push({ from: m.index, kind: kindForTemplate(name) });
+    } else {
+      const open = stack.pop();
+      if (open === undefined) continue;
+      frames.push({ from: open.from, to: m.index + 2, kind: open.kind });
+    }
+  }
+  for (const open of stack) frames.push({ from: open.from, to: text.length, kind: open.kind });
+  return frames;
+}
+
+/**
+ * The kind of the template that actually encloses `offset`: the narrowest
+ * frame containing it, widening outward past frames whose name implies no kind
+ * — `{{#if:`, `{{PAGENAME}}` and other wrappers sit between an infobox and its
+ * fields, and the infobox is still what the id belongs to.
+ */
+function enclosingKind(frames: Frame[], offset: number): IdKind {
   let best: IdKind | undefined;
-  for (const o of openings) {
-    if (o.at > offset) break;
-    if (offset - o.at > TEMPLATE_WINDOW) continue;
-    if (o.kind !== undefined) best = o.kind;
+  let width = Number.POSITIVE_INFINITY;
+  for (const f of frames) {
+    if (f.from > offset || f.to <= offset) continue;
+    if (f.kind === undefined) continue;
+    const w = f.to - f.from;
+    if (w < width) {
+      width = w;
+      best = f.kind;
+    }
   }
   return best ?? "unknown";
 }
@@ -94,11 +137,7 @@ function enclosingKind(openings: { at: number; kind: IdKind | undefined }[], off
  */
 export function extractIds(wikitext: string): WikiId[] {
   if (!wikitext.includes("=")) return [];
-  const openings: { at: number; kind: IdKind | undefined }[] = [];
-  TEMPLATE_OPEN.lastIndex = 0;
-  for (let m = TEMPLATE_OPEN.exec(wikitext); m !== null; m = TEMPLATE_OPEN.exec(wikitext)) {
-    openings.push({ at: m.index, kind: kindForTemplate(m[1] ?? "") });
-  }
+  const frames = templateFrames(wikitext);
 
   const out: WikiId[] = [];
   const seen = new Set<string>();
@@ -110,7 +149,7 @@ export function extractIds(wikitext: string): WikiId[] {
     if (fromField === undefined && field !== "id" && field !== "entry") continue;
     const id = Number.parseInt(m[2] ?? "", 10);
     if (!Number.isInteger(id) || id <= 0 || id > MAX_ID) continue;
-    const kind = fromField ?? enclosingKind(openings, m.index);
+    const kind = fromField ?? enclosingKind(frames, m.index);
     const key = `${kind}:${id}`;
     if (seen.has(key)) continue;
     seen.add(key);
