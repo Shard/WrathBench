@@ -52,11 +52,23 @@ priority. Items graduate out of this file into commits; the dev loop
 8. Claude-driver ContextBuilder: state sampling and watchdog checks are solid
    now, but a `quota-exhausted` pause still loses the CLI's accumulated
    context on resume (documented; acceptable for shakeout).
+   Amended 2026-08-22 (morning-opus-1 post-mortem): the subscription lane
+   also never applies the context policy the prompt describes — no trim,
+   one CLI conversation growing linearly (111k tokens at 40 min, ~640
+   tok/turn slope), so ~98% of that run's 10.2M tokens were cache-read
+   replays of the growing prefix. The prompt's "older conversation is
+   trimmed aggressively" is false on this lane; either the driver applies
+   a policy or the prompt stops promising one. Cost comparisons across
+   drivers are invalid until then.
 
 8a. **Extractive digest — deferred behind an evidence gate** (2026-08-21
    research verdict, three-agent pass). Dynamic context compaction is not
    needed on current evidence: requests plateau at ~8–12k tokens under the
-   fixed policy regardless of episode length. If either signal appears —
+   fixed policy regardless of episode length. (2026-08-22: the plateau
+   claim held for the API driver at the 24-window; under the 24→48
+   hysteresis medians run 13–20k, and the gate is now arguably tripped for
+   the subscription lane specifically — see item 8's amendment: unbounded
+   linear growth, ~330k extrapolated for a 2-hour episode.) If either signal appears —
    (a) genuine context-size exhaustion in a run, or (b) trajectories showing
    a model re-querying facts it lost to a window trim — build the extractive
    digest: trimmed messages replaced by a deterministic one-line record
