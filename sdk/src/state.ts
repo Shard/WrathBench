@@ -1111,54 +1111,10 @@ export class StateCache {
     const from = this.self.position?.value;
     const out: UnitView[] = [];
     for (const obj of this.nearby.values()) {
-      const type = obj.objectType?.value;
-      if (type === "item" || type === "container") continue;
+      const view = toUnitView(obj, from);
+      if (view === undefined) continue;
 
-      const point = pointOf(obj)?.value;
-      const distance =
-        from && point
-          ? Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100
-          : undefined;
-      const health = obj.fields.get("health")?.value;
-      const target = obj.targetGuid?.value;
-      const view: UnitView = {
-        guid: obj.guid,
-        entry: obj.entry?.value,
-        name: obj.name?.value,
-        type,
-        level: obj.level?.value,
-        health,
-        maxHealth: obj.fields.get("maxHealth")?.value,
-        dead: health === undefined ? undefined : health === 0,
-        distance,
-        x: point?.x,
-        y: point?.y,
-        z: point?.z,
-        targetGuid: target === undefined || target === "0" ? undefined : target,
-      };
-
-      if (f.entries && (view.entry === undefined || !f.entries.has(view.entry))) continue;
-      if (f.name !== undefined) {
-        // Unnamed objects never match: a name criterion cannot be evaluated
-        // against a name we have not observed.
-        if (view.name === undefined) continue;
-        if (f.name.kind === "regex") {
-          if (!f.name.re.test(view.name)) continue;
-        } else if (!view.name.toLowerCase().includes(f.name.query)) {
-          continue;
-        }
-      }
-      if (f.type !== undefined && view.type !== f.type) continue;
-      // Asymmetric on purpose: `alive: true` excludes only the *known* dead, so
-      // a unit whose health we have never seen still shows up. `alive: false`
-      // is a positive claim and needs the observation.
-      if (f.alive === true && view.dead === true) continue;
-      if (f.alive === false && view.dead !== true) continue;
-      if (f.maxDistance !== undefined && (distance === undefined || distance > f.maxDistance)) continue;
-      if (f.npc !== undefined) {
-        const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
-        if (isNpc !== f.npc) continue;
-      }
+      if (!passesUnitFilter(view, obj, f)) continue;
       out.push(view);
     }
     // Nearest first; unknown distance last. Stable, so unknowns keep first-sight
@@ -1196,18 +1152,48 @@ export class StateCache {
    * from our own last observed position. `undefined` when we have no position,
    * or nothing in view has one — never a guess.
    *
+   * `filter` is either a `units()` criteria object — `closest({ entry: 196 })`,
+   * `closest({ name: "Deputy Willem", npc: true })` — with exactly the meaning
+   * and the rejection messages it has there, or a predicate over the raw
+   * object. Four of five models in the 2026-08-22 roster reached for the
+   * criteria object by analogy with `units(filter)` and got a bare V8
+   * `TypeError: filter is not a function`, which cost one of them a 15-turn
+   * detour; the analogy was right, so the surface now matches it (ADR-0015:
+   * earned by observed need).
+   *
+   * Ordering is by distance in both forms. `units({ name: "tree" })` ranks its
+   * name matches by tier first; `closest` does not, because "nearest" is the
+   * whole question it answers.
+   *
    * Distances mix the freshness of two observations (ours and theirs); both
    * carry their own `seq`, so a caller that cares can check.
    */
-  closest(filter?: (obj: NearbyObject) => boolean): NearbyObject | undefined {
+  closest(filter?: UnitFilter | ((obj: NearbyObject) => boolean)): NearbyObject | undefined {
     const from = this.self.position?.value;
     if (!from) return undefined;
+
+    // A criteria object goes through `units()`'s own normalization and its own
+    // per-object test, so `{ entry: 196 }` here means exactly what it means
+    // there — including the rejection messages for a bad key or a bad value.
+    // What is *not* borrowed is `units()`'s name-tier ordering: `closest`
+    // promises the nearest match by distance, and a best-name-first answer
+    // under that name would be a new footgun in place of the old one.
+    const criteria =
+      filter !== undefined && typeof filter !== "function" ? normalizeUnitFilter(filter) : undefined;
+    const predicate = typeof filter === "function" ? filter : undefined;
+
     let best: NearbyObject | undefined;
     let bestD2 = Infinity;
     for (const obj of this.nearby.values()) {
       const p = pointOf(obj)?.value;
       if (!p) continue;
-      if (filter && !filter(obj)) continue;
+      if (predicate && !predicate(obj)) continue;
+      if (criteria) {
+        // Items and containers (our own inventory) are not in view for
+        // `units()`, so a criteria query must not find them here either.
+        const view = toUnitView(obj, from);
+        if (view === undefined || !passesUnitFilter(view, obj, criteria)) continue;
+      }
       const d2 = (p.x - from.x) ** 2 + (p.y - from.y) ** 2 + (p.z - from.z) ** 2;
       if (d2 < bestD2) {
         bestD2 = d2;
@@ -1493,6 +1479,72 @@ export class StateCache {
     obj.lastSeq = Math.max(obj.lastSeq, seq);
     return obj;
   }
+}
+
+/**
+ * One `NearbyObject` as `units()` reports it, or `undefined` when the object is
+ * not in the world view at all (our own items and bags). `from` is our own last
+ * observed position; without it `distance`/`x`/`y`/`z` stay unobserved.
+ */
+function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView | undefined {
+  const type = obj.objectType?.value;
+  if (type === "item" || type === "container") return undefined;
+  const point = pointOf(obj)?.value;
+  const distance =
+    from && point
+      ? Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100
+      : undefined;
+  const health = obj.fields.get("health")?.value;
+  const target = obj.targetGuid?.value;
+  return {
+    guid: obj.guid,
+    entry: obj.entry?.value,
+    name: obj.name?.value,
+    type,
+    level: obj.level?.value,
+    health,
+    maxHealth: obj.fields.get("maxHealth")?.value,
+    dead: health === undefined ? undefined : health === 0,
+    distance,
+    x: point?.x,
+    y: point?.y,
+    z: point?.z,
+    targetGuid: target === undefined || target === "0" ? undefined : target,
+  };
+}
+
+/**
+ * Whether one object satisfies every present criterion. The single definition
+ * of what a `UnitFilter` *means*, shared by `units()` and `closest()` so the
+ * two can never drift; `obj` is only needed for `npc`, which reads a raw field
+ * the view does not carry.
+ */
+function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFilter): boolean {
+  if (f.entries && (view.entry === undefined || !f.entries.has(view.entry))) return false;
+  if (f.name !== undefined) {
+    // Unnamed objects never match: a name criterion cannot be evaluated
+    // against a name we have not observed.
+    if (view.name === undefined) return false;
+    if (f.name.kind === "regex") {
+      if (!f.name.re.test(view.name)) return false;
+    } else if (!view.name.toLowerCase().includes(f.name.query)) {
+      return false;
+    }
+  }
+  if (f.type !== undefined && view.type !== f.type) return false;
+  // Asymmetric on purpose: `alive: true` excludes only the *known* dead, so a
+  // unit whose health we have never seen still shows up. `alive: false` is a
+  // positive claim and needs the observation.
+  if (f.alive === true && view.dead === true) return false;
+  if (f.alive === false && view.dead !== true) return false;
+  if (f.maxDistance !== undefined && (view.distance === undefined || view.distance > f.maxDistance)) {
+    return false;
+  }
+  if (f.npc !== undefined) {
+    const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
+    if (isNpc !== f.npc) return false;
+  }
+  return true;
 }
 
 // ------------------------------------------------------ units() filter input

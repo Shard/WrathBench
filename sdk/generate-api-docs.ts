@@ -143,7 +143,12 @@ const CLIENT_INTERNAL = new Set([
  */
 const STATE_ROWS: readonly Row[] = [
   { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc." },
-  { name: "closest", sig: "state.closest(filter?): NearbyObject | undefined", purpose: "The nearest object matching a filter." },
+  {
+    name: "closest",
+    sig: "state.closest(filter?): NearbyObject | undefined",
+    purpose:
+      "The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc }) or a predicate over the raw object.",
+  },
   { name: "nearbyUnits", sig: "state.nearbyUnits(): NearbyObject[]", purpose: "The raw nearby objects (state.units gives flat plain objects instead)." },
   { name: "creaturesByEntry", sig: "state.creaturesByEntry(entry): NearbyObject[]", purpose: "Nearby creatures with a given template entry id." },
   { name: "bag", sig: "state.bag(): BagContents", purpose: "The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }." },
