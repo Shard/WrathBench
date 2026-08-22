@@ -19,12 +19,14 @@ import { basename, join } from "node:path";
 import type {
   ApiInfoResponse,
   EntrySummary,
+  EvalRun,
   FleetLane,
   FleetLaneRun,
   FleetLaneView,
   FleetResponse,
   RunListRow,
 } from "./api-types";
+import { evalRunOf, trackFrom } from "./eval";
 import { readPositions } from "./positions";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
@@ -367,6 +369,24 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return totals;
   }
 
+  /**
+   * Every run projected onto the eval surface.
+   *
+   * Built inside this closure on purpose: it reuses the same memoised
+   * `runTotals`, so the charts inherit the (size, mtime) cache instead of
+   * re-reading every trajectory on every request. The segments it passes are
+   * the run page's own, which is what makes time-to-level and playtime agree.
+   */
+  async function evalRuns(): Promise<EvalRun[]> {
+    const out: EvalRun[] = [];
+    for (const row of listRuns(runsDir)) {
+      const dir = runDir(runsDir, row.runId);
+      const totals = dir === null ? null : await runTotals(row.runId, dir);
+      out.push(evalRunOf(row, readStates(runsDir, row.runId), totals?.segments ?? []));
+    }
+    return out;
+  }
+
   async function listWithTotals(): Promise<RunListRow[]> {
     const out: RunListRow[] = [];
     for (const row of listRuns(runsDir)) {
@@ -408,6 +428,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
     if (path === "/api/runs") return json({ runs: await listWithTotals() });
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
+    if (path === "/api/eval") return json({ runs: await evalRuns(), now: Date.now() });
     if (path === "/api/fleet") return json(readFleet(runsDir));
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
@@ -445,6 +466,19 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         total: entries.length,
         tokens: tokenTotals(entries),
         playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
+      });
+    }
+
+    if (rest === "/track") {
+      // The replay feed (FOLLOW-UPS 22): the same position shape the live map
+      // consumes, read from one finished run instead of every live one.
+      const run = readRun(runsDir, runId);
+      return json({
+        runId,
+        character: run.character,
+        model: run.model,
+        harnessVersion: run.harnessVersion,
+        points: trackFrom(readStates(runsDir, runId)),
       });
     }
 
