@@ -694,6 +694,56 @@ export const questCombatStream: unknown[] = [
   monsterMove,
 ];
 
+/**
+ * A trainer's spell list. Opcode ids are the pinned core's
+ * (`Opcodes.h`: SMSG_TRAINER_LIST 0x1B1, BUY_SUCCEEDED 0x1B3, BUY_FAILED 0x1B4).
+ */
+export function trainerList(
+  spells: readonly { spellId: number; state: number; cost: number }[],
+  seq = 60,
+  guid: string = CREATURE_GUID,
+): unknown {
+  return {
+    seq,
+    opcode: "SMSG_TRAINER_LIST",
+    opcodeId: 0x1b1,
+    ts: 1_700_000_000_600,
+    data: {
+      guid,
+      trainerType: 0,
+      greeting: "fixture trainer greeting",
+      spells: spells.map((s) => ({
+        spellId: s.spellId,
+        state: s.state,
+        cost: s.cost,
+        reqLevel: 4,
+        reqSkill: 0,
+        reqSkillValue: 0,
+      })),
+    },
+  };
+}
+
+export function trainerBuySucceeded(spellId: number, seq = 61): unknown {
+  return {
+    seq,
+    opcode: "SMSG_TRAINER_BUY_SUCCEEDED",
+    opcodeId: 0x1b3,
+    ts: 1_700_000_000_610,
+    data: { guid: CREATURE_GUID, spellId },
+  };
+}
+
+export function trainerBuyFailed(spellId: number, reason: number, seq = 62): unknown {
+  return {
+    seq,
+    opcode: "SMSG_TRAINER_BUY_FAILED",
+    opcodeId: 0x1b4,
+    ts: 1_700_000_000_620,
+    data: { guid: CREATURE_GUID, spellId, reason },
+  };
+}
+
 export const sessionResponseFixture = {
   ok: true as const,
   token: "test-token",

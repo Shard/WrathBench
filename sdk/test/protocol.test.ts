@@ -134,6 +134,9 @@ describe("event frames", () => {
       "SMSG_BUY_ITEM",
       "SMSG_BUY_FAILED",
       "SMSG_SELL_ITEM",
+      "SMSG_TRAINER_LIST",
+      "SMSG_TRAINER_BUY_SUCCEEDED",
+      "SMSG_TRAINER_BUY_FAILED",
       "SMSG_INVENTORY_CHANGE_FAILURE",
       "SMSG_ITEM_QUERY_SINGLE_RESPONSE",
       "SMSG_DEATH_RELEASE_LOC",
@@ -144,7 +147,10 @@ describe("event frames", () => {
     ]);
     expect(isKnownOpcode("SMSG_MESSAGECHAT")).toBe(true);
     expect(isKnownOpcode("SMSG_UPDATE_OBJECT")).toBe(true);
-    expect(isKnownOpcode("SMSG_TRAINER_LIST")).toBe(false);
+    // An opcode outside the whitelist stays unknown (and still streams, as
+    // `UnknownEvent`). SMSG_TRAINER_LIST used to stand here; it is whitelisted
+    // now, so the negative case moved to one the module does not serve.
+    expect(isKnownOpcode("SMSG_TRADE_STATUS")).toBe(false);
   });
 
   test("every observed MSG_MOVE_* name shares the one movement payload", () => {

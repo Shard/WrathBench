@@ -33,7 +33,11 @@ import {
   SELF_GUID,
   selfCreate,
   selfHealth,
+  selfProgress,
   swing,
+  trainerBuyFailed,
+  trainerBuySucceeded,
+  trainerList,
 } from "./fixtures";
 import { startStub, type StubServer } from "./server";
 
@@ -1017,6 +1021,179 @@ describe("client: quests", () => {
     await expect(client.waitForQuestObjective(QUEST_ID, { timeout: 40 })).rejects.toBeInstanceOf(
       EventTimeoutError,
     );
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: questsAvailableFrom", () => {
+  test("reads the offer out of a gossip menu", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(gossipWithQuests([QUEST_ID, OTHER_QUEST_ID], 91)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.quests.map((q) => q.questId)).toEqual([QUEST_ID, OTHER_QUEST_ID]);
+    expect(result.quests[0]?.title).toBe(`fixture quest ${QUEST_ID}`);
+    expect(result.quests[0]?.icon).toBe(2);
+    client.close();
+    await stub.stop();
+  });
+
+  test("reads the plain questgiver list too", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(questGiverList([QUEST_ID], 92)));
+    const result = await pending;
+    expect(result.quests.map((q) => q.questId)).toEqual([QUEST_ID]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an empty offer is an answer, not an error", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(gossipWithQuests([], 93)));
+    const result = await pending;
+    expect(result).toEqual({ ok: true, quests: [] });
+    client.close();
+    await stub.stop();
+  });
+
+  test("silence throws rather than reporting an empty offer", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await expect(
+      client.questsAvailableFrom(CREATURE_GUID, { timeout: 40 }),
+    ).rejects.toBeInstanceOf(EventTimeoutError);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: trainers", () => {
+  test("trainerList derives learnable and affordable per spell", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // Coinage is a self-only PRIVATE field; it only exists once observed.
+    stub.push(JSON.stringify(selfProgress)); // money 12345
+    await Bun.sleep(20);
+    const pending = client.trainerList(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "trainer_list");
+    stub.push(
+      JSON.stringify(
+        trainerList([
+          { spellId: 100, state: 0, cost: 100 },
+          { spellId: 200, state: 0, cost: 999_999 },
+          { spellId: 300, state: 1, cost: 10 },
+          { spellId: 400, state: 2, cost: 10 },
+        ]),
+      ),
+    );
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.trainerType).toBe(0);
+    expect(result.spells.map((s) => s.learnable)).toEqual([true, true, false, false]);
+    expect(result.spells.map((s) => s.affordable)).toEqual([true, false, true, true]);
+    // The wire fields survive untouched alongside the derived ones.
+    expect(result.spells[0]).toMatchObject({ spellId: 100, cost: 100, reqLevel: 4, reqSkill: 0 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("affordable is undefined while money is unobserved, never guessed", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    expect(client.state.money).toBeUndefined();
+    const pending = client.trainerList(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "trainer_list");
+    stub.push(JSON.stringify(trainerList([{ spellId: 100, state: 0, cost: 100 }])));
+    const result = await pending;
+    expect(result.spells[0]?.affordable).toBeUndefined();
+    expect(result.spells[0]?.learnable).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a trainer list for another NPC does not answer this one", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.trainerList(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "trainer_list");
+    stub.push(JSON.stringify(trainerList([{ spellId: 1, state: 0, cost: 1 }], 63, SELF_GUID)));
+    stub.push(JSON.stringify(trainerList([{ spellId: 100, state: 0, cost: 5 }], 64)));
+    const result = await pending;
+    expect(result.spells.map((s) => s.spellId)).toEqual([100]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a silent trainer times out with what was awaited", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const err = await client.trainerList(CREATURE_GUID, { timeout: 40 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect((err as EventTimeoutError).waitingFor).toContain("SMSG_TRAINER_LIST");
+    client.close();
+    await stub.stop();
+  });
+
+  test("buySpell reports the spell the server said it taught", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.buySpell(CREATURE_GUID, 100, { timeout: 2000 });
+    await untilAction(stub, "trainer_buy_spell");
+    // A verdict for a different spell must not settle this one.
+    stub.push(JSON.stringify(trainerBuySucceeded(999, 65)));
+    stub.push(JSON.stringify(trainerBuySucceeded(100, 66)));
+    expect(await pending).toEqual({ ok: true, status: "learned", spellId: 100 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a refusal is a value carrying the server's reason and a hint", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.buySpell(CREATURE_GUID, 100, { timeout: 2000 });
+    await untilAction(stub, "trainer_buy_spell");
+    stub.push(JSON.stringify(trainerBuyFailed(100, 1, 67)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("buy_failed");
+    expect(result.reason).toBe(1);
+    expect(result.hint).toContain("not enough money");
+    expect(result.hint).toContain("trainerList");
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unknown reason code still reports the number", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.buySpell(CREATURE_GUID, 100, { timeout: 2000 });
+    await untilAction(stub, "trainer_buy_spell");
+    stub.push(JSON.stringify(trainerBuyFailed(100, 77, 68)));
+    const result = await pending;
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe(77);
+    expect(result.hint).toContain("reason 77");
+    client.close();
+    await stub.stop();
+  });
+
+  test("no verdict at all throws rather than inventing one", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const err = await client.buySpell(CREATURE_GUID, 100, { timeout: 40 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect((err as EventTimeoutError).waitingFor).toContain("SMSG_TRAINER_BUY_SUCCEEDED");
     client.close();
     await stub.stop();
   });
