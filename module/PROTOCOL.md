@@ -658,8 +658,13 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
   destination. The module already tried once to subdivide (path to where the
   mesh got, then onward); `reachedPos` is how far the mesh could get, so the
   agent can route around or approach from another side. Nothing moved.
-- `interrupted` — the move stopped early (death, root, rejection); `pos` is
-  where the character actually is.
+- `transferred` — a map transfer or teleport took the character mid-move
+  (an areatrigger portal, a graveyard port); the server applies the
+  destination itself. `pos` is the last old-map position; the new map and
+  arrival point follow on `SMSG_NEW_WORLD`.
+- `interrupted` — the move stopped early (death, root, rejection, or the
+  character left the map for a non-teleport reason); `pos` is where the
+  character actually is.
 - `stopped` — a `stop` action ended the move.
 - `superseded` — a newer `move_to` replaced this move.
 
@@ -787,6 +792,20 @@ Creature movement:
 spline path points the client receives are consumed and dropped, because
 serving them would hand the agent the server's route in machine-readable form
 (ADR-0010). A client player only sees the animation.
+
+Map transfers (navigation, 2026-08, FOLLOW-UPS 38 N1):
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_TRANSFER_PENDING` | 0x03F | `{ "map": <u32>, "transportEntry": <u32?>, "oldMap": <u32?> }` — the optional pair only when a transport carries the character across |
+| `SMSG_NEW_WORLD` | 0x03E | `{ "map": <u32>, "x", "y", "z", "o" }` — the arrival point (transport-local when aboard one) |
+| `SMSG_TRANSFER_ABORTED` | 0x040 | `{ "map": <u32>, "reason": <u8>, "arg": <u8?> }` — `arg` only for INSUF_EXPAN_LVL / DIFFICULTY / UNIQUE_MESSAGE |
+
+`SMSG_NEW_WORLD` is the only map id a client receives after login
+(`SMSG_LOGIN_VERIFY_WORLD` is never re-sent), so it is what self position's
+`map` follows from then on. The module answers the teleport itself
+(`MSG_MOVE_WORLDPORT_ACK`, see the teleport-ack note) and a `move_to` in
+flight when a transfer or teleport begins ends with status `transferred`.
 
 #### Update-field whitelist additions (quest/combat extension)
 
