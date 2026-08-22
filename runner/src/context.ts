@@ -71,6 +71,37 @@ interface ObservedLike {
   seq?: number;
 }
 
+/** One nearby object as the sandbox flattens `state.units()` into the rpc JSON. */
+interface UnitLike {
+  guid?: unknown;
+  name?: unknown;
+  type?: unknown;
+  level?: unknown;
+  distance?: unknown;
+  /** `true` only when health was observed and is 0. See the HUD caveat below. */
+  dead?: unknown;
+}
+
+/** The backpack as `state.bag()` shapes it, flattened into the rpc JSON. */
+interface BagLike {
+  freeSlots?: unknown;
+  items?: { slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown }[];
+}
+
+/**
+ * The "open window" fold the HUD shows on its `ui` line. Every field is an
+ * honest fold over the event stream (or self fields) — never a guess. A kind
+ * that cannot be proven open is simply absent, so the line omits it.
+ */
+export interface UiOpenWindows {
+  /** Gossip menu open: the last SMSG_GOSSIP_MESSAGE has no later SMSG_GOSSIP_COMPLETE. */
+  gossip?: { options: number };
+  /** Loot window open: the last SMSG_LOOT_RESPONSE has no later SMSG_LOOT_RELEASE_RESPONSE. */
+  loot?: boolean;
+  /** Vendor list open: SMSG_LIST_INVENTORY is the most recent window event of the three. */
+  vendor?: boolean;
+}
+
 /** JSON-safe snapshot as produced by the sandbox rpc (StateCache.snapshot()). */
 export interface SnapshotLike {
   self?: {
@@ -78,17 +109,36 @@ export interface SnapshotLike {
     name?: unknown;
     level?: ObservedLike;
     position?: ObservedLike;
+    /** `value` is a `{ current, max }` gauge. Self only (the player frame is numbers). */
     health?: ObservedLike;
     power?: ObservedLike;
+    /** `UNIT_FIELD_TARGET` on our own block: what the client shows as selected. */
+    targetGuid?: ObservedLike;
+    /** Raw per-field record (a Map serialized to an object). Read for the ghost flag. */
+    fields?: Record<string, ObservedLike | undefined>;
   };
   /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
   xp?: ObservedLike;
-  /** Copper (top level in the SDK snapshot, like `xp`). Recorded, not shown. */
+  /** XP required for the next level, as the client's bar shows it. */
+  nextLevelXp?: ObservedLike;
+  /** Copper (top level in the SDK snapshot, like `xp`). */
   money?: ObservedLike;
   /** Confirmed turn-ins this session, oldest first. Recorded, not shown. */
   questCompletions?: { questId?: unknown; ts?: unknown }[];
+  /** The quest log's occupied slots: questId + completion bit only, no titles. */
+  questLog?: { questId?: unknown; complete?: unknown }[];
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
+  /**
+   * `state.units()` flattened by the sandbox (nearest first, items/containers
+   * dropped). Mob `health`/`maxHealth` are deliberately NOT carried here and are
+   * never printed — CONTRACTS.md forbids exact mob health.
+   */
+  units?: UnitLike[];
+  /** `state.bag()` shape: backpack items and free slot count. */
+  bag?: BagLike;
+  /** The open-window fold the sandbox computes from the event stream. */
+  ui?: UiOpenWindows;
   chat?: { senderGuid?: unknown; message?: unknown }[];
   notifications?: { text?: unknown }[];
   gaps?: unknown[];
@@ -102,9 +152,104 @@ function fmt(v: unknown, fallback = "unobserved"): string {
   return String(v);
 }
 
+/** Render a `{ current, max }` gauge, or "unobserved" if the gauge is absent. */
+function fmtGauge(o?: ObservedLike): string {
+  const v = o?.value as { current?: unknown; max?: unknown } | null | undefined;
+  if (v === undefined || v === null) return "unobserved";
+  if (typeof v === "object" && "current" in v) return `${fmt(v.current)}/${fmt(v.max)}`;
+  return fmt(v);
+}
+
+/** PLAYER_FLAGS_GHOST on 3.3.5a — set while the character is a corpse-run ghost. */
+const PLAYER_FLAGS_GHOST = 0x10;
+
+/** Backpack size (16 slots), for the "F free / 16" bag line. */
+const BACKPACK_SIZE = 16;
+/** How many bag items the HUD names before collapsing the rest to "+K more". */
+const BAG_ITEM_CAP = 8;
+/** How many nearby objects the HUD names before collapsing the rest to "+K more". */
+const NEARBY_CAP = 6;
+
+/** One item's label for the bag line: name, else item id, else slot. */
+function bagItemLabel(it: { slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown }): string {
+  const name =
+    it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : `slot ${String(it.slot)}`;
+  return typeof it.count === "number" && it.count > 1 ? `${name} x${it.count}` : name;
+}
+
 /**
- * The fixed state summary format. Every line is stable; a field no event has
- * carried yet reads "unobserved" — never a guessed zero (docs/CONTRACTS.md).
+ * Fold the "open window" state out of the raw event stream. Pure: the same
+ * events (in any order — it compares seqs, not positions) give the same result.
+ *
+ * Only honest folds, each an event-*pair* statement about the stream rather than
+ * a cached field (the state cache does not fold these opcodes): a window is open
+ * iff its opening opcode's last seq is newer than its closing opcode's. Vendor
+ * has no closing opcode, so it is trusted only when its SMSG_LIST_INVENTORY is
+ * the most recent window event of the three — "provably most-recent-of-three".
+ *
+ * Window truncation only ever fails safe: an opening event cannot sit in a
+ * bounded buffer while its (necessarily later, higher-seq) close is gone, so a
+ * truncated buffer yields "unknown → omit", never a false "open".
+ */
+export function foldUiOpenWindows(
+  events: readonly { opcode: string; seq: number; data?: unknown }[],
+): UiOpenWindows {
+  let gossipSeq = -1;
+  let gossipOptions = 0;
+  let gossipDoneSeq = -1;
+  let lootSeq = -1;
+  let lootReleaseSeq = -1;
+  let vendorSeq = -1;
+  for (const e of events) {
+    switch (e.opcode) {
+      case "SMSG_GOSSIP_MESSAGE":
+        if (e.seq >= gossipSeq) {
+          gossipSeq = e.seq;
+          const opts = (e.data as { options?: unknown } | undefined)?.options;
+          gossipOptions = Array.isArray(opts) ? opts.length : 0;
+        }
+        break;
+      case "SMSG_GOSSIP_COMPLETE":
+        if (e.seq > gossipDoneSeq) gossipDoneSeq = e.seq;
+        break;
+      case "SMSG_LOOT_RESPONSE":
+        if (e.seq > lootSeq) lootSeq = e.seq;
+        break;
+      case "SMSG_LOOT_RELEASE_RESPONSE":
+        if (e.seq > lootReleaseSeq) lootReleaseSeq = e.seq;
+        break;
+      case "SMSG_LIST_INVENTORY":
+        if (e.seq > vendorSeq) vendorSeq = e.seq;
+        break;
+      default:
+        break;
+    }
+  }
+  const ui: UiOpenWindows = {};
+  if (gossipSeq > -1 && gossipSeq > gossipDoneSeq) ui.gossip = { options: gossipOptions };
+  if (lootSeq > -1 && lootSeq > lootReleaseSeq) ui.loot = true;
+  if (
+    vendorSeq > -1 &&
+    vendorSeq > gossipSeq &&
+    vendorSeq > gossipDoneSeq &&
+    vendorSeq > lootSeq &&
+    vendorSeq > lootReleaseSeq
+  ) {
+    ui.vendor = true;
+  }
+  return ui;
+}
+
+/**
+ * The fixed client HUD. A 3.3.5a client always shows XP, bags, the quest
+ * tracker, nameplates, the target frame and open windows; this presents those
+ * observed fields as a stable, line-oriented summary.
+ *
+ * Two rules, both from docs/CONTRACTS.md: a field no event has carried reads
+ * "unobserved" — never a guessed zero; and the nearby line never prints exact
+ * mob health (the player frame on the health line is fine — those are numbers a
+ * client shows for itself). Every line is a pure function of the snapshot, so
+ * `assembleContext` stays byte-deterministic.
  */
 export function formatStateSummary(snapshot: SnapshotLike | null, o: { sessionLive: boolean }): string {
   if (snapshot === null) {
@@ -113,6 +258,8 @@ export function formatStateSummary(snapshot: SnapshotLike | null, o: { sessionLi
   const s = snapshot.self ?? {};
   const pos = s.position?.value as { map?: number; x?: number; y?: number; z?: number } | undefined;
   const lines: string[] = [];
+
+  // header + session + character + position
   lines.push(`== state (seq ${snapshot.lastSeq ?? -1}, ${snapshot.eventCount ?? 0} events seen) ==`);
   lines.push(`session: ${o.sessionLive ? "in world" : "not established"}`);
   lines.push(`character: ${fmt(s.name, "none")} (guid ${fmt(s.guid, "?")}) level ${fmt(s.level?.value)}`);
@@ -121,11 +268,85 @@ export function formatStateSummary(snapshot: SnapshotLike | null, o: { sessionLi
       ? "position: unobserved"
       : `position: map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
-  lines.push(`health: ${fmt(s.health?.value)}  power: ${fmt(s.power?.value)}`);
-  const nearbyCount = snapshot.nearby === undefined ? 0 : Object.keys(snapshot.nearby).length;
-  lines.push(`nearby objects: ${nearbyCount}`);
+
+  // health / power (self only — the player frame is numbers)
+  lines.push(`health: ${fmtGauge(s.health)}  power: ${fmtGauge(s.power)}`);
+
+  // xp / money
+  const money = snapshot.money?.value;
+  const moneyStr = money === undefined || money === null ? "unobserved" : `${fmt(money)} copper`;
+  lines.push(`xp: ${fmt(snapshot.xp?.value)} / ${fmt(snapshot.nextLevelXp?.value)}     money: ${moneyStr}`);
+
+  // bag
+  if (snapshot.bag === undefined) {
+    lines.push("bag: unobserved");
+  } else {
+    const items = snapshot.bag.items ?? [];
+    const free = snapshot.bag.freeSlots;
+    const freeStr = typeof free === "number" ? `${free} free / ${BACKPACK_SIZE}` : "unobserved";
+    let itemsStr = items.length === 0 ? "empty" : items.slice(0, BAG_ITEM_CAP).map(bagItemLabel).join(", ");
+    if (items.length > BAG_ITEM_CAP) itemsStr += ` +${items.length - BAG_ITEM_CAP} more`;
+    lines.push(`bag: ${freeStr}    items: ${itemsStr}`);
+  }
+
+  // quests (questId + completion bit only, no titles — CONTRACTS.md / no wiki lookup)
+  const ql = snapshot.questLog;
+  if (ql === undefined) {
+    lines.push("quests: unobserved");
+  } else if (ql.length === 0) {
+    lines.push("quests: none");
+  } else {
+    lines.push(
+      `quests: ${ql.map((q) => `${fmt(q.questId, "?")} ${q.complete === true ? "complete" : "progress"}`).join(", ")}`,
+    );
+  }
+
+  // target
+  const targetGuid = s.targetGuid?.value;
+  if (targetGuid === undefined || targetGuid === null || targetGuid === "0") {
+    lines.push("target: none");
+  } else {
+    const unit = (snapshot.units ?? []).find((u) => u.guid === targetGuid);
+    const name = unit?.name != null ? String(unit.name) : "unknown";
+    lines.push(`target: ${name} (guid ${String(targetGuid)})`);
+  }
+
+  // nearby — from state.units() semantics (nearest first, items/containers
+  // dropped by the sandbox). Name + distance + dead-when-known; never mob health.
+  const units = snapshot.units;
+  if (units === undefined) {
+    lines.push("nearby: unobserved");
+  } else if (units.length === 0) {
+    lines.push("nearby: none");
+  } else {
+    const shown = units.slice(0, NEARBY_CAP).map((u) => {
+      const name = u.name != null ? String(u.name) : "(unnamed)";
+      const dead = u.dead === true ? " dead" : "";
+      const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
+      return `${name}${dead} (${dist})`;
+    });
+    let nearbyStr = shown.join(", ");
+    if (units.length > NEARBY_CAP) nearbyStr += ` +${units.length - NEARBY_CAP} more`;
+    lines.push(`nearby: ${nearbyStr}`);
+  }
+
+  // ui — honest open-window folds only; the whole line is omitted when none hold
+  const uiParts: string[] = [];
+  const ui = snapshot.ui;
+  if (ui?.gossip) uiParts.push(`gossip (${ui.gossip.options} options)`);
+  if (ui?.loot) uiParts.push("loot");
+  if (ui?.vendor) uiParts.push("vendor");
+  const healthVal = s.health?.value as { current?: unknown } | null | undefined;
+  if (healthVal != null && typeof healthVal === "object" && healthVal.current === 0) uiParts.push("dead");
+  const playerFlags = s.fields?.["playerFlags"]?.value;
+  if (typeof playerFlags === "number" && (playerFlags & PLAYER_FLAGS_GHOST) !== 0) uiParts.push("ghost");
+  if (uiParts.length > 0) lines.push(`ui: ${uiParts.join(" | ")}`);
+
+  // stream
   const gaps = snapshot.gaps?.length ?? 0;
   lines.push(gaps === 0 ? "stream: continuous" : `stream: ${gaps} gap(s) — some events were missed`);
+
+  // chat / notification tails (kept as before)
   const chat = (snapshot.chat ?? []).slice(-CONTEXT_POLICY.CHAT_TAIL);
   if (chat.length > 0) {
     lines.push(`recent chat (${chat.length}):`);

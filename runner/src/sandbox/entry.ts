@@ -40,6 +40,7 @@ import { randomBytes } from "node:crypto";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
+import { foldUiOpenWindows } from "../context";
 import type { ChildToHost, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
@@ -295,6 +296,33 @@ function recentEvents(limit: number): EventSummary[] {
   }));
 }
 
+/**
+ * The state snapshot the host renders into the HUD (`formatStateSummary`).
+ *
+ * It is `StateCache.snapshot()` plus three derived views the HUD needs and the
+ * raw snapshot does not expose flat: `units()` (nearest-first, items/containers
+ * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
+ * forbids exact mob health and the HUD only needs name/distance/dead), `bag()`
+ * (backpack shape with freeSlots), and the open-window fold over the retained
+ * event stream. All three are pure reads over what the cache already holds — no
+ * new observation. This JSON is consumed only by the HUD, never returned raw.
+ */
+function stateSnapshot(): unknown {
+  const snap = toJsonSafe(client.state.snapshot(), 6) as Record<string, unknown>;
+  const units = client.state.units().map((u) => ({
+    guid: u.guid,
+    name: u.name,
+    type: u.type,
+    level: u.level,
+    distance: u.distance,
+    dead: u.dead,
+  }));
+  snap["units"] = toJsonSafe(units, 4);
+  snap["bag"] = toJsonSafe(client.state.bag(), 4);
+  snap["ui"] = foldUiOpenWindows(client.events.recent());
+  return snap;
+}
+
 function handle(msg: HostToChild | HostcallResult): void {
   switch (msg.t) {
     case "eval":
@@ -309,9 +337,7 @@ function handle(msg: HostToChild | HostcallResult): void {
     case "rpc": {
       try {
         const value =
-          msg.method === "recent_events"
-            ? recentEvents(msg.params.limit ?? 50)
-            : toJsonSafe(client.state.snapshot(), 6);
+          msg.method === "recent_events" ? recentEvents(msg.params.limit ?? 50) : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });
