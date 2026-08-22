@@ -388,6 +388,13 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     trajectory ran against) wants the runner to log `/health`'s `build` in its
     run header; not done here.
 
+43. **Subscription-lane quota pauses should be resumable** (2026-08-22).
+    Today, when the claude-subscription lane hits its quota window, the pause
+    ends the run instead of holding it. A long nav-probe episode loses all its
+    progress to a window that reopens on its own a few hours later. Want: the
+    run pauses in place and resumes when the window reopens, instead of
+    exiting.
+
 ## Ladder work (harness-0.3 / 0.4)
 
 The eight-rung ladder in `docs/VISION.md` is the guide; rung 4 (a capital, the

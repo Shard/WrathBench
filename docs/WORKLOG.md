@@ -194,7 +194,7 @@ them after a week. Deleting them also removes the last hand-copied duplicate of
 the ADR-0019 coordinate transform — the SPA imports `worldmap.ts` directly,
 which the string pages could not.
 
-### Reference bundle rebuilt to schema 3; run.ts stops bypassing openBundle (FOLLOW-UPS 30) — SWAP PENDING
+### Reference bundle rebuilt to schema 3; run.ts stops bypassing openBundle (FOLLOW-UPS 30) — SWAPPED
 
 `run.ts` and `mcp.ts` each opened `data/wiki/bundle.sqlite` with a bare
 `new Database(path, { readonly: true })`, which walks straight past
@@ -212,7 +212,8 @@ what makes the staleness *loud*, the rebuild is what makes the channels real.
   command and the swap. `runner/test/wiki.test.ts` pins all three.
 - A schema-3 bundle is built and verified at `data/wiki/bundle.next.sqlite`
   (43s, 22.20 GiB of XML, 114494 pages kept, 14386 coord rows, 84262 id rows).
-  It is **not** swapped in: the live bundle is read by running episodes.
+  It was swapped in 2026-08-22 ~21:56–22:00 local: the live bundle is now
+  schema 3, rebuilt with the id-kind fix.
 
 **Swap** (deploy window, same filesystem so the rename is atomic; an in-flight
 episode holds an fd on the old inode and is unaffected — only newly launched
@@ -224,9 +225,9 @@ cd data/wiki \
   && mv -f bundle.next.sqlite bundle.sqlite
 ```
 
-The swap is **blocking**, not optional: the fleet bind-mounts the repo, so the
-fail-closed guard is live the moment the edit lands, and until the rename every
-newly launched episode exits at startup instead of running coordless. The guard
+The swap was **blocking**, not optional: the fleet bind-mounts the repo, so the
+fail-closed guard was live the moment the edit landed, and until the rename every
+newly launched episode exited at startup instead of running coordless. The guard
 sits ahead of the run directory, the trajectory and the session on purpose, so
 there is no run.sqlite and `run-roster`'s `classify` calls it `launch-failed`:
 the spec is finished with, not retried, and no account is burned. One such exit
