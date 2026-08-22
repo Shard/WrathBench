@@ -963,6 +963,52 @@ describe("state.units(): the flat scan helper", () => {
     expect(c.units({ name: "nothing here" })).toEqual([]);
   });
 
+  // The tree/tree-stump fixture: an exact name and a longer name that contains
+  // it as a whole word, with the longer one placed *nearer*, so a pure distance
+  // sort would put the stump first.
+  const TREE_GUID = "1100";
+  const STUMP_GUID = "1101";
+  const TREE_ENTRY = 5100;
+  const STUMP_ENTRY = 5101;
+  const treeStream: unknown[] = [
+    ...worldStream,
+    unitAt(STUMP_GUID, 60, { dx: 2, objectType: "gameObject", entry: STUMP_ENTRY }),
+    namedEntry(STUMP_ENTRY, "tree stump", 61),
+    unitAt(TREE_GUID, 62, { dx: 20, objectType: "gameObject", entry: TREE_ENTRY }),
+    namedEntry(TREE_ENTRY, "tree", 63),
+  ];
+  const treeCache = () => StateCache.replay(toEvents(treeStream), { seed: SEED });
+
+  test("a plain name prefers the exact/shortest match over a longer one, even when farther", () => {
+    const rows = treeCache().units({ name: "tree" });
+    // Both match the substring, but "tree" (exact) ranks ahead of "tree stump"
+    // (whole-word) despite the stump being nearer.
+    expect(rows.map((r) => r.name)).toEqual(["tree", "tree stump"]);
+    expect(rows[0]!.guid).toBe(TREE_GUID);
+  });
+
+  test("a regex-literal string and a RegExp both match with test(), nearest-first", () => {
+    const c = treeCache();
+    // Anchored regex: only the exact "tree", not "tree stump".
+    expect(c.units({ name: "/^tree$/" }).map((r) => r.name)).toEqual(["tree"]);
+    expect(c.units({ name: /^tree$/i }).map((r) => r.name)).toEqual(["tree"]);
+    // A bare regex that matches both keeps nearest-first order (stump is nearer).
+    expect(c.units({ name: /tree/ }).map((r) => r.name)).toEqual(["tree stump", "tree"]);
+  });
+
+  test("a string starting with / but not a valid regex literal is a literal name", () => {
+    // No object is named this, so it simply finds nothing rather than throwing.
+    expect(treeCache().units({ name: "/tree" })).toEqual([]);
+  });
+
+  test("a well-formed regex literal whose pattern is broken is rejected", () => {
+    expect(() => cache().units({ name: "/tree(/" })).toThrow(/did not compile/);
+  });
+
+  test("a non-string, non-RegExp name is rejected with the ADR-0016 help", () => {
+    expect(() => cache().units({ name: 5 as unknown as string })).toThrow(/expected a string.*or a RegExp/s);
+  });
+
   test("type filters on the observed create-block type", () => {
     const c = cache();
     expect(c.units({ type: "gameObject" }).map((r) => r.guid)).toEqual([OBJECT_GUID]);
