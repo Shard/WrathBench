@@ -161,6 +161,25 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("usage is counted once when one API reply spans multiple assistant envelopes", async () => {
+    const { runDir, trajectory, options } = setupEpisode("split-usage", { maxTurns: 1 });
+    await runClaudeEpisode(options);
+    const responses = readTrajectory(runDir).filter((r) => r.t === "response");
+    // Two assistant envelopes (text + tool_use) share one message.id, so two
+    // response entries are written but only the first carries usage.
+    expect(responses).toHaveLength(2);
+    const withUsage = responses.filter((r) => r["usage"] !== undefined);
+    expect(withUsage).toHaveLength(1);
+    // Summing usage across response entries (what viewer/tail.ts does) equals a
+    // single API call's tokens, not double.
+    const sum = responses.reduce((acc, r) => {
+      const u = r["usage"] as { total_tokens?: number } | undefined;
+      return acc + (u?.total_tokens ?? 0);
+    }, 0);
+    expect(sum).toBe(122); // (12 + 3 + 100) + 7, counted once
+    trajectory.close();
+  }, 20_000);
+
   test("the spawned CLI never sees API-key credentials", async () => {
     const { recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     await runClaudeEpisode(options);
