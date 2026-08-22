@@ -498,6 +498,51 @@ describe("client: killTarget", () => {
     await stub.stop();
   });
 
+  test("a guid the cache never held is not reported as 'target left view alive'", async () => {
+    // The old detail claimed a mob "left view alive" for a guid that never
+    // named anything observable — a false statement about a fight that never
+    // existed. never-seen and genuinely-lost must read differently.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const result = await client.killTarget("999", { timeout: 5000, pollIntervalMs: 10, meleeRange: 100 });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("lost");
+    expect(result.detail).toContain("never in view");
+    expect(result.detail).not.toContain("left view");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a non-canonical guid string still finds the cached target", async () => {
+    // The nearby-cache keys are canonical decimal strings; the caller's guid
+    // is canonicalised the same way, so "0<guid>" fights the same mob instead
+    // of insta-reporting it lost.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(`0${CREATURE_GUID}`, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      meleeRange: 100,
+    });
+    await untilAction(stub, "attack_start");
+    stub.push(JSON.stringify(creatureHealth(0, 61)));
+    const result = await fight;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("killed");
+    expect(result.guid).toBe(CREATURE_GUID);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a guid string that does not parse is rejected before any opcode", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await expect(client.killTarget("Kobold Worker")).rejects.toThrow(/killTarget\(guid\).*decimal guid string/s);
+    expect(stub.actions).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
   test("a target that will not die times out as a value, not a throw", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);

@@ -1121,8 +1121,24 @@ export class WrathClient {
    * because a fight and a corpse are two decisions.
    */
   async killTarget(guid: GuidArg, options: KillTargetOptions = {}): Promise<KillResult> {
-    const id = guidArg(guid, "killTarget(guid)");
+    const raw = guidArg(guid, "killTarget(guid)");
+    // Canonicalised ("007" -> "7"), because it is used as the nearby-cache map
+    // key and the cache's own keys are canonical (guidSchema round-trips every
+    // wire guid). A raw string that does not parse names nothing and would
+    // otherwise earn an instant, false "lost" — reject it before any opcode.
+    let id: string;
+    try {
+      id = guidKey(raw);
+    } catch {
+      throw new TypeError(
+        `killTarget(guid) got ${JSON.stringify(raw)}, which is not a decimal guid string — ` +
+          `pass unit.guid exactly as state.nearbyUnits() or state.closest(...) gave it`,
+      );
+    }
     const key = id;
+    // Whether the cache has ever held the target while this fight ran: it is
+    // what separates "left view alive" from "was never in view at all".
+    let sawTarget = this.state.nearby.has(key);
     const refaceMs = options.refaceIntervalMs ?? 1500;
     const reapproachMs = options.reapproachIntervalMs ?? 6000;
     const meleeRange = options.meleeRange ?? 5;
@@ -1181,13 +1197,20 @@ export class WrathClient {
     const done = (status: KillResult["status"]): KillResult => {
       outcome = status;
       const armed = leavingArmed(status, options.disengage === true);
+      // A "lost" verdict on a guid the cache never held is not a target that
+      // left view — it is a guid that named nothing observable. Say so.
+      const base =
+        status === "lost" && !sawTarget
+          ? `target ${key} was never in view — a stale or mistyped guid, or a missed view update; ` +
+            `get guids from state.nearbyUnits() or state.closest(...)`
+          : KILL_DETAIL[status];
       const facts: KillResultFacts = {
         guid: id,
         swings,
         healthPct: healthPct(),
         attacking: armed,
         detail:
-          `${KILL_DETAIL[status]}${note}; ` +
+          `${base}${note}; ` +
           (armed
             ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
             : "auto-attack stopped"),
@@ -1215,7 +1238,8 @@ export class WrathClient {
       for (;;) {
         if (targetDead()) return done("killed");
         if (selfDead()) return done("player_died");
-        if (!this.state.nearby.has(key)) return done("lost");
+        if (this.state.nearby.has(key)) sawTarget = true;
+        else return done("lost");
         if (abortPct !== undefined) {
           const pct = healthPct();
           if (pct !== undefined && pct < abortPct) {

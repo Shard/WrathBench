@@ -361,6 +361,10 @@ process.on("disconnect", () => process.exit(0));
 const FAULT_WINDOW_MS = Number(process.env["WRATHBENCH_FAULT_WINDOW_MS"] ?? 60_000);
 const FAULT_ROLLUP_INTERVAL_MS = Number(process.env["WRATHBENCH_FAULT_ROLLUP_MS"] ?? 30_000);
 const FAULT_ESCALATION_THRESHOLD = Number(process.env["WRATHBENCH_FAULT_ESCALATION_THRESHOLD"] ?? 50);
+/** Max immediate first-reports across ALL signatures per window (see below). */
+const FAULT_IMMEDIATE_CAP = Number(process.env["WRATHBENCH_FAULT_IMMEDIATE_CAP"] ?? 5);
+/** Cap on distinct signatures tracked, so a varying-message loop can't grow the Map without bound. */
+const FAULT_STATS_MAX = 500;
 
 interface FaultStat {
   count: number;
@@ -372,6 +376,17 @@ const faultStats = new Map<string, FaultStat>();
 const rollupPending = new Map<string, number>();
 /** When the last background-fault notice of any kind was sent. Gates rollups. */
 let lastFaultNoticeAt = 0;
+/**
+ * Global immediate-report budget. Storm control that only aggregates repeats of
+ * the SAME signature was bypassed by a routine that rejects with a per-iteration
+ * value (a new signature every time), each taking the count===1 immediate path —
+ * reproducing the morning-laguna-2 trajectory bloat through a varying fault
+ * shape. This caps first-reports across all signatures per window; once spent,
+ * even a brand-new signature aggregates into the rollup. Escalation still fires
+ * once per continuously-faulting signature.
+ */
+let immediateReports = 0;
+let immediateWindowStart = 0;
 
 /**
  * What makes two faults "the same": kind, error name, and the first stack
@@ -398,12 +413,28 @@ function reportBackgroundError(kind: string, reason: unknown): void {
   let stat = faultStats.get(signature);
   if (stat === undefined || now - stat.windowStart > FAULT_WINDOW_MS) {
     stat = { count: 0, windowStart: now, escalated: false };
+    // Bound the Map: a routine varying its fault message adds a new signature
+    // each iteration, so evict the oldest rather than growing without bound.
+    if (!faultStats.has(signature) && faultStats.size >= FAULT_STATS_MAX) {
+      const oldest = faultStats.keys().next().value;
+      if (oldest !== undefined) faultStats.delete(oldest);
+    }
     faultStats.set(signature, stat);
   }
   stat.count++;
 
-  // First occurrence of this signature (per window): report immediately.
-  if (stat.count === 1) {
+  // Roll the global immediate-report window.
+  if (now - immediateWindowStart > FAULT_WINDOW_MS) {
+    immediateWindowStart = now;
+    immediateReports = 0;
+  }
+
+  // First occurrence of this signature (per window): report immediately, but
+  // only while the global first-report budget for this window has room. Once
+  // spent, a new signature falls through to the aggregated rollup path so a
+  // varying-signature storm can't bypass the control.
+  if (stat.count === 1 && immediateReports < FAULT_IMMEDIATE_CAP) {
+    immediateReports++;
     realConsole.error?.(`[sandbox] ${kind}:`, text);
     send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
     lastFaultNoticeAt = now;

@@ -359,6 +359,35 @@ describe("background fault storm control (morning-laguna-2)", () => {
     }
   });
 
+  test("varying fault signatures cannot bypass storm control (global immediate cap)", async () => {
+    const restore = setEnv({
+      WRATHBENCH_FAULT_IMMEDIATE_CAP: "3",
+      WRATHBENCH_FAULT_ROLLUP_MS: "80", // let overflow flush as periodic rollups
+      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "1000",
+    });
+    try {
+      const host = makeHost();
+      // Each rejection carries a per-iteration string: a brand-new signature
+      // every time, so every one used to take the immediate-report path. Spread
+      // over time (a rollup only flushes when a later fault arrives past the
+      // interval), which is the realistic broken-routine shape.
+      const res = await host.evalSnippet(
+        "let i = 0; const t = setInterval(() => Promise.reject(`tick ${i++}`), 25); " +
+          "await sleep(500); clearInterval(t);",
+      );
+      expect(res.ok).toBe(true);
+      const notes = host.drainNotices().filter((n) => n.kind === "session_note");
+      // Bounded far below the ~20 unique signatures: the immediate cap (3) of
+      // first-reports plus a handful of periodic rollups, never one notice per
+      // unique signature.
+      expect(notes.length).toBeLessThanOrEqual(9);
+      // The overflow aggregated rather than each reporting immediately.
+      expect(notes.some((n) => n.text.includes("aggregated"))).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
   test("repeated identical console lines collapse to one ×N entry", async () => {
     const host = makeHost();
     const res = await host.evalSnippet(
