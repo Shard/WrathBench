@@ -320,7 +320,7 @@ describe("the shipped fleet.json", () => {
     // nav-probe: the unscored navigation probe (ADR-0024). One 6h subscription
     // episode per enable, no-xp disabled, an operator objective on the lane.
     expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: false });
-    expect(byName["nav-probe"].objective).toContain("Travel from your starting zone");
+    expect(byName["nav-probe"].objective).toContain("Ironforge"); // the objective text changes per probe episode; only the destination is pinned
     expect(byName["nav-probe"].watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
     // One account, one lane — asserted over the file as written, not just over
     // the enabled subset parseFleet already guards. The one deliberate
