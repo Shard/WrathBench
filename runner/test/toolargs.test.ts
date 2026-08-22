@@ -59,6 +59,28 @@ describe("parseToolArgsText leniency ladder", () => {
     expect(parseToolArgsText(raw)).toEqual({ ok: true, args: { content: "# plan" } });
   });
 
+  test("trailing-comma repair never mutates content inside string literals", () => {
+    // Outer JSON has a real trailing comma (so the repair pass runs), and the
+    // code string itself contains `, ]` — which the old global regex deleted.
+    const res = parseToolArgsText('{"code": "await sdk.say(\', ]\')", }');
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.args as { code: string }).code).toBe("await sdk.say(', ]')");
+  });
+
+  test("repair leaves comma-bracket sequences inside strings byte-identical", () => {
+    const res = parseToolArgsText('{"code":"const arr = [1, 2, ]; log(\\"x, ]\\")",}');
+    expect(res.ok).toBe(true);
+    // The structural trailing comma (before the outer }) is stripped; the two
+    // `, ]` sequences inside the JS string are preserved verbatim.
+    if (res.ok) expect((res.args as { code: string }).code).toBe('const arr = [1, 2, ]; log("x, ]")');
+  });
+
+  test("escaped quotes inside a string do not desync the tokenizer", () => {
+    const res = parseToolArgsText('{"code":"a = \\"b, ]\\"; c = 1, ]",}');
+    expect(res.ok).toBe(true);
+    if (res.ok) expect((res.args as { code: string }).code).toBe('a = "b, ]"; c = 1, ]');
+  });
+
   test("final failure echoes what was received", () => {
     const raw = "definitely {not json at all";
     const res = parseToolArgsText(raw);

@@ -873,9 +873,11 @@ export class WrathClient {
    * a minute after logout the core still tracks an offline session for the
    * character and silently ignores the delete, which surfaces as `504 timeout`
    * — or, if the module's internal wait outlasts `requestTimeoutMs`, as an
-   * aborted request. Both mean "not released yet", so both are retried.
-   * Anything else the module says (`character_not_found`, `account_in_use`, a
-   * `char_delete_failed_code_<N>`) is a real answer and is thrown straight out.
+   * aborted request. `account_in_use` is the same not-yet-released transient
+   * seen from the other side (the parked session finds the account still
+   * held), so all three are retried. Anything else the module says
+   * (`character_not_found`, a `char_delete_failed_code_<N>`) is a real answer
+   * and is thrown straight out.
    */
   async deleteCharacter(
     character: string,
