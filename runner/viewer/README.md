@@ -14,15 +14,33 @@ Then open http://127.0.0.1:8090.
 
 - `WRATHBENCH_VIEWER_PORT` overrides the port (default 8090).
 - `WRATHBENCH_RUNS_DIR` overrides the runs directory (default `data/runs`).
+- `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).
+- `WRATHBENCH_DASHBOARD_DIR` overrides where the built SPA is looked for
+  (default `dashboard/dist`).
+- `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and tiles.
+
+## The dashboard, and the pages it replaced
+
+Since ADR-0022 the UI is a SolidJS SPA in `dashboard/`, and this directory is
+the API it reads plus the static host that serves it. Build it with
+`bun run dashboard:build`; the viewer picks it up from `dashboard/dist` with no
+further configuration.
+
+The hand-written pages described below are still here and still work. Where they
+serve depends on whether a build exists: at `/legacy/` and `/legacy/map` when it
+does, and at `/` and `/map` when it does not, so a fresh checkout needs no build
+step. They are scheduled for deletion (docs/FOLLOW-UPS.md).
 
 ## Loopback only
 
-The viewer binds 127.0.0.1 and nothing else. Trajectories contain game-derived
-text — quest text, NPC and item names — and per `docs/DATA-AND-LEGAL.md` none of
-it leaves this machine. `WRATHBENCH_VIEWER_HOST` exists only so the refusal is
-visible: set it to anything other than `127.0.0.1` and the process prints why and
-exits 1. There is no flag that opens it up. Do not put it behind a tunnel or a
-reverse proxy.
+The viewer binds 127.0.0.1. Trajectories contain game-derived text — quest text,
+NPC and item names — and per `docs/DATA-AND-LEGAL.md` none of it leaves this
+machine. Setting `WRATHBENCH_VIEWER_HOST` to anything else is a startup failure
+that prints why, unless `WRATHBENCH_VIEWER_LAN=1` explicitly opts a trusted
+private network in. That opt-in is for a LAN, not the internet: it lets someone
+on the same network read pages, and reaches nothing else — the module stays
+loopback regardless. Public hosting is intended eventually and is not this;
+ADR-0022 carries what has to be settled first.
 
 It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
 written by the harness inside the container is never disturbed, and an old run
@@ -142,19 +160,40 @@ entry is re-read from disk on demand behind a click.
 
 ## Endpoints
 
+Everything under `/api` is read-only: no route accepts a body, every database is
+opened readonly, and the runs directory is only ever listed and read.
+
 | path | what |
 | --- | --- |
-| `/`, `/run/<id>` | the single-page client |
-| `/map` | the live map |
-| `/api/runs` | run listing |
+| `/api/info` | what mode the viewer is in: public, dashboard built |
+| `/api/runs` | run listing, with per-run token totals and wall clock |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
-| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted) |
-| `/api/run/<id>` | run row, state series, entry count |
+| `/api/fleet` | the fleet supervisor's lanes, accounts and heartbeat |
+| `/api/run/<id>` | run row, state series, entry count, token totals |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md |
 | `/api/run/<id>/stream` | SSE: new entries as they are appended |
+| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted) |
+| `/`, `/run/<id>`, `/map` | the SPA, when built |
+| `/legacy/`, `/legacy/run/<id>`, `/legacy/map` | the hand-written pages |
+
+### What it will not serve
+
+The `meta` trajectory entry embeds the whole run config, bearer token included,
+and the generic summariser used to copy it wholesale — so both `/entries?from=0`
+and `/raw/0` served it. Redaction is keyed on field name at any depth and applied
+at the two places a raw record can reach a client (`summarize` and
+`TrajectoryTail.raw`). `apiKeyEnv` is deliberately kept: it names an environment
+variable, and the value of that variable is never written to the trajectory.
+
+`WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the three routes that carry
+verbatim game text or Blizzard-derived bytes — raw entries, scratchpads and
+minimap tiles. It is opt-in-to-public, not opt-in-to-raw: the run page depends on
+raw bodies, so a public deployment sets the flag rather than the developer
+clearing it. See ADR-0022 for the legal question that is still open.
 
 Tail and summariser logic is tested in `runner/test/viewer-tail.test.ts`; the
 coordinate transform, the position feed and tile path validation in
-`runner/test/viewer-map.test.ts`.
+`runner/test/viewer-map.test.ts`; the API surface, redaction and static hosting
+in `runner/test/viewer-api.test.ts`.

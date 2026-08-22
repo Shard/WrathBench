@@ -11,7 +11,7 @@
  *   stripped in `tail.ts` at both places a raw record can reach a client, and
  *   `WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the three routes that
  *   carry verbatim game text or Blizzard bytes (raw entries, scratchpads,
- *   minimap tiles). See ADR-0021.
+ *   minimap tiles). See ADR-0022.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";

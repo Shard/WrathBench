@@ -733,7 +733,7 @@ async function renderRun(runId) {
 }
 
 /*
- * These pages moved under /legacy when the SPA took over "/" (ADR-0021), and
+ * These pages moved under /legacy when the SPA took over "/" (ADR-0022), and
  * they are served at both paths meanwhile. Deriving the prefix from the URL is
  * what lets one document work at either, with no build step and no rewriting on
  * the way out.
