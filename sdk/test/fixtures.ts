@@ -260,6 +260,16 @@ export function moveResult(status: string, moveId = 1, seq = 19): unknown {
   };
 }
 
+export function transferPending(toMap: number, seq = 40): unknown {
+  return { seq, opcode: "SMSG_TRANSFER_PENDING", opcodeId: 0x03f, ts: 1_700_000_000_400, data: { map: toMap } };
+}
+export function newWorld(map: number, seq = 41, pos = { x: 69.25, y: 10.26, z: -4.3, o: 3.1 }): unknown {
+  return { seq, opcode: "SMSG_NEW_WORLD", opcodeId: 0x03e, ts: 1_700_000_000_410, data: { map, ...pos } };
+}
+export function transferAborted(map: number, reason: number, seq = 41): unknown {
+  return { seq, opcode: "SMSG_TRANSFER_ABORTED", opcodeId: 0x040, ts: 1_700_000_000_410, data: { map, reason } };
+}
+
 /** A player create block, named by a name query rather than a creature query. */
 export const playerCreate = {
   seq: 20,

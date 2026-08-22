@@ -79,7 +79,7 @@ export interface UnitPosition {
 }
 
 /**
- * Own position. `map` only ever comes from `SMSG_LOGIN_VERIFY_WORLD`; the x/y/z/o
+ * Own position. `map` only ever comes from `SMSG_LOGIN_VERIFY_WORLD` or `SMSG_NEW_WORLD`; the x/y/z/o
  * of later self updates are paired with the last map that packet reported,
  * which is what a client does. If no map has been observed yet, a self position
  * update is refused and recorded as an anomaly rather than defaulted.
@@ -167,6 +167,12 @@ export interface SelfState extends UnitFieldsState {
   guid: GuidKey | undefined;
   name: string | undefined;
   position: Observed<WorldPosition> | undefined;
+  /**
+   * A map transfer the server announced (`SMSG_TRANSFER_PENDING`) and has not
+   * yet completed (`SMSG_NEW_WORLD`) or abandoned (`SMSG_TRANSFER_ABORTED`).
+   * While set, `position` is the old map's last word.
+   */
+  transfer: Observed<{ readonly toMap: number }> | undefined;
   /** `UNIT_FIELD_TARGET` on our own block: what the client shows as selected. */
   targetGuid: Observed<GuidKey> | undefined;
 }
@@ -619,6 +625,7 @@ export class StateCache {
     name: undefined,
     level: undefined,
     position: undefined,
+    transfer: undefined,
     targetGuid: undefined,
     health: undefined,
     power: undefined,
@@ -711,8 +718,9 @@ export class StateCache {
   eventCount = 0;
 
   /**
-   * Last map id `SMSG_LOGIN_VERIFY_WORLD` reported. The only source of a map id
-   * on the whole whitelist, and what later self positions are paired with.
+   * Last map id `SMSG_LOGIN_VERIFY_WORLD` or `SMSG_NEW_WORLD` reported: the two
+   * sources of a map id on the whole whitelist, and what later self positions
+   * are paired with.
    */
   private selfMap: number | undefined;
 
@@ -1107,7 +1115,11 @@ export class StateCache {
         this.self.level = { value: d.level, seq: event.seq, ts: event.ts };
         return;
       }
-      case "SMSG_LOGIN_VERIFY_WORLD": {
+      case "SMSG_LOGIN_VERIFY_WORLD":
+      case "SMSG_NEW_WORLD": {
+        // The two packets that carry a map id to a client: login, and every
+        // far teleport after it (a portal, a graveyard port on another map).
+        // Same fold for both; NEW_WORLD additionally closes a pending transfer.
         const d = event.data as WorldPosition;
         this.evictOnMapChange(d.map);
         this.selfMap = d.map;
@@ -1116,6 +1128,16 @@ export class StateCache {
           seq: event.seq,
           ts: event.ts,
         };
+        this.self.transfer = undefined;
+        return;
+      }
+      case "SMSG_TRANSFER_PENDING": {
+        const d = event.data as { map: number };
+        this.self.transfer = { value: { toMap: d.map }, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_TRANSFER_ABORTED": {
+        this.self.transfer = undefined;
         return;
       }
       case "SMSG_QUESTGIVER_QUEST_COMPLETE": {
@@ -1721,7 +1743,7 @@ export class StateCache {
         seq,
         ts,
         kind: "self_position_without_map",
-        detail: "own position arrived before any SMSG_LOGIN_VERIFY_WORLD gave a map id",
+        detail: "own position arrived before any SMSG_LOGIN_VERIFY_WORLD / SMSG_NEW_WORLD gave a map id",
       });
       return;
     }

@@ -55,6 +55,8 @@ import {
   type MoveResultData,
   type MoveStatus,
   type MoveToResponse,
+  type NewWorldData,
+  type TransferAbortedData,
   type OfferedQuest,
   type QuestGiverQuestCompleteData,
   type QuestGiverQuestListData,
@@ -85,6 +87,7 @@ import {
   type TalentState,
   type UnitPosition,
   type UnitView,
+  type WorldPosition,
 } from "./state";
 import type { z } from "zod";
 
@@ -500,8 +503,20 @@ export type MoveResult =
       readonly hint?: string;
     }
   | {
+      readonly ok: true;
+      readonly status: "transferred";
+      readonly moveId: number;
+      /** Where the character was on the old map when the portal took it. */
+      readonly position: UnitPosition;
+      readonly seq: number;
+      readonly ts: number;
+      /** The map and arrival point `SMSG_NEW_WORLD` announced, server-confirmed. */
+      readonly to: WorldPosition;
+      readonly hint: string;
+    }
+  | {
       readonly ok: false;
-      readonly status: Exclude<KnownMoveStatus, "arrived"> | (string & {});
+      readonly status: Exclude<KnownMoveStatus, "arrived" | "transferred"> | (string & {});
       readonly moveId: number;
       readonly position: UnitPosition;
       readonly seq: number;
@@ -550,6 +565,69 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
 function fmtXY(p: { x: number; y: number }): string {
   return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
 }
+
+export interface WaitForTransferOptions {
+  /** How long to wait for `SMSG_NEW_WORLD`. Default 15000: a far teleport is a few server ticks. */
+  timeout?: number;
+  /** When given, arriving on any other map is reported as `wrong_map` rather than success. */
+  expectMap?: number;
+  /**
+   * Only consider transfer packets with `seq > sinceSeq`. Default: the
+   * stream position when the call is made, so a transfer that already
+   * completed earlier cannot be mistaken for this one. `moveTo` passes the
+   * position from before its move, because `SMSG_NEW_WORLD` can land before
+   * the `WB_MOVE_RESULT` that says `transferred`.
+   */
+  sinceSeq?: number;
+}
+
+/**
+ * The outcome of waiting for a map transfer — returned, never thrown, for the
+ * same reason as `MoveResult` (ADR-0011): every arm is the game answering, and
+ * the bounded-wait statuses FOLLOW-UPS 38 N1 asks for (`waiting`, `wrong_map`)
+ * are answers too, not absences.
+ */
+export type TransferResult =
+  | {
+      readonly ok: true;
+      readonly status: "transferred";
+      /** Server-announced arrival map and point (`SMSG_NEW_WORLD`), now on `state.self.position`. */
+      readonly to: WorldPosition;
+      readonly seq: number;
+      readonly ts: number;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "aborted";
+      readonly toMap: number;
+      /** `TransferAbortReason` as the server sent it (`SMSG_TRANSFER_ABORTED.reason`). */
+      readonly reason: number;
+      readonly seq: number;
+      readonly ts: number;
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "waiting";
+      /** The destination `SMSG_TRANSFER_PENDING` announced before the deadline ran out. */
+      readonly toMap: number;
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "no_transfer";
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "wrong_map";
+      readonly expected: number;
+      readonly actual: number;
+      readonly to: WorldPosition;
+      readonly seq: number;
+      readonly ts: number;
+      readonly hint: string;
+    };
 
 export interface WaitForNearbyOptions {
   timeout?: number;
@@ -1718,6 +1796,10 @@ export class WrathClient {
       options = repaired.options;
     }
     const epoch = this.events.epoch;
+    // Stream position before the move: a portal's SMSG_NEW_WORLD can land
+    // before the WB_MOVE_RESULT that says `transferred`, so the transfer wait
+    // has to admit packets from here on, not from the result on.
+    const sinceSeq = this.state.lastSeq;
     const ack = await this.moveToAsync(point);
     // The match is the moveId within the current session epoch, and the buffer
     // is searched: a result can land while the POST response is still in
@@ -1766,6 +1848,25 @@ export class WrathClient {
           `${point.z.toFixed(1)}. The mesh owns z; quote ${data.meshZ.toFixed(1)} for this spot next time.`,
       };
     }
+    if (status === "transferred") {
+      // Postcondition, not dispatch: resolve only once the server has named
+      // the new map (FOLLOW-UPS 38 N1). A transfer that never completes is a
+      // typed `ok: false` from waitForTransfer, surfaced with the move status
+      // intact so the caller sees both facts.
+      const transfer = await this.waitForTransfer({ timeout: options.timeout ?? 90_000, sinceSeq, epoch });
+      if (transfer.ok) {
+        return {
+          ok: true,
+          status: "transferred",
+          ...common,
+          to: transfer.to,
+          hint:
+            `a portal took the character to map ${transfer.to.map} at (${fmtXY(transfer.to)}); ` +
+            `state.self.position is on the new map now. Coordinates from the old map no longer apply.`,
+        };
+      }
+      return { ok: false, status: "transferred", ...common, hint: transfer.hint };
+    }
     const hint = MOVE_HINTS[status]?.(point, data);
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
     return {
@@ -1775,6 +1876,80 @@ export class WrathClient {
       ...(reachedPos !== undefined ? { reachedPos } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
+  }
+
+  /**
+   * Wait for a map transfer to complete, with a typed verdict.
+   *
+   * Resolves on `SMSG_NEW_WORLD` (the server's announcement of the new map
+   * and arrival point, already folded into `state.self.position`), or on
+   * `SMSG_TRANSFER_ABORTED`; a deadline with a transfer pending is `waiting`,
+   * a deadline with no transfer announced at all is `no_transfer`, and an
+   * arrival on a map other than `expectMap` is `wrong_map`. Never sleeps.
+   *
+   * Earned by the travel probe (`infra/smoke/travel.ts`, FOLLOW-UPS item 18):
+   * every version of it before this helper creep-walked into the tram portal
+   * and slept 1.5s per step to see whether a teleport had landed.
+   */
+  async waitForTransfer(options: WaitForTransferOptions & { epoch?: number } = {}): Promise<TransferResult> {
+    const sinceSeq = options.sinceSeq ?? this.state.lastSeq;
+    const epoch = options.epoch ?? this.events.epoch;
+    const timeout = options.timeout ?? 15_000;
+    const after = (e: StreamEvent) => e.seq > sinceSeq && !isDecodeError(e.data);
+    let event: StreamEvent;
+    try {
+      event = await this.events.waitFor(
+        (e) => after(e) && (isEvent(e, "SMSG_NEW_WORLD") || isEvent(e, "SMSG_TRANSFER_ABORTED")),
+        { timeout, epoch, description: "SMSG_NEW_WORLD or SMSG_TRANSFER_ABORTED (map transfer verdict)" },
+      );
+    } catch (err) {
+      if (!(err instanceof EventTimeoutError)) throw err;
+      const pending = this.state.self.transfer?.value;
+      if (pending !== undefined) {
+        return {
+          ok: false,
+          status: "waiting",
+          toMap: pending.toMap,
+          hint:
+            `the server announced a transfer to map ${pending.toMap} but no SMSG_NEW_WORLD arrived within ` +
+            `${timeout}ms. The teleport is still pending server-side; call waitForTransfer() again.`,
+        };
+      }
+      return {
+        ok: false,
+        status: "no_transfer",
+        hint:
+          `no map transfer was announced within ${timeout}ms. The character did not enter a portal; ` +
+          `check state.self.position and move onto the portal (an areatrigger fires on entry).`,
+      };
+    }
+    if (isEvent(event, "SMSG_TRANSFER_ABORTED")) {
+      const d = event.data as TransferAbortedData;
+      return {
+        ok: false,
+        status: "aborted",
+        toMap: d.map,
+        reason: d.reason,
+        seq: event.seq,
+        ts: event.ts,
+        hint: `the server refused the transfer to map ${d.map} (TransferAbortReason ${d.reason}); the character stays where it was.`,
+      };
+    }
+    const d = event.data as NewWorldData;
+    const to: WorldPosition = { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o };
+    if (options.expectMap !== undefined && d.map !== options.expectMap) {
+      return {
+        ok: false,
+        status: "wrong_map",
+        expected: options.expectMap,
+        actual: d.map,
+        to,
+        seq: event.seq,
+        ts: event.ts,
+        hint: `the transfer landed on map ${d.map}, not the expected ${options.expectMap}; state.self.position reflects map ${d.map}.`,
+      };
+    }
+    return { ok: true, status: "transferred", to, seq: event.seq, ts: event.ts };
   }
 
   /**

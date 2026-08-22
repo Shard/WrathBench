@@ -20,6 +20,9 @@ import {
   lootRelease,
   lootResponse,
   moveResult,
+  newWorld,
+  transferAborted,
+  transferPending,
   offerReward,
   OTHER_QUEST_ID,
   PLAYER_GUID,
@@ -289,14 +292,14 @@ describe("client: movement", () => {
     stub.push(JSON.stringify(withZ));
     const r1 = await p1;
     expect(r1.ok).toBe(true);
-    if (!r1.ok) throw new Error("unreachable");
+    if (!r1.ok || r1.status !== "arrived") throw new Error("unreachable");
     expect(r1.meshZ).toBe(42);
     expect(r1.hint).toContain("z 42.0, not 80.0");
 
     const p2 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
     stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
     const r2 = await p2;
-    if (!r2.ok) throw new Error("unreachable");
+    if (!r2.ok || r2.status !== "arrived") throw new Error("unreachable");
     expect(r2.meshZ).toBeUndefined();
     expect(r2.hint).toBeUndefined();
 
@@ -306,6 +309,83 @@ describe("client: movement", () => {
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
     expect(r3.hint).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("transferred resolves on SMSG_NEW_WORLD, even one that landed before the move result", async () => {
+    // FOLLOW-UPS 38 N1: the postcondition is the server naming the new map,
+    // never the dispatch. The server sends NEW_WORLD in the tick the portal
+    // fires; the module's `transferred` result follows on the next world tick.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const pending = client.moveTo({ x: -4839, y: -1330, z: 508 }, { timeout: 2000 });
+    stub.push(JSON.stringify(transferPending(369, 30)));
+    stub.push(JSON.stringify(newWorld(369, 31)));
+    stub.push(JSON.stringify(moveResult("transferred", 1, 32)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.status !== "transferred") throw new Error("unreachable");
+    expect(result.to).toEqual({ map: 369, x: 69.25, y: 10.26, z: -4.3, o: 3.1 });
+    expect(result.position.x).toBe(-1205); // old-map position from the result
+    expect(result.hint).toContain("map 369");
+    expect(client.state.self.position?.value.map).toBe(369);
+    client.close();
+    await stub.stop();
+  });
+
+  test("transferred with the transfer still pending at the deadline is ok:false, status intact", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 300 });
+    stub.push(JSON.stringify(transferPending(369, 30)));
+    stub.push(JSON.stringify(moveResult("transferred", 1, 31)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("transferred");
+    if (result.ok) throw new Error("unreachable");
+    expect(result.hint).toContain("map 369");
+    expect(result.hint).toContain("waitForTransfer");
+    client.close();
+    await stub.stop();
+  });
+
+  test("waitForTransfer: aborted, wrong_map, no_transfer, and a stale NEW_WORLD is not this transfer", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    // An earlier, completed transfer sits in the buffer; it must not answer a later wait.
+    stub.push(JSON.stringify(newWorld(1, 30)));
+    await client.events.waitFor((e) => e.seq === 30, { timeout: 1000 });
+    const none = await client.waitForTransfer({ timeout: 200 });
+    expect(none.status).toBe("no_transfer");
+
+    const p1 = client.waitForTransfer({ timeout: 1000 });
+    stub.push(JSON.stringify(transferPending(369, 31)));
+    stub.push(JSON.stringify(transferAborted(369, 1, 32)));
+    const r1 = await p1;
+    expect(r1.ok).toBe(false);
+    if (r1.status !== "aborted") throw new Error("unreachable");
+    expect(r1.reason).toBe(1);
+    expect(client.state.self.transfer).toBeUndefined();
+
+    const p2 = client.waitForTransfer({ timeout: 1000, expectMap: 369 });
+    stub.push(JSON.stringify(newWorld(0, 33)));
+    const r2 = await p2;
+    if (r2.status !== "wrong_map") throw new Error("unreachable");
+    expect(r2.expected).toBe(369);
+    expect(r2.actual).toBe(0);
+
+    const p3 = client.waitForTransfer({ timeout: 200 });
+    stub.push(JSON.stringify(transferPending(369, 34)));
+    const r3 = await p3;
+    if (r3.status !== "waiting") throw new Error("unreachable");
+    expect(r3.toMap).toBe(369);
     client.close();
     await stub.stop();
   });
