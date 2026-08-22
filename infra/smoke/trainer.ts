@@ -9,7 +9,8 @@
  *
  * Arc: fresh Human Paladin in Northshire -> walk into Northshire Abbey (the
  * waypoint module-quest.ts already proves) -> find a class trainer purely from
- * served events (creature-query name/subname) -> `trainer_list` -> assert the
+ * served events (creature-query name/subname) -> walk to it (the handler needs
+ * INTERACTION_DISTANCE, not update range) -> `trainer_list` -> assert the
  * decoded spell list parses -> buy the cheapest spell and assert an outcome
  * event -> log out and delete the character.
  *
@@ -48,7 +49,8 @@ const CHARACTER = "Bt" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijk
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 // Inside Northshire Abbey, the waypoint module-quest.ts walks to for Marshal
-// McBride. Every abbey trainer is within update range of it.
+// McBride. The abbey trainers come into update range from here; the probe then
+// walks the last few yards to whichever one it picks.
 const ABBEY = { x: -8902.6, y: -162.6, z: 82.0 };
 
 function log(msg: string) {
@@ -192,13 +194,14 @@ async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> 
 // Trainer candidates, purely from served events: creature subnames the client
 // shows under the name ("Paladin Trainer", "Weapon Master", ...). Class
 // trainers matching our own class first, then any other trainer.
-function trainerCandidates(preferred: RegExp): { guid: string; entry: number; name: string; subname: string }[] {
-  const out: { guid: string; entry: number; name: string; subname: string }[] = [];
+type Candidate = { guid: string; entry: number; name: string; subname: string; pos?: Vec };
+function trainerCandidates(preferred: RegExp): Candidate[] {
+  const out: Candidate[] = [];
   for (const [guid, u] of units) {
     if (u.entry === undefined || u.dead) continue;
     const c = creatures.get(u.entry);
     if (!c || !/trainer/i.test(c.subname)) continue;
-    out.push({ guid, entry: u.entry, name: c.name, subname: c.subname });
+    out.push({ guid, entry: u.entry, name: c.name, subname: c.subname, pos: u.pos });
   }
   out.sort((a, b) => Number(preferred.test(b.subname)) - Number(preferred.test(a.subname)));
   return out;
@@ -226,9 +229,14 @@ async function main() {
   // 2. Walk into the abbey; the trainers are within update range of McBride.
   const arrival = await tryMoveTo(ABBEY, "Northshire Abbey");
   if (arrival !== "arrived") fail(`move into the abbey ended ${arrival}`);
-  await Bun.sleep(2000); // let creature-query answers land for the NPCs in range
 
-  const candidates = trainerCandidates(/paladin/i);
+  // Creature-query answers for a room full of NPCs trickle in; poll rather
+  // than sleeping a fixed amount and calling an empty room a failure.
+  let candidates = trainerCandidates(/paladin/i);
+  for (const deadline = Date.now() + 10_000; candidates.length === 0 && Date.now() < deadline; ) {
+    await Bun.sleep(250);
+    candidates = trainerCandidates(/paladin/i);
+  }
   if (candidates.length === 0) {
     fail(
       `no creature with a "Trainer" subname in update range at the abbey; ` +
@@ -240,8 +248,20 @@ async function main() {
   // 3. trainer_list, walking the candidate list: the handler answers nothing at
   // all for a trainer of another class, so silence means "try the next one".
   let listed: any = null;
-  let trainer: { guid: string; name: string; subname: string } | null = null;
-  for (const c of candidates) {
+  let trainer: Candidate | null = null;
+  for (const c of candidates.slice(0, 3)) {
+    // The handler resolves the NPC through GetNPCIfCanInteractWith, which is
+    // an INTERACTION_DISTANCE (~5.5yd) check — update range is not enough, so
+    // walk to the candidate first, exactly as a player would.
+    if (!c.pos) {
+      log(`skipping ${c.name}: no position seen yet`);
+      continue;
+    }
+    const walked = await tryMoveTo(c.pos, `${c.name} <${c.subname}>`);
+    if (walked !== "arrived") {
+      log(`could not reach ${c.name}: ${walked}`);
+      continue;
+    }
     const mark = events.length;
     await action("trainer_list", { guid: c.guid });
     const ev = await pollFor((e) => e.opcode === "SMSG_TRAINER_LIST" && e.data?.guid === c.guid, 5000, mark);
@@ -255,7 +275,7 @@ async function main() {
   if (!listed || !trainer) {
     fail(
       `no trainer answered trainer_list. If the action itself came back 200 but nothing arrived, ` +
-        `check interaction range (the probe stops at the McBride waypoint) and class match ` +
+        `check class match ` +
         `(this character is a Paladin).`,
     );
   }
