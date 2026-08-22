@@ -38,10 +38,15 @@ Phase 0 action set:
 - Loot: open loot, take item, take money, take all.
 - Vendor: list, buy, sell, repair.
 - Inventory: equip item, use item, destroy item.
-- Chat: say, whisper (for later multi-agent use; harmless now).
+- Chat: say. (Whisper was listed here from the start but never implemented; corrected 2026-08. Other chat types are reachable through the raw passthrough's `CMSG_MESSAGECHAT` until a trajectory earns them a helper.)
 - Death: release spirit, reclaim corpse, spirit healer resurrection (added 2026-08 as the graveyard fallback when the corpse is unreachable).
+- Trainers (added 2026-08): list, buy spell.
+- Talents (added 2026-08): learn talent, learn preview talents.
+- Raw passthrough (added 2026-08, ADR-0025): one allowlisted client opcode with a caller-built body, queued verbatim into the stock handler. The allowlist (module/PROTOCOL.md, "raw") holds only opcodes a stock client sends in ordinary play whose handlers do nothing a non-GM client could not do, and excludes movement, session lifecycle, anything already covered by an action, and anything GM-gated. It is the escape hatch ADR-0015 promises: a way for a trajectory to show need before a surface is built, not a second path to existing actions.
 
-Deferred: trainers, flight paths, mail, bank, group invites, trade, talents.
+Observables added 2026-08 under the same test (each is a packet the client receives): the spellbook (`SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`, `SMSG_REMOVED_SPELL`, `SMSG_SUPERCEDED_SPELL`), cooldowns (`SMSG_SPELL_COOLDOWN`, `SMSG_COOLDOWN_EVENT`, `SMSG_CLEAR_COOLDOWN`) and talents (`SMSG_TALENTS_INFO`). Spell rank and name ride the spell rows as client-cache (Spell.dbc) knowledge, the same way item-template fields already do.
+
+Deferred: flight paths, mail, bank, group invites, trade (all reachable raw; none has a helper or a whitelisted reply yet).
 
 Pathing: the module resolves "move to position" into the client movement packet sequence a client would send along a navmesh path, using the server's mmaps. This is the one place the module does work a client would do locally, and it is done so that movement is correct rather than privileged. The agent still cannot query the navmesh directly; it asks to go somewhere and either arrives or gets a failure event.
 
