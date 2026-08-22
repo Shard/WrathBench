@@ -1,5 +1,11 @@
 {
   "_notes": [
+    "!! STOPPED 2026-08-22 — DO NOT LAUNCH until two run-roster bugs are fixed (see memory",
+    "free-ramp-20260822): (1) --loop recreates fresh L1 runs of the same model instead of",
+    "resuming the paused one, and hammers saturated pools with no backoff; (2) local-qwen's",
+    "account did not propagate (Qwenlocal landed on RUNNER not RUNNER6). Worldserver is up",
+    "and healthy on the reclaim image; the fleet layer itself is fine, the roster loop is not.",
+    "",
     "The fleet is this file. One lane = one sequential episode stream = one game account;",
     "parallelism is exactly the number of enabled lanes. Edit while run-fleet is up: it",
     "re-reads every 60s. enabled:false drains a lane (its roster process is SIGTERMed at",
@@ -72,8 +78,7 @@
     },
     {
       "name": "free-or-b",
-      "enabled": false,
-      "_why_disabled": "needs RUNNER3 in the module allowlist — flip on after the next worldserver recreate",
+      "enabled": true,
       "account": "RUNNER3",
       "loop": true,
       "untilDefault": "18:00",
@@ -84,8 +89,7 @@
     },
     {
       "name": "free-or-c",
-      "enabled": false,
-      "_why_disabled": "needs RUNNER4 in the module allowlist — flip on after the next worldserver recreate",
+      "enabled": true,
       "account": "RUNNER4",
       "loop": true,
       "untilDefault": "18:00",
@@ -108,8 +112,7 @@
     },
     {
       "name": "free-oc-b",
-      "enabled": false,
-      "_why_disabled": "needs RUNNER5 in the module allowlist — flip on after the next worldserver recreate",
+      "enabled": true,
       "account": "RUNNER5",
       "loop": true,
       "untilDefault": "18:00",
@@ -121,7 +124,7 @@
     {
       "name": "local-qwen",
       "enabled": false,
-      "_why_disabled": "needs RUNNER6 in the running module allowlist — flip on after the next worldserver recreate",
+      "_why_disabled": "2026-08-22: --account RUNNER6 did NOT propagate to createSession — Qwenlocal was created on RUNNER (default), colliding with free-or-a. Bug under diagnosis; re-enable once account propagation is fixed for a local-apiBase openai lane.",
       "account": "RUNNER6",
       "loop": true,
       "untilDefault": "18:00",
