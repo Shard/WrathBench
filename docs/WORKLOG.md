@@ -753,3 +753,4 @@ compact. The gate conditions (genuine context exhaustion, or a model re-querying
 facts lost to a window trim) and the design to build if they trip stay open in item
 8a — and the subscription-lane amendment of 2026-08-22 arguably trips them already.
 - 2026-08-22 Track B: spellbook/cooldown/talent taps, learn_talent + raw passthrough (ADR-0025), state.spells()/cooldowns()/talents(), CONTRACTS drift fixed (trainers shipped, whisper never existed); module built to :next, not deployed.
+- 2026-08-22 FOLLOW-UPS 44: cooperative abort on snippet timeout — per-eval `signal`, SDK `ConnectOptions.signal` provider + `EventAbortedError`, moveTo stops on abort, runtime survives; `no_path` fallbacks dropped from three smokes; `waitForTransfer` added to API.md (was drifted).

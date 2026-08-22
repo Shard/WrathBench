@@ -436,6 +436,16 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     "fewer iterations per snippet". Want: a cooperative abort — each eval gets
     a signal that SDK waits honor, abandonment aborts it (pending move stopped
     deterministically), and the result says so. No new helper beyond that.
+    **Shipped 2026-08-22.** Each eval runs under its own AbortController,
+    ambient as `signal` and threaded into the SDK client via AsyncLocalStorage
+    (`ConnectOptions.signal` takes a provider); every client wait rejects with
+    `EventAbortedError` (the absence of a verdict, like `EventTimeoutError` —
+    never a synthetic status), a `moveTo` aborted mid-walk issues `stop` once,
+    `sleep` rejects too, and the abandonment message says so. The runtime
+    still survives and the late result is still discarded. Routines launched
+    by a snippet that returned normally keep their own (never-aborted) signal.
+    Found on the way: a single-expression snippet is awaited REPL-style, so
+    the launch-a-routine recipe needs a trailing value — guidance fixed.
 
 ## Ladder work (harness-0.3 / 0.4)
 

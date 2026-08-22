@@ -181,7 +181,7 @@ async function serverPosition(what: string): Promise<Vec> {
   return { x: st.data.x, y: st.data.y, z: st.data.z };
 }
 
-// move_to with midpoint fallback for no_path/too_far legs (and the 250y cap).
+// move_to with midpoint fallback for too_far legs (and the 250y cap).
 async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> {
   const r = await action("move_to", target);
   const res = await waitFor(
@@ -190,7 +190,7 @@ async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> 
     `WB_MOVE_RESULT for ${what}`,
   );
   if (res.data.status === "arrived") return "arrived";
-  if ((res.data.status === "no_path" || res.data.status === "too_far") && depth < 4) {
+  if (res.data.status === "too_far" && depth < 4) {
     const mid = { x: (self.pos.x + target.x) / 2, y: (self.pos.y + target.y) / 2, z: (self.pos.z + target.z) / 2 };
     log(`move to ${what}: ${res.data.status}, hopping via midpoint`);
     const midStatus = await tryMoveTo(mid, `${what} (midpoint)`, depth + 1);

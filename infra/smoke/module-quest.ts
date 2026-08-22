@@ -175,7 +175,7 @@ async function waitForQuestInLog(questId: number, what: string): Promise<void> {
   }
 }
 
-// move_to with midpoint fallback for no_path/too_far legs. Returns the final
+// move_to with midpoint fallback for too_far legs. Returns the final
 // WB_MOVE_RESULT status instead of failing: callers in combat tolerate
 // interruptions, waypoint callers use moveTo below.
 async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> {
@@ -186,7 +186,7 @@ async function tryMoveTo(target: Vec, what: string, depth = 0): Promise<string> 
     `WB_MOVE_RESULT for ${what}`,
   );
   if (res.data.status === "arrived") return "arrived";
-  if ((res.data.status === "no_path" || res.data.status === "too_far") && depth < 4) {
+  if (res.data.status === "too_far" && depth < 4) {
     const mid = {
       x: (self.pos.x + target.x) / 2,
       y: (self.pos.y + target.y) / 2,
