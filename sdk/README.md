@@ -143,7 +143,11 @@ accepts the list in either shape: a gossip-flagged questgiver answers
 `quest_list` with an `SMSG_GOSSIP_MESSAGE` carrying the quests, not an
 `SMSG_QUESTGIVER_QUEST_LIST`. `turnInQuest` handles the other branch of the
 same asymmetry: `SMSG_QUESTGIVER_REQUEST_ITEMS` that says the quest *is*
-completable is the client's cue to send the completion again.
+completable is the client's cue to send the completion again. The completion
+wait races `SMSG_INVENTORY_CHANGE_FAILURE`: a reward that does not fit is
+answered with that failure and no completion at all, so a full bag comes back
+as `{ ok: false, status: "inventory_full", hint }` instead of burning the
+whole timeout (the quest stays in the log; free a slot and turn in again).
 
 `waitForQuestObjective` waits on the **quest log**, not on an event, because at
 the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill

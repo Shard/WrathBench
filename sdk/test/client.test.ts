@@ -13,6 +13,7 @@ import {
   creatureQuery,
   frames,
   gossipWithQuests,
+  inventoryChangeFailure,
   ITEM_ENTRY,
   itemPushed,
   loginSequence,
@@ -914,6 +915,24 @@ describe("client: quests", () => {
     await untilAction(stub, "quest_choose_reward");
     stub.push(JSON.stringify(questRewarded(QUEST_ID, 82)));
     expect((await pending).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a reward that does not fit is inventory_full, not a timeout", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 84)));
+    await untilAction(stub, "quest_choose_reward");
+    // The server refuses the hand-over: no QUEST_COMPLETE ever comes.
+    stub.push(JSON.stringify(inventoryChangeFailure(85)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok || result.status !== "inventory_full") throw new Error(`unexpected ${result.status}`);
+    expect(result.result).toBe(48);
+    expect(result.hint).toContain("free a bag slot");
     client.close();
     await stub.stop();
   });
