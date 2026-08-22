@@ -30,6 +30,13 @@ export interface SearchOptions {
   namespaces?: readonly number[];
   /** Snippet width in tokens. Default 28. */
   snippetTokens?: number;
+  /**
+   * Whether wiki-recorded coordinates are served. Default true. When false
+   * the `coords` field is never set and coordinate-shaped pairs in snippet
+   * prose are redacted (`stripProseCoords`): a names-first run must not be
+   * able to read an answer key off the page text either.
+   */
+  coords?: boolean;
 }
 
 export interface SearchResult {
@@ -91,6 +98,23 @@ interface PageRow {
   title: string;
   ns: number;
   text: string;
+}
+
+/**
+ * A coordinate-looking pair in prose: two numbers in 0–100 (optionally with
+ * decimals) separated by a comma or slash, inside round or square brackets,
+ * e.g. `(48.2, 42.1)`, `[48, 42]`, `(48.2/42.1)`. Templates and infoboxes are
+ * already stripped at build time (`stripWikitext`), so this is what survives
+ * into the stored text: hand-written prose like "at (48, 42)". Best-effort —
+ * a pair written without brackets is not matched, and a dotted version number
+ * in brackets would be.
+ */
+const PROSE_COORDS =
+  /[(\[]\s*(?:100|\d{1,2})(?:\.\d+)?\s*[,/]\s*(?:100|\d{1,2})(?:\.\d+)?\s*[)\]]/g;
+
+/** Redact coordinate-shaped pairs from snippet prose (see `PROSE_COORDS`). */
+export function stripProseCoords(text: string): string {
+  return text.replace(PROSE_COORDS, "(coords withheld)");
 }
 
 function headSnippet(text: string, chars = 280): string {
@@ -293,8 +317,10 @@ export function searchReference(
   const limit = Math.max(1, Math.min(opts.limit ?? 8, 50));
   const snippetTokens = Math.max(8, Math.min(opts.snippetTokens ?? 28, 64));
   const namespaces = opts.namespaces;
-  const hasCoords = bundleHasCoords(db);
+  const serveCoords = opts.coords ?? true;
+  const hasCoords = serveCoords && bundleHasCoords(db);
   const hasIds = bundleHasIds(db);
+  const snip = (text: string): string => (serveCoords ? text : stripProseCoords(text));
   const parsed = parseIdQuery(query);
   const inNamespace = (ns: number): boolean => namespaces === undefined || namespaces.includes(ns);
 
@@ -316,7 +342,7 @@ export function searchReference(
     push(BAND.title, {
       title: direct.page.title,
       ns: direct.page.ns,
-      snippet: headSnippet(direct.page.text),
+      snippet: snip(headSnippet(direct.page.text)),
       rank: EXACT_TITLE_RANK,
       exactTitle: true,
       ...(direct.via !== null ? { redirectedFrom: direct.via } : {}),
@@ -354,7 +380,7 @@ export function searchReference(
         push(BAND.id, {
           title: row.title,
           ns: row.ns,
-          snippet: headSnippet(row.text),
+          snippet: snip(headSnippet(row.text)),
           rank: ID_MATCH_RANK,
           matchedId: { kind: row.kind as IdKind, id: row.entity_id },
           ...(coords !== undefined ? { coords } : {}),
@@ -405,7 +431,7 @@ export function searchReference(
           push(titleCoversTokens(row.title, parsed.text) ? BAND.titleTokens : BAND.body, {
             title: row.title,
             ns: row.ns,
-            snippet: row.snippet.replace(/\s+/g, " ").trim(),
+            snippet: snip(row.snippet.replace(/\s+/g, " ").trim()),
             rank: row.rank,
             ...(coords !== undefined ? { coords } : {}),
           });

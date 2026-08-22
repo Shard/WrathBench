@@ -6,6 +6,7 @@ import {
   normaliseTitle,
   parseIdQuery,
   searchReference,
+  stripProseCoords,
   toMatchExpression,
 } from "../src/search";
 
@@ -35,6 +36,12 @@ beforeAll(() => {
     "Objectives: return to Example Person Gamma with five lorem tokens.",
   );
   writer.addPage("Example Category Page", 14, "Pages about lorem things in the example world.");
+  writer.addPage(
+    "Example Person Delta",
+    0,
+    "Example Person Delta stands at (48.2, 42.1) in Example Zone Beta, near the inn [50, 41]. Patch (3.3.5) notes.",
+    [{ zone: "Example Zone Beta", x: 48.2, y: 42.1, raw: "{{coords|48.2|42.1|Example Zone Beta}}" }],
+  );
   writer.addRedirect("Example Old Name", "Example Zone Beta", 0);
   writer.addRedirect("Example Older Name", "Example Old Name", 0);
   writer.addRedirect("Example Broken Name", "Example Missing Page", 0);
@@ -307,5 +314,40 @@ describe("the id band is bounded", () => {
     // A query that is nothing but the id may still have the whole slate.
     expect(searchReference(db, "npc 12", { limit: 8 }).length).toBe(8);
     db.close();
+  });
+});
+
+describe("stripProseCoords", () => {
+  test("redacts bracketed coordinate pairs and leaves other numbers", () => {
+    expect(stripProseCoords("at (48.2, 42.1) near [50, 41] and (48/42)")).toBe(
+      "at (coords withheld) near (coords withheld) and (coords withheld)",
+    );
+    expect(stripProseCoords("level 12 quest, id (783) and 5 tokens")).toBe("level 12 quest, id (783) and 5 tokens");
+    expect(stripProseCoords("x 48.2 y 42.1 without brackets")).toBe("x 48.2 y 42.1 without brackets");
+    expect(stripProseCoords("(120, 40) is out of map range")).toBe("(120, 40) is out of map range");
+  });
+});
+
+describe("searchReference coords channel", () => {
+  test("serves coords and prose pairs by default", () => {
+    const hit = searchReference(db, "Example Person Delta")[0]!;
+    expect(hit.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
+    expect(hit.snippet).toContain("(48.2, 42.1)");
+  });
+
+  test("coords:false withholds the field and redacts prose pairs on every band", () => {
+    const title = searchReference(db, "Example Person Delta", { coords: false })[0]!;
+    expect(title.exactTitle).toBe(true);
+    expect(title.coords).toBeUndefined();
+    expect(title.snippet).not.toContain("48.2");
+    expect(title.snippet).not.toContain("[50, 41]");
+    expect(title.snippet).toContain("(coords withheld)");
+    const body = searchReference(db, "delta stands inn", { coords: false }).find(
+      (h) => h.title === "Example Person Delta",
+    )!;
+    expect(body).toBeDefined();
+    expect(body.coords).toBeUndefined();
+    expect(body.snippet).not.toMatch(/\d+\.\d+, \d+/);
+    expect(JSON.stringify(searchReference(db, "Example Person Delta", { coords: false }))).not.toContain("coords\"");
   });
 });

@@ -218,6 +218,7 @@ describe("argv -> run config", () => {
       "--account", "SHAKEOUT",
       "--objective", OBJECTIVE,
       "--max-tool-calls", "2500",
+      "--wiki-coords", "true",
       "--character", "Navprobe",
       "--race", "3",
       "--class", "2",
@@ -226,6 +227,7 @@ describe("argv -> run config", () => {
     ]);
     expect(config.objective).toBe(OBJECTIVE);
     expect(config.maxToolCallsPerEpisode).toBe(2500);
+    expect(config.wikiCoords).toBe(true);
     expect(config.watchdogs).toEqual({
       idleMs: 1_200_000,
       noXpMs: null,
@@ -246,6 +248,7 @@ describe("argv -> run config", () => {
   test("no dimensions on the command line means the shipped defaults", () => {
     const config = configFromArgs(["--driver", "openai", "--model", "m:free"]);
     expect(config.objective).toBeUndefined();
+    expect(config.wikiCoords).toBe(false);
     expect(config.watchdogs).toEqual({
       idleMs: 10 * 60_000,
       noXpMs: 45 * 60_000,
@@ -253,6 +256,13 @@ describe("argv -> run config", () => {
       maxSandboxRestarts: 3,
     });
     expect(config.maxToolCallsPerEpisode).toBe(500);
+  });
+
+  test("--wiki-coords is a flag: bare, true/1 on; false/0 off; absent is names-first", () => {
+    expect(configFromArgs(["--model", "m", "--wiki-coords", "--race", "1"]).wikiCoords).toBe(true);
+    expect(configFromArgs(["--model", "m", "--wiki-coords", "1"]).wikiCoords).toBe(true);
+    expect(configFromArgs(["--model", "m", "--wiki-coords", "false"]).wikiCoords).toBe(false);
+    expect(configFromArgs(["--model", "m"]).wikiCoords).toBe(false);
   });
 
   test("--no-xp-ms 0 is the command-line spelling of disabled", () => {

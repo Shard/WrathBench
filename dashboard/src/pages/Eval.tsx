@@ -57,7 +57,8 @@ export default function Eval() {
       <h2 class="section">eval</h2>
       <p class="dim">
         Cost of reaching a level, per model per harness version. Scores are comparable within a
-        harness version only (ADR-0004); effort is part of the row, not averaged away (ADR-0024).
+        harness version only (ADR-0004); effort is part of the row, not averaged away (ADR-0024), and
+        so is whether the wiki served coordinates (ADR-0028).
       </p>
 
       <div class="chips">
@@ -111,6 +112,7 @@ export default function Eval() {
                 <th>model</th>
                 <th>harness</th>
                 <th>effort</th>
+                <th>wiki</th>
                 <th class="right">runs</th>
                 <th class="right">reached L{level()}</th>
                 <th class="right">best turns</th>
@@ -127,6 +129,7 @@ export default function Eval() {
                     <td>{g.model}</td>
                     <td class="dim">{shortHarness(g.harnessVersion)}</td>
                     <td class="dim">{g.effort ?? "—"}</td>
+                    <td class="dim">{g.wikiCoords === null ? "—" : g.wikiCoords ? "coords" : "names"}</td>
                     <td class="right mono">{g.attempts}</td>
                     <td class="right mono">{g.reached.length}</td>
                     <td class="right mono">{g.bestTurn ?? "—"}</td>
@@ -192,6 +195,7 @@ function Chart(props: { groups: EvalGroup[]; metric: "turns" | "time"; level: nu
                 >
                   {row.g.model}
                   {row.g.effort === null ? "" : ` (${row.g.effort})`}
+                  {row.g.wikiCoords === true ? " +coords" : ""}
                 </text>
                 <rect
                   x={LABEL_W}

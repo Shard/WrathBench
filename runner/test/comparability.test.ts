@@ -39,8 +39,23 @@ describe("comparabilityOf", () => {
     expect(c.promptHash).toBe(promptHash(SYSTEM_PROMPT));
     expect(c.promptChars).toBe(SYSTEM_PROMPT.length);
     expect(c.objective).toBe(false);
+    expect(c.wikiCoords).toBe(false); // names-first by default (ADR-0028)
     expect(c.contextEngine).toBe(CONTEXT_ENGINES.openai);
     expect(c.effort).toBeNull();
+  });
+
+  test("wikiCoords is stamped and separates otherwise identical runs (ADR-0028)", () => {
+    const base = loadRunConfig({ driver: "openai", model: "m" });
+    const names = comparabilityOf(base, "v");
+    const coords = comparabilityOf(loadRunConfig({ driver: "openai", model: "m", wikiCoords: true }), "v");
+    expect(coords.wikiCoords).toBe(true);
+    expect(coords.promptHash).toBe(names.promptHash); // the prompt itself is unchanged
+    expect(sameComparability(names, coords)).toBe(false);
+    expect(sameComparability(names, comparabilityOf(base, "v"))).toBe(true);
+    // A tuple stamped before the field existed still parses; the field is absent.
+    const { wikiCoords: _dropped, ...legacy } = names;
+    void _dropped;
+    expect(parseComparability(legacy)?.wikiCoords).toBeUndefined();
   });
 
   test("an objective changes the prompt hash and raises the flag", () => {

@@ -21,6 +21,34 @@ export interface ToolDef {
   inputSchema: Record<string, unknown>; // JSON Schema, for MCP and OpenAI tools
 }
 
+/**
+ * The one sentence of the `search_reference` description that depends on the
+ * run's `wikiCoords` dimension (ADR-0028). Model-agnostic and fixed per
+ * value, so a model never searches for numbers a names-first run withholds,
+ * and a coords run is told what the numbers are (reference notes, not a
+ * live observation).
+ */
+export const WIKI_COORDS_SENTENCE = {
+  withheld:
+    "This run serves no coordinates: results name places, zones and NPCs but carry no map x/y, so do not search for numbers — find things by name, by asking NPCs, and by looking.",
+  served:
+    "Some hits carry wiki-recorded coordinates (zone plus map x/y); these are reference notes from the wiki page, not a live observation and not proof anything is at that spot now.",
+} as const;
+
+/**
+ * The tool list for a run: `TOOLS` with the `search_reference` description
+ * stating whether coordinates are served. `TOOLS` itself is the names-first
+ * (default) rendering.
+ */
+export function toolsFor(opts: { wikiCoords?: boolean | undefined }): ToolDef[] {
+  if (opts.wikiCoords !== true) return TOOLS;
+  return TOOLS.map((t) =>
+    t.name === "search_reference"
+      ? { ...t, description: t.description.replace(WIKI_COORDS_SENTENCE.withheld, WIKI_COORDS_SENTENCE.served) }
+      : t,
+  );
+}
+
 export const TOOLS: ToolDef[] = [
   {
     name: "run_snippet",
@@ -66,7 +94,8 @@ export const TOOLS: ToolDef[] = [
   {
     name: "search_reference",
     description:
-      "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. Some hits carry wiki-recorded coordinates (zone plus map x/y); these are reference notes from the wiki page, not a live observation and not proof anything is at that spot now.",
+      "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. " +
+      WIKI_COORDS_SENTENCE.withheld,
     inputSchema: {
       type: "object",
       properties: {
@@ -413,6 +442,11 @@ export interface ToolContext {
   scratchpad: Scratchpad;
   /** Wiki bundle; absent means search_reference reports unavailability. */
   wiki?: Database | undefined;
+  /**
+   * Whether search_reference serves wiki-recorded coordinates (ADR-0028).
+   * Absent reads as false: names-first is the default everywhere.
+   */
+  wikiCoords?: boolean | undefined;
   /** Whether a game session has been established (for the summary header). */
   sessionLive: () => boolean;
   /**
@@ -519,7 +553,7 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         if (ctx.wiki === undefined) {
           return { text: "reference bundle unavailable (data/wiki/bundle.sqlite not found)", isError: true };
         }
-        const hits = searchReference(ctx.wiki, query, { limit });
+        const hits = searchReference(ctx.wiki, query, { limit, coords: ctx.wikiCoords === true });
         const note = searchRepeatNote(ctx, query, hits.map((h) => h.title));
         const prefix = note === undefined ? "" : `${note}\n\n`;
         if (hits.length === 0) {

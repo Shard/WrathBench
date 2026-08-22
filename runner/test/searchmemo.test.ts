@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
-import { callTool, normalizeSearchQuery, type ToolContext } from "../src/tools";
+import { TOOLS, WIKI_COORDS_SENTENCE, callTool, normalizeSearchQuery, toolsFor, type ToolContext } from "../src/tools";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
 
@@ -28,6 +28,12 @@ function bundle(): Database {
     [{ kind: "quest", id: 4242 }],
   );
   writer.addPage("Example Person Gamma", 0, "Example Person Gamma stands in the beta zone.");
+  writer.addPage(
+    "Example Person Delta",
+    0,
+    "Example Person Delta stands at (48.2, 42.1) in the beta zone.",
+    [{ zone: "Beta Zone", x: 48.2, y: 42.1, raw: "{{coords|48.2|42.1|Beta Zone}}" }],
+  );
   writer.flush();
   return db;
 }
@@ -155,5 +161,35 @@ describe("an id the reference does not record", () => {
     expect(res.text).toContain("no results");
     expect(res.text).toContain("no page in the reference records npc id 9999");
     expect(res.text).toContain("not evidence");
+  });
+});
+
+describe("the wikiCoords run dimension (ADR-0028)", () => {
+  test("names-first by default: no coords line, prose pairs redacted", async () => {
+    const res = await search(context(bundle()), "Example Person Delta");
+    expect(res.text).toContain("# Example Person Delta");
+    expect(res.text).not.toContain("wiki coords");
+    expect(res.text).not.toContain("48.2");
+    expect(res.text).toContain("(coords withheld)");
+  });
+
+  test("wikiCoords:true serves the coords line and the prose as written", async () => {
+    const res = await search({ ...context(bundle()), wikiCoords: true }, "Example Person Delta");
+    expect(res.text).toContain("wiki coords (reference, not live): Beta Zone (48.2, 42.1)");
+    expect(res.text).toContain("stands at (48.2, 42.1)");
+  });
+
+  test("the tool description states which side this run is on", () => {
+    const desc = (tools: typeof TOOLS): string => tools.find((t) => t.name === "search_reference")!.description;
+    expect(desc(TOOLS)).toContain(WIKI_COORDS_SENTENCE.withheld);
+    expect(desc(toolsFor({ wikiCoords: false }))).toContain(WIKI_COORDS_SENTENCE.withheld);
+    expect(desc(toolsFor({}))).toBe(desc(TOOLS));
+    const served = desc(toolsFor({ wikiCoords: true }));
+    expect(served).toContain(WIKI_COORDS_SENTENCE.served);
+    expect(served).not.toContain(WIKI_COORDS_SENTENCE.withheld);
+    // Only that one tool's text differs.
+    expect(toolsFor({ wikiCoords: true }).filter((t) => t.name !== "search_reference")).toEqual(
+      TOOLS.filter((t) => t.name !== "search_reference"),
+    );
   });
 });

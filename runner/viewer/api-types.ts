@@ -40,6 +40,11 @@ export interface ComparabilityView {
   /** True when an operator objective steered the run, which makes it unscored. */
   objective: boolean;
   /**
+   * Whether `search_reference` served wiki coordinates (ADR-0028). Absent on
+   * runs stamped before the field existed.
+   */
+  wikiCoords?: boolean;
+  /**
    * The worldserver's own build identity off its `/health` at launch (or
    * resume-restamp) time. Null when the module was unreachable, or for a run
    * that predates this field.
@@ -358,6 +363,8 @@ export interface EvalRun {
   promptHash: string | null;
   /** The worldserver build this run was stamped against, or null (ADR-0026). */
   serverBuild: string | null;
+  /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
+  wikiCoords: boolean | null;
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;

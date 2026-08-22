@@ -432,6 +432,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     sandbox: o.sandbox,
     scratchpad: o.scratchpad,
     wiki: o.wiki,
+    wikiCoords: config.wikiCoords,
     sessionLive: () => builder.sessionLive,
     onEventsServed: (events, folded) =>
       trajectory.append({

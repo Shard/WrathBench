@@ -164,6 +164,14 @@ export const runConfigSchema = z.object({
    * runs are.
    */
   objective: z.string().min(1).max(4000).optional(),
+  /**
+   * Whether `search_reference` serves wiki-recorded coordinates (ADR-0028).
+   * Default false — names-first: the scored lanes measure whether a model can
+   * find things, and exact yards would make every model converge on
+   * "search, read a number, moveTo". Freeplay/unscored lanes may turn it on.
+   * Stamped into the comparability tuple so the two never share a chart.
+   */
+  wikiCoords: z.boolean().default(false),
 
   /**
    * Reasoning effort for this run — a profile-matrix dimension, not a tuning

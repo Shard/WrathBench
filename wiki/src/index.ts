@@ -1,5 +1,6 @@
 export {
   searchReference,
+  stripProseCoords,
   openBundle,
   normaliseTitle,
   toMatchExpression,
