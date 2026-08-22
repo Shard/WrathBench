@@ -39,5 +39,7 @@ export type { RunMeta, StateLine, TrajectoryRecord } from "./trajectory";
 
 export { Scratchpad, SCRATCHPAD_MAX_CHARS } from "./scratchpad";
 export { harnessVersion } from "./version";
+export { CONTEXT_ENGINES, comparabilityOf, comparabilitySchema, parseComparability, promptHash, sameComparability } from "./comparability";
+export type { Comparability, EpisodeBudget } from "./comparability";
 export { renderTimeline } from "./timeline";
 export { toJsonSafe, jsonLine, compactJson } from "./jsonsafe";

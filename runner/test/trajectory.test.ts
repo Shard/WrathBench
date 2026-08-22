@@ -70,6 +70,18 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("the turn index is recorded, and absent rather than zero before the first turn", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    traj.recordState("run-t", { level: 1 });
+    traj.recordState("run-t", { level: 2, turn: 14 });
+    const rows = traj.stateRows("run-t");
+    expect(rows[0]!["turn"]).toBeNull();
+    expect(rows[1]!["turn"]).toBe(14);
+    expect(readTrajectory(dir).find((r) => r.t === "state" && r["turn"] !== undefined)?.["turn"]).toBe(14);
+    traj.close();
+  });
+
   test("a run.sqlite written before the new columns gains them on open", () => {
     const dir = tempRunDir();
     // The pre-migration state table, exactly as older runs carry it.
@@ -80,7 +92,7 @@ describe("Trajectory", () => {
     old.close();
 
     const traj = new Trajectory(dir);
-    traj.recordState("run-old", { level: 8, money: 42, questsCompleted: 1 });
+    traj.recordState("run-old", { level: 8, money: 42, questsCompleted: 1, turn: 3 });
     const rows = traj.stateRows("run-old");
     expect(rows).toHaveLength(2);
     // The pre-existing row keeps its data and reads null for the new columns.
@@ -88,6 +100,8 @@ describe("Trajectory", () => {
     expect(rows[0]!["money"]).toBeNull();
     expect(rows[1]!["money"]).toBe(42);
     expect(rows[1]!["quests_completed"]).toBe(1);
+    expect(rows[0]!["turn"]).toBeNull();
+    expect(rows[1]!["turn"]).toBe(3);
     traj.close();
 
     // Reopening is a no-op: the migration must not fail on an already-migrated file.

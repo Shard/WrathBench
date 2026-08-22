@@ -61,10 +61,24 @@ export class ContextBuilder {
   private live = false;
   /** High-water mark into the snapshot's quest-completion list, for logging. */
   private questsLogged = 0;
+  /**
+   * The driver turn currently in flight, stamped onto every state sample.
+   *
+   * Set by the driver rather than counted here: the fixed loop and the
+   * claude-subscription driver each own their own turn counter, and a sample
+   * is taken on the clock (`stateIntervalMs`), not once per turn. Zero means
+   * "before the first turn", which is recorded as no turn at all.
+   */
+  private turn = 0;
   private readonly now: () => number;
 
   constructor(private readonly o: ContextBuilderOptions) {
     this.now = o.now ?? Date.now;
+  }
+
+  /** Tell the builder which turn is in flight; every later sample carries it. */
+  noteTurn(turn: number): void {
+    this.turn = turn;
   }
 
   /** Whether the last snapshot showed a character in the world. */
@@ -121,6 +135,7 @@ export class ContextBuilder {
       lastSeq: snap.lastSeq,
       money,
       questsCompleted: completions.length,
+      ...(this.turn > 0 ? { turn: this.turn } : {}),
     });
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;
@@ -132,6 +147,7 @@ export class ContextBuilder {
    * did before this was extracted.
    */
   async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
+    this.noteTurn(turn);
     const snap = await this.sampleState();
     pendingNotices.push(...this.o.sandbox.drainNotices());
     let events: Parameters<typeof assembleContext>[0]["events"] = [];
