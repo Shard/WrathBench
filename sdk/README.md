@@ -71,7 +71,7 @@ class WrathClient {
   loot(guid) / lootAll(guid) / lootItem(slot) / lootMoney() / lootRelease(guid)
   vendorList(guid) / buyItem(guid, itemId, slot, count?) / sellItem(guid, itemGuid, count?) / repairAll(guid)
   equipItem(bag, slot) / useItem(bag, slot, targetGuid?) / destroyItem(bag, slot, count?)
-  repop() / reclaimCorpse(guid?)
+  repop() / reclaimCorpse(guid?) / spiritHealerActivate(guid)
   deleteCharacter(name, o?: DeleteCharacterOptions): Promise<CharacterDeleteResponse>  // POST /character-delete
 
   // composed helpers — each waits for the game's verdict
