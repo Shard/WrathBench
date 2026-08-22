@@ -98,6 +98,10 @@ describe("event frames", () => {
     "WB_SESSION_STATE",
       "WB_MOVE_RESULT",
       ...MOVE_OPCODES,
+      // map transfers
+      "SMSG_TRANSFER_PENDING",
+      "SMSG_NEW_WORLD",
+      "SMSG_TRANSFER_ABORTED",
       // quest/combat extension, in PROTOCOL.md's table order
       "SMSG_ATTACKSTART",
       "SMSG_ATTACKSTOP",
