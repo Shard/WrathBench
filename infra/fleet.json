@@ -68,7 +68,7 @@
     "server ignores; the pipeline just needs the var to exist in .env."
   ],
   "preflight": {
-    "enabled": false,
+    "enabled": true,
     "account": "SMOKE",
     "smokes": ["infra/smoke/module-quest.ts", "infra/smoke/quest-status.ts"],
     "timeoutMs": 900000
@@ -79,7 +79,6 @@
       "enabled": false,
       "account": "SHAKEOUT",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "sonnet", "driver": "claude-subscription", "character": "Fleetsonn", "race": 3, "class": 2, "episodeMs": 5400000 },
         { "model": "sonnet", "driver": "claude-subscription", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "episodeMs": 5400000 }
@@ -103,10 +102,10 @@
         "the SAME save."
       ],
       "name": "nav-probe",
-      "enabled": false,
+      "enabled": true,
       "account": "SHAKEOUT",
       "loop": false,
-      "objective": "Travel from your starting zone to the nearest capital city (Ironforge for dwarves/gnomes via the Deeprun Tram from Stormwind if needed, Stormwind for humans). Use the game's own transport: roads, the Deeprun Tram, flight masters once discovered. Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why.",
+      "objective": "Travel from Coldridge Valley to Ironforge on foot, using roads and the game's own transport if you find any (flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. Once in Ironforge, find the flight master and a trainer and note them in the log.",
       "watchdogs": { "episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000 },
       "maxToolCalls": 2500,
       "entries": [
@@ -118,7 +117,6 @@
       "enabled": false,
       "account": "SHAKEOUT2",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "opus", "driver": "claude-subscription", "character": "Fleetopus", "race": 3, "class": 2, "episodeMs": 5400000 },
         { "model": "opus", "driver": "claude-subscription", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "episodeMs": 5400000 }
@@ -126,10 +124,9 @@
     },
     {
       "name": "ox-alpha",
-      "enabled": false,
+      "enabled": true,
       "account": "RUNNER",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "episodeMs": 5400000 }
       ]
@@ -139,7 +136,6 @@
       "enabled": false,
       "account": "RUNNER3",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
         { "model": "cohere/north-mini-code:free" },
@@ -151,7 +147,6 @@
       "enabled": false,
       "account": "RUNNER4",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "nvidia/nemotron-3-super-120b-a12b:free" },
         { "model": "nvidia/nemotron-nano-9b-v2:free" },
@@ -161,10 +156,9 @@
     },
     {
       "name": "free-oc-a",
-      "enabled": false,
+      "enabled": true,
       "account": "RUNNER2",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
@@ -173,10 +167,9 @@
     },
     {
       "name": "free-oc-b",
-      "enabled": false,
+      "enabled": true,
       "account": "RUNNER5",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
         { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
@@ -184,10 +177,9 @@
     },
     {
       "name": "local-qwen",
-      "enabled": false,
+      "enabled": true,
       "account": "RUNNER6",
       "loop": true,
-      "untilDefault": "18:00",
       "entries": [
         { "model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "episodeMs": 5400000 }
       ]
