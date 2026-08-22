@@ -51,6 +51,36 @@ interface Pending {
   reject: (e: Error) => void;
 }
 
+/**
+ * The environment the sandbox child is spawned with — an explicit allowlist,
+ * not the runner's inherited env. The model authors the snippets and is the
+ * untrusted party (entry.ts's network guard is topology, not a secret gate);
+ * its exfiltration channel is the snippet result stream that flows back into
+ * its own context. Inheriting `process.env` therefore leaks every provider
+ * credential present in the runner (OPENROUTER_KEY, OPENCODE_KEY,
+ * CLAUDE_CODE_OAUTH_TOKEN, …) to a `console.log(process.env)` snippet.
+ *
+ * Unlike `childEnv` in adapter-claude.ts (a denylist, because the CLI needs a
+ * broad environment), this is an allowlist: the child needs only a runnable
+ * `bun` (PATH), a home/temp for the runtime, and the WRATHBENCH_* knobs. The
+ * SDK reads no env. WRATHBENCH_* is forwarded as a prefix so operators (and
+ * the storm-control tests) can tune the fault knobs from the parent.
+ */
+export function sandboxChildEnv(
+  parent: Record<string, string | undefined>,
+  explicit: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of ["PATH", "HOME", "TMPDIR"] as const) {
+    const v = parent[key];
+    if (v !== undefined) out[key] = v;
+  }
+  for (const [k, v] of Object.entries(parent)) {
+    if (v !== undefined && k.startsWith("WRATHBENCH_")) out[k] = v;
+  }
+  return { ...out, ...explicit };
+}
+
 /** Appended to every state-loss notice so the model knows the recovery steps. */
 const STATE_LOSS_RECOVERY =
   "All top-level bindings and routines were lost. " +
@@ -99,11 +129,10 @@ export class SandboxHost {
     });
     const markReady = this.markReady;
     this.proc = Bun.spawn(["bun", this.entryPath], {
-      env: {
-        ...process.env,
+      env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
-      },
+      }),
       stdio: ["ignore", "inherit", "pipe"],
       serialization: "json",
       ipc: (message) => {

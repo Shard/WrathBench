@@ -115,6 +115,33 @@ describe("event stream: waitFor", () => {
     ).rejects.toBeInstanceOf(EventTimeoutError);
   });
 
+  test("an exact-epoch waiter matches its own session's events", async () => {
+    const stream = offlineStream();
+    const pending = stream.waitFor((e) => e.opcode === "SMSG_MESSAGECHAT", {
+      epoch: stream.epoch,
+      timeout: 500,
+    });
+    stream.ingest(JSON.stringify(chatEcho));
+    expect((await pending).opcode).toBe("SMSG_MESSAGECHAT");
+  });
+
+  test("an exact-epoch waiter never matches a later session's colliding event", async () => {
+    const stream = offlineStream();
+    for (const f of frames(fullStream)) stream.ingest(f);
+    // Issued against the current session: correlation must be exact, because
+    // per-session ids (moveId, seq) restart when the session is recreated.
+    const pending = stream.waitFor((e) => e.opcode === "SMSG_MESSAGECHAT", {
+      epoch: stream.epoch,
+      includeBuffered: false,
+      timeout: 60,
+    });
+    // The session restarts (seq goes backwards): a byte-identical event from
+    // the NEW session must not settle the old waiter — it has no verdict.
+    for (const f of frames(loginSequence)) stream.ingest(f);
+    stream.ingest(JSON.stringify({ ...chatEcho, seq: 30 }));
+    await expect(pending).rejects.toBeInstanceOf(EventTimeoutError);
+  });
+
   test("times out with a typed error", async () => {
     const stream = offlineStream();
     await expect(stream.waitForOpcode("SMSG_MOTD", { timeout: 20 })).rejects.toBeInstanceOf(
