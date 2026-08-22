@@ -8,6 +8,7 @@ import {
   gateOpen,
   healthDigest,
   parsePreflight,
+  serverIdentity,
   smokePath,
   tailOf,
   fillEntries,
@@ -459,6 +460,33 @@ describe("server identity", () => {
     const base = { ok: true, module: "mod-wrathbench", worldStopped: false, sessions: 3, droppedPackets: 9 };
     expect(healthDigest(base)).toBe(healthDigest({ ...base, sessions: 41, droppedPackets: 12, worldStopped: true }));
     expect(healthDigest(base)).not.toBe(healthDigest({ ...base, build: "abc123" }));
+    // uptime ticks every call; it must not re-gate the same boot.
+    expect(healthDigest({ ...base, uptimeMs: 1 })).toBe(healthDigest({ ...base, uptimeMs: 99_999 }));
+  });
+
+  test("build + startedAtMs name the server outright; the boot marker is not even read", () => {
+    let markerReads = 0;
+    const marker = () => {
+      markerReads++;
+      return "boot:1";
+    };
+    const body = { ok: true, module: "mod-wrathbench", worldStopped: false, build: "harness-0.3-41-gabc123", startedAtMs: 1787400000000.4, uptimeMs: 5 };
+    expect(serverIdentity(body, marker)).toEqual({ identity: "build:harness-0.3-41-gabc123@1787400000000", build: "harness-0.3-41-gabc123" });
+    expect(markerReads).toBe(0);
+    // Same build, new boot -> new identity (a restart re-gates).
+    expect(serverIdentity({ ...body, startedAtMs: 1787400001000 }, marker).identity).not.toBe(serverIdentity(body, marker).identity);
+    // "unknown" is still a build stamp: the boot is what the identity keys on.
+    expect(serverIdentity({ ...body, build: "unknown" }, marker).build).toBe("unknown");
+  });
+
+  test("a module without the build field falls back to boot marker + digest", () => {
+    const body = { ok: true, module: "mod-wrathbench", worldStopped: false, sessions: 2, droppedPackets: 1, droppedPacketsLive: 0 };
+    const r = serverIdentity(body, () => "boot:1787396829401");
+    expect(r).toEqual({ identity: "boot:1787396829401|module=mod-wrathbench" });
+    expect(r.build).toBeUndefined();
+    // A build with no startedAtMs (or an empty one) is not trusted as an identity.
+    expect(serverIdentity({ ...body, build: "" , startedAtMs: 5 }, () => "boot:1").identity.startsWith("boot:1|")).toBe(true);
+    expect(serverIdentity({ ...body, build: "x" }, () => "boot:1").identity.startsWith("boot:1|")).toBe(true);
   });
 });
 
@@ -512,6 +540,8 @@ describe("gate record and rendering", () => {
     expect(Object.keys(r).sort()).toEqual(["at", "ok", "results", "serverIdentity"]);
     const out = formatGate(r, pf()).join("\n");
     expect(out).toContain("FAIL — lanes blocked");
+    expect(out).not.toContain("server build");
+    expect(formatGate({ ...r, build: "harness-0.3-41-gabc123" }, pf()).join("\n")).toContain("server build harness-0.3-41-gabc123");
     expect(out).toContain("FAIL infra/smoke/quest-status.ts (2s)");
     expect(out).toContain("unsupported_action");
   });

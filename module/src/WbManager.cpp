@@ -62,6 +62,22 @@ namespace WrathBench
             std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
+    // Build identity served on /health to every caller. WRATHBENCH_BUILD is the
+    // repo's `git describe --tags --always --dirty` at image build time (docker
+    // build-arg -> cmake -> define, see module/mod-wrathbench.cmake); absent
+    // when built outside that path. Process start is captured at static init.
+#ifndef WRATHBENCH_BUILD
+#define WRATHBENCH_BUILD "unknown"
+#endif
+    static int64_t const kStartedAtMs = NowMs();
+
+    static void AddBuildIdentity(Json::Writer& w)
+    {
+        w.Add("build", WRATHBENCH_BUILD);
+        w.Add("startedAtMs", kStartedAtMs);
+        w.Add("uptimeMs", NowMs() - kStartedAtMs);
+    }
+
     static std::string Sanitize(std::string const& token)
     {
         std::string out;
@@ -285,6 +301,7 @@ namespace WrathBench
             w.Add("sessions", 0);
             w.Add("droppedPackets", 0);
             w.Add("droppedPacketsLive", 0);
+            AddBuildIdentity(w);
             return {200, w.Str()};
         }
 
@@ -318,6 +335,7 @@ namespace WrathBench
         w.Add("droppedPackets", _totalDrops.load()); // lifetime
         w.Add("droppedPacketsLive", liveDrops);      // across current sessions
         w.Raw("droppedByOpcode", byOpcode.Str());    // lifetime, top 30 by count
+        AddBuildIdentity(w);
         return {200, w.Str()};
     }
 

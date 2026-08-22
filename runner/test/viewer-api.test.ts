@@ -69,8 +69,9 @@ function fixture(): string {
   return runs;
 }
 
-function api(runs: string, publicMode = false, dashboardDir?: string): (r: Request) => Promise<Response> {
-  return createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), publicMode, dashboardDir });
+function api(runs: string, publicMode = false, dashboardDir?: string, moduleUrl?: string): (r: Request) => Promise<Response> {
+  // Tests never reach a real module: an unroutable loopback port stands in for "server down".
+  return createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), publicMode, dashboardDir, moduleUrl: moduleUrl ?? "http://127.0.0.1:1" });
 }
 
 async function body(res: Response): Promise<string> {
@@ -237,6 +238,31 @@ describe("routes", () => {
     const b = (await res.json()) as { publicMode: boolean; dashboard: boolean };
     expect(b.publicMode).toBe(true);
     expect(b.dashboard).toBe(false);
+  });
+
+  test("/api/info carries the worldserver build off /health, null when it is down or unstamped", async () => {
+    const runs = fixture();
+    // Down: the default test module URL is unroutable.
+    const down = (await (await api(runs)(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
+    expect(down.worldserver).toBeNull();
+
+    let hits = 0;
+    let body: Record<string, unknown> = { ok: true, module: "mod-wrathbench", worldStopped: false, build: "harness-0.3-41-gabc123", startedAtMs: 1787400000000, uptimeMs: 7 };
+    const stub = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { hits++; return Response.json(body); } });
+    try {
+      const handle = api(runs, false, undefined, `http://127.0.0.1:${stub.port}`);
+      const up = (await (await handle(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
+      expect(up.worldserver).toEqual({ build: "harness-0.3-41-gabc123", startedAtMs: 1787400000000 });
+      // Cached: a second poll inside the window does not refetch.
+      await handle(new Request("http://x/api/info"));
+      expect(hits).toBe(1);
+      // A module that predates the field (a fresh api, so no cache) reports null.
+      body = { ok: true, module: "mod-wrathbench", worldStopped: false };
+      const old = (await (await api(runs, false, undefined, `http://127.0.0.1:${stub.port}`)(new Request("http://x/api/info"))).json()) as { worldserver: unknown };
+      expect(old.worldserver).toBeNull();
+    } finally {
+      stub.stop(true);
+    }
   });
 });
 

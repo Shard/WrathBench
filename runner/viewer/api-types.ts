@@ -270,6 +270,12 @@ export interface ApiInfoResponse {
   publicMode: boolean;
   /** True when a built dashboard is being served from disk. */
   dashboard: boolean;
+  /**
+   * The worldserver as its module's /health reports it: the build stamp the
+   * image was compiled with and its process start. `null` when the module is
+   * unreachable from the viewer or predates the field (cached briefly).
+   */
+  worldserver: { build: string; startedAtMs: number } | null;
   now: number;
 }
 

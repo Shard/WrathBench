@@ -48,6 +48,8 @@ const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
  */
 const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist";
 const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
+/** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
+const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
 
 if (!existsSync(runsDir)) {
   console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
@@ -60,6 +62,7 @@ const handle = createApi({
   tilesDir,
   dashboardDir: built ? dashboardDir : undefined,
   publicMode,
+  moduleUrl,
 });
 
 const server = Bun.serve({

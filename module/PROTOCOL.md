@@ -34,7 +34,8 @@ Two error channels, deliberately separated (docs/CONTRACTS.md):
 Module and world status. No auth, no body.
 
 Two views (2026-08). Callers on the compose network — the runner and, through
-it, the snippet sandbox — get liveness only: `ok`, `module`, `worldStopped`,
+it, the snippet sandbox — get liveness plus build identity: `ok`, `module`,
+`worldStopped`, `build`, `startedAtMs`, `uptimeMs`,
 with `sessions` / `droppedPackets` / `droppedPacketsLive` present but zeroed
 (kept so the SDK response schema parses) and no `droppedByOpcode`. The global
 session count and the drop census describe module internals and other runs'
@@ -52,9 +53,23 @@ Operator (loopback) response `200`:
   "sessions": 1,
   "droppedPackets": 4213,
   "droppedPacketsLive": 37,
-  "droppedByOpcode": { "SMSG_POWER_UPDATE": 1400, "SMSG_EMOTE": 220, "0x4F2": 3 }
+  "droppedByOpcode": { "SMSG_POWER_UPDATE": 1400, "SMSG_EMOTE": 220, "0x4F2": 3 },
+  "build": "harness-0.3-41-g0bfe207",
+  "startedAtMs": 1787400000000,
+  "uptimeMs": 3600000
 }
 ```
+- `build` — the wrathbench repo's `git describe --tags --always --dirty` at
+  image build time, compiled into the module from the `WRATHBENCH_BUILD`
+  docker build-arg (`infra/build-worldserver.sh` supplies it; see
+  `module/mod-wrathbench.cmake`). `"unknown"` when the image was built without
+  it. Served to every caller (added 2026-08-22): it is ops identity, not game
+  state, and lets the fleet gate, trajectories and the dashboard name *which*
+  server they talked to.
+- `startedAtMs` — worldserver process start, epoch milliseconds (captured at
+  static initialisation). `build` + `startedAtMs` together identify "this
+  build, this boot"; the fleet's preflight gate keys on exactly that pair.
+- `uptimeMs` — milliseconds since `startedAtMs`. Telemetry, not identity.
 - `sessions` — number of live bench sessions.
 - `droppedPackets` — lifetime count of outbound packets suppressed because they
   were not on the event whitelist (survives session teardown). Whitelist tuning

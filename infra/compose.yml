@@ -28,6 +28,9 @@ x-ac-build: &ac-build
     USER_ID: ${WRATHBENCH_UID:-1000}
     GROUP_ID: ${WRATHBENCH_GID:-1000}
     DOCKER_USER: acore
+    # /health `build` stamp. Set by infra/build-worldserver.sh; a bare
+    # `docker compose build` without it produces an image that says "unknown".
+    WRATHBENCH_BUILD: ${WRATHBENCH_BUILD:-}
 
 services:
   # ---------------------------------------------------------------- database
