@@ -103,6 +103,12 @@ namespace WrathBench
         std::atomic<int> phase{P_AUTH};
         uint64_t targetGuidRaw{0};
 
+        // Account-reclaim wait (create only, world thread only). When a create
+        // has to evict a stale/leaked session holding the account, DoCreateSession
+        // tears it down and re-queues itself until the core releases the account;
+        // this is the wall-clock deadline for that wait, set on the first entry.
+        int64_t createDeadlineMs{0};
+
         // Ack for the in-flight /session request. Set exactly once, by whichever
         // of the kickoff task (sync failure) or the tap (async completion) reaches
         // the terminal state first.
@@ -233,6 +239,11 @@ namespace WrathBench
 
         // Tap helpers (world/map thread).
         void EmitEvent(BenchSession& s, std::string const& opcodeName, uint16_t opcodeId, std::string const& dataJson);
+        // Emit one synthetic WB_SESSION_STATE for an in-world session (ADR-0014):
+        // the client-visible self state a fresh SMSG_LOGIN_VERIFY_WORLD carries.
+        // World thread only (reads Player). Reused by the WS-reattach path and by
+        // an idempotent same-token createSession so the caller re-syncs state.
+        void EmitSessionState(std::shared_ptr<BenchSession> const& s);
         void Audit(BenchSession& s, char const* kind, std::string const& json);
         void SucceedAck(BenchSession& s);
         void FailAck(BenchSession& s, std::string const& message, int status = 502);

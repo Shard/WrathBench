@@ -64,3 +64,39 @@ it never says "you should be fighting boars".
   does inside the sandbox (e.g. `BigInt.prototype.toJSON`) are outside this
   ADR: they alter the environment, not the surface, and need their own
   decision.
+
+## Addendum (2026-08-22): createSession reclaims a permitted account
+
+A confirmed harness trap surfaced on a shared-account lane (account `RUNNER`
+cycled model→model): a prior episode leaked a bench session under its old
+token, and the next episode's `createSession` was boxed in with three
+contradictory signals and no exit — `createSession` → `account_in_use` ("you
+already have a live session… do not call createSession again"), `deleteSession`
+(new token) → `no_session`, state cache → no session. One weak model called
+`createSession` 94 times against this; a capable agent is equally trapped. This
+is the failure ADR-0016 exists to prevent, on the create surface.
+
+The fix applies both rules of this ADR to `POST /session`. **Repair only what is
+deterministic:** the one-account-one-lane-one-episode invariant (enforced by the
+fleet's duplicate-account guard and the roster's account-busy guard) makes "a
+session is holding this permitted account at create time" mean exactly one thing
+— it is stale/leaked, never a legitimate concurrent run — so taking ownership is
+the single valid reading, not a guess. A normal create therefore reclaims: it
+tears the stale session down through the existing teardown path and enters world
+once the core has released the account. A same-token create that is already in
+world for the same character+account returns success idempotently (the caller
+re-syncs from the event stream); a same-token session in world for a *different*
+character is torn down and rebuilt rather than answered with a wrong-character
+success — the silent-wrong-behavior line this ADR draws. **Every rejection stays
+actionable:** `account_in_use`, whose SDK-rendered hint was the dead-end itself,
+no longer fires on `POST /session`. The only residual failure is the rare case
+where the core does not release the account within the internal reclaim wait,
+reported as the existing `timeout` code (retryable, and the teardown is already
+in flight, so a retry converges).
+
+Consequence, per this ADR's own terms: this changes a documented error contract
+(`account_in_use` was a create-path answer), so it is a harness change, versioned
+and not score-comparable across the boundary. `account_in_use` remains on the
+non-reclaiming surfaces (`POST /characters`, `POST /character-delete`);
+character-delete deliberately still refuses with `account_owned_by_other_token`
+rather than evicting a running episode.
