@@ -195,8 +195,10 @@ quest/combat extension set (2026-08, additive): `set_target`, `clear_target`,
 `quest_complete`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
 `loot_money`, `loot_release`, `loot_all`, `vendor_list`, `buy_item`,
 `sell_item`, `repair_all`, `equip_item`, `use_item`, `destroy_item`, `repop`,
-`reclaim_corpse`, `spirit_healer_activate` (2026-08, additive), and the trainer
-extension (2026-08, additive): `trainer_list`, `trainer_buy_spell`. Acks that the
+`reclaim_corpse`, `spirit_healer_activate` (2026-08, additive), the trainer
+extension (2026-08, additive): `trainer_list`, `trainer_buy_spell`, and the
+spellbook/talent extension (2026-08, additive): `learn_talent`,
+`learn_preview_talents`, `raw`. Acks that the
 opcode was synthesized and queued; the game
 result (the chat echo, an arrival, or an error) arrives on the WebSocket.
 
@@ -315,19 +317,85 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
 | `trainer_list` | `guid` | `CMSG_TRAINER_LIST` | `SMSG_TRAINER_LIST` follows — or nothing at all when the NPC is out of interaction range, is not a trainer, or trains another class (the handler returns silently) |
 | `trainer_buy_spell` | `guid`, `spellId` | `CMSG_TRAINER_BUY_SPELL` | costs the character's own money server-side; answered by `SMSG_TRAINER_BUY_SUCCEEDED` or `SMSG_TRAINER_BUY_FAILED` |
+| `learn_talent` | `talentId`, `rank` | `CMSG_LEARN_TALENT` | `talentId` from Talent.dbc, `rank` 0-based; the handler always answers `SMSG_TALENTS_INFO`, and a granted spell arrives as `SMSG_LEARNED_SPELL`; `400 missing_talent` |
+| `learn_preview_talents` | `talents` = `[[talentId, rank], ...]` | `CMSG_LEARN_PREVIEW_TALENTS` | the preview-mode "learn" button (at most 150 pairs); `400 missing_talents`, `400 invalid_talents` |
+| `raw` | `opcode`, `payload` | the named opcode | the escape hatch (ADR-0025), below |
 | `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
 | `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional |
 | `spirit_healer_activate` | `guid` | `CMSG_SPIRIT_HEALER_ACTIVATE` | graveyard resurrection fallback; no dedicated response opcode — the outcome arrives through already-served events (health update fields, res-sickness aura) |
 
 Validation errors (all `400`): `missing_guid`, `missing_option`,
 `missing_quest_id` (also for `quest_query`), `missing_reward_index`, `missing_spell_id`,
-`missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`.
+`missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`,
+`missing_talent`, `missing_talents`, `invalid_talents`, and for `raw`:
+`missing_opcode`, `opcode_not_allowed`, `invalid_payload`, `payload_too_large`.
 
 Every `missing_*` reply from `POST /action` echoes what it was about:
 `{"ok":false,"error":"missing_guid","action":"set_target","param":"guid"}`.
 A guid-shaped field (`guid`, `targetGuid`, `itemGuid`) that is present but not
 a decimal u64 string is `400 invalid_guid`, echoing `action`, `param` and the
 received value (truncated to 64 chars) — never silently coerced to guid 0.
+
+#### raw (escape hatch, 2026-08, ADR-0025)
+
+Send one allowlisted client opcode with a caller-built body. Exists so a
+trajectory can demonstrate the need for a surface before the module and SDK
+grow a dedicated action for it (ADR-0015); it is not a second way to do what an
+action already does.
+
+Request:
+```json
+{ "token": "...", "action": "raw", "opcode": "CMSG_TEXT_EMOTE", "payload": "2200000000000000" }
+```
+
+`opcode` is the `CMSG_*` name; `payload` is the packet body as a hex string
+(little-endian per field, as on the 3.3.5a wire; empty or omitted for a
+bodiless opcode; at most 512 bytes). The bytes are queued verbatim into the
+stock handler for that opcode — the module does not parse or repair them, and
+a body the handler cannot read is the same as a malformed client packet (the
+core logs it and, as for any client, may kick the session). Success `200`:
+`{ "ok": true, "action": "raw", "token": ... }`. The audit record carries
+`opcode` and `payload` so the exact bytes sent are reconstructable.
+
+Errors (all `400`): `missing_opcode`, `opcode_not_allowed` (echoes `opcode`
+and a hint), `invalid_payload` (not whole hex bytes), `payload_too_large`
+(echoes `received` and `maximum`).
+
+Allowlist — every entry is an opcode a stock client sends during ordinary play
+whose handler does nothing a non-GM client could not do:
+
+- talents: `CMSG_LEARN_TALENT`, `CMSG_LEARN_PREVIEW_TALENTS`
+- chat/emotes: `CMSG_MESSAGECHAT` (whisper, party, yell and the rest ride this
+  one), `CMSG_EMOTE`, `CMSG_TEXT_EMOTE`
+- inventory: `CMSG_SPLIT_ITEM`, `CMSG_SWAP_ITEM`, `CMSG_SWAP_INV_ITEM`,
+  `CMSG_AUTOSTORE_BAG_ITEM`, `CMSG_AUTOEQUIP_ITEM_SLOT`, `CMSG_READ_ITEM`,
+  `CMSG_OPEN_ITEM`, `CMSG_BUYBACK_ITEM`
+- spell/aura control: `CMSG_CANCEL_AURA`, `CMSG_CANCEL_AUTO_REPEAT_SPELL`,
+  `CMSG_CANCEL_CHANNELLING`, `CMSG_SET_SHEATHED`, `CMSG_STANDSTATECHANGE`,
+  `CMSG_RESURRECT_RESPONSE`
+- flight paths: `CMSG_TAXINODE_STATUS_QUERY`, `CMSG_TAXIQUERYAVAILABLENODES`,
+  `CMSG_ACTIVATETAXI`, `CMSG_ACTIVATETAXIEXPRESS`
+- bank: `CMSG_BANKER_ACTIVATE`, `CMSG_AUTOBANK_ITEM`, `CMSG_AUTOSTORE_BANK_ITEM`,
+  `CMSG_BUY_BANK_SLOT`
+- mail: `CMSG_SEND_MAIL`, `CMSG_GET_MAIL_LIST`, `CMSG_MAIL_TAKE_ITEM`,
+  `CMSG_MAIL_TAKE_MONEY`, `CMSG_MAIL_MARK_AS_READ`, `CMSG_MAIL_DELETE`
+- party: `CMSG_GROUP_INVITE`, `CMSG_GROUP_ACCEPT`, `CMSG_GROUP_DECLINE`,
+  `CMSG_GROUP_UNINVITE_GUID`, `CMSG_GROUP_DISBAND`, `CMSG_GROUP_SET_LEADER`,
+  `CMSG_LOOT_METHOD`
+- trade: `CMSG_INITIATE_TRADE`, `CMSG_BEGIN_TRADE`, `CMSG_ACCEPT_TRADE`,
+  `CMSG_CANCEL_TRADE`, `CMSG_SET_TRADE_ITEM`, `CMSG_CLEAR_TRADE_ITEM`,
+  `CMSG_SET_TRADE_GOLD`
+- client-cache queries: `CMSG_NAME_QUERY`, `CMSG_CREATURE_QUERY`,
+  `CMSG_GAMEOBJECT_QUERY`, `CMSG_ITEM_QUERY_SINGLE`, `CMSG_NPC_TEXT_QUERY`,
+  `CMSG_PAGE_TEXT_QUERY`, `CMSG_PLAYED_TIME`, `CMSG_QUERY_TIME`,
+  `CMSG_SET_WATCHED_FACTION`, `CMSG_SET_ACTION_BUTTON`
+
+Deliberately absent: movement opcodes (the module drives them; a stray one
+desyncs the mover), session lifecycle (login, logout, character create/delete),
+every opcode that already has an action (one audited path per opcode), and
+anything GM-gated or teleport-shaped. Answers to raw actions reach the agent
+only through the event whitelist: most of the above have no whitelisted reply
+yet, which is exactly the evidence the hatch exists to produce.
 
 ### POST /characters
 
@@ -661,6 +729,22 @@ entry (item create block, loot window, vendor list, item push, quest reward
 list) the module issues the `CMSG_ITEM_QUERY_SINGLE` a client cache miss would,
 and the answer arrives as `SMSG_ITEM_QUERY_SINGLE_RESPONSE`. Joining ids to
 names is the SDK's job.
+
+Spellbook, cooldowns, talents (2026-08, additive). `rank` and `name` on a spell
+row are what a client reads from its own Spell.dbc for the id (`rank` 1 when
+unranked; both absent when the id is unknown to the core) — client-cache
+knowledge, like item-template fields:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_INITIAL_SPELLS` | 0x12A | `{ "spells": [{ "spellId", "rank"?, "name"? }], "cooldowns": [{ "spellId", "itemId", "category", "cooldownMs", "categoryCooldownMs" }] }` — the whole active-spec spellbook, sent during login before `SMSG_LOGIN_VERIFY_WORLD`; a category cooldown carries its time in `categoryCooldownMs` and 0 in `cooldownMs`; `categoryCooldownMs` 0x80000000 with `cooldownMs` 1 is the core's "infinite" marker |
+| `SMSG_LEARNED_SPELL` | 0x12B | `{ "spellId", "rank"?, "name"? }` |
+| `SMSG_REMOVED_SPELL` | 0x203 | `{ "spellId" }` |
+| `SMSG_SUPERCEDED_SPELL` | 0x12C | `{ "supersededSpellId", "spellId", "rank"?, "name"? }` — the old rank leaves the book, `spellId` replaces it (a `SMSG_LEARNED_SPELL` for the new id follows) |
+| `SMSG_SPELL_COOLDOWN` | 0x134 | `{ "guid", "flags": <u8>, "cooldowns": [{ "spellId", "cooldownMs" }] }` — cooldowns that just started for `guid` (self or pet); `flags & 1` = the GCD was triggered too; a 0 ms entry is a GCD-only marker |
+| `SMSG_COOLDOWN_EVENT` | 0x135 | `{ "spellId", "guid" }` — "start the timer you already know for this spell": the duration is Spell.dbc knowledge the module does not serve |
+| `SMSG_CLEAR_COOLDOWN` | 0x1DE | `{ "spellId", "guid" }` |
+| `SMSG_TALENTS_INFO` | 0x4C0 | `{ "pet": false, "unspentPoints", "specCount", "activeSpec", "specs": [{ "talents": [{ "talentId", "rank" }] }] }` — `rank` is 0-based; glyph slots are consumed and not served. The pet form is `{ "pet": true }` only (no pet surface). Sent on login, level-up, after every `CMSG_LEARN_TALENT`, and on spec change |
 
 Death:
 
