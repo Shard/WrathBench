@@ -443,12 +443,43 @@ priority. Items graduate out of this file into commits; the dev loop
     regexes and a forced relog (ADR-0015 bar met); and the prompt now
     documents both SDK tiers briefly, as ADR-0015 said it should.
 
+21. **turnInQuest mis-statuses — Fixed 2026-08-22** (roster-opus/-sonnet
+    20260822 reviews, both models routed around the helper by reading its
+    source and issuing raw actions). Three defects in one method: a
+    *completable* `SMSG_QUESTGIVER_REQUEST_ITEMS` was answered by re-sending
+    `quest_complete`, which the core answers with REQUEST_ITEMS forever on
+    item-delivery quests — now the reward is chosen directly from that
+    answer; a refusal while the quest log said `complete:true` returned the
+    same `not_complete` as unfinished objectives — now `wrong_questgiver`
+    with a hint; and an out-of-range turn-in burned the full timeout because
+    the server silently drops it — now a >40y cached distance fails fast as
+    `too_far` (threshold deliberately gross so position staleness can never
+    falsely reject, ADR-0016). Shipped alongside: `item_not_usable` echoes
+    what the local bag cache sees at the given bag/slot; the 30s-timeout
+    message carries a concrete fire-and-forget idiom (sonnet never once used
+    background routines and re-ran inline travel loops into the cap 4×);
+    `state.self` documented as a property (sonnet guessed `state.self()`);
+    claude-lane trajectory records carry a `call` index because that lane's
+    single long driver turn makes `turn` useless for analysis.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed
    for a train action (deferred in docs/CONTRACTS.md Phase 0 set). First
    candidate for the next action-surface widening; needs SMSG_TRAINER_LIST
    decode + CMSG_TRAINER_BUY_SPELL.
+9a. **questsAvailableFrom(npcGuid)** — opus (roster-opus-20260822) wrote its
+    own `qlist` wrapper over `questList` + event scraping and got confused by
+    its own `null`s; earlier runs built the same scaffold. One more sighting
+    and the ADR-0015 bar is met: a helper that sends `quest_list` and returns
+    the parsed offer list from QUESTGIVER_QUEST_LIST *or* GOSSIP_MESSAGE
+    (the two shapes acceptQuestFrom already handles).
+9b. **A wait/until primitive that doesn't burn snippet turns** — ~20 of
+    opus's 85 turns were pure 25-28s sleep-polls of a background grind
+    routine. A `sdk.waitUntil(predicate, timeout)` (or letting a snippet
+    declare "wake me on event X") would cut turn counts for every model.
+    Held: smells like the convenience middle tier ADR-0015 forbids; decide
+    deliberately, with Mark, not inline.
 10. Per-character credentials (PHASE-0 deferred list) — required before any
     run parallelism beyond the current one-account-per-run scheme.
     Note 2026-08-22: the fleet layer (`infra/fleet.json` + `run-fleet.ts`)

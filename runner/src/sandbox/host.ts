@@ -313,7 +313,9 @@ export class SandboxHost {
             `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned; ` +
             `the runtime (bindings, routines, session) is still alive. ` +
             `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
-            `routine (launch it without awaiting, or use setInterval, and poll it from a later snippet); ` +
+            `routine (launch it without awaiting, e.g. ` +
+            `\`globalThis.trip = (async () => { for (const p of waypoints) await sdk.moveTo(p); return "done"; })().catch(String)\` ` +
+            `— returns instantly, then a later snippet checks \`await Promise.race([trip, "running"])\`); ` +
             `the abandoned code may still be running, so check state/events before assuming it failed.`,
           logs: ping.logs,
           durationMs: this.opts.snippetTimeoutMs,

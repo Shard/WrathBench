@@ -296,6 +296,9 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   timeout: "the module's internal wait ran out — the world may be busy; retry once before assuming failure",
   invalid_guid:
     "the guid did not parse as a decimal u64 string — pass unit.guid exactly as the state cache gave it, never a rounded number",
+  item_not_usable:
+    "the server refused CMSG_USE_ITEM for that bag/slot — the item there has no on-use effect, " +
+    "or the slot is empty or shifted (slots move after looting/selling); check state.bag()",
 };
 
 export class WrathRequestError extends Error {
@@ -580,9 +583,12 @@ export type QuestAcceptResult =
     };
 
 /**
- * The outcome of a turn-in. `not_complete` is the questgiver refusing;
- * `inventory_full` is the server refusing to hand over the reward — the quest
- * is still in the log and can be turned in again once a bag slot is free.
+ * The outcome of a turn-in. `not_complete` is the questgiver refusing while
+ * the quest log agrees the objectives are unfinished; `wrong_questgiver` is
+ * the refusal when the log says complete — another NPC ends this quest;
+ * `too_far` is a local pre-check, nothing was sent; `inventory_full` is the
+ * server refusing to hand over the reward — the quest is still in the log and
+ * can be turned in again once a bag slot is free.
  */
 export type QuestTurnInResult =
   | {
@@ -592,7 +598,25 @@ export type QuestTurnInResult =
       readonly xp: number;
       readonly money: number;
     }
-  | { readonly ok: false; readonly status: "not_complete"; readonly questId: number }
+  | {
+      readonly ok: false;
+      readonly status: "not_complete";
+      readonly questId: number;
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "wrong_questgiver";
+      readonly questId: number;
+      readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "too_far";
+      readonly questId: number;
+      readonly distance: number;
+      readonly hint: string;
+    }
   | {
       readonly ok: false;
       readonly status: "inventory_full";
@@ -897,13 +921,26 @@ export class WrathClient {
   }
 
   /** `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell. */
-  useItem(bag: number, slot: number, targetGuid?: GuidArg): Promise<ActionResponse> {
-    return this.action({
-      action: "use_item",
-      bag,
-      slot,
-      targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid, "useItem(..., targetGuid)"),
-    });
+  async useItem(bag: number, slot: number, targetGuid?: GuidArg): Promise<ActionResponse> {
+    try {
+      return await this.action({
+        action: "use_item",
+        bag,
+        slot,
+        targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid, "useItem(..., targetGuid)"),
+      });
+    } catch (err) {
+      // A bare item_not_usable cannot be told apart from "the slot shifted
+      // under me" (roster-sonnet-20260822); say what the local cache thinks is
+      // at that address so the model does not have to guess.
+      if (err instanceof WrathRequestError && err.code === "item_not_usable") {
+        const item = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
+        err.message += item
+          ? ` — local state sees ${item.name ?? `item ${item.itemId ?? "?"}`}${item.count !== undefined ? ` x${item.count}` : ""} at bag ${bag} slot ${slot}: that item has no on-use effect`
+          : ` — local state sees nothing at bag ${bag} slot ${slot}; slots shift after looting/selling, re-read state.bag()`;
+      }
+      throw err;
+    }
   }
 
   /** `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. */
@@ -1481,10 +1518,12 @@ export class WrathClient {
    * Hand a finished quest back and take a reward.
    *
    * `quest_complete` is answered either with the reward offer or with
-   * `SMSG_QUESTGIVER_REQUEST_ITEMS` — which, when it says the quest *is*
-   * completable, is the client's cue to send the completion again to get the
-   * offer. A `completable: false` is the questgiver saying no, and comes back
-   * as `{ ok: false, status: "not_complete" }`.
+   * `SMSG_QUESTGIVER_REQUEST_ITEMS`. A *completable* REQUEST_ITEMS is how the
+   * core answers item-delivery quests — re-asking gets the same answer forever
+   * (roster-opus-20260822), so the reward is chosen directly from there. A
+   * `completable: false` is the questgiver saying no: `not_complete` when the
+   * quest log agrees, `wrong_questgiver` when the log says the objectives are
+   * done — that refusal means another NPC ends this quest.
    */
   async turnInQuest(
     npcGuid: GuidArg,
@@ -1498,7 +1537,30 @@ export class WrathClient {
       !isDecodeError(e.data) &&
       (e.data as { questId: number }).questId === questId;
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Out-of-range quest_complete is silently ignored by the server and burns
+    // the whole timeout (roster-opus-20260822 turn ~28). Fail fast only when
+    // the cache can prove the NPC is *grossly* far away — the 40y threshold
+    // leaves cached-position staleness no room to reject a legitimate call
+    // (ADR-0016); borderline cases still get the honest timeout.
+    {
+      const npc = this.state.nearby.get(guidKey(guidArg(npcGuid, "turnInQuest(npcGuid)")));
+      const self = this.state.self.position;
+      const pos = npc?.position?.value;
+      if (npc && pos && self) {
+        const distance = Math.hypot(pos.x - self.value.x, pos.y - self.value.y, pos.z - self.value.z);
+        if (distance > 40) {
+          return {
+            ok: false,
+            status: "too_far",
+            questId,
+            distance: Math.round(distance),
+            hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~5y; moveTo it first`,
+          };
+        }
+      }
+    }
+
+    {
       const sinceSeq = this.events.recent(1)[0]?.seq;
       await this.questComplete(npcGuid, questId);
       const answer = await this.events.waitFor(
@@ -1512,8 +1574,24 @@ export class WrathClient {
       );
       if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
         const req = answer.data as QuestGiverRequestItemsData;
-        if (!req.completable) return { ok: false, status: "not_complete", questId };
-        continue; // completable: ask again, which is what the client does.
+        if (!req.completable) {
+          const logComplete = this.state.quest(questId)?.complete === true;
+          if (logComplete) {
+            return {
+              ok: false,
+              status: "wrong_questgiver",
+              questId,
+              hint: "the quest log says the objectives are complete but this NPC refused — a different NPC ends this quest; check the quest text for who to return to",
+            };
+          }
+          return {
+            ok: false,
+            status: "not_complete",
+            questId,
+            hint: "the questgiver refused and the quest log agrees the objectives are unfinished — check state.quest(questId).counts",
+          };
+        }
+        // completable REQUEST_ITEMS: fall through and choose the reward.
       }
       await this.questChooseReward(npcGuid, questId, rewardIndex);
       // Raced against the completion: a reward that does not fit answers the
@@ -1545,7 +1623,6 @@ export class WrathClient {
       const d = complete.data as QuestGiverQuestCompleteData;
       return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
     }
-    return { ok: false, status: "not_complete", questId };
   }
 
   /**

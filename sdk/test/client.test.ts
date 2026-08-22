@@ -904,14 +904,15 @@ describe("client: quests", () => {
     await stub.stop();
   });
 
-  test("a completable REQUEST_ITEMS is asked again, as the client does", async () => {
+  test("a completable REQUEST_ITEMS goes straight to the reward choice", async () => {
+    // Re-asking with quest_complete gets REQUEST_ITEMS again forever on
+    // item-delivery quests (roster-opus-20260822): the reward is chosen
+    // directly from the completable answer.
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
-    const first = await untilAction(stub, "quest_complete");
+    await untilAction(stub, "quest_complete");
     stub.push(JSON.stringify(requestItems(QUEST_ID, true, 80)));
-    await untilAction(stub, "quest_complete", first + 1);
-    stub.push(JSON.stringify(offerReward(QUEST_ID, 81)));
     await untilAction(stub, "quest_choose_reward");
     stub.push(JSON.stringify(questRewarded(QUEST_ID, 82)));
     expect((await pending).ok).toBe(true);
@@ -944,7 +945,49 @@ describe("client: quests", () => {
     await untilAction(stub, "quest_complete");
     stub.push(JSON.stringify(requestItems(QUEST_ID, false, 83)));
     const result = await pending;
-    expect(result).toEqual({ ok: false, status: "not_complete", questId: QUEST_ID });
+    expect(result).toMatchObject({ ok: false, status: "not_complete", questId: QUEST_ID });
+    if (result.ok || result.status !== "not_complete") throw new Error(`unexpected ${result.status}`);
+    expect(result.hint).toContain("unfinished");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a grossly out-of-range questgiver fails fast as too_far", async () => {
+    // The server silently ignores an out-of-range quest_complete; without the
+    // pre-check the call burns its whole timeout (roster-opus-20260822).
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const FAR_GUID = "17365880163140632599";
+    const far = structuredClone(creatureCreate);
+    (far.data.objects[0] as { guid: string }).guid = FAR_GUID;
+    (far.data.objects[0] as { pos: { x: number } }).pos.x = -1100.0; // ~134y off
+    far.seq = 90;
+    stub.push(JSON.stringify(far));
+    await Bun.sleep(20);
+    const result = await client.turnInQuest(FAR_GUID, QUEST_ID, 0, { timeout: 2000 });
+    expect(result).toMatchObject({ ok: false, status: "too_far", questId: QUEST_ID });
+    if (result.ok || result.status !== "too_far") throw new Error(`unexpected ${result.status}`);
+    expect(result.hint).toContain("moveTo");
+    expect(stub.actions.some((a) => a.action === "quest_complete")).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a refusal while the log says complete names the wrong questgiver", async () => {
+    // roster-sonnet-20260822: three not_completes against a log that said
+    // complete:true — the honest status is that another NPC ends this quest.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted));
+    stub.push(JSON.stringify(questComplete));
+    await Bun.sleep(20); // let the state cache apply the log updates
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(requestItems(QUEST_ID, false, 84)));
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, status: "wrong_questgiver", questId: QUEST_ID });
+    if (result.ok || result.status !== "wrong_questgiver") throw new Error(`unexpected ${result.status}`);
+    expect(result.hint).toContain("different NPC");
     client.close();
     await stub.stop();
   });
