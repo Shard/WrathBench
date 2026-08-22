@@ -568,14 +568,32 @@ export function questRewarded(questId: number, seq = 49): unknown {
 }
 
 /** `result` 48 is EQUIP_ERR_INVENTORY_FULL, the bag-full refusal. */
-export function inventoryChangeFailure(seq: number, result = 48): unknown {
+export function inventoryChangeFailure(
+  seq: number,
+  result = 48,
+  extra: { itemGuid?: string; requiredLevel?: number } = {},
+): unknown {
   return {
     seq,
     opcode: "SMSG_INVENTORY_CHANGE_FAILURE",
     opcodeId: 0x112,
     ts: 1_700_000_000_495,
-    data: { result },
+    data: { result, ...extra },
   };
+}
+
+/**
+ * The character's own inventory fields after the server moved `ITEM_GUID` from
+ * one slot to another — what an accepted equip looks like on the wire (the old
+ * slot zeroed, the equipment slot carrying the guid halves).
+ */
+export function inventorySlotMove(seq: number, from: number, to: number): unknown {
+  return selfFields(seq, {
+    [`invSlot${from}Lo`]: 0,
+    [`invSlot${from}Hi`]: 0,
+    [`invSlot${to}Lo`]: ITEM_GUID_LO,
+    [`invSlot${to}Hi`]: ITEM_GUID_HI,
+  });
 }
 
 /** `slotType` defaults to 4 (LOOT_SLOT_TYPE_OWNER): what every solo loot carries. */

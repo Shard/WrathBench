@@ -59,6 +59,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `questsAvailableFrom` | `questsAvailableFrom(npcGuid: GuidOrUnit, options?): Promise<{ ok, quests }>` | What an NPC is offering right now; an empty list is an answer, not an error. |
 | `trainerList` | `trainerList(npcGuid: GuidOrUnit, options?): Promise<TrainerListResult>` | What a trainer teaches, each row with derived learnable/affordable. |
 | `buySpell` | `buySpell(npcGuid: GuidOrUnit, spellId, options?): Promise<BuySpellResult>` | Learn one spell from a trainer for money; returns learned or buy_failed. |
+| `equipItem` | `equipItem(bag, slot, options?): Promise<EquipItemResult>` | Equip a bag item (bag 255 is the backpack, slots 23-38) and wait for the server's verdict; returns equipped, or not_equipped with the InventoryResult reason (proficiency, level, a two-hander blocking a shield, …). |
 | `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
@@ -99,7 +100,6 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `buyItem` | `buyItem(guid: GuidArg, itemId, slot, count?): Promise<ActionResponse>` | Buy an item from a vendor (slot is the 1-based vendor slot). |
 | `sellItem` | `sellItem(guid: GuidArg, itemGuid: GuidArg, count?): Promise<ActionResponse>` | Sell an item to a vendor; omit count to sell the whole stack. |
 | `repairAll` | `repairAll(guid: GuidArg): Promise<ActionResponse>` | Repair everything at a repair vendor. |
-| `equipItem` | `equipItem(bag, slot): Promise<ActionResponse>` | Equip an item; bag 255 is the backpack, slots 23-38. |
 | `useItem` | `useItem(bag, slot, targetGuid?: GuidArg): Promise<ActionResponse>` | Use a bag item's on-use effect. |
 | `destroyItem` | `destroyItem(bag, slot, count?): Promise<ActionResponse>` | Destroy a bag item; omit count to destroy the whole stack. |
 | `repop` | `repop(): Promise<ActionResponse>` | Release the spirit while dead. |
