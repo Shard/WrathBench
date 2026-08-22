@@ -366,7 +366,7 @@ tram, one flight — unaided) is the public release trigger. Items 38–40 are t
 surface work that gets there. Source for 38: the 2026-08-22 spatial-delivery
 research synthesis (operator's notes) and the travel probe (WORKLOG).
 
-38. **Navigation plan — rungs 2–4** (2026-08-22). Supersedes the ordering in
+39. **Navigation plan — rungs 2–4** (2026-08-22). Supersedes the ordering in
     item 18; the probe already made travel the obstacle, so Layer A is earned.
     Scoped to what a capital needs: walking, the Deeprun Tram, flight masters.
     Boats, zeppelins and elevators are rung-7 work and stay out.
