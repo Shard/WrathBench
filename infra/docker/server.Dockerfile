@@ -65,6 +65,10 @@ ARG CMODULES="static"
 ARG CSCRIPTS_DEFAULT_LINKAGE="static"
 ARG CWITH_WARNINGS="ON"
 ARG CMAKE_EXTRA_OPTIONS=""
+# Build identity served on /health (`build` field): the repo's
+# `git describe --tags --always --dirty`, supplied by the caller because the
+# build context carries no .git. See module/mod-wrathbench.cmake.
+ARG WRATHBENCH_BUILD=""
 
 ARG CCACHE_DIR="/ccache"
 ARG CCACHE_MAXSIZE="10G"
@@ -117,6 +121,7 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
        -DCMAKE_CXX_COMPILER_LAUNCHER="ccache"          \
        -DCMAKE_C_COMPILER_LAUNCHER="ccache"            \
        -DBoost_USE_STATIC_LIBS="ON"                    \
+       -DWRATHBENCH_BUILD="$WRATHBENCH_BUILD"          \
        $CMAKE_EXTRA_OPTIONS \
     && cmake --build . --config "$CTYPE" -j $(($(nproc) + 1)) \
     && cmake --install . --config "$CTYPE"

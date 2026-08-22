@@ -53,6 +53,48 @@ export interface ApiOptions {
    * defaulting them off would break the working view.
    */
   publicMode?: boolean;
+  /**
+   * Where the module answers /health, for the `worldserver` identity on
+   * /api/info. Defaults to loopback; the compose network does not publish the
+   * port to the host, so a host-side viewer reports `null` unless it is given
+   * a reachable URL.
+   */
+  moduleUrl?: string;
+}
+
+/** How long one /health answer (or one failure) stands in for the next. */
+export const HEALTH_CACHE_MS = 10_000;
+
+/**
+ * Read the worldserver's build identity off /health, tolerating a server that
+ * is down (null) or a module that predates the field (null). One fetch per
+ * cache window however many browsers poll.
+ */
+function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["worldserver"]> {
+  let cached: { at: number; value: ApiInfoResponse["worldserver"] } | undefined;
+  let inflight: Promise<ApiInfoResponse["worldserver"]> | undefined;
+  const read = async (): Promise<ApiInfoResponse["worldserver"]> => {
+    try {
+      const res = await fetch(`${moduleUrl}/health`, { signal: AbortSignal.timeout(2_000) });
+      if (!res.ok) return null;
+      const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
+      if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;
+      return { build: o.build, startedAtMs: o.startedAtMs };
+    } catch {
+      return null;
+    }
+  };
+  return async () => {
+    if (cached !== undefined && Date.now() - cached.at < HEALTH_CACHE_MS) return cached.value;
+    if (inflight === undefined) {
+      inflight = read().then((value) => {
+        cached = { at: Date.now(), value };
+        inflight = undefined;
+        return value;
+      });
+    }
+    return inflight;
+  };
 }
 
 export function json(body: unknown, status = 200): Response {
@@ -275,6 +317,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
   const dashboardDir = opts.dashboardDir;
+  const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
   const tails = new Map<string, TrajectoryTail>();
@@ -358,6 +401,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         service: "wrathbench-viewer",
         publicMode,
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
+        worldserver: await worldserver(),
         now: Date.now(),
       };
       return json(body);

@@ -353,20 +353,30 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     the other half, and is cheap because the module already sees every
     session; defer until it is the next obstacle.
 
-41. **`/health` has no build or version id** (2026-08-22, from ADR-0023). The
-    module answers non-loopback callers with liveness only — `ok`, `module`,
-    `worldStopped`, and zeroed counters — so nothing outside the worldserver
-    container can tell which build it is talking to. The fleet's preflight gate
-    works around it by deriving server identity from the boot of the world
-    (`data/logs/Server.log`'s creation time on the shared volume) plus a digest
-    of `/health`'s stable fields, which detects change but names nothing. A
-    `build` field (the module's compile-time git describe, or the image id
-    passed in as `AC_WRATH_BENCH_BUILD`) and a `startedAtMs` would make the
-    identity honest and let `--status`, trajectories and the deploy script all
-    say *which* server a run happened on. Trivial in `WbManager::HttpHealth`;
-    deferred only because it needs a worldserver rebuild and recreate to become
-    true of the running server, and `healthDigest()` already folds any new
-    stable field into the identity the moment it appears.
+41. ~~**`/health` has no build or version id**~~ (2026-08-22, from ADR-0023).
+    **Built to `:next`, deploy pending** (2026-08-22). `/health` now carries
+    `build` (the repo's `git describe --tags --always --dirty`, passed as the
+    `WRATHBENCH_BUILD` docker build-arg through `infra/build-worldserver.sh` /
+    compose and compiled in via `module/mod-wrathbench.cmake`; `"unknown"` if
+    absent), `startedAtMs` and `uptimeMs`, to every caller. The fleet gate's
+    server identity prefers `build@startedAtMs` and falls back to the boot
+    marker + health digest against a module that predates the field, so it
+    keeps working across the deploy; the gate record and `--status` carry
+    `build`. The viewer's `/api/info` exposes `worldserver: {build, startedAtMs}`
+    (null when unreachable). Becomes true of the running server when
+    `./infra/deploy-worldserver.sh` promotes `wrathbench/worldserver:next`.
+
+42. **Dashboard shows no server identity** (2026-08-22, from item 41). The
+    viewer's `/api/info` now serves `worldserver: { build, startedAtMs } | null`
+    off the module's `/health`, and the fleet gate record carries `build`, but
+    no page renders either. A one-line footer ("server harness-0.3-41-gabc123,
+    up since 11:07") on the fleet and run pages is the whole job; `null` should
+    read as "server unreachable from the viewer", which on the host is the
+    normal state because compose does not publish 8086 — set
+    `WRATHBENCH_MODULE_URL` for the viewer, or publish the port to loopback,
+    before the footer can say anything. Per-run server build (which build a
+    trajectory ran against) wants the runner to log `/health`'s `build` in its
+    run header; not done here.
 
 ## Ladder work (harness-0.3 / 0.4)
 

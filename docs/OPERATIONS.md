@@ -93,12 +93,21 @@ crash or a machine reboot, so run ids change there too.
 
 ### Deploy window (worldserver changes)
 
-One script, from the host:
+Two scripts, from the host:
 
 ```
+./infra/build-worldserver.sh                   # build wrathbench/worldserver:next, stamped
 ./infra/deploy-worldserver.sh                  # promote wrathbench/worldserver:next
 ./infra/deploy-worldserver.sh --next-tag wrathbench/worldserver:mybuild
 ```
+
+The build script stamps the image with this checkout's
+`git describe --tags --always --dirty` (docker build-arg `WRATHBENCH_BUILD`),
+which the module serves as `/health.build` alongside `startedAtMs`; the fleet
+gate, `run-fleet --status` and the viewer's `/api/info` name the server by it.
+Commit before building so the stamp names a commit rather than `-dirty`. A
+bare `docker compose build worldserver` without `WRATHBENCH_BUILD` in the
+environment produces an image that reports `"unknown"`.
 
 It refuses to run while any episode is live, tags the running image `:prev`,
 promotes the new one to `:latest`, recreates the worldserver (`--no-deps`; the

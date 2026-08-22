@@ -6,6 +6,24 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### `/health` names its build (FOLLOW-UPS 41)
+
+The fleet gate had to infer server identity from a log file's birth time because
+the module could not say which build it was. Now it can: `/health` carries
+`build` (the repo's `git describe`, passed in as the `WRATHBENCH_BUILD` docker
+build-arg by `infra/build-worldserver.sh` and compiled into `WbManager.cpp` via
+`module/mod-wrathbench.cmake`, scoped to that one translation unit so the
+ccache survives a new stamp), `startedAtMs` and `uptimeMs` — to every caller,
+since it is ops identity rather than game state. `run-fleet` keys the gate on
+`build@startedAtMs` when present and falls back to the boot marker + health
+digest otherwise, so the currently deployed (unstamped) server keeps gating
+through the deploy; the gate record and `--status` carry `build`, and the
+viewer's `/api/info` reports `worldserver: {build, startedAtMs}` (null when the
+module is unreachable — on the host, the normal state until the port or
+`WRATHBENCH_MODULE_URL` is arranged; item 42). Built to
+`wrathbench/worldserver:next`, define verified in the binary; deploy pending
+the next drain window.
+
 ### The deploy-window smoke becomes a fleet gate (ADR-0023)
 
 Deploying a worldserver was a manual checklist ending in "run a smoke if you

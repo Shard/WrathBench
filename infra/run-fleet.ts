@@ -105,6 +105,8 @@ export interface FleetPreflight {
 export interface PreflightRecord {
   at: number;
   serverIdentity: string;
+  /** The server's /health `build` stamp when it serves one (module >= 2026-08-22). */
+  build?: string;
   ok: boolean;
   /** True when preflight.enabled is false: the gate is open, nothing ran. */
   skipped?: boolean;
@@ -469,18 +471,20 @@ export function fleetComplete(opts: { running: number; toStart: number; hasDeadl
 // supervisor runs the configured smokes before it spawns anything, and again
 // whenever the server it is pointed at is no longer the same server.
 //
-// SERVER IDENTITY. The module's /health tells non-loopback callers liveness
-// only — no build id, no uptime (FOLLOW-UPS: add one) — and the supervisor is a
-// container without a docker socket, so it cannot ask the daemon for an image
-// id either. What it does share with the worldserver is the logs volume, and a
-// worldserver boot is visible there: the appender opens a fresh Server.log
-// (creation time = boot) after renaming the previous one aside. So identity is
-// "which boot of the world is this", plus a digest of /health's stable fields
-// so a module whose health surface changes also re-gates. That is weaker than
-// an image id and it is deliberately allowed to be: everything downstream keys
-// on the RECORDED TIME of a gate result, never on matching an identity string,
-// so a marker that fails to change can only ever cost an extra smoke run — it
-// can never greenlight an unsmoked server.
+// SERVER IDENTITY. Preferred source: /health's `build` (the repo's git describe
+// compiled into the module at image build time) and `startedAtMs` (process
+// start) — "this build, this boot", served to every caller since 2026-08-22.
+// Fallback, for a deployed module that predates those fields: the supervisor
+// is a container without a docker socket, so it cannot ask the daemon for an
+// image id, but it shares the logs volume with the worldserver, and a boot is
+// visible there: the appender opens a fresh Server.log (creation time = boot)
+// after renaming the previous one aside. So the fallback identity is "which
+// boot of the world is this", plus a digest of /health's stable fields so a
+// module whose health surface changes also re-gates. That is weaker than a
+// build id and it is deliberately allowed to be: everything downstream keys on
+// the RECORDED TIME of a gate result, never on matching an identity string, so
+// a marker that fails to change can only ever cost an extra smoke run — it can
+// never greenlight an unsmoked server.
 
 /** Where the module answers. Same default the runner and roster use. */
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
@@ -515,7 +519,7 @@ export function bootMarker(
  */
 export function healthDigest(body: unknown): string {
   if (typeof body !== "object" || body === null) return "health:unparsed";
-  const volatile = new Set(["sessions", "droppedPackets", "droppedPacketsLive", "worldStopped", "ok"]);
+  const volatile = new Set(["sessions", "droppedPackets", "droppedPacketsLive", "worldStopped", "ok", "uptimeMs"]);
   const parts = Object.entries(body as Record<string, unknown>)
     .filter(([k]) => !volatile.has(k))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -540,12 +544,33 @@ function readBootMarker(dir: string = SERVER_LOG_DIR): string {
   return bootMarker(birth, backups, Date.now());
 }
 
+export interface ServerIdentity {
+  /** The string the gate keys on; changes when the server is no longer the same server. */
+  identity: string;
+  /** /health's `build` when the module serves one; absent on the boot-marker fallback. */
+  build?: string;
+}
+
+/**
+ * Resolve a ready /health body into an identity. `build` + `startedAtMs`
+ * name the server outright; without them (a module that predates the field)
+ * fall back to the boot marker plus the health digest. Pure: the marker is
+ * injected, and only read when it is needed.
+ */
+export function serverIdentity(body: unknown, bootMarker: () => string): ServerIdentity {
+  const o = (typeof body === "object" && body !== null ? body : {}) as { build?: unknown; startedAtMs?: unknown };
+  if (typeof o.build === "string" && o.build !== "" && typeof o.startedAtMs === "number" && o.startedAtMs > 0) {
+    return { identity: `build:${o.build}@${Math.round(o.startedAtMs)}`, build: o.build };
+  }
+  return { identity: `${bootMarker()}|${healthDigest(body)}` };
+}
+
 /**
  * The server as the supervisor currently sees it: `undefined` when the module
  * does not answer or the world is stopping, which is "not ready" — neither
  * smoke it nor spawn against it.
  */
-async function readServerIdentity(): Promise<string | undefined> {
+async function readServerIdentity(): Promise<ServerIdentity | undefined> {
   let body: unknown;
   try {
     const res = await fetch(`${MODULE_URL}/health`, { signal: AbortSignal.timeout(5_000) });
@@ -556,7 +581,7 @@ async function readServerIdentity(): Promise<string | undefined> {
   }
   const o = body as { ok?: unknown; worldStopped?: unknown };
   if (o.ok !== true || o.worldStopped === true) return undefined;
-  return `${readBootMarker()}|${healthDigest(body)}`;
+  return serverIdentity(body, () => readBootMarker());
 }
 
 export type GateAction = "skip" | "wait" | "pass" | "run";
@@ -612,7 +637,7 @@ export function smokePath(script: string, root: string = REPO_ROOT): string {
  * session on the next create (commit 9bba93b), so the next attempt is not stuck
  * behind it.
  */
-async function runPreflight(pf: FleetPreflight, identity: string): Promise<PreflightRecord> {
+async function runPreflight(pf: FleetPreflight, server: ServerIdentity): Promise<PreflightRecord> {
   const started = Date.now();
   const deadline = started + pf.timeoutMs;
   const results: PreflightRecord["results"] = [];
@@ -663,7 +688,7 @@ async function runPreflight(pf: FleetPreflight, identity: string): Promise<Prefl
       break;
     }
   }
-  return { at: Date.now(), serverIdentity: identity, ok, results };
+  return { at: Date.now(), serverIdentity: server.identity, ...(server.build !== undefined ? { build: server.build } : {}), ok, results };
 }
 
 /** --status / --dry-run rendering of a gate record. Pure. */
@@ -673,6 +698,7 @@ export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight)
   const when = new Date(rec.at).toLocaleString();
   const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — lanes blocked";
   const out = [head, `  last gate ${verdict} at ${when}, identity ${rec.serverIdentity}`];
+  if (rec.build !== undefined) out.push(`  server build ${rec.build}`);
   for (const r of rec.results) {
     out.push(`    ${r.ok ? "ok  " : "FAIL"} ${r.script} (${Math.round(r.ms / 1000)}s)${r.tail === "" ? "" : ` — ${r.tail}`}`);
   }
@@ -1254,7 +1280,8 @@ async function main(): Promise<void> {
   const checkGate = async (pf: FleetPreflight): Promise<boolean> => {
     // Disabled short-circuits before the /health probe: a gate nobody armed
     // must not cost a 5s fetch every tick.
-    const identity = pf.enabled ? await readServerIdentity() : undefined;
+    const server = pf.enabled ? await readServerIdentity() : undefined;
+    const identity = server?.identity;
     const action = gateDecision({ enabled: pf.enabled, identity, last: gate });
     if (action === "skip") {
       if (gate?.skipped !== true) {
@@ -1275,7 +1302,7 @@ async function main(): Promise<void> {
     if (action === "pass") return gateOpen(action, gate);
     say(`preflight: smoking the server (identity ${identity!})`);
     record({ lane: "-", event: "preflight-start", detail: identity });
-    gate = await runPreflight(pf, identity!);
+    gate = await runPreflight(pf, server!);
     if (gate.ok) {
       complainedFor = undefined;
       say(`preflight: PASS in ${Math.round(gate.results.reduce((a, r) => a + r.ms, 0) / 1000)}s — lanes may spawn`);
