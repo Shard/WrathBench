@@ -2,7 +2,7 @@
 /**
  * Run entry point.
  *
- *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [flags]
+ *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [--effort low] [flags]
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
  *   bun runner/src/run.ts --driver claude-subscription --model opus  [SHAKEOUT ONLY]
  *   bun runner/src/run.ts --resume <run-id>
@@ -105,6 +105,9 @@ async function main(): Promise<void> {
           ? args["api-base"]
           : process.env["OPENAI_BASE_URL"] ?? undefined,
       apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
+      // Identity, like model and driver: a resumed run keeps the effort it was
+      // launched with, so --effort is not an override on --resume.
+      effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
       stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
       maxTurns: num(args["max-turns"]),
       maxToolCallsPerEpisode: num(args["max-tool-calls"]),
@@ -156,7 +159,12 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     trajectory.redact(apiKey);
-    adapter = new OpenAiChatAdapter({ baseUrl: apiBase, apiKey, model: config.model });
+    adapter = new OpenAiChatAdapter({
+      baseUrl: apiBase,
+      apiKey,
+      model: config.model,
+      ...(config.effort !== undefined ? { effort: config.effort } : {}),
+    });
   }
 
   const shakeout = shakeoutStamp(config.driver);

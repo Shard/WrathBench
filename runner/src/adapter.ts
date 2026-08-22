@@ -128,6 +128,8 @@ export interface OpenAiAdapterOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** Reasoning effort, sent as `reasoning_effort`. Omitted when absent. */
+  effort?: string;
   maxAttempts?: number;
   requestTimeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -165,6 +167,16 @@ export class OpenAiChatAdapter implements ChatAdapter {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.inputSchema },
       })),
+      // Only present when the run declares an effort level. Unlike the usage
+      // opt-in below this is NOT host-gated: effort is a run dimension the
+      // operator asked for by name, and silently dropping it on a non-OpenRouter
+      // endpoint would put a run in the matrix under a level it never used.
+      // Sent in the OpenAI-compatible spelling, which OpenRouter honours — the
+      // same prompt at low/high moved reasoning_tokens 216/310 on a model whose
+      // OpenRouter metadata lists `reasoning_effort`. A provider that rejects
+      // the field fails loudly on the first request, which is the right way for
+      // a mis-declared matrix cell to end.
+      ...(this.opts.effort !== undefined ? { reasoning_effort: this.opts.effort } : {}),
       // OpenRouter-only accounting opt-in: returns cache and cost detail in
       // `usage`. Observability, not behavior — but gated to the one host that
       // documents it, since a strict OpenAI-compat server may 400 on unknowns.

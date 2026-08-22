@@ -8,8 +8,8 @@
  *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
  *
  * Every entry is config: `model`, `driver` (openai | claude-subscription),
- * `account`, `apiBase`/`apiKeyEnv` (openai only), `character`/`race`/`class`,
- * `episodeMs`. Everything but `model` has a default, so the old shape — a bare
+ * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
+ * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
  *
  * One episode at a time, in roster order, each launched through
@@ -53,6 +53,8 @@ export interface RosterSpec {
   driver?: Driver;
   /** Game account for the entry's session. Omitted -> the runner's default. */
   account?: string;
+  /** Reasoning effort. Omitted -> the provider's own default, not a level. */
+  effort?: string;
   apiBase?: string;
   apiKeyEnv?: string;
   runId?: string;
@@ -66,6 +68,7 @@ export interface Resolved {
   model: string;
   driver: Driver;
   account: string | undefined;
+  effort: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
   runId: string;
@@ -251,9 +254,13 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       model: s.model,
       driver,
       account: s.account,
+      effort: s.effort,
       apiBase: s.apiBase ?? DEFAULT_API_BASE,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
-      runId: s.runId ?? `roster-${slug(s.model)}-${stamp}`,
+      // Effort is part of the run's identity, so it is part of the derived id:
+      // opus at low and opus at high are two rows in the matrix, and a shared
+      // run id would make them one run appended to twice.
+      runId: s.runId ?? `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}-${stamp}`,
       character,
       race: s.race ?? 1,
       class: s.class ?? 2,
@@ -275,6 +282,7 @@ export function episodeArgv(spec: Resolved, resume: boolean): string[] {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
   }
   if (spec.account !== undefined) argv.push("--account", spec.account);
+  if (spec.effort !== undefined) argv.push("--effort", spec.effort);
   argv.push(
     "--character",
     spec.character,
@@ -914,7 +922,7 @@ async function main(): Promise<void> {
           : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
-        : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}\n` +
+        : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
           `   character ${s.character} (race ${s.race}, class ${s.class})\n` +
           endpoint +
           `   episodeMs ${s.episodeMs} (${s.episodeMs / 60_000}m)`;
