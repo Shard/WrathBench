@@ -25,6 +25,16 @@ const WINDOW = 200;
 /** Past this much silence a live run is more likely stopped than thinking. */
 const SILENT_MS = 120_000;
 
+/**
+ * How often a live run's summary is re-fetched.
+ *
+ * The entry feed arrives over the tail stream, but the summary card does not:
+ * playtime, level and money come from `/api/run/<id>`, and playtime for a live
+ * run advances with the clock. Matched to the fleet listing's own 10s poll so
+ * the two pages show the same number rather than one lagging the other.
+ */
+const DETAIL_POLL_MS = 10_000;
+
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
 
@@ -55,6 +65,11 @@ export default function RunDetail() {
      */
     let stop: (() => void) | undefined;
     onCleanup(() => stop?.());
+    // Same reason as `stop`: registered here, filled in after the first await.
+    let resummarise: ReturnType<typeof setInterval> | undefined;
+    onCleanup(() => {
+      if (resummarise !== undefined) clearInterval(resummarise);
+    });
 
     void api
       .run(params.id)
@@ -66,6 +81,15 @@ export default function RunDetail() {
         setFrom(page.from);
         setTotal(page.total);
         if (d.run.terminationReason !== null) return;
+        // A live run's summary keeps moving; a finished one is settled.
+        resummarise = setInterval(() => {
+          void api
+            .run(params.id)
+            .then((next) => setDetail(next))
+            .catch(() => {
+              /* a failed poll keeps the last good summary, like `poll()` does */
+            });
+        }, DETAIL_POLL_MS);
         // Only a live run needs the tail; a finished one never grows again.
         stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {
