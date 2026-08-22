@@ -22,3 +22,4 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0018: Measure signals, not scores
 - ADR-0019: Map view — minimap tiles from the client, one renderer for live and replay
 - ADR-0020: The fleet supervisor is a compose service, not a host process
+- ADR-0021: Client-parity queries live in the SDK, except cache-miss lookups

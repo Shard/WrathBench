@@ -6,6 +6,60 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Questgiver markers and quest objectives (FOLLOW-UPS 27, 28) — NEEDS DEPLOY
+
+Both items from the five-trajectory review, built and unit-tested but **not yet
+live**: the module half is in the `wrathbench/worldserver:next` image only, and
+the running worldserver answers the new actions with `400 unsupported_action`
+(which the SDK swallows, so current runs are unaffected — `questGiver` and
+`objectives` just stay `undefined` until the deploy).
+
+- **Module** (`a4ed1a3`): `quest_query`, `questgiver_status_query`,
+  `questgiver_status_multiple_query` on `POST /action`, one client opcode each;
+  `SMSG_QUESTGIVER_STATUS_MULTIPLE` and `SMSG_QUEST_QUERY_RESPONSE` tapped and
+  decoded (field order from `PlayerMenu::SendQuestQueryResponse`, cited in
+  PROTOCOL.md; reward fields consumed, not served).
+- **SDK** (`756eb83`): `state.units()` rows carry `questGiver` (named
+  `DIALOG_STATUS_*`: `available`, `reward`, `incomplete`, `none`, …) plus the raw
+  byte; `units({ questGiver: "reward" })` and `closest({ questGiver })` filter on
+  it; `state.quest(id)` carries `title` and `objectives: [{ kind, entry, text,
+  required, have, done }]` from the template in `state.quests` joined with the
+  log counters / backpack stacks. The client sends the queries a real client
+  sends unprompted (ADR-0021), and the turn-in / quest-list silences now say
+  "this NPC's questgiver status is `available`, not `reward` — it is not quest
+  N's ender". Raw `questQuery` / `questGiverStatusQuery` exist for a refresh on
+  demand. Tests: sdk 274 (was 254), repo 733 minus the wiki track's in-flight
+  failures.
+
+**Deploy window** (docs/OPERATIONS.md "Deploy window"; zero live runs first):
+
+```
+# 0. drain: set every lane in infra/fleet.json to "enabled": false, wait for
+#    ./infra/run-fleet.sh --status to show no live run (or `stop fleet`)
+# 1. confirm the candidate image is the one built from a4ed1a3 or later
+docker images wrathbench/worldserver          # :next newer than :latest
+# 2. promote and recreate only the worldserver
+docker tag wrathbench/worldserver:latest wrathbench/worldserver:prev
+docker tag wrathbench/worldserver:next wrathbench/worldserver:latest
+docker compose -f infra/compose.yml up -d --no-deps worldserver
+# 3. wait for the world to come up (health + Server.log), then smoke
+docker compose -f infra/compose.yml exec runner bun infra/smoke/quest-status.ts
+docker compose -f infra/compose.yml exec runner bun infra/smoke/module-quest.ts   # regression
+# 4. re-enable the lanes (or `up -d --no-deps fleet`)
+```
+
+`quest-status.ts` asserts: the login `SMSG_QUESTGIVER_STATUS_MULTIPLE` names
+Deputy Willem with an available status; `questgiver_status_query` for his guid
+returns the same status as `SMSG_QUESTGIVER_STATUS`; `quest_query 783` decodes a
+title and four zeroed npc-or-go slots; `quest_query 7` decodes
+`requiredNpcOrGo[0] = { entry 6, count 8 }`; `quest_query` without `questId` is
+`400 missing_quest_id`; after accepting 783, `questgiver_status_multiple_query`
+shows Willem no longer available; then session delete + character delete. If it
+fails, `docker tag wrathbench/worldserver:prev wrathbench/worldserver:latest`
+and recreate again. Also watch the first live episode's action audit for the
+auto-query volume (one `questgiver_status_query` per questgiver entering view,
+one `questgiver_status_multiple_query` per quest-log change).
+
 ### `search_reference`: banded ranking, an id channel, and a repeat memo (FOLLOW-UPS 25)
 
 laguna issued 11 searches and nemotron 13 near-identical ones inside one episode,
