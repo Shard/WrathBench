@@ -347,8 +347,12 @@ namespace WrathBench
                              "hand-written or run-id-derived string, or append random hex to it")
                 .Str()};
 
-        if (FindByToken(token))
-            return {409, Json::Writer().Add("ok", false).Add("error", "token_in_use").Str()};
+        // Same-token handling (idempotent create / self-reclaim) is decided on
+        // the world thread in DoCreateSession, where TeardownByToken is legal and
+        // the create is serialized — not here on the io thread. _byToken[token]
+        // is written only after those checks, so there is no clobber of an
+        // existing record. (POST /characters and /character-delete keep their
+        // io-thread token_in_use pre-filter below: they never reclaim.)
 
         auto s = std::make_shared<BenchSession>();
         s->token = token;
@@ -627,31 +631,140 @@ namespace WrathBench
             return fail("unknown_account");
         s->accountId = accountId;
 
-        // One bench session per account, decided here on the world thread where
-        // creates are serialized. The HTTP-side scans (token_in_use, the
-        // /character-delete ownership gate) are only fast-path pre-filters:
-        // two requests for the same account arriving within one world tick
-        // both pass them, because a racing session only lands in _byToken
-        // below, and the core-side FindSession check further down cannot see
-        // it either (AddSession only queues; _sessions is drained in
-        // UpdateSessions, which runs before our task drain). Without this
-        // check a /character-delete racing a /session create could delete the
-        // character out from under the episode being created, and the core's
-        // AddSession_ would kick-and-delete one of the two WorldSessions
-        // while we still hold the pointer.
+        // --- Same-token create (idempotent liftoff / self-reclaim) ---------
+        // A repeated createSession under the same token must never dead-end. If
+        // that token already owns a live in-world session for the SAME account
+        // and character, return success idempotently — the caller re-syncs its
+        // state from the event stream (the trap this whole change fixes was a
+        // model boxed into calling createSession with no accepting answer). A
+        // session still mid-login is genuinely in flight (token_in_use). Any
+        // other same-token state — in world under a different character/account,
+        // or already tearing down — means the old record is stale, so tear it
+        // down and rebuild. Success is never returned for a character the caller
+        // did not ask for (ADR-0016: no silent wrong behavior). deleteMode and
+        // listMode reject same-token upstream (HttpCharacterDelete/List) and
+        // never reach here as duplicates.
+        if (!s->deleteMode && !s->listMode)
         {
-            std::lock_guard<std::mutex> lock(_sessMutex);
-            for (auto& [otherToken, other] : _byToken)
-                if (!other->tearingDown.load() && otherToken != s->token && other->accountId == accountId)
-                    return s->deleteMode ? fail("account_owned_by_other_token", 409)
-                                         : fail("account_in_use");
+            std::shared_ptr<BenchSession> existing;
+            {
+                std::lock_guard<std::mutex> lock(_sessMutex);
+                auto it = _byToken.find(s->token);
+                if (it != _byToken.end() && it->second != s)
+                    existing = it->second;
+            }
+            if (existing)
+            {
+                bool const sameChar = strcasecmp(existing->charName.c_str(), s->charName.c_str()) == 0;
+                bool const sameAcct = existing->accountId == accountId;
+                int const ph = existing->phase.load();
+                if (!existing->tearingDown.load() && ph == BenchSession::P_INWORLD
+                    && !existing->deleteMode && !existing->listMode && sameChar && sameAcct)
+                {
+                    // account/charName/targetGuidRaw are create-time-stable and
+                    // published before P_INWORLD, so reading them here is safe.
+                    if (!s->ackFired.exchange(true))
+                        ack->set_value({200, Json::Writer().Add("ok", true).Add("token", existing->token)
+                            .Add("account", existing->account).Add("character", existing->charName)
+                            .AddGuid("guid", existing->targetGuidRaw).Add("inWorld", true).Str()});
+                    // No new module session is created, so the SDK's per-session
+                    // event stream never restarts — without this the caller would
+                    // get ok:inWorld beside an empty state cache (the trap in a new
+                    // skin). Emit the same reattach snapshot the WS-reattach path
+                    // uses (ADR-0014); the SDK advances its event epoch before the
+                    // POST, so this lands in the new epoch, not the discarded one.
+                    EmitSessionState(existing);
+                    return;
+                }
+                if (!existing->tearingDown.load() && ph != BenchSession::P_INWORLD)
+                    return fail("token_in_use", 409);   // genuinely mid-login; do not disrupt it
+                // Stale or mismatched: reclaim our own token via the teardown
+                // path. The account-reclaim wait below then covers the core
+                // release before we rebuild.
+                TeardownByToken(s->token);
+            }
         }
 
-        // One session per account, against the core's map too. AddSession_ would
-        // otherwise kick and delete the existing session, leaving us with a
-        // dangling WorldSession*.
-        if (sWorldSessionMgr->FindSession(accountId))
-            return fail("account_in_use");
+        // --- Account ownership: reclaim (create) or refuse (delete/list) ---
+        // One account = one lane = one live episode, enforced upstream (the
+        // fleet's duplicate-account guard and the roster's account-busy guard),
+        // so any OTHER session found holding this *permitted* account (the
+        // allowlist was already checked in HttpCreateSession) at create time is a
+        // stale/leaked session from a prior episode — not a legitimate concurrent
+        // run, so reclaiming it is correct, not a race. A normal create therefore
+        // takes ownership: tear the holder down via the existing teardown path
+        // (never hand-rolled), then re-queue this create until the core has fully
+        // released the account (FindSession null). Waiting for the release means
+        // AddSession_ never has to kick a live session out from under a
+        // WorldSession* we still hold — the dangling-pointer hazard the original
+        // account_in_use guard existed to avoid, preserved here. deleteMode and
+        // listMode keep the stricter refusal: character-delete must never evict a
+        // running episode, and /characters is a read-only utility.
+        {
+            std::vector<std::string> holders;
+            bool held = false;
+            {
+                std::lock_guard<std::mutex> lock(_sessMutex);
+                for (auto& [otherToken, other] : _byToken)
+                    if (!other->tearingDown.load() && otherToken != s->token && other->accountId == accountId)
+                    {
+                        held = true;
+                        holders.push_back(otherToken);
+                    }
+            }
+            if (held && (s->deleteMode || s->listMode))
+                return s->deleteMode ? fail("account_owned_by_other_token", 409)
+                                     : fail("account_in_use");
+
+            // A core-side session on the account (a holder mid-teardown, or a
+            // logged-out session still inside its post-logout grace window —
+            // FindSession lingers up to ~a minute, the same window the runner's
+            // deleteCharacter loop retries) also blocks a safe AddSession.
+            bool const coreHeld = sWorldSessionMgr->FindSession(accountId) != nullptr;
+            if (coreHeld && (s->deleteMode || s->listMode))
+                return fail("account_in_use");
+
+            if (held || coreHeld)   // create only past here
+            {
+                for (auto const& t : holders)
+                {
+                    // Audit the eviction on the leaked session's own log (its
+                    // stream is still open until its shared_ptr drops) so the
+                    // reclaim is visible from both sides of the handoff.
+                    if (auto victim = TeardownByToken(t))   // idempotent: already-tearing-down holders are skipped
+                    {
+                        Audit(*victim, "action", Json::Writer().Add("op", "session_reclaimed")
+                            .Add("account", s->account).Add("byToken", s->token).Str());
+                        LOG_INFO("module", "wrathbench: reclaiming leaked account '{}' (session token '{}') for create token '{}'",
+                            s->account, t, s->token);
+                    }
+                }
+
+                int64_t const now = NowMs();
+                if (s->createDeadlineMs == 0)
+                    // Budget only part of HttpCreateSession's 20s wait for the
+                    // release: the login flow that follows (auth -> char-enum ->
+                    // PLAYER_LOGIN -> LOGIN_VERIFY_WORLD, several world ticks) must
+                    // finish inside the same 20s, and overrunning it trips the 20s
+                    // teardown path (which would now kill the session we just
+                    // built). Leave ~9s of headroom for login.
+                    s->createDeadlineMs = now + 11000;
+                if (now < s->createDeadlineMs)
+                {
+                    // Retry on the next world tick: UpdateSessions (which drains
+                    // before this task queue) needs ticks to run LogoutPlayer and
+                    // drop the old WorldSession from the core session map.
+                    PushTask([this, s, ack]() { DoCreateSession(s, ack); });
+                    return;
+                }
+                // The core did not release the account within the wait. The
+                // teardown is already in flight, so this is a transient the
+                // caller should retry into — report it as `timeout` (the same
+                // code, and actionable retry hint, the 20s HTTP wait uses),
+                // never the old dead-end account_in_use.
+                return fail("timeout", 504);
+            }
+        }
 
         QueryResult info = LoginDatabase.Query(
             "SELECT expansion, flags, mutetime, locale, recruiter, totaltime FROM account WHERE id = {}", accountId);
@@ -1761,26 +1874,33 @@ namespace WrathBench
         auto s = FindByToken(token);
         if (!s || s->phase.load() != BenchSession::P_INWORLD || s->tearingDown.load())
             return;
-        PushTask([this, s]() {
-            if (s->tearingDown.load() || s->phase.load() != BenchSession::P_INWORLD)
-                return;
-            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
-                return;
-            Player* player = s->ws->GetPlayer();
-            if (!player || !player->IsInWorld())
-                return;
-            Json::Writer w;
-            w.Add("character", s->charName)
-             .AddGuid("guid", (uint64_t)player->GetGUID().GetRawValue())
-             .Add("inWorld", true)
-             .Add("map", player->GetMapId())
-             .Add("x", (double)player->GetPositionX())
-             .Add("y", (double)player->GetPositionY())
-             .Add("z", (double)player->GetPositionZ())
-             .Add("o", (double)player->GetOrientation())
-             .Add("level", (uint32)player->GetLevel());
-            EmitEvent(*s, "WB_SESSION_STATE", 0xFF03, w.Str());
-        });
+        PushTask([this, s]() { EmitSessionState(s); });
+    }
+
+    // Emit one synthetic WB_SESSION_STATE carrying the session's own
+    // client-visible state (ADR-0014). World thread only: reads the Player. The
+    // guards mirror the reattach path — the session may tear down or lose the
+    // core WorldSession between the caller's check and this run.
+    void Manager::EmitSessionState(std::shared_ptr<BenchSession> const& s)
+    {
+        if (!s || s->tearingDown.load() || s->phase.load() != BenchSession::P_INWORLD)
+            return;
+        if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+            return;
+        Player* player = s->ws->GetPlayer();
+        if (!player || !player->IsInWorld())
+            return;
+        Json::Writer w;
+        w.Add("character", s->charName)
+         .AddGuid("guid", (uint64_t)player->GetGUID().GetRawValue())
+         .Add("inWorld", true)
+         .Add("map", player->GetMapId())
+         .Add("x", (double)player->GetPositionX())
+         .Add("y", (double)player->GetPositionY())
+         .Add("z", (double)player->GetPositionZ())
+         .Add("o", (double)player->GetOrientation())
+         .Add("level", (uint32)player->GetLevel());
+        EmitEvent(*s, "WB_SESSION_STATE", 0xFF03, w.Str());
     }
 
     void Manager::OnWsClose(std::string const& token, IWsConn* conn)

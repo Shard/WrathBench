@@ -128,7 +128,10 @@ Errors:
 - `400 {"ok":false,"error":"invalid_race_class","token":...}` — the character
   does not exist and race/class are not both in [1,11] (see above; decided at
   char-enum time, before any char-create packet is synthesized).
-- `409 {"ok":false,"error":"token_in_use"}`
+- `409 {"ok":false,"error":"token_in_use"}` — a session already exists under
+  this token and is still mid-login (not yet in world). A same-token create for a
+  session that is already in world does **not** get this: it succeeds
+  idempotently (see the reclaim note below).
 - `403 {"ok":false,"error":"account_not_permitted"}` — `account` is not on the
   `WrathBench.Accounts` allowlist.
 - `400 {"ok":false,"error":"unknown_account"}`
@@ -138,8 +141,29 @@ Errors:
   a `SMSG_CHAR_CREATE` event.
 - `502 {"ok":false,"error":"login_failed","token":...}`
 - `502 {"ok":false,"error":"character_missing_after_create","token":...}`
-- `504 {"ok":false,"error":"timeout","token":...}` — the flow did not reach the
-  world within 20s.
+- `504 {"ok":false,"error":"timeout","token":...}` — either the login flow did not
+  reach the world within 20s, or (see reclaim below) a stale session held the
+  account and the core had not released it within the internal reclaim wait.
+  Both are transient and retryable.
+
+Create reclaims a permitted account (2026-08). `POST /session` on an account
+that passed the allowlist **always takes ownership** instead of dead-ending on a
+stale/leaked session — the invariant is one account = one lane = one live
+episode (enforced by the fleet's duplicate-account guard and the roster's
+account-busy guard), so any session found holding the account at create time is
+stale, and reclaiming it is correct, not a race:
+- Same token, already in world for the **same** account+character: returns
+  success idempotently (the caller re-syncs state from the event stream); it does
+  not tear down and rebuild. A same-token session mid-login is `token_in_use`; a
+  same-token session in world for a **different** character/account is torn down
+  and rebuilt (never a silent wrong-character success, ADR-0016).
+- A different token (or a core-side session with no live bench token) holding the
+  account is torn down via the normal teardown path, and the create waits for the
+  core to fully release the account before entering world. If the release does not
+  complete within the reclaim wait, the create returns `504 timeout` (retryable),
+  never the old `account_in_use`. `account_in_use` no longer fires on `POST
+  /session`; it remains only on the read-only `POST /characters` and on
+  `POST /character-delete`, neither of which reclaims.
 
 The login flow the module performs internally, all through the real handlers:
 `AddSession` → `SMSG_AUTH_RESPONSE(AUTH_OK)` → `CMSG_CHAR_ENUM` →
@@ -317,11 +341,15 @@ configured account allowlist (`WrathBench.Accounts`, defaulting to the single
 while a different token holds a live bench session on it. The ownership check
 is decided on the world thread where session creates are serialized (the HTTP
 thread's scan is only a fast-path pre-filter), so a delete racing a
-`POST /session` for the same account within one world tick loses: one of the
-two gets `409 account_owned_by_other_token` (delete mode) or
-`400 account_in_use` (create mode) instead of both proceeding. `POST /session`
-and `POST /characters` apply the same allowlist. Minimal ownership gate for the
-per-run account scheme; per-character credentials are the Phase-1 fix.)
+`POST /session` for the same account within one world tick is decided
+deterministically: a `POST /character-delete` that finds another token on the
+account gets `409 account_owned_by_other_token` — character-delete never evicts a
+running episode. A `POST /session` create, by contrast, reclaims (see the create
+reclaim note above): it tears the other session down and takes ownership rather
+than returning `account_in_use`, so the create-mode side of the old race no
+longer produces `account_in_use`. `POST /session` and `POST /characters` apply
+the same allowlist. Minimal ownership gate for the per-run account scheme;
+per-character credentials are the Phase-1 fix.)
 
 Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
 Errors: `400 missing_token`, `400 missing_character`, `409 token_in_use`,
