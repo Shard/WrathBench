@@ -6,7 +6,9 @@
  * ### Retry policy (fixed, documented here and only here)
  *
  * - Retryable: network errors, HTTP 408/429/5xx. Exponential backoff
- *   1s * 2^attempt with ±25% jitter, capped at 30s, max 5 attempts.
+ *   1s * 2^attempt with ±25% jitter, capped at 30s, max 5 attempts. A
+ *   `Retry-After` on the response overrides that backoff for the next attempt,
+ *   clamped to the same 30s cap and jittered upward only.
  * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
  *   failure: a spent budget says nothing about the model, so the run is
  *   suspended and resumable. The body wording only picks which pause it is —
@@ -56,6 +58,13 @@ export interface AssistantTurn {
   content: string | null;
   toolCalls: ToolCall[];
   usage?: TokenUsage;
+  /**
+   * The provider's own id for the request that produced this turn, off the
+   * response headers (`x-request-id` / OpenRouter's `x-openrouter-id`) or the
+   * body's top-level `id`. The only handle a provider-side support thread can
+   * use. Absent when the provider identifies nothing.
+   */
+  providerRequestId?: string;
   raw?: unknown;
 }
 
@@ -134,6 +143,46 @@ export interface OpenAiAdapterOptions {
   requestTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Attribution referer override. Falls back to env, then to APP_URL. */
+  appUrl?: string;
+  /** Injectable for tests, the way version.ts does it. */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Attribution only — never fetched, never used for auth or routing. OpenRouter
+ * groups requests into an "app" by the `HTTP-Referer` header and labels it with
+ * `X-Title`; without them the harness shows up on openrouter.ai as "unknown".
+ * A placeholder domain the operator can claim later; override per-run with
+ * `WRATHBENCH_APP_URL`.
+ */
+export const APP_URL = "https://wrathbench.dev";
+export const APP_TITLE = "WrathBench";
+/**
+ * Deliberately a constant and not `harnessVersion()`: that shells out to `git
+ * describe` (version.ts), and a subprocess per model call to decorate a header
+ * is not a trade worth making. The trajectory carries the exact version.
+ */
+export const USER_AGENT = "wrathbench/0.2";
+
+/** `Retry-After`: integer seconds or an HTTP-date. Anything else is ignored. */
+export function parseRetryAfter(value: string | null, nowMs: number): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1_000;
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - nowMs);
+}
+
+/** The provider's request id, for a provider-side support thread. */
+function requestIdOf(res: Response): string | undefined {
+  for (const h of ["x-request-id", "x-openrouter-id", "openai-request-id", "cf-ray"]) {
+    const v = res.headers.get(h);
+    if (v !== null && v.trim().length > 0) return v.trim();
+  }
+  return undefined;
 }
 
 const EXHAUSTION_HINTS = /quota|credit|billing|insufficient|exceeded.*limit|payment/i;
@@ -160,6 +209,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
   private readonly requestTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
+  /** Built once: nothing in here varies per request. */
+  private readonly headers: Record<string, string>;
 
   constructor(private readonly opts: OpenAiAdapterOptions) {
     this.label = `openai-compatible:${opts.model}`;
@@ -167,6 +218,21 @@ export class OpenAiChatAdapter implements ChatAdapter {
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 120_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    const env = opts.env ?? process.env;
+    const fromEnv = env["WRATHBENCH_APP_URL"];
+    const appUrl =
+      opts.appUrl ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv.trim() : APP_URL);
+    this.headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${opts.apiKey}`,
+      // Sent unconditionally: OpenRouter attributes the app by these two, and
+      // every other OpenAI-compatible endpoint ignores them. `HTTP-Referer` is
+      // OpenRouter's own (misspelt) header name — not the standard `Referer`,
+      // and it must not be normalised to it.
+      "HTTP-Referer": appUrl,
+      "X-Title": APP_TITLE,
+      "user-agent": USER_AGENT,
+    };
   }
 
   async complete(req: ChatRequest): Promise<AdapterOutcome> {
@@ -196,24 +262,39 @@ export class OpenAiChatAdapter implements ChatAdapter {
 
     let lastError = "";
     let lastStatus: number | undefined;
+    /** Newest provider request id seen; threaded into every failure message. */
+    let lastRequestId: string | undefined;
     // Sticky across attempts, deliberately: a 429 followed by a retry that dies
     // of a network timeout used to clear `lastStatus` and turn a budget pause
     // into a terminal adapter-error (observed on run-real-smoke-1). What the
     // provider said once about the budget outlives one flaky socket.
     let budget: { reason: "quota-exhausted" | "rate-limited"; detail: string } | null = null;
+    // Set from a `Retry-After` on the response that is about to be retried, and
+    // consumed by the next iteration's sleep — the sleep happens at the top of
+    // the loop, so honouring the header means carrying it across one iteration.
+    let retryAfterMs: number | null = null;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       if (attempt > 0) {
         const base = Math.min(1_000 * 2 ** (attempt - 1), 30_000);
-        await this.sleep(base + Math.floor(base * (Math.random() * 0.5 - 0.25)));
+        // Jitter is subtractive on the computed backoff but NOT on a
+        // server-stated delay: retrying before the time the provider named is
+        // the one thing Retry-After exists to prevent, so it only ever waits
+        // longer. And it is clamped to the same 30s cap the backoff uses: a
+        // `Retry-After: 3600` would park the whole harness inside one
+        // complete(), where no watchdog can see it, and trade a resumable
+        // `rate-limited` pause for an invisible hour-long hang.
+        const wait =
+          retryAfterMs !== null
+            ? Math.min(retryAfterMs, 30_000) + Math.floor(Math.random() * 250)
+            : base + Math.floor(base * (Math.random() * 0.5 - 0.25));
+        retryAfterMs = null;
+        await this.sleep(wait);
       }
       let res: Response;
       try {
         res = await this.fetchImpl(url, {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${this.opts.apiKey}`,
-          },
+          headers: this.headers,
           body,
           signal: AbortSignal.timeout(this.requestTimeoutMs),
         });
@@ -222,6 +303,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
         lastStatus = undefined;
         continue;
       }
+      const requestId = requestIdOf(res);
+      if (requestId !== undefined) lastRequestId = requestId;
       let text: string;
       try {
         // The body read shares the request's AbortSignal: a provider that
@@ -238,7 +321,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
         try {
           json = JSON.parse(text);
         } catch {
-          throw new AdapterError("model API returned 2xx with a non-JSON body");
+          throw new AdapterError(
+            `model API returned 2xx with a non-JSON body${requestId !== undefined ? ` [req ${requestId}]` : ""}`,
+          );
         }
         const parsed = completionSchema.safeParse(json);
         if (!parsed.success) {
@@ -248,7 +333,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
           // HTTP-status path: budget-shaped errors pause, the rest retry.
           const errObj = (json as { error?: unknown }).error;
           if (errObj !== undefined && errObj !== null) {
-            lastError = `provider error in 2xx body: ${JSON.stringify(errObj).slice(0, 500)}`;
+            lastError = `provider error in 2xx body${
+              requestId !== undefined ? ` [req ${requestId}]` : ""
+            }: ${JSON.stringify(errObj).slice(0, 500)}`;
             const code = (errObj as { code?: unknown; status?: unknown }).code ??
               (errObj as { status?: unknown }).status;
             // Accept a numeric code or a numeric string ("429"): providers vary.
@@ -278,10 +365,16 @@ export class OpenAiChatAdapter implements ChatAdapter {
         }
         const msg = parsed.data.choices[0]!.message;
         const usage = toUsage(parsed.data.usage);
+        // Header first, body `id` as the fallback: OpenRouter puts the same
+        // generation id in both, plain OpenAI only in the header.
+        const bodyId = (json as { id?: unknown }).id;
+        const turnRequestId =
+          requestId ?? (typeof bodyId === "string" && bodyId.length > 0 ? bodyId : undefined);
         return {
           kind: "ok",
           turn: {
             content: msg.content ?? null,
+            ...(turnRequestId !== undefined ? { providerRequestId: turnRequestId } : {}),
             toolCalls: (msg.tool_calls ?? []).map((tc) => ({
               id: tc.id,
               name: tc.function.name,
@@ -293,7 +386,8 @@ export class OpenAiChatAdapter implements ChatAdapter {
         };
       }
       lastStatus = res.status;
-      lastError = `HTTP ${res.status}: ${text.slice(0, 500)}`;
+      lastError = `HTTP ${res.status}${requestId !== undefined ? ` [req ${requestId}]` : ""}: ${text.slice(0, 500)}`;
+      retryAfterMs = parseRetryAfter(res.headers.get("retry-after"), Date.now());
       // A 429 is a pause whatever the body says; the hints only decide whether
       // it reads as a spent budget or as ordinary rate limiting. Body wording
       // is a provider's whim and a run must not die on it.
@@ -331,7 +425,14 @@ export class OpenAiChatAdapter implements ChatAdapter {
         detail: `persistent 5xx after ${this.maxAttempts} attempts: ${lastError}`,
       };
     }
-    throw new AdapterError(`model API failed after ${this.maxAttempts} attempts: ${lastError}`, lastStatus);
+    // The last request id even when the final attempt died on the socket and
+    // carried none: it is what a provider-side support thread asks for first.
+    const idSuffix =
+      lastRequestId !== undefined && !lastError.includes(lastRequestId) ? ` (last req ${lastRequestId})` : "";
+    throw new AdapterError(
+      `model API failed after ${this.maxAttempts} attempts${idSuffix}: ${lastError}`,
+      lastStatus,
+    );
   }
 }
 

@@ -2,7 +2,7 @@
  * The OpenAI-compatible adapter against a fake fetch. No network, no model.
  */
 import { describe, expect, test } from "bun:test";
-import { OpenAiChatAdapter } from "../src/adapter";
+import { APP_TITLE, APP_URL, OpenAiChatAdapter, USER_AGENT, parseRetryAfter } from "../src/adapter";
 
 function adapterReturning(body: unknown): OpenAiChatAdapter {
   return new OpenAiChatAdapter({
@@ -40,9 +40,12 @@ function adapterPlaying(script: (Response | Error)[]): OpenAiChatAdapter {
 
 const status = (code: number, body: string): Response => new Response(body, { status: code });
 
-/** Captures the request body an adapter sends, with the given extra options. */
-async function sentBody(extra: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** Captures the request an adapter sends, with the given extra options. */
+async function sentRequest(
+  extra: Record<string, unknown>,
+): Promise<{ body: Record<string, unknown>; headers: Headers }> {
   let seen = "";
+  let headers = new Headers();
   const adapter = new OpenAiChatAdapter({
     baseUrl: "http://model.invalid/v1",
     apiKey: "k",
@@ -50,6 +53,9 @@ async function sentBody(extra: Record<string, unknown>): Promise<Record<string, 
     fetchImpl: Object.assign(
       (_url: string, init: RequestInit): Promise<Response> => {
         seen = String(init.body);
+        // The adapter passes a plain object; normalise so the assertions are
+        // about header semantics rather than object shape or key casing.
+        headers = new Headers(init.headers as Record<string, string>);
         return Promise.resolve(new Response(JSON.stringify({ choices }), { status: 200 }));
       },
       { preconnect: () => {} },
@@ -58,8 +64,137 @@ async function sentBody(extra: Record<string, unknown>): Promise<Record<string, 
     ...extra,
   });
   await adapter.complete({ messages: [{ role: "user", content: "hi" }], tools: [] });
-  return JSON.parse(seen) as Record<string, unknown>;
+  return { body: JSON.parse(seen) as Record<string, unknown>, headers };
 }
+
+async function sentBody(extra: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return (await sentRequest(extra)).body;
+}
+
+describe("OpenAiChatAdapter attribution headers", () => {
+  test("every request carries the OpenRouter attribution pair and a user agent", async () => {
+    const { headers } = await sentRequest({ env: {} });
+    expect(headers.get("x-title")).toBe(APP_TITLE);
+    expect(headers.get("http-referer")).toBe(APP_URL);
+    expect(headers.get("user-agent")).toBe(USER_AGENT);
+    // and the key still goes where it always did
+    expect(headers.get("authorization")).toBe("Bearer k");
+  });
+
+  test("WRATHBENCH_APP_URL overrides the placeholder referer", async () => {
+    const { headers } = await sentRequest({ env: { WRATHBENCH_APP_URL: "https://example.test/wb " } });
+    expect(headers.get("http-referer")).toBe("https://example.test/wb");
+  });
+
+  test("a blank WRATHBENCH_APP_URL falls back to the default", async () => {
+    const { headers } = await sentRequest({ env: { WRATHBENCH_APP_URL: "   " } });
+    expect(headers.get("http-referer")).toBe(APP_URL);
+  });
+
+  test("attribution is not host-gated: a non-OpenRouter endpoint gets it too", async () => {
+    const { headers, body } = await sentRequest({ env: {} });
+    expect(body).not.toHaveProperty("usage"); // not OpenRouter
+    expect(headers.get("x-title")).toBe(APP_TITLE);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  const now = Date.parse("2026-08-22T00:00:00Z");
+
+  test("integer seconds", () => {
+    expect(parseRetryAfter("3", now)).toBe(3_000);
+  });
+
+  test("an HTTP-date becomes the delta from now, never negative", () => {
+    expect(parseRetryAfter("Sat, 22 Aug 2026 00:00:07 GMT", now)).toBe(7_000);
+    expect(parseRetryAfter("Fri, 21 Aug 2026 00:00:00 GMT", now)).toBe(0);
+  });
+
+  test("absent or unparseable yields null, never NaN", () => {
+    expect(parseRetryAfter(null, now)).toBeNull();
+    expect(parseRetryAfter("soon", now)).toBeNull();
+    expect(parseRetryAfter("", now)).toBeNull();
+  });
+});
+
+describe("OpenAiChatAdapter Retry-After", () => {
+  /** Plays a script and records how long the adapter slept between attempts. */
+  function adapterTiming(script: Response[]): { adapter: OpenAiChatAdapter; slept: number[] } {
+    const slept: number[] = [];
+    let i = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: script.length,
+      fetchImpl: Object.assign(() => Promise.resolve(script[i++]!), { preconnect: () => {} }) as unknown as typeof fetch,
+      sleep: (ms: number) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+    });
+    return { adapter, slept };
+  }
+
+  const limited = (retryAfter: string): Response =>
+    new Response("slow down", { status: 429, headers: { "retry-after": retryAfter } });
+
+  test("a Retry-After replaces the computed backoff and is never undercut", async () => {
+    const { adapter, slept } = adapterTiming([limited("5"), new Response(JSON.stringify({ choices }))]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind).toBe("ok");
+    expect(slept.length).toBe(1);
+    expect(slept[0]).toBeGreaterThanOrEqual(5_000);
+    expect(slept[0]).toBeLessThan(5_500);
+  });
+
+  test("an absurd Retry-After is clamped to the 30s backoff cap", async () => {
+    const { adapter, slept } = adapterTiming([limited("3600"), limited("3600")]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind).toBe("pause"); // semantics unchanged: a 429 still pauses
+    expect(slept[0]).toBeLessThanOrEqual(30_250);
+    expect(slept[0]).toBeGreaterThanOrEqual(30_000);
+  });
+
+  test("without a Retry-After the exponential backoff is unchanged", async () => {
+    const { adapter, slept } = adapterTiming([status(500, "boom"), status(500, "boom")]);
+    await adapter.complete({ messages: [], tools: [] });
+    expect(slept[0]).toBeGreaterThanOrEqual(750);
+    expect(slept[0]).toBeLessThanOrEqual(1_250);
+  });
+});
+
+describe("OpenAiChatAdapter request ids", () => {
+  test("a response header id rides onto the turn", async () => {
+    const adapter = adapterPlaying([
+      new Response(JSON.stringify({ choices }), { status: 200, headers: { "x-request-id": "req_abc" } }),
+    ]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.providerRequestId).toBe("req_abc");
+  });
+
+  test("the body's generation id is the fallback when no header carries one", async () => {
+    const out = await adapterReturning({ id: "gen-123", choices }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.providerRequestId).toBe("gen-123");
+  });
+
+  test("no id anywhere leaves the field absent", async () => {
+    const out = await adapterReturning({ choices }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.providerRequestId).toBeUndefined();
+  });
+
+  test("a fatal 4xx names the request id so the provider can be asked about it", async () => {
+    const res = new Response("bad request", { status: 400, headers: { "x-request-id": "req_bad" } });
+    await expect(adapterPlaying([res]).complete({ messages: [], tools: [] })).rejects.toThrow(/req_bad/);
+  });
+
+  test("a pause detail names the request id too", async () => {
+    const res = (): Response =>
+      new Response("slow down", { status: 429, headers: { "x-openrouter-id": "gen-xyz" } });
+    const out = await adapterPlaying([res(), res()]).complete({ messages: [], tools: [] });
+    expect(out.kind === "pause" && out.detail).toContain("gen-xyz");
+  });
+});
 
 describe("OpenAiChatAdapter reasoning effort", () => {
   test("no effort configured sends no reasoning_effort at all", async () => {
