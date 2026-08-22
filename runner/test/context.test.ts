@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CONTEXT_POLICY,
   assembleContext,
+  foldUiOpenWindows,
   formatStateSummary,
   messageWindow,
   messageWindowCut,
@@ -88,11 +89,168 @@ describe("formatStateSummary", () => {
     expect(text).toContain("level unobserved");
     expect(text).toContain("position: unobserved");
     expect(text).toContain("health: unobserved  power: unobserved");
+    expect(text).toContain("xp: unobserved / unobserved     money: unobserved");
+    expect(text).toContain("bag: unobserved");
+    expect(text).toContain("quests: unobserved");
+    expect(text).toContain("nearby: unobserved");
+    expect(text).toContain("target: none");
+    // Never a guessed zero on the observable-field lines, and no ui line open.
+    expect(text).toContain("level unobserved");
     expect(text).not.toContain("level 0");
+    expect(text).not.toContain("xp: 0");
+    expect(text).not.toContain("copper"); // money unobserved, not "0 copper"
+    expect(text).not.toContain("\nui:");
   });
+
+  test("observed zeros are shown, not turned into 'unobserved'", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "B", guid: "1", health: { value: { current: 100, max: 100 } } },
+        xp: { value: 0 },
+        nextLevelXp: { value: 400 },
+        money: { value: 0 },
+        bag: { freeSlots: 0, items: [] },
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("xp: 0 / 400     money: 0 copper");
+    expect(text).toContain("bag: 0 free / 16    items: empty");
+  });
+
   test("gaps are surfaced", () => {
     const text = formatStateSummary({ gaps: [{}, {}] }, { sessionLive: true });
     expect(text).toContain("stream: 2 gap(s)");
+  });
+
+  test("bag, quests, nearby and gossip lines render when present", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "B", guid: "1" },
+        bag: {
+          freeSlots: 12,
+          items: [
+            { slot: 23, itemId: 6948, name: "Hearthstone", count: 1 },
+            { slot: 24, itemId: 117, name: "Tough Jerky", count: 5 },
+          ],
+        },
+        questLog: [
+          { questId: 54, complete: true },
+          { questId: 82, complete: false },
+        ],
+        units: [
+          { guid: "9", name: "Kobold Vermin", type: "unit", distance: 12.3, dead: false },
+          { guid: "10", name: "Kobold Worker", type: "unit", distance: 30, dead: true },
+        ],
+        ui: { gossip: { options: 3 } },
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("bag: 12 free / 16    items: Hearthstone, Tough Jerky x5");
+    expect(text).toContain("quests: 54 complete, 82 progress");
+    expect(text).toContain("nearby: Kobold Vermin (12.3y), Kobold Worker dead (30y)");
+    expect(text).toContain("ui: gossip (3 options)");
+  });
+
+  test("bag caps the item list at 8 with a '+K more' tail", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({ slot: 23 + i, itemId: i, name: `it${i}`, count: 1 }));
+    const text = formatStateSummary({ bag: { freeSlots: 5, items } }, { sessionLive: true });
+    expect(text).toContain("+3 more");
+    expect(text).toContain("it0, it1, it2, it3, it4, it5, it6, it7 +3 more");
+  });
+
+  test("nearby caps at 6 and never prints exact mob health", () => {
+    // Even if a raw mob health leaks into the unit shape, the HUD must not print it.
+    const units = Array.from({ length: 8 }, (_, i) => ({
+      guid: String(i),
+      name: `Mob${i}`,
+      type: "unit",
+      distance: i,
+      dead: false,
+      health: 4321,
+      maxHealth: 5000,
+    }));
+    const text = formatStateSummary({ units }, { sessionLive: true });
+    expect(text).toContain("nearby: Mob0 (0y)");
+    expect(text).toContain("+2 more");
+    expect(text).not.toContain("4321");
+    expect(text).not.toContain("5000");
+  });
+
+  test("target resolves its name from units and hides the no-target guid '0'", () => {
+    const withTarget = formatStateSummary(
+      {
+        self: { name: "B", guid: "1", targetGuid: { value: "9" } },
+        units: [{ guid: "9", name: "Kobold Vermin", type: "unit", distance: 5 }],
+      },
+      { sessionLive: true },
+    );
+    expect(withTarget).toContain("target: Kobold Vermin (guid 9)");
+    const noTarget = formatStateSummary(
+      { self: { name: "B", guid: "1", targetGuid: { value: "0" } } },
+      { sessionLive: true },
+    );
+    expect(noTarget).toContain("target: none");
+  });
+
+  test("dead and ghost fold onto the ui line from self fields", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          name: "B",
+          guid: "1",
+          health: { value: { current: 0, max: 100 } },
+          fields: { playerFlags: { value: 0x10 } },
+        },
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("ui: dead | ghost");
+  });
+});
+
+describe("foldUiOpenWindows", () => {
+  test("gossip is open until a later complete, and carries the option count", () => {
+    const open = foldUiOpenWindows([
+      { opcode: "SMSG_GOSSIP_MESSAGE", seq: 5, data: { options: [{}, {}, {}] } },
+    ]);
+    expect(open.gossip).toEqual({ options: 3 });
+    const closed = foldUiOpenWindows([
+      { opcode: "SMSG_GOSSIP_MESSAGE", seq: 5, data: { options: [{}, {}] } },
+      { opcode: "SMSG_GOSSIP_COMPLETE", seq: 7 },
+    ]);
+    expect(closed.gossip).toBeUndefined();
+  });
+
+  test("loot is open until its release response", () => {
+    expect(foldUiOpenWindows([{ opcode: "SMSG_LOOT_RESPONSE", seq: 3 }]).loot).toBe(true);
+    expect(
+      foldUiOpenWindows([
+        { opcode: "SMSG_LOOT_RESPONSE", seq: 3 },
+        { opcode: "SMSG_LOOT_RELEASE_RESPONSE", seq: 4 },
+      ]).loot,
+    ).toBeUndefined();
+  });
+
+  test("vendor shows only when it is the most-recent window event of the three", () => {
+    expect(
+      foldUiOpenWindows([
+        { opcode: "SMSG_GOSSIP_MESSAGE", seq: 2, data: { options: [] } },
+        { opcode: "SMSG_LIST_INVENTORY", seq: 6 },
+      ]).vendor,
+    ).toBe(true);
+    // A newer gossip message means we cannot prove the vendor list is still open.
+    expect(
+      foldUiOpenWindows([
+        { opcode: "SMSG_LIST_INVENTORY", seq: 6 },
+        { opcode: "SMSG_GOSSIP_MESSAGE", seq: 9, data: { options: [] } },
+      ]).vendor,
+    ).toBeUndefined();
+  });
+
+  test("a truncated window fails safe to closed", () => {
+    // Only the complete survived in the buffer; the opening message rolled off.
+    expect(foldUiOpenWindows([{ opcode: "SMSG_GOSSIP_COMPLETE", seq: 40 }]).gossip).toBeUndefined();
+    expect(foldUiOpenWindows([]).gossip).toBeUndefined();
   });
 });
 
