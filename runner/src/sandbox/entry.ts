@@ -11,6 +11,8 @@
  *   sleep(ms)   Promise timer
  *   scratchpad  { read(), write(content), append(text) } — the run's markdown
  *               scratchpad, bridged to the host process which owns the file
+ *   API_MD_PATH absolute path to the generated SDK reference (sdk/API.md);
+ *               read it with `await Bun.file(API_MD_PATH).text()`, in slices
  *   setTimeout / setInterval / clearInterval / …  the normal timers; routines
  *               started here keep running between snippets
  *
@@ -37,6 +39,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
@@ -160,11 +163,19 @@ function hostcall(method: "scratchpad_read" | "scratchpad_write" | "scratchpad_a
   });
 }
 
+// The generated SDK reference (sdk/API.md), at a stable absolute path a snippet
+// can read: `await Bun.file(API_MD_PATH).text()`. It is larger than one snippet
+// result, so read it in slices (one `## ` section, or lines filtered by name).
+// Resolved from this file's location — sdk and runner are sibling workspaces —
+// rather than the cwd, which the child does not control.
+const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
+
 let eventsConnected = false;
 const ambient: Record<string, unknown> = {
   sdk: client,
   state: client.state,
   events: client.events,
+  API_MD_PATH,
   connect: async (): Promise<void> => {
     if (eventsConnected) return;
     await client.events.connect();

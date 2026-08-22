@@ -226,6 +226,23 @@ describe("sandbox evaluation", () => {
     }
   });
 
+  test("a snippet can read the generated API.md at the ambient path", async () => {
+    const host = makeHost();
+    // The path is ambient and absolute.
+    const path = await host.evalSnippet("API_MD_PATH");
+    expect(path.ok).toBe(true);
+    expect(path.value).toContain("sdk/API.md");
+    // A snippet reads a real row out of it, in a slice (the file is larger than
+    // one snippet result), proving the doc is present and readable — not merely
+    // that a read succeeded.
+    const row = await host.evalSnippet(
+      '(await Bun.file(API_MD_PATH).text()).split("\\n").filter((l) => l.includes("gossipSelect")).join("\\n")',
+    );
+    expect(row.ok).toBe(true);
+    expect(row.value).toContain("gossipSelect");
+    expect(row.value).toContain("visible text");
+  });
+
   test("sdk and state are ambient without a connection", async () => {
     const host = makeHost();
     const res = await host.evalSnippet("[typeof sdk, typeof state, typeof events, state.self.name]");
