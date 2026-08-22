@@ -21,10 +21,13 @@ Two knobs are missing for that and both are easy to get wrong:
   leveling run and fatal for a travel run: walking to Ironforge earns nothing.
   Reaching for it as a global default change would weaken every other run.
 
-`effort` already set the precedent (ADR-0017/0018 line of work): a knob that
-would be tuning if it varied per model is legitimate when it is a *dimension* —
-set per run, recorded in metadata, identical in shape for everyone, so `opus at
-low` and `opus at high` are two comparable rows rather than one tuned model.
+`effort` already set the precedent, in code rather than in an ADR (see the
+`effort` doc comment in `runner/src/config.ts` — "a profile-matrix dimension,
+not a tuning knob for one model" — and the run-id derivation in
+`infra/run-roster.ts`): under ADR-0004 and ADR-0018, a knob that would be tuning
+if it varied per model is legitimate when it is a *dimension* — set per run,
+recorded in metadata, identical in shape for everyone, so `opus at low` and
+`opus at high` are two comparable rows rather than one tuned model.
 
 ## Decision
 

@@ -89,8 +89,64 @@ function watchdogOverrides(v: string | boolean | undefined): WatchdogOverride {
   return parsed.data;
 }
 
+/**
+ * A fresh run's config, assembled from raw argv.
+ *
+ * Exported (and taking argv rather than a parsed object) so the whole seam —
+ * `parseArgs`, the per-flag plumbing, `--watchdogs-json`, and the zod defaults
+ * — is testable as one unit. A dropped flag here is invisible until a run ends
+ * hours early for the wrong reason, which is exactly what the roster's
+ * generated argv must be pinned against.
+ */
+export function configFromArgs(argv: string[]): RunConfig & { runId: string; token: string } {
+  const args = parseArgs(argv);
+  const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
+  const c = loadRunConfig({
+    runId,
+    moduleUrl:
+      typeof args["module-url"] === "string"
+        ? args["module-url"]
+        : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
+    token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
+    character: typeof args["character"] === "string" ? args["character"] : undefined,
+    account: typeof args["account"] === "string" ? args["account"] : undefined,
+    race: num(args["race"]),
+    class: num(args["class"]),
+    driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
+    adapter: typeof args["adapter"] === "string" ? args["adapter"] : undefined,
+    model: typeof args["model"] === "string" ? args["model"] : undefined,
+    apiBase:
+      typeof args["api-base"] === "string"
+        ? args["api-base"]
+        : process.env["OPENAI_BASE_URL"] ?? undefined,
+    apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
+    // Identity, like model and driver: a resumed run keeps the effort it was
+    // launched with, so --effort is not an override on --resume.
+    effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
+    // Identity, like model and effort: an objective steers what the whole
+    // run was for, so a resumed run keeps the one it was launched with.
+    objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
+    stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
+    maxTurns: num(args["max-turns"]),
+    maxToolCallsPerEpisode: num(args["max-tool-calls"]),
+    stepIntervalMs: num(args["step-interval-ms"]),
+    stateIntervalMs: num(args["state-interval-ms"]),
+    snippetTimeoutMs: num(args["snippet-timeout-ms"]),
+    runsDir: typeof args["runs-dir"] === "string" ? args["runs-dir"] : undefined,
+    wikiBundle: typeof args["wiki-bundle"] === "string" ? args["wiki-bundle"] : undefined,
+    watchdogs: {
+      ...(num(args["idle-ms"]) !== undefined ? { idleMs: num(args["idle-ms"]) } : {}),
+      ...(num(args["no-xp-ms"]) !== undefined ? { noXpMs: num(args["no-xp-ms"]) } : {}),
+      ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
+      ...watchdogOverrides(args["watchdogs-json"]),
+    },
+  });
+  return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
+}
+
 async function main(): Promise<void> {
-  const args = parseArgs(Bun.argv.slice(2));
+  const rawArgs = Bun.argv.slice(2);
+  const args = parseArgs(rawArgs);
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
   if (typeof args["driver"] === "string" && !(DRIVERS as readonly string[]).includes(args["driver"])) {
     console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
@@ -134,48 +190,7 @@ async function main(): Promise<void> {
     tokenRegenerated = session.regenerated;
     resumed = true;
   } else {
-    const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
-    const c = loadRunConfig({
-      runId,
-      moduleUrl:
-        typeof args["module-url"] === "string"
-          ? args["module-url"]
-          : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
-      token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
-      character: typeof args["character"] === "string" ? args["character"] : undefined,
-      account: typeof args["account"] === "string" ? args["account"] : undefined,
-      race: num(args["race"]),
-      class: num(args["class"]),
-      driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
-      adapter: typeof args["adapter"] === "string" ? args["adapter"] : undefined,
-      model: typeof args["model"] === "string" ? args["model"] : undefined,
-      apiBase:
-        typeof args["api-base"] === "string"
-          ? args["api-base"]
-          : process.env["OPENAI_BASE_URL"] ?? undefined,
-      apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
-      // Identity, like model and driver: a resumed run keeps the effort it was
-      // launched with, so --effort is not an override on --resume.
-      effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
-      // Identity, like model and effort: an objective steers what the whole
-      // run was for, so a resumed run keeps the one it was launched with.
-      objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
-      stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
-      maxTurns: num(args["max-turns"]),
-      maxToolCallsPerEpisode: num(args["max-tool-calls"]),
-      stepIntervalMs: num(args["step-interval-ms"]),
-      stateIntervalMs: num(args["state-interval-ms"]),
-      snippetTimeoutMs: num(args["snippet-timeout-ms"]),
-      runsDir: typeof args["runs-dir"] === "string" ? args["runs-dir"] : undefined,
-      wikiBundle: typeof args["wiki-bundle"] === "string" ? args["wiki-bundle"] : undefined,
-      watchdogs: {
-        ...(num(args["idle-ms"]) !== undefined ? { idleMs: num(args["idle-ms"]) } : {}),
-        ...(num(args["no-xp-ms"]) !== undefined ? { noXpMs: num(args["no-xp-ms"]) } : {}),
-        ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
-        ...watchdogOverrides(args["watchdogs-json"]),
-      },
-    });
-    config = { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
+    config = configFromArgs(rawArgs);
   }
   // Deliberately NOT registered with `trajectory.redact`: meta.json is scrubbed
   // with the same secret list, and a redacted token could never be read back by
