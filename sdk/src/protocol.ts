@@ -638,11 +638,17 @@ export const MOVE_OPCODES = [
 ] as const;
 export type MoveOpcode = (typeof MOVE_OPCODES)[number];
 
-/** Terminal statuses of a `move_to`, from PROTOCOL.md. */
+/**
+ * Terminal statuses of a `move_to`, from PROTOCOL.md (navigation vocabulary of
+ * 2026-08, FOLLOW-UPS 38 N1: the former undifferentiated `no_path` is gone).
+ */
 export const MOVE_STATUSES = [
   "arrived",
-  "no_path",
   "too_far",
+  "no_mesh",
+  "target_off_mesh",
+  "start_off_mesh",
+  "path_incomplete",
   "interrupted",
   "stopped",
   "superseded",
@@ -668,6 +674,10 @@ export const moveResultDataSchema = z.looseObject({
   // parsing (same reasoning as `errorBodySchema.error`).
   status: z.string(),
   pos: positionSchema,
+  /** `arrived` only: the ground z the mesh walked to when the request's z was off by >1y. */
+  meshZ: z.number().optional(),
+  /** `path_incomplete` only: how far the mesh could get toward the request. */
+  reachedPos: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
 });
 export type MoveResultData = z.infer<typeof moveResultDataSchema>;
 

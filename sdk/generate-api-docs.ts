@@ -64,7 +64,7 @@ const CLIENT_ENDPOINTS: readonly Row[] = [
 
 /** Helpers: they wait for the game's verdict and return it as a value (ADR-0011). */
 const CLIENT_HELPERS: readonly Row[] = [
-  { name: "moveTo", sig: "moveTo(point, options?): Promise<MoveResult>", purpose: "Walk to a world position and wait for the server's arrive/no_path/… verdict." },
+  { name: "moveTo", sig: "moveTo(point, options?): Promise<MoveResult>", purpose: "Walk to a world position and wait for the server's arrive/target_off_mesh/… verdict." },
   { name: "killTarget", sig: "killTarget(target: GuidOrUnit, options?): Promise<KillResult>", purpose: "Approach and auto-attack until the target or we drop; returns how the fight ended." },
   { name: "lootCorpse", sig: "lootCorpse(target: GuidOrUnit, options?): Promise<LootResult>", purpose: "Empty a corpse and report what actually entered the bags (confirmed pushes, not the window)." },
   { name: "acceptQuestFrom", sig: "acceptQuestFrom(npcGuid: GuidOrUnit, questId, options?): Promise<QuestAcceptResult>", purpose: "Take a quest from an NPC and confirm it landed in the quest log." },
@@ -304,7 +304,7 @@ and in template literals, and \`JSON.stringify\` them freely; get them from
 outcome (\`EventTimeoutError\` — no result arrived within the timeout). Anything
 the *game* decided is a returned value, not an exception: helpers return a
 discriminated union with an \`ok\` boolean and a \`status\`, so \`if (!result.ok)\`
-handles the normal failures (\`no_path\`, \`buy_failed\`, \`not_complete\`) without a
+handles the normal failures (\`target_off_mesh\`, \`buy_failed\`, \`not_complete\`) without a
 \`try\`. So: \`try\`/\`catch\` guards a broken or unanswered call; \`if (!ok)\` reads a
 game answer you asked for.
 
