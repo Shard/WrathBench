@@ -203,6 +203,18 @@ fi
 
 # -------------------------------------------------------------------- 2. tags
 docker image inspect "${NEXT_TAG}" >/dev/null 2>&1 || die "no such image: ${NEXT_TAG} (build it first)"
+# A gate sequence in flight against the CURRENT server would be killed by the
+# recreate below, and its FAIL record would then be mistaken for a verdict on
+# the new one (2026-08-23, docs/WORKLOG.md). Wait for it to finish first.
+if [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then
+  waited=0
+  while "${BUN_PLAIN_ENV[@]}" bun -e 'try{const s=await Bun.file(process.argv[1]).json();process.exit(s.preflightInFlight?0:1)}catch{process.exit(1)}' "${STATE_JSON}"; do
+    if [[ "${waited}" -eq 0 ]]; then say "the fleet gate is smoking the current server — waiting for that sequence to end before touching anything (up to ${PREFLIGHT_TIMEOUT_S}s)"; fi
+    waited=$(( waited + 10 ))
+    if [[ "${waited}" -ge "${PREFLIGHT_TIMEOUT_S}" ]]; then die "gate sequence still in flight after ${PREFLIGHT_TIMEOUT_S}s; not deploying over it"; fi
+    sleep 10
+  done
+fi
 HAVE_PREV=0
 if docker image inspect "${IMAGE}:latest" >/dev/null 2>&1; then
   docker tag "${IMAGE}:latest" "${IMAGE}:prev"
@@ -270,6 +282,14 @@ until health_ok; do
   sleep 5
 done
 say "worldserver is healthy"
+# The identity the supervisor will stamp on its gate record for THIS server.
+# A record carrying any other identity is a verdict on some other boot.
+NEW_IDENTITY="$("${COMPOSE[@]}" exec -T runner bun -e '
+  const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/health";
+  try{const j=await (await fetch(url,{signal:AbortSignal.timeout(4000)})).json();
+    if(typeof j.build==="string"&&typeof j.startedAtMs==="number")process.stdout.write(`build:${j.build}@${Math.round(j.startedAtMs)}`);}catch{}
+' 2>/dev/null | strip_ansi)"
+say "new server identity: ${NEW_IDENTITY:-unknown (module predates /health build id; matching by time only)}"
 # The gate grace is measured from HERE, not from the promote: the health wait
 # above may legitimately take longer than the grace, and an expired grace would
 # send us smoking directly while the live supervisor is smoking the same
@@ -292,15 +312,16 @@ fi
 # nothing — see the 2026-08-23 false rollback in docs/WORKLOG.md).
 gate_verdict() {
   "${BUN_PLAIN_ENV[@]}" bun -e '
-    const [p,since]=process.argv.slice(1);
+    const [p,since,ident]=process.argv.slice(1);
+    const mine=(id)=>ident===""||id===ident;
     try{const s=await Bun.file(p).json();const g=s.preflight;const f=s.preflightInFlight;
-      const fresh=g&&typeof g.at==="number"&&g.at>=Number(since)&&g.skipped!==true;
-      if(!fresh){ if(f&&typeof f.since==="number"&&f.since>=Number(since))process.exit(3); process.exit(1); }
+      const fresh=g&&typeof g.at==="number"&&g.at>=Number(since)&&g.skipped!==true&&mine(g.serverIdentity);
+      if(!fresh){ if(f&&typeof f.since==="number"&&f.since>=Number(since)&&mine(f.identity))process.exit(3); process.exit(1); }
       if(g.ok===true)process.exit(0);
       console.error((g.results??[]).filter(r=>!r.ok).map(r=>`${r.script}: ${r.tail}`).join("\n"));
       process.exit(2);}
     catch{process.exit(1);}
-  ' "${STATE_JSON}" "${DEPLOY_AT_MS}"
+  ' "${STATE_JSON}" "${DEPLOY_AT_MS}" "${NEW_IDENTITY}"
 }
 
 # The single source of truth for the success line: set to a non-empty string
