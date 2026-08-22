@@ -209,7 +209,7 @@ function usage(): void {
 
 // ------------------------------------------------------------- derivation
 
-function slug(model: string): string {
+export function slug(model: string): string {
   const tail = model.split("/").pop() ?? model;
   return tail
     .replace(/:free$/, "")

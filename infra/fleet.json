@@ -1,0 +1,77 @@
+{
+  "_notes": [
+    "The fleet is this file. One lane = one sequential episode stream = one game account;",
+    "parallelism is exactly the number of enabled lanes. Edit while run-fleet is up: it",
+    "re-reads every 60s. enabled:false drains a lane (its roster process is SIGTERMed at",
+    "the next episode boundary — the running episode finishes); enabled:true or a new",
+    "lane spawns one. A malformed edit never kills running lanes: the fleet complains and",
+    "keeps the last good config.",
+    "",
+    "Lane policy: OpenCode Zen and OpenRouter lanes carry FREE models only, one stream",
+    "per provider (their free tiers are pooled per upstream provider — two streams just",
+    "starve each other and trip the same rate limits twice). claude models run ONLY via",
+    "the claude-subscription driver, never through an openai-driver lane.",
+    "",
+    "Entries use the exact per-entry schema of roster JSONs (model, driver, effort,",
+    "character, race, class, episodeMs, ...). account comes from the lane. A lane may",
+    "point at a rosterFile instead of inline entries. Run ids derive as",
+    "fleet-<lane>-<model-slug>[-<effort>]-<date> so fleet runs never collide with",
+    "hand-launched rosters.",
+    "",
+    "sub-opus is the burn switch: flip it to true when there is subscription budget to",
+    "burn, back to false to stop after the episode in flight."
+  ],
+  "lanes": [
+    {
+      "name": "sub-sonnet",
+      "enabled": true,
+      "account": "SHAKEOUT",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
+        { "model": "sonnet", "driver": "claude-subscription", "character": "Fleetsonn", "race": 3, "class": 2, "episodeMs": 5400000 },
+        { "model": "sonnet", "driver": "claude-subscription", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "episodeMs": 5400000 }
+      ]
+    },
+    {
+      "name": "sub-opus",
+      "enabled": false,
+      "account": "SHAKEOUT2",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
+        { "model": "opus", "driver": "claude-subscription", "character": "Fleetopus", "race": 3, "class": 2, "episodeMs": 5400000 },
+        { "model": "opus", "driver": "claude-subscription", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "episodeMs": 5400000 }
+      ]
+    },
+    {
+      "name": "free-openrouter",
+      "enabled": true,
+      "account": "RUNNER",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
+        { "model": "z-ai/glm-5.2:free" },
+        { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
+        { "model": "google/gemma-4-31b-it:free" },
+        { "model": "poolside/laguna-s-2.1:free" },
+        { "model": "openai/gpt-oss-20b:free" },
+        { "model": "nvidia/nemotron-nano-9b-v2:free" }
+      ]
+    },
+    {
+      "name": "free-opencode",
+      "enabled": true,
+      "account": "RUNNER2",
+      "loop": true,
+      "untilDefault": "18:00",
+      "entries": [
+        { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" },
+        { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY" }
+      ]
+    }
+  ]
+}
