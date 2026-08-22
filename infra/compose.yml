@@ -176,7 +176,7 @@ services:
       # one live session per account). It exists in auth already; this line only
       # takes effect when the worldserver container is next recreated, and until
       # then the module answers 403 account_not_permitted for it.
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,SHAKEOUT,SHAKEOUT2,PROBE"
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,SHAKEOUT,SHAKEOUT2,PROBE"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc
