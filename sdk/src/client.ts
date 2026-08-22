@@ -568,8 +568,11 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `(${fmtXY(p)}) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the ` +
     `cause). Pick a point on a road or floor, or where an NPC stands.`,
   start_off_mesh: () =>
-    `the character is standing somewhere the navmesh does not cover (a transport deck, a ledge). Step a ` +
-    `few yards onto ordinary ground, or wait for the transport to dock, then retry.`,
+    `the character's own position is not on the walkable mesh (a transport deck, a ledge, a wedge of ` +
+    `terrain the mesh misses), so no destination and no sweep of nearby points can fix it. Step a few ` +
+    `yards onto ordinary ground if you can; when every moveTo fails the same way, stop(), stand still a ` +
+    `few seconds, then useItem() the Hearthstone from state.bag() — it is a spell cast, ignores pathing, ` +
+    `and returns you to your bound inn; retry it if the cast fails with SPELL_FAILED_MOVING.`,
   path_incomplete: (p, d) =>
     `the walkable mesh has no continuous route to (${fmtXY(p)})` +
     (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)})` : "") +
