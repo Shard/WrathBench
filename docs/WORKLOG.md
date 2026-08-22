@@ -6,6 +6,26 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Navigation N1: typed move causes, areatriggers, transports (ADR-0027)
+
+FOLLOW-UPS 38 N1, code complete and built to `wrathbench/worldserver:next`
+(`harness-0.3-68-g73be12f`), gate run pending the next deploy window. The
+single `no_path` hid four failures and one self-inflicted one (a 3D endpoint
+check against a stale request z); the module now names the cause
+(`no_mesh` / `target_off_mesh` / `start_off_mesh` / `path_incomplete`),
+compares the endpoint in 2D and reports `meshZ`, and does the one subdivision
+retry itself. Areatriggers fire as a client's do — the module reads the
+client's `AreaTrigger.dbc` from the data volume and sends `CMSG_AREATRIGGER`
+on entry — and transports carry the character because the movement packets
+now say `ONTRANSPORT` with the offset the model bounds give. The SDK follows
+`SMSG_NEW_WORLD` for the map, resolves a `transferred` move on the new map,
+and `waitForTransfer` answers typed. `travel.ts` is rewritten without the
+z-ladder to ride the tram IF->SW.
+
+**Harness-version note (ADR-0016):** the `WB_MOVE_RESULT` status vocabulary
+and the move hint text changed, so runs before and after this boundary are
+not score-comparable on navigation; the next tag after deploy marks it.
+
 ### The release-point dashboard: comparability, turns-to-level, ladder, replay
 
 Track C. The eval charts' integrity claim is that two rows beside each other

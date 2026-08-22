@@ -449,22 +449,34 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     Scoped to what a capital needs: walking, the Deeprun Tram, flight masters.
     Boats, zeppelins and elevators are rung-7 work and stay out.
 
-    **N1 — actions and statuses** (gate for everything below)
-    - `no_path` split into distinguishable causes (`target_off_mesh`,
-      `path_incomplete`, `no_mesh`), with the z-ladder / subdivision retry done
-      by the module itself: it is a pathing detail, the same layer as obstacle
-      avoidance, not a decision the model should have to make.
-    - `CMSG_AREATRIGGER` dispatched automatically inside `move_to` when the
+    **N1 — actions and statuses** (gate for everything below) — **code shipped
+    2026-08-22 (ADR-0027, commits 92f7df1..b88dd1d); gate run pending deploy.**
+    - [x] `no_path` split into distinguishable causes (`target_off_mesh`,
+      `path_incomplete`, `no_mesh`, plus `start_off_mesh`), with the z-ladder /
+      subdivision retry done by the module itself: it is a pathing detail, the
+      same layer as obstacle avoidance, not a decision the model should have to
+      make. (`meshZ` / `reachedPos` on the result; per-status SDK hints.)
+    - [x] `CMSG_AREATRIGGER` dispatched automatically inside `move_to` when the
       character enters a DBC trigger volume — client parity, not an agent
       action. A real client fires it without the player choosing to; the
-      agent observes the consequence (transfer, quest credit, inn).
-    - Map change observed: tap `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`,
-      update `state.self.position.map`; SDK `moveTo` resolves on a
-      server-confirmed postcondition (map + position), never on dispatch.
-    - Bounded waits on transfers with typed results (`waiting`, `wrong_map`,
-      `stuck`) instead of sleeping.
-    - Gate: the travel probe rides the tram end to end with a typed success and
-      no undifferentiated `no_path`. Then write the navigation ADR from that run.
+      agent observes the consequence (transfer, quest credit, inn). The module
+      reads `AreaTrigger.dbc` from the data volume; `WB_AREATRIGGER` mirrors it.
+    - [x] Map change observed: tap `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` /
+      `SMSG_TRANSFER_ABORTED`, update `state.self.position.map`; SDK `moveTo`
+      resolves `transferred` on the server-confirmed new map, never on dispatch.
+    - [x] Bounded waits on transfers with typed results (`waitForTransfer`:
+      `transferred` / `aborted` / `waiting` / `no_transfer` / `wrong_map`)
+      instead of sleeping.
+    - [x] Transport-relative movement (ONTRANSPORT packets from model bounds,
+      `onTransport` on the result, `WB_RIDE_PROGRESS` while riding) — needed
+      for the tram leg; boarding is walking onto the car.
+    - [ ] Gate: the travel probe (`infra/smoke/travel.ts`, rewritten without the
+      z-ladder) rides the tram end to end with a typed success and no
+      undifferentiated `no_path`. Run it three times on PROBE after the next
+      deploy window and record wall-clock per leg; ADR-0027 flips to accepted
+      on that run. Known residuals to watch: interpolated-vs-applied position
+      at trigger dispatch (re-armed after 1.5s), and triggers are only tested
+      while a `move_to` is active.
 
     **N2 — field-level observations** (each small, each earned, each logged)
     - Zone / area name on self, derived from position and the same DBC the
