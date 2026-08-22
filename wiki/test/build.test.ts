@@ -36,7 +36,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
           {
             id: 3,
             timestamp: "2016-01-01T00:00:00Z",
-            text: "'''Example Zone Beta''' is a starting region full of consectetur.",
+            text: "{{coords|48.2|42.1|Example Zone Beta}}'''Example Zone Beta''' is a starting region full of consectetur.",
           },
         ],
       },
@@ -84,7 +84,14 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(viaRedirect.title).toBe("Example Zone Beta");
 
   // Full text search works over the stripped text.
-  expect(searchReference(db, "consectetur")[0]!.title).toBe("Example Zone Beta");
+  const beta = searchReference(db, "consectetur")[0]!;
+  expect(beta.title).toBe("Example Zone Beta");
+  // Coords were lifted off the raw wikitext before the strip and persisted.
+  expect(beta.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
+  expect(beta.snippet).not.toContain("coords"); // the template is gone from text
+  const coordRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_coords").get()!;
+  expect(coordRows.n).toBe(1);
+  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("2");
 
   // The dropped namespace is really absent.
   expect(searchReference(db, "chatter")).toEqual([]);

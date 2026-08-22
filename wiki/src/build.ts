@@ -21,6 +21,7 @@ import {
   makeWriter,
   setMeta,
 } from "./bundle";
+import { extractCoords } from "./coords";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats } from "./parse";
 import { redirectTarget, stripWikitext } from "./strip";
 
@@ -121,6 +122,7 @@ async function main(): Promise<void> {
   let empties = 0;
   let bytes = 0;
   let charsKept = 0;
+  let coordRows = 0;
   let stoppedEarly = false;
   const parseStats: ParseStats = { pagesSkipped: 0 };
 
@@ -154,13 +156,16 @@ async function main(): Promise<void> {
         redirects++;
         writer.addRedirect(page.title, target, page.ns);
       } else {
+        // Coords come off the RAW wikitext before the strip destroys templates.
+        const coords = extractCoords(page.wikitext);
         const text = stripWikitext(page.wikitext);
         if (text.length === 0) {
           empties++;
         } else {
-          writer.addPage(page.title, page.ns, text);
+          writer.addPage(page.title, page.ns, text, coords);
           pagesKept++;
           charsKept += text.length;
+          coordRows += coords.length;
           perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
         }
       }
@@ -200,9 +205,10 @@ async function main(): Promise<void> {
     pages_kept: String(pagesKept),
     redirects: String(redirects),
     empty_pages: String(empties),
+    coord_rows: String(coordRows),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
-    schema_version: "1",
+    schema_version: "2",
   });
   db.run("PRAGMA optimize");
   db.close();
@@ -217,6 +223,7 @@ async function main(): Promise<void> {
   console.log(`  in ns:     ${pagesSeen}`);
   console.log(`  dropped:   ${parseStats.pagesSkipped} (namespace)`);
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
+  console.log(`coord rows:  ${coordRows}`);
   console.log(`redirects:   ${redirects}`);
   console.log(`empty:       ${empties}`);
   for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {

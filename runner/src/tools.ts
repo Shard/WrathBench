@@ -65,7 +65,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "search_reference",
     description:
-      "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence.",
+      "Full-text search over the game reference wiki (quests, NPCs, zones, items, mechanics). Query with a page title or a few keywords, not a sentence. Some hits carry wiki-recorded coordinates (zone plus map x/y); these are reference notes from the wiki page, not a live observation and not proof anything is at that spot now.",
     inputSchema: {
       type: "object",
       properties: {
@@ -444,7 +444,13 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
           text: hits
             .map((h) => {
               const via = h.redirectedFrom !== undefined ? ` (redirected from ${h.redirectedFrom})` : "";
-              return `# ${h.title}${via}\n${h.snippet}`;
+              const coordLine =
+                h.coords !== undefined && h.coords.length > 0
+                  ? `\nwiki coords (reference, not live): ${h.coords
+                      .map((c) => `${c.zone !== undefined ? `${c.zone} ` : ""}(${c.x}, ${c.y})`)
+                      .join("; ")}`
+                  : "";
+              return `# ${h.title}${via}\n${h.snippet}${coordLine}`;
             })
             .join("\n\n"),
         };

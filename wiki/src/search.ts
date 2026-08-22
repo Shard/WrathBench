@@ -11,7 +11,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { DEFAULT_BUNDLE_PATH } from "./bundle";
+import { DEFAULT_BUNDLE_PATH, bundleHasCoords } from "./bundle";
 
 export interface SearchOptions {
   /** Max results. Default 8. */
@@ -36,6 +36,14 @@ export interface SearchResult {
   exactTitle?: true;
   /** Set when the query matched a redirect that led here. */
   redirectedFrom?: string;
+  /**
+   * Coordinates recorded on the wiki page (templates/infoboxes). These are
+   * wiki-reference notes, not a live observation and not proof anything is at
+   * that spot now. Absent when the page has none, or when the bundle predates
+   * the coordinate channel. Every number is finite: this crosses a JSON
+   * boundary on its way to the model.
+   */
+  coords?: { zone?: string; x: number; y: number }[];
 }
 
 /** Sorts ahead of any bm25 score and survives JSON.stringify. */
@@ -67,6 +75,33 @@ interface PageRow {
 function headSnippet(text: string, chars = 280): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length <= chars ? flat : `${flat.slice(0, chars)} …`;
+}
+
+interface CoordRow {
+  zone: string | null;
+  x: number;
+  y: number;
+}
+
+/**
+ * Coordinates for a page, or undefined when it has none. Returns undefined
+ * (not a throw) on a pre-coords bundle, so a stale bundle read directly by the
+ * runner degrades to "no coords" rather than crashing search. Only finite,
+ * in-range triples survive; JSON stays safe.
+ */
+function coordsForPage(
+  db: Database,
+  hasCoords: boolean,
+  pageId: number,
+): SearchResult["coords"] {
+  if (!hasCoords) return undefined;
+  const rows = db
+    .query<CoordRow, [number]>("SELECT zone, x, y FROM page_coords WHERE page_id = ? LIMIT 8")
+    .all(pageId);
+  const coords = rows
+    .filter((r) => Number.isFinite(r.x) && Number.isFinite(r.y))
+    .map((r) => (r.zone !== null && r.zone !== "" ? { zone: r.zone, x: r.x, y: r.y } : { x: r.x, y: r.y }));
+  return coords.length > 0 ? coords : undefined;
 }
 
 /**
@@ -117,10 +152,12 @@ export function searchReference(
   const namespaces = opts.namespaces;
   const results: SearchResult[] = [];
   const seen = new Set<string>();
+  const hasCoords = bundleHasCoords(db);
 
   const direct = resolveTitle(db, query);
   if (direct !== null && (namespaces === undefined || namespaces.includes(direct.page.ns))) {
     seen.add(direct.page.title);
+    const coords = coordsForPage(db, hasCoords, direct.page.id);
     results.push({
       title: direct.page.title,
       ns: direct.page.ns,
@@ -128,6 +165,7 @@ export function searchReference(
       rank: EXACT_TITLE_RANK,
       exactTitle: true,
       ...(direct.via !== null ? { redirectedFrom: direct.via } : {}),
+      ...(coords !== undefined ? { coords } : {}),
     });
   }
 
@@ -141,7 +179,8 @@ export function searchReference(
         ? ` AND p.ns IN (${namespaces.map(() => "?").join(",")})`
         : "";
     const sql = `
-      SELECT p.title AS title,
+      SELECT p.id AS id,
+             p.title AS title,
              p.ns AS ns,
              snippet(pages_fts, 1, '', '', ' … ', ${snippetTokens}) AS snippet,
              bm25(pages_fts, 8.0, 1.0) AS rank
@@ -155,7 +194,7 @@ export function searchReference(
     if (nsFilter !== "") params.push(...(namespaces as readonly number[]));
     params.push(limit + results.length + 4);
     const stmt = db.query<
-      { title: string; ns: number; snippet: string; rank: number },
+      { id: number; title: string; ns: number; snippet: string; rank: number },
       (string | number)[]
     >(sql);
     for (const expression of expressions) {
@@ -166,11 +205,13 @@ export function searchReference(
           matched++;
           if (seen.has(row.title)) continue;
           seen.add(row.title);
+          const coords = coordsForPage(db, hasCoords, row.id);
           results.push({
             title: row.title,
             ns: row.ns,
             snippet: row.snippet.replace(/\s+/g, " ").trim(),
             rank: row.rank,
+            ...(coords !== undefined ? { coords } : {}),
           });
           if (results.length >= limit) break;
         }
@@ -185,9 +226,22 @@ export function searchReference(
   return results.slice(0, limit);
 }
 
-/** Open a bundle read-only. */
+/**
+ * Open a bundle read-only. Fails loudly on a bundle built before the coordinate
+ * channel (schema < 2): the `page_coords` table is a schema change, and a stale
+ * bundle would silently advertise an empty coords channel. Rebuild with:
+ *   bun wiki/src/build.ts data/wiki/<dump>.7z --out data/wiki/bundle.sqlite
+ */
 export function openBundle(path: string = DEFAULT_BUNDLE_PATH): Database {
-  return new Database(path, { readonly: true });
+  const db = new Database(path, { readonly: true });
+  if (!bundleHasCoords(db)) {
+    db.close();
+    throw new Error(
+      `wiki bundle at ${path} predates the coordinate channel (no page_coords table). ` +
+        `Rebuild it: bun wiki/src/build.ts data/wiki/<dump>.7z --out ${path}`,
+    );
+  }
+  return db;
 }
 
 if (import.meta.main) {
