@@ -472,9 +472,10 @@ namespace WrathBench
                 "quest_choose_reward", "loot", "loot_all", "loot_release",
                 "vendor_list", "buy_item", "sell_item", "repair_all",
                 "trainer_list", "trainer_buy_spell",
-                "spirit_healer_activate", nullptr };
+                "spirit_healer_activate", "questgiver_status_query", nullptr };
             static char const* kNoParams[] = {
-                "clear_target", "attack_stop", "loot_money", "repop", "reclaim_corpse", nullptr };
+                "clear_target", "attack_stop", "loot_money", "repop", "reclaim_corpse",
+                "questgiver_status_multiple_query", nullptr };
 
             bool known = false;
             bool needsGuid = false;
@@ -486,7 +487,7 @@ namespace WrathBench
             if (!known)
                 known = action == "cast_spell" || action == "cancel_cast" || action == "quest_abandon"
                      || action == "loot_item" || action == "equip_item" || action == "use_item"
-                     || action == "destroy_item";
+                     || action == "destroy_item" || action == "quest_query";
             if (!known)
                 return {400, Json::Writer().Add("ok", false).Add("error", "unsupported_action").Add("action", action).Str()};
 
@@ -495,7 +496,8 @@ namespace WrathBench
             if (action == "gossip_select" && (!req.Has("menuId") || !req.Has("optionId")))
                 return MissingParam(action, "missing_option", !req.Has("menuId") ? "menuId" : "optionId");
             if ((action == "quest_details" || action == "quest_accept" || action == "quest_complete"
-                 || action == "quest_choose_reward" || action == "quest_abandon") && !req.Has("questId"))
+                 || action == "quest_choose_reward" || action == "quest_abandon" || action == "quest_query")
+                && !req.Has("questId"))
                 return MissingParam(action, "missing_quest_id", "questId");
             if (action == "quest_choose_reward" && !req.Has("rewardIndex"))
                 return MissingParam(action, "missing_reward_index", "rewardIndex");
@@ -1180,6 +1182,31 @@ namespace WrathBench
             p = new WorldPacket(CMSG_QUESTLOG_REMOVE_QUEST, 1);
             *p << uint8(slot);
             auditW.Add("questId", questId).Add("slot", (uint32)slot);
+        }
+        else if (action == "quest_query")
+        {
+            // The client's template fetch for a quest in its log (title,
+            // objective text, required entries/counts). Answered by
+            // SMSG_QUEST_QUERY_RESPONSE; an unknown id is silently dropped by
+            // the core, exactly as for a client.
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            p = new WorldPacket(CMSG_QUEST_QUERY, 4);
+            *p << uint32(questId);
+            auditW.Add("questId", questId);
+        }
+        else if (action == "questgiver_status_query")
+        {
+            // What a client sends for each questgiver-flagged unit/gameobject
+            // that comes into view, to draw the !/? marker. Answered by
+            // SMSG_QUESTGIVER_STATUS for that guid.
+            p = new WorldPacket(CMSG_QUESTGIVER_STATUS_QUERY, 8);
+            *p << uint64(guid);
+        }
+        else if (action == "questgiver_status_multiple_query")
+        {
+            // What a client sends after its quest log changes, to refresh every
+            // marker in view. Answered by SMSG_QUESTGIVER_STATUS_MULTIPLE.
+            p = new WorldPacket(CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY, 0);
         }
         else if (action == "loot" || action == "loot_all")
         {
@@ -2751,6 +2778,85 @@ namespace WrathBench
                     uint64 guid; p >> guid;
                     uint8 status; p >> status;
                     w.AddGuid("guid", (uint64_t)guid).Add("status", (uint32)status);
+                    break;
+                }
+                case SMSG_QUESTGIVER_STATUS_MULTIPLE:
+                {
+                    // Player::SendQuestGiverStatusMultiple: u32 count, then
+                    // (u64 guid, u8 status) per questgiver in view. Sent by the
+                    // core on login, level-up and quest reward, and in answer
+                    // to CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY.
+                    name = "SMSG_QUESTGIVER_STATUS_MULTIPLE";
+                    uint32 count; p >> count;
+                    std::string statuses = "[";
+                    for (uint32 i = 0; i < count; ++i)
+                    {
+                        uint64 guid; uint8 status;
+                        p >> guid >> status;
+                        if (i) statuses += ',';
+                        statuses += Json::Writer().AddGuid("guid", (uint64_t)guid).Add("status", (uint32)status).Str();
+                    }
+                    statuses += "]";
+                    w.Raw("statuses", statuses);
+                    break;
+                }
+                case SMSG_QUEST_QUERY_RESPONSE:
+                {
+                    // PlayerMenu::SendQuestQueryResponse (3.3.5a layout; field
+                    // order cited in PROTOCOL.md). Only what the client's quest
+                    // log renders is named: title/objective text, level, and
+                    // the per-objective required entries and counts. Rewards
+                    // are skipped over (they arrive on QUEST_DETAILS /
+                    // OFFER_REWARD when the client asks for them).
+                    name = "SMSG_QUEST_QUERY_RESPONSE";
+                    uint32 questId, method; int32 level; uint32 minLevel, zoneOrSort, type, suggested;
+                    p >> questId >> method >> level >> minLevel >> zoneOrSort >> type >> suggested;
+                    uint32 repFaction, repValue, repFaction2, repValue2, nextQuest, xpId;
+                    p >> repFaction >> repValue >> repFaction2 >> repValue2 >> nextQuest >> xpId;
+                    uint32 rewMoney, rewMoneyMaxLevel, rewSpell; int32 rewSpellCast;
+                    p >> rewMoney >> rewMoneyMaxLevel >> rewSpell >> rewSpellCast;
+                    uint32 honorAdd; float honorMult; uint32 srcItem, flags, titleId, playersSlain, bonusTalents, arenaPoints, repMask;
+                    p >> honorAdd >> honorMult >> srcItem >> flags >> titleId >> playersSlain >> bonusTalents >> arenaPoints >> repMask;
+                    // QUEST_REWARDS_COUNT (4) + QUEST_REWARD_CHOICES_COUNT (6) item/count pairs
+                    for (int i = 0; i < 4 + 6; ++i) { uint32 a, b; p >> a >> b; }
+                    // QUEST_REPUTATIONS_COUNT (5) x3 (faction id, value id, override)
+                    for (int i = 0; i < 5 * 3; ++i) { uint32 a; p >> a; }
+                    uint32 poiContinent; float poiX, poiY; uint32 pointOpt;
+                    p >> poiContinent >> poiX >> poiY >> pointOpt;
+                    std::string title, objectives, details, areaDescription, completedText;
+                    p >> title >> objectives >> details >> areaDescription >> completedText;
+                    // QUEST_OBJECTIVES_COUNT (4): required npc-or-go (go as id|0x80000000), count, item drop, 0
+                    uint32 reqEntry[4], reqCount[4];
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        uint32 itemDrop, unk;
+                        p >> reqEntry[i] >> reqCount[i] >> itemDrop >> unk;
+                    }
+                    // QUEST_ITEM_OBJECTIVES_COUNT (6): required item id, count
+                    std::string reqItems = "[";
+                    for (int i = 0; i < 6; ++i)
+                    {
+                        uint32 itemId, cnt; p >> itemId >> cnt;
+                        if (i) reqItems += ',';
+                        reqItems += Json::Writer().Add("itemId", itemId).Add("count", cnt).Str();
+                        if (itemId)
+                            itemEntries.push_back(itemId);
+                    }
+                    reqItems += "]";
+                    std::string reqNpcOrGo = "[";
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        std::string text; p >> text;
+                        if (i) reqNpcOrGo += ',';
+                        reqNpcOrGo += Json::Writer().Add("entry", reqEntry[i]).Add("count", reqCount[i])
+                            .Add("text", text).Str();
+                    }
+                    reqNpcOrGo += "]";
+                    w.Add("questId", questId).Add("method", method).Add("level", level).Add("minLevel", minLevel)
+                     .Add("type", type).Add("suggestedPlayers", suggested)
+                     .Add("title", title).Add("objectives", objectives).Add("details", details)
+                     .Add("areaDescription", areaDescription).Add("completedText", completedText)
+                     .Raw("requiredNpcOrGo", reqNpcOrGo).Raw("requiredItems", reqItems);
                     break;
                 }
                 case SMSG_QUESTGIVER_QUEST_LIST:

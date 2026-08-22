@@ -283,6 +283,9 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `quest_complete` | `guid`, `questId` | `CMSG_QUESTGIVER_COMPLETE_QUEST` | server answers REQUEST_ITEMS or OFFER_REWARD |
 | `quest_choose_reward` | `guid`, `questId`, `rewardIndex` | `CMSG_QUESTGIVER_CHOOSE_REWARD` | `rewardIndex` 0-based into `choiceRewards`; 0 when there is no choice |
 | `quest_abandon` | `questId` | `CMSG_QUESTLOG_REMOVE_QUEST` | module maps quest id -> log slot (client-visible via quest-log fields); `400 quest_not_in_log` |
+| `quest_query` | `questId` | `CMSG_QUEST_QUERY` | the client's template fetch for a quest in its log; `SMSG_QUEST_QUERY_RESPONSE` follows (unknown id: silence) |
+| `questgiver_status_query` | `guid` | `CMSG_QUESTGIVER_STATUS_QUERY` | what a client sends per questgiver-flagged unit/gameobject as it comes into view; `SMSG_QUESTGIVER_STATUS` for that guid follows (not a questgiver, or not in view: silence) |
+| `questgiver_status_multiple_query` | — | `CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY` | what a client sends after its quest log changes; `SMSG_QUESTGIVER_STATUS_MULTIPLE` follows |
 | `loot` | `guid` | `CMSG_LOOT` | opens the loot window (`SMSG_LOOT_RESPONSE`) |
 | `loot_item` | `slot` | `CMSG_AUTOSTORE_LOOT_ITEM` | `slot` from `SMSG_LOOT_RESPONSE.items[]` |
 | `loot_money` | — | `CMSG_LOOT_MONEY` | |
@@ -302,7 +305,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `spirit_healer_activate` | `guid` | `CMSG_SPIRIT_HEALER_ACTIVATE` | graveyard resurrection fallback; no dedicated response opcode — the outcome arrives through already-served events (health update fields, res-sickness aura) |
 
 Validation errors (all `400`): `missing_guid`, `missing_option`,
-`missing_quest_id`, `missing_reward_index`, `missing_spell_id`,
+`missing_quest_id` (also for `quest_query`), `missing_reward_index`, `missing_spell_id`,
 `missing_slot`, `missing_item`, `missing_item_guid`, `missing_bag_slot`.
 
 Every `missing_*` reply from `POST /action` echoes what it was about:
@@ -604,6 +607,8 @@ Quests and gossip (quest/gossip text served as the client would show it):
 | opcode | id | `data` fields |
 |---|---|---|
 | `SMSG_QUESTGIVER_STATUS` | 0x183 | `{ "guid", "status": <u8> }` |
+| `SMSG_QUESTGIVER_STATUS_MULTIPLE` | 0x418 | `{ "statuses": [{ "guid", "status": <u8> }] }` — every questgiver in view; sent by the core on login, level-up and quest reward, and in answer to `questgiver_status_multiple_query`. Status values are `DIALOG_STATUS_*` (0 none, 1 unavailable, 2 low-level available, 3 low-level reward-rep, 4 low-level available-rep, 5 incomplete, 6 reward-rep, 7 available-rep, 8 available, 9 reward2 (no minimap dot), 10 reward); the SDK names them |
+| `SMSG_QUEST_QUERY_RESPONSE` | 0x05D | `{ "questId", "method", "level", "minLevel", "type", "suggestedPlayers", "title", "objectives", "details", "areaDescription", "completedText", "requiredNpcOrGo": [4 x { "entry", "count", "text" }], "requiredItems": [6 x { "itemId", "count" }] }` — decoded from `PlayerMenu::SendQuestQueryResponse` in this order: questId, method, level, minLevel, zoneOrSort, type, suggestedPlayers, rep objective faction/value x2, nextQuestInChain, xpId, rewMoney, rewMoneyMaxLevel, rewSpell, rewSpellCast, honor addition/multiplier, srcItem, flags, charTitle, playersSlain, bonusTalents, arenaPoints, repMask, 4+6 reward (item,count) pairs, 3x5 reputation ids, POI continent/x/y/pointOpt, then the five strings, then 4 x (requiredNpcOrGo, count, itemDrop, 0), 6 x (requiredItem, count), 4 x objective text (joined into `requiredNpcOrGo[i].text`). A gameobject objective arrives as `entry \| 0x80000000`, as the client expects. Reward fields are consumed and not served (they ride `QUEST_DETAILS`/`OFFER_REWARD` when the client asks) |
 | `SMSG_QUESTGIVER_QUEST_LIST` | 0x185 | `{ "guid", "greeting", "quests": [{ "questId", "icon", "level", "repeatable", "title" }] }` |
 | `SMSG_QUESTGIVER_QUEST_DETAILS` | 0x188 | `{ "guid", "questId", "title", "details", "objectives", "choiceRewards": [{ "itemId", "count" }], "rewards": [...], "money", "xp" }` |
 | `SMSG_QUESTGIVER_REQUEST_ITEMS` | 0x18B | `{ "guid", "questId", "title", "text", "requiredMoney", "requiredItems": [{ "itemId", "count" }], "completable": <bool> }` |
