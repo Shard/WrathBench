@@ -27,7 +27,9 @@ const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
 const WS = `ws://${HOST}:${PORT}`;
 
-const TOKEN = `probe-death-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-death-${crypto.randomUUID()}`;
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account). Created by
 // infra/bootstrap/bootstrap.ts with WRATHBENCH_ACCOUNT_USER=PROBE.

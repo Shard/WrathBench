@@ -22,7 +22,9 @@ const WS = `ws://${HOST}:${PORT}`;
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account).
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `probe-state-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `probe-state-${crypto.randomUUID()}`;
 
 function randomName(): string {
   const letters = "abcdefghijklmnopqrstuvwxyz";

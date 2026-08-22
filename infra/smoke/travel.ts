@@ -26,7 +26,9 @@ const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.M
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
 // allows one live session per account and RUNNER belongs to the runner track.
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const TOKEN = `smoke-travel-${Date.now()}`;
+// Session tokens must be at least 32 characters (POST /session rejects
+// shorter ones with weak_token); randomUUID keeps them unguessable too.
+const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
 const CHARACTER = "Tr" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]).slice(-8);
 
 const started = Date.now();
