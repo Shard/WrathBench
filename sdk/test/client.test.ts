@@ -234,6 +234,45 @@ describe("client: movement", () => {
     }
   });
 
+  test("no_path carries the distance it failed over and the recovery recipe", async () => {
+    // qwen (2026-08-22 roster) spent 8 turns rediscovering that a long hop
+    // works when chunked; the SDK knew the distance all along. FOLLOW-UPS
+    // 18(3)'s other half — splitting no_path into causes — stays module work.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    const from = client.state.self.position?.value;
+    if (!from) throw new Error("no login position");
+
+    const pending = client.moveTo({ x: from.x + 30, y: from.y + 40, z: from.z }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("no_path", 1, 30)));
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.distance).toBe(50);
+    expect(result.hint).toContain("pathfinding failed over 50y");
+    expect(result.hint).toContain("~15y");
+    expect(result.hint).toContain("different z");
+    client.close();
+    await stub.stop();
+  });
+
+  test("every other failure status stays exactly as it was", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("too_far", 1, 30)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.distance).toBeUndefined();
+    expect(result.hint).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
   test("a relog cannot resolve a moveTo against the previous session's stale result", async () => {
     // The module's moveId generator is per-session and restarts when the
     // session is recreated, so after a relog a fresh ack can reuse a moveId
@@ -1087,6 +1126,58 @@ describe("client: quests", () => {
     if (result.ok || result.status !== "too_far") throw new Error(`unexpected ${result.status}`);
     expect(result.hint).toContain("moveTo");
     expect(stub.actions.some((a) => a.action === "quest_complete")).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a turn-in timeout quotes the distance and rules range out when it is close", async () => {
+    // laguna-s-2.1 stood 0.1y from the *giver* of quest 783 (McBride ends it)
+    // and re-read "the NPC may be out of interact range" for 135 turns. The
+    // SDK knows the distance locally, so the message stops offering range as a
+    // live possibility when it is not one.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const NEAR_GUID = "17365880163140632777";
+    const self = client.state.self.position?.value;
+    if (!self) throw new Error("no login position");
+    const near = structuredClone(creatureCreate);
+    (near.data.objects[0] as { guid: string }).guid = NEAR_GUID;
+    (near.data.objects[0] as { pos: { x: number; y: number; z: number } }).pos = {
+      ...(near.data.objects[0] as { pos: { x: number; y: number; z: number; o: number } }).pos,
+      x: self.x + 0.8,
+      y: self.y,
+      z: self.z,
+    };
+    near.seq = 91;
+    stub.push(JSON.stringify(near));
+    await Bun.sleep(20);
+
+    const err = (await client
+      .turnInQuest(NEAR_GUID, QUEST_ID, 0, { timeout: 150 })
+      .catch((e: unknown) => e)) as Error & { distance?: number };
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("distance: 0.8y");
+    expect(err.message).toContain("range is NOT the cause");
+    expect(err.message).toContain(`does not end quest ${QUEST_ID}`);
+    expect(err.message).toContain("search_reference");
+    expect(err.distance).toBe(0.8);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a quest-list timeout quotes the distance and says to close it when it is far", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    await Bun.sleep(20);
+    const err = (await client
+      .questsAvailableFrom(CREATURE_GUID, { timeout: 150 })
+      .catch((e: unknown) => e)) as Error & { distance?: number };
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    // creatureCreate stands ~35y from the login position.
+    expect(err.message).toMatch(/distance: 3\d(\.\d+)?y/);
+    expect(err.message).toContain("interact range is ~5y");
+    expect(err.message).toContain("move to the NPC first");
+    expect(err.distance).toBeGreaterThan(30);
     client.close();
     await stub.stop();
   });
