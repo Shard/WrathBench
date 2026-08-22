@@ -132,9 +132,11 @@ async function main() {
   //    Human Paladin: neither 21084 (Seal of Righteousness) nor 59752 (Every
   //    Man for Himself, a real 2-minute racial) emits SMSG_SPELL_COOLDOWN or
   //    SMSG_COOLDOWN_EVENT, and no other spell in the level-1 book has an
-  //    observable cooldown. The decode of SMSG_SPELL_COOLDOWN is still
-  //    covered by the login-time `cooldowns[]` assertion above; the running
-  //    cooldown assertion is a FOLLOW-UP for a character that has one.
+  //    observable cooldown. Be honest about the hole this leaves: nothing
+  //    here exercises the SMSG_SPELL_COOLDOWN decode any more. The
+  //    login-time `cooldowns[]` check is a DIFFERENT wire shape (the block
+  //    inside SMSG_INITIAL_SPELLS) and it comes back empty at level 1, so it
+  //    covers nothing either. FOLLOW-UPS 47 owns the real assertion.
   let mark = events.length;
   await action("cast_spell", { spellId: SEAL_OF_RIGHTEOUSNESS });
   const go = await waitFor(
@@ -177,7 +179,7 @@ async function main() {
   }
   if (!deleted?.json?.deleted) fail(`character-delete never succeeded`);
   ws.close();
-  log("PASS: spellbook/talents/cooldown decodes, learn_talent round-trip, raw allow/deny");
+  log("PASS: spellbook/talents decodes, self-cast SPELL_GO, learn_talent round-trip, raw allow/deny");
   process.exit(0);
 }
 
