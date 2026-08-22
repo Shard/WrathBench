@@ -50,6 +50,14 @@ Edit `infra/fleet.json`. Nothing to restart.
 - A malformed edit is complained about and ignored; the last good config keeps
   running. Check it first if you like:
   `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts infra/fleet.json --dry-run`
+- While the file is rejected, **every `enabled` flag in it is inert** — including
+  a later, valid-looking edit disabling a lane, which the supervisor never sees
+  because it never gets past the parse. `--status` leads with a banner
+  (`!! fleet.json REJECTED since …`) and marks each lane's `enabled=` as
+  `(FILE, NOT in effect)` until a re-read succeeds. The banner comes from the
+  supervisor's own state file, not from parsing the config here: the two can be
+  different versions of the code, and the supervisor's verdict is the one that
+  decides what runs. Trust the banner over your own reading of the file.
 
 Two enabled lanes must not share an account, and lane policy (claude models on
 the claude-subscription driver only; shared free pools carry free ids only) is

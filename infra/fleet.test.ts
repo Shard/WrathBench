@@ -23,6 +23,9 @@ import {
   resolveStatePath,
   parseFleet,
   rereadFleet,
+  formatConfigBanner,
+  loadConfigForRead,
+  nextConfigRejection,
   validateEntries,
   type FleetConfig,
   type FleetLane,
@@ -30,6 +33,7 @@ import {
   type LaneSets,
   type PreflightRecord,
   type PreflightSmoke,
+  type ConfigRejection,
 } from "./run-fleet";
 
 /**
@@ -770,5 +774,55 @@ describe("lane-level run dimensions", () => {
     expect(() =>
       parseFleet(fleetJson([lane({ entries: [{ model: "a:free", watchdogs: { idleMs: -5 } }] })])),
     ).toThrow(/watchdogs/);
+  });
+});
+
+/**
+ * The 2026-08-22 incident: a config the running supervisor could not parse kept
+ * the last good config (by design), a later edit disabling every lane was
+ * therefore inert for seven hours, and `--status` said nothing about it. What
+ * follows is the state and the banner that make that condition impossible to
+ * miss.
+ */
+describe("config rejection", () => {
+  test("the first failure stamps `since`, later failures keep it", () => {
+    const first = nextConfigRejection(undefined, { error: "bad shape", mtime: 10 }, 1_000)!;
+    expect(first).toEqual({ since: 1_000, error: "bad shape", mtime: 10 });
+    const second = nextConfigRejection(first, { error: "still bad", mtime: 20 }, 9_000)!;
+    expect(second.since).toBe(1_000);
+    expect(second.error).toBe("still bad");
+    expect(second.mtime).toBe(20);
+  });
+
+  test("a successful re-read clears it", () => {
+    const rej: ConfigRejection = { since: 1_000, error: "bad", mtime: 10 };
+    expect(nextConfigRejection(rej, { mtime: 30 }, 9_000)).toBeUndefined();
+  });
+
+  test("the banner names the time, the error, and that the file is not in effect", () => {
+    const out = formatConfigBanner({ since: 1_700_000_000_000, error: "preflight.smokes[0]", mtime: 5 }, 1_699_000_000_000).join(
+      "\n",
+    );
+    expect(out).toContain("fleet.json REJECTED since");
+    expect(out).toContain(new Date(1_700_000_000_000).toLocaleString());
+    expect(out).toContain("preflight.smokes[0]");
+    expect(out).toContain("running on config loaded at " + new Date(1_699_000_000_000).toLocaleString());
+    expect(out).toContain("NOT in effect");
+  });
+
+  test("no rejection means no banner, and a missing load time degrades", () => {
+    expect(formatConfigBanner(undefined, 1)).toEqual([]);
+    expect(formatConfigBanner({ since: 1, error: "e", mtime: 2 }, undefined).join("\n")).toContain(
+      "an unrecorded time",
+    );
+  });
+
+  test("a status reader gets an error back instead of throwing on a broken file", () => {
+    expect(loadConfigForRead("fleet.json", () => "{not json").error).toBeDefined();
+    expect(loadConfigForRead("fleet.json", () => "{not json").config).toBeUndefined();
+    const dupe = JSON.stringify(fleetJson([lane({ name: "a", account: "X" }), lane({ name: "b", account: "X" })]));
+    expect(loadConfigForRead("fleet.json", () => dupe).error).toMatch(/shared by enabled lanes/);
+    const ok = JSON.stringify(fleetJson([lane({ name: "one" })]));
+    expect(loadConfigForRead("fleet.json", () => ok).config!.lanes[0]!.name).toBe("one");
   });
 });
