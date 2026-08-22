@@ -478,7 +478,35 @@ export type MoveResult =
       readonly position: UnitPosition;
       readonly seq: number;
       readonly ts: number;
+      /**
+       * `no_path` only: straight-line yards from where the move started to the
+       * point asked for, `undefined` when the start position was unobserved.
+       * Carried for the same reason `turnInQuest`'s `too_far` carries one — the
+       * number is the whole diagnosis and the SDK already has it.
+       */
+      readonly distance?: number;
+      /** `no_path` only: what to try next. See `MOVE_NO_PATH_HINT`. */
+      readonly hint?: string;
     };
+
+/**
+ * The `no_path` recovery recipe, in the result rather than in a trajectory
+ * nobody reads twice.
+ *
+ * `no_path` is one status over several causes — the destination is off the
+ * navmesh, the straight line crosses geometry the path cannot get around, or
+ * the z is inside/above the ground. Splitting them needs the module (FOLLOW-UPS
+ * 18(3)); teaching the recovery does not, and it is the half a model actually
+ * acts on. qwen spent 8 turns of the 2026-08-22 roster rediscovering that a long
+ * hop works when chunked into ~12y steps.
+ */
+function noPathHint(distance: number | undefined): string {
+  const over = distance === undefined ? "" : ` over ${distance}y`;
+  return (
+    `pathfinding failed${over} — the destination or the route is off the navmesh. Try an intermediate ` +
+    `waypoint within ~15y of where you are and repeat, or the same x/y at a different z (ground level).`
+  );
+}
 
 export interface WaitForNearbyOptions {
   timeout?: number;
@@ -569,6 +597,67 @@ export type KillResult =
     } & KillResultFacts);
 
 /** How each outcome reads, before the note and the armed/disarmed clause. */
+/**
+ * Straight-line yards to an object in view, rounded to 2dp — `undefined` when
+ * either side's position is unobserved. The one distance every questgiver
+ * failure message quotes. Module-level, not a method: it is an explanation
+ * detail, not new public surface (ADR-0015).
+ */
+function distanceToUnit(state: StateCache, guid: GuidArg): number | undefined {
+  const obj = state.nearby.get(guidKey(guid));
+  const pos = obj && pointOf(obj)?.value;
+  const self = state.self.position?.value;
+  if (!pos || !self) return undefined;
+  return Math.round(Math.hypot(pos.x - self.x, pos.y - self.y, pos.z - self.z) * 100) / 100;
+}
+
+/** What the core treats as interaction range for a questgiver/trainer, in yards. */
+const INTERACT_RANGE = 5;
+
+/**
+ * The silence-explaining tail of a questgiver timeout, built from the distance
+ * the SDK already knows.
+ *
+ * The core's questgiver handlers return without sending anything when the NPC
+ * is out of range, is not the right NPC, or has nothing for this character —
+ * one silence, three causes, and the old message listed all three with equal
+ * weight. Range is the only one of the three the client can rule out locally,
+ * and in every case observed in the 2026-08-22 roster it was *not* the cause:
+ * laguna sat 0.1y from the giver of a quest McBride ends and spent 135 turns
+ * there. So when the distance says range is fine, the message says so and
+ * names what is left.
+ */
+function questgiverSilence(distance: number | undefined, otherCauses: string, nextStep: string): string {
+  if (distance === undefined) {
+    return (
+      `the server stays silent when the NPC is out of interact range (~${INTERACT_RANGE}y), ${otherCauses}. ` +
+      `This SDK has no observed position for that guid, so it cannot tell you which — check state.units() ` +
+      `for the NPC and its distance. ${nextStep}`
+    );
+  }
+  if (distance <= INTERACT_RANGE) {
+    return (
+      `distance: ${distance}y, inside interact range (~${INTERACT_RANGE}y) — so range is NOT the cause here. ` +
+      `What is left: the NPC ${otherCauses}. ${nextStep}`
+    );
+  }
+  return (
+    `distance: ${distance}y, and interact range is ~${INTERACT_RANGE}y — move to the NPC first ` +
+    `(sdk.moveTo). If a closer attempt is also silent, the NPC ${otherCauses}. ${nextStep}`
+  );
+}
+
+/**
+ * Record the measured distance on a timeout so a caller can branch on it
+ * without parsing the message. Any other error passes through untouched.
+ */
+function withDistance<E>(error: E, distance: number | undefined): E {
+  if (error instanceof EventTimeoutError && distance !== undefined) {
+    (error as EventTimeoutError & { distance?: number }).distance = distance;
+  }
+  return error;
+}
+
 const KILL_DETAIL: Record<KillResult["status"], string> = {
   killed: "target died",
   player_died: "we died",
@@ -1324,6 +1413,8 @@ export class WrathClient {
       options = repaired.options;
     }
     const epoch = this.events.epoch;
+    // Read before the move: a `no_path` answer quotes the distance that failed.
+    const start = this.state.self.position?.value;
     const ack = await this.moveToAsync(point);
     // The match is the moveId within the current session epoch, and the buffer
     // is searched: a result can land while the POST response is still in
@@ -1360,9 +1451,14 @@ export class WrathClient {
       o: data.pos.o,
     };
     const common = { moveId: data.moveId, position, seq: event.seq, ts: event.ts } as const;
-    return status === "arrived"
-      ? { ok: true, status: "arrived", ...common }
-      : { ok: false, status, ...common };
+    if (status === "arrived") return { ok: true, status: "arrived", ...common };
+    if (status !== "no_path") return { ok: false, status, ...common };
+    // `no_path` means nothing moved, so the start is where we still are; the
+    // pre-move reading is preferred only because it is what was asked about.
+    const from = start ?? position;
+    const distance =
+      Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100;
+    return { ok: false, status, ...common, distance, hint: noPathHint(distance) };
   }
 
   /**
@@ -1875,39 +1971,40 @@ export class WrathClient {
     // the cache can prove the NPC is *grossly* far away — the 40y threshold
     // leaves cached-position staleness no room to reject a legitimate call
     // (ADR-0016); borderline cases still get the honest timeout.
-    {
-      const npc = this.state.nearby.get(guidKey(npcId));
-      const self = this.state.self.position;
-      const pos = npc?.position?.value;
-      if (npc && pos && self) {
-        const distance = Math.hypot(pos.x - self.value.x, pos.y - self.value.y, pos.z - self.value.z);
-        if (distance > 40) {
-          return {
-            ok: false,
-            status: "too_far",
-            questId,
-            distance: Math.round(distance),
-            hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~5y; moveTo it first`,
-          };
-        }
-      }
+    const distance = distanceToUnit(this.state, npcId);
+    if (distance !== undefined && distance > 40) {
+      return {
+        ok: false,
+        status: "too_far",
+        questId,
+        distance: Math.round(distance),
+        hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`,
+      };
     }
 
     {
       const sinceSeq = this.events.recent(1)[0]?.seq;
       await this.questComplete(npcId, questId);
-      const answer = await this.events.waitFor(
-        (e) =>
-          (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
-          (sinceSeq === undefined || e.seq > sinceSeq),
-        {
-          timeout,
-          description:
-            `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS) — ` +
-            `the server stays silent when the NPC is out of interact range (~5y), is not this quest's ` +
-            `ender, or the objectives are not complete; moveTo the NPC and check state.quest(${questId})`,
-        },
-      );
+      const answer = await this.events
+        .waitFor(
+          (e) =>
+            (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
+            (sinceSeq === undefined || e.seq > sinceSeq),
+          {
+            timeout,
+            description:
+              `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS) — ` +
+              questgiverSilence(
+                distance,
+                `does not end quest ${questId}, or the objectives are not complete`,
+                `Check state.quest(${questId}).complete, and use the search_reference tool for who ends ` +
+                  `quest ${questId} — the giver of a quest is often not its ender.`,
+              ),
+          },
+        )
+        .catch((e: unknown) => {
+          throw withDistance(e, distance);
+        });
       if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
         const req = answer.data as QuestGiverRequestItemsData;
         if (!req.completable) {
@@ -2058,22 +2155,31 @@ export class WrathClient {
    */
   private async questOffer(npcGuid: GuidArg, timeout: number): Promise<readonly OfferedQuest[]> {
     const sinceSeq = this.events.recent(1)[0]?.seq;
+    const distance = distanceToUnit(this.state, npcGuid);
     await this.questList(npcGuid);
-    const menu = await this.events.waitFor(
-      (e) =>
-        (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
-        !isDecodeError(e.data) &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      {
-        timeout,
-        description:
-          "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE) — " +
-          "the server stays silent when the NPC is out of interact range (~5y), is not a questgiver, " +
-          "or has nothing for this character; moveTo the NPC first",
-      },
-    );
+    const menu = await this.events
+      .waitFor(
+        (e) =>
+          (isEvent(e, "SMSG_QUESTGIVER_QUEST_LIST") || isEvent(e, "SMSG_GOSSIP_MESSAGE")) &&
+          !isDecodeError(e.data) &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        {
+          timeout,
+          description:
+            "the questgiver's quest list (SMSG_QUESTGIVER_QUEST_LIST or SMSG_GOSSIP_MESSAGE) — " +
+            questgiverSilence(
+              distance,
+              "is not a questgiver, or has nothing for this character right now",
+              "Use the search_reference tool for who offers the quest you are after.",
+            ),
+        },
+      )
+      .catch((e: unknown) => {
+        throw withDistance(e, distance);
+      });
     return (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
   }
+
 
   /**
    * `face`, with the module's refusals swallowed.
