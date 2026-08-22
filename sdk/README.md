@@ -293,6 +293,7 @@ state.nearby        // Map<guidKey, NearbyObject>                (from SMSG_UPDA
 state.questLog      // QuestLogEntry[]   — derived from the raw quest<slot><Off> fields
 state.quest(id)     // one quest log slot, or undefined
 state.inventory     // InventoryItem[]   — invSlot halves joined to items and names
+state.bag()         // { items: [{ bag, slot, itemId, name, count, guid }], freeSlots }
 state.questCompletions, state.questsCompleted  // turn-ins seen (SMSG_QUESTGIVER_QUEST_COMPLETE)
 state.money, state.xp, state.nextLevelXp   // Observed<number> | undefined (self only)
 state.target        // the NearbyObject our own targetGuid points at, when in view
@@ -327,6 +328,15 @@ fields and this is where they are folded.
   own create block (for `entry`), and an item query (for the name). Each leg
   can be missing, and a slot whose item has not been created for us yet is
   still reported — it *is* occupied — with `itemId` and `name` undefined.
+- `bag()` is the backpack view of `inventory`, shaped for acting on it:
+  `bag`/`slot` are exactly what `equipItem`, `useItem` and `destroyItem` take
+  (bag 255, slots 23-38), `count` is the observed stack count, and `freeSlots`
+  counts the backpack slots holding nothing. Earned surface (ADR-0015):
+  morning-opus-1 rebuilt this from push-result listeners, invSlot regexes and a
+  full relog when it was already in the cache. Two caveats: empty slots are
+  zero fields the wire compresses away, so before our own create block arrives
+  `freeSlots` reads 16; and equipped bags' contents (slots 19-22) are container
+  fields no whitelisted opcode serves — only the backpack is reported.
 - `pointOf(obj)` answers "where do I walk to reach it" from the freshest of the
   two independent sources: an oriented position (update blocks, `MSG_MOVE_*`)
   or `SMSG_MONSTER_MOVE`'s destination, which is what a player reads off a

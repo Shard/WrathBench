@@ -224,6 +224,26 @@ export interface InventoryItem {
   readonly ts: number;
 }
 
+/**
+ * One occupied backpack slot, addressed the way the item actions want it:
+ * `bag`/`slot` feed `equipItem`, `useItem` and `destroyItem` unchanged
+ * (`bag` 255 is the backpack, `slot` 23-38).
+ */
+export interface BagSlotItem {
+  readonly bag: number;
+  readonly slot: number;
+  readonly guid: GuidKey;
+  readonly itemId: number | undefined;
+  readonly name: string | undefined;
+  readonly count: number | undefined;
+}
+
+/** The backpack as `bag()` reports it. */
+export interface BagContents {
+  readonly items: readonly BagSlotItem[];
+  readonly freeSlots: number;
+}
+
 /** What an item query answered about one item entry. */
 export interface ItemInfo {
   readonly itemId: number;
@@ -569,6 +589,36 @@ export class StateCache {
       });
     }
     return out;
+  }
+
+  /**
+   * The backpack, shaped for acting on it: `bag`/`slot` are exactly what
+   * `equipItem(bag, slot)`, `useItem` and `destroyItem` take (bag 255, slots
+   * 23-38), and `freeSlots` is how many of the 16 backpack slots hold nothing.
+   *
+   * A view over `inventory` — same fields, same three-way join, no new
+   * observation. Earned surface (ADR-0015): morning-opus-1 rebuilt this from
+   * ITEM_PUSH_RESULT listeners, invSlot regexes over raw updates, and a full
+   * relog to force a resend, when everything needed was already in the cache.
+   *
+   * Two honest caveats. Empty slots are zero-valued update fields and the wire
+   * compresses zeros out of create blocks, so "no field observed" reads as
+   * free — before our own create block has arrived this says 16. And the
+   * contents of *equipped* bags (slots 19-22) are container fields no
+   * whitelisted opcode serves, so only the backpack is reported.
+   */
+  bag(): BagContents {
+    const items = this.inventory
+      .filter((i) => i.slot >= BACKPACK_FIRST_SLOT)
+      .map((i) => ({
+        bag: BACKPACK_BAG,
+        slot: i.slot,
+        guid: i.guid,
+        itemId: i.itemId,
+        name: i.name,
+        count: i.stackCount,
+      }));
+    return { items, freeSlots: BACKPACK_SIZE - items.length };
   }
 
   /** The object our own `targetGuid` points at, when it is also in view. */
@@ -1212,6 +1262,11 @@ const QUEST_LOG_SLOTS = 25;
 const QUEST_STATE_COMPLETE = 1;
 /** Equipment + bags are 0-22, backpack 23-38 (PROTOCOL.md). */
 const INVENTORY_LAST_SLOT = 38;
+/** First/last backpack slot in the `invSlot<n>` numbering, and its size. */
+const BACKPACK_FIRST_SLOT = 23;
+const BACKPACK_SIZE = 16;
+/** `INVENTORY_SLOT_BAG_0` on the wire: the bag id the item actions take for the backpack. */
+const BACKPACK_BAG = 255;
 
 /**
  * Where an object is, from the freshest thing that said so.

@@ -49,6 +49,8 @@ export { pointOf, StateCache } from "./state";
 export type {
   Anomaly,
   AuraEntry,
+  BagContents,
+  BagSlotItem,
   ChatEntry,
   CharacterSummary,
   CreatureInfo,
