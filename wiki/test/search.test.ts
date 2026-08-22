@@ -4,6 +4,7 @@ import { createMemoryBundle, makeWriter } from "../src/bundle";
 import {
   EXACT_TITLE_RANK,
   normaliseTitle,
+  parseIdQuery,
   searchReference,
   toMatchExpression,
 } from "../src/search";
@@ -134,5 +135,157 @@ describe("searchReference", () => {
     expect(() => searchReference(db, `"unbalanced AND (`)).not.toThrow();
     expect(searchReference(db, "   ")).toEqual([]);
     expect(searchReference(db, "zzzznothinghere")).toEqual([]);
+  });
+});
+
+describe("parseIdQuery", () => {
+  test("a bare number is an id lookup of unknown kind", () => {
+    expect(parseIdQuery("4242")).toEqual({ ids: [{ id: 4242 }], text: "" });
+  });
+
+  test("an id word beside the number gives the kind and is consumed with it", () => {
+    expect(parseIdQuery("quest 4242")).toEqual({ ids: [{ id: 4242, kind: "quest" }], text: "" });
+    expect(parseIdQuery("Example Quest Alpha quest 4242")).toEqual({
+      ids: [{ id: 4242, kind: "quest" }],
+      text: "Example Quest Alpha",
+    });
+    expect(parseIdQuery("entry 1717 Example Zone Beta")).toEqual({
+      ids: [{ id: 1717 }],
+      text: "Example Zone Beta",
+    });
+  });
+
+  test("a run of numbers after an id word are all ids, and a kindless word takes the kind before it", () => {
+    expect(parseIdQuery("npc entry 1717 1718")).toEqual({
+      ids: [
+        { id: 1717, kind: "npc" },
+        { id: 1718, kind: "npc" },
+      ],
+      text: "",
+    });
+  });
+
+  test("an id word after the number does not turn it into an id", () => {
+    expect(parseIdQuery("level 5 quests")).toEqual({ ids: [], text: "level 5 quests" });
+  });
+
+  test("a number no id word introduces stays ordinary text", () => {
+    expect(parseIdQuery("level 5 quests")).toEqual({ ids: [], text: "level 5 quests" });
+    expect(parseIdQuery("Example Zone Beta")).toEqual({ ids: [], text: "Example Zone Beta" });
+  });
+});
+
+describe("ranking bands", () => {
+  let ranked: Database;
+
+  beforeAll(() => {
+    ranked = createMemoryBundle();
+    const writer = makeWriter(ranked, 2);
+    // A page whose only connection to 4242 is arithmetic in its body — the
+    // shape that outranked the real entity page (FOLLOW-UPS 25).
+    writer.addPage(
+      "Example Formula Notes",
+      0,
+      "Worked example: 4242 divided by two is 2121, and 4242 minus 42 is 4200. " +
+        "Example Quest Alpha is mentioned here in passing, as is Example Person Gamma. " +
+        "4242 4242 4242 lorem ipsum dolor sit amet.",
+    );
+    writer.addPage(
+      "Example Quest Alpha",
+      118,
+      "Objectives: speak to Example Person Gamma in the beta zone.",
+      undefined,
+      [{ kind: "quest", id: 4242 }],
+    );
+    writer.addPage(
+      "Example Person Gamma",
+      0,
+      "Example Person Gamma stands in the beta zone.",
+      undefined,
+      [{ kind: "npc", id: 1717 }],
+    );
+    // Mentions the entity by name many times over, so bm25 alone ranks it
+    // above the page actually named for that entity.
+    writer.addPage(
+      "Example Chatter Page",
+      0,
+      "Example Person Gamma. Example Person Gamma. Example Person Gamma. Gamma, Gamma, Gamma.",
+    );
+    // Shares an id with the quest page, under a different kind.
+    writer.addPage("Example Object Marker", 0, "A marker in the beta zone.", undefined, [
+      { kind: "object", id: 4242 },
+    ]);
+    writer.flush();
+  });
+
+  test("a bare id finds the page that states it, not the page that mentions the digits", () => {
+    const hits = searchReference(ranked, "4242");
+    expect(hits[0]!.title).toBe("Example Quest Alpha");
+    expect(hits[0]!.matchedId).toEqual({ kind: "quest", id: 4242 });
+    // The digits-in-prose page is not merely demoted, it is gone: an id query
+    // never reaches the text index.
+    expect(hits.some((h) => h.title === "Example Formula Notes")).toBe(false);
+  });
+
+  test("a qualified id keeps the rest of the query as text", () => {
+    const hits = searchReference(ranked, "Example Quest Alpha quest 4242");
+    expect(hits[0]!.title).toBe("Example Quest Alpha");
+    // The prose page may still come back on the words — it just cannot come
+    // back on the digits, and never above the page that states the id.
+    expect(hits.findIndex((h) => h.title === "Example Formula Notes")).not.toBe(0);
+  });
+
+  test("the kind named in the query decides between two pages sharing an id", () => {
+    expect(searchReference(ranked, "object 4242")[0]!.title).toBe("Example Object Marker");
+    expect(searchReference(ranked, "quest 4242")[0]!.title).toBe("Example Quest Alpha");
+  });
+
+  test("an exact title outranks an id hit", () => {
+    const hits = searchReference(ranked, "Example Quest Alpha");
+    expect(hits[0]!.exactTitle).toBe(true);
+    expect(hits[0]!.rank).toBe(EXACT_TITLE_RANK);
+  });
+
+  test("a title match outranks a body match that bm25 scores higher", () => {
+    const hits = searchReference(ranked, "Example Person Gamma");
+    expect(hits[0]!.title).toBe("Example Person Gamma");
+    expect(hits.map((h) => h.title)).toContain("Example Chatter Page");
+    expect(hits.indexOf(hits.find((h) => h.title === "Example Chatter Page")!)).toBeGreaterThan(0);
+  });
+
+  test("an id query against a bundle with no id index yields nothing rather than noise", () => {
+    const old = createMemoryBundle();
+    const writer = makeWriter(old, 2);
+    writer.addPage("Example Formula Notes", 0, "4242 divided by two is 2121.");
+    writer.flush();
+    // What a bundle built before schema 3 looks like.
+    old.run("DROP INDEX page_ids_lookup");
+    old.run("DROP INDEX page_ids_page_id");
+    old.run("DROP TABLE page_ids");
+    expect(searchReference(old, "quest 4242")).toEqual([]);
+    old.close();
+  });
+
+  test("id results survive a JSON round trip", () => {
+    const hits = searchReference(ranked, "npc 1717");
+    expect(JSON.parse(JSON.stringify(hits))).toEqual(hits);
+    expect(hits[0]!.title).toBe("Example Person Gamma");
+    expect(Number.isFinite(hits[0]!.rank)).toBe(true);
+  });
+});
+
+describe("parseIdQuery leading numbers", () => {
+  test("a number that opens the query may be claimed by the id word after it", () => {
+    expect(parseIdQuery("4242 npc entry Example Zone Beta")).toEqual({
+      ids: [{ id: 4242, kind: "npc" }],
+      text: "Example Zone Beta",
+    });
+  });
+
+  test("but only in that position", () => {
+    expect(parseIdQuery("Example Zone Beta 4242 npc")).toEqual({
+      ids: [],
+      text: "Example Zone Beta 4242 npc",
+    });
   });
 });

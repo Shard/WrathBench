@@ -3,15 +3,25 @@
  * Search over the wiki bundle. This is what the runner's `search_reference`
  * MCP tool calls.
  *
- * Two things happen per query. First a title resolution: the query is treated
- * as a page title and pushed through the redirect table, so an agent that knows
- * an old or alternate name still lands on the article. Then an FTS5 MATCH
- * ranked by bm25 with the title column weighted up. The title hit, if any, is
- * returned first; FTS results follow, deduplicated.
+ * Results come back in bands, and only within a band does bm25 decide:
+ *
+ *   0. exact title — the query resolved to a page title, via redirects.
+ *   1. entity id — the query named an id and a page states that id in its
+ *      infobox (`page_ids`, bundle schema 3).
+ *   2. title tokens — every word of the query appears in the page title.
+ *   3. body — the words appear somewhere in the text.
+ *
+ * The bands exist because bm25 alone put a page whose only connection to
+ * "quest 783" was the digits 783 inside an arithmetic example above the quest
+ * page itself (FOLLOW-UPS 25). Numbers are the sharp case: a numeric token that
+ * the query marks as an id ("783", "quest 783", "npc entry 721") is looked up
+ * against id fields only and is never handed to the full-text index, so body
+ * prose can no longer answer an id question.
  */
 
 import { Database } from "bun:sqlite";
-import { DEFAULT_BUNDLE_PATH, bundleHasCoords } from "./bundle";
+import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds } from "./bundle";
+import type { IdKind } from "./ids";
 
 export interface SearchOptions {
   /** Max results. Default 8. */
@@ -36,6 +46,8 @@ export interface SearchResult {
   exactTitle?: true;
   /** Set when the query matched a redirect that led here. */
   redirectedFrom?: string;
+  /** Set when the page was found because it states this entity id. */
+  matchedId?: { kind: IdKind; id: number };
   /**
    * Coordinates recorded on the wiki page (templates/infoboxes). These are
    * wiki-reference notes, not a live observation and not proof anything is at
@@ -48,6 +60,15 @@ export interface SearchResult {
 
 /** Sorts ahead of any bm25 score and survives JSON.stringify. */
 export const EXACT_TITLE_RANK = -1e9;
+
+/** An id hit: below an exact title, above anything bm25 scored. Finite, for JSON. */
+export const ID_MATCH_RANK = -5e8;
+
+/**
+ * Result bands. Ordering is by band first, bm25 second; `rank` is what the
+ * caller displays, `band` is what sorts.
+ */
+const BAND = { title: 0, id: 1, titleTokens: 2, body: 3 } as const;
 
 const TOKEN = /[\p{L}\p{N}][\p{L}\p{N}'_-]*/gu;
 
@@ -138,6 +159,128 @@ function resolveTitle(db: Database, title: string): { page: PageRow; via: string
   return null;
 }
 
+
+/**
+ * Words that mark the number beside them as an entity id, and the kind they
+ * imply. `undefined` means "an id, kind unknown" — `entry`, `id`, `number`.
+ */
+const ID_WORDS: Record<string, IdKind | undefined> = {
+  quest: "quest",
+  quests: "quest",
+  questid: "quest",
+  npc: "npc",
+  npcs: "npc",
+  mob: "npc",
+  mobs: "npc",
+  creature: "npc",
+  creatures: "npc",
+  item: "item",
+  items: "item",
+  object: "object",
+  objects: "object",
+  spell: "spell",
+  spells: "spell",
+  entry: undefined,
+  entries: undefined,
+  id: undefined,
+  ids: undefined,
+  number: undefined,
+};
+
+const NUMERIC = /^\d{1,9}$/;
+
+/** One numeric token the query asked about as an id. */
+export interface QueryId {
+  id: number;
+  /** Kind the query named, when it named one. */
+  kind?: IdKind;
+}
+
+export interface ParsedQuery {
+  /** Ids to look up in id-shaped fields. Never handed to the text index. */
+  ids: QueryId[];
+  /** What is left of the query for full-text search; "" when nothing is. */
+  text: string;
+}
+
+/**
+ * Split a query into id lookups and text.
+ *
+ * A numeric token becomes an id lookup when it is the whole query, when the
+ * nearest preceding non-numeric token is an id word ("quest 783",
+ * "entry 721 Northshire", "npc entry 299 69"), or when the number opens the
+ * query and an id word follows it ("721 npc entry Northshire"). A following id
+ * word counts only in that opening position, deliberately — "level 5 quests"
+ * is a request for level-5 quests, not for entity 5. The id word is consumed with the number,
+ * since leaving "quest" in the text query would match every quest page; a
+ * kindless word ("entry", "id") takes its kind from the word before it, which
+ * is how models actually write it ("npc entry 197").
+ */
+export function parseIdQuery(query: string): ParsedQuery {
+  const tokens = query.match(TOKEN) ?? [];
+  const isNum = tokens.map((t) => NUMERIC.test(t));
+  const lower = tokens.map((t) => t.toLowerCase());
+  const isIdWord = lower.map((t) => t in ID_WORDS);
+  const consumed = new Array<boolean>(tokens.length).fill(false);
+  const ids: QueryId[] = [];
+
+  /** Nearest non-numeric neighbour in `step` direction, or -1. */
+  const neighbour = (from: number, step: number): number => {
+    for (let i = from + step; i >= 0 && i < tokens.length; i += step) {
+      if (!isNum[i]) return i;
+    }
+    return -1;
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isNum[i]) continue;
+    let qualifier = -1;
+    let after = -1;
+    if (tokens.length > 1) {
+      const left = neighbour(i, -1);
+      const right = neighbour(i, 1);
+      if (left >= 0 && isIdWord[left]) qualifier = left;
+      else if (left < 0 && right >= 0 && isIdWord[right]) {
+        // The number opens the query: "721 npc entry Northshire". Only here is
+        // a *following* id word allowed to claim it — "level 5 quests" must
+        // stay a search for level-5 quests.
+        qualifier = right;
+        after = right;
+      } else continue; // an ordinary number, not an id
+    }
+    const value = Number.parseInt(tokens[i]!, 10);
+    if (!Number.isInteger(value) || value <= 0) continue;
+    consumed[i] = true;
+    let kind: IdKind | undefined;
+    if (qualifier >= 0) {
+      consumed[qualifier] = true;
+      kind = ID_WORDS[lower[qualifier]!];
+      if (kind === undefined && qualifier > 0 && isIdWord[qualifier - 1]) {
+        // "npc entry 197": the kindless word takes its kind from the one before.
+        kind = ID_WORDS[lower[qualifier - 1]!];
+        if (kind !== undefined) consumed[qualifier - 1] = true;
+      }
+      // "721 npc entry …": the id words trailing the number all belong to it.
+      for (let j = after + 1; after >= 0 && j < tokens.length && isIdWord[j]; j++) consumed[j] = true;
+    }
+    if (!ids.some((e) => e.id === value && e.kind === kind)) {
+      ids.push(kind === undefined ? { id: value } : { id: value, kind });
+    }
+  }
+
+  if (ids.length === 0) return { ids: [], text: query };
+  const text = tokens.filter((_t, i) => !consumed[i]).join(" ");
+  return { ids, text };
+}
+
+/** True when every token of `text` appears in `title` (case-insensitive). */
+function titleCoversTokens(title: string, text: string): boolean {
+  const tokens = text.match(TOKEN);
+  if (tokens === null || tokens.length === 0) return false;
+  const haystack = title.toLowerCase();
+  return tokens.every((t) => haystack.includes(t.toLowerCase()));
+}
+
 /**
  * Search the bundle. Never throws on a malformed query: an unparseable query
  * simply yields no FTS results.
@@ -150,15 +293,27 @@ export function searchReference(
   const limit = Math.max(1, Math.min(opts.limit ?? 8, 50));
   const snippetTokens = Math.max(8, Math.min(opts.snippetTokens ?? 28, 64));
   const namespaces = opts.namespaces;
-  const results: SearchResult[] = [];
-  const seen = new Set<string>();
   const hasCoords = bundleHasCoords(db);
+  const hasIds = bundleHasIds(db);
+  const parsed = parseIdQuery(query);
+  const inNamespace = (ns: number): boolean => namespaces === undefined || namespaces.includes(ns);
 
-  const direct = resolveTitle(db, query);
-  if (direct !== null && (namespaces === undefined || namespaces.includes(direct.page.ns))) {
-    seen.add(direct.page.title);
+  const banded: { band: number; result: SearchResult }[] = [];
+  const seen = new Set<string>();
+  const push = (band: number, result: SearchResult): void => {
+    if (seen.has(result.title)) return;
+    seen.add(result.title);
+    banded.push({ band, result });
+  };
+
+  // --- band 0: the query is a page title (possibly through redirects).
+  // Tried on the query as written, then on the query with its id tokens
+  // removed, so "A Threat Within quest 783" still resolves to the article.
+  for (const candidate of parsed.text !== query && parsed.text !== "" ? [query, parsed.text] : [query]) {
+    const direct = resolveTitle(db, candidate);
+    if (direct === null || !inNamespace(direct.page.ns)) continue;
     const coords = coordsForPage(db, hasCoords, direct.page.id);
-    results.push({
+    push(BAND.title, {
       title: direct.page.title,
       ns: direct.page.ns,
       snippet: headSnippet(direct.page.text),
@@ -167,9 +322,43 @@ export function searchReference(
       ...(direct.via !== null ? { redirectedFrom: direct.via } : {}),
       ...(coords !== undefined ? { coords } : {}),
     });
+    break;
   }
 
-  const match = toMatchExpression(query);
+  // --- band 1: entity ids, matched only against id-shaped fields.
+  if (hasIds && parsed.ids.length > 0) {
+    const stmt = db.query<PageRow & { kind: string; entity_id: number }, [number]>(`
+      SELECT p.id AS id, p.title AS title, p.ns AS ns, p.text AS text,
+             i.kind AS kind, i.id AS entity_id
+      FROM page_ids i JOIN pages p ON p.id = i.page_id
+      WHERE i.id = ?
+      ORDER BY p.id
+      LIMIT 32
+    `);
+    for (const wanted of parsed.ids) {
+      // A page whose kind matches the word the query used comes first; an id
+      // stated under another kind still beats a body match.
+      const rows = stmt.all(wanted.id).filter((r) => inNamespace(r.ns));
+      const ordered = [
+        ...rows.filter((r) => wanted.kind !== undefined && r.kind === wanted.kind),
+        ...rows.filter((r) => wanted.kind === undefined || r.kind !== wanted.kind),
+      ];
+      for (const row of ordered) {
+        const coords = coordsForPage(db, hasCoords, row.id);
+        push(BAND.id, {
+          title: row.title,
+          ns: row.ns,
+          snippet: headSnippet(row.text),
+          rank: ID_MATCH_RANK,
+          matchedId: { kind: row.kind as IdKind, id: row.entity_id },
+          ...(coords !== undefined ? { coords } : {}),
+        });
+      }
+    }
+  }
+
+  // --- bands 2 and 3: full text, over the query minus its id tokens.
+  const match = parsed.text === "" ? null : toMatchExpression(parsed.text);
   if (match !== null) {
     // A model asks in sentences. Try the precise AND first; if nothing matches,
     // fall back to OR so a long question still finds the article.
@@ -192,7 +381,10 @@ export function searchReference(
     `;
     const params: (string | number)[] = [match];
     if (nsFilter !== "") params.push(...(namespaces as readonly number[]));
-    params.push(limit + results.length + 4);
+    // Deliberately far wider than `limit`: the title band is decided here, in
+    // TypeScript, and a title match sitting twentieth by bm25 has to be in the
+    // candidate set to be promoted at all.
+    params.push(Math.min(200, limit * 4 + 16));
     const stmt = db.query<
       { id: number; title: string; ns: number; snippet: string; rank: number },
       (string | number)[]
@@ -203,17 +395,14 @@ export function searchReference(
       try {
         for (const row of stmt.all(...params)) {
           matched++;
-          if (seen.has(row.title)) continue;
-          seen.add(row.title);
           const coords = coordsForPage(db, hasCoords, row.id);
-          results.push({
+          push(titleCoversTokens(row.title, parsed.text) ? BAND.titleTokens : BAND.body, {
             title: row.title,
             ns: row.ns,
             snippet: row.snippet.replace(/\s+/g, " ").trim(),
             rank: row.rank,
             ...(coords !== undefined ? { coords } : {}),
           });
-          if (results.length >= limit) break;
         }
       } catch {
         // A query FTS5 cannot parse yields no matches rather than an error.
@@ -223,7 +412,12 @@ export function searchReference(
     }
   }
 
-  return results.slice(0, limit);
+  // Stable within a band: bm25 order for text, insertion order for the rest.
+  return banded
+    .map((entry, index) => ({ ...entry, index }))
+    .sort((a, b) => a.band - b.band || a.result.rank - b.result.rank || a.index - b.index)
+    .slice(0, limit)
+    .map((entry) => entry.result);
 }
 
 /**
