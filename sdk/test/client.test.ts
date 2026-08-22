@@ -16,6 +16,7 @@ import {
   gossipWithQuests,
   inventoryChangeFailure,
   inventorySlot,
+  inventorySlotCleared,
   inventorySlotMove,
   ITEM_ENTRY,
   itemCreate,
@@ -1730,6 +1731,35 @@ describe("client: equipItem", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     expect(result.equippedSlot).toBe(15);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an item that only leaves the backpack still counts as equipped", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    // The equipment slot's own field was not seen, only the backpack emptying.
+    stub.push(JSON.stringify(inventorySlotCleared(76, BACKPACK_SLOT)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.equippedSlot).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("a bag-to-bag shuffle is not an equip", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 200 });
+    await untilAction(stub, "equip_item");
+    stub.push(JSON.stringify(inventorySlotMove(77, BACKPACK_SLOT, BACKPACK_SLOT + 1)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("unconfirmed");
     client.close();
     await stub.stop();
   });

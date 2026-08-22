@@ -70,7 +70,7 @@ class WrathClient {
   questComplete(guid, questId) / questChooseReward(guid, questId, rewardIndex?) / questAbandon(questId)
   loot(guid) / lootAll(guid) / lootItem(slot) / lootMoney() / lootRelease(guid)
   vendorList(guid) / buyItem(guid, itemId, slot, count?) / sellItem(guid, itemGuid, count?) / repairAll(guid)
-  equipItem(bag, slot) / useItem(bag, slot, targetGuid?) / destroyItem(bag, slot, count?)
+  useItem(bag, slot, targetGuid?) / destroyItem(bag, slot, count?)
   trainerListAsync(guid) / trainerBuySpellAsync(guid, spellId)
   repop() / reclaimCorpse(guid?) / spiritHealerActivate(guid)
   deleteCharacter(name, o?: DeleteCharacterOptions): Promise<CharacterDeleteResponse>  // POST /character-delete
@@ -87,6 +87,7 @@ class WrathClient {
   waitForQuestObjective(questId, o?: QuestOptions): Promise<QuestLogEntry>
   trainerList(npcGuid, o?: TrainerOptions): Promise<TrainerListResult>
   buySpell(npcGuid, spellId, o?: TrainerOptions): Promise<BuySpellResult>
+  equipItem(bag, slot, o?: EquipOptions): Promise<EquipItemResult>
   get selfKey(): string | undefined
 }
 ```
