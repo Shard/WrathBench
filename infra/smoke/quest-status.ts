@@ -11,8 +11,10 @@
  *
  * Arc: fresh Human Paladin in Northshire (spawns beside Deputy Willem, who
  * offers 783 "A Threat Within") ->
- *   1. the login burst carries SMSG_QUESTGIVER_STATUS_MULTIPLE naming Willem
- *      with an "available" status (8; 2 if the core decides low-level);
+ *   1. the login-time SMSG_QUESTGIVER_STATUS_MULTIPLE arrives (empty — the
+ *      core sends it before visibility is populated), then, with Willem in
+ *      view, questgiver_status_multiple_query names him "available" (8; 2 if
+ *      the core decides low-level);
  *   2. questgiver_status_query for Willem's guid -> SMSG_QUESTGIVER_STATUS
  *      for that guid with the same status;
  *   3. quest_query 783 -> SMSG_QUEST_QUERY_RESPONSE with the title and no
@@ -147,15 +149,23 @@ async function main() {
   await waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT" && e.data?.objects?.some((o: any) => o.self), 10000, "self create");
   const willem = await waitForUnit(ENTRY_WILLEM, 10000, "Deputy Willem");
 
-  // 1. The login burst: SMSG_QUESTGIVER_STATUS_MULTIPLE names Willem as available.
-  const multiple = await waitFor((e) => e.opcode === "SMSG_QUESTGIVER_STATUS_MULTIPLE", 10000, "login STATUS_MULTIPLE");
+  // 1. The core's unprompted login-time STATUS_MULTIPLE is EMPTY (verified live
+  //    2026-08-22: it is sent before the visibility container is populated,
+  //    even though the create blocks precede it on the stream) — which is why a
+  //    client, and the SDK, query per guid on spawn. So: wait until Willem is in
+  //    view, then ask, and assert on the answer.
+  const loginMultiple = await waitFor((e) => e.opcode === "SMSG_QUESTGIVER_STATUS_MULTIPLE", 10000, "login STATUS_MULTIPLE");
+  log(`login STATUS_MULTIPLE: ${loginMultiple.data.statuses?.length ?? "?"} entries (the core sends it before visibility is populated; 0 is normal)`);
+  let mark = events.length;
+  await action("questgiver_status_multiple_query");
+  const multiple = await waitFor((e) => e.opcode === "SMSG_QUESTGIVER_STATUS_MULTIPLE", 5000, "STATUS_MULTIPLE after Willem is in view", mark);
   const willemRow = (multiple.data.statuses ?? []).find((r: any) => r.guid === willem);
-  if (!willemRow) fail(`login STATUS_MULTIPLE did not name Willem (${willem}): ${JSON.stringify(multiple.data)}`);
-  if (!STATUS_AVAILABLE.has(willemRow.status)) fail(`Willem's login status is ${willemRow.status}, expected an available status`);
-  log(`login STATUS_MULTIPLE: ${multiple.data.statuses.length} questgivers, Willem status=${willemRow.status}`);
+  if (!willemRow) fail(`STATUS_MULTIPLE did not name Willem (${willem}): ${JSON.stringify(multiple.data)}`);
+  if (!STATUS_AVAILABLE.has(willemRow.status)) fail(`Willem's status is ${willemRow.status}, expected an available status`);
+  log(`STATUS_MULTIPLE: ${multiple.data.statuses.length} questgivers, Willem status=${willemRow.status}`);
 
   // 2. Per-guid query, as a client sends for a questgiver coming into view.
-  let mark = events.length;
+  mark = events.length;
   await action("questgiver_status_query", { guid: willem });
   const single = await waitFor((e) => e.opcode === "SMSG_QUESTGIVER_STATUS" && e.data?.guid === willem, 5000, "SMSG_QUESTGIVER_STATUS for Willem", mark);
   if (single.data.status !== willemRow.status) fail(`single status ${single.data.status} != multiple status ${willemRow.status}`);
