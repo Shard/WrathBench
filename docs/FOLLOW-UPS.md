@@ -55,7 +55,11 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     `SMSG_NEW_WORLD` and update `state.self.position.map` from them, since today it
     only ever updates from `SMSG_LOGIN_VERIFY_WORLD`; (3) split `no_path` into
     distinguishable causes, or teach the z-ladder/subdivision recovery recipe in the
-    prompt; (4) a contract-clean coordinates source — the probe hardcoded DB-derived
+    prompt — **the second half shipped 2026-08-22**: a `no_path` result now carries
+    `{ distance, hint }` naming the failed span and the ~15y-waypoint / different-z
+    recovery (qwen spent 8 turns rediscovering it). Splitting the causes is still open
+    and is module work: off-navmesh destination, blocked route and bad z are one status
+    on the wire; (4) a contract-clean coordinates source — the probe hardcoded DB-derived
     waypoints, which the observation contract denies an agent. The wiki-coordinate
     channel for this shipped 2026-08-22 (issue #2 item 4, WORKLOG): `search_reference`
     now returns wowwiki `{{coords}}`/infobox coordinates as reference hints — so (4)
@@ -106,6 +110,34 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     mystery slowdown in three weeks. An index keyed on account, or a scan capped
     to recently-modified directories, is the fix.
 
+25. **`search_reference` ranks id noise above the entity page, and never says
+    "you already asked this"** (2026-08-22 review). laguna issued 11 searches and
+    nemotron 13 *identical* queries in one episode; the top hits were pages whose
+    only match was a numeric-id substring, with the actual NPC/quest page below
+    them. Two changes, both harness-side: rank an exact title/entity match above a
+    body substring, and de-noise bare-number matches (an id match should require the
+    id to be in an id-shaped field, not anywhere in the text). Then make repetition
+    visible — a per-episode memo of "this query returned these titles N turns ago"
+    in the tool result, so a model re-asking sees it is re-asking rather than
+    reading the same list as if it were new. The second half is the cheaper of the
+    two and probably the one that saves turns.
+
+26. **A silent turn-in cannot be told from "this NPC has nothing to offer"**
+    (2026-08-22 review; investigated and deliberately not implemented). The
+    proposal was: during `turnInQuest`, treat an `SMSG_GOSSIP_MESSAGE` for the
+    target carrying no quests and no options as `status: "nothing_offered"` instead
+    of burning the 10s timeout. The trajectory does not support it. In
+    `roster-laguna-s-2-1-20260822` the empty gossip menus (menuId 4650, `options: []`,
+    `quests: []`, seq 5489 and 5858) are the answers to that model's own
+    `questList`/`gossipHello` calls on Llane Beshere, not to a `quest_complete` —
+    the core does not answer `quest_complete` with a gossip menu at all. Keying a
+    resolved status on an unrelated event that happens to land inside the wait would
+    let a merely-slow legitimate turn-in report a fabricated outcome, which is the
+    one thing ADR-0016 forbids. If it is wanted, the honest version is module-side:
+    have the module report that the handler returned without sending (see item 27's
+    questgiver status, which answers the same question before the call). The distance
+    in the timeout message (shipped 2026-08-22) covers the observed cases meanwhile.
+
 ## Surface candidates (add when a run makes them the obstacle)
 
 9. **Trainers** — every model so far has visited Brother Sammuel and probed for a
@@ -126,6 +158,28 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     event X", would cut turn counts for every model. Held: smells like the
     convenience middle tier ADR-0015 forbids; decide deliberately, with Mark, not
     inline. Item 17's parked `sdk.wait` alias is the same decision.
+
+27. **Questgiver status icon on nearby units** (`SMSG_QUESTGIVER_STATUS` /
+    `_MULTIPLE`) — the `!`/`?`/greyed marker a real client renders over an NPC's
+    head, and squarely inside the observation contract: it is a packet a client
+    receives. Today a snippet cannot tell a questgiver from a guard, or an *ender*
+    from a *giver*, without interacting and waiting out a silence. That silence is
+    the single most expensive failure in the 2026-08-22 review — laguna spent turns
+    103-238 at 0.1y from the giver of quest 783 (McBride ends it), ox-alpha 8-10
+    turns, nemotron 10, qwen 5 — and an icon on `state.units()` would let a snippet
+    filter enders before ever sending an opcode. Module work: tap the opcode, fold
+    the status onto the object in the state cache, expose it as a `UnitFilter` key.
+
+28. **Quest objective text and required counts** — the client renders
+    "Kobold Vermin slain: 0/8" from the quest query response
+    (`SMSG_QUEST_QUERY_RESPONSE`); the SDK exposes only the packed progress
+    `counts: [n,n,n,n]` from the quest log, with no objective names and no
+    denominators. So a model that has the quest cannot tell *what* to kill or *how
+    many*: ox-alpha lost ~15-20 turns grinding wolves for a kobold quest, watching
+    `counts` stay at 0 and concluding the counter was broken. Module work
+    (`CMSG_QUEST_QUERY` plus the response decode), then a `state.quest(id)` that
+    carries `objectives: [{ text, required, have }]`. Pairs with item 27: together
+    they are most of what a client actually shows about a quest.
 
 10. **Per-character credentials** (PHASE-0 deferred list) — required before any run
     parallelism beyond the current one-account-per-run scheme. The fleet layer
@@ -159,3 +213,11 @@ what shipped; the dev loop (docs/PHASE-0.md) decides when.
     for a future pass: taint is per-process, not per-day — a lane restarted after
     a taint gets the tainted specs back only if the sidecar survives, and there
     is no operator command to un-taint one without editing the sidecar.
+
+29. **The local-qwen lane is inference-bound, so harness fixes will not move it**
+    (2026-08-22). Median 48s per turn, and 78 of that episode's 90 minutes were spent
+    inside the model rather than in the sandbox, the module or the world. Ergonomics
+    changes that save a weak model turns (the 2026-08-22 pass: `closest` filters,
+    distance in questgiver timeouts, `no_path` hints) buy that lane almost nothing —
+    read its results as a throughput measurement of the local box, and do not use it
+    to judge whether a harness change helped.

@@ -6,6 +6,67 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-22
 
+### Ergonomics pass on five roster trajectories: closest filters, measured silences, shape docs
+
+A review of five 2026-08-22 episodes (hy3, nemotron, laguna, ox-alpha, qwen)
+against the shipped surface. Every item below is a place where the harness knew
+the answer and did not say it; none of them widens a contract, and none is
+model-specific (ADR-0004).
+
+- **`state.closest()` took only a predicate** (`30c826a`). Four of the five
+  models called `state.closest({entry: 196})` or `{name: "Deputy Willem"}` by
+  analogy with `state.units(filter)`, and got a bare V8 `TypeError: filter is
+  not a function` — hy3 burned 10 turns plus a 15-turn detour, nemotron hit it
+  7 times, laguna 4, ox-alpha 1. The analogy was right, so `closest` now takes a
+  criteria object too, routed through `units()`'s own `normalizeUnitFilter` and
+  a shared `passesUnitFilter`, which means a bad key gets the same actionable
+  rejection `units()` gives (ADR-0016) and the two definitions cannot drift.
+  Ordering stays by distance: `units()`'s name-tier ranking is deliberately not
+  inherited, because "nearest" is the whole question `closest` answers.
+- **Questgiver silence now carries the distance** (`5666f27`). The core answers
+  nothing when the NPC is out of range, is the wrong NPC, or has nothing to
+  give; the old message listed all three as equally likely. Range is the one the
+  client can rule out locally, and in *every* observed case it was not the cause
+  — laguna spent turns 103-238 standing 0.1y from the giver of quest 783, whose
+  ender is McBride; ox-alpha lost 8-10 turns, nemotron 10, qwen 5. The message
+  now quotes `distance: 0.8y` from the state cache, and when that is inside
+  interact range it says range is *not* the cause, names what is left, and points
+  at `search_reference` for the quest's ender. The number is also set on the
+  `EventTimeoutError` so a snippet can branch without parsing prose.
+- **`moveTo` `no_path` carries `{ distance, hint }`** (`5666f27`), the way
+  `turnInQuest`'s `too_far` already did — qwen spent 8 turns rediscovering that
+  a long hop works when chunked into short steps. This is FOLLOW-UPS 18(3)'s
+  "teach the recovery recipe" half; splitting `no_path` into distinguishable
+  causes stays module work and stays open.
+- **Prompt: raw-action `ok`, state shapes, and the tool/ambient seam.** Raw
+  `questComplete`/`questChooseReward` answered `{"ok": true}` while the server
+  silently dropped both (qwen, 5 turns): the prompt now says a raw action's `ok`
+  means *dispatched*, not *succeeded*, and points at the helper that confirms the
+  outcome. The prompt's old universal "every observed field is `{value, seq,
+  ts}`" was false for `questLog` (hy3, 1 turn) and hid that `state.self` has no
+  top-level `maxHealth` (qwen crashed on `state.self.maxHealth.value` and ran
+  blind on max HP for the rest of the episode); it now enumerates wrapped vs
+  flat with a one-line example for each, and the *shapes themselves are
+  unchanged* on purpose — changing the wire/state shape mid-0.3 would break
+  comparability across the runs already on the board. And models kept calling
+  `write_scratchpad(...)`/`search_reference(...)` as bare snippet globals
+  (laguna 2, hy3 1), so one sentence next to `scratchpad` now separates tools
+  (called between snippets) from ambient objects (available inside one).
+- **Deferred to FOLLOW-UPS**, with the evidence: the questgiver status icon and
+  quest objective text/counts (items 27, 28 — both module-tier observation
+  surface a client already receives), `search_reference`'s id-substring noise and
+  missing "you already asked this" signal (item 25), and a `nothing_offered`
+  status for turn-ins (item 26 — investigated and rejected: the empty gossip
+  menus laguna saw were answers to its own `questList`/`gossipHello`, not to
+  `quest_complete`, so resolving on them would fabricate an outcome). Item 29
+  records that the local-qwen lane is inference-bound (median 48s/turn, 78 of 90
+  minutes inside the model), so none of this moves that lane.
+
+No module rebuild is needed for any of it: the runner mounts this repo and the
+sandbox loads the SDK from source at episode launch, so the next episode to
+start picks these up. 694 tests green (`bun test`), `sdk/API.md` regenerated.
+
+
 ### Roster defer ladder, taint, and the idle-lane fix (`infra/run-roster.ts`)
 
 Two failures observed live on the same afternoon, both in the roster's loop
