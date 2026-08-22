@@ -176,9 +176,15 @@ export function parseRetryAfter(value: string | null, nowMs: number): number | n
   return Math.max(0, at - nowMs);
 }
 
-/** The provider's request id, for a provider-side support thread. */
+/**
+ * The provider's request id, for a provider-side support thread. Deliberately
+ * NOT `cf-ray`: OpenRouter is Cloudflare-fronted, so a ray is present on
+ * essentially every response and would shadow the body's `gen-…` id — which is
+ * the only one OpenRouter's own generation lookup accepts. A CDN ray identifies
+ * a proxy hop, not a generation, and cannot be asked about.
+ */
 function requestIdOf(res: Response): string | undefined {
-  for (const h of ["x-request-id", "x-openrouter-id", "openai-request-id", "cf-ray"]) {
+  for (const h of ["x-request-id", "x-openrouter-id", "openai-request-id"]) {
     const v = res.headers.get(h);
     if (v !== null && v.trim().length > 0) return v.trim();
   }
@@ -220,8 +226,13 @@ export class OpenAiChatAdapter implements ChatAdapter {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const env = opts.env ?? process.env;
     const fromEnv = env["WRATHBENCH_APP_URL"];
+    const configured = opts.appUrl ?? fromEnv;
+    // A stray newline or control character in the env var would make `fetch`
+    // throw while building headers, which this adapter's catch would read as a
+    // network error and retry five times — an operator typo presenting as a
+    // phantom outage. Anything unusable falls back to the placeholder.
     const appUrl =
-      opts.appUrl ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv.trim() : APP_URL);
+      configured !== undefined && /^[\x21-\x7e]+$/.test(configured.trim()) ? configured.trim() : APP_URL;
     this.headers = {
       "content-type": "application/json",
       authorization: `Bearer ${opts.apiKey}`,

@@ -91,6 +91,13 @@ describe("OpenAiChatAdapter attribution headers", () => {
     expect(headers.get("http-referer")).toBe(APP_URL);
   });
 
+  test("an unusable WRATHBENCH_APP_URL falls back instead of breaking every request", async () => {
+    // A control character would make fetch throw building the headers, which
+    // the adapter would read as a network error and retry five times.
+    const { headers } = await sentRequest({ env: { WRATHBENCH_APP_URL: "https://x.test/\nInjected: 1" } });
+    expect(headers.get("http-referer")).toBe(APP_URL);
+  });
+
   test("attribution is not host-gated: a non-OpenRouter endpoint gets it too", async () => {
     const { headers, body } = await sentRequest({ env: {} });
     expect(body).not.toHaveProperty("usage"); // not OpenRouter
@@ -176,6 +183,19 @@ describe("OpenAiChatAdapter request ids", () => {
   test("the body's generation id is the fallback when no header carries one", async () => {
     const out = await adapterReturning({ id: "gen-123", choices }).complete({ messages: [], tools: [] });
     expect(out.kind === "ok" && out.turn.providerRequestId).toBe("gen-123");
+  });
+
+  test("a Cloudflare ray never shadows the body's generation id", async () => {
+    // OpenRouter is CDN-fronted, so cf-ray is on nearly every response; the
+    // gen-… id is the only one its generation lookup accepts.
+    const adapter = adapterPlaying([
+      new Response(JSON.stringify({ id: "gen-real", choices }), {
+        status: 200,
+        headers: { "cf-ray": "8ab-LHR" },
+      }),
+    ]);
+    const out = await adapter.complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.providerRequestId).toBe("gen-real");
   });
 
   test("no id anywhere leaves the field absent", async () => {
