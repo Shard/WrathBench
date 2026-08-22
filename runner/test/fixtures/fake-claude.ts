@@ -248,19 +248,27 @@ for await (const chunk of Bun.stdin.stream()) {
       continue;
     }
 
-    // One API reply split across two assistant envelopes sharing a message.id
-    // and the SAME usage — the real CLI's shape for a text+tool_use turn. The
-    // usage must be counted once, not once per envelope.
+    // One API reply split across two assistant envelopes sharing a message.id,
+    // the real CLI's shape for a text+tool_use turn — and its usage is a
+    // RUNNING TOTAL, so the early envelope reports a fraction of the output the
+    // final one does. Counting the first undercounted morning-opus-1 20x. It
+    // must be counted once, from the last envelope.
     if (mode === "split-usage") {
-      const usage = {
+      const partial = {
         input_tokens: 12,
-        output_tokens: 7,
+        output_tokens: 1,
         cache_creation_input_tokens: 3,
         cache_read_input_tokens: 100,
       };
+      const final = { ...partial, output_tokens: 7 };
       emit({
         type: "assistant",
-        message: { id: `msg-${turn}`, role: "assistant", content: [{ type: "text", text: "thinking" }], usage },
+        message: {
+          id: `msg-${turn}`,
+          role: "assistant",
+          content: [{ type: "text", text: "thinking" }],
+          usage: partial,
+        },
         session_id: "fake-session",
       });
       emit({
@@ -269,7 +277,7 @@ for await (const chunk of Bun.stdin.stream()) {
           id: `msg-${turn}`,
           role: "assistant",
           content: [{ type: "tool_use", id: `tu-${turn}`, name: "mcp__wrathbench__run_snippet", input: { code: "1" } }],
-          usage,
+          usage: final,
         },
         session_id: "fake-session",
       });
@@ -279,7 +287,7 @@ for await (const chunk of Bun.stdin.stream()) {
         is_error: false,
         result: `turn ${turn} done`,
         num_turns: 1,
-        usage,
+        usage: final,
         session_id: "fake-session",
       });
       continue;

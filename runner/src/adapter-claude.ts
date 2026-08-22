@@ -718,6 +718,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const reaped = (ms: number): Promise<boolean> =>
     Promise.race([proc.exited.then(() => true).catch(() => true), waitMs(ms).then(() => false)]);
   const shutdown = async (): Promise<void> => {
+    // A turn cut short mid-message still has its newest response entry held
+    // back one envelope. It goes to the trajectory, usage and all.
+    flushPendingResponse();
     clearInterval(ticker);
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
@@ -740,12 +743,27 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   };
 
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
-  // The CLI emits one `assistant` envelope per content block, so a text+tool_use
-  // reply arrives as several envelopes sharing one message.id and carrying the
-  // SAME message.usage. Attaching usage to every response entry double-counts a
-  // single API call for any consumer that sums the entries (viewer/tail.ts does).
-  // Track seen ids and attach usage only to the first envelope of each message.
-  const usageCountedMessageIds = new Set<string>();
+  /**
+   * The CLI emits one `assistant` envelope per content block, so a text+tool_use
+   * reply arrives as several envelopes sharing one message.id. Attaching usage
+   * to every response entry double-counts a single API call for any consumer
+   * that sums the entries (viewer/tail.ts does), so exactly one entry per id
+   * carries it — and it has to be the last envelope's, because the usage grows
+   * as the message streams.
+   *
+   * Which means the newest entry of a message is held back by one envelope: it
+   * is written as soon as anything shows it was not the last (a new message id,
+   * the end of the turn) and, failing that, by shutdown().
+   */
+  let pendingResponse:
+    | { idKey: string; entry: Record<string, unknown> & { t: string }; usage: ReturnType<typeof assistantUsage> }
+    | null = null;
+  const flushPendingResponse = (): void => {
+    if (pendingResponse === null) return;
+    const { entry, usage } = pendingResponse;
+    pendingResponse = null;
+    trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
+  };
 
   try {
     for (;;) {
@@ -819,17 +837,17 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               sawOutput = true;
               watchdogs.noteModelOutput();
               // One API reply can span several `assistant` envelopes (one per
-              // content block), all sharing message.id and message.usage. Attach
-              // the call's usage to the first envelope of that id only, so a
-              // consumer summing the response entries counts each call once. The
-              // `result` envelope's session total only lands at end of episode,
-              // which a run cut short by the wall clock never reaches.
+              // content block) sharing a message.id, and the usage on each is a
+              // running total, not a copy: on morning-opus-1 the first envelope
+              // of a message reported 1 completion token where the last reported
+              // 208, and counting the first summed the run to 2,504 against a
+              // real 51,044. So exactly one entry per message id carries usage,
+              // and it is the LAST envelope's. The `result` envelope's session
+              // total only lands at end of episode, which a run cut short by the
+              // wall clock never reaches.
               const messageId = (msg["message"] as { id?: unknown } | undefined)?.id;
               const idKey = typeof messageId === "string" ? messageId : undefined;
-              const alreadyCounted = idKey !== undefined && usageCountedMessageIds.has(idKey);
-              const usage = alreadyCounted ? undefined : assistantUsage(msg);
-              if (idKey !== undefined && usage !== undefined) usageCountedMessageIds.add(idKey);
-              trajectory.append({
+              const entry = {
                 t: "response",
                 turn,
                 message: {
@@ -837,13 +855,29 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                   content: text.length > 0 ? text : null,
                   ...(toolUses.length > 0 ? { tool_uses: toolUses } : {}),
                 },
-                ...(usage !== undefined ? { usage } : {}),
-              });
+              };
+              const usage = assistantUsage(msg);
+              if (idKey === undefined) {
+                flushPendingResponse();
+                trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
+              } else {
+                if (pendingResponse !== null && pendingResponse.idKey !== idKey) flushPendingResponse();
+                if (pendingResponse === null) {
+                  pendingResponse = { idKey, entry, usage };
+                } else {
+                  // Same message: the earlier envelope goes out without usage,
+                  // and the newest running total rides on the newest entry.
+                  trajectory.append(pendingResponse.entry);
+                  pendingResponse = { idKey, entry, usage: usage ?? pendingResponse.usage };
+                }
+              }
             }
             break;
           }
           case "result": {
             turnEnded = true;
+            // the message is over: nothing more can arrive for its id
+            flushPendingResponse();
             const resultText = typeof msg["result"] === "string" ? (msg["result"] as string) : "";
             trajectory.append({
               t: "claude_result",
