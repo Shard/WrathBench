@@ -627,7 +627,10 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     sends those packets only for cooldowns the client cannot derive, so
     GCD-only spells are silent (measured on a Human Paladin: 21084 and the
     racial 59752 both emit `SMSG_SPELL_GO` and nothing else). `spellbook.ts`
-    asserts `SMSG_SPELL_GO` instead and says so at the cast. When a smoke has
+    asserts `SMSG_SPELL_GO` instead and says so at the cast, which leaves the
+    `SMSG_SPELL_COOLDOWN` decode with no smoke coverage at all — the
+    login-time `cooldowns[]` check is the different block inside
+    `SMSG_INITIAL_SPELLS` and it is empty at level 1. When a smoke has
     a character past level 1 — or a Hearthstone `use_item`, whose 30-minute
     cooldown the server does send — assert the packet and the cache entry it
     produces, and the honest-but-weaker `SPELL_GO` assertion can go back to
