@@ -920,7 +920,10 @@ function laneDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
  */
 function printLiveRuns(configPath: string): number {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
-  const accounts = [...new Set(config.lanes.map((l) => l.account))];
+  // Lane accounts plus the gate's own and the ad-hoc debugging account: the
+  // refusal claims "no episodes are live", and a PROBE session dies in a
+  // recreate exactly like a lane's does.
+  const accounts = [...new Set([...config.lanes.map((l) => l.account), config.preflight.account, "PROBE"])];
   let live = 0;
   for (const account of accounts) {
     const holder = accountHeldBy(account, "");
@@ -1249,7 +1252,9 @@ async function main(): Promise<void> {
    * a bad deploy.
    */
   const checkGate = async (pf: FleetPreflight): Promise<boolean> => {
-    const identity = await readServerIdentity();
+    // Disabled short-circuits before the /health probe: a gate nobody armed
+    // must not cost a 5s fetch every tick.
+    const identity = pf.enabled ? await readServerIdentity() : undefined;
     const action = gateDecision({ enabled: pf.enabled, identity, last: gate });
     if (action === "skip") {
       if (gate?.skipped !== true) {
@@ -1257,7 +1262,7 @@ async function main(): Promise<void> {
         say("preflight: disabled in fleet.json — gate open, lanes spawn unsmoked");
         record({ lane: "-", event: "preflight-skipped" });
       }
-      return true;
+      return gateOpen(action, gate);
     }
     if (action === "wait") {
       if (complainedFor !== "unready") {
@@ -1265,9 +1270,9 @@ async function main(): Promise<void> {
         say(`preflight: ${MODULE_URL}/health is not answering ready — spawning nothing until it does`);
         record({ lane: "-", event: "preflight-waiting" });
       }
-      return false;
+      return gateOpen(action, gate);
     }
-    if (action === "pass") return true;
+    if (action === "pass") return gateOpen(action, gate);
     say(`preflight: smoking the server (identity ${identity!})`);
     record({ lane: "-", event: "preflight-start", detail: identity });
     gate = await runPreflight(pf, identity!);
@@ -1287,7 +1292,7 @@ async function main(): Promise<void> {
       }
       record({ lane: "-", event: "preflight-fail", detail: `${failed?.script ?? "?"}: ${failed?.tail ?? ""}` });
     }
-    return gate.ok;
+    return gateOpen(action, gate);
   };
 
   let mayStart = await checkGate(config.preflight);
@@ -1336,16 +1341,9 @@ async function main(): Promise<void> {
       say(`lane ${name}: disabled — draining (SIGTERM at the next episode boundary)`);
       record({ lane: name, event: "draining" });
     }
-    // The gate runs after the drain/undrain/rearm actions above precisely so a
-    // shut gate never blocks the operator from parking a lane.
-    mayStart = await checkGate(config.preflight);
-    if (mayStart) {
-      for (const lane of actions.start) spawnLane(lane);
-    } else if (actions.start.length > 0) {
-      record({ lane: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
-    }
-
-    // Drains: only SIGTERM a roster with no episode child.
+    // Drains: only SIGTERM a roster with no episode child. Delivered BEFORE the
+    // gate, which can sit inside a smoke for minutes: an operator parking a lane
+    // must never wait on the gate for their SIGTERM.
     for (const name of [...sets.draining]) {
       const p = procs.get(name);
       if (p === undefined || p.exited) continue;
@@ -1358,6 +1356,17 @@ async function main(): Promise<void> {
         say(`lane ${name}: between episodes — SIGTERM sent`);
         record({ lane: name, event: "drain-sigterm" });
       }
+    }
+
+    // The gate runs after every drain/undrain/rearm action precisely so a shut
+    // gate never blocks the operator from parking a lane. `stopping` is
+    // re-checked after the await: a SIGTERM that lands during a 15-minute smoke
+    // has already killed the lanes, and spawning into that would be a leak.
+    mayStart = await checkGate(config.preflight);
+    if (mayStart && !stopping) {
+      for (const lane of actions.start) spawnLane(lane);
+    } else if (actions.start.length > 0 && !stopping) {
+      record({ lane: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
     }
 
     writeState(args.config, stampToday, procs, sets.draining, gate);

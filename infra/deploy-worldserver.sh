@@ -133,6 +133,12 @@ until health_ok; do
   sleep 5
 done
 say "worldserver is healthy"
+# The gate grace is measured from HERE, not from the promote: the health wait
+# above may legitimately take longer than the grace, and an expired grace would
+# send us smoking directly while the live supervisor is smoking the same
+# account — mutual session reclaims, a failed smoke, and a rolled-back good
+# image. False rollback is the worst thing this script could do.
+HEALTHY_AT_S="$(date +%s)"
 
 if [[ "${RUN_SMOKE}" -eq 0 ]]; then
   say "--no-smoke: DEPLOYED UNVERIFIED. Nothing has driven this server end to end."
@@ -166,7 +172,7 @@ gate_verdict() {
 verified=0
 if [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then
   say "fleet supervisor is up and gating — waiting for its gate result on the new server"
-  gate_deadline=$(( $(date +%s) + GATE_GRACE_S + PREFLIGHT_TIMEOUT_S ))
+  gate_deadline=$(( HEALTHY_AT_S + GATE_GRACE_S + PREFLIGHT_TIMEOUT_S ))
   while [[ "$(date +%s)" -lt "${gate_deadline}" ]]; do
     set +e; gate_verdict; rc=$?; set -e
     case "${rc}" in
@@ -175,7 +181,7 @@ if [[ "${PREFLIGHT_ENABLED}" -eq 1 ]] && fleet_alive; then
     esac
     # No record yet. If the supervisor has had its grace and written nothing, it
     # is not gating (old code): stop waiting and smoke the server ourselves.
-    if [[ "$(date +%s)" -ge $(( DEPLOY_AT_MS / 1000 + GATE_GRACE_S )) ]]; then
+    if [[ "$(date +%s)" -ge $(( HEALTHY_AT_S + GATE_GRACE_S )) ]]; then
       say "no gate result after ${GATE_GRACE_S}s — the supervisor predates the gate; smoking directly"
       break
     fi
@@ -189,11 +195,23 @@ if [[ "${verified}" -eq 0 ]]; then
     exit 0
   fi
   say "running the preflight smokes directly as ${PREFLIGHT_ACCOUNT} (docker compose exec runner)"
+  # timeoutMs is the budget for the WHOLE sequence, same as the supervisor's
+  # gate, so each script gets what is left of it. Note that `timeout` kills the
+  # `docker compose exec` CLIENT: the smoke keeps running inside the runner and
+  # keeps its session (the module reclaims that on the next create) — so a
+  # timeout here is a hard stop, not something to continue past.
+  smoke_deadline=$(( $(date +%s) + PREFLIGHT_TIMEOUT_S ))
   for smoke in "${SMOKES[@]}"; do
-    say "smoke ${smoke}"
-    if ! timeout "${PREFLIGHT_TIMEOUT_S}" "${COMPOSE[@]}" exec -T \
+    left=$(( smoke_deadline - $(date +%s) ))
+    if [[ "${left}" -le 0 ]]; then
+      say "preflight budget exhausted before ${smoke} ran"
+      rollback
+      exit 1
+    fi
+    say "smoke ${smoke} (${left}s left of the sequence budget)"
+    if ! timeout "${left}" "${COMPOSE[@]}" exec -T \
         -e "MODULE_ACCOUNT=${PREFLIGHT_ACCOUNT}" runner bun "${smoke}"; then
-      say "smoke FAILED: ${smoke}"
+      say "smoke FAILED (or timed out, leaving it running in the runner): ${smoke}"
       rollback
       exit 1
     fi
