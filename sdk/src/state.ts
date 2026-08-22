@@ -42,6 +42,9 @@ import {
   type GuidKey,
   type ItemQueryResponseData,
   type MonsterMoveData,
+  type QuestGiverStatusData,
+  type QuestGiverStatusMultipleData,
+  type QuestQueryResponseData,
   type MoveUpdateData,
   type PositionData,
   type UpdateBlock,
@@ -177,6 +180,16 @@ export interface SelfState extends UnitFieldsState {
 export interface QuestLogEntry {
   readonly slot: number;
   readonly questId: number;
+  /** From the quest query answer, once it has arrived. */
+  readonly title: string | undefined;
+  /**
+   * The objectives as the client's quest log renders them ("Kobold Vermin
+   * slain: 3/8"), joined from the quest query answer (`required`, `text`,
+   * `entry`) and the log's own counters (`have`). `undefined` until
+   * `SMSG_QUEST_QUERY_RESPONSE` has answered for this quest — the log alone
+   * carries no denominators, so nothing is invented before then.
+   */
+  readonly objectives: readonly QuestObjective[] | undefined;
   /** Raw `PLAYER_QUEST_LOG_x_STATE`, unmasked, as the wire carried it. */
   readonly state: number;
   /** `state & 1` — the objectives are done and the quest can be turned in. */
@@ -186,6 +199,45 @@ export interface QuestLogEntry {
   readonly timer: number | undefined;
   readonly seq: number;
   readonly ts: number;
+}
+
+/**
+ * One objective of a quest in the log, client-style. `kind` is what the
+ * required entry denotes: `kill` a creature, `interact` a gameobject (the
+ * wire's `entry | 0x80000000`), `collect` an item, `event` a scripted or
+ * exploration objective that carries text but no entry. `have` is the log's
+ * counter for creature/gameobject/event slots and the backpack stack total for
+ * items — the two places a client reads it from.
+ */
+export interface QuestObjective {
+  readonly kind: "kill" | "interact" | "collect" | "event";
+  /** Creature entry, gameobject entry, or item id, by `kind`. `undefined` for `event`. */
+  readonly entry: number | undefined;
+  /** The objective's own text from the template, when it has one. */
+  readonly text: string | undefined;
+  readonly required: number;
+  readonly have: number;
+  /** `have >= required`. */
+  readonly done: boolean;
+}
+
+/**
+ * What `SMSG_QUEST_QUERY_RESPONSE` said about one quest: the template the
+ * client renders its log from. Kept as the wire shape, minus the reward fields
+ * the module does not serve.
+ */
+export interface QuestInfo {
+  readonly questId: number;
+  readonly title: string;
+  readonly level: number | undefined;
+  readonly minLevel: number | undefined;
+  readonly objectivesText: string | undefined;
+  readonly details: string | undefined;
+  readonly completedText: string | undefined;
+  /** Four slots, as the wire carries them; unused slots have `entry` 0 and `count` 0. */
+  readonly requiredNpcOrGo: readonly { entry: number; count: number; text: string | undefined }[];
+  /** Six slots; unused slots have `itemId` 0. */
+  readonly requiredItems: readonly { itemId: number; count: number }[];
 }
 
 /**
@@ -320,6 +372,12 @@ export interface NearbyObject extends UnitFieldsState {
   /** From `SMSG_MONSTER_MOVE`: creatures move by spline, not by `MSG_MOVE_*`. */
   motion: Observed<Motion> | undefined;
   targetGuid: Observed<GuidKey> | undefined;
+  /**
+   * The questgiver marker the client draws over this object (`!`/`?`/grey),
+   * from `SMSG_QUESTGIVER_STATUS` / `_MULTIPLE`. The wire `DIALOG_STATUS_*`
+   * u8; `questGiverStatusName` names it.
+   */
+  questGiver: Observed<number> | undefined;
   /** Seq of the event that first put this object in view. */
   firstSeq: number;
   /** Seq of the most recent event that touched this object. */
@@ -355,6 +413,51 @@ export interface UnitView {
   readonly z: number | undefined;
   /** What it is targeting, when observed. `"0"` (no target) reads as undefined. */
   readonly targetGuid: GuidKey | undefined;
+  /**
+   * The questgiver marker the client shows over this object, named:
+   * `available` (`!`), `reward` (`?` — a quest it ends is ready to turn in),
+   * `incomplete` (grey `?` — it ends a quest in the log that is not done),
+   * `none`, `unavailable`, and the rep/low-level variants. `undefined` until
+   * a status packet named this guid; `none` is the server saying it has
+   * nothing for you, which is an observation.
+   */
+  readonly questGiver: QuestGiverStatusName | undefined;
+  /** The raw `DIALOG_STATUS_*` byte behind `questGiver`. */
+  readonly questGiverStatus: number | undefined;
+}
+
+/** The `DIALOG_STATUS_*` names, 3.3.5a. `unknown` covers any byte outside 0-10. */
+export type QuestGiverStatusName =
+  | "none"
+  | "unavailable"
+  | "low_level_available"
+  | "low_level_reward_rep"
+  | "low_level_available_rep"
+  | "incomplete"
+  | "reward_rep"
+  | "available_rep"
+  | "available"
+  | "reward2"
+  | "reward"
+  | "unknown";
+
+const QUEST_GIVER_STATUS_NAMES: readonly QuestGiverStatusName[] = [
+  "none",
+  "unavailable",
+  "low_level_available",
+  "low_level_reward_rep",
+  "low_level_available_rep",
+  "incomplete",
+  "reward_rep",
+  "available_rep",
+  "available",
+  "reward2",
+  "reward",
+];
+
+/** Name a wire `DIALOG_STATUS_*` byte. */
+export function questGiverStatusName(status: number): QuestGiverStatusName {
+  return QUEST_GIVER_STATUS_NAMES[status] ?? "unknown";
 }
 
 /**
@@ -383,6 +486,13 @@ export interface UnitFilter {
   maxDistance?: number;
   /** `npcFlags > 0` — a gossip/vendor/questgiver NPC, as observed. */
   npc?: boolean;
+  /**
+   * The observed questgiver marker, by name or a list of names — e.g.
+   * `{ questGiver: "reward" }` for every NPC ready to take a turn-in, or
+   * `{ questGiver: ["available", "available_rep"] }`. Objects with no observed
+   * status never match.
+   */
+  questGiver?: QuestGiverStatusName | QuestGiverStatusName[];
 }
 
 /**
@@ -430,6 +540,7 @@ export interface StateSnapshot {
   readonly auras: ReadonlyMap<GuidKey, readonly AuraEntry[]>;
   readonly questLog: readonly QuestLogEntry[];
   readonly questCompletions: readonly QuestCompletion[];
+  readonly quests: ReadonlyMap<number, Observed<QuestInfo>>;
   readonly inventory: readonly InventoryItem[];
   readonly money: Observed<number> | undefined;
   readonly xp: Observed<number> | undefined;
@@ -482,6 +593,13 @@ export class StateCache {
 
   /** guid -> object in view, from `SMSG_UPDATE_OBJECT` and `MSG_MOVE_*`. */
   readonly nearby = new Map<GuidKey, NearbyObject>();
+
+  /**
+   * questId -> quest template, from `SMSG_QUEST_QUERY_RESPONSE`. Never pruned:
+   * a template does not change, and a quest abandoned and re-accepted is the
+   * same template.
+   */
+  readonly quests = new Map<number, Observed<QuestInfo>>();
 
   /**
    * guid -> slot -> aura. Kept per slot because `SMSG_AURA_UPDATE` is a *slot*
@@ -616,18 +734,22 @@ export class StateCache {
       const hi = this.self.fields.get(`quest${slot}CountsHi`);
       const timer = this.self.fields.get(`quest${slot}Time`);
       const raw = state?.value ?? 0;
+      // Two u32s, each holding two u16 objective counters (3.3.5 layout).
+      const counts: [number, number, number, number] = [
+        (lo?.value ?? 0) & 0xffff,
+        ((lo?.value ?? 0) >>> 16) & 0xffff,
+        (hi?.value ?? 0) & 0xffff,
+        ((hi?.value ?? 0) >>> 16) & 0xffff,
+      ];
+      const info = this.quests.get(id.value)?.value;
       out.push({
         slot,
         questId: id.value,
+        title: info?.title,
+        objectives: info === undefined ? undefined : this.questObjectives(info, counts),
         state: raw,
         complete: (raw & QUEST_STATE_COMPLETE) !== 0,
-        // Two u32s, each holding two u16 objective counters (3.3.5 layout).
-        counts: [
-          (lo?.value ?? 0) & 0xffff,
-          ((lo?.value ?? 0) >>> 16) & 0xffff,
-          (hi?.value ?? 0) & 0xffff,
-          ((hi?.value ?? 0) >>> 16) & 0xffff,
-        ],
+        counts,
         timer: timer?.value,
         seq: Math.max(id.seq, state?.seq ?? -1, lo?.seq ?? -1, hi?.seq ?? -1),
         ts: Math.max(id.ts, state?.ts ?? 0, lo?.ts ?? 0, hi?.ts ?? 0),
@@ -649,6 +771,47 @@ export class StateCache {
   /** The quest log slot holding `questId`, if the log shows it at all. */
   quest(questId: number): QuestLogEntry | undefined {
     return this.questLog.find((q) => q.questId === questId);
+  }
+
+  /**
+   * The objectives of one quest, client-style: the template's required
+   * entries and counts joined with the log's counters (creature/gameobject/
+   * event slots) or the backpack's stack totals (item slots). A join over two
+   * observations, nothing invented.
+   */
+  private questObjectives(info: QuestInfo, counts: readonly number[]): QuestObjective[] {
+    const out: QuestObjective[] = [];
+    info.requiredNpcOrGo.forEach((req, i) => {
+      const text = req.text === undefined || req.text === "" ? undefined : req.text;
+      if (req.entry === 0 && req.count === 0 && text === undefined) return;
+      const have = counts[i] ?? 0;
+      if (req.entry === 0) {
+        // Scripted/exploration objective: text only, credited as a count of 1.
+        const required = Math.max(req.count, 1);
+        out.push({ kind: "event", entry: undefined, text, required, have, done: have >= required });
+        return;
+      }
+      const isGo = (req.entry & 0x80000000) !== 0;
+      out.push({
+        kind: isGo ? "interact" : "kill",
+        entry: isGo ? req.entry & 0x7fffffff : req.entry,
+        text,
+        required: req.count,
+        have,
+        done: have >= req.count,
+      });
+    });
+    let bags: InventoryItem[] | undefined;
+    for (const item of info.requiredItems) {
+      if (item.itemId === 0) continue;
+      bags ??= this.inventory;
+      let have = 0;
+      for (const row of bags) {
+        if (row.itemId === item.itemId) have += row.stackCount ?? 1;
+      }
+      out.push({ kind: "collect", entry: item.itemId, text: undefined, required: item.count, have, done: have >= item.count });
+    }
+    return out;
   }
 
   /**
@@ -753,6 +916,7 @@ export class StateCache {
       auras: new Map([...this.auraSlots].map(([k, v]) => [k, [...v.values()].sort((a, b) => a.slot - b.slot)])),
       questLog: this.questLog,
       questCompletions: [...this.questDoneBuf],
+      quests: new Map(this.quests),
       inventory: this.inventory,
       money: this.money,
       xp: this.xp,
@@ -857,6 +1021,35 @@ export class StateCache {
           questId: d.questId,
           xp: d.xp,
           money: d.money,
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_QUESTGIVER_STATUS": {
+        const d = event.data as QuestGiverStatusData;
+        this.applyQuestGiverStatus(d.guid, d.status, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_QUESTGIVER_STATUS_MULTIPLE": {
+        const d = event.data as QuestGiverStatusMultipleData;
+        for (const row of d.statuses) this.applyQuestGiverStatus(row.guid, row.status, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_QUEST_QUERY_RESPONSE": {
+        const d = event.data as QuestQueryResponseData;
+        this.quests.set(d.questId, {
+          value: {
+            questId: d.questId,
+            title: d.title,
+            level: d.level,
+            minLevel: d.minLevel,
+            objectivesText: d.objectives,
+            details: d.details,
+            completedText: d.completedText,
+            requiredNpcOrGo: d.requiredNpcOrGo.map((r) => ({ entry: r.entry, count: r.count, text: r.text })),
+            requiredItems: d.requiredItems.map((r) => ({ itemId: r.itemId, count: r.count })),
+          },
           seq: event.seq,
           ts: event.ts,
         });
@@ -1292,6 +1485,19 @@ export class StateCache {
   }
 
   /**
+   * Fold one questgiver marker onto the object it names. A status for a guid
+   * not yet in `nearby` still goes on an entry: the core only reports
+   * questgivers it considers visible to us, so the guid is in view even when
+   * its create block has not been folded (or was missed).
+   */
+  private applyQuestGiverStatus(guid: GuidKey, status: number, seq: number, ts: number): void {
+    if (this.isSelfGuid(guid)) return;
+    this.upsertNearby(guid, seq, (obj) => {
+      obj.questGiver = { value: status, seq, ts };
+    });
+  }
+
+  /**
    * Drop everything observed *about one object* when it leaves view. Auras go
    * with it: a client stops showing the buff bar of a unit it cannot see, and
    * keeping them would let a stale aura outlive its unit.
@@ -1469,6 +1675,7 @@ export class StateCache {
         health: undefined,
         power: undefined,
         targetGuid: undefined,
+        questGiver: undefined,
         fields: new Map<string, Observed<number>>(),
         firstSeq: seq,
         lastSeq: seq,
@@ -1510,6 +1717,8 @@ function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView
     y: point?.y,
     z: point?.z,
     targetGuid: target === undefined || target === "0" ? undefined : target,
+    questGiver: obj.questGiver === undefined ? undefined : questGiverStatusName(obj.questGiver.value),
+    questGiverStatus: obj.questGiver?.value,
   };
 }
 
@@ -1544,6 +1753,9 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
     const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
     if (isNpc !== f.npc) return false;
   }
+  if (f.questGiver !== undefined && (view.questGiver === undefined || !f.questGiver.has(view.questGiver))) {
+    return false;
+  }
   return true;
 }
 
@@ -1555,7 +1767,7 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
 // the forbidden outcome — it returns a wrong-but-plausible answer, which is the
 // very failure this helper exists to remove.
 
-const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc"] as const;
+const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc", "questGiver"] as const;
 const UNIT_FILTER_TYPES = ["unit", "player", "gameObject"] as const;
 
 /**
@@ -1572,6 +1784,7 @@ interface NormalizedUnitFilter {
   alive: boolean | undefined;
   maxDistance: number | undefined;
   npc: boolean | undefined;
+  questGiver: Set<QuestGiverStatusName> | undefined;
 }
 
 const EMPTY_UNIT_FILTER: NormalizedUnitFilter = {
@@ -1581,6 +1794,7 @@ const EMPTY_UNIT_FILTER: NormalizedUnitFilter = {
   alive: undefined,
   maxDistance: undefined,
   npc: undefined,
+  questGiver: undefined,
 };
 
 /** How a rejected value is quoted back to the caller. */
@@ -1758,6 +1972,27 @@ function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilt
 
   if (filter.alive !== undefined) out.alive = coerceBoolean(filter.alive, "alive");
   if (filter.npc !== undefined) out.npc = coerceBoolean(filter.npc, "npc");
+
+  if (filter.questGiver !== undefined) {
+    // Exact names only: "?"/"!" or "turnin" have more than one reading
+    // (reward vs reward_rep vs incomplete), so ADR-0016 says reject and list.
+    const raw = Array.isArray(filter.questGiver) ? filter.questGiver : [filter.questGiver];
+    if (raw.length === 0) {
+      throw filterError('questGiver received an empty array; pass a status name such as "reward", or omit questGiver.');
+    }
+    const names = new Set<QuestGiverStatusName>();
+    for (const item of raw) {
+      if (typeof item !== "string" || !(QUEST_GIVER_STATUS_NAMES as readonly string[]).includes(item)) {
+        throw filterError(
+          `questGiver received ${showValue(item)}, expected one of ${QUEST_GIVER_STATUS_NAMES.map(showValue).join(", ")} ` +
+            '(exact, case-sensitive) or an array of them. "reward" is a turn-in ready now, "available" a quest on offer, ' +
+            '"incomplete" an ender whose quest is not done yet.',
+        );
+      }
+      names.add(item as QuestGiverStatusName);
+    }
+    out.questGiver = names;
+  }
 
   if (filter.maxDistance !== undefined) {
     const n = coerceNumber(filter.maxDistance, "maxDistance", "a distance in yards");

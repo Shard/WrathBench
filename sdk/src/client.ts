@@ -56,6 +56,8 @@ import {
   type QuestGiverQuestCompleteData,
   type QuestGiverQuestListData,
   type QuestGiverRequestItemsData,
+  type QuestGiverStatusData,
+  type QuestGiverStatusMultipleData,
   type SessionResponse,
   type TrainerBuyFailedData,
   type TrainerListData,
@@ -69,6 +71,7 @@ import {
 } from "./events";
 import {
   pointOf,
+  questGiverStatusName,
   StateCache,
   type ChatEntry,
   type NearbyObject,
@@ -613,6 +616,12 @@ function distanceToUnit(state: StateCache, guid: GuidArg): number | undefined {
 
 /** What the core treats as interaction range for a questgiver/trainer, in yards. */
 const INTERACT_RANGE = 5;
+/** `UNIT_NPC_FLAG_QUESTGIVER`. */
+const NPC_FLAG_QUESTGIVER = 0x2;
+/** `GAMEOBJECT_TYPE_QUESTGIVER`. */
+const GO_TYPE_QUESTGIVER = 2;
+/** How long the client-parity queries wait to coalesce one burst of events. */
+const STATUS_QUERY_DEBOUNCE_MS = 150;
 
 /**
  * The silence-explaining tail of a questgiver timeout, built from the distance
@@ -627,24 +636,63 @@ const INTERACT_RANGE = 5;
  * there. So when the distance says range is fine, the message says so and
  * names what is left.
  */
-function questgiverSilence(distance: number | undefined, otherCauses: string, nextStep: string): string {
+function questgiverSilence(
+  distance: number | undefined,
+  otherCauses: string,
+  nextStep: string,
+  marker?: QuestGiverMarker,
+): string {
+  const status = marker === undefined ? "" : `${questgiverMarkerClause(marker)} `;
   if (distance === undefined) {
     return (
       `the server stays silent when the NPC is out of interact range (~${INTERACT_RANGE}y), ${otherCauses}. ` +
       `This SDK has no observed position for that guid, so it cannot tell you which — check state.units() ` +
-      `for the NPC and its distance. ${nextStep}`
+      `for the NPC and its distance. ${status}${nextStep}`
     );
   }
   if (distance <= INTERACT_RANGE) {
     return (
       `distance: ${distance}y, inside interact range (~${INTERACT_RANGE}y) — so range is NOT the cause here. ` +
-      `What is left: the NPC ${otherCauses}. ${nextStep}`
+      `What is left: the NPC ${otherCauses}. ${status}${nextStep}`
     );
   }
   return (
     `distance: ${distance}y, and interact range is ~${INTERACT_RANGE}y — move to the NPC first ` +
-    `(sdk.moveTo). If a closer attempt is also silent, the NPC ${otherCauses}. ${nextStep}`
+    `(sdk.moveTo). If a closer attempt is also silent, the NPC ${otherCauses}. ${status}${nextStep}`
   );
+}
+
+/**
+ * What the questgiver marker on an NPC says about a silent call. The marker
+ * is the server's own answer to "what does this NPC have for me", received
+ * before the call was made, so it names the cause the distance cannot.
+ */
+interface QuestGiverMarker {
+  readonly name: ReturnType<typeof questGiverStatusName>;
+  /** What the call needed the marker to be. */
+  readonly wanted: "reward" | "available";
+  readonly questId?: number;
+}
+
+function questgiverMarkerClause(m: QuestGiverMarker): string {
+  const q = m.questId === undefined ? "" : ` quest ${m.questId}`;
+  if (m.wanted === "reward") {
+    const isReward = m.name === "reward" || m.name === "reward2" || m.name === "reward_rep";
+    if (isReward) return `Its questgiver status is \`${m.name}\`, so it does end a quest that is complete — if the turn-in of${q} stays silent, the quest it ends is a different one.`;
+    if (m.name === "incomplete") return `Its questgiver status is \`incomplete\`, not \`reward\` — it ends a quest in your log whose objectives are not done yet; check state.quest(id).objectives.`;
+    return `Its questgiver status is \`${m.name}\`, not \`reward\` — it is not${q}'s ender (or the quest is not complete).`;
+  }
+  const offers = m.name === "available" || m.name === "available_rep" || m.name === "low_level_available" || m.name === "low_level_available_rep";
+  if (offers) return `Its questgiver status is \`${m.name}\`, so it is offering something — the silence is not "nothing to give".`;
+  if (m.name === "none") return `Its questgiver status is \`none\` — the server says it has no quest for you right now.`;
+  return `Its questgiver status is \`${m.name}\`, not \`available\` — it has nothing on offer for you right now.`;
+}
+
+/** The observed questgiver marker of a unit, named, or undefined when none was observed. */
+function questgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" | "available", questId?: number): QuestGiverMarker | undefined {
+  const raw = state.nearby.get(guidKey(guid))?.questGiver?.value;
+  if (raw === undefined) return undefined;
+  return { name: questGiverStatusName(raw), wanted, questId };
 }
 
 /**
@@ -908,6 +956,123 @@ export class WrathClient {
     this.state = new StateCache(options.state ?? {});
     // Registered before the socket opens, so the cache sees every frame.
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
+    this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
+  }
+
+  // ------------------------------------------------ client-parity queries
+  //
+  // Queries a real 3.3.5a client fires on its own, without the player doing
+  // anything, so that the state cache sees what the client's screen shows.
+  // They are issued from the event fold, bounded the way the client bounds
+  // them, and their failures are dropped: none of them is an action the model
+  // asked for, and a session that is not in world simply has nothing to ask.
+  //
+  //  - `questgiver_status_query` once per questgiver-flagged unit/gameobject
+  //    that comes into view (the client does this to draw the !/? marker),
+  //    skipped when a status for that guid already arrived in the same burst
+  //    (the login `SMSG_QUESTGIVER_STATUS_MULTIPLE` covers the initial view).
+  //  - `questgiver_status_multiple_query` when the quest log's membership or
+  //    a quest's complete bit changes (the client re-requests every marker on
+  //    a quest-log update; counters alone do not move a marker, so they do
+  //    not trigger it).
+  //  - `quest_query` once per quest id that appears in the log (the client's
+  //    template fetch); re-issued if the quest leaves the log and returns.
+
+  private readonly statusKnown = new Set<string>();
+  private readonly statusPending = new Set<string>();
+  private statusFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  private multipleTimer: ReturnType<typeof setTimeout> | undefined;
+  private questLogKey: string | undefined;
+  private readonly questQueried = new Set<number>();
+
+  private clientParityQueries(event: StreamEvent): void {
+    if (isDecodeError(event.data) || ("schemaError" in event && event.schemaError !== undefined)) return;
+    switch (event.opcode) {
+      case "SMSG_UPDATE_OBJECT": {
+        const d = event.data as { objects: readonly Record<string, unknown>[] };
+        for (const block of d.objects) {
+          if (block["update"] === "create" && block["self"] !== true) {
+            const guid = block["guid"] as string;
+            if (this.state.self.guid !== undefined && guid === this.state.self.guid) continue;
+            const fields = (block["fields"] ?? {}) as Record<string, unknown>;
+            const npcFlags = typeof fields["npcFlags"] === "number" ? fields["npcFlags"] : 0;
+            const goType = typeof fields["goType"] === "number" ? fields["goType"] : -1;
+            const isQuestGiver = (npcFlags & NPC_FLAG_QUESTGIVER) !== 0 || goType === GO_TYPE_QUESTGIVER;
+            if (isQuestGiver && !this.statusKnown.has(guid)) this.statusPending.add(guid);
+          } else if (block["update"] === "outOfRange") {
+            for (const g of block["guids"] as string[]) this.forgetStatus(g);
+          }
+        }
+        if (this.statusPending.size > 0 && this.statusFlushTimer === undefined) {
+          this.statusFlushTimer = setTimeout(() => this.flushStatusQueries(), STATUS_QUERY_DEBOUNCE_MS);
+        }
+        break;
+      }
+      case "SMSG_DESTROY_OBJECT":
+        this.forgetStatus((event.data as { guid: string }).guid);
+        break;
+      case "SMSG_QUESTGIVER_STATUS": {
+        const d = event.data as QuestGiverStatusData;
+        this.statusKnown.add(d.guid);
+        this.statusPending.delete(d.guid);
+        break;
+      }
+      case "SMSG_QUESTGIVER_STATUS_MULTIPLE": {
+        const d = event.data as QuestGiverStatusMultipleData;
+        for (const row of d.statuses) {
+          this.statusKnown.add(row.guid);
+          this.statusPending.delete(row.guid);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    this.trackQuestLog();
+  }
+
+  private forgetStatus(guid: string): void {
+    this.statusKnown.delete(guid);
+    this.statusPending.delete(guid);
+  }
+
+  private flushStatusQueries(): void {
+    this.statusFlushTimer = undefined;
+    const guids = [...this.statusPending];
+    this.statusPending.clear();
+    for (const guid of guids) {
+      if (this.statusKnown.has(guid)) continue;
+      this.statusKnown.add(guid);
+      this.fireAndForget({ action: "questgiver_status_query", guid });
+    }
+  }
+
+  private trackQuestLog(): void {
+    const log = this.state.questLog;
+    const key = log.map((q) => `${q.questId}:${q.complete ? 1 : 0}`).join(",");
+    if (key === this.questLogKey) return;
+    const first = this.questLogKey === undefined;
+    this.questLogKey = key;
+    const inLog = new Set(log.map((q) => q.questId));
+    for (const id of this.questQueried) if (!inLog.has(id)) this.questQueried.delete(id);
+    for (const id of inLog) {
+      if (this.questQueried.has(id)) continue;
+      this.questQueried.add(id);
+      if (!this.state.quests.has(id)) this.fireAndForget({ action: "quest_query", questId: id });
+    }
+    // The first fold of the log is our own create block at login, where the
+    // core already sends SMSG_QUESTGIVER_STATUS_MULTIPLE unprompted.
+    if (first || this.multipleTimer !== undefined) return;
+    this.multipleTimer = setTimeout(() => {
+      this.multipleTimer = undefined;
+      this.fireAndForget({ action: "questgiver_status_multiple_query" });
+    }, STATUS_QUERY_DEBOUNCE_MS);
+  }
+
+  private fireAndForget(body: ActionBody): void {
+    this.action(body).catch(() => {
+      /* a client-parity query has no caller to report to */
+    });
   }
 
   // ------------------------------------------------------------- endpoints
@@ -1139,6 +1304,29 @@ export class WrathClient {
     return this.action({ action: "quest_choose_reward", guid: guidArg(guid, "questChooseReward(guid, ...)"), questId, rewardIndex });
   }
 
+  /**
+   * `CMSG_QUEST_QUERY` — the quest template (title, objective text, required
+   * entries and counts) via `SMSG_QUEST_QUERY_RESPONSE`, folded into
+   * `state.quests` and onto `state.quest(id).objectives`. The SDK already
+   * sends this for every quest that enters the log; call it only for a quest
+   * you do not hold.
+   */
+  questQuery(questId: number): Promise<ActionResponse> {
+    return this.action({ action: "quest_query", questId });
+  }
+
+  /**
+   * `CMSG_QUESTGIVER_STATUS_QUERY` — the !/? marker for one questgiver, via
+   * `SMSG_QUESTGIVER_STATUS`, folded onto `state.units()` as `questGiver`.
+   * The SDK already sends this for every questgiver that comes into view and
+   * refreshes all of them when the quest log changes; pass no guid to refresh
+   * everything in view now (`CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY`).
+   */
+  questGiverStatusQuery(guid?: GuidArg): Promise<ActionResponse> {
+    if (guid === undefined) return this.action({ action: "questgiver_status_multiple_query" });
+    return this.action({ action: "questgiver_status_query", guid: guidArg(guid, "questGiverStatusQuery(guid?)") });
+  }
+
   /** `CMSG_QUESTLOG_REMOVE_QUEST`; the module maps quest id to log slot. */
   questAbandon(questId: number): Promise<ActionResponse> {
     return this.action({ action: "quest_abandon", questId });
@@ -1355,6 +1543,11 @@ export class WrathClient {
   /** Close the event stream. Does not log the character out. */
   close(): void {
     this.events.close();
+    if (this.statusFlushTimer !== undefined) clearTimeout(this.statusFlushTimer);
+    if (this.multipleTimer !== undefined) clearTimeout(this.multipleTimer);
+    this.statusFlushTimer = undefined;
+    this.multipleTimer = undefined;
+    this.statusPending.clear();
   }
 
   // --------------------------------------------------------------- helpers
@@ -1998,7 +2191,9 @@ export class WrathClient {
                 distance,
                 `does not end quest ${questId}, or the objectives are not complete`,
                 `Check state.quest(${questId}).complete, and use the search_reference tool for who ends ` +
-                  `quest ${questId} — the giver of a quest is often not its ender.`,
+                  `quest ${questId} — the giver of a quest is often not its ender. ` +
+                  `state.units({ questGiver: "reward" }) lists every NPC in view ready to take a turn-in.`,
+                questgiverMarkerOf(this.state, npcId, "reward", questId),
               ),
           },
         )
@@ -2170,7 +2365,8 @@ export class WrathClient {
             questgiverSilence(
               distance,
               "is not a questgiver, or has nothing for this character right now",
-              "Use the search_reference tool for who offers the quest you are after.",
+              'Use the search_reference tool for who offers the quest you are after; state.units({ questGiver: "available" }) lists every NPC in view with a quest on offer.',
+              questgiverMarkerOf(this.state, npcGuid, "available"),
             ),
         },
       )

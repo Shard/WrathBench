@@ -229,6 +229,9 @@ export type ActionRequest =
   | { token: string; action: "quest_complete"; guid: string; questId: number }
   | { token: string; action: "quest_choose_reward"; guid: string; questId: number; rewardIndex: number }
   | { token: string; action: "quest_abandon"; questId: number }
+  | { token: string; action: "quest_query"; questId: number }
+  | { token: string; action: "questgiver_status_query"; guid: string }
+  | { token: string; action: "questgiver_status_multiple_query" }
   | { token: string; action: "loot"; guid: string }
   | { token: string; action: "loot_all"; guid: string }
   | { token: string; action: "loot_item"; slot: number }
@@ -708,6 +711,39 @@ export const questGiverStatusDataSchema = z.looseObject({
 });
 export type QuestGiverStatusData = z.infer<typeof questGiverStatusDataSchema>;
 
+/**
+ * `SMSG_QUESTGIVER_STATUS_MULTIPLE`: the marker for every questgiver in view,
+ * sent on login/level-up/quest reward and in answer to
+ * `questgiver_status_multiple_query`. Same `status` domain as the single form.
+ */
+export const questGiverStatusMultipleDataSchema = z.looseObject({
+  statuses: z.array(questGiverStatusDataSchema),
+});
+export type QuestGiverStatusMultipleData = z.infer<typeof questGiverStatusMultipleDataSchema>;
+
+/**
+ * `SMSG_QUEST_QUERY_RESPONSE`: the quest template the client's log renders
+ * from. `requiredNpcOrGo[i].entry` is a creature entry, or a gameobject entry
+ * with bit 31 set (the client's own convention); a zero entry with a non-empty
+ * `text` is an event/exploration objective.
+ */
+export const questQueryResponseDataSchema = z.looseObject({
+  questId: z.number(),
+  method: z.number().optional(),
+  level: z.number().optional(),
+  minLevel: z.number().optional(),
+  type: z.number().optional(),
+  suggestedPlayers: z.number().optional(),
+  title: z.string(),
+  objectives: z.string().optional(),
+  details: z.string().optional(),
+  areaDescription: z.string().optional(),
+  completedText: z.string().optional(),
+  requiredNpcOrGo: z.array(z.looseObject({ entry: z.number(), count: z.number(), text: z.string().optional() })),
+  requiredItems: z.array(z.looseObject({ itemId: z.number(), count: z.number() })),
+});
+export type QuestQueryResponseData = z.infer<typeof questQueryResponseDataSchema>;
+
 /** One row of a questgiver's list, in either of the two shapes that carry it. */
 export const offeredQuestSchema = z.looseObject({
   questId: z.number(),
@@ -1024,6 +1060,8 @@ export const eventDataSchemas = {
   SMSG_ITEM_PUSH_RESULT: itemPushResultDataSchema,
   // quests and gossip
   SMSG_QUESTGIVER_STATUS: questGiverStatusDataSchema,
+  SMSG_QUESTGIVER_STATUS_MULTIPLE: questGiverStatusMultipleDataSchema,
+  SMSG_QUEST_QUERY_RESPONSE: questQueryResponseDataSchema,
   SMSG_QUESTGIVER_QUEST_LIST: questGiverQuestListDataSchema,
   SMSG_QUESTGIVER_QUEST_DETAILS: questGiverQuestDetailsDataSchema,
   SMSG_QUESTGIVER_REQUEST_ITEMS: questGiverRequestItemsDataSchema,

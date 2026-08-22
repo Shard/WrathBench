@@ -85,6 +85,8 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `questComplete` | `questComplete(guid: GuidArg, questId): Promise<ActionResponse>` | Ask to complete a quest (prefer turnInQuest, which waits). |
 | `questChooseReward` | `questChooseReward(guid: GuidArg, questId, rewardIndex?): Promise<ActionResponse>` | Choose a quest reward by index. |
 | `questAbandon` | `questAbandon(questId): Promise<ActionResponse>` | Abandon a quest from the log. |
+| `questQuery` | `questQuery(questId): Promise<ActionResponse>` | Fetch a quest template (title, objective text, required entries/counts) into state.quests; the SDK already does this for every quest entering the log. |
+| `questGiverStatusQuery` | `questGiverStatusQuery(guid?: GuidArg): Promise<ActionResponse>` | Refresh the questgiver marker (state.units(...).questGiver) for one guid, or for everything in view when called with no guid; the SDK already does this on sight and on quest-log changes. |
 | `loot` | `loot(guid: GuidArg): Promise<ActionResponse>` | Open the loot window on a corpse. |
 | `lootAll` | `lootAll(guid: GuidArg): Promise<ActionResponse>` | Open and auto-loot; fire-and-forget (prefer lootCorpse, which waits). |
 | `lootItem` | `lootItem(slot): Promise<ActionResponse>` | Store one loot slot into the bags. |
@@ -114,12 +116,12 @@ zero.
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc. |
-| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc }) or a predicate over the raw object. |
+| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done). Rows carry questGiver / questGiverStatus. |
+| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, questGiver }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
 | `bag` | `state.bag(): BagContents` | The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }. |
-| `quest` | `state.quest(questId): QuestLogEntry | undefined` | One quest-log entry by id (questId, complete bit, counts). |
+| `quest` | `state.quest(questId): QuestLogEntry | undefined` | One quest-log entry by id: questId, title, complete bit, counts, and objectives: [{ kind: "kill"|"interact"|"collect"|"event", entry, text, required, have, done }] (objectives/title are undefined until the quest template answer has arrived, usually within a second of accepting). |
 | `questLog` | `get state.questLog: QuestLogEntry[]` | All quest-log entries. |
 | `lastGossip` | `state.lastGossip(guid): GossipMenu | undefined` | The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against). |
 | `aurasOf` | `state.aurasOf(guid): AuraEntry[]` | Observed auras on a unit, by slot. |

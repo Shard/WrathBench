@@ -104,6 +104,8 @@ const CLIENT_RAW: readonly Row[] = [
   { name: "questComplete", sig: "questComplete(guid: GuidArg, questId): Promise<ActionResponse>", purpose: "Ask to complete a quest (prefer turnInQuest, which waits)." },
   { name: "questChooseReward", sig: "questChooseReward(guid: GuidArg, questId, rewardIndex?): Promise<ActionResponse>", purpose: "Choose a quest reward by index." },
   { name: "questAbandon", sig: "questAbandon(questId): Promise<ActionResponse>", purpose: "Abandon a quest from the log." },
+  { name: "questQuery", sig: "questQuery(questId): Promise<ActionResponse>", purpose: "Fetch a quest template (title, objective text, required entries/counts) into state.quests; the SDK already does this for every quest entering the log." },
+  { name: "questGiverStatusQuery", sig: "questGiverStatusQuery(guid?: GuidArg): Promise<ActionResponse>", purpose: "Refresh the questgiver marker (state.units(...).questGiver) for one guid, or for everything in view when called with no guid; the SDK already does this on sight and on quest-log changes." },
   { name: "loot", sig: "loot(guid: GuidArg): Promise<ActionResponse>", purpose: "Open the loot window on a corpse." },
   { name: "lootAll", sig: "lootAll(guid: GuidArg): Promise<ActionResponse>", purpose: "Open and auto-loot; fire-and-forget (prefer lootCorpse, which waits)." },
   { name: "lootItem", sig: "lootItem(slot): Promise<ActionResponse>", purpose: "Store one loot slot into the bags." },
@@ -131,6 +133,11 @@ const CLIENT_INTERNAL = new Set([
   "questOffer",
   "faceQuietly",
   "waitForState",
+  "clientParityQueries",
+  "fireAndForget",
+  "flushStatusQueries",
+  "forgetStatus",
+  "trackQuestLog",
 ]);
 
 // ---------------------------------------------------------------- state rows
@@ -142,17 +149,17 @@ const CLIENT_INTERNAL = new Set([
  * unobserved, never zero.
  */
 const STATE_ROWS: readonly Row[] = [
-  { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc." },
+  { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: \"available\" offers a quest, \"reward\" takes a turn-in now, \"incomplete\" ends a quest not yet done). Rows carry questGiver / questGiverStatus." },
   {
     name: "closest",
     sig: "state.closest(filter?): NearbyObject | undefined",
     purpose:
-      "The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc }) or a predicate over the raw object.",
+      "The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, questGiver }) or a predicate over the raw object.",
   },
   { name: "nearbyUnits", sig: "state.nearbyUnits(): NearbyObject[]", purpose: "The raw nearby objects (state.units gives flat plain objects instead)." },
   { name: "creaturesByEntry", sig: "state.creaturesByEntry(entry): NearbyObject[]", purpose: "Nearby creatures with a given template entry id." },
   { name: "bag", sig: "state.bag(): BagContents", purpose: "The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }." },
-  { name: "quest", sig: "state.quest(questId): QuestLogEntry | undefined", purpose: "One quest-log entry by id (questId, complete bit, counts)." },
+  { name: "quest", sig: "state.quest(questId): QuestLogEntry | undefined", purpose: "One quest-log entry by id: questId, title, complete bit, counts, and objectives: [{ kind: \"kill\"|\"interact\"|\"collect\"|\"event\", entry, text, required, have, done }] (objectives/title are undefined until the quest template answer has arrived, usually within a second of accepting)." },
   { name: "questLog", sig: "get state.questLog: QuestLogEntry[]", purpose: "All quest-log entries." },
   { name: "lastGossip", sig: "state.lastGossip(guid): GossipMenu | undefined", purpose: "The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against)." },
   { name: "aurasOf", sig: "state.aurasOf(guid): AuraEntry[]", purpose: "Observed auras on a unit, by slot." },
@@ -178,6 +185,8 @@ const STATE_ROWS: readonly Row[] = [
  */
 const STATE_INTERNAL = new Set([
   "apply",
+  "applyQuestGiverStatus",
+  "questObjectives",
   "seedSelf",
   "adoptOwnCharacter",
   "applyCreate",
