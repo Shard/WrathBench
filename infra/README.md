@@ -119,6 +119,7 @@ config and everything but `model` has a default, so an old bare
 | `model` | — | required, passed through verbatim |
 | `driver` | `openai` | or `claude-subscription` (SHAKEOUT lane only) |
 | `account` | runner default (`RUNNER`) | one live session per account |
+| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-subscription` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
 | `character`, `race`, `class` | derived from the model, Human Paladin | |
 | `episodeMs` | 5400000 (90m) | |

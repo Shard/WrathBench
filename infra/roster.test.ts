@@ -63,6 +63,26 @@ describe("episodeArgv", () => {
     expect(argv[argv.indexOf("--account") + 1]).toBe("SHAKEOUT");
   });
 
+  test("effort is passed only when the entry declares one", () => {
+    const [plain] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
+    expect(episodeArgv(plain!, false)).not.toContain("--effort");
+
+    const [low] = resolve([{ model: "opus", driver: "claude-subscription", effort: "low" }], "20260101");
+    const argv = episodeArgv(low!, false);
+    expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
+  });
+
+  test("effort is part of the derived run id, so opus@low is its own run", () => {
+    const specs = resolve(
+      [
+        { model: "opus", driver: "claude-subscription" },
+        { model: "opus", driver: "claude-subscription", effort: "low" },
+      ],
+      "20260101",
+    );
+    expect(specs.map((s) => s.runId)).toEqual(["roster-opus-20260101", "roster-opus-low-20260101"]);
+  });
+
   test("a resume passes only the run id — identity comes from meta.json", () => {
     const [s] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
     expect(episodeArgv(s!, true).slice(1)).toEqual(["--resume", "roster-opus-20260101"]);

@@ -49,6 +49,7 @@ const record: Record<string, unknown> = {
   argv,
   cwd: process.cwd(),
   systemPrompt: flagValue("--system-prompt"),
+  effort: flagValue("--effort") ?? null,
   toolsFlag: argv.includes("--tools") ? (argv[argv.indexOf("--tools") + 1] ?? null) : null,
   allowedTools: variadic("--allowed-tools"),
   strictMcpConfig: argv.includes("--strict-mcp-config"),

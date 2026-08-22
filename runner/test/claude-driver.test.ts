@@ -168,6 +168,24 @@ describe("claude-subscription driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("a declared effort reaches the CLI as --effort; an undeclared one sends no flag", async () => {
+    const plain = setupEpisode("tools", { maxTurns: 1 });
+    await runClaudeEpisode(plain.options);
+    expect(readRecord(plain.recordPath)["effort"]).toBeNull();
+    expect(plain.options.config.effort).toBeUndefined();
+    plain.trajectory.close();
+
+    const low = setupEpisode("tools", { maxTurns: 1, effort: "low" });
+    await runClaudeEpisode(low.options);
+    expect(readRecord(low.recordPath)["effort"]).toBe("low");
+    // and it is recorded as run identity, not just passed
+    expect(readMeta(low.runDir)?.config.effort).toBe("low");
+    expect(
+      JSON.parse(String(low.trajectory.runRow("run-test")?.["config_json"])).effort,
+    ).toBe("low");
+    low.trajectory.close();
+  }, 30_000);
+
   test("a CLI that ignores SIGTERM is killed with its MCP child, not orphaned", async () => {
     // A pause, deliberately: it is the path that does NOT call killClaude, so
     // shutdown() alone stands between the CLI and an orphan. Without the

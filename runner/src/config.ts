@@ -113,6 +113,24 @@ export const runConfigSchema = z.object({
   apiBase: z.string().optional(),
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
+  /**
+   * Reasoning effort for this run — a profile-matrix dimension, not a tuning
+   * knob for one model: it is set per roster entry and recorded, so `opus at
+   * low` and `opus at high` are two comparable rows.
+   *
+   * Absent means "say nothing", which is not the same as any named level: the
+   * request goes out without the field and the provider's own default applies.
+   *
+   * The vocabulary is the union of the two drivers'. `openai` sends it as the
+   * OpenAI-compatible `reasoning_effort` (verified honoured by OpenRouter:
+   * low/high moved reasoning_tokens 216/310 on the same prompt); a provider
+   * that does not know the level is the operator's problem, which is why the
+   * field is opt-in and never sent by default. `claude-subscription` passes it
+   * as the CLI's `--effort`, which accepts low|medium|high|xhigh|max (verified
+   * against the 2.1.238 binary in the runner image). `xhigh`/`max` are
+   * claude-only; `minimal` is OpenAI-only.
+   */
+  effort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   /** Path to a JSON file of scripted stub turns (adapter: "stub"). */
   stubScript: z.string().optional(),
 

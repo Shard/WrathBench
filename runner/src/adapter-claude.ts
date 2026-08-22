@@ -276,6 +276,8 @@ async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<st
 export interface ClaudeArgsOptions {
   mcpConfigPath: string;
   model?: string | undefined;
+  /** `--effort` level, when the run declares one. */
+  effort?: string | undefined;
   systemPrompt?: string;
 }
 
@@ -326,6 +328,10 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     "--tools",
     "",
     ...(o.model !== undefined ? ["--model", o.model] : []),
+    // `--effort <low|medium|high|xhigh|max>` in 2.1.238. Only when the run
+    // declares one: absent means the CLI's own default, which is not the same
+    // as any named level.
+    ...(o.effort !== undefined ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
     ...mcpToolNames(),
@@ -568,7 +574,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // A cwd outside the repo: `claude` walks parents for CLAUDE.md, and the run
   // directory lives under a checkout that has one.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-claude-"));
-  const args = claudeArgs({ mcpConfigPath, model: config.model });
+  const args = claudeArgs({
+    mcpConfigPath,
+    model: config.model,
+    ...(config.effort !== undefined ? { effort: config.effort } : {}),
+  });
   const env = childEnv(o.env ?? process.env, {
     configDir,
     ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}),

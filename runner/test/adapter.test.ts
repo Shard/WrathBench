@@ -40,6 +40,44 @@ function adapterPlaying(script: (Response | Error)[]): OpenAiChatAdapter {
 
 const status = (code: number, body: string): Response => new Response(body, { status: code });
 
+/** Captures the request body an adapter sends, with the given extra options. */
+async function sentBody(extra: Record<string, unknown>): Promise<Record<string, unknown>> {
+  let seen = "";
+  const adapter = new OpenAiChatAdapter({
+    baseUrl: "http://model.invalid/v1",
+    apiKey: "k",
+    model: "m",
+    fetchImpl: Object.assign(
+      (_url: string, init: RequestInit): Promise<Response> => {
+        seen = String(init.body);
+        return Promise.resolve(new Response(JSON.stringify({ choices }), { status: 200 }));
+      },
+      { preconnect: () => {} },
+    ) as unknown as typeof fetch,
+    sleep: () => Promise.resolve(),
+    ...extra,
+  });
+  await adapter.complete({ messages: [{ role: "user", content: "hi" }], tools: [] });
+  return JSON.parse(seen) as Record<string, unknown>;
+}
+
+describe("OpenAiChatAdapter reasoning effort", () => {
+  test("no effort configured sends no reasoning_effort at all", async () => {
+    expect(await sentBody({})).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("a configured effort is sent verbatim", async () => {
+    expect(await sentBody({ effort: "low" })).toMatchObject({ reasoning_effort: "low" });
+  });
+
+  test("effort is not host-gated the way the usage opt-in is", async () => {
+    const body = await sentBody({ effort: "high" });
+    expect(body["reasoning_effort"]).toBe("high");
+    // the usage opt-in IS host-gated, and this base url is not OpenRouter
+    expect(body).not.toHaveProperty("usage");
+  });
+});
+
 describe("OpenAiChatAdapter usage", () => {
   test("carries provider-reported usage onto the turn", async () => {
     const out = await adapterReturning({
