@@ -219,7 +219,7 @@ describe("client: movement", () => {
   });
 
   test("a game-level failure comes back as a result, not an exception", async () => {
-    for (const status of ["no_path", "too_far", "interrupted", "stopped", "superseded"] as const) {
+    for (const status of ["too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete", "interrupted", "stopped", "superseded"] as const) {
       const stub = startStub({ onConnect: () => frames(loginSequence) });
       const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
       await client.createSession({ character: "Fenwick" });
@@ -237,41 +237,75 @@ describe("client: movement", () => {
     }
   });
 
-  test("no_path carries the distance it failed over and the recovery recipe", async () => {
-    // qwen (2026-08-22 roster) spent 8 turns rediscovering that a long hop
-    // works when chunked; the SDK knew the distance all along. FOLLOW-UPS
-    // 18(3)'s other half — splitting no_path into causes — stays module work.
+  test("each typed failure carries its own recovery hint; path_incomplete carries reachedPos", async () => {
+    // FOLLOW-UPS 38 N1: the module now names the cause, so the hint is only
+    // the recovery that follows from it (ADR-0016 rule 2).
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
     await client.createSession({ character: "Fenwick" });
-    const from = client.state.self.position?.value;
-    if (!from) throw new Error("no login position");
 
-    const pending = client.moveTo({ x: from.x + 30, y: from.y + 40, z: from.z }, { timeout: 2000 });
-    stub.push(JSON.stringify(moveResult("no_path", 1, 30)));
-    const result = await pending;
+    const p1 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("target_off_mesh", 1, 30)));
+    const r1 = await p1;
+    expect(r1.ok).toBe(false);
+    if (r1.ok) throw new Error("unreachable");
+    expect(r1.hint).toContain("10.0, 20.0");
+    expect(r1.hint).toContain("not on walkable ground");
+    expect(r1.reachedPos).toBeUndefined();
 
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.distance).toBe(50);
-    expect(result.hint).toContain("pathfinding failed over 50y");
-    expect(result.hint).toContain("~15y");
-    expect(result.hint).toContain("different z");
+    const p2 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    const partial = moveResult("path_incomplete", 2, 31) as { data: Record<string, unknown> };
+    partial.data.reachedPos = { x: 5, y: 6, z: 7 };
+    stub.push(JSON.stringify(partial));
+    const r2 = await p2;
+    if (r2.ok) throw new Error("unreachable");
+    expect(r2.status).toBe("path_incomplete");
+    expect(r2.reachedPos).toEqual({ x: 5, y: 6, z: 7 });
+    expect(r2.hint).toContain("ends at (5.0, 6.0)");
+
+    const p3 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("no_mesh", 3, 32)));
+    const r3 = await p3;
+    if (r3.ok) throw new Error("unreachable");
+    expect(r3.hint).toContain("harness data limitation");
+
+    const p4 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("start_off_mesh", 4, 33)));
+    const r4 = await p4;
+    if (r4.ok) throw new Error("unreachable");
+    expect(r4.hint).toContain("transport deck");
     client.close();
     await stub.stop();
   });
 
-  test("every other failure status stays exactly as it was", async () => {
+  test("arrived with meshZ says which z the mesh used; a plain arrived carries neither", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
     await client.createSession({ character: "Fenwick" });
-    const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
-    stub.push(JSON.stringify(moveResult("too_far", 1, 30)));
-    const result = await pending;
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.distance).toBeUndefined();
-    expect(result.hint).toBeUndefined();
+
+    const p1 = client.moveTo({ x: -1205, y: 981, z: 80 }, { timeout: 2000 });
+    const withZ = moveResult("arrived", 1, 30) as { data: Record<string, unknown> };
+    withZ.data.meshZ = 42;
+    stub.push(JSON.stringify(withZ));
+    const r1 = await p1;
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) throw new Error("unreachable");
+    expect(r1.meshZ).toBe(42);
+    expect(r1.hint).toContain("z 42.0, not 80.0");
+
+    const p2 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
+    const r2 = await p2;
+    if (!r2.ok) throw new Error("unreachable");
+    expect(r2.meshZ).toBeUndefined();
+    expect(r2.hint).toBeUndefined();
+
+    // A status the SDK has no recipe for passes through with no hint invented.
+    const p3 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("stopped", 3, 32)));
+    const r3 = await p3;
+    if (r3.ok) throw new Error("unreachable");
+    expect(r3.hint).toBeUndefined();
     client.close();
     await stub.stop();
   });

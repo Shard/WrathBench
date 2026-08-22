@@ -490,6 +490,14 @@ export type MoveResult =
       readonly position: UnitPosition;
       readonly seq: number;
       readonly ts: number;
+      /**
+       * Present when the navmesh resolved the request to a ground z more than
+       * 1y from the z asked for: the move still arrived (x/y matched), and this
+       * is the z it actually walked to. Quote it next time.
+       */
+      readonly meshZ?: number;
+      /** Present with a hint only when `meshZ` is: what the z difference means. */
+      readonly hint?: string;
     }
   | {
       readonly ok: false;
@@ -499,33 +507,48 @@ export type MoveResult =
       readonly seq: number;
       readonly ts: number;
       /**
-       * `no_path` only: straight-line yards from where the move started to the
-       * point asked for, `undefined` when the start position was unobserved.
-       * Carried for the same reason `turnInQuest`'s `too_far` carries one — the
-       * number is the whole diagnosis and the SDK already has it.
+       * `path_incomplete` only: how far the mesh could get toward the request
+       * (the module already tried one subdivision from here). Route around, or
+       * approach from another side.
        */
-      readonly distance?: number;
-      /** `no_path` only: what to try next. See `MOVE_NO_PATH_HINT`. */
+      readonly reachedPos?: Point3;
+      /** What the status means and what to try next. See `MOVE_HINTS`. */
       readonly hint?: string;
     };
 
 /**
- * The `no_path` recovery recipe, in the result rather than in a trajectory
- * nobody reads twice.
- *
- * `no_path` is one status over several causes — the destination is off the
- * navmesh, the straight line crosses geometry the path cannot get around, or
- * the z is inside/above the ground. Splitting them needs the module (FOLLOW-UPS
- * 18(3)); teaching the recovery does not, and it is the half a model actually
- * acts on. qwen spent 8 turns of the 2026-08-22 roster rediscovering that a long
- * hop works when chunked into ~12y steps.
+ * Per-status recovery recipes (ADR-0016 rule 2: what happened, what it means,
+ * the next step), in the result rather than in a trajectory nobody reads twice.
+ * Before the module split `no_path` into causes (FOLLOW-UPS 38 N1) one hint
+ * covered four failures and qwen (2026-08-22 roster) spent 8 turns discovering
+ * which one it had; the cause is now the module's word and the hint is only the
+ * recovery that follows from it.
  */
-function noPathHint(distance: number | undefined): string {
-  const over = distance === undefined ? "" : ` over ${distance}y`;
-  return (
-    `pathfinding failed${over} — the destination or the route is off the navmesh. Try an intermediate ` +
-    `waypoint within ~15y of where you are and repeat, or the same x/y at a different z (ground level).`
-  );
+export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveResultData) => string>> = {
+  too_far: (p, d) =>
+    `(${fmtXY(p)}) is ${Math.round(Math.hypot(p.x - d.pos.x, p.y - d.pos.y))}y away in a straight line; ` +
+    `a single moveTo covers ~250y. Walk to an intermediate point first.`,
+  no_mesh: (p) =>
+    `no navmesh is loaded under you or under (${fmtXY(p)}); this is a harness data limitation, not a route ` +
+    `problem. Nothing to retry here — choose a destination in a mapped area.`,
+  target_off_mesh: (p) =>
+    `(${fmtXY(p)}) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the ` +
+    `cause). Pick a point on a road or floor, or where an NPC stands.`,
+  start_off_mesh: () =>
+    `the character is standing somewhere the navmesh does not cover (a transport deck, a ledge). Step a ` +
+    `few yards onto ordinary ground, or wait for the transport to dock, then retry.`,
+  path_incomplete: (p, d) =>
+    `the walkable mesh has no continuous route to (${fmtXY(p)})` +
+    (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)})` : "") +
+    `. The module already tried one subdivision. Route around (a road, a ramp, a door) or approach from ` +
+    `another side.`,
+  interrupted: () =>
+    `the move stopped early (death, root, stun, or the server rejected the movement). Check state.self, ` +
+    `then retry from where you are.`,
+};
+
+function fmtXY(p: { x: number; y: number }): string {
+  return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
 }
 
 export interface WaitForNearbyOptions {
@@ -1695,12 +1718,10 @@ export class WrathClient {
       options = repaired.options;
     }
     const epoch = this.events.epoch;
-    // Read before the move: a `no_path` answer quotes the distance that failed.
-    const start = this.state.self.position?.value;
     const ack = await this.moveToAsync(point);
     // The match is the moveId within the current session epoch, and the buffer
     // is searched: a result can land while the POST response is still in
-    // flight (an immediate `no_path` does exactly that). No `sinceSeq` bound —
+    // flight (an immediate `target_off_mesh` does exactly that). No `sinceSeq` bound —
     // `seq` restarts when a token's session is recreated, so any seq-based
     // floor can outrun the very event it is meant to admit. `moveId` alone is
     // not enough either: the module's generator is per-session and restarts on
@@ -1733,14 +1754,27 @@ export class WrathClient {
       o: data.pos.o,
     };
     const common = { moveId: data.moveId, position, seq: event.seq, ts: event.ts } as const;
-    if (status === "arrived") return { ok: true, status: "arrived", ...common };
-    if (status !== "no_path") return { ok: false, status, ...common };
-    // `no_path` means nothing moved, so the start is where we still are; the
-    // pre-move reading is preferred only because it is what was asked about.
-    const from = start ?? position;
-    const distance =
-      Math.round(Math.hypot(point.x - from.x, point.y - from.y, point.z - from.z) * 100) / 100;
-    return { ok: false, status, ...common, distance, hint: noPathHint(distance) };
+    if (status === "arrived") {
+      if (data.meshZ === undefined) return { ok: true, status: "arrived", ...common };
+      return {
+        ok: true,
+        status: "arrived",
+        ...common,
+        meshZ: data.meshZ,
+        hint:
+          `arrived at (${fmtXY(point)}), but the ground there is at z ${data.meshZ.toFixed(1)}, not ` +
+          `${point.z.toFixed(1)}. The mesh owns z; quote ${data.meshZ.toFixed(1)} for this spot next time.`,
+      };
+    }
+    const hint = MOVE_HINTS[status]?.(point, data);
+    const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
+    return {
+      ok: false,
+      status,
+      ...common,
+      ...(reachedPos !== undefined ? { reachedPos } : {}),
+      ...(hint !== undefined ? { hint } : {}),
+    };
   }
 
   /**

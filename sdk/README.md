@@ -205,9 +205,12 @@ else console.log("did not get there:", result.status, "stopped at", result.posit
 
 `moveTo` issues `move_to`, then resolves on the `WB_MOVE_RESULT` carrying the
 same `moveId`. **Game outcomes are returned, not thrown** (`docs/decisions/ADR-0011`):
-`arrived` is `ok: true`; `no_path`, `too_far`, `interrupted`, `stopped` and
-`superseded` are `ok: false` with the status intact, and *every* one of them
-carries the server-confirmed position the character actually ended at. A
+`arrived` is `ok: true` (with `meshZ` when the mesh walked to a different z
+than asked); `too_far`, `no_mesh`, `target_off_mesh`, `start_off_mesh`,
+`path_incomplete` (with `reachedPos`), `interrupted`, `stopped` and
+`superseded` are `ok: false` with the status intact and a per-status `hint`,
+and *every* one of them carries the server-confirmed position the character
+actually ended at. A
 snippet that forgets a `try` should not lose a run to a wall, and "there is no
 path there" is an answer, not an error.
 

@@ -9,7 +9,7 @@
  * The destination is a point on the line toward an observed creature rather
  * than a blind offset: a creature is standing on walkable ground by
  * construction, whereas an arbitrary 30y bearing lands in a wall or a lake and
- * comes back `no_path`.
+ * comes back `target_off_mesh` / `path_incomplete`.
  *
  * Not part of `bun test`: it needs a booted worldserver. Run it from inside the
  * compose network:
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
 
     // 2. Walk toward an observed creature, stopping short of it. Candidates are
     //    tried farthest-first so the walk is as close to TARGET_DISTANCE as the
-    //    neighbourhood allows; a no_path just moves to the next one.
+    //    neighbourhood allows; an off-mesh/incomplete verdict just moves to the next one.
     const from = client.state.self.position?.value ?? start.value;
     const candidates = client
       .state.nearbyUnits()
