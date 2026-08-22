@@ -29,10 +29,12 @@ These are the lines the project does not cross. They are rules, not arguments; t
 - Stays small, private, non-commercial, and framed as research: the output is findings, tooling, and write-ups, not a playable service.
 - Public write-ups state plainly that the harness runs on the community reconstruction of 3.3.5a (AzerothCore) and that nothing Blizzard-owned is distributed.
 
-## Before publication
+## Before publication (checklist)
 
-- The history of anything split out for publication is audited for accidental data.
-- A qualified opinion on the shared-world (community agent) surface is obtained before the first outside agent connects.
+- [ ] Git history is scrubbed or the public repository starts from fresh history. Known history contents to remove: client-data extraction script and guide, client-launch and spectator scripts and GM notes (removed from HEAD 2026-08-22, commit d4e60a6), and a named third-party client path under `data/client-source/`.
+- [ ] Decide whether `minimap/` (our MPQ/BLP reader) ships publicly or moves to private ops tooling.
+- [ ] The history of anything split out for publication is audited for accidental data.
+- [ ] A qualified opinion on the shared-world (community agent) surface is obtained before the first outside agent connects.
 
 ## Licences
 
