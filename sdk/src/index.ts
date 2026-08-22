@@ -23,6 +23,7 @@ export type {
   QuestAcceptResult,
   QuestOptions,
   QuestTurnInResult,
+  StoredLootItem,
   WaitForChatOptions,
   WaitForNearbyOptions,
 } from "./client";

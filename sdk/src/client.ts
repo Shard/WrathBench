@@ -44,6 +44,8 @@ import {
   type FaceResponse,
   type GossipMessageData,
   type HealthResponse,
+  type InventoryChangeFailureData,
+  type ItemPushResultData,
   type KnownMoveStatus,
   type LootItemData,
   type LootResponseData,
@@ -504,20 +506,50 @@ function leavingArmed(status: KillResult["status"] | undefined, disengage: boole
 const REARM_MIN_INTERVAL_MS = 500;
 const REARM_CAP = 20;
 
+/** How long after the loot release a straggling `SMSG_ITEM_PUSH_RESULT` is still waited for. */
+const LOOT_PUSH_GRACE_MS = 1500;
+
 export interface LootOptions {
   /** How long to wait for the loot window / release. Default 10000. */
   timeout?: number;
 }
 
-/** What a corpse gave up. `empty` means the server closed the window at once. */
+/** One item confirmed *stored* by `SMSG_ITEM_PUSH_RESULT` — in the bag, not merely seen. */
+export interface StoredLootItem {
+  readonly itemId: number;
+  readonly count: number;
+}
+
+/**
+ * What a corpse actually gave up. `items` are the pushes the server confirmed
+ * with `SMSG_ITEM_PUSH_RESULT` — reporting the loot *window* contents as a
+ * success would call a possible no-op "looted", which is exactly the silent
+ * wrong behavior ADR-0016 forbids (and exactly what happened while the module's
+ * auto-loot replay was broken: window shown, nothing stored, `ok: true`).
+ *
+ * - `looted`: at least one item was stored, or the window held only gold.
+ * - `empty`: the server closed the window at once — nothing was on the corpse.
+ * - `none_stored`: the window showed items but not one entered the bag
+ *   (bags full, or the items were not ours to take); `window` says what was
+ *   shown.
+ */
 export type LootResult =
   | {
       readonly ok: true;
       readonly status: "looted";
       readonly gold: number;
-      readonly items: readonly LootItemData[];
+      readonly items: readonly StoredLootItem[];
+      /** What the window showed, including anything that was not stored. */
+      readonly window: readonly LootItemData[];
     }
-  | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] };
+  | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] }
+  | {
+      readonly ok: false;
+      readonly status: "none_stored";
+      readonly gold: number;
+      readonly items: readonly [];
+      readonly window: readonly LootItemData[];
+    };
 
 export interface QuestOptions {
   timeout?: number;
@@ -1323,8 +1355,11 @@ export class WrathClient {
    * Empty a corpse and wait until the window is closed again.
    *
    * `loot_all` is the module replaying the client's auto-loot sequence
-   * (ADR-0013), so this is one action plus the two events that bracket it: the
-   * window that says what was there, and the release that says it is finished.
+   * (ADR-0013): the window that says what was there, the release that says it
+   * is finished — and, between them, one `SMSG_ITEM_PUSH_RESULT` per item that
+   * actually entered a bag. The pushes, not the window, decide the result:
+   * a window is an offer, and calling an offer "looted" made a broken replay
+   * invisible for a whole run (morning-opus-1; ADR-0016 forbids exactly that).
    * A corpse with nothing on it releases without ever opening a window, which
    * is `{ ok: false, status: "empty" }` — an answer, not a failure. Silence is
    * neither, so it still throws `EventTimeoutError`.
@@ -1333,25 +1368,59 @@ export class WrathClient {
     const id = guidArg(guid, "lootCorpse(guid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.lootAll(id);
-    const first = await this.events.waitFor(
-      (e) =>
-        (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
-        !isDecodeError(e.data) &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
-    );
-    if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
-      return { ok: false, status: "empty", gold: 0, items: [] };
-    }
-    const window = first.data as LootResponseData;
-    await this.events.waitFor((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
-      timeout,
-      sinceSeq: first.seq + 1,
-      includeBuffered: true,
-      description: "the loot window closing (SMSG_LOOT_RELEASE_RESPONSE)",
+    // Collected live from before the action goes out, so a push can never slip
+    // between the window arriving and a listener being registered.
+    const stored: StoredLootItem[] = [];
+    const offPush = this.events.on("SMSG_ITEM_PUSH_RESULT", (e: StreamEvent) => {
+      if (isDecodeError(e.data) || (sinceSeq !== undefined && e.seq <= sinceSeq)) return;
+      const d = e.data as ItemPushResultData;
+      if (d.looted) stored.push({ itemId: d.itemId, count: d.count });
     });
-    return { ok: true, status: "looted", gold: window.gold, items: window.items };
+    try {
+      await this.lootAll(id);
+      const first = await this.events.waitFor(
+        (e) =>
+          (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
+          !isDecodeError(e.data) &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
+      );
+      if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
+        return { ok: false, status: "empty", gold: 0, items: [] };
+      }
+      const window = first.data as LootResponseData;
+      // What the replay will try to store: slots free to loot (0, ALLOW_LOOT)
+      // or owned outright (4, OWNER — every slot of a solo loot). Group-only
+      // slot types are shown but never auto-stored.
+      const expected = window.items.filter((i) => i.slotType === 0 || i.slotType === 4).length;
+      const release = await this.events.waitFor((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
+        timeout,
+        sinceSeq: first.seq + 1,
+        includeBuffered: true,
+        description: "the loot window closing (SMSG_LOOT_RELEASE_RESPONSE)",
+      });
+      // The pushes usually precede the release, but the ordering is not
+      // contractual; give stragglers a short grace rather than under-reporting.
+      const deadline = Date.now() + Math.min(timeout, LOOT_PUSH_GRACE_MS);
+      let graceSince = release.seq + 1;
+      while (stored.length < expected && Date.now() < deadline) {
+        try {
+          const push = await this.events.waitFor(
+            (e) => isEvent(e, "SMSG_ITEM_PUSH_RESULT") && !isDecodeError(e.data),
+            { timeout: Math.max(1, deadline - Date.now()), sinceSeq: graceSince },
+          );
+          graceSince = push.seq + 1; // the on() listener above already recorded it
+        } catch {
+          break; // grace expired: report what was confirmed, nothing more
+        }
+      }
+      if (expected > 0 && stored.length === 0) {
+        return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items };
+      }
+      return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items };
+    } finally {
+      offPush();
+    }
   }
 
   /**
