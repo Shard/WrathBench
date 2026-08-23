@@ -65,6 +65,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -72,6 +73,21 @@ import {
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import {
+  DEFAULT_POLICY,
+  LADDER_MS,
+  MODELS_SIDECAR,
+  modelStates,
+  nextJobs,
+  parseModelsSidecar,
+  readModelsSidecar,
+  schedulability,
+  serializeModelsSidecar,
+  type ModelState,
+  type NextJob,
+  type RosterModel,
+  type SchedulingPolicy,
+} from "../runner/src/models";
 
 // ------------------------------------------------------------------ types
 
@@ -169,12 +185,15 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
  * A roster entry as named in the new shape's `roster` map: the exact per-entry
- * schema plus `tiers`, the tiers the model has been promoted into. Promotion
- * is a recorded operator/eval decision, never computed here; a job whose
- * episode is not in its model's tiers is skipped with a logged reason.
+ * schema plus two optional scheduling fields. `tiers` is a manual FORCE —
+ * tiers listed here are eligible regardless of history (ADR-0032: every model
+ * is e90-eligible on arrival and e360 is earned from run history, so the field
+ * is normally absent). `runsPerEpisode` overrides the policy's per-episode
+ * target for this entry.
  */
 export interface FleetRosterEntry extends RosterSpec {
   tiers: EpisodeId[];
+  runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
 }
 
 export interface FleetJob {
@@ -196,6 +215,12 @@ export interface FleetJob {
    */
   lane: string;
   enabled: boolean;
+  /**
+   * Set on a job the scheduling policy (ADR-0032) made up, never on one from
+   * the file: the n-th attempt on (model, episode), which suffixes the run id
+   * `-a<n>` from the second attempt on so every attempt has its own id.
+   */
+  attempt?: number;
 }
 
 export interface FleetAccounts {
@@ -212,6 +237,8 @@ export interface FleetConfig {
   accounts: FleetAccounts;
   roster: Record<string, FleetRosterEntry>;
   queue: FleetJob[];
+  /** ADR-0032 targets; `policy.runsPerEpisode` in the file, defaults apply. */
+  policy: SchedulingPolicy;
 }
 
 /**
@@ -420,6 +447,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     accounts?: unknown;
     roster?: unknown;
     queue?: unknown;
+    policy?: unknown;
   };
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   if (!Array.isArray(o.lanes)) fail("fleet config: lanes must be an array");
@@ -528,7 +556,7 @@ export function parseFleet(raw: unknown): FleetConfig {
   if (queue.some((j) => j.enabled) && accounts.pool.length === 0) {
     fail("queue has enabled jobs but accounts.pool is empty — nothing could ever run them");
   }
-  return { notes, lanes, preflight, accounts, roster, queue };
+  return { notes, lanes, preflight, accounts, roster, queue, policy: parsePolicy(o.policy) };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
@@ -573,18 +601,61 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tiers: rawTiers, ...rest } = e as { tiers?: unknown } & Record<string, unknown>;
-    const tiers = rawTiers === undefined ? ["e90"] : rawTiers;
-    if (!Array.isArray(tiers) || tiers.length === 0 || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
-      fail(`roster ${name}: tiers must be a non-empty array of ${EPISODE_IDS.join("|")}`);
+    const { tiers: rawTiers, runsPerEpisode: rawRuns, ...rest } = e as { tiers?: unknown; runsPerEpisode?: unknown } & Record<string, unknown>;
+    // Absent means "no force": eligibility comes from run history (ADR-0032).
+    const tiers = rawTiers === undefined ? [] : rawTiers;
+    if (!Array.isArray(tiers) || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
+      fail(`roster ${name}: tiers must be an array of ${EPISODE_IDS.join("|")}`);
     }
+    const runsPerEpisode = parseRunsPerEpisode(rawRuns, `roster ${name}: runsPerEpisode`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — the pool assigns one`);
     // Lane-policy checks are per entry; the pseudo-lane is only there for the
     // error message and the account-agreement check (vacuous here).
     const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [rest]);
-    out[name] = { ...validated!, tiers: tiers as EpisodeId[] };
+    out[name] = { ...validated!, tiers: tiers as EpisodeId[], ...(runsPerEpisode !== undefined ? { runsPerEpisode } : {}) };
   }
   return out;
+}
+
+function parseRunsPerEpisode(raw: unknown, where: string): Partial<Record<"e90" | "e360", number>> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail(`${where} must be an object like { "e90": 3, "e360": 3 }`);
+  const out: Partial<Record<"e90" | "e360", number>> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k !== "e90" && k !== "e360") fail(`${where}: unknown episode ${k} (e90 or e360; freeplay is never scheduled by policy)`);
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) fail(`${where}.${k} must be a non-negative integer`);
+    out[k] = v;
+  }
+  return out;
+}
+
+/** The file's `policy` block: only the targets are configurable; the ladder and the promotion level are code. */
+function parsePolicy(raw: unknown): SchedulingPolicy {
+  if (raw === undefined) return DEFAULT_POLICY;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: policy must be an object");
+  const r = parseRunsPerEpisode((raw as { runsPerEpisode?: unknown }).runsPerEpisode, "policy.runsPerEpisode");
+  return { ...DEFAULT_POLICY, runsPerEpisode: { ...DEFAULT_POLICY.runsPerEpisode, ...r } };
+}
+
+/** The roster as the projection reads it: ordered, named, with the two overrides. */
+export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterModel[] {
+  return Object.entries(roster).map(([name, e]) => ({
+    name,
+    model: e.model,
+    ...(e.effort !== undefined ? { effort: e.effort } : {}),
+    ...(e.driver !== undefined ? { driver: e.driver } : {}),
+    ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+    ...(e.tiers.length > 0 ? { tiers: e.tiers } : {}),
+    ...(e.runsPerEpisode !== undefined ? { runsPerEpisode: e.runsPerEpisode } : {}),
+  }));
+}
+
+/** An eligibility predicate over the projection, for planQueue / runnableRefs. */
+export type Eligible = (ref: string, episode: EpisodeId) => boolean;
+
+export function eligibleFrom(states: readonly ModelState[]): Eligible {
+  const by = new Map(states.map((s) => [s.name, s]));
+  return (ref, ep) => ep === "freeplay" || (by.get(ref)?.eligible.includes(ep) ?? false);
 }
 
 function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>, laneNames: Set<string>): FleetJob[] {
@@ -658,15 +729,23 @@ export function planQueue(opts: {
   finished: Set<string>;
   held: (account: string) => string | undefined;
   cooling: (job: FleetJob) => string | undefined;
+  /**
+   * Who may run what. Default: the roster's `tiers` (a manual force). The
+   * supervisor passes `eligibleFrom(modelStates(...))`, which adds what run
+   * history has earned (ADR-0032).
+   */
+  eligible?: Eligible;
+  /** Roster names with a stream in flight outside `queue` (policy jobs). */
+  runningRefs?: ReadonlySet<string>;
 }): QueuePlan {
   const plan: QueuePlan = { assign: [], waiting: [], skipped: [] };
   const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  const runningRefs = new Set<string>();
+  const runningRefs = new Set<string>(opts.runningRefs ?? []);
   for (const job of opts.queue) if (opts.running.has(job.lane)) for (const r of job.refs) runningRefs.add(r);
   for (const job of opts.queue) {
     if (!job.enabled || opts.running.has(job.lane) || opts.finished.has(job.lane)) continue;
-    const refs = runnableRefs(job, opts.roster);
+    const refs = runnableRefs(job, opts.roster, opts.eligible);
     if (refs.length === 0) {
       const gated = job.refs.filter((r) => opts.roster[r] !== undefined);
       plan.skipped.push({
@@ -674,7 +753,7 @@ export function planQueue(opts: {
         reason:
           gated.length === 0
             ? `ref ${job.ref} is not in roster`
-            : `${job.ref} is not promoted into ${job.episode} (tiers: ${gated.map((r) => `${r}=${opts.roster[r]!.tiers.join("/")}`).join(", ")}) — promotion is an operator decision, edit roster.<name>.tiers`,
+            : `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)`,
       });
       continue;
     }
@@ -705,11 +784,47 @@ export function planQueue(opts: {
  * with whatever subset passes; a ref gated out is dropped from that job's
  * roster, and the skip reason names it only when nothing is left.
  */
-export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEntry>): string[] {
+export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEntry>, eligible?: Eligible): string[] {
   return job.refs.filter((r) => {
     const e = roster[r];
-    return e !== undefined && (job.episode === "freeplay" || e.tiers.includes(job.episode));
+    if (e === undefined) return false;
+    // A policy job was made from the projection that answers eligibility; it is its own witness.
+    if (job.attempt !== undefined) return true;
+    // e90 is every model's on arrival (ADR-0032); freeplay is unscored and needs no promotion.
+    if (job.episode === "freeplay" || job.episode === "e90" || e.tiers.includes(job.episode)) return true;
+    return eligible !== undefined && eligible(r, job.episode);
   });
+}
+
+/**
+ * A policy pick as a job: one ref, one run, lane `<name>-<episode>`. The lane
+ * name is stable across attempts so its log and defer sidecar accumulate;
+ * the run id is not (`attempt`).
+ */
+export function policyJob(pick: NextJob): FleetJob {
+  return { refs: [pick.name], ref: pick.name, episode: pick.episode, repeat: 1, lane: `${pick.name}-${pick.episode}`, enabled: true, attempt: pick.attempt };
+}
+
+/**
+ * The policy's fill for whatever the queue left free (ADR-0032). Pure: the
+ * projection is handed in. Only runs when no manual job is waiting — a manual
+ * entry always outranks the policy — and never puts a second stream on a model.
+ */
+export function planPolicy(opts: {
+  states: readonly ModelState[];
+  pool: string[];
+  running: Map<string, string>;
+  held: (account: string) => string | undefined;
+  queuePlan: QueuePlan;
+  runningRefs: ReadonlySet<string>;
+}): { job: FleetJob; account: string; why: string }[] {
+  if (opts.queuePlan.waiting.length > 0) return [];
+  const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
+  const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
+  if (free.length === 0) return [];
+  const running = new Set(opts.runningRefs);
+  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
+  return nextJobs(opts.states, free, running).map((pick) => ({ job: policyJob(pick), account: pick.account, why: pick.why }));
 }
 
 /**
@@ -719,24 +834,26 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
  * them in sequence, `repeat: "loop"` as run-roster's own --loop. `tiers` never
  * reaches the roster file.
  */
-export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string): FleetLane {
+export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): FleetLane {
   const dims = episodeDimensions(job.episode);
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
-  for (const r of runnableRefs(job, roster)) {
-    const { tiers: _tiers, ...spec } = roster[r]!;
+  for (const r of runnableRefs(job, roster, eligible)) {
+    const { tiers: _tiers, runsPerEpisode: _runs, ...spec } = roster[r]!;
     const base: RosterSpec = {
       ...spec,
       ...dims,
       watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
       ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
     };
-    const runId = `fleet-${job.lane}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}`;
+    const runId =
+      `fleet-${job.lane}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}` +
+      (job.attempt !== undefined && job.attempt > 1 ? `-a${job.attempt}` : "");
     for (let k = 1; k <= copies; k++) {
-      entries.push(k === 1 ? base : { ...base, runId: `${runId}-r${k}` });
+      entries.push(k === 1 ? (job.attempt !== undefined && job.attempt > 1 ? { ...base, runId } : base) : { ...base, runId: `${runId}-r${k}` });
     }
   }
-  if (entries.length === 0) fail(`queue ${job.lane}: no ref of ${job.ref} is promoted into ${job.episode}`);
+  if (entries.length === 0) fail(`queue ${job.lane}: no ref of ${job.ref} is eligible for ${job.episode}`);
   return {
     name: job.lane,
     enabled: job.enabled,
@@ -1373,6 +1490,12 @@ interface FleetState {
     finished: string[];
     skipped: { lane: string; reason: string }[];
   };
+  /** ADR-0032: the jobs the policy made up and is running (lane -> job). */
+  policy?: {
+    jobs: Record<string, { ref: string; episode: EpisodeId; account: string; attempt: number }>;
+    /** Why the last tick spawned nothing from the policy, when it did not. */
+    idle?: string;
+  };
   lanes: Record<
     string,
     {
@@ -1432,6 +1555,8 @@ interface PoolView {
   finished: Set<string>;
   waiting: string[];
   skipped: { lane: string; reason: string }[];
+  policyJobs: Map<string, FleetJob>;
+  policyIdle?: string;
 }
 
 function writeState(
@@ -1467,6 +1592,12 @@ function writeState(
             waiting: pool.waiting,
             finished: pool.queue.filter((j) => pool.finished.has(j.lane)).map((j) => j.lane),
             skipped: pool.skipped,
+          },
+          policy: {
+            jobs: Object.fromEntries(
+              [...pool.policyJobs].map(([lane, j]) => [lane, { ref: j.ref, episode: j.episode, account: pool.assigned.get(lane) ?? "-", attempt: j.attempt ?? 1 }]),
+            ),
+            ...(pool.policyIdle !== undefined ? { idle: pool.policyIdle } : {}),
           },
         }
       : {}),
@@ -1641,6 +1772,16 @@ function printStatus(configPath: string): void {
   if (config !== undefined) {
     for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
     for (const line of formatPool(config, state)) console.log(`  ${line}`);
+    if (config.accounts.pool.length > 0) {
+      const running = new Set<string>();
+      for (const j of Object.values(state?.policy?.jobs ?? {})) running.add(j.ref);
+      for (const lane of state?.queue?.running ?? []) for (const r of config.queue.find((j) => j.lane === lane)?.refs ?? []) running.add(r);
+      const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy });
+      for (const line of formatModels(states, running)) console.log(`  ${line}`);
+      const pj = Object.entries(state?.policy?.jobs ?? {});
+      if (pj.length > 0) console.log(`  policy jobs running: ${pj.map(([lane, j]) => `${lane}=${j.account} (attempt ${j.attempt})`).join(", ")}`);
+      if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
+    }
   }
   // Lanes from the file when it loads, else the ones the supervisor last ran.
   // Pool jobs the supervisor is running (or ran) appear as lanes too, on the
@@ -1651,7 +1792,7 @@ function printStatus(configPath: string): void {
           ...config.lanes.map((l) => ({ name: l.name, account: l.account, enabled: l.enabled })),
           ...Object.entries(state?.lanes ?? {})
             .filter(([name]) => !config.lanes.some((l) => l.name === name))
-            .map(([name, l]) => ({ name, account: l.account, enabled: config.queue.find((j) => j.lane === name)?.enabled })),
+            .map(([name, l]) => ({ name, account: l.account, enabled: config.queue.find((j) => j.lane === name)?.enabled ?? (state?.policy?.jobs[name] !== undefined ? true : undefined) })),
         ]
       : Object.entries(state?.lanes ?? {}).map(([name, l]) => ({ name, account: l.account }));
   for (const lane of laneRows) {
@@ -1745,19 +1886,23 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     console.log(`  argv      ${laneArgv(lane, { stamp: stampToday, until: cliUntil }).join(" ")}`);
   }
   if (config.queue.length > 0 || config.accounts.pool.length > 0) {
+    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy });
+    const eligible = eligibleFrom(states);
+    const held = (a: string): string | undefined => accountHeldBy(a, "");
     const plan = planQueue({
       queue: config.queue,
       roster: config.roster,
       pool: config.accounts.pool,
       running: new Map(),
       finished: new Set(),
-      held: (a) => accountHeldBy(a, ""),
+      held,
       cooling: () => undefined,
+      eligible,
     });
     console.log(`\npool: ${config.accounts.pool.join(", ") || "(none)"}; queue: ${config.queue.length} job(s)`);
     console.log(`first ${plan.assign.length} job(s) would spawn now (one per free pool account):`);
     for (const { job, account } of plan.assign) {
-      const l = jobLane(job, config.roster, account, stampToday);
+      const l = jobLane(job, config.roster, account, stampToday, eligible);
       const entries = fillEntries(l, l.entries!, stampToday);
       console.log(`  ${job.lane}: account ${account}, ${job.ref} ${job.episode} x${job.repeat} -> ${entries.map((e) => e.runId).join(", ")}`);
       console.log(`    argv ${laneArgv(l, { stamp: stampToday, until: cliUntil }).join(" ")}`);
@@ -1765,6 +1910,17 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     for (const job of plan.waiting) console.log(`  ${job.lane}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
     for (const sk of plan.skipped) console.log(`  ${sk.job.lane}: SKIP — ${sk.reason}`);
     for (const job of config.queue) if (!job.enabled) console.log(`  ${job.lane}: disabled`);
+    console.log("");
+    for (const line of formatModels(states, new Set())) console.log(line);
+    const picks = planPolicy({ states, pool: config.accounts.pool, running: new Map(), held, queuePlan: plan, runningRefs: new Set() });
+    console.log(`\npolicy (ADR-0032) would fill ${picks.length} free pool account(s) now:`);
+    for (const { job, account, why } of picks) {
+      const l = jobLane(job, config.roster, account, stampToday);
+      const entries = fillEntries(l, l.entries!, stampToday);
+      console.log(`  ${job.lane}: account ${account}, ${job.ref} ${job.episode} attempt ${job.attempt} (${why}) -> ${entries.map((e) => e.runId).join(", ")}`);
+      console.log(`    argv ${laneArgv(l, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+    }
+    if (picks.length === 0 && plan.waiting.length > 0) console.log("  (manual jobs are waiting; they outrank the policy)");
   }
   console.log("");
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
@@ -1797,12 +1953,14 @@ function parseArgs(argv: string[]): {
   status: boolean;
   liveRuns: boolean;
   until: string | undefined;
+  clearModel: string | undefined;
 } {
   let config = join(REPO_ROOT, "infra", "fleet.json");
   let dryRun = false;
   let status = false;
   let liveRuns = false;
   let until: string | undefined;
+  let clearModel: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     switch (a) {
@@ -1818,6 +1976,13 @@ function parseArgs(argv: string[]): {
       case "--until":
         until = argv[++i];
         break;
+      case "--clear-model":
+        clearModel = argv[++i];
+        if (clearModel === undefined) {
+          console.error("run-fleet: --clear-model needs a roster name");
+          process.exit(2);
+        }
+        break;
       case "-h":
       case "--help":
         console.error(
@@ -1831,6 +1996,9 @@ function parseArgs(argv: string[]): {
             "                  host against a containerized supervisor (heartbeat, not kill -0)",
             "  --live-runs     read-only: list live episodes across the lane accounts and exit",
             "                  non-zero if there are any (the deploy window's refusal check)",
+            "  --clear-model NAME  forgive a roster model's defer ladder / retirement (ADR-0032):",
+            "                  records the clear in data/runs/fleet-models.json; the running",
+            "                  supervisor picks it up on its next tick. Safe while the fleet runs.",
             "",
             "The supervisor's normal home is the `fleet` compose service (ADR-0020):",
             "  docker compose -f infra/compose.yml up -d --no-deps fleet",
@@ -1846,7 +2014,58 @@ function parseArgs(argv: string[]): {
         config = isAbsolute(a) ? a : join(process.cwd(), a);
     }
   }
-  return { config, dryRun, status, liveRuns, until };
+  return { config, dryRun, status, liveRuns, until, clearModel };
+}
+
+/**
+ * `--clear-model`: the one write an operator makes against the projection.
+ * Attempts that ended before the clear no longer climb the ladder; history
+ * toward targets is untouched. Atomic rename so a supervisor mid-read never
+ * sees a torn file.
+ */
+function clearModel(configPath: string, name: string): void {
+  const { config } = loadConfigForRead(configPath);
+  if (config !== undefined && config.roster[name] === undefined) {
+    console.error(`run-fleet: ${name} is not a roster entry in ${configPath} (clearing it anyway; names are free-form in the sidecar)`);
+  }
+  const path = join(RUNS_DIR, MODELS_SIDECAR);
+  const prev = readModelsSidecar(RUNS_DIR);
+  const next = { ...prev, cleared: { ...prev.cleared, [name]: Date.now() } };
+  mkdirSync(RUNS_DIR, { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, serializeModelsSidecar(next));
+  renameSync(tmp, path);
+  console.log(`cleared ${name} at ${new Date(next.cleared[name]!).toISOString()} -> ${relative(REPO_ROOT, path)}`);
+  if (config !== undefined) {
+    const st = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, sidecar: parseModelsSidecar(serializeModelsSidecar(next)) }).find((m) => m.name === name);
+    if (st !== undefined) console.log(`  ${name}: now ${st.status} — ${schedulability(st).why}`);
+  }
+}
+
+/**
+ * --status / --dry-run rendering of the projection: one block per roster
+ * model, with why it is or is not schedulable. Pure.
+ */
+export function formatModels(states: readonly ModelState[], running: ReadonlySet<string>, now = Date.now()): string[] {
+  const out: string[] = [`models: ${states.length} in roster (policy: ADR-0032; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h)`];
+  const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
+  for (const s of states) {
+    const eps = s.eligible
+      .map((ep) => {
+        const st = s.perEpisode[ep]!;
+        return `${ep} ${st.counted}/${st.target}${st.stillborn > 0 ? ` (+${st.stillborn} stillborn)` : ""}${st.bestLevel !== null ? ` L${st.bestLevel}` : ""}`;
+      })
+      .join(", ");
+    const last = (["e90", "e360"] as const).map((ep) => s.perEpisode[ep]!).filter((st) => st.lastEnded !== null).sort((a, b) => b.lastEnded! - a.lastEnded!)[0];
+    const sched = schedulability(s, running);
+    out.push(
+      `  ${s.name.padEnd(16)} ${s.status.padEnd(8)} ${eps}` +
+        (last !== undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
+        (s.ladder > 0 ? ` — ladder ${s.ladder}` : ""),
+    );
+    out.push(`                   ${sched.ok ? "schedulable" : "not schedulable"}: ${sched.why}`);
+  }
+  return out;
 }
 
 async function main(): Promise<void> {
@@ -1861,6 +2080,10 @@ async function main(): Promise<void> {
   }
   if (args.liveRuns) {
     process.exit(printLiveRuns(args.config) === 0 ? 0 : 1);
+  }
+  if (args.clearModel !== undefined) {
+    clearModel(args.config, args.clearModel);
+    return;
   }
   // The stamp is a supervisor EPOCH, not a date. It is taken once, here, and
   // every run id, lane roster, lane log and defer sidecar hangs off it for the
@@ -1877,7 +2100,8 @@ async function main(): Promise<void> {
     if (!lane.enabled) continue;
     loadLaneEntries(lane);
   }
-  for (const job of config.queue) if (runnableRefs(job, config.roster).length > 0) jobLane(job, config.roster, "-", stampToday);
+  const eligibleNow = eligibleFrom(modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }));
+  for (const job of config.queue) if (runnableRefs(job, config.roster, eligibleNow).length > 0) jobLane(job, config.roster, "-", stampToday, eligibleNow);
 
   if (args.dryRun) {
     printDryRun(config, args.until, stampToday);
@@ -1895,6 +2119,13 @@ async function main(): Promise<void> {
   const assigned = new Map<string, string>();
   let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
   const complainedSkips = new Map<string, string>();
+  // Policy jobs (ADR-0032): lane -> the job the policy made up. They live
+  // here, not in the config, and are forgotten when their process exits.
+  const policyJobs = new Map<string, FleetJob>();
+  /** Picks made this tick, claimed by spawnLane; a gated tick re-picks next time. */
+  const pendingPolicy = new Map<string, FleetJob>();
+  const announcedPicks = new Set<string>();
+  let policyIdle: string | undefined;
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
@@ -1915,27 +2146,77 @@ async function main(): Promise<void> {
    */
   const effectiveLanes = (cfg: FleetConfig): FleetLane[] => {
     const out: FleetLane[] = [...cfg.lanes];
+    // The projection, once a tick: eligibility for the queue's gate and the
+    // policy's picks read the same answer (ADR-0032).
+    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy });
+    const eligible = eligibleFrom(states);
     const byLane = new Map(cfg.queue.map((j) => [j.lane, j]));
+    const policyRefs = new Set<string>();
     for (const [laneName, account] of assigned) {
+      const pj = policyJobs.get(laneName);
+      if (pj !== undefined) {
+        // A running policy job keeps running whatever the roster now says; a
+        // ref dropped from the roster drains it like a removed queue job.
+        if (cfg.roster[pj.ref] === undefined) {
+          out.push({ name: laneName, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
+        } else {
+          out.push(jobLane(pj, cfg.roster, account, stampToday));
+          policyRefs.add(pj.ref);
+        }
+        continue;
+      }
       const job = byLane.get(laneName);
-      if (job === undefined || runnableRefs(job, cfg.roster).length === 0) {
+      if (job === undefined || runnableRefs(job, cfg.roster, eligible).length === 0) {
         // Removed from the queue (or its ref vanished): a disabled stand-in
         // makes diffLanes drain it. The running process keeps its roster.
         out.push({ name: laneName, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      out.push(jobLane(job, cfg.roster, account, stampToday));
+      out.push(jobLane(job, cfg.roster, account, stampToday, eligible));
     }
+    const held = (a: string): string | undefined => accountHeldBy(a, "");
     lastPlan = planQueue({
       queue: cfg.queue,
       roster: cfg.roster,
       pool: cfg.accounts.pool,
       running: assigned,
       finished: sets.finished,
-      held: (a) => accountHeldBy(a, ""),
+      held,
       cooling: jobCooling,
+      eligible,
+      runningRefs: policyRefs,
     });
-    for (const { job, account } of lastPlan.assign) out.push(jobLane(job, cfg.roster, account, stampToday));
+    for (const { job, account } of lastPlan.assign) out.push(jobLane(job, cfg.roster, account, stampToday, eligible));
+    // The policy fills what the queue left free. A gated spawn is not a
+    // problem: the pick is re-made next tick from the same projection.
+    if (cfg.accounts.pool.length > 0) {
+      const picks = planPolicy({ states, pool: cfg.accounts.pool, running: assigned, held, queuePlan: lastPlan, runningRefs: policyRefs });
+      for (const { job, account, why } of picks) {
+        pendingPolicy.set(job.lane, job);
+        // A policy lane that finished an earlier attempt is fair game again;
+        // the projection, not the finished set, decides whether it runs.
+        sets.finished.delete(job.lane);
+        const key = `${job.lane}:${job.attempt}`;
+        if (!announcedPicks.has(key)) {
+          announcedPicks.add(key);
+          say(`policy ${job.lane}: ${job.ref} ${job.episode} attempt ${job.attempt} on ${account} — ${why}`);
+          record({ lane: job.lane, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt} on ${account}: ${why}` });
+        }
+        out.push(jobLane(job, cfg.roster, account, stampToday));
+      }
+      const taken = new Set([...assigned.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
+      const free = cfg.accounts.pool.filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
+      const idle =
+        free.length === 0
+          ? undefined
+          : lastPlan.waiting.length > 0
+            ? `${free.length} free account(s) but manual job(s) waiting (${lastPlan.waiting.map((j) => j.lane).join(", ")}) — they outrank the policy`
+            : `${free.length} free account(s), nothing schedulable: ${states.map((st) => `${st.name}=${st.status}`).join(" ")}`;
+      if (idle !== policyIdle) {
+        if (idle !== undefined) say(`policy: ${idle}`);
+        policyIdle = idle;
+      }
+    }
     for (const sk of lastPlan.skipped) {
       if (complainedSkips.get(sk.job.lane) !== sk.reason) {
         complainedSkips.set(sk.job.lane, sk.reason);
@@ -1954,8 +2235,11 @@ async function main(): Promise<void> {
     finished: sets.finished,
     waiting: lastPlan.waiting.map((j) => j.lane),
     skipped: lastPlan.skipped.map((sk) => ({ lane: sk.job.lane, reason: sk.reason })),
+    policyJobs,
+    ...(policyIdle !== undefined ? { policyIdle } : {}),
   });
-  const isPoolLane = (cfg: FleetConfig, name: string): boolean => cfg.queue.some((j) => j.lane === name) || assigned.has(name);
+  const isPoolLane = (cfg: FleetConfig, name: string): boolean =>
+    cfg.queue.some((j) => j.lane === name) || assigned.has(name) || policyJobs.has(name) || pendingPolicy.has(name);
 
   const spawnLane = (lane: FleetLane): void => {
     let until: string | undefined;
@@ -1995,6 +2279,12 @@ async function main(): Promise<void> {
     procs.set(lane.name, lp);
     sets.running.add(lane.name);
     if (isPoolLane(config, lane.name)) assigned.set(lane.name, lane.account);
+    const pj = pendingPolicy.get(lane.name);
+    if (pj !== undefined) {
+      policyJobs.set(lane.name, pj);
+      pendingPolicy.delete(lane.name);
+      announcedPicks.delete(`${lane.name}:${pj.attempt}`);
+    }
     say(`lane ${lane.name}: spawned pid ${proc.pid} (account ${lane.account}${resumeRoster ? ", --resume-roster" : ""}) -> ${stdoutLog}`);
     record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${resumeRoster ? "; resume-roster" : ""}; account ${lane.account}` });
   };
@@ -2105,6 +2395,9 @@ async function main(): Promise<void> {
         if (!drained) sets.finished.add(name);
         const acct = assigned.get(name);
         assigned.delete(name);
+        // A policy lane is not "finished": the projection decides whether it
+        // runs again, so nothing here keeps it out of the next plan.
+        if (policyJobs.delete(name)) sets.finished.delete(name);
         say(`lane ${name}: roster exited ${p.exitCode}${drained ? " (drained)" : ""}${acct !== undefined ? ` — pool account ${acct} released` : ""}`);
         record({ lane: name, event: "exited", detail: `code ${p.exitCode}${drained ? "; drained" : ""}` });
       }

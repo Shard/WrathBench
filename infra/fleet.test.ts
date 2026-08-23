@@ -31,6 +31,11 @@ import {
   formatPool,
   jobLane,
   planQueue,
+  planPolicy,
+  policyJob,
+  rosterModels,
+  eligibleFrom,
+  formatModels,
   runnableRefs,
   type FleetJob,
   type FleetRosterEntry,
@@ -42,6 +47,7 @@ import {
   type PreflightSmoke,
   type ConfigRejection,
 } from "./run-fleet";
+import { modelStates, type ModelState, type RosterModel, type RunFact } from "../runner/src/models";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -867,7 +873,9 @@ describe("pool and queue (ADR-0031)", () => {
     const config = parseFleet(nextShape());
     expect(config.lanes[0]!.account).toBe("SHAKEOUT");
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3"]);
-    expect(config.roster["glm"]!.tiers).toEqual(["e90"]);
+    // No tiers in the file means no force; e90 eligibility is the policy's, not the field's.
+    expect(config.roster["glm"]!.tiers).toEqual([]);
+    expect(config.policy).toEqual({ runsPerEpisode: { e90: 3, e360: 3 }, promoteAtLevel: 5 });
     expect(config.queue.map((j) => j.lane)).toEqual(["glm-e90", "ox-long", "qwen-e360", "pair"]);
     expect(config.queue[0]).toMatchObject({ refs: ["glm"], ref: "glm", repeat: "loop", enabled: true });
     expect(config.queue[2]).toMatchObject({ repeat: 1 });
@@ -881,6 +889,9 @@ describe("pool and queue (ADR-0031)", () => {
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e9000" }] }))).toThrow(/episode must be one of/);
     expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free", tiers: ["e45"] } }, queue: [] }))).toThrow(/tiers/);
     expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free", account: "RUNNER" } }, queue: [] }))).toThrow(/must not pin an account/);
+    expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free", runsPerEpisode: { e45: 1 } } }, queue: [] }))).toThrow(/unknown episode e45/);
+    expect(() => parseFleet(nextShape({ policy: { runsPerEpisode: { e90: -1 } } }))).toThrow(/non-negative/);
+    expect(parseFleet(nextShape({ policy: { runsPerEpisode: { e90: 5 } } })).policy.runsPerEpisode).toEqual({ e90: 5, e360: 3 });
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90", lane: "nav-probe" }] }))).toThrow(/collides with a pinned lane/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share lane name/);
     // Lane policy still applies to roster entries.
@@ -946,8 +957,8 @@ describe("pool and queue (ADR-0031)", () => {
     const queue = [job({ ref: "glm", episode: "e360" }), job({ ref: "ox", episode: "e360" }), job({ ref: "glm", episode: "freeplay" })];
     const plan = planQueue({ ...base, queue, running: new Map() });
     expect(plan.skipped.map((s) => s.job.lane)).toEqual(["glm-e360"]);
-    expect(plan.skipped[0]!.reason).toMatch(/not promoted into e360/);
-    expect(plan.skipped[0]!.reason).toMatch(/operator decision/);
+    expect(plan.skipped[0]!.reason).toMatch(/not eligible for e360/);
+    expect(plan.skipped[0]!.reason).toMatch(/level 5/);
     expect(plan.assign.map((a) => a.job.lane)).toEqual(["ox-e360", "glm-freeplay"]);
     // A multi-ref job runs with the promoted subset; the gated ref is dropped.
     const pair = job({ ref: "glm", refs: ["glm", "ox"], episode: "e360", lane: "pair" });
@@ -1027,28 +1038,134 @@ describe("pool and queue (ADR-0031)", () => {
     expect(lines).toMatch(/pair .*waiting/);
   });
 
-  test("the shipped fleet.next.json is today's fleet under the new schema", async () => {
+  test("the shipped fleet.next.json: pool roster under the policy, empty manual queue, nav-probe pinned", async () => {
     const raw = (await Bun.file(new URL("./fleet.next.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
-    const byLane = Object.fromEntries(config.queue.map((j) => [j.lane, j]));
-    for (const name of ["ox-alpha", "free-or-a", "free-or-b", "free-oc-a", "free-oc-b", "local-qwen"]) {
-      expect(byLane[name]).toMatchObject({ episode: "e90", repeat: "loop", enabled: true });
-    }
-    // Same run ids as today's lanes produce, so the switch is invisible to the eval surface.
-    const ox = jobLane(byLane["ox-alpha"]!, config.roster, "RUNNER", "20260823");
-    expect(fillEntries(ox, ox.entries!, "20260823")[0]!.runId).toBe("fleet-ox-alpha-ox-alpha-20260823");
-    // Every model is e90-only; the e360 jobs exist, disabled, and would be tier-gated if enabled.
-    for (const e of Object.values(config.roster)) expect(e.tiers).toEqual(["e90"]);
-    expect(byLane["sonnet-e360"]).toMatchObject({ episode: "e360", enabled: false });
-    expect(byLane["qwen-e360"]).toMatchObject({ episode: "e360", enabled: false });
-    const forced = config.queue.map((j) => (j.episode === "e360" ? { ...j, enabled: true } : j));
-    const plan = planQueue({ queue: forced, roster: config.roster, pool: config.accounts.pool, running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined });
-    expect(plan.skipped.map((s) => s.job.lane).sort()).toEqual(["qwen-e360", "sonnet-e360"]);
+    // The policy replaces the per-lane loop jobs (ADR-0032): nothing manual is queued.
+    expect(config.queue).toEqual([]);
+    expect(config.policy.runsPerEpisode).toEqual({ e90: 3, e360: 3 });
+    // No forced tiers: every model arrives e90-eligible and earns e360.
+    for (const e of Object.values(config.roster)) expect(e.tiers).toEqual([]);
+    expect(Object.keys(config.roster).length).toBeGreaterThanOrEqual(10);
+    // With an empty run history every roster model is "new" and the first six take the pool, in roster order.
+    const states = modelStatesOf(rosterModels(config.roster));
+    expect(states.every((st) => st.status === "new" && st.eligible.join() === "e90")).toBe(true);
+    const picks = planPolicy({ states, pool: config.accounts.pool, running: new Map(), held: () => undefined, queuePlan: { assign: [], waiting: [], skipped: [] }, runningRefs: new Set() });
+    expect(picks.map((p) => [p.job.lane, p.account])).toEqual([
+      ["sonnet-e90", "RUNNER"],
+      ["sonnet-low-e90", "RUNNER2"],
+      ["ox-alpha-e90", "RUNNER3"],
+      ["nemotron-ultra-e90", "RUNNER4"],
+      ["north-mini-code-e90", "RUNNER5"],
+      ["nemotron-super-e90", "RUNNER6"],
+    ]);
+    const ox = jobLane(picks[2]!.job, config.roster, "RUNNER3", "20260823");
+    expect(fillEntries(ox, ox.entries!, "20260823")[0]).toMatchObject({ runId: "fleet-ox-alpha-e90-ox-alpha-20260823", episode: "e90", account: "RUNNER3" });
     // The nav-probe lane is byte-for-byte the pinned lane of today.
     const nav = config.lanes.find((l) => l.name === "nav-probe")!;
     expect(nav).toMatchObject({ account: "SHAKEOUT", loop: true, wikiCoords: true, maxToolCalls: 2500 });
     expect(nav.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
+  });
+});
+
+// ------------------------------------------------------------ ADR-0032 policy
+
+/** The projection over an in-memory history, so no run directory is needed. */
+function modelStatesOf(roster: RosterModel[], runs: RunFact[] = [], now = 1_800_000_000_000): ModelState[] {
+  return modelStates({ runsDir: "/nonexistent", roster, runs, sidecar: { version: 1, cleared: {} }, now });
+}
+
+describe("scheduling policy (ADR-0032)", () => {
+  const NOW = 1_800_000_000_000;
+  const run = (model: string, episode: "e90" | "e360", i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `${model}-${episode}-${i}`,
+    model,
+    effort: null,
+    episode,
+    episodeOverride: false,
+    harnessVersion: null,
+    startedAt: NOW - (50 - i) * 3_600_000,
+    endedAt: NOW - (49 - i) * 3_600_000,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 3,
+    live: false,
+    ...over,
+  });
+  const roster: Record<string, FleetRosterEntry> = {
+    glm: { model: "z-ai/glm-5.2:free", tiers: [] },
+    ox: { model: "stealth/ox-alpha", tiers: [] },
+    mimo: { model: "mimo-v2.5-free", tiers: [] },
+  };
+  const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
+    refs: [over.ref],
+    episode: "e90",
+    repeat: 1,
+    lane: `${over.ref}-${over.episode ?? "e90"}`,
+    enabled: true,
+    ...over,
+  });
+  const empty = { assign: [], waiting: [], skipped: [] };
+
+  test("e90 is every model's on arrival; e360 is earned by a level-5 e90 run or forced by tiers", () => {
+    const states = modelStatesOf(rosterModels(roster), [run("stealth/ox-alpha", "e90", 1, { bestLevel: 5 })]);
+    const eligible = eligibleFrom(states);
+    expect(eligible("glm", "e90")).toBe(true);
+    expect(eligible("glm", "e360")).toBe(false);
+    expect(eligible("ox", "e360")).toBe(true);
+    expect(eligible("nobody", "freeplay")).toBe(true);
+    // The queue's gate reads the same answer.
+    const queue = [job({ ref: "glm", episode: "e360" }), job({ ref: "ox", episode: "e360" })];
+    const plan = planQueue({ queue, roster, pool: ["RUNNER", "RUNNER2"], running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined, eligible });
+    expect(plan.assign.map((a) => a.job.lane)).toEqual(["ox-e360"]);
+    expect(plan.skipped.map((s) => s.job.lane)).toEqual(["glm-e360"]);
+    // Without the projection, only a forced tier opens e360.
+    expect(runnableRefs(job({ ref: "glm", episode: "e360" }), roster)).toEqual([]);
+    expect(runnableRefs(job({ ref: "glm", episode: "e360" }), { glm: { model: "z-ai/glm-5.2:free", tiers: ["e360"] } })).toEqual(["glm"]);
+    expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
+  });
+
+  test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second stream", () => {
+    const states = modelStatesOf(rosterModels(roster));
+    // Two accounts, one taken by a manual job: the policy gets the other.
+    let picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2"], running: new Map([["glm-e90", "RUNNER"]]), held: () => undefined, queuePlan: empty, runningRefs: new Set(["glm"]) });
+    expect(picks.map((p) => [p.job.lane, p.account, p.job.attempt])).toEqual([["ox-e90", "RUNNER2", 1]]);
+    // A manual job waiting outranks the policy even with accounts free.
+    picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2"], running: new Map(), held: () => undefined, queuePlan: { ...empty, waiting: [job({ ref: "mimo" })] }, runningRefs: new Set() });
+    expect(picks).toEqual([]);
+    // Accounts the queue just assigned this tick, or held live by anything, are not free.
+    picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: (a) => (a === "RUNNER3" ? "hand-run" : undefined), queuePlan: { ...empty, assign: [{ job: job({ ref: "glm" }), account: "RUNNER" }] }, runningRefs: new Set() });
+    expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER2"]]);
+  });
+
+  test("a policy job is a one-run lane named <ref>-<episode>; attempts after the first suffix the run id", () => {
+    const first = policyJob({ name: "ox", episode: "e90", account: "RUNNER", attempt: 1, why: "" });
+    expect(first).toMatchObject({ refs: ["ox"], ref: "ox", episode: "e90", repeat: 1, lane: "ox-e90", enabled: true, attempt: 1 });
+    const l1 = jobLane(first, roster, "RUNNER", "20260101");
+    expect(fillEntries(l1, l1.entries!, "20260101").map((e) => e.runId)).toEqual(["fleet-ox-e90-ox-alpha-20260101"]);
+    expect(laneArgv(l1, { stamp: "20260101", until: undefined })).not.toContain("--loop");
+    const l3 = jobLane(policyJob({ name: "ox", episode: "e360", account: "RUNNER", attempt: 3, why: "" }), roster, "RUNNER", "20260101");
+    expect(fillEntries(l3, l3.entries!, "20260101")[0]).toMatchObject({ runId: "fleet-ox-e360-ox-alpha-20260101-a3", episode: "e360", maxToolCalls: 12000 });
+  });
+
+  test("priority and the ladder flow through: stillborn attempts cool a model, a promoted model gets e360 after the fresh ones", () => {
+    const runs = [
+      // ox: promoted, e90 target met.
+      run("stealth/ox-alpha", "e90", 1, { bestLevel: 5 }),
+      run("stealth/ox-alpha", "e90", 2),
+      run("stealth/ox-alpha", "e90", 3),
+      // glm: one stillborn attempt a minute ago -> cooling rung 1.
+      run("z-ai/glm-5.2:free", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW - 30_000 }),
+    ];
+    const states = modelStatesOf(rosterModels(roster), runs);
+    const picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set() });
+    expect(picks.map((p) => [p.job.lane, p.account])).toEqual([["mimo-e90", "RUNNER"], ["ox-e360", "RUNNER2"]]);
+    const text = formatModels(states, new Set(), NOW).join("\n");
+    expect(text).toMatch(/ox +promoted +e90 3\/3 L5, e360 0\/3/);
+    expect(text).toMatch(/glm +cooling +e90 0\/3 \(\+1 stillborn\)/);
+    expect(text).toMatch(/not schedulable: cooling rung 1\/9/);
+    expect(text).toMatch(/mimo +new/);
   });
 });

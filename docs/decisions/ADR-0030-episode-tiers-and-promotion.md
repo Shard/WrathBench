@@ -1,6 +1,8 @@
 # ADR-0030: Episode tiers and promotion
 
-Date: 2026-08-23. Status: accepted.
+Date: 2026-08-23. Status: accepted; **promotion and demotion superseded by
+ADR-0032** (one qualifying `e90` run, computed from run history; no demotion).
+The tiers and the comparability rules below stand.
 
 ## Context
 
@@ -50,21 +52,25 @@ and does not share its chart. Overrides keep the meaning they had — a two-minu
 smoke does not want a six-hour clock — but they now cost group membership
 instead of quietly shifting what a group means.
 
-**Promotion is mechanical and recorded.** A model is `e360`-eligible once it
-has, **on the current harness version**, two `e90` episodes that both reached
-ladder rung 1 (level 5) and neither of which ended `adapter-error`. A run that
+**Promotion is mechanical and recorded.** *(Superseded by ADR-0032: one
+counted, un-overridden `e90` run that reached level 5 promotes, automatically,
+with no harness-version filter.)* As first written: a model is `e360`-eligible
+once it has, **on the current harness version**, two `e90` episodes that both
+reached ladder rung 1 (level 5) and neither of which ended `adapter-error`. A run that
 paused (`quota-exhausted`, `rate-limited`) and was resumed still counts —
 a pause is not a judgement (ADR-0026's resume rules keep such a run readable).
 A run that ended `harness-error` counts for neither side: it is our defect, so
 it neither qualifies nor disqualifies, and the two qualifying episodes are
 simply the next two that are not one.
 
-**Demotion is mechanical too.** Two consecutive `e360` episodes ended by the
+**Demotion is mechanical too.** *(Not implemented; ADR-0032 lets a model meet
+its `e360` target and stop instead.)* Two consecutive `e360` episodes ended by the
 idle watchdog return the model to `e90` only. Consecutive means consecutive
 within a harness version; a version bump resets eligibility in both directions,
 because "on the current harness version" is the whole point of the group.
 
-**Eligibility is a roster field (`tiers`), never a per-model prompt.** The
+**Eligibility is a roster field (`tiers`), never a per-model prompt.**
+*(ADR-0032: `tiers` is now only a manual force; eligibility is derived.)* The
 loop stays model-agnostic (CLAUDE.md): the model is never told which tier it is
 in, no prompt text moves with the tier, and the only thing that varies is the
 wall clock and the watchdogs — which the tuple already records. Eligibility is
