@@ -30,7 +30,7 @@ against the same `fleet.json`; naming the service is what activates it.
 ```
 docker compose -f infra/compose.yml logs -f fleet     # supervisor stdout
 ./infra/run-fleet.sh --status                          # host, read-only
-tail -f data/runs/fleet-<lane>-<stamp>.log             # one lane's roster stdout
+tail -f data/runs/fleet-<job>-<stamp>.log              # one job's roster stdout
 ```
 
 `--status` works from the host even though the supervisor is in a container: it
@@ -41,29 +41,64 @@ reports `NOT RUNNING`.
 
 ### Steer it
 
-Edit `infra/fleet.json`. Nothing to restart.
+Edit `infra/fleet.json`. Nothing to restart. The unit you steer is the **job**
+(ADR-0034): a roster entry (or a rotation of several), an episode tier, a
+repeat count, on one account — pinned to it when the job names an `account`,
+otherwise on whichever pool account is free.
 
-- `"enabled": false` — the lane **drains**: no signal while it has an episode in
+- `"enabled": false` — the job **drains**: no signal while it has an episode in
   flight, SIGTERM at the next episode boundary. Worst case a just-started
-  episode is terminated gracefully; never a corrupted one.
-- `"enabled": true`, or a brand-new lane — spawned on the next tick.
+  episode is terminated gracefully; never a corrupted one. A pool job frees
+  its account when the process exits; deleting a job from the queue drains it
+  the same way.
+- `"enabled": true`, or a brand-new job — spawned on the next tick (a pool job
+  when an account is free).
 - A malformed edit is complained about and ignored; the last good config keeps
   running. Check it first if you like:
   `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts infra/fleet.json --dry-run`
 - While the file is rejected, **every `enabled` flag in it is inert** — including
-  a later, valid-looking edit disabling a lane, which the supervisor never sees
+  a later, valid-looking edit disabling a job, which the supervisor never sees
   because it never gets past the parse. `--status` leads with a banner
-  (`!! fleet.json REJECTED since …`) and marks each lane's `enabled=` as
+  (`!! fleet.json REJECTED since …`) and marks a pinned job's flag as
   `(FILE, NOT in effect)` until a re-read succeeds. The banner comes from the
   supervisor's own state file, not from parsing the config here: the two can be
   different versions of the code, and the supervisor's verdict is the one that
   decides what runs. Trust the banner over your own reading of the file.
 
-Two enabled lanes must not share an account, and lane policy (claude models on
-the claude-code driver only — the claude-code harness, ADR-0035; shared free
-pools carry free ids only) is
-enforced on every re-read. Under the pool/queue shape (ADR-0034, below) the
-same applies to pinned lanes, and queue jobs are steered the same way.
+Two enabled jobs must not share an account, a pinned account may not be in the
+pool, and lane policy (claude models on the claude-code driver only — the
+claude-code harness, ADR-0035; shared free pools carry free ids only) is
+enforced on every roster entry at every re-read.
+
+#### Config reference (`infra/fleet.json`)
+
+```
+preflight   the gate (ADR-0023): enabled, account, smokes [{script, account}], timeoutMs,
+            deploySmokes, deployTimeoutMs. Its accounts may not be in the pool or on a job.
+accounts    { pool: [...] }  — accounts the pool and the policy may use, in preference order.
+            Never PROBE, never SMOKE*. (`pinned` is legacy input: read, cross-checked, never needed.)
+roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
+            apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
+            Never an account. Optional scheduling fields: `tiers` (a manual FORCE into a tier;
+            normally absent — e360 is earned) and `runsPerEpisode {e90, e360}` (per-entry target).
+policy      runsPerEpisode {e90, e360} targets (default 3/3); maxConcurrent { <driver>: n } caps
+            the streams the policy may have in flight per driver, counting every job on that
+            driver, pinned ones included (`"claude-code": 2` today: the probe plus one sonnet).
+queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
+            enabled, account? }. With `account` the job is PINNED to it and never the policy's;
+            without, it is a manual pool job that outranks the policy. The name is always
+            `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>]-<stamp>`), one job
+            per (ref, episode). A pool job whose ref is not eligible for its tier is skipped with
+            the reason in --status; a pinned one waits the same way.
+```
+
+A roster entry referenced by a pinned job, or carrying an `objective`, is never
+policy-scheduled: the account is spoken for, and a probe's runs are not the
+model's evidence. Everything else in the roster is the policy's (below). Older
+files still load — the pre-pool shape (lanes naming their accounts) and the
+pool shape (a `lanes` list beside `accounts.pinned`) both read as pinned jobs
+carrying their entries verbatim, announced once in the log — and the `lane`
+field on a queue entry is read and ignored.
 
 ### Stop it
 
@@ -72,9 +107,9 @@ docker compose -f infra/compose.yml stop fleet
 ```
 
 This is a **drain**, not a kill: SIGTERM reaches the supervisor, which SIGTERMs
-each lane, each of which terminates its episode gracefully (30s of grace) —
+each job, each of which terminates its episode gracefully (30s of grace) —
 which is why the service has a 180s stop grace period. To stop launching
-*without* killing what is running, set every lane to `"enabled": false` and wait
+*without* killing what is running, set every job to `"enabled": false` and wait
 for `--status` to go quiet. The supervisor does not exit when it runs out of
 work — with no deadline it idles (logging so once) and waits for the config to
 give it something, because exiting under `restart: unless-stopped` would just
@@ -85,7 +120,7 @@ in `data/runs/` is what matters and it is on the bind mount.
 
 ### Roll the epoch / pick up code changes
 
-The date stamp in run ids (`fleet-<lane>-<model>-<YYYYMMDD>`) is taken once at
+The date stamp in run ids (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
 supervisor start and stays fixed for the life of the process — it is an *epoch*,
 not a calendar date, so that `--resume-roster` and the loop's `-cN` numbering
 keep meaning what they meant. A supervisor up for three days still stamps the
@@ -152,17 +187,17 @@ real script with `docker` replaced by a PATH shim, under `FORCE_COLOR=3`, and
 asserts the rollback branch and the exit codes.
 
 Getting to zero live runs is still yours to do, and it is the same drain as
-ever: set every lane in `infra/fleet.json` to `"enabled": false` and wait until
-`./infra/run-fleet.sh --status` shows no lane with a live run (an episode can
+ever: set every job in `infra/fleet.json` to `"enabled": false` and wait until
+`./infra/run-fleet.sh --status` shows no account with a live run (an episode can
 take up to 90 minutes; `docker compose -f infra/compose.yml stop fleet` cuts it
 to the 30s graceful path). `./infra/run-fleet.sh --live-runs` is the same check
 the script uses — it lists live episodes and exits non-zero if there are any.
-Re-enable the lanes afterwards.
+Re-enable the jobs afterwards.
 
 ### The preflight gate
 
 The supervisor smokes the server before it launches anything. The knob is the
-top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the lanes:
+top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the jobs:
 
 ```json
 "preflight": {
@@ -181,7 +216,7 @@ top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the lanes:
 
 There are two tiers (ADR-0023, amended 2026-08-23):
 
-- **`smokes` is the per-tick gate.** It runs before the first lane is spawned
+- **`smokes` is the per-tick gate.** It runs before the first job is spawned
   and again whenever the server identity changes — which is to say on every
   worldserver recreate *and* on every restart the container does by itself.
   Entries with **distinct accounts run in parallel**; entries sharing an account
@@ -240,28 +275,54 @@ recreate, flip `kill-credit.ts` to `SMOKE2` and `timeoutMs` to 130000 for the
 parallel ~42s gate; `module-navigation.ts` on `SMOKE3` becomes live at the same
 recreate and stays its own parallel chain (~15s, well under the budget). Never
 before: a smoke bound to an unpermitted account gets 403
-`account_not_permitted`, the gate fails, and no lane spawns until it is fixed.
+`account_not_permitted`, the gate fails, and no job spawns until it is fixed.
 The order of operations at that drain window is therefore: recreate the
 worldserver, then restart the fleet (which is also what picks up the new
 supervisor code — a running supervisor rejects the `{ script, account }` entry
 shape and keeps its last good config until restarted).
 
-The gate accounts must be their own: sharing one with an enabled lane is refused
+The gate accounts must be their own: sharing one with an enabled job is refused
 as a config error (every per-entry account is checked), and none is ever
 `PROBE`, the ad-hoc debugging account.
 
-### Switching to the pool/queue shape (ADR-0034)
-
-`infra/fleet.next.json` is today's fleet under the new schema: lanes no longer
-own accounts; `accounts.pinned` keeps nav-probe on SHAKEOUT, `accounts.pool`
-holds RUNNER–RUNNER6, and the free/local models are a `roster` the scheduling
-policy (ADR-0034) runs on whichever pool account is free; `queue` is for manual
-overrides. The supervisor that is running today rejects
-that shape (it keeps its last good config and complains), so the switch is done
-at a drain window, in this order:
+### What `--status` shows
 
 ```
-# 1. drain: park every lane, wait for --status to show no live run
+./infra/run-fleet.sh --status
+```
+
+In order: the REJECTED banner when the file is not in effect; the supervisor
+line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the
+gate (last result, per smoke); the **accounts** table — every account, pinned
+first then the pool in preference order, with the job on it (`name: model
+episode — run id — Lx xp, elapsed`, plus `cooling until …` when its roster is
+between episodes on the defer ladder) or `free` (with `held by run … — not
+fleet-managed` when something outside the fleet has the account, or the
+pinned job's enabled/disabled state); the **models** table from the projection
+(`runner/src/models.ts`) — status, counted/target per episode with best level
+(`+2sb` is two stillborn attempts), and `yes: …`/`no: …` for schedulability;
+the concurrency cap when one is set; one line `finished this session: N (ok M,
+retried K)` (processes that exited since the supervisor started; `ok` is exit
+0, `retried` counts respawns of a name already spawned this epoch); and a
+**queue** block only when the file has manual pool jobs. Finished runs get no
+rows: the run directories and `fleet-<stamp>.jsonl` are the record.
+`--dry-run` prints the same anatomy for a supervisor about to start — what
+would spawn on each account now, with the exact argv.
+
+### Switching to the job shape (ADR-0034 amendment, 2026-08-23)
+
+`infra/fleet.next.json` is today's fleet under the job schema: `lanes` and
+`accounts.pinned` are gone, nav-probe is a roster entry (objective, watchdogs,
+wiki coords) pinned to SHAKEOUT by a looping `freeplay` job, `sub-opus` a
+disabled pinned job on SHAKEOUT2, `sonnet` and `sonnet-low` back in the roster
+under `maxConcurrent: { "claude-code": 2 }`. The supervisor running today
+reads the job shape's `queue` fields fine but not `policy.maxConcurrent`, a
+queue entry's `account`, or a roster entry with an `objective`, and it still
+rejects the `claude-code` driver spelling — so the switch is done at a drain
+window, in this order:
+
+```
+# 1. drain: set every job's enabled:false, wait for --status to show no live run
 #    (or `stop fleet`, which cuts a running episode to the 30s graceful path)
 docker compose -f infra/compose.yml stop fleet
 
@@ -278,31 +339,24 @@ docker compose -f infra/compose.yml up -d --no-deps fleet
 ```
 
 Steps 2 and 4 commute: a new-code supervisor started against the old file runs
-it as "every lane pinned, empty queue", and a later rename is picked up on the
-next 60s re-read like any other edit. What must not happen is the reverse —
-the new file under the old code — which is why the file ships as a sibling.
-Roll back by renaming `fleet.prev.json` back; nothing else changes.
-
-Steering under the new shape, all hot-reloaded:
-
-- A job's `enabled: false` drains it at the next episode boundary and frees its
-  pool account; deleting it from the queue does the same. Re-enabling a job
-  that finished (exit 0) is the rearm, as for a lane.
-- Promotion into `e360` is automatic; the rule is stated in ADR-0034 and
-  nowhere else. `roster.<name>.tiers` is only a manual force. A manual job
-  whose episode a ref is not eligible for is skipped with the reason in
-  `--status` and the fleet log, never run.
+its lanes as pinned jobs (one log line says so), and a later rename is picked
+up on the next 60s re-read like any other edit. What must not happen is the
+reverse — the new file under the old code — which is why the file ships as a
+sibling. Roll back by renaming `fleet.prev.json` back; nothing else changes.
+The probe's run ids move from `fleet-nav-probe-…` to `fleet-nav-probe-freeplay-…`
+with the new epoch; nothing resumes across the rename.
 
 ### The scheduling policy (ADR-0034)
 
-With the pool shape the `queue` is normally empty: the supervisor fills free
-pool accounts from the roster by policy — three runs per (model, episode),
-`e90` for everyone, `e360` once earned, newest-to-the-roster first, shorter
-episode first, fewest runs first. Everything it decides is derived from
+With the job shape the `queue` normally holds only the pinned jobs: the
+supervisor fills free pool accounts from the roster by policy — three runs per
+(model, episode), `e90` for everyone, `e360` once earned, newest-to-the-roster
+first, shorter episode first, fewest runs first, one stream per model, within
+`policy.maxConcurrent` per driver. Everything it decides is derived from
 `data/runs/` each tick; nothing is stored except an operator's clear.
 
 ```
-./infra/run-fleet.sh infra/fleet.json --status      # per-model block: status, counted/target per episode, why (not) schedulable
+./infra/run-fleet.sh infra/fleet.json --status      # models table: status, counted/target per episode, why (not) schedulable
 ./infra/run-fleet.sh infra/fleet.json --dry-run     # the picks the policy would make for the free accounts right now
 ./infra/run-fleet.sh --clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
 ```
@@ -311,16 +365,13 @@ What the status words mean: `new` has no counted run yet; `active` is working
 toward its `e90` target; `promoted` may also be scheduled on `e360`; `cooling`
 is on the defer ladder (`1m … 6h`) after consecutive stillborn or
 `adapter-error` attempts; `retired` failed once more at the 6h ceiling and will
-not be scheduled until cleared. A stillborn run never counts toward a target
-but does climb the ladder, so a dead provider costs at most ten launches over
-~10 hours before it is retired. A manual `queue` entry always outranks the
-policy; add one to force a specific run (an `e360` for an unpromoted model
-needs `tiers: ["e360"]` on its roster entry as well). Targets: `policy.runsPerEpisode`
-for the fleet, `roster.<name>.runsPerEpisode` per entry.
-- Queue order is priority: with six pool accounts the first six runnable loop
-  jobs are the fleet and the rest wait. `--dry-run` prints what would spawn now.
-- `--status` shows each account (pinned -> lane, or pool -> job / free) and the
-  queue (running, waiting, finished, skipped with reason).
+not be scheduled until cleared; `pinned` is outside the policy (a pinned ref or
+a probe). A stillborn run never counts toward a target but does climb the
+ladder, so a dead provider costs at most ten launches over ~10 hours before it
+is retired. A manual pool job (`queue` entry without an account) always
+outranks the policy; add one to force a specific run (an `e360` for an
+unpromoted model needs `tiers: ["e360"]` on its roster entry as well). Targets:
+`policy.runsPerEpisode` for the fleet, `roster.<name>.runsPerEpisode` per entry.
 
 ### Ad-hoc launches still work
 
@@ -338,7 +389,7 @@ One roster, or a whole fleet, from the host:
 ```
 
 Do not run a host supervisor against `infra/fleet.json` while the `fleet`
-service is up: they would both spawn lanes on the same accounts.
+service is up: they would both spawn jobs on the same accounts.
 
 ### Stillborn runs, and archiving them
 

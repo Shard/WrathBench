@@ -179,6 +179,15 @@ and status.
     whose 30-minute cooldown the server does send — assert the packet and the cache
     entry, and `SPELL_GO` goes back to being a cast-path check.
 
+52. **The viewer's roster read does not know pinned refs or probes** (2026-08-23,
+    ADR-0034 amendment). `runner/viewer/models.ts` lists every `roster` entry on
+    `/api/models`, so `nav-probe` (model `sonnet`, an objective) shows beside `sonnet`
+    with the same counts, and `policy.maxConcurrent` is not surfaced. `--status`
+    marks them `pinned`; the viewer should read the same exclusion (`policyRefs`) —
+    which means lifting that predicate into `runner/src/models.ts` rather than
+    importing the supervisor. Also: the supervisor's `session` counters and `jobs`
+    block in `fleet-state.json` are new and unread by the dashboard's fleet page.
+
 ## Episodes and eval
 
 8. **Context policy is not applied on the claude-code harness.** (ADR-0035 names
