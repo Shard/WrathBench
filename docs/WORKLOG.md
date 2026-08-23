@@ -33,3 +33,7 @@ Convention:
   (`equipItem`, `reclaimCorpse`, `moveTo(unit)`, `sleep` reasons, `events.off`); bundle
   schema 4 (ADR-0029); episode tiers, runner pool, scheduling policy, stillborn runs,
   Models page, COSTS.md (ADR-0030/0031/0032); fleet on the pool/queue shape.
+- [2026-08-24](worklogs/2026-08-24.md) — run view redesign: two-column layout (feed
+  left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
+  the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
+  bands on the y-axis, inventory folded into the sidebar.

@@ -14,7 +14,7 @@
  */
 
 import { A, useParams } from "@solidjs/router";
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
   api,
@@ -27,10 +27,36 @@ import {
 } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { Sparkline } from "../components/Sparkline";
+import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
+import { atBottom } from "../lib/runview";
 
 const WINDOW = 200;
+
+/** How close to the bottom still counts as "following" (px). */
+const FOLLOW_THRESHOLD = 32;
+
+/**
+ * The manual autoscroll preference, remembered across visits. Only the manual
+ * toggle writes it; a scroll that turns follow off is a fact about this session
+ * (the reader is looking at something) and must not become the saved default.
+ */
+const FOLLOW_KEY = "wrathbench.runview.follow";
+function readFollowPref(): boolean {
+  try {
+    return localStorage.getItem(FOLLOW_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeFollowPref(keep: boolean): void {
+  try {
+    localStorage.setItem(FOLLOW_KEY, keep ? "1" : "0");
+  } catch {
+    /* private mode, blocked storage: the toggle still works, it just won't persist */
+  }
+}
 
 /** Past this much silence a live run is more likely stopped than thinking. */
 const SILENT_MS = 120_000;
@@ -58,8 +84,33 @@ export default function RunDetail() {
   const [error, setError] = createSignal<string | undefined>(undefined);
   const [lastWrite, setLastWrite] = createSignal(Date.now());
   const [now, setNow] = createSignal(Date.now());
-  const [follow, setFollow] = createSignal(true);
+  const [follow, setFollow] = createSignal(readFollowPref());
   const [disconnected, setDisconnected] = createSignal(false);
+
+  /*
+   * The log column is the scroll container, not the window: with the two-column
+   * layout the feed scrolls inside its own pane while the sidebar stays put.
+   * `logEl` is that pane. Pinning to the bottom must happen after Solid commits
+   * the new entry nodes, or `scrollHeight` is read stale and we land mid-list —
+   * so it is done in an effect on `entries`, never inside the SSE callback.
+   */
+  let logEl: HTMLDivElement | undefined;
+  const pinToBottom = (): void => {
+    if (logEl !== undefined) logEl.scrollTop = logEl.scrollHeight;
+  };
+  /* A user scrolling up off the bottom turns follow off; scrolling back on. */
+  const onLogScroll = (): void => {
+    if (logEl === undefined) return;
+    setFollow(atBottom(logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight, FOLLOW_THRESHOLD));
+  };
+  /* The manual toggle: remembered, and it re-pins when switched back on. */
+  const toggleFollow = (): void => {
+    const next = !follow();
+    setFollow(next);
+    writeFollowPref(next);
+    if (next) queueMicrotask(pinToBottom);
+  };
+  createEffect(on(entries, () => { if (follow()) pinToBottom(); }));
   /*
    * The roster, only so this run can link back to the model row that scheduled
    * it. A run records a model string and an effort, never a roster name, and
@@ -125,7 +176,8 @@ export default function RunDetail() {
             if (tot !== undefined) setTokens(tot);
             setLastWrite(Date.now());
             setDisconnected(false);
-            if (follow()) queueMicrotask(() => window.scrollTo(0, document.body.scrollHeight));
+            // The pin is driven by an effect on `entries` (see above), which
+            // runs after the DOM commits — reading scrollHeight here is stale.
           },
           onTick: () => setDisconnected(false),
           onError: () => setDisconnected(true),
@@ -145,9 +197,6 @@ export default function RunDetail() {
 
   const levels = createMemo(() =>
     (detail()?.states ?? []).map((s) => s.level).filter((v): v is number => v !== null && v > 0),
-  );
-  const xps = createMemo(() =>
-    (detail()?.states ?? []).map((s) => s.xp).filter((v): v is number => v !== null),
   );
 
   /**
@@ -176,7 +225,7 @@ export default function RunDetail() {
   };
 
   return (
-    <div class="page">
+    <div class="page runview">
       <Show when={error()}>
         <div class="banner bad">{error()}</div>
       </Show>
@@ -191,154 +240,174 @@ export default function RunDetail() {
                 <A href="/">fleet</A> / {run().runId}
               </h2>
 
-              <div class="cards">
-                <div class="card">
-                  <div class="k">model</div>
-                  <div class="v">
-                    {/* The roster row this run's model belongs to, when it is on the roster:
-                        a run records a model string, never the name that scheduled it. */}
-                    <Show when={rosterName(run())} fallback={run().model ?? "—"}>
-                      {(name) => <A href={modelsHref(name())}>{run().model}</A>}
+              {/* Cumulative XP with level bands — full page width, above both columns. */}
+              <XpChart
+                states={d().states}
+                startedAt={run().startedAt}
+                endedAt={run().endedAt}
+                episodeMs={run().comparability?.budget.episodeMs ?? null}
+                now={now()}
+              />
+
+              <div class="runview-cols">
+                {/* Left column: the feed is its own scroll container (autoscroll pins it). */}
+                <div class="runview-logs" ref={logEl} onScroll={onLogScroll}>
+                  <h2 class="section">
+                    feed
+                    <Show when={from() > 0}>
+                      {" "}
+                      <button onClick={loadEarlier}>load earlier</button>
                     </Show>
-                  </div>
-                  <div class="sub">
-                    {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
-                  </div>
-                </div>
-                <div class="card">
-                  <div class="k">character</div>
-                  <div class="v">
-                    {run().character ?? "—"}
-                    {/* Race and class: the baseline is Human Paladin; extras cycle (ADR-0034). */}
-                    <Show when={run().characterLabel !== null}>
-                      <span class="dim"> · {run().characterLabel}</span>
-                    </Show>
-                  </div>
-                  <div class="sub">
-                    level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
-                  </div>
-                  {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
-                  <div class="sub">carrying: {fmtItems(run().items, false)}</div>
-                  <div class="sub">equipped: {fmtItems(run().items, true)}</div>
-                </div>
-                <div class="card">
-                  <div class="k">context / total tokens</div>
-                  <div class="v mono">
-                    {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
-                  </div>
-                  <div class="sub">
-                    {tokens()?.source === "reported" ? "provider-reported" : "estimated (chars ÷ 4)"} ·{" "}
-                    {tokens()?.turns ?? 0} turns
+                  </h2>
+                  <div class="feed">
+                    <For each={entries()}>{(e) => <Entry entry={e} runId={run().runId} />}</For>
                   </div>
                 </div>
-                <div class="card">
-                  <div class="k">playtime</div>
-                  <div class="v mono">{fmtDuration(playtime())}</div>
-                  <div class="sub" title={stamp(run().startedAt)}>
-                    {total()} entries
+
+                {/* Right column: controls and everything about the run, always in view. */}
+                <aside class="runview-side">
+                  <Show when={live()}>
+                    <div class="side-controls">
+                      {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
+                      <button class={follow() ? "on" : ""} onClick={toggleFollow}>
+                        auto-scroll
+                      </button>
+                      <Show when={run().terminationReason === null}>
+                        <span class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
+                          <span class="dot live" />
+                          {now() - lastWrite() > SILENT_MS
+                            ? "no activity for a while — the run may have stopped"
+                            : activity()}{" "}
+                          · {fmtAge(now() - lastWrite())}
+                          <Show when={disconnected()}> · <span class="err">stream disconnected</span></Show>
+                        </span>
+                      </Show>
+                    </div>
+                  </Show>
+
+                  <div class="cards">
+                    <div class="card">
+                      <div class="k">model</div>
+                      <div class="v">
+                        {/* The roster row this run's model belongs to, when it is on the roster:
+                            a run records a model string, never the name that scheduled it. */}
+                        <Show when={rosterName(run())} fallback={run().model ?? "—"}>
+                          {(name) => <A href={modelsHref(name())}>{run().model}</A>}
+                        </Show>
+                      </div>
+                      <div class="sub">
+                        {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="k">character</div>
+                      <div class="v">
+                        {run().character ?? "—"}
+                        {/* Race and class: the baseline is Human Paladin; extras cycle (ADR-0034). */}
+                        <Show when={run().characterLabel !== null}>
+                          <span class="dim"> · {run().characterLabel}</span>
+                        </Show>
+                      </div>
+                      <div class="sub">
+                        level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
+                      </div>
+                      {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
+                      <div class="sub">carrying: {fmtItems(run().items, false)}</div>
+                      <div class="sub">equipped: {fmtItems(run().items, true)}</div>
+                    </div>
+                    <div class="card">
+                      <div class="k">context / total tokens</div>
+                      <div class="v mono">
+                        {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
+                      </div>
+                      <div class="sub">
+                        {tokens()?.source === "reported" ? "provider-reported" : "estimated (chars ÷ 4)"} ·{" "}
+                        {tokens()?.turns ?? 0} turns
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="k">playtime</div>
+                      <div class="v mono">{fmtDuration(playtime())}</div>
+                      <div class="sub" title={stamp(run().startedAt)}>
+                        {total()} entries
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="k">tokens in / out</div>
+                      <div class="v mono">
+                        {fmtTokens(tokens()?.promptTokens ?? null)} / {fmtTokens(tokens()?.completionTokens ?? null)}
+                      </div>
+                      <div class="sub">
+                        cache r/w {fmtTokens(tokens()?.cacheReadTokens ?? null)} /{" "}
+                        {fmtTokens(tokens()?.cacheWriteTokens ?? null)}
+                      </div>
+                    </div>
+                    {/*
+                      * Cost sits with the token cards because it is the same
+                      * measurement read in another unit — and it is shown twice
+                      * because two different questions hide behind one number.
+                      * ACTUAL is what the provider charged (OpenRouter's per-call
+                      * `usage.cost`, or the Claude SDK's `total_cost_usd`); most
+                      * runs have none and say so rather than borrowing the
+                      * estimate. EXPECTED is this repo's price table applied to the
+                      * tokens above, dated, so a stale rate reads as stale.
+                      */}
+                    <div class="card">
+                      <div class="k">cost — actual</div>
+                      <div class="v mono" title={detail()?.cost.actual.note ?? ""}>
+                        {fmtCost(detail()?.cost.actual, "—")}
+                      </div>
+                      <div class="sub" title={detail()?.cost.actual.note ?? ""}>
+                        {detail()?.cost.actual.basis === "none"
+                          ? "provider reports no cost for this run"
+                          : detail()?.cost.actual.asIfMetered
+                            ? "the driver's own total_cost_usd, billed to a subscription"
+                            : "the provider's own charge, summed over the run"}
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="k">cost — expected</div>
+                      <div class="v mono" title={detail()?.cost.expected.note ?? ""}>
+                        {fmtCost(detail()?.cost.expected)}
+                      </div>
+                      <div class="sub" title={detail()?.cost.expected.note ?? ""}>
+                        {detail()?.cost.expected.basis === "none"
+                          ? (detail()?.cost.expected.note ?? "")
+                          : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
+                      </div>
+                    </div>
+                    <div class="card">
+                      <div class="k">level / xp</div>
+                      <div class="v">
+                        {/* The prominent XP curve is the full-width chart above; this is a
+                            glanceable level trace. */}
+                        <Sparkline values={levels()} title="level over time" height={22} width={140} />
+                      </div>
+                      <div class="sub">
+                        L{num(run().level)} · xp {num(run().xp)} in level
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div class="card">
-                  <div class="k">tokens in / out</div>
-                  <div class="v mono">
-                    {fmtTokens(tokens()?.promptTokens ?? null)} / {fmtTokens(tokens()?.completionTokens ?? null)}
-                  </div>
-                  <div class="sub">
-                    cache r/w {fmtTokens(tokens()?.cacheReadTokens ?? null)} /{" "}
-                    {fmtTokens(tokens()?.cacheWriteTokens ?? null)}
-                  </div>
-                </div>
-                {/*
-                  * Cost sits with the token cards because it is the same
-                  * measurement read in another unit — and it is shown twice
-                  * because two different questions hide behind one number.
-                  * ACTUAL is what the provider charged (OpenRouter's per-call
-                  * `usage.cost`, or the Claude SDK's `total_cost_usd`); most
-                  * runs have none and say so rather than borrowing the
-                  * estimate. EXPECTED is this repo's price table applied to the
-                  * tokens above, dated, so a stale rate reads as stale.
-                  */}
-                <div class="card">
-                  <div class="k">cost — actual</div>
-                  <div class="v mono" title={detail()?.cost.actual.note ?? ""}>
-                    {fmtCost(detail()?.cost.actual, "—")}
-                  </div>
-                  <div class="sub" title={detail()?.cost.actual.note ?? ""}>
-                    {detail()?.cost.actual.basis === "none"
-                      ? "provider reports no cost for this run"
-                      : detail()?.cost.actual.asIfMetered
-                        ? "the driver's own total_cost_usd, billed to a subscription"
-                        : "the provider's own charge, summed over the run"}
-                  </div>
-                </div>
-                <div class="card">
-                  <div class="k">cost — expected</div>
-                  <div class="v mono" title={detail()?.cost.expected.note ?? ""}>
-                    {fmtCost(detail()?.cost.expected)}
-                  </div>
-                  <div class="sub" title={detail()?.cost.expected.note ?? ""}>
-                    {detail()?.cost.expected.basis === "none"
-                      ? (detail()?.cost.expected.note ?? "")
-                      : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
-                  </div>
-                </div>
-                <div class="card">
-                  <div class="k">level / xp</div>
-                  <div class="v">
-                    <Sparkline values={levels()} title="level over time" height={22} width={140} />
-                  </div>
-                  <div class="sub">
-                    <Sparkline values={xps()} title="xp over time" height={16} width={140} />
-                  </div>
-                </div>
+
+                  <h2 class="section">
+                    comparability{" "}
+                    <A href={`/map?run=${encodeURIComponent(run().runId)}`}>replay on map</A>
+                  </h2>
+                  <Tuple run={run()} />
+
+                  <Show when={run().terminationReason !== null}>
+                    <div class="banner bad">
+                      <strong>{run().terminationReason}</strong>
+                      <Show when={run().terminationDetail}> — {run().terminationDetail}</Show>
+                    </div>
+                  </Show>
+                  <Show when={run().terminationReason === null && run().pauseReason !== null}>
+                    <div class="banner warn">paused: {run().pauseReason}</div>
+                  </Show>
+
+                  <ServerFooter info={info()} run={run()} />
+                </aside>
               </div>
-
-              <h2 class="section">
-                comparability{" "}
-                <A href={`/map?run=${encodeURIComponent(run().runId)}`}>replay on map</A>
-              </h2>
-              <Tuple run={run()} />
-
-              <Show when={run().terminationReason !== null}>
-                <div class="banner bad">
-                  <strong>{run().terminationReason}</strong>
-                  <Show when={run().terminationDetail}> — {run().terminationDetail}</Show>
-                </div>
-              </Show>
-              <Show when={run().terminationReason === null && run().pauseReason !== null}>
-                <div class="banner warn">paused: {run().pauseReason}</div>
-              </Show>
-
-              <h2 class="section">
-                feed
-                <Show when={from() > 0}>
-                  {" "}
-                  <button onClick={loadEarlier}>load earlier</button>
-                </Show>
-                <Show when={live()}>
-                  {" "}
-                  <button class={follow() ? "on" : ""} onClick={() => setFollow(!follow())}>
-                    auto-scroll
-                  </button>
-                </Show>
-              </h2>
-
-              <div class="feed">
-                <For each={entries()}>{(e) => <Entry entry={e} runId={run().runId} />}</For>
-              </div>
-
-              <ServerFooter info={info()} run={run()} />
-
-              <Show when={live() && run().terminationReason === null}>
-                <p class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
-                  <span class="dot live" />
-                  {now() - lastWrite() > SILENT_MS
-                    ? "no activity for a while — the run may have stopped"
-                    : activity()}{" "}
-                  · {fmtAge(now() - lastWrite())}
-                  <Show when={disconnected()}> · <span class="err">stream disconnected</span></Show>
-                </p>
-              </Show>
             </>
           );
         }}
