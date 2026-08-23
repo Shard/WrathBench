@@ -154,6 +154,15 @@ function toUsage(u: z.infer<typeof completionSchema>["usage"]): TokenUsage | und
   if (typeof u.total_tokens === "number") usage.total_tokens = u.total_tokens;
   const cached = typeof u.cached_tokens === "number" ? u.cached_tokens : u.prompt_tokens_details?.cached_tokens;
   if (typeof cached === "number") usage.cached_tokens = cached;
+  const reasoning = u.completion_tokens_details?.reasoning_tokens;
+  if (typeof reasoning === "number") usage.reasoning_tokens = reasoning;
+  // The provider's own charge for this call, in credits (OpenRouter credits are
+  // dollars). It is the only figure in the run that is a bill rather than a
+  // reconstruction, so it must survive the trip into the trajectory: the viewer
+  // reads it as the run's *actual* cost, against which the price table is only
+  // an estimate. Both this and `reasoning_tokens` were parsed and then dropped
+  // here until 2026-08-23, which is why no run before then carries either.
+  if (typeof u.cost === "number") usage.cost = u.cost;
   return Object.keys(usage).length === 0 ? undefined : usage;
 }
 

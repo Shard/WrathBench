@@ -269,6 +269,26 @@ describe("OpenAiChatAdapter usage", () => {
     expect(out.kind === "ok" && out.turn.usage).toEqual({ cached_tokens: 40 });
   });
 
+  test("the provider's own cost survives into the turn — it is the actual bill", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { prompt_tokens: 900, completion_tokens: 12, cost: 0.000138 },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({
+      prompt_tokens: 900,
+      completion_tokens: 12,
+      cost: 0.000138,
+    });
+  });
+
+  test("reasoning tokens are flattened from completion_tokens_details", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 31 } },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({ completion_tokens: 40, reasoning_tokens: 31 });
+  });
+
   test("partial usage keeps the counters it has and drops the rest", async () => {
     const out = await adapterReturning({
       choices,
