@@ -180,12 +180,14 @@ describe("modelStates", () => {
     const states = modelStates({ runsDir, roster, policy, now: NOW, sidecar: { version: 1, cleared: {} } });
     const local = states.find((s) => s.name === "local")!;
     expect(local.status).toBe("new");
-    expect(local.perEpisode.e90).toMatchObject({ counted: 0, attempts: 1, extras: 1, otherSeries: 1, bestLevel: 2 });
+    expect(local.perEpisode.e90).toMatchObject({ counted: 0, attempts: 2, extras: 1, otherSeries: 1, bestLevel: 2 });
     // Everything else in the fixture is 0.3 and unchanged.
     expect(states.find((s) => s.name === "ox")!.perEpisode.e90).toMatchObject({ counted: 2, attempts: 3, otherSeries: 0 });
-    // A policy keyed on a series nothing ran under: every model is new.
+    // A policy keyed on a series nothing ran under: every model is new, but
+    // attempts still number every run on disk so the next run id is unique.
     const none = modelStates({ runsDir, roster, policy: { ...policy, series: "0.4" }, now: NOW, sidecar: { version: 1, cleared: {} } });
-    expect(none.every((s) => s.status === "new" && s.perEpisode.e90!.attempts === 0)).toBe(true);
+    expect(none.every((s) => s.status === "new" && s.perEpisode.e90!.counted === 0)).toBe(true);
+    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.attempts).toBe(3);
     expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.otherSeries).toBe(3);
   });
 

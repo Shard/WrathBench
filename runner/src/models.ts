@@ -307,7 +307,7 @@ export interface EpisodeStats {
   attempts: number;
   /** Attempts the policy made past the target (`extra: true`); reported apart, never counted. */
   extras: number;
-  /** Runs from another harness series: shown, never counted, never attempts. */
+  /** Runs from another harness series: shown and numbered as attempts, never counted. */
   otherSeries: number;
   target: number;
   bestLevel: number | null;
@@ -644,9 +644,11 @@ export function projectModel(
 ): ModelState {
   const billing = rosterBilling(r);
   const all = runs.filter((f) => matchesRoster(f, r));
-  // Another series' runs are shown, never counted: not attempts, not witnesses,
-  // not ladder. The ladder is about the provider, but a run that old says
-  // nothing about tonight's provider either.
+  // Another series' runs are shown, never counted: not witnesses, not ladder.
+  // The ladder is about the provider, but a run that old says nothing about
+  // tonight's provider either. They DO number attempts: the attempt index is
+  // what keeps run ids unique on disk, and a series bump must not make the
+  // next run id collide with an older directory (2026-08-23, harness-0.4).
   const mine = all.filter((f) => inSeries(f, policy));
   const perEpisode: Partial<Record<EpisodeId, EpisodeStats>> = {};
   for (const ep of POLICY_EPISODES) {
@@ -662,9 +664,9 @@ export function projectModel(
       lastEnded: null,
       lastReason: null,
     };
+    for (const f of all) if (f.episode === ep) stats.attempts++;
     for (const f of mine) {
       if (f.episode !== ep) continue;
-      stats.attempts++;
       if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
       if (isCounted(f)) {
