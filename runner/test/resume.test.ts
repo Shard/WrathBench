@@ -36,6 +36,8 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
     class: 2,
   });
   traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
+  // Where the character was left, so the resume note can say so.
+  traj.recordState(runId, { level: 4, xp: 586 });
   traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", elapsedMs);
   traj.writeMeta({
     ...readMeta(dir)!,
@@ -102,6 +104,7 @@ describe("--resume after a pause", () => {
     expect(sent).toContain("Dwarf");
     expect(sent).toContain("Paladin");
     expect(sent).toContain("resumed after a pause, 10 minutes elapsed of 90");
+    expect(sent).toContain("last observed at level 4 with 586 xp");
     expect(sent).not.toContain("createSession({...})");
   }, 30_000);
 });
