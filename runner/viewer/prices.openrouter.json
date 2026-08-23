@@ -1,0 +1,71 @@
+{
+  "asOf": "2026-08-23",
+  "models": {
+    "cohere/north-mini-code:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "deepseek/deepseek-v4-flash": {
+      "input": 0.05166,
+      "output": 0.10332,
+      "cacheRead": 0.010332,
+      "cacheWrite": 0.05166
+    },
+    "deepseek/deepseek-v4-flash-0731": {
+      "input": 0.08,
+      "output": 0.18,
+      "cacheRead": 0.016,
+      "cacheWrite": 0.08
+    },
+    "dots-studio/dots-3-note-preview:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "nvidia/nemotron-3-super-120b-a12b:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "nvidia/nemotron-nano-9b-v2:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "poolside/laguna-s-2.1:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "qwen/qwen3.8-27b": {
+      "input": 0.4,
+      "output": 3,
+      "cacheRead": 0.05,
+      "cacheWrite": 0.4
+    },
+    "stealth/ox-alpha": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "z-ai/glm-5.2:free": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    }
+  }
+}
