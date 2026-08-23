@@ -2,7 +2,9 @@
 
 The rulesets a run can be launched under. Every run is tagged with exactly one
 episode id, and the id is a comparability group: two runs may only be compared
-if they share an id **and** a harness version. The decision and its reasoning
+if they share an id **and** a harness series (`major.minor` of the harness
+version; the exact build is recorded and listed, the series is the group —
+ADR-0034). The decision and its reasoning
 are in `docs/decisions/ADR-0033-run-dimensions-and-the-comparability-tuple.md`;
 this page is the definition an operator tags against. Who gets scheduled on
 which tier, including promotion, is ADR-0034 — it is stated there and only there.
@@ -28,6 +30,10 @@ told which one it is in.
 - **Scoring.** Scored.
 - **Promotion.** Every model starts here. Reaching rung 1 in one counted
   episode earns `e360`; the rule, targets and what counts are in ADR-0034.
+- **Extras.** A free model past its target may be given extra `e90` runs with
+  a different starting race/class (ADR-0034). An extra is this tier — scored,
+  same prompt and leash — stamped `extra: true`; it is never counted toward a
+  target and never a promotion witness.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
   thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`.
 
@@ -55,6 +61,8 @@ because that would silently re-scope every score already carrying this label.
   them on one axis would rank the schedule rather than the models.
 - **Promotion in.** Earned on `e90` per ADR-0034. **Out:** none; a model that
   stalls its `e360` runs meets its target and is simply not scheduled here again.
+  A paid model's default target here is one run; a promoted free model may get
+  `e360` extras once everything else is met (ADR-0034).
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling once 48(c) fixes it.

@@ -84,6 +84,13 @@ roster      name -> entry, the exact run-roster per-entry schema (model, driver,
 policy      runsPerEpisode {e90, e360} targets (default 3/3); maxConcurrent { <driver>: n } caps
             the streams the policy may have in flight per driver, counting every job on that
             driver, pinned ones included (`"claude-code": 2` today: the probe plus one sonnet).
+            Optional, off when absent (ADR-0034 amendment): `paid { runsPerEpisode {e90 3, e360 1},
+            maxConcurrent 1 }` — paid models get those hard targets and at most that many in
+            flight across the pool; `extras { characters [{race, class}, ...] }` — free models
+            past their targets get extra runs when the pool is idle, cycling those characters
+            (default: a short Alliance level-1 list). `{}` for either takes the defaults.
+            Billing is derived per model (free slug / LAN apiBase / claude-code / allowlist ->
+            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it.
 queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? }. With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
@@ -299,15 +306,18 @@ episode — run id — Lx xp, elapsed`, plus `cooling until …` when its roster
 between episodes on the defer ladder) or `free` (with `held by run … — not
 fleet-managed` when something outside the fleet has the account, or the
 pinned job's enabled/disabled state); the **models** table from the projection
-(`runner/src/models.ts`) — status, counted/target per episode with best level
-(`+2sb` is two stillborn attempts), and `yes: …`/`no: …` for schedulability;
+(`runner/src/models.ts`) — the series it counts against in the header, then
+per model its billing, status, counted/target per episode with best level
+(`+2sb` is two stillborn attempts), extras made, and `yes: …`/`no: …` for
+schedulability (runs from another series are noted, not counted);
 the concurrency cap when one is set; one line `finished this session: N (ok M,
 retried K)` (processes that exited since the supervisor started; `ok` is exit
 0, `retried` counts respawns of a name already spawned this epoch); and a
 **queue** block only when the file has manual pool jobs. Finished runs get no
 rows: the run directories and `fleet-<stamp>.jsonl` are the record.
 `--dry-run` prints the same anatomy for a supervisor about to start — what
-would spawn on each account now, with the exact argv.
+would spawn on each account now, with the exact argv, and `HELD` lines for
+picks the paid cap or a driver cap held back.
 
 ### Switching to the job shape (ADR-0034 amendment, 2026-08-23)
 
@@ -352,8 +362,15 @@ With the job shape the `queue` normally holds only the pinned jobs: the
 supervisor fills free pool accounts from the roster by policy — three runs per
 (model, episode), `e90` for everyone, `e360` once earned, newest-to-the-roster
 first, shorter episode first, fewest runs first, one stream per model, within
-`policy.maxConcurrent` per driver. Everything it decides is derived from
-`data/runs/` each tick; nothing is stored except an operator's clear.
+`policy.maxConcurrent` per driver. Only runs from the running checkout's
+harness **series** (`0.3` of `harness-0.3-114-g…`) count; a minor bump starts
+every model's evidence over, a fix commit does not. With `policy.paid` set,
+paid models (derived, see the config reference) get hard targets of 3/1 and
+share a one-in-flight cap; with `policy.extras` set, free models past their
+targets get extra runs — stamped `extra: true`, an attempt but never counted —
+with the next race/class in the cycle, once nothing else is schedulable.
+Everything it decides is derived from `data/runs/` each tick; nothing is
+stored except an operator's clear.
 
 ```
 ./infra/run-fleet.sh infra/fleet.json --status      # models table: status, counted/target per episode, why (not) schedulable

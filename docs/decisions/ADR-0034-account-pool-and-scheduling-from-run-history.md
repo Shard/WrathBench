@@ -1,7 +1,8 @@
 # ADR-0034: Account pool and a scheduling policy from run history
 
 Status: Accepted. Date: 2026-08-23. Consolidates ADR-0031 and ADR-0032 (both
-superseded by this record). Amended the same day: one job concept (below). **This is the single statement of the promotion rule**;
+superseded by this record). Amended the same day, twice: one job concept, then
+series keying with the paid/free split (both below). **This is the single statement of the promotion rule**;
 docs/EPISODES.md, docs/OPERATIONS.md and docs/COSTS.md point here.
 
 ## Context
@@ -110,3 +111,51 @@ and its own `--status` rows. Consolidated:
   runs get no rows.
 
 The shape change ships as `fleet.next.json` again, for the reason above.
+
+## Amendment (2026-08-23, evening): series keying, paid and free, extras
+
+Three things the first night under the policy showed.
+
+**The harness version is the wrong grain for "what counts".** The record above
+says no harness-version filter, because filtering on the exact `git describe`
+would restart every model's evidence on each fix commit. But *never* filtering
+is wrong the other way: a minor bump (`harness-0.3` → `0.4`) changes what a run
+measures, and three runs from the old series would leave a model "target met"
+and unscheduled under the new one. The grain that matches how the repo is
+actually versioned is the **series** — `major.minor` of the stamp
+(`harnessSeries()` in `runner/src/comparability.ts`). Counting, targets,
+promotion witnesses and the ladder key on the series of the **running
+checkout** against each run's recorded series; runs from another series are
+listed (`otherSeries`) and never counted. An unversioned checkout has no
+series and counts everything, and says so in `--status`. The eval surface
+groups by series the same way, each row naming the exact builds it holds, so
+the schedule and the charts agree on what is comparable. Nothing is rewritten:
+the stamp stays the exact version.
+
+**Paid and free are different bets.** A free or local model costs nothing per
+extra run, so there is no reason a free account should sit idle once the
+targets are met; a paid model is evidence bought with money and wants a hard
+stop and a throttle. Billing is a property of the **model**, decided once in
+`runner/src/model-cost.ts` (a `-free`/`contributor-free` slug, a LAN api base,
+the claude-code subscription, or the verified-free allowlist → `free`;
+everything else → `paid`; `roster.<name>.billing` overrides) and shared by the
+viewer's price table. Under `policy.paid` a paid model's default target is
+**e90 3 / e360 1**, hard — never extras — and at most `maxConcurrent` (default
+1) paid models are in flight across the pool at once, pinned jobs excluded;
+priority among paid models is unchanged, and a pick held by the cap is listed
+in `--dry-run` with the reason.
+
+**Extras.** Under `policy.extras`, once nothing else is schedulable, free
+models past their targets get **extra** runs at the lowest priority, unbounded,
+fewest-extras first, `e90` before `e360` (`e360` only for a promoted model),
+cycling through `policy.extras.characters` (a list of `{race, class}`; the
+default is a short list of Alliance level-1 combos). An extra is a normal
+scored run of its tier — same prompt, same leash, a different starting
+character — stamped `extra: true` in its config so the projection numbers it
+as an attempt, reports it apart, and never counts it toward a target or as a
+promotion witness. The point is more samples on the free roster for no money,
+and a start-state dimension (race/class) sampled without anyone choosing it.
+
+Both blocks are **optional and off when absent**: a `fleet.json` without
+them runs exactly as before, and the live supervisor's hot-reload stays
+parseable. `policy.paid: {}` and `policy.extras: {}` take the defaults.
