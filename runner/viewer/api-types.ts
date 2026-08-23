@@ -197,6 +197,10 @@ export interface ReportedUsage {
   completion: number;
   cachedRead?: number;
   cacheWrite?: number;
+  /** What the provider charged for this call, in dollars (OpenRouter credits).
+   * Present only when the provider reports it — the run's *actual* cost is the
+   * sum of these, and nothing here estimates one. */
+  cost?: number;
 }
 
 /** Token accounting for a whole run. */
@@ -222,20 +226,21 @@ export interface CostBreakdown {
 }
 
 /**
- * What a run cost, or why we will not say (`runner/viewer/pricing.ts`).
+ * One dollar figure with its provenance (`runner/viewer/pricing.ts`).
  *
- * `basis` is the provenance, and it is the field to read first:
- * - `reported` — the driver's own figure (the Claude Agent SDK's
- *   `total_cost_usd`), used verbatim.
+ * `basis` is the field to read first:
+ * - `reported` — a figure the provider itself billed: OpenRouter's per-response
+ *   `usage.cost` summed over the run, or the Claude Agent SDK's
+ *   `total_cost_usd`. Used verbatim.
  * - `list-price` — this repo's price table applied to `TokenTotals`.
- * - `none` — the model is not priced, or the tokens were estimated. `usd` is
- *   null and `note` says which.
+ * - `none` — nothing to say, and `note` says which nothing: no price on file,
+ *   no synced price, estimated tokens, or a provider that reports no cost.
  *
  * `asIfMetered` marks a figure the operator did not actually pay: a flat
  * subscription, a free tier, or local hardware. The number is then a
  * comparison, never an invoice.
  */
-export interface CostView {
+export interface CostFigure {
   usd: number | null;
   basis: "reported" | "list-price" | "none";
   asIfMetered: boolean;
@@ -249,6 +254,25 @@ export interface CostView {
   asOf: string | null;
   /** Always present: a blank cost states something and must say what. */
   note: string;
+}
+
+/**
+ * What a run cost, twice over, because the two answers are different questions.
+ *
+ * - `actual` — what the provider says it charged. The only figure that is a
+ *   bill. Null (`basis: "none"`) whenever the provider reports no cost, which
+ *   is most runs: OpenRouter only sends `usage.cost` on the usage opt-in, and
+ *   the Claude SDK only emits `total_cost_usd` on a cleanly ended session.
+ * - `expected` — the price table applied to the run's own tokens. Always
+ *   attempted, even when `actual` exists, so the two can be compared and a
+ *   stale price row shows up as a divergence rather than as silence.
+ *
+ * The top-level fields are `expected`, kept for one release so older consumers
+ * keep working. Read `actual`/`expected` in new code.
+ */
+export interface CostView extends CostFigure {
+  actual: CostFigure;
+  expected: CostFigure;
 }
 
 /**
@@ -458,6 +482,8 @@ export interface FleetJobView {
   ref: string;
   episode: string;
   account: string;
+  /** The class of the account it landed on (ADR-0034): pool, paid, local, or pinned. */
+  accountClass?: string;
   source: string;
   /** The n-th attempt on (model, episode); absent on a job from the file. */
   attempt?: number;
@@ -465,6 +491,45 @@ export interface FleetJobView {
   resuming?: string;
   /** The models behind `ref`, in roster order. */
   models: string[];
+  /**
+   * The run holding this job's account, resolved the same way a lane's is
+   * (`heldAccounts`). Null between episodes and while a resume is spawning.
+   */
+  runId?: string | null;
+  /** The supervisor's process record for this job: what it published as a lane. */
+  pid?: number;
+  spawnedAt?: number;
+  exitCode?: number | null;
+  draining?: boolean;
+  alive?: boolean;
+}
+
+/**
+ * One account and what holds it, as the supervisor's `accounts` block records
+ * it (ADR-0034's classes). `job` is null when nothing is on it — which is what
+ * the fleet table's idle rows are made of.
+ */
+export interface FleetAccountView {
+  account: string;
+  /** `pinned` (a job names it), or the class that may schedule it. */
+  class: "pinned" | "pool" | "paid" | "local";
+  job: string | null;
+}
+
+/**
+ * A paused run the supervisor is holding rather than resuming (ADR-0036), as
+ * `--status` lists it. A paused run holds no account, so it shows against the
+ * idle account it paused on rather than as a job.
+ */
+export interface FleetPausedView {
+  runId: string;
+  model: string;
+  account: string | null;
+  reason: string;
+  since: number;
+  elapsedMs: number | null;
+  budgetMs: number | null;
+  why: string;
 }
 
 /** The supervisor's counters since it started (`session` in fleet-state.json). */
@@ -492,6 +557,13 @@ export interface FleetResponse {
    * absent rather than synthesised from them.
    */
   jobs?: FleetJobView[];
+  /**
+   * Every account the supervisor knows, with its class and what holds it.
+   * Absent on a supervisor that published no `accounts` block.
+   */
+  accounts?: FleetAccountView[];
+  /** Paused runs the supervisor is not resuming right now; absent on an older one. */
+  paused?: FleetPausedView[];
   /** Runs finished since this supervisor started; absent on an older one. */
   session?: FleetSessionView;
   /** Server clock at read time, so a client can age the heartbeat honestly. */

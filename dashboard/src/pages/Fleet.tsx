@@ -3,19 +3,21 @@
  * behind.
  *
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
- * published view — lanes, accounts, a heartbeat — and it is the only
- * honest liveness signal across a container boundary. `/api/runs` is the
- * filesystem's view, where "live" means an unterminated run whose trajectory
- * grew recently. A lane can be alive with no live run (between episodes), and a
- * run can look live with a dead lane (a killed process writes no termination),
- * so the page shows both rather than reconciling them into one number.
+ * published view — jobs, accounts, a heartbeat — and it is the only honest
+ * liveness signal across a container boundary. `/api/runs` is the filesystem's
+ * view, where "live" means an unterminated run whose trajectory grew recently.
+ * A job can be alive with no live run (between episodes), and a run can look
+ * live with a dead process (a killed job writes no termination), so the page
+ * shows both rather than reconciling them into one number.
+ *
+ * One table for the fleet, keyed by the job (ADR-0034), with the accounts that
+ * hold nothing as idle rows under it; the assembly is in `lib/fleet.ts`.
  */
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
-import type { FleetJobView, FleetLaneView } from "@viewer/api-types";
-import { FLEET_COLUMNS, JOB_COLUMNS, jobModelLabel, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
+import { FLEET_COLUMNS, fleetRows, runHref, type FleetRow } from "../lib/fleet";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -74,72 +76,28 @@ export default function Fleet() {
           const stale = (): boolean => age() === null || age()! > HEARTBEAT_STALE_MS;
           return (
             <>
-              <div class="cards">
-                <div class="card">
-                  <div class="k">supervisor</div>
-                  <div class="v">
-                    <span class={`dot ${stale() ? "dead" : "live"}`} />
-                    {stale() ? "stale" : "beating"}
-                  </div>
-                  <div class="sub">
-                    pid {f().fleetPid ?? "—"} · {f().containerized === true ? "container" : "host"} ·{" "}
-                    {age() === null ? "no heartbeat" : fmtAge(age()!)}
-                  </div>
-                </div>
-                <div class="card">
-                  <div class="k">lanes</div>
-                  <div class="v">
-                    {f().lanes.filter((l) => l.alive !== false).length} / {f().lanes.length}
-                  </div>
-                  <div class="sub">alive · stamp {f().stamp ?? "—"}</div>
-                </div>
-                <div class="card">
-                  <div class="k">live runs</div>
-                  <div class="v">{live().length}</div>
-                  <div class="sub">writing within the last two minutes</div>
-                </div>
-                <div class="card">
-                  <div class="k">runs recorded</div>
-                  <div class="v">{runs.latest?.length ?? "—"}</div>
-                  <div class="sub">under data/runs</div>
-                </div>
-                {/*
-                  The supervisor's own counters, not the filesystem's: runs it
-                  finished since it started, how many exited clean, and how many
-                  it relaunched. Absent on a supervisor that predates them, and
-                  the card says so rather than showing a zero.
-                */}
-                <div class="card">
-                  <div class="k">this session</div>
-                  <div class="v">{f().session?.finished ?? "—"}</div>
-                  <div class="sub">
-                    <Show when={f().session !== undefined} fallback={<>not reported by this supervisor</>}>
-                      finished · ok {f().session!.ok} · retried {f().session!.retried}
-                    </Show>
-                  </div>
-                </div>
-              </div>
-
               {/*
-                Jobs, where the supervisor publishes them (ADR-0034: the job is
-                the unit of work). A job says which roster entry is running, on
-                what tier and account, and whether it is the file's, the manual
-                queue's or the policy's own pick — none of which a lane carries.
+                The header strip: the supervisor's liveness, what it has in
+                flight, and its own counters since it started (absent on a
+                supervisor that predates them — it says so rather than showing
+                a zero). Everything else about a job is a row in the table.
               */}
-              <Show when={(f().jobs ?? []).length > 0}>
-                <div class="scroller">
-                  <table>
-                    <thead>
-                      <tr>
-                        <For each={JOB_COLUMNS}>{(c) => <th>{c}</th>}</For>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={f().jobs}>{(job) => <JobRow job={job} />}</For>
-                    </tbody>
-                  </table>
-                </div>
-              </Show>
+              <div class="strip">
+                <span>
+                  <span class={`dot ${stale() ? "dead" : "live"}`} />
+                  {stale() ? "stale" : "beating"} · pid {f().fleetPid ?? "—"} ·{" "}
+                  {f().containerized === true ? "container" : "host"} ·{" "}
+                  {age() === null ? "no heartbeat" : fmtAge(age()!)}
+                </span>
+                <span class="dim">stamp {f().stamp ?? "—"}</span>
+                <span class="dim">{(f().jobs ?? []).length} jobs · {live().length} live runs</span>
+                <span class="dim">
+                  <Show when={f().session !== undefined} fallback={<>session not reported</>}>
+                    session: {f().session!.finished} finished · ok {f().session!.ok} · retried {f().session!.retried}
+                  </Show>
+                </span>
+                <span class="dim">{runs.latest?.length ?? "—"} runs recorded</span>
+              </div>
 
               <div class="scroller">
                 <table>
@@ -149,7 +107,7 @@ export default function Fleet() {
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={f().lanes}>{(lane) => <LaneRow lane={lane} now={now()} />}</For>
+                    <For each={fleetRows(f(), runs.latest ?? [])}>{(row) => <FleetRowView row={row} />}</For>
                   </tbody>
                 </table>
               </div>
@@ -233,63 +191,46 @@ function ServerIdentity(props: { info: ApiInfoResponse | undefined; now: number 
 }
 
 /**
- * One lane. The whole row is a click-through to the run the lane is holding, so
- * the fleet table is a way into a live run and not just a status readout — the
- * model cell carries the same link for anyone tabbing rather than clicking, and
- * the handler stands aside when the click already landed on that anchor.
+ * One row of the fleet table: a job on its account, or an account holding
+ * nothing. The whole row is a click-through to the run it is about, so the
+ * table is a way into a live run and not just a status readout — the run cell
+ * carries the same link for anyone tabbing rather than clicking, and the
+ * handler stands aside when the click already landed on that anchor.
  */
-function LaneRow(props: { lane: FleetLaneView; now: number }) {
+function FleetRowView(props: { row: FleetRow }) {
   const navigate = useNavigate();
-  const lane = (): FleetLaneView => props.lane;
-  const href = (): string | null => laneRunHref(lane());
-  const state = (): string => laneState(lane());
+  const r = (): FleetRow => props.row;
+  const href = (): string | null => runHref(r().runId);
   const onClick = (e: MouseEvent): void => {
     const to = href();
     if (to === null || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     if ((e.target as Element | null)?.closest("a") !== null) return;
     navigate(to);
   };
+  const dot = (): string => (r().state === "exited" ? "dead" : r().state === "running" ? "live" : "");
   return (
     <tr onClick={onClick} class={href() === null ? undefined : "clickable"}>
       <td>
-        <span class={`dot ${state() === "exited" ? "dead" : state() === "running" ? "live" : ""}`} />
-        <span class={`badge ${state()}`}>{state()}</span>
+        <span class={`dot ${dot()}`} />
+        <span class={`badge ${r().state}`}>{r().state}</span>
       </td>
-      <td>{lane().name}</td>
-      <td class="dim" title={laneModelTitle(lane())}>
-        <Show when={href()} fallback={laneModelLabel(lane())}>
-          {(to) => <A href={to()}>{laneModelLabel(lane())}</A>}
-        </Show>
+      <td title={r().note ?? ""}>{r().job ?? "—"}</td>
+      <td class="dim" title={r().modelsTitle}>
+        {r().models}
       </td>
-      <td class="dim">{lane().account}</td>
-      <td class="dim" title={stamp(lane().spawnedAt)}>
-        {fmtWhen(lane().spawnedAt, props.now)}
-      </td>
-      <td class={lane().exitCode === null || lane().exitCode === 0 ? "dim" : "err"}>
-        {lane().exitCode === null ? "—" : lane().exitCode}
-      </td>
-    </tr>
-  );
-}
-
-/** One job the supervisor has a process for. */
-function JobRow(props: { job: FleetJobView }) {
-  const job = (): FleetJobView => props.job;
-  return (
-    <tr>
-      <td>{job().name}</td>
-      <td class="dim" title={job().models.join(", ")}>
-        {jobModelLabel(job())}
-      </td>
-      <td class="dim">{job().episode}</td>
-      <td class="dim">{job().account}</td>
-      <td class="dim">{job().source}</td>
-      <td class="dim">{job().attempt === undefined ? "—" : `#${job().attempt}`}</td>
+      <td class="dim">{r().tier ?? "—"}</td>
       <td class="dim">
-        <Show when={job().resuming !== undefined} fallback={<>—</>}>
-          <A href={`/run/${encodeURIComponent(job().resuming!)}`}>{job().resuming}</A>
+        {r().account} <span class="dim">({r().accountClass})</span>
+      </td>
+      <td class="dim">{r().source ?? "—"}</td>
+      <td class="dim">{r().attempt === null ? "—" : `#${r().attempt}`}</td>
+      <td class="dim" title={r().note ?? ""}>
+        <Show when={href()} fallback={r().note ?? "—"}>
+          {(to) => <A href={to()}>{r().runId}</A>}
         </Show>
       </td>
+      <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
+      <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
     </tr>
   );
 }
