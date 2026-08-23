@@ -9,6 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FleetJobView, FleetOutstandingView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
+import type { FleetRow } from "../src/lib/fleet";
 import {
   outstandingLabel,
   outstandingTitle,
@@ -96,7 +97,8 @@ describe("the model cell", () => {
 });
 
 describe("row state", () => {
-  const stateOf = (over: Partial<FleetJobView>): string => fleetRows(fleet({ jobs: [job(over)] }), [])[0]!.state;
+  // The table is ordered by state, so pick the job row out rather than trusting an index.
+  const stateOf = (over: Partial<FleetJobView>): string => fleetRows(fleet({ jobs: [job(over)] }), []).find((r) => r.job !== null)!.state;
 
   test("a job driving a run is running; between episodes it is idle", () => {
     expect(stateOf({})).toBe("running");
@@ -179,6 +181,56 @@ describe("the rows", () => {
     const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
     expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
     expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
+  });
+});
+
+describe("the row order", () => {
+  test("state ranks the table, then account name — one row of every state", () => {
+    // The rank list lives in STATE_RANK: running, resuming, draining,
+    // paused-deploy, paused, idle, exited. A deploy window is open so that
+    // paused-deploy and exited can both be on the table at once.
+    const f = fleet({
+      server: { ...REST, phase: "swapping" },
+      jobs: [
+        job({ name: "j-zz", account: "ZZ" }),
+        job({ name: "j-aa", account: "AA" }),
+        job({ name: "j-res", account: "BB", runId: null, resuming: "fleet-r-a1" }),
+        job({ name: "j-dra", account: "CC", draining: true }),
+        job({ name: "j-dep", account: "DD", alive: false, runId: null }),
+        job({ name: "j-exi", account: "EE", alive: false }),
+      ],
+      accounts: [
+        { account: "FF", class: "pool", job: null },
+        { account: "GG", class: "pool", job: null },
+        { account: "AH", class: "local", job: null },
+      ],
+      paused: [
+        {
+          runId: "fleet-p-a5",
+          model: "m",
+          account: "FF",
+          reason: "rate-limited",
+          since: 1,
+          pauseCount: 1,
+          resumeAfter: null,
+          elapsedMs: null,
+          budgetMs: null,
+          why: "w",
+        },
+      ],
+    });
+    expect(fleetRows(f, []).map((r) => [r.state, r.account])).toEqual([
+      ["running", "AA"],
+      ["running", "ZZ"],
+      ["resuming", "BB"],
+      ["draining", "CC"],
+      ["paused-deploy", "DD"],
+      ["paused", "FF"],
+      // Inside idle the classes stay grouped: pool before local, name second.
+      ["idle", "GG"],
+      ["idle", "AH"],
+      ["exited", "EE"],
+    ]);
   });
 });
 
@@ -282,13 +334,14 @@ describe("the deploy window (server-state.json)", () => {
 
   test("a job whose process is gone and whose run is not held reads 'paused for deploy' inside the window, 'exited' outside it", () => {
     const gone = job({ alive: false, runId: null, model: null, exitCode: 0 });
-    const inWindow = fleetRows(fleet({ server: server({ phase: "swapping" }), jobs: [gone] }), [])[0]!;
+    const jobRow = (f: FleetResponse): FleetRow => fleetRows(f, []).find((r) => r.job !== null)!;
+    const inWindow = jobRow(fleet({ server: server({ phase: "swapping" }), jobs: [gone] }));
     expect(inWindow.state).toBe("paused-deploy");
     expect(rowStateLabel(inWindow.state)).toBe("paused for deploy");
     expect(inWindow.note).toContain("resumes it when the fleet starts");
-    expect(fleetRows(fleet({ jobs: [gone] }), [])[0]!.state).toBe("exited");
+    expect(jobRow(fleet({ jobs: [gone] })).state).toBe("exited");
     // A gone process still holding a run is not a paused run, whatever the phase.
-    expect(fleetRows(fleet({ server: server({ phase: "swapping" }), jobs: [job({ alive: false })] }), [])[0]!.state).toBe("exited");
+    expect(jobRow(fleet({ server: server({ phase: "swapping" }), jobs: [job({ alive: false })] })).state).toBe("exited");
     expect(rowStateLabel("running")).toBe("running");
   });
 });

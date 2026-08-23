@@ -3,9 +3,9 @@
  *
  * One table, keyed by the JOB (ADR-0034: the job is the unit of work, an
  * account — with a class — is where it runs). A row is either a job with an
- * account or an account with no job, and the accounts that hold nothing sort
- * to the bottom under their class. The indicators above the table are the
- * same ones `run-fleet --status` prints, phrased here once.
+ * account or an account with no job, and the table is ordered by state: see
+ * `STATE_RANK` for the list and why it runs that way. The indicators above the
+ * table are the same ones `run-fleet --status` prints, phrased here once.
  *
  * The component renders its header from `FLEET_COLUMNS` and its body from
  * `fleetRows`, so what is asserted here is what ships — the same reason the run
@@ -217,6 +217,49 @@ export function runHref(runId: string | null): string | null {
 const CLASS_ORDER = ["pool", "paid", "local", "pinned"];
 
 /**
+ * The order the table is read in, most alive first.
+ *
+ * An operator scans this page for what is moving and what has stopped moving,
+ * so the rank is by state, not by job name:
+ *
+ *   1 running        — driving a run right now
+ *   2 resuming       — spawned, coming back to a paused run
+ *   3 draining       — finishing its episode, taking nothing new
+ *   4 paused-deploy  — stopped by the deploy window, resumes when the fleet starts
+ *   5 paused         — a paused run parked against the account it paused on
+ *   6 idle           — holding nothing: a job between episodes, or a free account
+ *   7 exited         — the process is gone and nothing is coming back
+ *
+ * `paused` sits between the deploy window and idle because it is an account row
+ * that still holds something: account rows holding a run sort above account rows
+ * holding nothing, and both sort above what has exited.
+ *
+ * Ties break by account name, with one exception: inside `idle` the accounts
+ * stay grouped by class (`CLASS_ORDER`) first, which is how the free capacity
+ * reads. A `Record` rather than an array so an eighth state fails to compile.
+ */
+const STATE_RANK: Record<FleetRowState, number> = {
+  running: 1,
+  resuming: 2,
+  draining: 3,
+  "paused-deploy": 4,
+  paused: 5,
+  idle: 6,
+  exited: 7,
+};
+
+/** The one comparator behind the table's order; see `STATE_RANK`. */
+function byState(a: FleetRow, b: FleetRow): number {
+  const rank = STATE_RANK[a.state] - STATE_RANK[b.state];
+  if (rank !== 0) return rank;
+  if (a.state === "idle") {
+    const cls = CLASS_ORDER.indexOf(a.accountClass) - CLASS_ORDER.indexOf(b.accountClass);
+    if (cls !== 0) return cls;
+  }
+  return a.account.localeCompare(b.account);
+}
+
+/**
  * A job whose process is gone during a deploy window, driving no run, is a
  * job the deploy stopped: its run paused (ADR-0036) and resumes when the
  * script starts the fleet again. The same row outside a window is just exited.
@@ -229,8 +272,8 @@ function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
 }
 
 /**
- * The whole table: every job the supervisor has a process for, then every
- * account holding nothing, grouped by class.
+ * The whole table: every job the supervisor has a process for, plus every
+ * account holding nothing, ordered by state through `byState`.
  *
  * `runs` is the filesystem's view (`/api/runs`) and is joined by run id for
  * level, xp and the episode's active time — the same numbers the runs table
@@ -270,11 +313,10 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
             : null,
     });
   }
-  // Idle accounts, grouped by class. A paused run holds no account, so it is
-  // reported against the account it paused on rather than as a job of its own.
+  // Accounts no job is on. A paused run holds no account, so it is reported
+  // against the account it paused on rather than as a job of its own.
   const paused = fleet.paused;
   const idle = fleet.accounts.filter((a) => !busy.has(a.account.toUpperCase()));
-  idle.sort((a, b) => CLASS_ORDER.indexOf(a.class) - CLASS_ORDER.indexOf(b.class) || a.account.localeCompare(b.account));
   for (const a of idle) {
     const here = paused.find((p) => (p.account ?? "").toUpperCase() === a.account.toUpperCase());
     const run = here === undefined ? undefined : byId.get(here.runId);
@@ -296,5 +338,5 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,
     });
   }
-  return rows;
+  return rows.sort(byState);
 }
