@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UNBUILT_NOTICE, createApi, readFleet } from "../viewer/api";
@@ -450,6 +450,28 @@ describe("fleet state", () => {
     const runs = fixture();
     writeFileSync(join(runs, "fleet-state.json"), '{"jobs": {');
     expect(readFleet(runs).present).toBe(false);
+  });
+
+  test("server-state.json is served as `server`; absent, garbage or an unknown phase is `running` with nothing to say", () => {
+    const runs = fixture();
+    jobState(runs, "RUNNER");
+    expect(readFleet(runs).server).toMatchObject({ phase: "running", build: "", detail: "" });
+    writeFileSync(
+      join(runs, "server-state.json"),
+      JSON.stringify({ phase: "verifying", since: 1, build: "harness-0.4-52", prevBuild: "harness-0.4-3", detail: "gate smoke x (1 of 2)", pid: 123, updatedAt: 2 }),
+    );
+    const s = readFleet(runs).server;
+    expect(s).toEqual({ phase: "verifying", since: 1, build: "harness-0.4-52", prevBuild: "harness-0.4-3", detail: "gate smoke x (1 of 2)", updatedAt: 2 });
+    // The script's pid is a host fact and stays behind.
+    expect(JSON.stringify(s)).not.toContain("123");
+    writeFileSync(join(runs, "server-state.json"), JSON.stringify({ phase: "exploding", detail: "?" }));
+    expect(readFleet(runs).server.phase).toBe("running");
+    writeFileSync(join(runs, "server-state.json"), "{");
+    expect(readFleet(runs).server.phase).toBe("running");
+    // Served even when the fleet has never run here.
+    rmSync(join(runs, "fleet-state.json"));
+    writeFileSync(join(runs, "server-state.json"), JSON.stringify({ phase: "draining", since: 1, build: "b", detail: "d", updatedAt: 2 }));
+    expect(readFleet(runs)).toMatchObject({ present: false, server: { phase: "draining" } });
   });
 });
 

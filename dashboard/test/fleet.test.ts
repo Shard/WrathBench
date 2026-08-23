@@ -8,8 +8,24 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetResponse, RunListRow } from "../../runner/viewer/api-types";
-import { FLEET_COLUMNS, HEARTBEAT_STALE_MS, accountClassSummary, fleetRows, gateVerdict, jobModelLabel, pausedLabel, runHref, supervisorAlive } from "../src/lib/fleet";
+import type { FleetJobView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
+import {
+  FLEET_COLUMNS,
+  HEARTBEAT_STALE_MS,
+  accountClassSummary,
+  deployWindowOpen,
+  fleetRows,
+  gateVerdict,
+  jobModelLabel,
+  pausedLabel,
+  rowStateLabel,
+  runHref,
+  serverBanner,
+  supervisorAlive,
+  supervisorLabel,
+} from "../src/lib/fleet";
+
+const REST: FleetServerView = { phase: "running", since: 0, build: "", detail: "", updatedAt: 0 };
 
 function job(over: Partial<FleetJobView> = {}): FleetJobView {
   return {
@@ -35,6 +51,7 @@ function job(over: Partial<FleetJobView> = {}): FleetJobView {
 function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
   return {
     present: true,
+    server: REST,
     jobs: [job()],
     accounts: [
       { account: "RUNNER", class: "pool", job: "ox-alpha-e90" },
@@ -202,5 +219,74 @@ describe("the run link", () => {
     const rows = fleetRows(fleet({ jobs: [job({ runId: null, resuming: "fleet-ox-alpha-e90-20260823-a1" })] }), []);
     expect(rows[0]!.runId).toBe("fleet-ox-alpha-e90-20260823-a1");
     expect(rows[0]!.note).toBe("resuming fleet-ox-alpha-e90-20260823-a1");
+  });
+});
+
+describe("the deploy window (server-state.json)", () => {
+  const at = new Date(2026, 7, 23, 18, 52).getTime();
+  const hhmm = new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const server = (over: Partial<FleetServerView>): FleetServerView => ({ ...REST, since: at, build: "harness-0.4-52", ...over });
+
+  test("at rest there is no banner; a rest detail (what was last deployed) is a dim line", () => {
+    expect(serverBanner(REST)).toBeNull();
+    expect(serverBanner(server({ detail: "deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s); fleet resumed" }))).toEqual({
+      text: "server running: deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s); fleet resumed",
+      tone: "dim",
+    });
+  });
+
+  test("each window phase is one plain line, with the script's detail verbatim after the colon", () => {
+    const d = "fleet stopped, 7 job(s) paused and will resume";
+    expect(serverBanner(server({ phase: "draining", detail: d }))).toEqual({
+      text: `Deploy window since ${hhmm} — stopping the fleet for harness-0.4-52, runs are pausing: ${d}`,
+      tone: "info",
+    });
+    expect(serverBanner(server({ phase: "swapping", detail: d }))).toEqual({
+      text: `Deploy window since ${hhmm} — swapping the worldserver to harness-0.4-52: ${d}`,
+      tone: "info",
+    });
+    expect(serverBanner(server({ phase: "verifying", detail: "full-arc smoke infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its budget; " + d }))).toEqual({
+      text: `Deploy window since ${hhmm} — swapped to harness-0.4-52, verifying: full-arc smoke infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its budget; ${d}`,
+      tone: "info",
+    });
+    expect(serverBanner(server({ phase: "resuming", detail: "x" }))).toEqual({
+      text: `Deploy window since ${hhmm} — harness-0.4-52 verified, starting the fleet; paused runs resume: x`,
+      tone: "info",
+    });
+  });
+
+  test("a verdict is red and names the builds; an unnamed build is said to be unnamed", () => {
+    expect(serverBanner(server({ phase: "rolled-back", prevBuild: "harness-0.4-3", detail: "gate smoke failed" }))).toEqual({
+      text: `Deploy of harness-0.4-52 FAILED at ${hhmm} and was rolled back to harness-0.4-3: gate smoke failed`,
+      tone: "bad",
+    });
+    expect(serverBanner(server({ phase: "failed", build: "", detail: "no :prev" }))).toEqual({
+      text: `Deploy of an unnamed build FAILED at ${hhmm}: no :prev`,
+      tone: "bad",
+    });
+  });
+
+  test("only the four window phases open the window; verdicts do not", () => {
+    for (const phase of ["draining", "swapping", "verifying", "resuming"] as const) expect(deployWindowOpen({ phase })).toBe(true);
+    for (const phase of ["running", "rolled-back", "failed"] as const) expect(deployWindowOpen({ phase })).toBe(false);
+  });
+
+  test("a dead heartbeat inside the window is the deploy's doing; outside it the supervisor is NOT RUNNING", () => {
+    const dead = { heartbeatAt: 0 };
+    expect(supervisorLabel({ ...dead, server: server({ phase: "verifying" }) }, HEARTBEAT_STALE_MS + 1)).toBe("fleet stopped for the deploy window");
+    expect(supervisorLabel({ ...dead, server: REST }, HEARTBEAT_STALE_MS + 1)).toBe("supervisor NOT RUNNING");
+    expect(supervisorLabel({ heartbeatAt: 1000, server: server({ phase: "verifying" }) }, 2000)).toBe("supervisor ALIVE");
+  });
+
+  test("a job whose process is gone and whose run is not held reads 'paused for deploy' inside the window, 'exited' outside it", () => {
+    const gone = job({ alive: false, runId: null, model: null, exitCode: 0 });
+    const inWindow = fleetRows(fleet({ server: server({ phase: "swapping" }), jobs: [gone] }), [])[0]!;
+    expect(inWindow.state).toBe("paused-deploy");
+    expect(rowStateLabel(inWindow.state)).toBe("paused for deploy");
+    expect(inWindow.note).toContain("resumes it when the fleet starts");
+    expect(fleetRows(fleet({ jobs: [gone] }), [])[0]!.state).toBe("exited");
+    // A gone process still holding a run is not a paused run, whatever the phase.
+    expect(fleetRows(fleet({ server: server({ phase: "swapping" }), jobs: [job({ alive: false })] }), [])[0]!.state).toBe("exited");
+    expect(rowStateLabel("running")).toBe("running");
   });
 });
