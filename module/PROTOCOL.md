@@ -240,6 +240,16 @@ Request:
 { "token": "run-abc123", "action": "move_to", "x": -8913.2, "y": -137.6, "z": 80.9 }
 ```
 
+Optional `guid` (decimal string): the unit the point was read from. It is a
+planning hint, never a lookup — the move still goes to `x,y`. A unit's z comes
+from its own movement packets and a patrolling or sloped NPC's can sit outside
+the mesh's poly-search box while the ground under it is walkable, so with
+`guid` the module resolves z to the ground height at `x,y` (terrain, vmap and
+model geometry a client has too) before pathing, and falls back to the given z.
+Without `guid` the ground z is tried only after a `target_off_mesh`. Either way
+a target the mesh rejects at both heights is still `target_off_mesh`, and
+`meshZ` is reported relative to the z asked for.
+
 Success `200` (means "queued and pathing", not "arrived"):
 ```json
 { "ok": true, "action": "move_to", "token": "run-abc123", "moveId": 1 }
@@ -249,8 +259,12 @@ Additional error: `400 {"ok":false,"error":"missing_position","action":"move_to"
 
 The outcome arrives as a `WB_MOVE_RESULT` event carrying the same `moveId`
 (statuses below). A `move_to` issued while a previous one is still running
-supersedes it: the old move ends with status `superseded`, then the new path
-starts from wherever the character is.
+supersedes it: the old move ends with status `superseded` (the module sends the
+`MSG_MOVE_STOP` a redirected client would, so a new request that fails at
+planning never leaves the server believing the character is still running),
+then the new path starts from wherever the character is. A request that fails
+before anything moves (`too_far` and the planning causes below) likewise sends
+a stop if the server still holds the character as moving.
 
 #### stop
 
@@ -548,11 +562,21 @@ server. The exact `opcode` strings emitted are: `MSG_MOVE_START_FORWARD`,
 `MSG_MOVE_START_TURN_LEFT`, `MSG_MOVE_START_TURN_RIGHT`, `MSG_MOVE_STOP_TURN`,
 `MSG_MOVE_SET_FACING`, `MSG_MOVE_HEARTBEAT`, `MSG_MOVE_FALL_LAND`,
 `MSG_MOVE_START_SWIM`, `MSG_MOVE_STOP_SWIM`, `MSG_MOVE_SET_RUN_MODE`,
-`MSG_MOVE_SET_WALK_MODE`; any other movement opcode in the observed set is
-emitted with the bare fallback name `MSG_MOVE`. The bench character's own
-synthesized movement is not echoed by the server; own position comes from
-`WB_MOVE_PROGRESS` / `WB_MOVE_RESULT` below and from the self
+`MSG_MOVE_SET_WALK_MODE`, `MSG_MOVE_TELEPORT_ACK`; any other movement opcode in
+the observed set is emitted with the bare fallback name `MSG_MOVE`. The bench
+character's own synthesized movement is not echoed by the server; own position
+comes from `WB_MOVE_PROGRESS` / `WB_MOVE_RESULT` below and from the self
 `SMSG_UPDATE_OBJECT` create block.
+
+`MSG_MOVE_TELEPORT_ACK` (0x0C7) is the one entry about *self*: the server's
+side of a same-map teleport (`Player::SendTeleportAckPacket` — Hearthstone,
+graveyard port, any port that does not change map). `guid` is the bench
+character's own and `pos` is the arrival point; the module answers the packet
+itself (module-internal client behaviour, like `MSG_MOVE_WORLDPORT_ACK`) so
+the agent only observes it. No `SMSG_NEW_WORLD`
+follows a same-map teleport; this is how own position follows one. On the wire
+the packet carries a `u32` movement-order counter between the packGUID and the
+MovementInfo; it is consumed, not served.
 
 `SMSG_COMPRESSED_UPDATE_OBJECT` never appears on this stream: the core
 compresses large update packets at socket-write time, below the module's tap,
@@ -660,10 +684,15 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
   destination. The module already tried once to subdivide (path to where the
   mesh got, then onward); `reachedPos` is how far the mesh could get, so the
   agent can route around or approach from another side. Nothing moved.
-- `transferred` — a map transfer or teleport took the character mid-move
-  (an areatrigger portal, a graveyard port); the server applies the
-  destination itself. `pos` is the last old-map position; the new map and
-  arrival point follow on `SMSG_NEW_WORLD`.
+- `transferred` — a map transfer took the character mid-move (an areatrigger
+  portal, a cross-map port); the server applies the destination itself. `pos`
+  is the last old-map position; the new map and arrival point follow on
+  `SMSG_NEW_WORLD`.
+- `teleported` — a same-map teleport took the character mid-move (Hearthstone,
+  a graveyard port on the same map). No map change is coming and no
+  `SMSG_NEW_WORLD` will follow; `pos` is the pre-teleport position and the
+  arrival point is the `MSG_MOVE_TELEPORT_ACK` observed-movement event (own
+  guid), which the server sends before this result.
 - `interrupted` — the move stopped early (death, root, rejection, or the
   character left the map for a non-teleport reason); `pos` is where the
   character actually is.
@@ -840,7 +869,8 @@ Map transfers (navigation, 2026-08, FOLLOW-UPS 38 N1):
 (`SMSG_LOGIN_VERIFY_WORLD` is never re-sent), so it is what self position's
 `map` follows from then on. The module answers the teleport itself
 (`MSG_MOVE_WORLDPORT_ACK`, see the teleport-ack note) and a `move_to` in
-flight when a transfer or teleport begins ends with status `transferred`.
+flight when a transfer begins ends with status `transferred` (a same-map
+teleport: `teleported`, with the arrival on `MSG_MOVE_TELEPORT_ACK`).
 
 #### Update-field whitelist additions (quest/combat extension)
 

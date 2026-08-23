@@ -576,7 +576,12 @@ namespace WrathBench
                 return MissingParam(action, "missing_position",
                     !req.Has("x") ? "x" : (!req.Has("y") ? "y" : "z"));
             float x = (float)req.GetDouble("x"), y = (float)req.GetDouble("y"), z = (float)req.GetDouble("z");
-            PushTask([this, token, x, y, z, ack]() { DoMoveTo(token, x, y, z, ack); });
+            // Optional: the guid of the unit the point was read from. Only a
+            // planning hint (the z of a patrolling NPC is resolved to the
+            // ground under it before pathing, see ResolvePath); never a
+            // lookup, the request still walks to x,y.
+            std::string guid = req.GetString("guid");
+            PushTask([this, token, x, y, z, guid, ack]() { DoMoveTo(token, x, y, z, guid, ack); });
         }
         else if (action == "stop")
         {
@@ -1140,7 +1145,7 @@ namespace WrathBench
     // missing tile inside NORMAL|NOT_USING_PATH; the endpoint check is 2D so
     // that a stale z in the request is the mesh's problem (meshZ), not the
     // agent's.
-    Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z)
+    Manager::PathResolve Manager::ResolvePathAt(Player* player, float x, float y, float z, float reqZ)
     {
         PathResolve r;
         dtNavMesh const* navMesh = player->GetMap()->GetMapCollisionData().GetMMapData().GetNavMesh();
@@ -1243,10 +1248,53 @@ namespace WrathBench
             return r;
         }
         float endZ = r.points.back().z;
-        if (std::fabs(endZ - z) > 1.0f)
+        if (std::fabs(endZ - reqZ) > 1.0f)
         {
             r.hasMeshZ = true;
             r.meshZ = endZ;
+        }
+        return r;
+    }
+
+    // The z-ladder in front of the cause ladder (FOLLOW-UPS 46 part 3). A unit
+    // target's z comes from the unit's own movement packets, and a patrolling or
+    // sloped NPC's z can sit outside the core's default poly-search extents
+    // while the ground under it is perfectly walkable ("Ironforge Mountaineer"
+    // at (-5909, -68), nav-probe c3/c4: `target_off_mesh` for a point an NPC
+    // stands on). The ground height at x,y is terrain and model geometry a
+    // client has too (Map::GetHeight over maps/vmaps/GO models), so the module
+    // resolves it before pathing: first for a unit target, as a fallback after
+    // a `target_off_mesh` for any point. A target the mesh rejects at both its
+    // own z and the ground z is still `target_off_mesh`; `meshZ` is always
+    // relative to the z the agent asked for.
+    Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z, bool unitTarget, bool* usedGroundZ, float* groundZOut)
+    {
+        if (usedGroundZ) *usedGroundZ = false;
+        float groundZ = player->GetMap()->GetHeight(player->GetPhaseMask(), x, y, z, true);
+        bool haveGround = groundZ > INVALID_HEIGHT && std::fabs(groundZ - z) > 0.5f;
+        if (groundZOut) *groundZOut = haveGround ? groundZ : z;
+
+        auto isTargetOffMesh = [](PathResolve const& r) { return r.status && std::strcmp(r.status, "target_off_mesh") == 0; };
+
+        if (unitTarget && haveGround)
+        {
+            PathResolve r = ResolvePathAt(player, x, y, groundZ, z);
+            if (!isTargetOffMesh(r))
+            {
+                if (usedGroundZ) *usedGroundZ = true;
+                return r;
+            }
+            return ResolvePathAt(player, x, y, z, z);
+        }
+        PathResolve r = ResolvePathAt(player, x, y, z, z);
+        if (isTargetOffMesh(r) && haveGround)
+        {
+            PathResolve r2 = ResolvePathAt(player, x, y, groundZ, z);
+            if (!isTargetOffMesh(r2))
+            {
+                if (usedGroundZ) *usedGroundZ = true;
+                return r2;
+            }
         }
         return r;
     }
@@ -1283,18 +1331,33 @@ namespace WrathBench
         EmitEvent(s, "WB_MOVE_RESULT", 0xFF01, w.Str());
     }
 
-    void Manager::DoMoveTo(std::string token, float x, float y, float z, std::shared_ptr<std::promise<HttpReply>> ack)
+    void Manager::DoMoveTo(std::string token, float x, float y, float z, std::string guid, std::shared_ptr<std::promise<HttpReply>> ack)
     {
         auto s = FindByToken(token);
         Player* player = CheckActionSession(s, ack);
         if (!player)
             return;
 
-        Audit(*s, "action", Json::Writer().Add("op", "move_to")
-            .Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str());
+        {
+            Json::Writer a;
+            a.Add("op", "move_to").Add("x", (double)x).Add("y", (double)y).Add("z", (double)z);
+            if (!guid.empty())
+                a.Add("guid", guid);
+            Audit(*s, "action", a.Str());
+        }
 
         if (s->move.active)
+        {
+            // A client whose run is redirected stops first: without this the
+            // server's last movement word stays MOVEMENTFLAG_FORWARD when the
+            // new request fails at planning, isMoving() stays true and every
+            // later cast fails SPELL_FAILED_MOVING (FOLLOW-UPS 46 part 3,
+            // ~10 minutes of Hearthstone casts in nav-probe c3).
+            MoveState& old = s->move;
+            SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, old.curX, old.curY, old.curZ, old.curO,
+                FindTransportAt(player->GetMap(), old.curX, old.curY, old.curZ));
             FinishMove(*s, "superseded");
+        }
 
         uint64_t moveId = ++s->moveIdGen;
         MoveState& m = s->move;
@@ -1306,6 +1369,13 @@ namespace WrathBench
             .Add("token", token).Add("moveId", moveId).Str()});
 
         auto failEvent = [&](char const* status) {
+            // Nothing moved; if the server still has the character flagged as
+            // moving (a superseded run it has not yet seen stop), end it the
+            // way a client's run ends. A no-op for a character already still.
+            if (player->isMoving())
+                SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                    player->GetTransport());
             Json::Writer w;
             w.Add("moveId", moveId).Add("status", status);
             w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
@@ -1342,10 +1412,20 @@ namespace WrathBench
                     .Add("boarding", targetT != nullptr).Add("leaving", startT != nullptr && !targetT).Str());
             }
             else
-                r = ResolvePath(player, x, y, z);
+            {
+                bool usedGroundZ = false; float groundZ = z;
+                r = ResolvePath(player, x, y, z, !guid.empty(), &usedGroundZ, &groundZ);
+                if (usedGroundZ)
+                    Audit(*s, "action", Json::Writer().Add("op", "move_ground_z").Add("moveId", moveId)
+                        .Add("unitTarget", !guid.empty()).Add("z", (double)z).Add("groundZ", (double)groundZ).Str());
+            }
         }
         if (r.status != nullptr)
         {
+            if (player->isMoving()) // see failEvent
+                SendMovePacket(*s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
+                    player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(),
+                    player->GetTransport());
             Json::Writer w;
             w.Add("moveId", moveId).Add("status", r.status);
             w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
@@ -1943,11 +2023,20 @@ namespace WrathBench
         // every movement opcode until the ack (TickTeleportAcks) and applies the
         // destination itself. `transferred` rather than `interrupted`, so the
         // agent knows a portal took it (FOLLOW-UPS 38 N1); the SDK then waits
-        // for SMSG_NEW_WORLD and resolves on the new map. The 15y desync guard
+        // for SMSG_NEW_WORLD and resolves on the new map. A same-map teleport
+        // (Hearthstone, graveyard port) is `teleported` (FOLLOW-UPS 46): no
+        // map change is coming. The 15y desync guard
         // below must not run here: the far-teleport position jump would race it.
-        if (s.pendingTransferMap.load() != 0 || player->IsBeingTeleported())
+        if (s.pendingTransferMap.load() != 0 || player->IsBeingTeleportedFar())
         {
             FinishMove(s, "transferred");
+            return;
+        }
+        if (player->IsBeingTeleportedNear())
+        {
+            // Same map: no SMSG_NEW_WORLD will follow. The arrival point is
+            // what the server's MSG_MOVE_TELEPORT_ACK (tapped) carries.
+            FinishMove(s, "teleported");
             return;
         }
         if (!player->IsInWorld())
@@ -2937,6 +3026,7 @@ namespace WrathBench
             case MSG_MOVE_STOP_SWIM:          return "MSG_MOVE_STOP_SWIM";
             case MSG_MOVE_SET_RUN_MODE:       return "MSG_MOVE_SET_RUN_MODE";
             case MSG_MOVE_SET_WALK_MODE:      return "MSG_MOVE_SET_WALK_MODE";
+            case MSG_MOVE_TELEPORT_ACK:       return "MSG_MOVE_TELEPORT_ACK";
             default:                          return "MSG_MOVE";
         }
     }
@@ -3189,9 +3279,17 @@ namespace WrathBench
                 case MSG_MOVE_STOP_TURN: case MSG_MOVE_SET_FACING: case MSG_MOVE_HEARTBEAT:
                 case MSG_MOVE_FALL_LAND: case MSG_MOVE_START_SWIM: case MSG_MOVE_STOP_SWIM:
                 case MSG_MOVE_SET_RUN_MODE: case MSG_MOVE_SET_WALK_MODE:
+                // The server's side of a same-map teleport (Player::
+                // SendTeleportAckPacket): the bench character's own guid and
+                // the arrival point, which the server relocated to before
+                // building the MovementInfo. One u32 movement-order counter
+                // sits between the packGUID and the MovementInfo; otherwise the
+                // shape is the observed-movement one (FOLLOW-UPS 46).
+                case MSG_MOVE_TELEPORT_ACK:
                 {
                     name = MoveOpcodeName(opcode);
                     uint64 guid = 0; p.readPackGUID(guid);
+                    if (opcode == MSG_MOVE_TELEPORT_ACK) { uint32 counter = 0; p >> counter; }
                     uint32 mflags = 0; uint16 mflags2 = 0; uint32 mtime = 0;
                     p >> mflags >> mflags2 >> mtime;
                     float x, y, z, o;
