@@ -171,6 +171,56 @@ flat ~12k-token plateau, which exists specifically because that driver trims con
 relying on cache economics) — but under >99% cache-read and a flat subscription, the operator's
 real marginal cost stays $0 regardless of context size.
 
+### Actual vs expected (viewer, 2026-08-23)
+
+The viewer now carries two dollar figures per run and never collapses them into
+one, because they answer different questions:
+
+- **actual** — what the provider says it charged. OpenRouter reports it per
+  response as `usage.cost` (credits, which are dollars) under the `usage:
+  {include: true}` opt-in the adapter sets for that host; the Claude Code driver
+  reports it per session as `total_cost_usd` on a `claude_result`. The viewer
+  sums whichever the run carries and uses it verbatim. Null for most runs, and a
+  null says "provider reports no cost for this run" rather than quietly showing
+  the estimate in its place. The runs table on the models page shows this figure
+  and only this one.
+- **expected** — the price table applied to the run's own tokens, dated, with
+  its per-component breakdown. Computed even when an actual exists, so a gap
+  between the two is visible: the nav-probe Sonnet e360 above reads $43.90
+  actual against $158.97 expected, which is exactly the per-response-usage
+  overcount this section measured, now on screen instead of in a footnote.
+
+One caveat on the corpus: `toUsage` in `runner/src/adapter.ts` parsed `cost` out
+of the usage block and then dropped it, so **no run before 2026-08-23 carries an
+actual cost on the OpenRouter lanes** however long it ran — the opt-in was
+paying for a figure nothing recorded. Fixed in `1fe3951`; runs started after it
+record the charge per response.
+
+### Where the prices come from
+
+Claude rows stay hand-kept in `runner/viewer/pricing.ts`: they are subscription
+as-if-metered figures and this document verified them against a real `costUsd`.
+Everything else is synced, not typed:
+
+```
+bun run sync-prices     # infra/sync-prices.ts
+```
+
+It GETs `https://openrouter.ai/api/v1/models` and writes
+`runner/viewer/prices.openrouter.json` — dollars per million, one `asOf` for the
+file, `cacheWrite` falling back to the input rate where OpenRouter quotes no
+write tier. Scope is the roster in `infra/fleet.json`, every model any run under
+`data/runs` was launched on, and a hand-kept `PIN` list in the script; the other
+~410 catalogue rows are noise. A model the catalogue does not carry stays
+unpriced and the run page says `no synced price — run bun infra/sync-prices.ts`
+rather than guessing. Free slugs and LAN models never reach the table: they are
+priced $0 by rule (`runner/src/model-cost.ts`), which is why a `:free` row in the
+synced file is inert.
+
+Re-run it when a model joins the roster, when a provider changes a rate, or when
+the run page starts saying a price is missing — and commit the JSON, so the
+figure on screen is one anybody can diff.
+
 ## 4. Platform reliability notes (hidden cost)
 
 | lane | rate-limit/5xx pauses (sum) | adapter-error terminations | dominant failure text |
