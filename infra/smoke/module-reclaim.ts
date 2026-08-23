@@ -3,7 +3,7 @@
  * anything older, where a same-account create under a second token still returns
  * `account_in_use` (the exact harness trap this probe proves is gone).
  *
- * Reproduces the confirmed trap and asserts the fix. On a shared-account lane a
+ * Reproduces the confirmed trap and asserts the fix. On a shared-account job a
  * session could leak under a previous episode's token; the next episode's
  * createSession was then boxed in — `account_in_use` on create, `no_session` on
  * deleteSession (new token), and an empty state cache, with no recovery. The fix:

@@ -22,7 +22,7 @@
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
     "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy.",
     "  Name is <first ref>-<episode>; one job per (ref, episode). A job with no account and nothing eligible is skipped.",
-    "Lane policy: claude models only via driver claude-code; shared free pools carry free ids only; local apiBase exempt.",
+    "Roster policy: claude models only via driver claude-code; shared free pools carry free ids only; local apiBase exempt.",
     "preflight: ADR-0023; its accounts may not be in the pool or on a job."
   ],
   "preflight": {

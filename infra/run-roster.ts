@@ -91,7 +91,7 @@ export interface RosterSpec {
   maxToolCalls?: number;
   /**
    * Whether `search_reference` serves wiki coordinates (ADR-0028). Absent or
-   * false is names-first, the scored default; only freeplay/unscored lanes
+   * false is names-first, the scored default; only freeplay/unscored jobs
    * should set it. Stamped into the run's comparability tuple.
    */
   wikiCoords?: boolean;
@@ -477,7 +477,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
   argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
   // The wall clock keeps its own flag when it is a number (that is what every
-  // existing lane emits); a disabled one can only travel in the JSON.
+  // existing job emits); a disabled one can only travel in the JSON.
   if (spec.episodeMs !== null) argv.push("--episode-ms", String(spec.episodeMs));
   const watchdogs = watchdogsJson(spec);
   if (watchdogs !== undefined) argv.push("--watchdogs-json", watchdogs);
@@ -577,7 +577,7 @@ export const DEFER_TAINT_AFTER = DEFER_BACKOFF_MS.length + 1;
  *                           for its own -cN burn sample, preserving loop semantics)
  *  - tainted entry        -> `tainted` (never launch again this process)
  *  - entry, still cooling -> `skip` (do not launch; this is what kills hammering,
- *                           and it is per-spec so a lane-mate failing in seconds
+ *                           and it is per-spec so a rotation-mate failing in seconds
  *                           cannot drag this spec back into a fast relaunch)
  *  - entry, cooled off    -> `resume` the *stored* run id in place
  */
@@ -594,7 +594,7 @@ export type CyclePlan = AttemptPlan | { kind: "already-done" };
  * planAttempt plus the one thing that is cycle-dependent: a spec whose cycle-1
  * run was already terminated when --resume-roster started. That is a statement
  * about cycle 1 only — the spec stays in the rotation and cycle 2+ launches it
- * fresh under a -cN id. Dropping it instead is what idled the lanes.
+ * fresh under a -cN id. Dropping it instead is what idled the jobs.
  */
 export function planCycle(
   entry: DeferEntry | undefined,
@@ -624,7 +624,7 @@ export function nextDefer(
 // ------------------------------------------------------------ defer sidecar
 //
 // Defer state has to outlive the process: a supervisor restart or a fleet.json
-// edit respawns the lane, and without this a spec sitting on a 6h backoff would
+// edit respawns the job, and without this a spec sitting on a 6h backoff would
 // come back as `fresh` and start hammering again from rung 1. The sidecar sits
 // next to the roster's --log jsonl and is keyed on the SPEC's stable cycle-1
 // run id — NOT on DeferEntry.runId, which may be a -cN from a mid-loop defer.
@@ -672,7 +672,7 @@ function loadDefers(log: string): Map<string, DeferEntry> {
   }
 }
 
-/** Written via tmp+rename: `--status` may read this while a lane is writing it. */
+/** Written via tmp+rename: `--status` may read this while a job is writing it. */
 function saveDefers(log: string, map: Map<string, DeferEntry>, dryRun: boolean): void {
   if (dryRun || log === "") return;
   const path = deferSidecarPath(log);
@@ -900,7 +900,7 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
     // A pause row means the session is already gone: every path in attemptSpec
     // that leaves a paused run behind frees its session first, and
     // pause_reason is only cleared by --resume. Without this skip, the
-    // activity-age test parks the lane for LIVE_TRAJECTORY_MS behind
+    // activity-age test parks the job for LIVE_TRAJECTORY_MS behind
     // its own just-deferred run's still-warm trajectory (fleet-free-or-a
     // waited 3m behind its deferred glm run, 2026-08-22). A hand-paused run
     // whose operator kept the session alive is the module's to defend: the
@@ -1157,8 +1157,8 @@ interface Attempt {
   /**
    * --resume-roster found this spec's cycle-1 run already terminated. Cycle 1
    * is done for it; later loop cycles still give it a fresh -cN. It used to be
-   * dropped from `pending` outright, which idled a whole lane: five of six
-   * fleet lanes spent 2026-08-22 16:48-17:01 logging "restarting the roster
+   * dropped from `pending` outright, which idled a whole job: five of six
+   * fleet jobs spent 2026-08-22 16:48-17:01 logging "restarting the roster
    * (0 episode(s))" every cycle because every entry had finished cycle 1.
    */
   doneCycle1?: boolean;
@@ -1380,7 +1380,7 @@ async function main(): Promise<void> {
   // is up and steering is done by editing fleet.json, not by a wall clock. The
   // stop conditions remain available as optional caps.
   if (args.loop && deadline === undefined) {
-    say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the lane is disabled)");
+    say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the job is disabled)");
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
 
@@ -1486,7 +1486,7 @@ async function main(): Promise<void> {
         `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +
         `\n        then RESUMED in place on its own run id (never relaunched fresh at L1); TAINTED` +
         `\n        (dropped from the rotation) on consecutive defer ${DEFER_TAINT_AFTER}. Resume` +
-        `\n        restores trajectory + scratchpad but NOT level — a lane-mate's fresh launch wipes` +
+        `\n        restores trajectory + scratchpad but NOT level — a rotation-mate's fresh launch wipes` +
         `\n        the shared account, so a resumed character is recreated at level 1.` +
         `\n        non-loop retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each (loop mode` +
         `\n        resumes in the rotation instead)` +
@@ -1600,7 +1600,7 @@ async function main(): Promise<void> {
       // A deferred spec resumes its stored run id in place instead of spawning
       // a fresh L1 -cN — this is the "resume, don't recreate" Mark asked for.
       // Honesty (§C): resume restores that run's trajectory and scratchpad, but
-      // NOT its level — a lane-mate's fresh launch wipes every character on the
+      // NOT its level — a rotation-mate's fresh launch wipes every character on the
       // shared account (run.ts hygiene, which we cannot change from here), so a
       // resumed run recreates its character at level 1. For a 0-turn rate-limit
       // there was nothing to preserve anyway; for a real-turns pause the model

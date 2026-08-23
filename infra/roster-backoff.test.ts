@@ -166,7 +166,7 @@ describe("planGap", () => {
   });
 
   test("a cycle that launched nothing because every entry was already terminated does NOT nap", () => {
-    // The observed lie: a lane whose whole roster was skipped on
+    // The observed lie: a job whose whole roster was skipped on
     // --resume-roster slept 10m announcing "all models backing off" when
     // nothing was backing off at all.
     const g = planGap(0, 0, undefined, NOW, 2);
@@ -181,8 +181,8 @@ describe("ladder", () => {
   });
 });
 
-describe("planCycle — --resume-roster + --loop must not idle the lane", () => {
-  // Observed live 2026-08-22 16:48-17:01: five of six fleet lanes logged
+describe("planCycle — --resume-roster + --loop must not idle the job", () => {
+  // Observed live 2026-08-22 16:48-17:01: five of six fleet jobs logged
   // "loop cycle N: restarting the roster (0 episode(s))" forever, because a
   // spec whose cycle-1 run had already terminated was dropped from the roster
   // instead of being carried into the next cycle.
@@ -190,7 +190,7 @@ describe("planCycle — --resume-roster + --loop must not idle the lane", () => 
     expect(planCycle(undefined, true, 1, NOW)).toEqual({ kind: "already-done" });
   });
 
-  test("cycle 2 gives that same spec a fresh launch — the lane keeps working", () => {
+  test("cycle 2 gives that same spec a fresh launch — the job keeps working", () => {
     expect(planCycle(undefined, true, 2, NOW)).toEqual({ kind: "fresh" });
     expect(planCycle(undefined, true, 7, NOW)).toEqual({ kind: "fresh" });
   });

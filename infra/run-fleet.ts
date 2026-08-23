@@ -10,7 +10,7 @@
  * The supervisor's home is the `fleet` compose service — same image and mounts
  * as `runner`, `restart: unless-stopped`, no deadline (ADR-0020). It therefore
  * cannot assume the reader of `--status` shares its PID namespace: liveness is
- * published as a heartbeat in fleet-state.json and per-lane `alive` flags, not
+ * published as a heartbeat in fleet-state.json and per-job `alive` flags, not
  * inferred with kill(pid, 0). Paths in that state file are repo-relative for
  * the same reason.
  *
@@ -22,10 +22,8 @@
  * own — synthetic, never persisted — for the accounts the manual queue leaves
  * free. Every job spawns through the same path: it becomes one run-roster
  * process on one account, and releases the account when that process exits.
- * Older files still load: the pre-pool shape (lanes that each name an account)
- * and the pool shape (a `lanes` list beside `accounts.pinned`) both read as
- * pinned jobs, with a one-line notice. The supervisor re-reads fleet.json
- * every tick (60s):
+ * There is no other shape: a file that still says `lanes` or `accounts.pinned`
+ * is refused by name. The supervisor re-reads fleet.json every tick (60s):
  *
  *  - enabled:false  -> the job drains: no SIGTERM while its roster process
  *    has an episode child; once the process is between episodes it is
@@ -39,23 +37,23 @@
  *    config kept, nothing running is touched.
  *
  * Guards, enforced at startup and on every re-read:
- *  - two enabled lanes must not share an account (one live session per
- *    account; the second lane would spend the night in account_in_use).
- *  - lane-policy: claude-family models (opus/sonnet/haiku/claude-*) run only
+ *  - two enabled jobs must not share an account (one live session per
+ *    account; the second job would spend the night in account_in_use).
+ *  - roster policy: claude-family models (opus/sonnet/haiku/claude-*) run only
  *    via the claude-code driver, and that driver runs only claude
  *    models. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
- *    only; keeping a single stream per provider pool is the whole point of the
- *    lane shape. A local/self-hosted openai apiBase is a distinct category:
- *    exempt from the free-suffix rule (no shared pool to meter), still barred
- *    from claude-* ids.
+ *    only; keeping a single stream per provider pool is the whole point of
+ *    one job per account. A local/self-hosted openai apiBase is a distinct
+ *    category: exempt from the free-suffix rule (no shared pool to meter),
+ *    still barred from claude-* ids.
  *
- * The roster's own account-busy guard still runs under every lane: a lane
+ * The roster's own account-busy guard still runs under every job: a job
  * pointed at an account something else is using waits, it does not clobber.
  *
  * Preflight gate (ADR-0023): the top-level `preflight` block in fleet.json is
  * the deploy-window smoke, made a normal part of fleet operation. The
  * supervisor runs those scripts against the live server before it spawns any
- * lane, and again whenever the server identity changes (a recreate, or a
+ * job, and again whenever the server identity changes (a recreate, or a
  * restart the container did by itself). A failure spawns nothing, complains
  * once, and is re-checked every tick; only `start` is ever suppressed, so
  * drains keep working while the gate is shut. `enabled:false` records a
@@ -78,8 +76,9 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
-import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
 import {
   ACCOUNT_CLASSES,
@@ -128,33 +127,20 @@ export function currentSeries(): string | null {
 
 /**
  * A job as it is spawned: one run-roster process on one account. This is the
- * materialised form every job takes on its way to `spawnLane` — pinned, pool
- * and policy alike — and the shape a pre-pool fleet.json still describes
- * directly (see `legacyJob`). Nothing in a new-shape file is a lane.
+ * materialised form every job takes on its way to `spawnJob` — pinned, pool
+ * and policy alike. The roster entries carry every run dimension themselves
+ * (objective, watchdogs, maxToolCalls, wikiCoords — ADR-0024/0028); the
+ * spawn adds only the account and the fleet-scoped run ids.
  */
-export interface FleetLane {
+export interface JobSpawn {
   name: string;
   enabled: boolean;
   account: string;
   loop: boolean;
-  untilDefault?: string;
-  /** Inline roster entries — the exact per-entry schema run-roster accepts. */
-  entries?: RosterSpec[];
-  /** Alternative to entries: a roster JSON on disk. */
-  rosterFile?: string;
+  /** Roster entries — the exact per-entry schema run-roster accepts. */
+  entries: RosterSpec[];
   /**
-   * Lane-level defaults for the two run dimensions of ADR-0024 and for the
-   * episode's tool-call ceiling. An entry that carries its own wins; a lane
-   * that carries one applies it to every entry that does not. An objective
-   * stamps every run in the lane unscored.
-   */
-  objective?: string;
-  watchdogs?: WatchdogOverride;
-  maxToolCalls?: number;
-  /** Lane default for the wiki-coordinates tier (ADR-0028); entry wins. */
-  wikiCoords?: boolean;
-  /**
-   * Set on a lane spawned to resume a paused run (ADR-0036): its first entry
+   * Set on a spawn that resumes a paused run (ADR-0036): its first entry
    * carries that run id, and the roster is started with --resume-roster so
    * it reattaches instead of launching fresh (which would wipe the account's
    * characters).
@@ -173,7 +159,7 @@ export interface FleetLane {
  * the breakdown.
  *
  * Smokes fan out: entries with distinct accounts run concurrently (one live
- * session per account is the module's rule, so the account IS the lane), and
+ * session per account is the module's rule, so the account is the stream), and
  * entries that share an account run one after the other in list order. A bare
  * string entry in fleet.json is the pre-2026-08-23 form and means "on the
  * default `account`".
@@ -185,7 +171,7 @@ export interface FleetLane {
  */
 export interface FleetPreflight {
   enabled: boolean;
-  /** Default game account for string-form smokes — its own, never a lane's, never PROBE. */
+  /** Default game account for string-form smokes — its own, never a job's, never PROBE. */
   account: string;
   /** Repo-relative (or absolute) smoke scripts, each bound to the account it logs in as. */
   smokes: PreflightSmoke[];
@@ -221,11 +207,10 @@ export interface PreflightRecord {
 // ------------------------------------------------------------------- jobs
 //
 // ADR-0034: the fleet is a set of jobs over a set of accounts. A job PINNED
-// to an account (`account` in the file) is the old lane; a job without one is
-// POOL work, spawned on whichever `accounts.pool` account is free when its
-// turn comes; the policy's own picks are jobs too, made up each tick. Older
-// shapes still load: a `lanes` list (pre-pool, or pool-era beside
-// `accounts.pinned`) converts to pinned jobs that carry their entries verbatim.
+// to an account (`account` in the file) runs there and nowhere else; a job
+// without one is POOL work, spawned on whichever `accounts.pool` account is
+// free when its turn comes; the policy's own picks are jobs too, made up each
+// tick.
 
 /** Episode tiers (ADR-0033). `freeplay` is unscored and bypasses the tiers gate. */
 export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
@@ -248,13 +233,13 @@ export interface FleetRosterEntry extends RosterSpec {
   billing?: Billing;
 }
 
-export type JobSource = "pinned" | "queue" | "policy" | "legacy";
+export type JobSource = "pinned" | "queue" | "policy";
 
 export interface FleetJob {
   /**
    * Keys into `roster`, one or more. Several refs make one job rotate through
    * several models on one account; `ref` in the file may be a string or an
-   * array, normalised here. Empty for a legacy job (its entries are inline).
+   * array, normalised here.
    */
   refs: string[];
   /** `refs.join("+")`: what the job is called in logs and skip reasons. */
@@ -265,7 +250,7 @@ export interface FleetJob {
   /**
    * The job's name: run ids, roster and log paths hang off it
    * (`fleet-<name>-<model>-<stamp>`). Always `<first ref>-<episode>`; unique
-   * across the file. A legacy lane keeps its lane name.
+   * across the file.
    */
   name: string;
   enabled: boolean;
@@ -284,12 +269,6 @@ export interface FleetJob {
    * `--extra true`, so the run is stamped and never counted.
    */
   extra?: StartingCharacter;
-  /**
-   * A pre-job lane, carried verbatim so an older file runs exactly as it did:
-   * its own entries (or rosterFile), lane-level dimensions, untilDefault.
-   * Only `legacyJob` sets it.
-   */
-  legacy?: FleetLane;
   /**
    * Set by `planResumes` (ADR-0036): this job's spawn resumes the paused run
    * named here, on the account it was on, before anything fresh is launched.
@@ -338,8 +317,6 @@ export interface FleetConfig {
    * concurrent sessions.
    */
   maxConcurrent: Record<string, number>;
-  /** Lane names read from a legacy `lanes` list this load, for the one-line notice. */
-  legacyLanes: string[];
 }
 
 /**
@@ -356,12 +333,11 @@ export function paidPoolOf(config: Pick<FleetConfig, "accounts" | "policy">): st
  * The accounts each split-out class may use, for `planNextJobs`. A class absent
  * from the map is not split and shares the pool.
  *
- * The two classes are deliberately asymmetric. **Paid** keeps a pre-split
- * escape: without `accounts.paid` and without a `policy.paid` block a file
- * predates the split entirely, and its paid picks share the pool as they always
- * did. **Local** has no such block to key on and no legacy to preserve — the
- * split is always on, so a roster with a local model and no `accounts.local` is
- * a config gap that holds those picks rather than putting the box's model on a
+ * The two classes are deliberately asymmetric. **Paid** is split only when the
+ * file says so: without `accounts.paid` and without a `policy.paid` block the
+ * paid picks share the pool. **Local** has no such block to key on — the split
+ * is always on, so a roster with a local model and no `accounts.local` is a
+ * config gap that holds those picks rather than putting the box's model on a
  * shared account.
  */
 export function classPoolsOf(config: Pick<FleetConfig, "accounts" | "policy">): Partial<Record<AccountClass, string[]>> {
@@ -405,7 +381,7 @@ export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
  * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
  * owns the id. e90: 90m, idle 20m, no-xp 20m, 3000 calls. e360: 6h, idle 20m,
  * no-xp off — ceilings are a runaway guard at 1000 calls per 30 min (e90
- * 3000, e360 12000; docs/EPISODES.md). freeplay: no wall clock, unscored, ceiling left to the lane (the runner has no "unbounded").
+ * 3000, e360 12000; docs/EPISODES.md). freeplay: no wall clock, unscored, ceiling left to the entry (the runner has no "unbounded").
  */
 export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "watchdogs" | "maxToolCalls"> {
   switch (id) {
@@ -449,14 +425,14 @@ export function isClaudeFamily(model: string): boolean {
 }
 
 /**
- * True when an openai lane points at a shared free-cloud pool — OpenRouter or
+ * True when an openai entry points at a shared free-cloud pool — OpenRouter or
  * OpenCode Zen. Those pools are what the free-suffix rule polices: their free
  * tiers are metered per upstream provider, so only free model ids belong there.
  * An absent apiBase means the run-roster default (OpenRouter), so it counts as
  * a shared pool too. A local/self-hosted OpenAI-compatible endpoint (e.g. an
  * LM Studio box on the LAN) is NOT a shared pool: it has no free tier to abuse,
  * so it is exempt from the free-suffix rule — but still bound by every other
- * lane-policy check, the claude bar included.
+ * roster-policy check, the claude bar included.
  */
 export function isSharedFreePool(apiBase: string | undefined): boolean {
   if (apiBase === undefined) return true;
@@ -467,44 +443,36 @@ export function isSharedFreePool(apiBase: string | undefined): boolean {
 // lives in runner/src/model-cost.ts, next to the billing verdict it feeds.
 
 /**
- * Lane-policy and shape checks for one lane's entries. Used for inline
- * entries at parse time and for rosterFile contents at load time.
+ * Roster-policy and shape checks for roster entries. `where` names the
+ * entry's home (`roster:<name>`) for the error message.
  */
-export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[] {
-  if (!Array.isArray(entries)) fail(`lane ${lane.name}: entries must be a JSON array`);
+export function validateEntries(where: string, entries: unknown): RosterSpec[] {
+  if (!Array.isArray(entries)) fail(`${where}: entries must be a JSON array`);
   const out: RosterSpec[] = [];
   for (const e of entries as RosterSpec[]) {
     if (typeof e !== "object" || e === null || typeof e.model !== "string" || e.model.length === 0) {
-      fail(`lane ${lane.name}: entry without a model: ${JSON.stringify(e)}`);
+      fail(`${where}: entry without a model: ${JSON.stringify(e)}`);
     }
-    // `claude-subscription` is the pre-ADR-0035 spelling of `claude-code`;
-    // a live fleet.json may still carry it, and it reads as the same driver.
-    const driver = normalizeDriver(e.driver ?? "openai");
+    const driver: string = e.driver ?? "openai";
     if (driver !== "openai" && driver !== "claude-code") {
-      fail(`lane ${lane.name}: entry ${e.model}: unknown driver ${String(e.driver)}`);
+      fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (openai | claude-code)`);
     }
     if (driver === "openai" && isClaudeFamily(e.model)) {
       fail(
-        `lane ${lane.name}: entry ${e.model}: lane-policy — claude models run only via the ` +
-          `claude-code driver, never through an openai-driver lane`,
+        `${where}: entry ${e.model}: roster policy — claude models run only via the ` +
+          `claude-code driver, never through an openai-driver entry`,
       );
     }
     if (driver === "claude-code" && !isClaudeFamily(e.model)) {
       fail(
-        `lane ${lane.name}: entry ${e.model}: lane-policy — the claude-code driver ` +
+        `${where}: entry ${e.model}: roster policy — the claude-code driver ` +
           `carries claude models only`,
       );
     }
-    if (e.account !== undefined && e.account.toUpperCase() !== lane.account.toUpperCase()) {
-      fail(
-        `lane ${lane.name}: entry ${e.model} pins account ${e.account} but the lane owns ` +
-          `${lane.account} — one lane, one account`,
-      );
-    }
     // Shared free-cloud pools (OpenRouter, OpenCode Zen) carry free models
-    // only; the suffix is how we keep a lane off a paid tier, and an explicit
+    // only; the suffix is how we keep an entry off a paid tier, and an explicit
     // `billing: "paid"` is how the operator opts one in on purpose. Local/self-hosted
-    // openai lanes have no such pool and are exempt — but still claude-barred
+    // openai entries have no such pool and are exempt — but still claude-barred
     // above.
     if (
       driver === "openai" &&
@@ -514,7 +482,7 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
       e.billing !== "paid"
     ) {
       fail(
-        `lane ${lane.name}: entry ${e.model}: lane-policy — a shared free-cloud pool ` +
+        `${where}: entry ${e.model}: roster policy — a shared free-cloud pool ` +
           `(OpenRouter/OpenCode) carries free models only (id must end -free or :free, ` +
           `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST) unless the entry ` +
           `declares "billing": "paid" — a deliberate paid model under policy.paid (ADR-0034); ` +
@@ -524,26 +492,24 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
       if (!parsed.success) {
-        fail(`lane ${lane.name}: entry ${e.model}: watchdogs — ${parsed.error.message}`);
+        fail(`${where}: entry ${e.model}: watchdogs — ${parsed.error.message}`);
       }
     }
     if (e.objective !== undefined && (typeof e.objective !== "string" || e.objective.length === 0)) {
-      fail(`lane ${lane.name}: entry ${e.model}: objective must be a non-empty string`);
+      fail(`${where}: entry ${e.model}: objective must be a non-empty string`);
     }
     if (e.wikiCoords !== undefined && typeof e.wikiCoords !== "boolean") {
-      fail(`lane ${lane.name}: entry ${e.model}: wikiCoords must be a boolean`);
+      fail(`${where}: entry ${e.model}: wikiCoords must be a boolean`);
     }
     if (
       e.maxToolCalls !== undefined &&
       (typeof e.maxToolCalls !== "number" || !Number.isInteger(e.maxToolCalls) || e.maxToolCalls <= 0)
     ) {
-      fail(`lane ${lane.name}: entry ${e.model}: maxToolCalls must be a positive integer`);
+      fail(`${where}: entry ${e.model}: maxToolCalls must be a positive integer`);
     }
-    // Normalised driver spelling from here on: meta.json and the runner argv
-    // only ever see `claude-code`.
-    out.push(e.driver === undefined ? e : { ...e, driver });
+    out.push(e);
   }
-  if (out.length === 0) fail(`lane ${lane.name}: no entries`);
+  if (out.length === 0) fail(`${where}: no entries`);
   return out;
 }
 
@@ -601,58 +567,22 @@ export function parseFleet(raw: unknown): FleetConfig {
     queue?: unknown;
     policy?: unknown;
   };
+  if (o.lanes !== undefined) {
+    fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (ADR-0034)");
+  }
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
-  const legacyPinned = accounts.pinned;
-  accounts.pinned = {};
   const roster = parseRoster(o.roster);
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
     if (names.has(job.name)) {
-      fail(
-        job.source === "legacy"
-          ? `fleet config: duplicate lane name ${job.name}`
-          : `queue: two jobs would share the name ${job.name} (${job.ref} ${job.episode}) — one job per (ref, episode)`,
-      );
+      fail(`queue: two jobs would share the name ${job.name} (${job.ref} ${job.episode}) — one job per (ref, episode)`);
     }
     names.add(job.name);
     jobs.push(job);
   };
-  // Legacy `lanes`: the pre-pool shape (each lane names its account) and the
-  // pool shape (accounts come from accounts.pinned) both read as pinned jobs
-  // that carry their entries verbatim.
-  const legacyLanes: string[] = [];
-  if (o.lanes !== undefined) {
-    if (!Array.isArray(o.lanes)) fail("fleet config: lanes must be an array");
-    const hasPinnedMap = o.accounts !== undefined && Object.keys(legacyPinned).length > 0;
-    for (const l of o.lanes as Partial<FleetLane>[]) {
-      const lane = parseLegacyLane(l, (name) => {
-        if (o.accounts === undefined) return undefined;
-        const pinned = Object.entries(legacyPinned).find(([, ln]) => ln === name)?.[0];
-        if (pinned === undefined) {
-          fail(`lane ${name}: not in accounts.pinned — a lane must be pinned to an account (pool work goes in queue)`);
-        }
-        return pinned;
-      });
-      add(legacyJob(lane));
-      legacyLanes.push(lane.name);
-    }
-    if (hasPinnedMap) {
-      for (const [account, laneName] of Object.entries(legacyPinned)) {
-        if (!names.has(laneName)) fail(`accounts.pinned: ${account} is pinned to lane ${laneName}, which is not in lanes`);
-      }
-    }
-  }
   for (const job of parseQueue(o.queue, roster)) add(job);
-  for (const [account, name] of Object.entries(legacyPinned)) {
-    const job = jobs.find((j) => j.name === name);
-    if (job === undefined) fail(`accounts.pinned: ${account} is pinned to ${name}, which is not a job`);
-    if (job.account !== undefined && job.account.toUpperCase() !== account.toUpperCase()) {
-      fail(`accounts.pinned: ${account} -> ${name} disagrees with the job's own account ${job.account}`);
-    }
-    if (job.account === undefined) fail(`accounts.pinned: ${account} -> ${name}, but that job carries no account — pin it on the job`);
-  }
   // One live session per account: two enabled jobs on one account means one
   // of them spends the whole window waiting behind the other.
   const byAccount = new Map<string, string>();
@@ -705,118 +635,24 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
-  return { notes, preflight, accounts, roster, jobs, policy, maxConcurrent, legacyLanes };
-}
-
-/**
- * One lane of a legacy `lanes` list, exactly as the pre-job code read it.
- * `accountOf` answers for the pool-era shape (accounts.pinned); undefined
- * means the lane names its own account (pre-pool shape).
- */
-function parseLegacyLane(l: Partial<FleetLane>, accountOf: (name: string) => string | undefined): FleetLane {
-  if (typeof l !== "object" || l === null) fail("fleet config: lane is not an object");
-  if (typeof l.name !== "string" || l.name.length === 0) fail("fleet config: lane without a name");
-  if (typeof l.enabled !== "boolean") fail(`lane ${l.name}: enabled must be true or false`);
-  const pinnedAccount = accountOf(l.name);
-  if (pinnedAccount !== undefined) {
-    if (l.account !== undefined && l.account.toUpperCase() !== pinnedAccount.toUpperCase()) {
-      fail(`lane ${l.name}: account ${l.account} disagrees with accounts.pinned (${pinnedAccount})`);
-    }
-    l.account = pinnedAccount;
-  }
-  if (typeof l.account !== "string" || l.account.length === 0) fail(`lane ${l.name}: account is required`);
-  const loop = l.loop ?? false;
-  if (typeof loop !== "boolean") fail(`lane ${l.name}: loop must be true or false`);
-  if (l.untilDefault !== undefined && !/^\d{1,2}:\d{2}$/.test(l.untilDefault)) {
-    fail(`lane ${l.name}: untilDefault wants HH:MM, got ${String(l.untilDefault)}`);
-  }
-  const hasEntries = l.entries !== undefined;
-  const hasFile = l.rosterFile !== undefined;
-  if (hasEntries === hasFile) fail(`lane ${l.name}: exactly one of entries or rosterFile`);
-  if (l.objective !== undefined && (typeof l.objective !== "string" || l.objective.length === 0)) {
-    fail(`lane ${l.name}: objective must be a non-empty string`);
-  }
-  if (l.wikiCoords !== undefined && typeof l.wikiCoords !== "boolean") {
-    fail(`lane ${l.name}: wikiCoords must be a boolean`);
-  }
-  if (l.watchdogs !== undefined) {
-    const parsed = watchdogOverrideSchema.safeParse(l.watchdogs);
-    if (!parsed.success) fail(`lane ${l.name}: watchdogs — ${parsed.error.message}`);
-  }
-  if (
-    l.maxToolCalls !== undefined &&
-    (typeof l.maxToolCalls !== "number" || !Number.isInteger(l.maxToolCalls) || l.maxToolCalls <= 0)
-  ) {
-    fail(`lane ${l.name}: maxToolCalls must be a positive integer`);
-  }
-  const lane: FleetLane = {
-    name: l.name,
-    enabled: l.enabled,
-    account: l.account,
-    loop,
-    ...(l.untilDefault !== undefined ? { untilDefault: l.untilDefault } : {}),
-    ...(hasFile ? { rosterFile: l.rosterFile } : {}),
-    ...(l.objective !== undefined ? { objective: l.objective } : {}),
-    ...(l.watchdogs !== undefined ? { watchdogs: l.watchdogs } : {}),
-    ...(l.maxToolCalls !== undefined ? { maxToolCalls: l.maxToolCalls } : {}),
-    ...(l.wikiCoords !== undefined ? { wikiCoords: l.wikiCoords } : {}),
-  };
-  if (hasEntries) lane.entries = validateEntries(lane, l.entries);
-  return lane;
-}
-
-/**
- * A legacy lane as a pinned job. It keeps its name, account and loop/once
- * semantics, and carries the lane itself so its entries spawn verbatim — no
- * episode tier is folded in (its entries say what they say; an entry's own
- * `episode` field still reaches the runner).
- */
-export function legacyJob(lane: FleetLane): FleetJob {
-  const episode = (lane.entries ?? []).map((e) => e.episode).find((e): e is EpisodeId => (EPISODE_IDS as readonly string[]).includes(e ?? ""));
-  return {
-    refs: [],
-    ref: lane.name,
-    episode: episode ?? "freeplay",
-    repeat: lane.loop ? "loop" : 1,
-    name: lane.name,
-    enabled: lane.enabled,
-    account: lane.account,
-    source: "legacy",
-    legacy: lane,
-  };
+  return { notes, preflight, accounts, roster, jobs, policy, maxConcurrent };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
   if (raw === undefined) return { pinned: {}, pool: [], paid: [], local: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
   const o = raw as { pinned?: unknown; pool?: unknown; paid?: unknown; local?: unknown };
-  // `pinned` is legacy input (account -> lane/job name): accepted so the
-  // pool-era file loads, cross-checked against the jobs, never authored anew.
-  const pinned: Record<string, string> = {};
+  // `pinned` is derived from the jobs (`account` on a queue entry), never authored.
   if (o.pinned !== undefined) {
-    if (typeof o.pinned !== "object" || o.pinned === null || Array.isArray(o.pinned)) {
-      fail("accounts.pinned must be an object of account -> job name (legacy; pin the account on the job instead)");
-    }
-    for (const [account, lane] of Object.entries(o.pinned as Record<string, unknown>)) {
-      if (typeof lane !== "string" || lane.length === 0) fail(`accounts.pinned: ${account} needs a job name`);
-      if (account.length === 0) fail("accounts.pinned: empty account name");
-      pinned[account] = lane;
-    }
+    fail("accounts.pinned is not a 0.4 key — pin the account on the job (`account` in its queue entry); the map is derived");
   }
-  const seenLanes = new Set<string>();
-  for (const lane of Object.values(pinned)) {
-    if (seenLanes.has(lane)) fail(`accounts.pinned: ${lane} is pinned to two accounts — one job, one account`);
-    seenLanes.add(lane);
-  }
+  const pinned: Record<string, string> = {};
   const pool: string[] = [];
   if (o.pool !== undefined) {
     if (!Array.isArray(o.pool)) fail("accounts.pool must be an array of account names");
     for (const a of o.pool as unknown[]) {
       if (typeof a !== "string" || a.length === 0) fail("accounts.pool: entries are account names");
       if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
-      if (Object.keys(pinned).some((p) => p.toUpperCase() === a.toUpperCase())) {
-        fail(`accounts.pool: ${a} is also pinned (to ${pinned[a] ?? "a job"})`);
-      }
       pool.push(a);
     }
   }
@@ -859,11 +695,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     }
     const runsPerEpisode = parseRunsPerEpisode(rawRuns, `roster ${name}: runsPerEpisode`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
-    // Lane-policy checks are per entry; the pseudo-lane is only there for the
-    // error message and the account-agreement check (vacuous here).
-    const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [
-      rawBilling === undefined ? rest : { ...rest, billing: rawBilling },
-    ]);
+    const [validated] = validateEntries(`roster:${name}`, [rawBilling === undefined ? rest : { ...rest, billing: rawBilling }]);
     out[name] = {
       ...validated!,
       tiers: tiers as EpisodeId[],
@@ -911,7 +743,7 @@ export function policyExclusion(config: Pick<FleetConfig, "jobs" | "roster">, na
 
 /** The driver a roster name runs on, for the concurrency cap. */
 export function driverOf(roster: Record<string, FleetRosterEntry>, name: string): string {
-  return normalizeDriver(roster[name]?.driver ?? "openai") ?? "openai";
+  return roster[name]?.driver ?? "openai";
 }
 
 /** An eligibility predicate over the projection, for planQueue / runnableRefs. */
@@ -926,7 +758,7 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) fail("fleet config: queue must be an array of jobs");
   const out: FleetJob[] = [];
-  for (const j of raw as (Partial<FleetJob> & { lane?: unknown })[]) {
+  for (const j of raw as Partial<FleetJob>[]) {
     if (typeof j !== "object" || j === null) fail("queue: job is not an object");
     const rawRef = (j as { ref?: unknown }).ref;
     const refs = typeof rawRef === "string" ? [rawRef] : Array.isArray(rawRef) ? (rawRef as unknown[]) : undefined;
@@ -943,7 +775,6 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
     if (repeat !== "loop" && (typeof repeat !== "number" || !Number.isInteger(repeat) || repeat <= 0)) {
       fail(`queue ${ref}: repeat must be a positive integer or "loop"`);
     }
-    // `lane` is the pre-job name field: read and ignored — the name is derived.
     const name = `${(refs as string[])[0]}-${j.episode}`;
     const enabled = j.enabled ?? true;
     if (typeof enabled !== "boolean") fail(`queue ${ref}: enabled must be true or false`);
@@ -1214,17 +1045,13 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
 }
 
 /**
- * A job as the lane the spawner runs: the roster entries with the episode's
+ * A job materialised for the spawner: the roster entries with the episode's
  * dimensions folded in, `repeat: n` as n copies with their own run ids
  * (`-r2`, `-r3`, ...) so one roster process runs them in sequence,
  * `repeat: "loop"` as run-roster's own --loop. `tiers` never reaches the
- * roster file. A legacy job is its lane, verbatim, on the account given.
+ * roster file.
  */
-export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): FleetLane {
-  if (job.legacy !== undefined) {
-    const lane: FleetLane = { ...job.legacy, account, enabled: job.enabled };
-    return job.resume === undefined ? lane : withResume(lane, job.resume);
-  }
+export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): JobSpawn {
   const dims = episodeDimensions(job.episode);
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
@@ -1247,25 +1074,25 @@ export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>,
     }
   }
   if (entries.length === 0) fail(`job ${job.name}: no ref of ${job.ref} is eligible for ${job.episode}`);
-  const lane: FleetLane = {
+  const spawn: JobSpawn = {
     name: job.name,
     enabled: job.enabled,
     account,
     loop: job.repeat === "loop",
     entries,
   };
-  return job.resume === undefined ? lane : withResume(lane, job.resume);
+  return job.resume === undefined ? spawn : withResume(spawn, job.resume);
 }
 
 /**
- * The lane, made to resume one paused run first (ADR-0036): the entry for
+ * The spawn, made to resume one paused run first (ADR-0036): the entry for
  * that model carries the paused run id and moves to the front — the roster
- * runs entries in order, and a *fresh* launch of a lane-mate wipes the
+ * runs entries in order, and a *fresh* launch of a rotation-mate wipes the
  * account's characters, which would cost the paused run its level. The
  * roster's --resume-roster then reattaches that run id instead of launching.
  */
-export function withResume(lane: FleetLane, resume: NonNullable<FleetJob["resume"]>): FleetLane {
-  const entries = [...(lane.entries ?? [])];
+export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume"]>): JobSpawn {
+  const entries = [...spawn.entries];
   const i = entries.findIndex((e) => e.model === resume.model && (e.effort ?? undefined) === (resume.effort ?? undefined));
   if (i >= 0) {
     const [hit] = entries.splice(i, 1);
@@ -1275,7 +1102,7 @@ export function withResume(lane: FleetLane, resume: NonNullable<FleetJob["resume
     // entry only has to name the run id and a model the roster accepts.
     entries.unshift({ ...entries[0]!, model: resume.model, ...(resume.effort !== undefined ? { effort: resume.effort } : {}), runId: resume.runId });
   }
-  return { ...lane, entries, resumeRunId: resume.runId };
+  return { ...spawn, entries, resumeRunId: resume.runId };
 }
 
 // ------------------------------------------------------------------ resumes
@@ -1295,6 +1122,24 @@ export interface ResumePlan {
   why: string;
 }
 
+/**
+ * A paused run the supervisor ENDS instead of resuming: the roster entry its
+ * job ref names is a different model now (the operator re-pointed the ref),
+ * so the run has no job to come back under. Ended as `manual` with the detail
+ * below, through the runner's own termination writer, never resumed.
+ */
+export interface EndedRun {
+  runId: string;
+  model: string;
+  ref: string;
+  detail: string;
+}
+
+/** The job ref a fleet run id was launched under, off the id's `fleet-<ref>-<episode>-` prefix. Longest ref wins. */
+export function refOfRunId(runId: string, episode: EpisodeId, refs: readonly string[]): string | undefined {
+  return [...refs].filter((r) => runId.startsWith(`fleet-${r}-${episode}-`)).sort((a, b) => b.length - a.length)[0];
+}
+
 /** A paused run the supervisor will NOT resume right now, and why. For --status. */
 export interface PausedListing {
   runId: string;
@@ -1303,6 +1148,10 @@ export interface PausedListing {
   reason: string;
   /** When the run paused. */
   since: number;
+  /** How many times this run has paused; what the resume cadence indexes. */
+  pauseCount: number;
+  /** When the supervisor will try again; null when waiting on something other than time. */
+  resumeAfter: number | null;
   elapsedMs: number | null;
   budgetMs: number | null;
   why: string;
@@ -1334,10 +1183,13 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
  * A run maps back to its job by what the run recorded — model, effort,
  * episode — against the roster; a pinned or queued job from the file takes
  * it, else a policy model gets a synthetic policy job (the attempt number is
- * read off the run id's `-aN`). A run whose model or tier is no longer in the
- * file stays paused and is listed: the operator resumes it by hand or
- * archives it. Resumes go to the account the run was on (the character
- * lives there), so a busy account means waiting, never a different account.
+ * read off the run id's `-aN`). A run whose job ref now names a DIFFERENT
+ * model is ended (`end`): it has nothing to come back under, and the policy
+ * will schedule the ref's current model fresh. A run whose model or tier is
+ * otherwise no longer in the file stays paused and is listed: the operator
+ * resumes it by hand or archives it. Resumes go to the account the run was
+ * on (the character lives there), so a busy account means waiting, never a
+ * different account.
  */
 export function planResumes(opts: {
   runs: readonly RunFact[];
@@ -1346,10 +1198,11 @@ export function planResumes(opts: {
   running: ReadonlyMap<string, string>;
   held: (account: string) => string | undefined;
   now: number;
-}): { resume: ResumePlan[]; listed: PausedListing[] } {
+}): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
   const resume: ResumePlan[] = [];
   const listed: PausedListing[] = [];
+  const end: EndedRun[] = [];
   const takenAccounts = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const takenJobs = new Set(opts.running.keys());
   const policyNames = policyRefs(config);
@@ -1360,10 +1213,16 @@ export function planResumes(opts: {
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
-    const list = (why: string): void => {
-      listed.push({ runId: f.runId, model: f.model, account: f.account, reason: pause.reason, since: pause.at, elapsedMs: pause.episodeElapsedMs, budgetMs: f.episodeMs, why });
+    const list = (why: string, resumeAfter: number | null = null): void => {
+      listed.push({ runId: f.runId, model: f.model, account: f.account, reason: pause.reason, since: pause.at, pauseCount: pause.count, resumeAfter, elapsedMs: pause.episodeElapsedMs, budgetMs: f.episodeMs, why });
     };
     const modelKey = `${f.model}@${f.effort ?? ""}`;
+    const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
+    const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
+    if (launchedUnder !== undefined && current !== undefined && (current.model !== f.model || (current.effort ?? null) !== (f.effort ?? null))) {
+      end.push({ runId: f.runId, model: f.model, ref: launchedUnder, detail: `ended by the supervisor: model ${f.model} no longer under ref ${launchedUnder}` });
+      continue;
+    }
     if (isStalePause(f, now)) {
       list(`stale: paused ${fmtElapsed(now - pause.at)} ago, past twice its ${f.episodeMs !== null ? fmtElapsed(f.episodeMs) : "6h"} budget — resume by hand (--resume ${f.runId}) or archive`);
       continue;
@@ -1376,8 +1235,7 @@ export function planResumes(opts: {
     const refs = Object.entries(config.roster)
       .filter(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null))
       .map(([name]) => name);
-    const legacyMatch = (j: FleetJob): boolean => j.legacy?.entries?.some((e) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null)) === true;
-    const fromFile = config.jobs.find((j) => (j.refs.some((r) => refs.includes(r)) && j.episode === f.episode) || legacyMatch(j));
+    const fromFile = config.jobs.find((j) => j.refs.some((r) => refs.includes(r)) && j.episode === f.episode);
     let job: FleetJob | undefined;
     let account: string | null = f.account;
     if (fromFile !== undefined) {
@@ -1387,10 +1245,6 @@ export function planResumes(opts: {
       }
       if (fromFile.account !== undefined && f.account !== null && fromFile.account.toUpperCase() !== f.account.toUpperCase()) {
         list(`pinned job ${fromFile.name} is on ${fromFile.account}, the run was on ${f.account} — resume by hand`);
-        continue;
-      }
-      if (fromFile.legacy !== undefined && fromFile.legacy.entries === undefined) {
-        list(`job ${fromFile.name} reads a rosterFile — resume by hand`);
         continue;
       }
       job = fromFile;
@@ -1428,7 +1282,7 @@ export function planResumes(opts: {
       continue;
     }
     if (notBefore !== null && now < notBefore) {
-      list(`${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`);
+      list(`${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`, notBefore);
       continue;
     }
     if (takenAccounts.has(account.toUpperCase())) {
@@ -1450,7 +1304,39 @@ export function planResumes(opts: {
       why: `${pause.reason}${pause.count > 1 ? ` (pause ${pause.count})` : ""}, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}`,
     });
   }
-  return { resume, listed };
+  return { resume, listed, end };
+}
+
+/**
+ * End the runs `planResumes` said to end, through the runner's own writer
+ * (`Trajectory.setTermination`: the trajectory record, the run row, the
+ * pause cleared) — the same path `classify.ts` takes, so nothing else writes
+ * a termination into run.sqlite. Returns what it ended; a run directory that
+ * will not open is reported, not fatal.
+ */
+export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: string; error?: string }[] {
+  return ended.map((e) => {
+    try {
+      const t = new Trajectory(join(runsDir, e.runId));
+      try {
+        t.setTermination(e.runId, "manual", e.detail);
+      } finally {
+        t.close();
+      }
+      return { runId: e.runId };
+    } catch (err) {
+      return { runId: e.runId, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+}
+
+/** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
+export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean): string[] {
+  if (ended.length === 0) return [];
+  return [
+    `paused runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
+    ...ended.map((e) => `  ${e.runId} — ${e.detail}`),
+  ];
 }
 
 /** One line per paused run the supervisor is not resuming, for --status and --dry-run. */
@@ -1464,7 +1350,7 @@ export function formatPaused(listed: readonly PausedListing[]): string[] {
 
 /**
  * Re-read the config during supervision. A broken edit must never take down
- * running lanes, so any error keeps the last good config and is reported.
+ * running jobs, so any error keeps the last good config and is reported.
  */
 export function rereadFleet(
   path: string,
@@ -1512,7 +1398,7 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
   return [
     `!! fleet.json REJECTED since ${new Date(rej.since).toLocaleString()}: ${rej.error}` +
       ` — running on config loaded at ${loadedAt === undefined ? "an unrecorded time" : new Date(loadedAt).toLocaleString()};` +
-      ` lane enabled flags in the file are NOT in effect`,
+      ` job enabled flags in the file are NOT in effect`,
     `   fix the file (or roll it back) — the supervisor retries every ${TICK_MS / 1000}s and clears this by itself`,
   ];
 }
@@ -1535,129 +1421,93 @@ export function loadConfigForRead(
 // ------------------------------------------------------------- materialize
 
 /**
- * A lane's entries, stamped with the lane account and fleet-scoped run ids
- * (`fleet-<lane>-<model-slug>[-<effort>]-<date>`) so fleet runs never share a
- * run id with hand-launched rosters or with another lane.
+ * A spawn's entries, stamped with the job's account and fleet-scoped run ids
+ * (`fleet-<job>-<model-slug>[-<effort>]-<date>`) so fleet runs never share a
+ * run id with hand-launched rosters or with another job.
  */
-export function fillEntries(lane: FleetLane, entries: RosterSpec[], stamp: string): RosterSpec[] {
-  return entries.map((e) => ({
+export function fillEntries(spawn: JobSpawn, stamp: string): RosterSpec[] {
+  return spawn.entries.map((e) => ({
     ...e,
-    account: lane.account,
-    // Lane defaults, entry wins. `watchdogs` merges key-by-key so a lane can
-    // set a long episode while one entry tightens `idleMs`.
-    ...((e.objective ?? lane.objective) !== undefined
-      ? { objective: (e.objective ?? lane.objective)! }
-      : {}),
-    ...(lane.watchdogs !== undefined || e.watchdogs !== undefined
-      ? { watchdogs: { ...lane.watchdogs, ...e.watchdogs } }
-      : {}),
-    ...((e.maxToolCalls ?? lane.maxToolCalls) !== undefined
-      ? { maxToolCalls: (e.maxToolCalls ?? lane.maxToolCalls)! }
-      : {}),
-    ...((e.wikiCoords ?? lane.wikiCoords) !== undefined
-      ? { wikiCoords: (e.wikiCoords ?? lane.wikiCoords)! }
-      : {}),
+    account: spawn.account,
     runId:
       e.runId ??
-      `fleet-${lane.name}-${slug(e.model)}${e.effort !== undefined ? `-${slug(e.effort)}` : ""}-${stamp}`,
+      `fleet-${spawn.name}-${slug(e.model)}${e.effort !== undefined ? `-${slug(e.effort)}` : ""}-${stamp}`,
   }));
 }
 
-/** Load and validate a lane's entries, wherever they live. */
-export function loadLaneEntries(
-  lane: FleetLane,
-  read: (p: string) => string = (p) => readFileSync(p, "utf8"),
-): RosterSpec[] {
-  if (lane.entries !== undefined) return lane.entries;
-  const path = isAbsolute(lane.rosterFile!) ? lane.rosterFile! : join(REPO_ROOT, lane.rosterFile!);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(read(path));
-  } catch (e) {
-    fail(`lane ${lane.name}: cannot read rosterFile ${lane.rosterFile}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  return validateEntries(lane, raw);
+/** Per-job files, all hanging off the job name and the supervisor's stamp. */
+export function jobRosterPath(job: string, stamp: string): string {
+  return join(RUNS_DIR, `fleet-${job}-${stamp}.roster.json`);
 }
-
-export function laneRosterPath(lane: string, stamp: string): string {
-  return join(RUNS_DIR, `fleet-${lane}-${stamp}.roster.json`);
+export function jobJsonlPath(job: string, stamp: string): string {
+  return join(RUNS_DIR, `fleet-${job}-${stamp}.jsonl`);
 }
-export function laneJsonlPath(lane: string, stamp: string): string {
-  return join(RUNS_DIR, `fleet-${lane}-${stamp}.jsonl`);
-}
-export function laneStdoutPath(lane: string, stamp: string): string {
-  return join(RUNS_DIR, `fleet-${lane}-${stamp}.log`);
-}
-
-/** The exact run-roster argv for one lane. Pure; tested. */
-export function laneArgv(
-  lane: FleetLane,
-  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean },
-): string[] {
-  const until = opts.until ?? lane.untilDefault;
-  const argv = [
-    ROSTER_SH,
-    laneRosterPath(lane.name, opts.stamp),
-    "--log",
-    laneJsonlPath(lane.name, opts.stamp),
-    "--date",
-    opts.stamp,
-  ];
-  if (lane.loop) argv.push("--loop");
-  if (until !== undefined) argv.push("--until", until);
-  // A resume lane always reattaches: the roster must find the paused run's
-  // row and --resume it rather than launch the id fresh.
-  if (opts.resumeRoster === true || lane.resumeRunId !== undefined) argv.push("--resume-roster");
-  return argv;
+export function jobLogPath(job: string, stamp: string): string {
+  return join(RUNS_DIR, `fleet-${job}-${stamp}.log`);
 }
 
 /**
- * The stop condition for one lane, or none. A loop lane without one used to be
- * refused; under the fleet service that is the normal case — the supervisor is
- * up while the machine is up and lanes are steered by editing fleet.json, not
- * by a wall clock. `--until` and `untilDefault` remain as optional caps.
+ * The exact run-roster argv for one spawn. Pure; tested. `until` is the CLI's
+ * optional cap; under the fleet service there is none — the supervisor is up
+ * while the machine is up and jobs are steered by editing fleet.json.
  */
-export function laneUntil(lane: FleetLane, cliUntil: string | undefined): string | undefined {
-  return cliUntil ?? lane.untilDefault;
+export function jobArgv(
+  spawn: JobSpawn,
+  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean },
+): string[] {
+  const argv = [
+    ROSTER_SH,
+    jobRosterPath(spawn.name, opts.stamp),
+    "--log",
+    jobJsonlPath(spawn.name, opts.stamp),
+    "--date",
+    opts.stamp,
+  ];
+  if (spawn.loop) argv.push("--loop");
+  if (opts.until !== undefined) argv.push("--until", opts.until);
+  // A resume spawn always reattaches: the roster must find the paused run's
+  // row and --resume it rather than launch the id fresh.
+  if (opts.resumeRoster === true || spawn.resumeRunId !== undefined) argv.push("--resume-roster");
+  return argv;
 }
 
 // ------------------------------------------------------------------ diffing
 
-export interface LaneSets {
-  /** lanes with a live roster process */
+export interface JobSets {
+  /** jobs with a live roster process */
   running: Set<string>;
-  /** running lanes waiting for an episode boundary to be SIGTERMed */
+  /** running jobs waiting for an episode boundary to be SIGTERMed */
   draining: Set<string>;
-  /** lanes whose process exited while enabled (done; not respawned) */
+  /** jobs whose process exited while enabled (done; not respawned) */
   finished: Set<string>;
 }
 
-export interface LaneActions {
-  start: FleetLane[];
+export interface JobActions {
+  start: JobSpawn[];
   drain: string[];
   undrain: string[];
-  /** finished lanes now disabled: forget them so a later re-enable respawns */
+  /** finished jobs now disabled: forget them so a later re-enable respawns */
   rearm: string[];
 }
 
 /** What the supervisor should do to make reality match the config. Pure. */
-export function diffLanes(lanes: FleetLane[], sets: LaneSets): LaneActions {
-  const actions: LaneActions = { start: [], drain: [], undrain: [], rearm: [] };
-  const byName = new Map(lanes.map((l) => [l.name, l]));
-  for (const lane of lanes) {
-    if (lane.enabled && sets.running.has(lane.name) && sets.draining.has(lane.name)) {
-      actions.undrain.push(lane.name);
+export function diffJobs(spawns: JobSpawn[], sets: JobSets): JobActions {
+  const actions: JobActions = { start: [], drain: [], undrain: [], rearm: [] };
+  const byName = new Map(spawns.map((l) => [l.name, l]));
+  for (const spawn of spawns) {
+    if (spawn.enabled && sets.running.has(spawn.name) && sets.draining.has(spawn.name)) {
+      actions.undrain.push(spawn.name);
       continue;
     }
-    if (lane.enabled && !sets.running.has(lane.name) && !sets.finished.has(lane.name)) {
-      actions.start.push(lane);
+    if (spawn.enabled && !sets.running.has(spawn.name) && !sets.finished.has(spawn.name)) {
+      actions.start.push(spawn);
       continue;
     }
-    if (!lane.enabled && sets.finished.has(lane.name)) actions.rearm.push(lane.name);
+    if (!spawn.enabled && sets.finished.has(spawn.name)) actions.rearm.push(spawn.name);
   }
   for (const name of sets.running) {
-    const lane = byName.get(name);
-    if ((lane === undefined || !lane.enabled) && !sets.draining.has(name)) actions.drain.push(name);
+    const spawn = byName.get(name);
+    if ((spawn === undefined || !spawn.enabled) && !sets.draining.has(name)) actions.drain.push(name);
   }
   return actions;
 }
@@ -1666,10 +1516,10 @@ export function diffLanes(lanes: FleetLane[], sets: LaneSets): LaneActions {
  * Should the tick loop end? Only when a deadline was asked for.
  *
  * "Nothing running and nothing to start" is a terminal state for a one-shot
- * host run (`--until 18:00`, lanes finish, exit). It is NOT one for the fleet
- * SERVICE: the config is hot, so a lane can be enabled on any tick, and
+ * host run (`--until 18:00`, jobs finish, exit). It is NOT one for the fleet
+ * SERVICE: the config is hot, so a job can be enabled on any tick, and
  * `restart: unless-stopped` restarts on exit 0 as readily as on a crash. A
- * supervisor that exited when the operator parked every lane — which is exactly
+ * supervisor that exited when the operator parked every job — which is exactly
  * what docs/OPERATIONS.md tells them to do before a deploy window — would be
  * restarted every 60s, taking a new epoch stamp each time. So with no deadline
  * the supervisor idles instead, which is also the honest reading of a control
@@ -1824,7 +1674,7 @@ export function gateDecision(opts: {
   return "run";
 }
 
-/** May lanes be spawned given the gate's own last word? Pure. */
+/** May jobs be spawned given the gate's own last word? Pure. */
 export function gateOpen(action: GateAction, record: PreflightRecord | undefined): boolean {
   if (action === "skip") return true;
   if (action === "pass") return true;
@@ -1937,7 +1787,7 @@ export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight)
     `budget ${Math.round(pf.timeoutMs / 1000)}s; ${pf.deploySmokes.length} deploy-only smoke(s), budget ${Math.round(pf.deployTimeoutMs / 1000)}s)`;
   if (rec === undefined) return [head, "  no gate result recorded yet"];
   const when = new Date(rec.at).toLocaleString();
-  const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — lanes blocked";
+  const verdict = rec.skipped === true ? "SKIPPED (gate open)" : rec.ok ? "PASS" : "FAIL — jobs blocked";
   const out = [head, `  last gate ${verdict} at ${when}, identity ${rec.serverIdentity}`];
   if (rec.build !== undefined) out.push(`  server build ${rec.build}`);
   for (const r of rec.results) {
@@ -2142,7 +1992,7 @@ function now(): string {
 function say(line: string): void {
   console.log(`[${now()}] fleet: ${line}`);
 }
-function record(entry: { lane: string; event: string; detail?: string }): void {
+function record(entry: { job: string; event: string; detail?: string }): void {
   if (fleetLog === "") return;
   mkdirSync(dirname(fleetLog), { recursive: true });
   appendFileSync(fleetLog, JSON.stringify({ ts: Date.now(), ...entry }) + "\n");
@@ -2154,8 +2004,8 @@ function dateStamp(d: Date = new Date()): string {
 
 // ------------------------------------------------------------------ process
 
-interface LaneProc {
-  lane: FleetLane;
+interface JobProc {
+  spawn: JobSpawn;
   proc: ReturnType<typeof Bun.spawn>;
   pid: number;
   spawnedAt: number;
@@ -2237,34 +2087,44 @@ interface FleetState {
     finished: string[];
     skipped: { name: string; reason: string }[];
   };
-  /** Every job with a live process: the one concept (ADR-0034). */
-  jobs?: Record<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }>;
+  /**
+   * Every job with a process: the one unit of work (ADR-0034) — what it is
+   * (ref, tier, account, source) and the process that runs it (pid, files,
+   * exit). Written fresh every tick; the supervisor rewrites the whole file
+   * on boot, so nothing reads an older shape.
+   */
+  jobs: Record<string, StateJob>;
   /** Why the last tick spawned nothing from the policy, when it did not. */
-  policy?: {
-    idle?: string;
-    /** Pre-job supervisors wrote the policy's running jobs here; read, never written. */
-    jobs?: Record<string, { ref: string; episode: EpisodeId; account: string; attempt: number }>;
-  };
+  policy?: { idle?: string };
   /** Counters since the supervisor started. */
   session?: { finished: number; ok: number; retried: number };
   /** Paused runs the supervisor is not resuming right now, with why (ADR-0036). */
   paused?: PausedListing[];
-  lanes: Record<
-    string,
-    {
-      pid: number;
-      account: string;
-      /** Repo-relative since ADR-0020; older states carry absolute host paths. */
-      rosterPath: string;
-      jsonl: string;
-      stdoutLog: string;
-      spawnedAt: number;
-      exitCode: number | null;
-      draining: boolean;
-      /** The supervisor's own view of the lane process; see resolveStatePath. */
-      alive?: boolean;
-    }
-  >;
+  /** Paused runs the supervisor ended instead of resuming, this session (ADR-0036 amendment). */
+  ended?: EndedRun[];
+}
+
+/** One job in the state file: the job and its process. */
+export interface StateJob {
+  ref: string;
+  episode: EpisodeId;
+  account: string;
+  source: JobSource;
+  attempt?: number;
+  extra?: StartingCharacter;
+  /** The paused run this spawn is resuming (ADR-0036). */
+  resuming?: string;
+  models: string[];
+  pid: number;
+  /** Repo-relative (ADR-0020): the reader may be on the other side of the mount. */
+  rosterPath: string;
+  jsonl: string;
+  log: string;
+  spawnedAt: number;
+  exitCode: number | null;
+  draining: boolean;
+  /** The supervisor's own view of the process; see resolveStatePath. */
+  alive: boolean;
 }
 
 /**
@@ -2272,10 +2132,10 @@ interface FleetState {
  *
  * The supervisor writes repo-relative paths so `--status` works from the host
  * while the state was written in the container (where REPO_ROOT is
- * /wrathbench). A state written by an older, host-side supervisor carries
- * absolute host paths: honour those when they exist, otherwise fall back to the
- * path recomputed locally from the lane name and stamp. Pure, so the mapping is
- * testable without a live fleet.
+ * /wrathbench). A host-side supervisor writes the same relative form; an
+ * absolute path is honoured when it exists, otherwise the path is recomputed
+ * locally from the job name and stamp. Pure, so the mapping is testable
+ * without a live fleet.
  */
 export function resolveStatePath(
   stored: string | undefined,
@@ -2317,16 +2177,40 @@ interface PoolView {
   session: { finished: number; ok: number; retried: number };
   /** Paused runs the last plan did not resume, with why (ADR-0036). */
   paused: PausedListing[];
+  /** Paused runs ended instead of resumed, this session. */
+  ended: EndedRun[];
 }
 
 function writeState(
   configPath: string,
   stampToday: string,
-  procs: Map<string, LaneProc>,
+  procs: Map<string, JobProc>,
   draining: Set<string>,
   preflight?: PreflightRecord,
   pool?: PoolView,
 ): void {
+  const jobs: Record<string, StateJob> = {};
+  for (const [name, p] of procs) {
+    const j = pool?.jobs.get(name);
+    jobs[name] = {
+      ref: j?.ref ?? name,
+      episode: j?.episode ?? "freeplay",
+      account: p.spawn.account,
+      source: j?.source ?? "pinned",
+      ...(j?.attempt !== undefined ? { attempt: j.attempt } : {}),
+      ...(j?.extra !== undefined ? { extra: j.extra } : {}),
+      ...(p.spawn.resumeRunId !== undefined ? { resuming: p.spawn.resumeRunId } : {}),
+      models: p.spawn.entries.map((e) => e.model),
+      pid: p.pid,
+      rosterPath: relative(REPO_ROOT, jobRosterPath(name, stampToday)),
+      jsonl: relative(REPO_ROOT, jobJsonlPath(name, stampToday)),
+      log: relative(REPO_ROOT, jobLogPath(name, stampToday)),
+      spawnedAt: p.spawnedAt,
+      exitCode: p.exitCode,
+      draining: draining.has(name),
+      alive: !p.exited,
+    };
+  }
   const state: FleetState = {
     fleetPid: process.pid,
     startedAt: START_AT,
@@ -2357,41 +2241,14 @@ function writeState(
                 },
               }
             : {}),
-          jobs: Object.fromEntries(
-            [...pool.jobs].map(([name, j]) => [
-              name,
-              {
-                ref: j.ref,
-                episode: j.episode,
-                account: pool.assigned.get(name) ?? j.account ?? "-",
-                source: j.source,
-                ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
-                ...(j.extra !== undefined ? { extra: j.extra } : {}),
-                ...(procs.get(name)?.lane.resumeRunId !== undefined ? { resuming: procs.get(name)!.lane.resumeRunId! } : {}),
-                models: (procs.get(name)?.lane.entries ?? []).map((e) => e.model),
-              },
-            ]),
-          ),
           policy: { ...(pool.policyIdle !== undefined ? { idle: pool.policyIdle } : {}) },
           session: pool.session,
           paused: pool.paused,
+          ended: pool.ended,
         }
       : {}),
-    lanes: {},
+    jobs,
   };
-  for (const [name, p] of procs) {
-    state.lanes[name] = {
-      pid: p.pid,
-      account: p.lane.account,
-      rosterPath: relative(REPO_ROOT, laneRosterPath(name, stampToday)),
-      jsonl: relative(REPO_ROOT, laneJsonlPath(name, stampToday)),
-      stdoutLog: relative(REPO_ROOT, laneStdoutPath(name, stampToday)),
-      spawnedAt: p.spawnedAt,
-      exitCode: p.exitCode,
-      draining: draining.has(name),
-      alive: !p.exited,
-    };
-  }
   mkdirSync(RUNS_DIR, { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n");
 }
@@ -2464,11 +2321,11 @@ function foreignRosters(managedPids: Set<number>): { pid: number; argv: string }
 }
 
 /**
- * Backed-off / tainted specs for one lane, straight off the roster's defer
- * sidecar. Read-only and tolerant: a lane mid-write (or no sidecar at all)
- * must degrade to "no rows", never break the status report for other lanes.
+ * Backed-off / tainted specs for one job, straight off the roster's defer
+ * sidecar. Read-only and tolerant: a job mid-write (or no sidecar at all)
+ * must degrade to "no rows", never break the status report for other jobs.
  */
-function laneDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
+function jobDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
   const path = deferSidecarPath(jsonl);
   if (!existsSync(path)) return [];
   try {
@@ -2482,16 +2339,16 @@ function laneDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
 }
 
 /**
- * Live episodes across every lane account, for scripts that must not run while
+ * Live episodes across every job account, for scripts that must not run while
  * the world is busy (infra/deploy-worldserver.sh). Same signal --status shows:
  * the roster's own account-busy inference over the trajectory stores. Exit code
  * carries the answer so bash never parses this text.
  */
 function printLiveRuns(configPath: string): number {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
-  // Lane accounts plus the gate's own and the ad-hoc debugging account: the
+  // Job accounts plus the gate's own and the ad-hoc debugging account: the
   // refusal claims "no episodes are live", and a PROBE session dies in a
-  // recreate exactly like a lane's does.
+  // recreate exactly like a job's does.
   const accounts = [
     ...new Set([...Object.keys(config.accounts.pinned), ...scheduledAccounts(config), ...preflightAccounts(config.preflight), "PROBE"]),
   ];
@@ -2506,44 +2363,11 @@ function printLiveRuns(configPath: string): number {
   return live;
 }
 
-/**
- * The running jobs as the state file tells them. A state written by a pre-job
- * supervisor has no `jobs` block: its lanes, `policy.jobs` and `queue.running`
- * are read instead, so --status on new code keeps reporting on an old
- * supervisor until the restart.
- */
-export function liveJobsFromState(
-  state: Pick<FleetState, "jobs" | "lanes" | "policy" | "queue" | "accounts"> | undefined,
-  config: Pick<FleetConfig, "jobs" | "roster"> | undefined,
-): Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }> {
-  const out = new Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }>();
-  if (state === undefined) return out;
-  if (state.jobs !== undefined) {
-    for (const [name, j] of Object.entries(state.jobs)) out.set(name, j);
-    return out;
-  }
-  for (const [name, l] of Object.entries(state.lanes ?? {})) {
-    if (l.alive !== true) continue;
-    const pj = state.policy?.jobs?.[name];
-    const fromFile = config?.jobs.find((j) => j.name === name);
-    const ref = pj?.ref ?? fromFile?.ref ?? name;
-    const models =
-      pj !== undefined
-        ? [config?.roster[pj.ref]?.model ?? pj.ref]
-        : fromFile !== undefined
-          ? fromFile.legacy !== undefined
-            ? (fromFile.legacy.entries ?? []).map((e) => e.model)
-            : fromFile.refs.map((r) => config!.roster[r]?.model ?? r)
-          : [];
-    out.set(name, {
-      ref,
-      episode: pj?.episode ?? fromFile?.episode ?? ("freeplay" as EpisodeId),
-      account: l.account,
-      source: pj !== undefined ? "policy" : fromFile?.source ?? "legacy",
-      ...(pj !== undefined ? { attempt: pj.attempt } : {}),
-      models,
-    });
-  }
+/** The jobs with a process, as the state file tells them. A state without a `jobs` map is not this supervisor's. */
+export function liveJobsFromState(state: Pick<FleetState, "jobs"> | undefined): Map<string, StateJob> {
+  const out = new Map<string, StateJob>();
+  if (state === undefined || typeof state.jobs !== "object" || state.jobs === null) return out;
+  for (const [name, j] of Object.entries(state.jobs)) out.set(name, j);
   return out;
 }
 
@@ -2596,7 +2420,7 @@ function printStatus(configPath: string): void {
   if (config !== undefined) for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
-  const live = liveJobsFromState(state, config);
+  const live = liveJobsFromState(state);
   // Paused runs (ADR-0036): what the supervisor would resume now, and what it
   // lists instead — computed from disk so it is right with the fleet down.
   const runFacts = readRunFacts(RUNS_DIR);
@@ -2610,14 +2434,18 @@ function printStatus(configPath: string): void {
           held: (a) => accountHeldBy(a, ""),
           now: Date.now(),
         })
-      : { resume: [], listed: [] };
-  const jobRow = (name: string, j: { ref: string; episode: EpisodeId; source: JobSource; attempt?: number; models: string[] }): JobRow => {
-    const ls = state?.lanes[name];
-    const alive = ls === undefined ? false : hbAgeMs !== undefined ? fleetUp && ls.alive === true : pidAlive(ls.pid);
+      : { resume: [], listed: [], end: [] };
+  const jobRow = (name: string, j: StateJob): JobRow => {
     const row: JobRow = { name, models: j.models.length > 0 ? j.models : [j.ref], episode: j.episode, ...(j.attempt !== undefined ? { attempt: j.attempt } : {}) };
-    if (ls === undefined) return row;
-    const stdoutLog = resolveStatePath(ls.stdoutLog, laneStdoutPath(name, state!.stamp));
-    const jsonl = resolveStatePath(ls.jsonl, laneJsonlPath(name, state!.stamp));
+    // A job record without its process half was written by another build of
+    // the supervisor: say so rather than render NaN. The restart rewrites it.
+    if (typeof j.pid !== "number" || typeof j.spawnedAt !== "number") {
+      row.cooling = "state file from another supervisor build — restart the fleet service";
+      return row;
+    }
+    const alive = hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
+    const stdoutLog = resolveStatePath(j.log, jobLogPath(name, state!.stamp));
+    const jsonl = resolveStatePath(j.jsonl, jobJsonlPath(name, state!.stamp));
     const runId = lastLaunchedRunId(stdoutLog);
     if (runId !== undefined) {
       row.runId = runId;
@@ -2625,20 +2453,20 @@ function printStatus(configPath: string): void {
       if (prog !== undefined) {
         row.level = prog.level;
         row.xp = prog.xp;
-        row.elapsedMs = Date.now() - (prog.startedAt ?? ls.spawnedAt);
+        row.elapsedMs = Date.now() - (prog.startedAt ?? j.spawnedAt);
       } else {
-        row.elapsedMs = Date.now() - ls.spawnedAt;
+        row.elapsedMs = Date.now() - j.spawnedAt;
       }
     }
-    const defers = laneDefers(jsonl);
+    const defers = jobDefers(jsonl);
     const tainted = defers.find((d) => d.entry.tainted === true);
     const cooling = defers.find((d) => d.entry.tainted !== true && d.entry.notBefore > Date.now());
     if (tainted !== undefined) row.cooling = `tainted: ${tainted.spec} (${tainted.entry.defers} defers, ${tainted.entry.reason})`;
     else if (cooling !== undefined) row.cooling = `cooling until ${new Date(cooling.entry.notBefore).toLocaleTimeString()} (${cooling.entry.reason})`;
-    if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${ls.exitCode !== null ? `exited ${ls.exitCode}` : "dead"}`;
+    if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${j.exitCode !== null ? `exited ${j.exitCode}` : "dead"}`;
     return row;
   };
-  const byAccount = new Map<string, { name: string; j: ReturnType<typeof liveJobsFromState> extends Map<string, infer V> ? V : never }>();
+  const byAccount = new Map<string, { name: string; j: StateJob }>();
   for (const [name, j] of live) byAccount.set(j.account.toUpperCase(), { name, j });
   // With the config in hand the classes come from the file; without it (an
   // older or foreign checkout) from whatever the state file published.
@@ -2716,8 +2544,12 @@ function printStatus(configPath: string): void {
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
   }
 
-  // (d) paused runs the supervisor is not resuming, and why.
+  // (d) paused runs the supervisor is not resuming, and why; and the ones it ends.
   for (const line of formatPaused(resumePlan.listed)) console.log(`  ${line}`);
+  for (const line of formatEnded(resumePlan.end, fleetUp)) console.log(`  ${line}`);
+  if (state?.ended !== undefined && state.ended.length > 0) {
+    console.log(`  ended this session (${state.ended.length}): ${state.ended.map((e) => `${e.runId} (${e.detail})`).join("; ")}`);
+  }
   if (!fleetUp && resumePlan.resume.length > 0) {
     console.log(`  resumes on the next fleet start (${resumePlan.resume.length}): ${resumePlan.resume.map((r) => `${r.runId} on ${r.account}`).join(", ")}`);
   }
@@ -2734,12 +2566,12 @@ function printStatus(configPath: string): void {
   if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue)) console.log(`  ${line}`);
 
   // A /proc scan only means anything when the supervisor shares this namespace.
-  // Against a containerized fleet every lane would show up here as "hand
+  // Against a containerized fleet every job would show up here as "hand
   // started" (host pids, container pids in the state file) — pure noise.
   const foreign =
     state?.containerized === true
       ? []
-      : foreignRosters(new Set(Object.values(state?.lanes ?? {}).map((l) => l.pid)));
+      : foreignRosters(new Set([...live.values()].map((l) => l.pid)));
   if (foreign.length > 0) {
     console.log("  not fleet-managed (hand-started run-roster processes):");
     for (const f of foreign) console.log(`    pid ${f.pid}: ${f.argv}`);
@@ -2754,7 +2586,7 @@ function printStatus(configPath: string): void {
  * projection; used by --dry-run and by the startup fail-fast.
  */
 export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = []): {
-  pinned: { job: FleetJob; lane: FleetLane }[];
+  pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
   policy: PolicyPick[];
   /** Picks the policy wanted but held back (paid cap, driver cap), with why. */
@@ -2763,8 +2595,8 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const eligible = eligibleFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
   const pinned = pinnedJobs(config)
-    .filter((j) => j.enabled && !resumed.has(j.name) && (j.legacy !== undefined || runnableRefs(j, config.roster, eligible).length > 0))
-    .map((job) => ({ job, lane: jobLane(job, config.roster, job.account!, stamp, eligible) }));
+    .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
+    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.
   const running = new Map(resumes.map((r) => [r.job.name, r.account]));
   const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs)]);
@@ -2799,7 +2631,6 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
 
 function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
-  if (config.legacyLanes.length > 0) console.log(`legacy lanes read as pinned jobs: ${config.legacyLanes.join(", ")}`);
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
   if (config.preflight.enabled) {
     for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
@@ -2814,9 +2645,9 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const plan = planTick(config, states, held, stampToday, resumes.resume);
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
-  const planned = (job: FleetJob, lane: FleetLane): JobRow => {
-    const entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
-    argvs.push(`  ${job.name}: ${laneArgv(lane, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+  const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
+    const entries = fillEntries(spawn, stampToday);
+    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil }).join(" ")}`);
     return {
       name: job.name,
       models: [...new Set(entries.map((e) => e.model))],
@@ -2830,7 +2661,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const resumeRow = (r: ResumePlan, kind: AccountKind): AccountRow => ({
     account: r.account,
     kind,
-    job: { ...planned(r.job, jobLane(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
+    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
   });
   const listedInDryRun = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
@@ -2838,7 +2669,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     const holder = held(account);
     const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
     if (rs !== undefined) rows.push(resumeRow(rs, "pinned"));
-    else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.lane) });
+    else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.spawn) });
     else {
       const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
       rows.push({ account, kind: "pinned", free: true, note: holder !== undefined ? `held by run ${holder}` : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn` });
@@ -2851,8 +2682,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       const holder = held(account);
       const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
       if (rs !== undefined) rows.push(resumeRow(rs, kind));
-      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobLane(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
-      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobLane(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
+      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
+      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
       else rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
     }
   }
@@ -2875,6 +2706,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   for (const line of formatModels(states, new Set(), Date.now(), excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed)) console.log(line);
+  for (const line of formatEnded(resumes.end, false)) console.log(line);
   if (Object.keys(config.maxConcurrent).length > 0) {
     console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
   }
@@ -2933,12 +2765,11 @@ function parseArgs(argv: string[]): {
           [
             "usage: infra/run-fleet.sh [fleet.json] [flags]",
             "",
-            "  --until HH:MM   stop condition passed to every lane (overridden by nothing;",
-            "                  a lane's untilDefault applies when this is absent)",
+            "  --until HH:MM   stop condition passed to every job (none when absent)",
             "  --dry-run       print what would spawn on every account right now; spawn nothing",
             "  --status        read-only: accounts, models and session report. Works from the",
             "                  host against a containerized supervisor (heartbeat, not kill -0)",
-            "  --live-runs     read-only: list live episodes across the lane accounts and exit",
+            "  --live-runs     read-only: list live episodes across the job accounts and exit",
             "                  non-zero if there are any (the deploy window's refusal check)",
             "  --clear-model NAME  forgive a roster model's defer ladder / retirement (ADR-0032):",
             "                  records the clear in data/runs/fleet-models.json; the running",
@@ -3004,21 +2835,17 @@ async function main(): Promise<void> {
     return;
   }
   // The stamp is a supervisor EPOCH, not a date. It is taken once, here, and
-  // every run id, lane roster, lane log and defer sidecar hangs off it for the
+  // every run id, job roster, job log and defer sidecar hangs off it for the
   // life of the process — which under `restart: unless-stopped` is "until the
-  // machine reboots". Rolling it at midnight would rename every lane's roster
-  // and jsonl underneath a running lane and hand --resume-roster/freeCycle a
+  // machine reboots". Rolling it at midnight would rename every job's roster
+  // and jsonl underneath a running job and hand --resume-roster/freeCycle a
   // fresh namespace mid-flight; keeping it fixed leaves both semantics exactly
   // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
   let config = parseFleet(JSON.parse(readFileSync(args.config, "utf8")));
   configLoadedAt = Date.now();
-  if (config.legacyLanes.length > 0 && !args.dryRun) say(`legacy lanes read as pinned jobs: ${config.legacyLanes.join(", ")}`);
   // Fail fast on anything that would fail at spawn time.
-  {
-    const plan = planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
-    for (const p of plan.pinned) loadLaneEntries(p.lane);
-  }
+  planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
 
   if (args.dryRun) {
     printDryRun(config, args.until, stampToday);
@@ -3026,8 +2853,8 @@ async function main(): Promise<void> {
   }
 
   fleetLog = join(RUNS_DIR, `fleet-${stampToday}.jsonl`);
-  const procs = new Map<string, LaneProc>();
-  const sets: LaneSets = { running: new Set(), draining: new Set(), finished: new Set() };
+  const procs = new Map<string, JobProc>();
+  const sets: JobSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
   let wasIdle = false;
   // Job bookkeeping (ADR-0034): which job holds which account, the job itself
@@ -3038,18 +2865,19 @@ async function main(): Promise<void> {
   let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
   /** Paused runs the last plan did not resume, with why; for the state file. */
   let lastPaused: PausedListing[] = [];
+  /** Paused runs ended instead of resumed, this session; for the state file. */
+  const endedRuns: EndedRun[] = [];
   const complainedSkips = new Map<string, string>();
-  /** Jobs handed an account this tick, claimed by spawnLane; a gated tick re-plans next time. */
+  /** Jobs handed an account this tick, claimed by spawnJob; a gated tick re-plans next time. */
   const pending = new Map<string, FleetJob>();
   const announcedPicks = new Set<string>();
   let policyIdle: string | undefined;
   const session = { finished: 0, ok: 0, retried: 0 };
   const spawnedNames = new Set<string>();
-  let legacyNotice = config.legacyLanes.join(",");
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
-    const defers = laneDefers(laneJsonlPath(job.name, stampToday));
+    const defers = jobDefers(jobJsonlPath(job.name, stampToday));
     const now = Date.now();
     for (const d of defers) {
       if (d.entry.tainted === true) return `${job.ref} tainted this epoch (${d.entry.defers} defers, ${d.entry.reason})`;
@@ -3059,14 +2887,14 @@ async function main(): Promise<void> {
   };
 
   /**
-   * The lanes the supervisor acts on this tick, every one of them a job: the
+   * The spawns the supervisor acts on this tick, every one of them a job: the
    * pinned jobs on their accounts; every pool job already running (on the
    * account it was given; `enabled` follows the file so a job flipped off or
    * deleted drains); the manual jobs the queue just handed a free account;
    * and the policy's picks for what is left. Jobs with nothing free wait.
    */
-  const effectiveLanes = (cfg: FleetConfig): FleetLane[] => {
-    const out: FleetLane[] = [];
+  const effectiveJobs = (cfg: FleetConfig): JobSpawn[] => {
+    const out: JobSpawn[] = [];
     // The run facts once a tick, shared by the projection and the resume
     // planner. Eligibility for the queue's gate and the policy's picks read
     // the same answer (ADR-0034); resumes read the same facts (ADR-0036).
@@ -3083,28 +2911,22 @@ async function main(): Promise<void> {
     const countDriver = (refs: readonly string[]): void => {
       for (const r of refs) driverCount.set(driverOf(cfg.roster, r), (driverCount.get(driverOf(cfg.roster, r)) ?? 0) + 1);
     };
-    const countJob = (job: FleetJob): void => {
-      if (job.legacy === undefined) return countDriver(job.refs);
-      // A legacy job's driver is on its entries; count its first (a lane rotates one stream).
-      const d = normalizeDriver(job.legacy.entries?.[0]?.driver ?? "openai") ?? "openai";
-      driverCount.set(d, (driverCount.get(d) ?? 0) + 1);
-    };
     // Pinned jobs: from the file, on their own accounts.
     for (const job of pinnedJobs(cfg)) {
-      if (job.enabled && job.legacy === undefined && runnableRefs(job, cfg.roster, eligible).length === 0) {
+      if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
         pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)` });
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      out.push(jobLane(job, cfg.roster, job.account!, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, job.account!, stampToday, eligible));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
         // An enabled pinned job spawns this tick if it is not already running,
         // so it counts against the driver cap either way — otherwise the first
         // tick after a restart fills the pool before the pinned session exists.
-        countJob(job);
+        countDriver(job.refs);
       }
     }
     // Pool jobs with a live process: keep running whatever the file now says,
@@ -3116,7 +2938,7 @@ async function main(): Promise<void> {
         if (cfg.roster[running.ref] === undefined) {
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         } else {
-          out.push(jobLane(running, cfg.roster, account, stampToday));
+          out.push(jobSpawn(running, cfg.roster, account, stampToday));
           runningRefs.add(running.ref);
           countDriver(running.refs);
           if (billingOf.get(running.ref) === "paid") paidRunning++;
@@ -3125,11 +2947,11 @@ async function main(): Promise<void> {
       }
       if (fromFile === undefined || fromFile.account !== undefined || runnableRefs(fromFile, cfg.roster, eligible).length === 0) {
         // Removed from the queue (or pinned now, or its ref vanished): a
-        // disabled stand-in makes diffLanes drain it. The process keeps its roster.
+        // disabled stand-in makes diffJobs drain it. The process keeps its roster.
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      out.push(jobLane(fromFile, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible));
       for (const r of fromFile.refs) runningRefs.add(r);
       countDriver(fromFile.refs);
       // A manual pool job on a paid model holds a paid slot too: the cap is
@@ -3139,26 +2961,39 @@ async function main(): Promise<void> {
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     // Resumes before anything fresh (ADR-0036): a paused run goes back onto
     // its own account ahead of the queue and the policy, so nothing can wipe
-    // its character first. A pinned job's lane is replaced by its resume
-    // lane; a pool job's resume reserves its account like an assignment.
+    // its character first. A pinned job's spawn is replaced by its resume
+    // spawn; a pool job's resume reserves its account like an assignment.
     const runningMap = new Map<string, string>(assigned);
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
     const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
     lastPaused = resumes.listed;
+    // A paused run whose ref now names another model is ended, not resumed:
+    // the runner's own writer, once, and the run leaves the paused set.
+    for (const r of endRuns(RUNS_DIR, resumes.end)) {
+      const e = resumes.end.find((x) => x.runId === r.runId)!;
+      if (r.error !== undefined) {
+        say(`end ${e.runId}: could not write the termination — ${r.error}`);
+        record({ job: `${e.ref}-${runs.find((f) => f.runId === e.runId)?.episode ?? "e90"}`, event: "end-failed", detail: `${e.detail}; ${r.error}` });
+        continue;
+      }
+      endedRuns.push(e);
+      say(`end ${e.runId}: ${e.detail}`);
+      record({ job: `${e.ref}-${runs.find((f) => f.runId === e.runId)?.episode ?? "e90"}`, event: "ended", detail: e.detail });
+    }
     const reserved = new Map<string, string>();
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
-      const lane = jobLane(r.job, cfg.roster, r.account, stampToday);
+      const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday);
       if (r.job.account !== undefined) {
         const idx = out.findIndex((l) => l.name === name);
-        if (idx >= 0) out[idx] = lane;
-        else out.push(lane);
+        if (idx >= 0) out[idx] = spawn;
+        else out.push(spawn);
       } else {
         pending.set(name, r.job);
         sets.finished.delete(name);
         reserved.set(name, r.account);
-        out.push(lane);
+        out.push(spawn);
         for (const ref of r.job.refs) {
           runningRefs.add(ref);
           if (billingOf.get(ref) === "paid") paidRunning++;
@@ -3169,7 +3004,7 @@ async function main(): Promise<void> {
       if (!announcedPicks.has(key)) {
         announcedPicks.add(key);
         say(`resume ${name}: ${r.runId} on ${r.account} — ${r.why}`);
-        record({ lane: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` });
+        record({ job: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` });
       }
     }
     const runningAndReserved = new Map([...assigned, ...reserved]);
@@ -3187,7 +3022,7 @@ async function main(): Promise<void> {
     lastPlan.skipped.unshift(...pinnedSkips);
     for (const { job, account } of lastPlan.assign) {
       pending.set(job.name, job);
-      out.push(jobLane(job, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible));
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
@@ -3215,9 +3050,9 @@ async function main(): Promise<void> {
           announcedPicks.add(key);
           const tag = job.extra !== undefined ? " (extra)" : "";
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
-          record({ lane: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
+          record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
-        out.push(jobLane(job, cfg.roster, account, stampToday));
+        out.push(jobSpawn(job, cfg.roster, account, stampToday));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
       const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
@@ -3239,7 +3074,7 @@ async function main(): Promise<void> {
       if (complainedSkips.get(sk.job.name) !== sk.reason) {
         complainedSkips.set(sk.job.name, sk.reason);
         say(`queue ${sk.job.name}: skipped — ${sk.reason}`);
-        record({ lane: sk.job.name, event: "queue-skipped", detail: sk.reason });
+        record({ job: sk.job.name, event: "queue-skipped", detail: sk.reason });
       }
     }
     for (const j of cfg.jobs) if (!lastPlan.skipped.some((sk) => sk.job.name === j.name)) complainedSkips.delete(j.name);
@@ -3259,30 +3094,21 @@ async function main(): Promise<void> {
     ...(policyIdle !== undefined ? { policyIdle } : {}),
     session,
     paused: lastPaused,
+    ended: endedRuns,
   });
 
-  const spawnLane = (lane: FleetLane): void => {
-    let until: string | undefined;
-    let entries: RosterSpec[];
-    try {
-      until = laneUntil(lane, args.until);
-      entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : String(e);
-      say(`lane ${lane.name}: not spawning — ${detail}`);
-      record({ lane: lane.name, event: "spawn-refused", detail });
-      return;
-    }
-    const rosterPath = laneRosterPath(lane.name, stampToday);
+  const spawnJob = (spawn: JobSpawn): void => {
+    const entries = fillEntries(spawn, stampToday);
+    const rosterPath = jobRosterPath(spawn.name, stampToday);
     mkdirSync(RUNS_DIR, { recursive: true });
     writeFileSync(rosterPath, JSON.stringify(entries, null, 2) + "\n");
-    // A respawn (lane toggled off then on again the same day) resumes the
+    // A respawn (job toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
-    const resumeRoster = lane.resumeRunId !== undefined || existsSync(laneJsonlPath(lane.name, stampToday));
-    const argv = laneArgv(lane, { stamp: stampToday, until: args.until, resumeRoster });
-    const stdoutLog = laneStdoutPath(lane.name, stampToday);
+    const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
+    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster });
+    const stdoutLog = jobLogPath(spawn.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
-    // respawned lane used to overwrite the head of its own log and leave the
+    // respawned job used to overwrite the head of its own log and leave the
     // dead process's tail behind it — which is exactly what `--status` reads.
     // The shared offset an append fd gives both streams also keeps stdout and
     // stderr from clobbering each other.
@@ -3291,32 +3117,32 @@ async function main(): Promise<void> {
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
-    const lp: LaneProc = { lane, proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const lp: JobProc = { spawn, proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
     });
-    procs.set(lane.name, lp);
-    sets.running.add(lane.name);
-    if (spawnedNames.has(lane.name)) session.retried++;
-    spawnedNames.add(lane.name);
-    const pj = pending.get(lane.name) ?? pinnedJobs(config).find((j) => j.name === lane.name);
+    procs.set(spawn.name, lp);
+    sets.running.add(spawn.name);
+    if (spawnedNames.has(spawn.name)) session.retried++;
+    spawnedNames.add(spawn.name);
+    const pj = pending.get(spawn.name) ?? pinnedJobs(config).find((j) => j.name === spawn.name);
     if (pj !== undefined) {
-      liveJobs.set(lane.name, pj);
-      if (pj.account === undefined) assigned.set(lane.name, lane.account);
-      pending.delete(lane.name);
-      if (pj.attempt !== undefined) announcedPicks.delete(`${lane.name}:${pj.attempt}`);
+      liveJobs.set(spawn.name, pj);
+      if (pj.account === undefined) assigned.set(spawn.name, spawn.account);
+      pending.delete(spawn.name);
+      if (pj.attempt !== undefined) announcedPicks.delete(`${spawn.name}:${pj.attempt}`);
     }
-    const how = lane.resumeRunId !== undefined ? `, resuming ${lane.resumeRunId}` : resumeRoster ? ", --resume-roster" : "";
-    say(`lane ${lane.name}: spawned pid ${proc.pid} (account ${lane.account}${how}) -> ${stdoutLog}`);
-    record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${how}; account ${lane.account}` });
+    const how = spawn.resumeRunId !== undefined ? `, resuming ${spawn.resumeRunId}` : resumeRoster ? ", --resume-roster" : "";
+    say(`job ${spawn.name}: spawned pid ${proc.pid} (account ${spawn.account}${how}) -> ${stdoutLog}`);
+    record({ job: spawn.name, event: "spawned", detail: `pid ${proc.pid}${how}; account ${spawn.account}` });
   };
 
   let wakeTick: (() => void) | undefined;
   const requestStop = (): void => {
     if (stopping) process.exit(130);
     stopping = true;
-    say("stopping: SIGTERM to every lane — each live episode PAUSES as operator-pause (ADR-0036); waiting for the rosters to exit");
+    say("stopping: SIGTERM to every job — each live episode PAUSES as operator-pause (ADR-0036); waiting for the rosters to exit");
     wakeTick?.();
     for (const [name, p] of procs) {
       if (!p.exited) {
@@ -3325,7 +3151,7 @@ async function main(): Promise<void> {
         } catch {
           // already gone
         }
-        record({ lane: name, event: "sigterm", detail: "fleet stop" });
+        record({ job: name, event: "sigterm", detail: "fleet stop" });
       }
     }
   };
@@ -3344,9 +3170,9 @@ async function main(): Promise<void> {
   let complainedFor: string | undefined;
 
   /**
-   * Evaluate (and if needed run) the gate. Returns whether lanes may spawn.
+   * Evaluate (and if needed run) the gate. Returns whether jobs may spawn.
    * Only `start` is ever suppressed: drains, undrains and rearms must keep
-   * working while the gate is shut, or an operator could not park a lane during
+   * working while the gate is shut, or an operator could not park a job during
    * a bad deploy.
    */
   const checkGate = async (pf: FleetPreflight): Promise<boolean> => {
@@ -3358,8 +3184,8 @@ async function main(): Promise<void> {
     if (action === "skip") {
       if (gate?.skipped !== true) {
         gate = { at: Date.now(), serverIdentity: identity ?? "unknown", ok: true, skipped: true, results: [] };
-        say("preflight: disabled in fleet.json — gate open, lanes spawn unsmoked");
-        record({ lane: "-", event: "preflight-skipped" });
+        say("preflight: disabled in fleet.json — gate open, jobs spawn unsmoked");
+        record({ job: "-", event: "preflight-skipped" });
       }
       return gateOpen(action, gate);
     }
@@ -3367,13 +3193,13 @@ async function main(): Promise<void> {
       if (complainedFor !== "unready") {
         complainedFor = "unready";
         say(`preflight: ${MODULE_URL}/health is not answering ready — spawning nothing until it does`);
-        record({ lane: "-", event: "preflight-waiting" });
+        record({ job: "-", event: "preflight-waiting" });
       }
       return gateOpen(action, gate);
     }
     if (action === "pass") return gateOpen(action, gate);
     say(`preflight: smoking the server (identity ${identity!})`);
-    record({ lane: "-", event: "preflight-start", detail: identity });
+    record({ job: "-", event: "preflight-start", detail: identity });
     preflightInFlight = { identity: identity!, since: Date.now() };
     writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
     // Keep the heartbeat fresh while the sequence runs: a smoke outlasts the
@@ -3388,25 +3214,25 @@ async function main(): Promise<void> {
     }
     if (gate.ok) {
       complainedFor = undefined;
-      say(`preflight: PASS in ${Math.round(Math.max(0, ...gate.results.map((r) => r.ms)) / 1000)}s wall — lanes may spawn`);
-      record({ lane: "-", event: "preflight-pass", detail: identity });
+      say(`preflight: PASS in ${Math.round(Math.max(0, ...gate.results.map((r) => r.ms)) / 1000)}s wall — jobs may spawn`);
+      record({ job: "-", event: "preflight-pass", detail: identity });
     } else {
       const failed = gate.results.find((r) => !r.ok);
       if (complainedFor !== identity) {
         complainedFor = identity;
         say(
           `preflight: FAIL — ${failed?.script ?? "?"}: ${failed?.tail ?? "no output"}\n` +
-            `           NO LANES WILL SPAWN against this server. Fix or roll back the ` +
+            `           NO JOBS WILL SPAWN against this server. Fix or roll back the ` +
             `worldserver; the gate re-runs every ${TICK_MS / 1000}s.`,
         );
       }
-      record({ lane: "-", event: "preflight-fail", detail: `${failed?.script ?? "?"}: ${failed?.tail ?? ""}` });
+      record({ job: "-", event: "preflight-fail", detail: `${failed?.script ?? "?"}: ${failed?.tail ?? ""}` });
     }
     return gateOpen(action, gate);
   };
 
   let mayStart = await checkGate(config.preflight);
-  if (mayStart) for (const lane of diffLanes(effectiveLanes(config), sets).start) spawnLane(lane);
+  if (mayStart) for (const spawn of diffJobs(effectiveJobs(config), sets).start) spawnJob(spawn);
   writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
@@ -3438,7 +3264,7 @@ async function main(): Promise<void> {
         liveJobs.delete(name);
         if (job?.source === "policy") sets.finished.delete(name);
         say(`job ${name}: roster exited ${p.exitCode}${drained ? " (drained)" : ""}${acct !== undefined ? ` — pool account ${acct} released` : ""}`);
-        record({ lane: name, event: "exited", detail: `code ${p.exitCode}${drained ? "; drained" : ""}` });
+        record({ job: name, event: "exited", detail: `code ${p.exitCode}${drained ? "; drained" : ""}` });
       }
     }
 
@@ -3469,38 +3295,34 @@ async function main(): Promise<void> {
           `fleet config REJECTED — keeping the last good config; the enabled flags in ` +
             `${args.config} are NOT in effect: ${error}`,
         );
-        record({ lane: "-", event: "config-error", detail: error });
+        record({ job: "-", event: "config-error", detail: error });
       }
     } else {
       configLoadedAt = Date.now();
       if (wasRejected !== undefined) {
         say("fleet config loads again — the file is back in effect");
-        record({ lane: "-", event: "config-recovered" });
+        record({ job: "-", event: "config-recovered" });
       }
     }
     config = next;
-    if (config.legacyLanes.join(",") !== legacyNotice) {
-      legacyNotice = config.legacyLanes.join(",");
-      if (config.legacyLanes.length > 0) say(`legacy lanes read as pinned jobs: ${config.legacyLanes.join(", ")}`);
-    }
 
-    const actions = diffLanes(effectiveLanes(config), sets);
+    const actions = diffJobs(effectiveJobs(config), sets);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
-      say(`lane ${name}: re-enabled before it drained — keeping it running`);
-      record({ lane: name, event: "undrain" });
+      say(`job ${name}: re-enabled before it drained — keeping it running`);
+      record({ job: name, event: "undrain" });
     }
     for (const name of actions.rearm) {
       sets.finished.delete(name);
-      record({ lane: name, event: "rearmed", detail: "disabled after finishing; enable again to respawn" });
+      record({ job: name, event: "rearmed", detail: "disabled after finishing; enable again to respawn" });
     }
     for (const name of actions.drain) {
       sets.draining.add(name);
-      say(`lane ${name}: disabled — draining (SIGTERM at the next episode boundary)`);
-      record({ lane: name, event: "draining" });
+      say(`job ${name}: disabled — draining (SIGTERM at the next episode boundary)`);
+      record({ job: name, event: "draining" });
     }
     // Drains: only SIGTERM a roster with no episode child. Delivered BEFORE the
-    // gate, which can sit inside a smoke for minutes: an operator parking a lane
+    // gate, which can sit inside a smoke for minutes: an operator parking a job
     // must never wait on the gate for their SIGTERM.
     for (const name of [...sets.draining]) {
       const p = procs.get(name);
@@ -3511,36 +3333,36 @@ async function main(): Promise<void> {
         } catch {
           // already gone
         }
-        say(`lane ${name}: between episodes — SIGTERM sent`);
-        record({ lane: name, event: "drain-sigterm" });
+        say(`job ${name}: between episodes — SIGTERM sent`);
+        record({ job: name, event: "drain-sigterm" });
       }
     }
 
     // The gate runs after every drain/undrain/rearm action precisely so a shut
-    // gate never blocks the operator from parking a lane. `stopping` is
+    // gate never blocks the operator from parking a job. `stopping` is
     // re-checked after the await: a SIGTERM that lands during a 15-minute smoke
-    // has already killed the lanes, and spawning into that would be a leak.
+    // has already killed the jobs, and spawning into that would be a leak.
     mayStart = await checkGate(config.preflight);
     if (mayStart && !stopping) {
-      for (const lane of actions.start) spawnLane(lane);
+      for (const spawn of actions.start) spawnJob(spawn);
     } else if (actions.start.length > 0 && !stopping) {
-      record({ lane: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
+      record({ job: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
     }
 
     writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
-    const toStart = diffLanes(effectiveLanes(config), sets).start.length + lastPlan.waiting.length;
+    const toStart = diffJobs(effectiveJobs(config), sets).start.length + lastPlan.waiting.length;
     if (fleetComplete({ running: sets.running.size, toStart, hasDeadline: args.until !== undefined })) {
-      say("all lanes have exited and nothing is left to spawn — fleet complete");
+      say("all jobs have exited and nothing is left to spawn — fleet complete");
       break;
     }
     const idle = sets.running.size === 0 && toStart === 0;
     if (idle !== wasIdle) {
       wasIdle = idle;
       if (idle) {
-        say("no lanes running and none to spawn — idling; enable a lane in fleet.json (or stop the service)");
-        record({ lane: "-", event: "idle" });
+        say("no jobs running and none to spawn — idling; enable a job in fleet.json (or stop the service)");
+        record({ job: "-", event: "idle" });
       } else {
-        record({ lane: "-", event: "unidle" });
+        record({ job: "-", event: "unidle" });
       }
     }
   }
