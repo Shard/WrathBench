@@ -180,6 +180,34 @@ export default function Models() {
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
             {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more
             no-progress attempt at the ceiling retires the model until an operator clears it.
+            <Show when={Object.keys(body()!.policy.maxConcurrent).length > 0}>
+              {" "}
+              At most{" "}
+              {Object.entries(body()!.policy.maxConcurrent)
+                .map(([driver, n]) => `${n} on ${driver}`)
+                .join(", ")}{" "}
+              at a time, counting every job on the driver.
+            </Show>
+          </p>
+        </Show>
+
+        {/*
+          Roster entries the policy does not schedule are named, not rowed: a
+          probe on a pinned account runs the same model under an objective, so a
+          row would show that model's counts twice (FOLLOW-UPS 52).
+        */}
+        <Show when={body()!.roster.excluded.length > 0}>
+          <p class="dim">
+            Outside the policy, so not listed above:{" "}
+            <For each={body()!.roster.excluded}>
+              {(e, i) => (
+                <>
+                  <Show when={i() > 0}>, </Show>
+                  <span title={e.reason}>{e.name}</span> ({e.reason})
+                </>
+              )}
+            </For>
+            .
           </p>
         </Show>
       </Show>

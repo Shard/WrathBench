@@ -14,8 +14,8 @@
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
-import type { FleetLaneView } from "@viewer/api-types";
-import { FLEET_COLUMNS, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
+import type { FleetJobView, FleetLaneView } from "@viewer/api-types";
+import { FLEET_COLUMNS, JOB_COLUMNS, jobModelLabel, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -103,7 +103,43 @@ export default function Fleet() {
                   <div class="v">{runs.latest?.length ?? "—"}</div>
                   <div class="sub">under data/runs</div>
                 </div>
+                {/*
+                  The supervisor's own counters, not the filesystem's: runs it
+                  finished since it started, how many exited clean, and how many
+                  it relaunched. Absent on a supervisor that predates them, and
+                  the card says so rather than showing a zero.
+                */}
+                <div class="card">
+                  <div class="k">this session</div>
+                  <div class="v">{f().session?.finished ?? "—"}</div>
+                  <div class="sub">
+                    <Show when={f().session !== undefined} fallback={<>not reported by this supervisor</>}>
+                      finished · ok {f().session!.ok} · retried {f().session!.retried}
+                    </Show>
+                  </div>
+                </div>
               </div>
+
+              {/*
+                Jobs, where the supervisor publishes them (ADR-0034: the job is
+                the unit of work). A job says which roster entry is running, on
+                what tier and account, and whether it is the file's, the manual
+                queue's or the policy's own pick — none of which a lane carries.
+              */}
+              <Show when={(f().jobs ?? []).length > 0}>
+                <div class="scroller">
+                  <table>
+                    <thead>
+                      <tr>
+                        <For each={JOB_COLUMNS}>{(c) => <th>{c}</th>}</For>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={f().jobs}>{(job) => <JobRow job={job} />}</For>
+                    </tbody>
+                  </table>
+                </div>
+              </Show>
 
               <div class="scroller">
                 <table>
@@ -231,6 +267,28 @@ function LaneRow(props: { lane: FleetLaneView; now: number }) {
       </td>
       <td class={lane().exitCode === null || lane().exitCode === 0 ? "dim" : "err"}>
         {lane().exitCode === null ? "—" : lane().exitCode}
+      </td>
+    </tr>
+  );
+}
+
+/** One job the supervisor has a process for. */
+function JobRow(props: { job: FleetJobView }) {
+  const job = (): FleetJobView => props.job;
+  return (
+    <tr>
+      <td>{job().name}</td>
+      <td class="dim" title={job().models.join(", ")}>
+        {jobModelLabel(job())}
+      </td>
+      <td class="dim">{job().episode}</td>
+      <td class="dim">{job().account}</td>
+      <td class="dim">{job().source}</td>
+      <td class="dim">{job().attempt === undefined ? "—" : `#${job().attempt}`}</td>
+      <td class="dim">
+        <Show when={job().resuming !== undefined} fallback={<>—</>}>
+          <A href={`/run/${encodeURIComponent(job().resuming!)}`}>{job().resuming}</A>
+        </Show>
       </td>
     </tr>
   );

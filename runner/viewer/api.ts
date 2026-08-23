@@ -28,7 +28,9 @@ import type {
   FleetLane,
   FleetLaneRun,
   FleetLaneView,
+  FleetJobView,
   FleetResponse,
+  FleetSessionView,
   HarnessView,
   ModelsResponse,
   RunDetailResponse,
@@ -302,6 +304,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       containerized?: boolean;
       stamp?: string;
       lanes?: Record<string, FleetLane>;
+      jobs?: Record<string, Omit<FleetJobView, "name">>;
+      session?: FleetSessionView;
     };
     const held = heldAccounts(runsDir, now);
     const lanes: FleetLaneView[] = Object.entries(raw.lanes ?? {}).map(([name, lane]) => {
@@ -314,6 +318,19 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       return { name, ...lane, ...resolved };
     });
     lanes.sort((a, b) => a.name.localeCompare(b.name));
+    /*
+     * Jobs and the session counters are forwarded as the supervisor wrote them
+     * (FOLLOW-UPS 52): a job names a roster ref, a tier, an account and where
+     * it came from, none of which the lane block carries, and neither block
+     * holds anything `lanes` does not already expose. A pre-job supervisor
+     * wrote neither, and the fields stay absent rather than being invented.
+     */
+    const jobs =
+      raw.jobs === undefined
+        ? undefined
+        : Object.entries(raw.jobs)
+            .map(([name, j]) => ({ name, ...j }))
+            .sort((a, b) => a.name.localeCompare(b.name));
     // `fleetConfig` is deliberately not forwarded: it is a host path, and the
     // API says what the fleet is doing, not where this machine keeps things.
     return {
@@ -324,6 +341,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       containerized: raw.containerized,
       stamp: raw.stamp,
       lanes,
+      ...(jobs !== undefined ? { jobs } : {}),
+      ...(raw.session !== undefined ? { session: raw.session } : {}),
       now,
     };
   } catch {

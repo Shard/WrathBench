@@ -235,6 +235,64 @@ export interface RosterModel {
   billing?: Billing;
 }
 
+/**
+ * A job as the membership predicate needs it: which roster names it holds, and
+ * the account it is pinned to when it is pinned to one.
+ *
+ * Deliberately structural. The supervisor's `FleetJob` carries a spawn's worth
+ * of fields and lives beside the process path; the viewer parses a narrow
+ * slice of the same file at its own boundary. Both can satisfy this, so the
+ * question "is this roster name the policy's to schedule" has one answer
+ * rather than one per reader (FOLLOW-UPS 52).
+ */
+export interface PolicyJob {
+  refs: readonly string[];
+  /** Set: the job is pinned to this account. Absent: it takes a pool account. */
+  account?: string | undefined;
+  /** The job's name, for the exclusion sentence. */
+  name?: string | undefined;
+}
+
+/** A roster entry as the same predicate needs it: only the objective matters. */
+export interface PolicyRosterEntry {
+  objective?: string | undefined;
+}
+
+/** Roster names a pinned job references: never the policy's to schedule. */
+export function pinnedRefs(jobs: readonly PolicyJob[]): Set<string> {
+  return new Set(jobs.filter((j) => j.account !== undefined).flatMap((j) => [...j.refs]));
+}
+
+/**
+ * The roster names the policy may schedule: not referenced by a pinned job
+ * (that account is spoken for, and a probe's runs are not the model's
+ * evidence), and not carrying an objective (an objective stamps every run
+ * unscored, and the policy schedules evidence).
+ */
+export function policyRefs(
+  jobs: readonly PolicyJob[],
+  roster: Record<string, PolicyRosterEntry>,
+): Set<string> {
+  const pinned = pinnedRefs(jobs);
+  return new Set(
+    Object.entries(roster)
+      .filter(([n, e]) => !pinned.has(n) && e.objective === undefined)
+      .map(([n]) => n),
+  );
+}
+
+/** Why a roster name is outside the policy, or undefined when it is inside. */
+export function policyExclusion(
+  jobs: readonly PolicyJob[],
+  roster: Record<string, PolicyRosterEntry>,
+  name: string,
+): string | undefined {
+  const job = jobs.find((j) => j.account !== undefined && j.refs.includes(name));
+  if (job !== undefined) return `pinned to ${job.account} by job ${job.name ?? job.refs.join("+")}`;
+  if (roster[name]?.objective !== undefined) return "carries an objective (unscored probe)";
+  return undefined;
+}
+
 /** Operator overrides the supervisor persists (`fleet-models.json`). */
 export interface ModelsSidecar {
   version: 1;

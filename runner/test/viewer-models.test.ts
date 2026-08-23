@@ -135,6 +135,37 @@ describe("readFleetRoster", () => {
     expect(read.policy.runsPerEpisode.e360).toBe(3);
   });
 
+  // FOLLOW-UPS 52: the same predicate the supervisor schedules on.
+  test("names the entries the policy does not schedule, with why", () => {
+    const { fleetPath } = fixture({
+      ...ROSTER,
+      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
+      queue: [
+        { ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop", enabled: true },
+        { ref: "alpha", episode: "e90" },
+      ],
+      policy: { ...ROSTER.policy, maxConcurrent: { "claude-code": 2 } },
+    });
+    const read = readFleetRoster(fleetPath);
+    // Pinned wins the sentence: the account is spoken for either way.
+    expect(read.excluded).toEqual([
+      { name: "probe", reason: "pinned to SHAKEOUT by job probe-freeplay" },
+    ]);
+    // A pool job holds its ref without pinning it: still the policy's to schedule.
+    expect(read.models.map((m) => m.name)).toContain("alpha");
+    expect(read.maxConcurrent).toEqual({ "claude-code": 2 });
+  });
+
+  test("an objective excludes an entry no job names", () => {
+    const { fleetPath } = fixture({
+      ...ROSTER,
+      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
+    });
+    expect(readFleetRoster(fleetPath).excluded).toEqual([
+      { name: "probe", reason: "carries an objective (unscored probe)" },
+    ]);
+  });
+
   test("a pre-roster config is legacy and empty, never a synthesised roster", () => {
     const { fleetPath } = fixture({ lanes: [{ name: "l", entries: [{ model: "vendor/alpha" }] }] });
     const read = readFleetRoster(fleetPath);
@@ -249,6 +280,28 @@ describe("/api/models", () => {
     expect(body.models).toEqual([]);
     expect(body.roster.shape).toBe("legacy");
     expect(body.roster.count).toBe(0);
+  });
+
+  /*
+   * FOLLOW-UPS 52: `probe` is `vendor/alpha` under an objective, so a row for
+   * it would show alpha's counts a second time under another name. It is named
+   * in `roster.excluded`, with the concurrency cap the file sets, and rowed
+   * nowhere.
+   */
+  test("pinned and objective entries are named, not rowed", async () => {
+    const { runsDir, fleetPath } = fixture({
+      ...ROSTER,
+      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
+      queue: [{ ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop", enabled: true }],
+      policy: { ...ROSTER.policy, maxConcurrent: { "claude-code": 2 } },
+    });
+    writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 4, level: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+
+    const body = await models(runsDir, fleetPath);
+    expect(body.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
+    expect(body.roster.count).toBe(4);
+    expect(body.roster.excluded.map((e) => e.name)).toEqual(["probe"]);
+    expect(body.policy.maxConcurrent).toEqual({ "claude-code": 2 });
   });
 
   test("no fleet config at all is a normal answer, not a 500", async () => {
