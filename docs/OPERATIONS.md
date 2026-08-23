@@ -61,7 +61,7 @@ Edit `infra/fleet.json`. Nothing to restart.
 
 Two enabled lanes must not share an account, and lane policy (claude models on
 the claude-subscription driver only; shared free pools carry free ids only) is
-enforced on every re-read. Under the pool/queue shape (ADR-0031, below) the
+enforced on every re-read. Under the pool/queue shape (ADR-0034, below) the
 same applies to pinned lanes, and queue jobs are steered the same way.
 
 ### Stop it
@@ -249,12 +249,12 @@ The gate accounts must be their own: sharing one with an enabled lane is refused
 as a config error (every per-entry account is checked), and none is ever
 `PROBE`, the ad-hoc debugging account.
 
-### Switching to the pool/queue shape (ADR-0031)
+### Switching to the pool/queue shape (ADR-0034)
 
 `infra/fleet.next.json` is today's fleet under the new schema: lanes no longer
 own accounts; `accounts.pinned` keeps nav-probe on SHAKEOUT, `accounts.pool`
 holds RUNNER–RUNNER6, and the free/local models are a `roster` the scheduling
-policy (ADR-0032) runs on whichever pool account is free; `queue` is for manual
+policy (ADR-0034) runs on whichever pool account is free; `queue` is for manual
 overrides. The supervisor that is running today rejects
 that shape (it keeps its last good config and complains), so the switch is done
 at a drain window, in this order:
@@ -287,12 +287,12 @@ Steering under the new shape, all hot-reloaded:
 - A job's `enabled: false` drains it at the next episode boundary and frees its
   pool account; deleting it from the queue does the same. Re-enabling a job
   that finished (exit 0) is the rearm, as for a lane.
-- Promotion into `e360` is automatic (ADR-0032): one counted `e90` run that
-  reached level 5. `roster.<name>.tiers` is only a manual force. A manual job
+- Promotion into `e360` is automatic; the rule is stated in ADR-0034 and
+  nowhere else. `roster.<name>.tiers` is only a manual force. A manual job
   whose episode a ref is not eligible for is skipped with the reason in
   `--status` and the fleet log, never run.
 
-### The scheduling policy (ADR-0032)
+### The scheduling policy (ADR-0034)
 
 With the pool shape the `queue` is normally empty: the supervisor fills free
 pool accounts from the roster by policy — three runs per (model, episode),
