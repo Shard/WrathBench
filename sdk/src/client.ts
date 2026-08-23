@@ -682,6 +682,7 @@ export type MoveResult =
       readonly seq?: undefined;
       readonly ts?: undefined;
       readonly reachedPos?: undefined;
+      readonly dz?: undefined;
       /** Why the target resolved to nothing, and what to pass instead. */
       readonly hint: string;
     }
@@ -693,11 +694,14 @@ export type MoveResult =
       readonly seq: number;
       readonly ts: number;
       /**
-       * `path_incomplete` only: how far the mesh could get toward the request
-       * (the module already tried one subdivision from here). Route around, or
-       * approach from another side.
+       * `path_incomplete`: how far the mesh could get toward the request (the
+       * module already tried one subdivision from here); route around, or
+       * approach from another side. `drop`: the last point before the route
+       * steps off a ledge — the edge, on the character's level.
        */
       readonly reachedPos?: Point3;
+      /** `drop` only: the signed vertical step the route would have taken at `reachedPos`. */
+      readonly dz?: number;
       /** What the status means and what to try next. See `MOVE_HINTS`. */
       readonly hint?: string;
     };
@@ -731,6 +735,15 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     (d.reachedPos ? `; it ends at (${fmtXY(d.reachedPos)})` : "") +
     `. The module already tried one subdivision. Route around (a road, a ramp, a door) or approach from ` +
     `another side.`,
+  drop: (p, d) => {
+    const edge = d.reachedPos ?? d.pos;
+    const n = d.dz === undefined ? "several" : Math.abs(d.dz).toFixed(1);
+    return (
+      `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge of ${n} yards at (${fmtXY(edge)}); ` +
+      `the character stopped at the edge and did not take the drop. Pick a destination on this level, or ` +
+      `find the ramp/stairs that connect the two.`
+    );
+  },
   interrupted: () =>
     `the move stopped early (death, root, stun, or the server rejected the movement). Check state.self, ` +
     `then retry from where you are.`,
@@ -755,7 +768,31 @@ const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
   "target_off_mesh",
   "start_off_mesh",
   "path_incomplete",
+  "drop",
 ]);
+
+/**
+ * What an `arrived` with `meshZ` means. Within 3y the mesh corrected a stale
+ * z and the agent should quote the mesh's value. Beyond that the module's
+ * drop guard should have refused the walk, so the honest reading is that the
+ * character ended a level away from where it asked to go — not that its z
+ * was wrong (nav-probe c4, map 369: the old one-shape hint told an agent to
+ * "quote z -6.9 next time" after the mesh walked it 7.6y down a ledge).
+ */
+export const MESH_Z_QUOTE_BAND = 3;
+export function meshZHint(point: { x: number; y: number; z: number }, meshZ: number): string {
+  const dz = meshZ - point.z;
+  const head = `arrived at (${fmtXY(point)}), but the ground there is at z ${meshZ.toFixed(1)}, not ${point.z.toFixed(1)}.`;
+  if (Math.abs(dz) <= MESH_Z_QUOTE_BAND) {
+    return `${head} The mesh owns z; quote ${meshZ.toFixed(1)} for this spot next time.`;
+  }
+  const dir = dz < 0 ? "below" : "above";
+  return (
+    `${head} The character ended ${Math.abs(dz).toFixed(1)} yards ${dir} the requested point — a different ` +
+    `level, not a stale z: the z passed to moveTo is not what put it there. Check state.self.position before ` +
+    `the next move; if this is the wrong level, find the ramp/stairs rather than re-quoting a z.`
+  );
+}
 
 function fmtXY(p: { x: number; y: number }): string {
   return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
@@ -2696,10 +2733,7 @@ export class WrathClient {
         ...common,
         ...aboard,
         meshZ: data.meshZ,
-        hint: withNotes(
-          `arrived at (${fmtXY(point)}), but the ground there is at z ${data.meshZ.toFixed(1)}, not ` +
-            `${point.z.toFixed(1)}. The mesh owns z; quote ${data.meshZ.toFixed(1)} for this spot next time.`,
-        ) as string,
+        hint: withNotes(meshZHint(point, data.meshZ)) as string,
       };
     }
     if (status === "transferred") {
@@ -2786,6 +2820,7 @@ export class WrathClient {
       status,
       ...common,
       ...(reachedPos !== undefined ? { reachedPos } : {}),
+      ...(data.dz !== undefined ? { dz: data.dz } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { connect, WrathRequestError, WrathTransportError } from "../src/client";
+import { connect, meshZHint, WrathRequestError, WrathTransportError } from "../src/client";
 import { EventAbortedError, EventTimeoutError } from "../src/events";
 import {
   addKill,
@@ -313,7 +313,7 @@ describe("client: movement", () => {
     // use_item answering SMSG_CAST_FAILED result 51 (SPELL_FAILED_MOVING)
     // while the character stood still, ended by one `stop`. ADR-0016 rule 1:
     // after a move that did not move, "stop walking" has one reading.
-    for (const status of ["too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete"] as const) {
+    for (const status of ["too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete", "drop"] as const) {
       const stub = startStub({ onConnect: () => frames(loginSequence) });
       const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
       await client.createSession({ character: "Fenwick" });
@@ -401,6 +401,46 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("drop carries the edge, the step and the target, with a hint about levels", async () => {
+    // ADR-0027 amendment (nav-probe c4, map 369): a route that falls 7.64y
+    // over 1y of 2D travel is a ledge. The module refuses the walk and says
+    // where the edge is; the hint says to change level by ramp or stairs.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const p = client.moveTo({ x: 10, y: 20, z: -6.9 }, { timeout: 2000 });
+    const ev = moveResult("drop", 1, 30) as { data: Record<string, unknown> };
+    ev.data.reachedPos = { x: 9.2, y: 19.5, z: 0.7 };
+    ev.data.dz = -7.64;
+    ev.data.target = { x: 10, y: 20, z: -6.9 };
+    stub.push(JSON.stringify(ev));
+    const r = await p;
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.status).toBe("drop");
+    expect(r.reachedPos).toEqual({ x: 9.2, y: 19.5, z: 0.7 });
+    expect(r.dz).toBe(-7.64);
+    expect(r.hint).toContain("route to (10.0, 20.0, z -6.9) steps off a ledge of 7.6 yards at (9.2, 19.5)");
+    expect(r.hint).toContain("stopped at the edge");
+    expect(r.hint).toContain("ramp/stairs");
+    // Nothing moved, so the SDK sends the stop the module left unsent.
+    expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("the meshZ hint says 'quote it' within 3y and 'a different level' beyond", async () => {
+    expect(meshZHint({ x: 1, y: 2, z: 80 }, 81.5)).toContain("The mesh owns z; quote 81.5");
+    expect(meshZHint({ x: 1, y: 2, z: 80 }, 77)).toContain("quote 77.0");
+    const far = meshZHint({ x: 1, y: 2, z: 0.7 }, -6.9);
+    expect(far).toContain("z -6.9, not 0.7");
+    expect(far).toContain("ended 7.6 yards below the requested point");
+    expect(far).toContain("not what put it there");
+    expect(far).not.toContain("quote");
+    expect(meshZHint({ x: 1, y: 2, z: 0 }, 5)).toContain("5.0 yards above");
+  });
+
   test("arrived with meshZ says which z the mesh used; a plain arrived carries neither", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
@@ -415,6 +455,9 @@ describe("client: movement", () => {
     if (!r1.ok || r1.status !== "arrived") throw new Error("unreachable");
     expect(r1.meshZ).toBe(42);
     expect(r1.hint).toContain("z 42.0, not 80.0");
+    // 38y is a level, not a stale z: the hint must not say "quote it".
+    expect(r1.hint).toContain("38.0 yards below");
+    expect(r1.hint).not.toContain("quote");
 
     // A short walk, so the caller's 2s timeout draws no mesh-slack note either.
     const p2 = client.moveTo({ x: -1200, y: 983, z: 42 }, { timeout: 2000 });
