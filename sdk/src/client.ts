@@ -522,7 +522,7 @@ export interface ConnectOptions {
    * `token` (ADR-0016, addendum 2026-08-22). When set it is authoritative: it
    * fills an omitted `createSession`/`deleteCharacter` account and overrides any
    * account the model typed, so a snippet can never land on — or delete on —
-   * the wrong account (the RUNNER6→RUNNER cross-lane corruption this closes).
+   * the wrong account (the RUNNER6→RUNNER cross-account corruption this closes).
    * Which account a run occupies is fleet infra, not a model decision, so the
    * model is not told it and cannot choose it. Left undefined (standalone /
    * MCP) the prior behavior stands: the caller's account, else the module
@@ -1602,7 +1602,7 @@ export class WrathClient {
     // account and overrides one the model typed (which it should never supply —
     // it is not told the account). Unbound, the request's own account (else the
     // module default) stands, preserving standalone/MCP behavior. This is what
-    // closes the RUNNER6→RUNNER cross-lane eviction: an omitted-account
+    // closes the RUNNER6→RUNNER cross-account eviction: an omitted-account
     // createSession can no longer default onto a shared account.
     const account = this.boundAccount ?? request.account;
     const body: CreateSessionRequest = { token: this.token, ...request, account };
@@ -2341,7 +2341,7 @@ export class WrathClient {
             character,
             // Bound account wins here too (ADR-0016): a run must only ever
             // delete on its assigned account. Deleting on the wrong (idle)
-            // account is a cross-lane hazard even though character-delete
+            // account is a cross-account hazard even though character-delete
             // refuses an account another live token holds. Unbound, the
             // caller's option (else the module default) stands.
             account: this.boundAccount ?? options.account,

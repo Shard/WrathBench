@@ -231,3 +231,15 @@ rather than killing a run to tidy the table.
 
 `accounts.paid` is optional and absent is the old behaviour: with neither block
 the pool is one undifferentiated class again.
+
+## Amendment 2026-08-23: "lane" is retired
+
+The word is gone from the code, the state file, the API and the docs. A **job**
+is the unit of work; an **account**, with a class, is where it runs; the
+materialised thing the supervisor spawns is a `JobSpawn`. `fleet-state.json`
+has one `jobs` map carrying both the job and its process; there is no `lanes`
+block, no `lanes` list in `fleet.json`, no `accounts.pinned` input, and no
+read of any of them — a file that still says so is refused by name, with the
+message naming the 0.4 keys. Per-job files keep their pattern
+(`fleet-<job>-<stamp>.{roster.json,jsonl,log}`); the per-job jsonl record's
+key is `job`. Older worklogs and ADR bodies keep the word as history.

@@ -152,7 +152,7 @@ describe("client: operator-bound account (ADR-0016)", () => {
       subscribeEvents: false,
     });
     // The model should never pass an account; if it does, the bound one wins so
-    // it cannot land on someone else's lane by typing the default.
+    // it cannot land on someone else's account by typing the default.
     await client.createSession({ character: "Qwenlocal", account: "RUNNER", race: 1, class: 2 });
     expect(stub.sessions[0]?.account).toBe("RUNNER6");
     client.close();

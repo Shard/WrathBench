@@ -55,7 +55,7 @@ describe("the table", () => {
     });
     // The same rate — 1000 calls per 30 minutes — held across four times the clock.
     expect(EPISODES.e360.toolCalls).toBe(12_000);
-    // freeplay pins nothing: the lane's own ceiling stands.
+    // freeplay pins nothing: the job's own ceiling stands.
     expect(EPISODES.freeplay.toolCalls).toBeNull();
     expect(EPISODES.freeplay).toMatchObject({
       minutes: null, noXpMinutes: null, objectiveAllowed: true, scored: false,

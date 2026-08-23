@@ -27,7 +27,7 @@ export type Billing = "free" | "paid";
  * suffix. Stealth/preview models are the case: OpenRouter lists
  * `stealth/ox-alpha` at 0/0 (verified 2026-08-22). Membership is an explicit
  * operator assertion; re-verify before adding one and drop it the day the
- * id starts billing. The fleet's lane policy (`infra/run-fleet.ts`) reads the
+ * id starts billing. The fleet's roster policy (`infra/run-fleet.ts`) reads the
  * same set.
  */
 export const FREE_SUFFIXLESS_ALLOWLIST: ReadonlySet<string> = new Set(["stealth/ox-alpha"]);

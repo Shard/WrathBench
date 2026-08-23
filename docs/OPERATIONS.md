@@ -66,7 +66,7 @@ otherwise on whichever pool account is free.
   decides what runs. Trust the banner over your own reading of the file.
 
 Two enabled jobs must not share an account, a pinned account may not be in the
-pool, and lane policy (claude models on the claude-code driver only — the
+pool, and the roster policy (claude models on the claude-code driver only — the
 claude-code harness, ADR-0035; shared free pools carry free ids only) is
 enforced on every roster entry at every re-read.
 
@@ -75,8 +75,9 @@ enforced on every roster entry at every re-read.
 ```
 preflight   the gate (ADR-0023): enabled, account, smokes [{script, account}], timeoutMs,
             deploySmokes, deployTimeoutMs. Its accounts may not be in the pool or on a job.
-accounts    { pool: [...] }  — accounts the pool and the policy may use, in preference order.
-            Never PROBE, never SMOKE*. (`pinned` is legacy input: read, cross-checked, never needed.)
+accounts    { pool: [...], paid: [...], local: [...] } — the account classes (ADR-0034), each in
+            preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
+            refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
             Never an account. Optional scheduling fields: `tiers` (a manual FORCE into a tier;
@@ -101,11 +102,9 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
 
 A roster entry referenced by a pinned job, or carrying an `objective`, is never
 policy-scheduled: the account is spoken for, and a probe's runs are not the
-model's evidence. Everything else in the roster is the policy's (below). Older
-files still load — the pre-pool shape (lanes naming their accounts) and the
-pool shape (a `lanes` list beside `accounts.pinned`) both read as pinned jobs
-carrying their entries verbatim, announced once in the log — and the `lane`
-field on a queue entry is read and ignored.
+model's evidence. Everything else in the roster is the policy's (below). This
+is the only shape: a file that still says `lanes` or `accounts.pinned` is
+refused by name, with the message naming the 0.4 keys.
 
 ### Stop it
 
@@ -378,44 +377,17 @@ would spawn on each account now, with the exact argv, and `HELD` lines for
 picks the paid cap, a driver cap, or an account class with no account held
 back (`no paid account configured`, `no local account configured`).
 
-### Switching to the job shape (ADR-0034 amendment, 2026-08-23) — DONE
+### Changing the config shape
 
-Kept as the pattern for the next shape change; the swap itself happened on
-2026-08-23 and the sibling files it names are gone. `infra/fleet.next.json`
-was today's fleet under the job schema: `lanes` and
-`accounts.pinned` are gone, nav-probe is a roster entry (objective, watchdogs,
-wiki coords) pinned to SHAKEOUT by a looping `freeplay` job, `sub-opus` a
-disabled pinned job on SHAKEOUT2, `sonnet` and `sonnet-low` back in the roster
-under `maxConcurrent: { "claude-code": 2 }`. The supervisor running today
-reads the job shape's `queue` fields fine but not `policy.maxConcurrent`, a
-queue entry's `account`, or a roster entry with an `objective`, and it still
-rejects the `claude-code` driver spelling — so the switch is done at a drain
-window, in this order:
-
-```
-# 1. drain: set every job's enabled:false, wait for --status to show no live run
-#    (or `stop fleet`, which pauses running episodes; they resume on start)
-docker compose -f infra/compose.yml stop fleet
-
-# 2. swap the file (keep the old one: the new code loads either shape)
-git mv -f infra/fleet.json infra/fleet.old.json       # or plain mv if you prefer
-git mv infra/fleet.next.json infra/fleet.json
-
-# 3. check the plan from the new code before anything spawns
-docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts infra/fleet.json --dry-run
-
-# 4. start the supervisor on the new code (this is also what picks up run-fleet.ts)
-docker compose -f infra/compose.yml up -d --no-deps fleet
-./infra/run-fleet.sh --status
-```
-
-Steps 2 and 4 commute: a new-code supervisor started against the old file runs
-its lanes as pinned jobs (one log line says so), and a later rename is picked
-up on the next 60s re-read like any other edit. What must not happen is the
-reverse — the new file under the old code — which is why the file ships as a
-sibling. Roll back by renaming the old file back; nothing else changes.
-The probe's run ids move from `fleet-nav-probe-…` to `fleet-nav-probe-freeplay-…`
-with the new epoch; nothing resumes across the rename.
+The pattern, from the 2026-08-23 switch to the job shape (ADR-0034 amendment):
+ship the new file as a sibling (`infra/fleet.next.json`), drain or `stop fleet`
+(running episodes pause and resume on start, ADR-0036), rename it over
+`fleet.json`, check `--dry-run` from the new code before anything spawns, then
+`up -d --no-deps fleet`. The new file under the old code is the one thing that
+must not happen, which is why it ships as a sibling. A shape the current code
+does not read is refused by name — there is no compatibility read, so roll
+back by renaming the old file back. Run ids carry the job name, so a renamed
+job starts a fresh id; nothing resumes across the rename.
 
 ### The scheduling policy (ADR-0034)
 
@@ -489,15 +461,27 @@ bun runner/src/archive.ts --stillborn             # move them
 Directories move to `data/runs/archive/<run-id>/` — nothing is deleted, and the
 viewer never reads inside `archive/`. A run the fleet may still be holding is
 refused with the reason rather than moved: its own files written inside the
-last ten minutes, or a fleet lane jsonl naming it inside the same window. Run
-the dry-run first; a live lane is the one thing this must not touch.
+last ten minutes, a `run.ts` process naming it, or a fleet job jsonl naming it
+inside the same window. Run the dry-run first; a live run is the one thing
+this must not touch.
+
+```
+bun runner/src/archive.ts --pre-series 0.4 --dry-run            # everything below the harness-0.4 floor
+bun runner/src/archive.ts --pre-series 0.4 --release-paused     # ...including parked runs nobody holds
+```
+
+`--pre-series` parks every run whose recorded harness version is not a clean
+build of the series — an older series, a `-dirty` build, or no `harness-` tag
+at all. `--release-paused` lets a run through the activity hold when its meta
+records a pause and no `run.ts` process names it: a supervisor retrying a
+paused run rewrites its files every few minutes, which would hold it forever.
 
 ### Secrets
 
 `.env` at the repo root, never argv. Bun loads `/wrathbench/.env` inside the
 container — in the supervisor and again in every child — so keys reach the
 runner without appearing in `ps` or in the compose file. A claude-code
-lane needs `CLAUDE_CODE_OAUTH_TOKEN` there (`claude setup-token`); without it
+job needs `CLAUDE_CODE_OAUTH_TOKEN` there (`claude setup-token`); without it
 the roster refuses the episode with a `launch-failed` row rather than burning a
 session.
 
