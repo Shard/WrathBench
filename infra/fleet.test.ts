@@ -750,6 +750,9 @@ describe("scheduling policy (ADR-0032)", () => {
     modelResponses: 20,
     bestLevel: 3,
     live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
     ...over,
   });
   const roster: Record<string, FleetRosterEntry> = {

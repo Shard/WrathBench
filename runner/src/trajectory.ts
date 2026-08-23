@@ -70,6 +70,29 @@ export interface RunMeta {
    * the comparability tuple, never a stamp here.
    */
   shakeout?: string;
+  /**
+   * Set while the run is paused (`--resume` clears it): the reason, when, and
+   * the episode clock spent so far, which is what the resumed run's wall
+   * clock continues from. The same facts are in run.sqlite's `pause_reason`
+   * and the trajectory's `pause` record; they live here too so a supervisor
+   * can find resumable runs from meta.json alone.
+   */
+  pause?: PauseMark;
+  /**
+   * A resume that could not reattach the driver's own conversation (the
+   * claude-code CLI keeps its history in its own session; the runner starts
+   * a fresh one and says so in the prompt). Sticky once set: the run had at
+   * least one fresh restart somewhere in its life.
+   */
+  resumedFresh?: boolean;
+}
+
+export interface PauseMark {
+  reason: PauseReason;
+  detail?: string | undefined;
+  at: number;
+  /** Episode wall clock spent across every segment up to this pause. */
+  episodeElapsedMs: number;
 }
 
 export interface TrajectoryRecord {
@@ -246,8 +269,13 @@ export class Trajectory {
       .run(reason, detail ?? null, this.now(), runId);
   }
 
-  setPause(runId: string, reason: PauseReason, detail?: string): void {
-    this.append({ t: "pause", reason, detail });
+  /**
+   * Record a pause. `episodeElapsedMs` rides on the record when the caller
+   * knows it (run.ts does; the drivers pass what their watchdogs say) so the
+   * pause line in the trajectory reads as "paused at 41m of 90m".
+   */
+  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number): void {
+    this.append({ t: "pause", reason, detail, ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}) });
     this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
   }
 

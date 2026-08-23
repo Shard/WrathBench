@@ -69,7 +69,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
-import { ContextBuilder, type LoopOutcome } from "./loop";
+import { ContextBuilder, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
 import { TOOLS, type ToolContext } from "./tools";
@@ -392,6 +392,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    * already recorded.
    */
   let ended: { reason: TerminationReason; detail?: string } | null = null;
+  /**
+   * The pause twin of `ended`: the supervisor is stopping and the run is to
+   * be suspended, not judged. Recorded once, then the CLI is torn down the
+   * same way; the CLI's own conversation is not reattached on resume (the
+   * run is restarted with a fresh CLI session and stamped `resumedFresh`).
+   */
+  let pausedAs: { reason: PauseReason; detail: string } | null = null;
   let killClaude: () => void = () => undefined;
   const endEpisode = (
     reason: TerminationReason,
@@ -404,8 +411,18 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     trajectory.setTermination(runId, reason, detail);
     killClaude();
   };
+  const pauseEpisode = (reason: PauseReason, detail: string): void => {
+    if (ended !== null || pausedAs !== null) return;
+    pausedAs = { reason, detail };
+    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
+    killClaude();
+  };
+  /** Whether an end or a pause is already on record. */
+  const done = (): boolean => ended !== null || pausedAs !== null;
   const finish = (): LoopOutcome => {
     const e = ended as { reason: TerminationReason; detail?: string } | null;
+    const p = pausedAs as { reason: PauseReason; detail: string } | null;
+    if (e === null && p !== null) return { kind: "paused", reason: p.reason, detail: p.detail };
     if (e === null) return { kind: "terminated", reason: "harness-error", detail: "ended without a reason" };
     return e.detail === undefined
       ? { kind: "terminated", reason: e.reason }
@@ -413,13 +430,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   };
 
   const terminate = (reason: TerminationReason, detail?: string): LoopOutcome => {
-    if (ended !== null) return finish();
+    if (done()) return finish();
     endEpisode(reason, detail);
     return finish();
   };
   const pause = (reason: PauseReason, detail: string): LoopOutcome => {
-    if (ended !== null) return finish(); // a recorded termination wins over a late pause
-    trajectory.setPause(runId, reason, detail);
+    if (done()) return finish(); // a recorded termination (or pause) wins over a late pause
+    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
     return { kind: "paused", reason, detail };
   };
 
@@ -460,7 +477,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    * between turns is not a control at all.
    */
   const enforceLimits = (): boolean => {
-    if (ended !== null) return false;
+    if (done()) return false;
     const verdict = watchdogs.check();
     if (verdict !== null) {
       endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
@@ -538,7 +555,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                       id,
                       result: {
                         content: [
-                          { type: "text", text: `run terminated by the harness: ${ended?.reason ?? "?"}` },
+                          {
+                            type: "text",
+                            text:
+                              pausedAs !== null && ended === null
+                                ? `run paused by the harness: ${pausedAs.reason}`
+                                : `run terminated by the harness: ${ended?.reason ?? "?"}`,
+                          },
                         ],
                         isError: true,
                       },
@@ -662,10 +685,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
   // An externally killed runner must still finalise: run.ts aborts this on
   // SIGINT/SIGTERM and the episode ends as `manual`.
+  // An externally stopped runner must still finalise: run.ts aborts this on
+  // SIGINT/SIGTERM, and the `StopRequest` it carries says whether the run
+  // pauses (the supervisor is stopping; resumable) or ends as `manual`.
   if (o.signal !== undefined) {
     const onAbort = (): void => {
-      const reason = o.signal?.reason;
-      endEpisode("manual", typeof reason === "string" ? reason : "aborted");
+      const req = stopRequestOf(o.signal);
+      if (req?.kind === "pause") pauseEpisode(req.reason, req.detail);
+      else endEpisode("manual", req?.detail ?? "aborted");
     };
     if (o.signal.aborted) onAbort();
     else o.signal.addEventListener("abort", onAbort, { once: true });
@@ -708,7 +735,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // making no tool calls at all.
   let ticking = false;
   const ticker = setInterval(() => {
-    if (ended !== null || ticking) return;
+    if (done() || ticking) return;
     ticking = true;
     void builder
       .sampleState()
@@ -791,7 +818,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
   try {
     for (;;) {
-      if (ended !== null) return finish();
+      if (done()) return finish();
       const verdict = watchdogs.check();
       if (verdict !== null) {
         endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
@@ -934,11 +961,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             // already records tool calls and results authoritatively.
             break;
         }
-        if (limit !== null || ended !== null) break;
+        if (limit !== null || done()) break;
       }
 
-      // A recorded termination wins: the reason is already in the trajectory.
-      if (ended !== null) return finish();
+      // A recorded termination (or pause) wins: the reason is already in the trajectory.
+      if (done()) return finish();
       if (limit !== null) return pause(limit.reason, limit.detail);
 
       if (!turnEnded) {

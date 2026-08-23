@@ -224,6 +224,46 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted (ADR-0036)", async () => {
+    const abort = new AbortController();
+    let calls = 0;
+    const slow: ChatAdapter = {
+      label: "slow",
+      complete: (req: ChatRequest): Promise<AdapterOutcome> => {
+        calls++;
+        // The request in flight is abandoned when the runner stops: the
+        // adapter contract is "throw once the signal fires".
+        return new Promise((_resolve, reject) => {
+          req.signal?.addEventListener("abort", () => reject(new Error("abandoned")), { once: true });
+        });
+      },
+    };
+    const { options } = setup(slow);
+    const run = runLoop({ ...options, signal: abort.signal });
+    await new Promise((r) => setTimeout(r, 20));
+    abort.abort({ kind: "pause", reason: "operator-pause", detail: "SIGTERM: supervisor stop" });
+    const outcome = await run;
+    expect(calls).toBe(1);
+    expect(outcome).toEqual({ kind: "paused", reason: "operator-pause", detail: "SIGTERM: supervisor stop" });
+    const row = options.trajectory.runRow("run-test");
+    expect(row?.["pause_reason"]).toBe("operator-pause");
+    expect(row?.["termination_reason"]).toBeNull();
+    const pause = readTrajectory(options.trajectory.dir).find((r) => r.t === "pause");
+    expect(pause?.["reason"]).toBe("operator-pause");
+    expect(typeof pause?.["episodeElapsedMs"]).toBe("number");
+    options.trajectory.close();
+  });
+
+  test("a stop request carrying a terminate (Ctrl-C) ends the run as manual", async () => {
+    const abort = new AbortController();
+    abort.abort({ kind: "terminate", detail: "SIGINT" });
+    const adapter = new StubAdapter([{ content: "never reached", toolCalls: [] }]);
+    const { options } = setup(adapter);
+    const outcome = await runLoop({ ...options, signal: abort.signal });
+    expect(outcome).toEqual({ kind: "terminated", reason: "manual", detail: "SIGINT" });
+    options.trajectory.close();
+  });
+
   test("an adapter throwing mid-run terminates as adapter-error", async () => {
     const { AdapterError } = await import("../src/adapter");
     const broken: ChatAdapter = {
