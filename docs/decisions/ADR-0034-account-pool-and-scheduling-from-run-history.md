@@ -159,3 +159,44 @@ and a start-state dimension (race/class) sampled without anyone choosing it.
 Both blocks are **optional and off when absent**: a `fleet.json` without
 them runs exactly as before, and the live supervisor's hot-reload stays
 parseable. `policy.paid: {}` and `policy.extras: {}` take the defaults.
+
+## Amendment 2026-08-23: paid accounts
+
+`policy.paid.maxConcurrent` throttles paid models, but it throttles them *over
+the shared pool*: a paid run lands on whichever `accounts.pool` account happens
+to be free, and "one paid run at a time" holds only because a number in a file
+says so. Money is worth a stronger guarantee than a counter, so the paid class
+gets its own accounts: `accounts.paid`, beside `accounts.pool`.
+
+A paid pick launches only on a free account from `accounts.paid`, and a free
+pick — extras included — only on the pool. With one paid account, one paid run
+at a time is true *by construction*, the same reason the local LM Studio box is
+one runner: the resource itself is the limit, not a policy that could be edited
+into something expensive. The cap stays anyway; it is what holds when there is
+more than one paid account, and it keeps the projection's held-pick reason
+("paid cap: 1/1") meaningful.
+
+If `policy.paid` is present and `accounts.paid` is absent or empty, paid picks
+are **held** with `no paid account configured` rather than spilling into the
+pool. Spilling is the failure mode this amendment exists to remove; a gap in
+the config should stop paid work, not quietly widen it. `--status` and
+`--dry-run` name that gap on its own line so it does not read as "the models
+are just not schedulable today".
+
+**Coexistence rule.** Listing an account says who may *schedule* it; `enabled`
+says who *holds* it — and only an enabled job holds one. So an account may not
+appear in both lists, and an **enabled** pinned job may not sit on an account in
+either list, but a **disabled** pinned job may: it is a parked switch, holding
+nothing. That is how `SHAKEOUT2` is the paid account today while the disabled
+`sub-opus-e90` job stays pinned to it, ready to be flipped on by hand — and it
+matches the neighbouring one-job-per-account check, which has always ignored
+disabled jobs. The accounts table shows such an account once, under the class
+that schedules it, with the parked job as its note.
+
+One exception, deliberate: the split governs the **policy**. A manual queue
+job with no account is the operator's explicit override and draws from the
+pool whatever its ref's billing — pin a paid ref to a paid account, or let the
+policy schedule it.
+
+`accounts.paid` is optional and absent is the old behaviour: with neither block
+the pool is one undifferentiated class again.
