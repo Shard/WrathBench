@@ -937,8 +937,8 @@ export interface ModelsResponse {
     extras: { characters: number } | null;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per
-     * driver, counting every job on that driver. An absent driver is
-     * unlimited; an empty object is a file that names no cap.
+     * key (`concurrencyKeyOf`), counting every run on that key. An absent
+     * key is unlimited; an empty object is a file that names no cap.
      */
     maxConcurrent: Record<string, number>;
   };

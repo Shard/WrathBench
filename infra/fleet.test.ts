@@ -365,7 +365,7 @@ describe("the shipped fleet files", () => {
     expect(rosterModels(config.roster).filter((r) => rosterClass(r) === "local").map((r) => r.name)).toEqual(["qwen3-8-27b"]);
     expect(config.jobs.find((j) => j.account === "SHAKEOUT2")!.enabled).toBe(false);
     expect(config.policy.runsPerEpisode).toEqual({ e90: 3, e360: 3 });
-    expect(config.maxConcurrent).toEqual({ "claude-code": 2 });
+    expect(config.maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
     expect(Object.keys(config.roster).length).toBeGreaterThanOrEqual(5);
     // No forced tiers: every model arrives e90-eligible and earns e360.
     for (const e of Object.values(config.roster)) expect(e.tiers).toEqual([]);
@@ -487,8 +487,10 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s", enabled: false }] })).accounts.pinned).toEqual({ S: "glm-e90" });
     expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "RUNNER" }] }))).toThrow(/also pinned to job glm-e90/);
     expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name glm-e90/);
-    expect(() => parseFleet(pin({ policy: { maxConcurrent: { warp: 1 } } }))).toThrow(/unknown driver warp/);
+    expect(() => parseFleet(pin({ policy: { maxConcurrent: { warp: 1 } } }))).toThrow(/unknown concurrency key warp/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { openai: 0 } } }))).toThrow(/positive integer/);
+    // The free-pool lanes are accepted alongside the drivers (ADR-0034 key cap).
+    expect(parseFleet(pin({ policy: { maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1 } } })).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
   });
 
   test("guards: pool/pinned overlap, bad refs, bad tiers, name collisions", () => {
@@ -710,6 +712,29 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     const held = planTick({ ...config, jobs: config.jobs.map((j) => ({ ...j, enabled: false })) }, states, (a) => (a === "RUNNER" ? "hand" : undefined), "20260101");
     expect(held.pinned).toEqual([]);
     expect(held.policy.map((p) => [p.job.ref, p.account])).toEqual([["son", "RUNNER2"], ["sonlo", "RUNNER3"]]);
+  });
+
+  test("planTick: the openrouter free key caps at one; a paid openrouter model runs beside it (ADR-0034 key cap)", () => {
+    const config = parseFleet({
+      accounts: { pool: ["RUNNER", "RUNNER2"], paid: ["PAID"] },
+      roster: {
+        or1: { model: "a-model:free" },
+        or2: { model: "b-model:free" },
+        dsp: { model: "deepseek/v4-flash", billing: "paid" },
+      },
+      // openrouter capped at one in flight; paid governed by its own cap.
+      policy: { maxConcurrent: { openrouter: 1 }, paid: { maxConcurrent: 1 } },
+    });
+    const states = modelStatesOf(rosterModels(config.roster), [], 1_800_000_000_000, config.policy);
+    const plan = planTick(config, states, () => undefined, "20260101");
+    const scheduled = plan.policy.map((p) => p.job.ref);
+    // One free OpenRouter model runs, the paid one runs beside it on its paid account.
+    expect(scheduled).toContain("dsp");
+    expect(plan.policy.find((p) => p.job.ref === "dsp")!.account).toBe("PAID");
+    expect(scheduled.filter((r) => r === "or1" || r === "or2")).toHaveLength(1);
+    // The second free OpenRouter ref is held on the key cap, not scheduled.
+    const heldRef = ["or1", "or2"].find((r) => !scheduled.includes(r))!;
+    expect(plan.heldPicks.find((h) => h.name === heldRef)!.why).toMatch(/cap: openrouter <= 1/);
   });
 
 });

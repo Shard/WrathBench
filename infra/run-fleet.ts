@@ -85,6 +85,7 @@ import {
   LADDER_MS,
   MODELS_SIDECAR,
   accountClassOf,
+  concurrencyKeyOf,
   inSeries,
   isStalePause,
   modelStates,
@@ -318,10 +319,11 @@ export interface FleetConfig {
   /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
-   * `policy.maxConcurrent`: streams the policy may have in flight per driver,
-   * counting every job on that driver (pinned ones included). Absent driver:
-   * unlimited. The knob for a subscription that tolerates only so many
-   * concurrent sessions.
+   * `policy.maxConcurrent`: streams the policy may have in flight per key
+   * (`concurrencyKeyOf`), counting every run on that key (pinned ones
+   * included). Absent key: unlimited. The knob for a subscription — or a
+   * shared free pool's daily budget — that tolerates only so many concurrent
+   * sessions.
    */
   maxConcurrent: Record<string, number>;
 }
@@ -756,9 +758,23 @@ export function policyExclusion(config: Pick<FleetConfig, "jobs" | "roster">, na
   return policyExclusionOf(config.jobs, config.roster, name);
 }
 
-/** The driver a roster name runs on, for the concurrency cap. */
+/** The driver a roster name runs on. */
 export function driverOf(roster: Record<string, FleetRosterEntry>, name: string): string {
   return roster[name]?.driver ?? "openai";
+}
+
+/**
+ * The concurrency key a roster name counts against for `policy.maxConcurrent`
+ * (`concurrencyKeyOf`, models.ts): the free shared pools are capped per
+ * platform, everything else per driver. `billing` is the derived verdict the
+ * caller already holds (the projection's `state.billing`); a name the roster
+ * does not carry falls back to its driver key, so a stranger can never eat a
+ * free key.
+ */
+export function concurrencyKeyOfRef(roster: Record<string, FleetRosterEntry>, name: string, billing: Billing | undefined): string {
+  const e = roster[name];
+  if (e === undefined || billing === undefined) return driverOf(roster, name);
+  return concurrencyKeyOf({ name, ...(e.driver !== undefined ? { driver: e.driver } : {}), ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}) }, billing);
 }
 
 /** An eligibility predicate over the projection, for planQueue / runnableRefs. */
@@ -960,10 +976,11 @@ export interface PolicyPick {
  * The policy's fill for whatever the queue left free (ADR-0034). Pure: the
  * projection is handed in. Only runs when no manual job is waiting — a manual
  * entry always outranks the policy — and never puts a second stream on a
- * model. `concurrency` is the per-driver cap: `running` counts every stream
- * in flight on that driver, pinned jobs included, so a subscription that
- * tolerates two sessions is a number in the file rather than a model removed
- * from the roster. `paid` is the paid cap (`policy.paid.maxConcurrent`):
+ * model. `concurrency` is the per-key cap (`concurrencyKeyOf`): `running`
+ * counts every stream in flight on that key, pinned jobs included, so a
+ * subscription (or a shared free pool's daily budget) that tolerates only so
+ * many sessions is a number in the file rather than a model removed from the
+ * roster. `paid` is the paid cap (`policy.paid.maxConcurrent`):
  * `running` counts paid policy models in flight (pinned jobs excluded), and a
  * paid pick over the cap is held, with the reason in `held` for `--dry-run`.
  */
@@ -981,7 +998,7 @@ export function planPolicy(opts: {
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
   runningRefs: ReadonlySet<string>;
-  concurrency?: { driverOf: (name: string) => string; max: Record<string, number>; running: ReadonlyMap<string, number> };
+  concurrency?: { keyOf: (name: string) => string; max: Record<string, number>; running: ReadonlyMap<string, number> };
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
   paidRunning?: number;
@@ -1053,12 +1070,12 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     const plan = next(opts.states, free, []);
     return { picks: plan.jobs.map(wrap), held: plan.held };
   }
-  // The cap, over the projection's own priority order: a pick whose driver is
+  // The cap, over the projection's own priority order: a pick whose key is
   // full is passed over and the next candidate is asked for its account, until
   // a round yields nothing to pass over.
-  const { driverOf, max } = opts.concurrency;
+  const { keyOf, max } = opts.concurrency;
   const count = new Map(opts.concurrency.running);
-  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) count.set(driverOf(r), (count.get(driverOf(r)) ?? 0) + 1);
+  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) count.set(keyOf(r), (count.get(keyOf(r)) ?? 0) + 1);
   const out: NextJob[] = [];
   const held: HeldPick[] = [];
   const passed = new Set<string>();
@@ -1069,11 +1086,11 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     for (const h of plan.held) if (!held.some((x) => x.name === h.name)) held.push(h);
     let rejected = false;
     for (const pick of plan.jobs) {
-      const d = driverOf(pick.name);
+      const d = keyOf(pick.name);
       const cap = max[d];
       if (cap !== undefined && (count.get(d) ?? 0) >= cap) {
         passed.add(pick.name);
-        held.push({ name: pick.name, episode: pick.episode, why: `driver cap: ${d} <= ${cap}, ${count.get(d) ?? 0} in flight` });
+        held.push({ name: pick.name, episode: pick.episode, why: `cap: ${d} <= ${cap}, ${count.get(d) ?? 0} in flight` });
         rejected = true;
         continue;
       }
@@ -2690,7 +2707,7 @@ function printStatus(configPath: string): void {
     }
     for (const line of formatModels(states, running, Date.now(), excluded, config.policy)) console.log(`  ${line}`);
     if (Object.keys(config.maxConcurrent).length > 0) {
-      console.log(`  concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
+      console.log(`  concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every run on the key counts)`);
     }
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     /*
@@ -2780,8 +2797,10 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     runningRefs,
   });
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
-  const driverCount = new Map<string, number>();
-  for (const r of runningRefs) driverCount.set(driverOf(config.roster, r), (driverCount.get(driverOf(config.roster, r)) ?? 0) + 1);
+  const billingOfName = new Map(states.map((st) => [st.name, st.billing]));
+  const keyOf = (n: string): string => concurrencyKeyOfRef(config.roster, n, billingOfName.get(n));
+  const keyCount = new Map<string, number>();
+  for (const r of runningRefs) keyCount.set(keyOf(r), (keyCount.get(keyOf(r)) ?? 0) + 1);
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
@@ -2790,7 +2809,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     held,
     queuePlan: queue,
     runningRefs,
-    concurrency: { driverOf: (n) => driverOf(config.roster, n), max: config.maxConcurrent, running: driverCount },
+    concurrency: { keyOf, max: config.maxConcurrent, running: keyCount },
     policy: config.policy,
     paidRunning: 0,
   });
@@ -2876,7 +2895,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   for (const line of formatPaused(resumes.listed)) console.log(line);
   for (const line of formatEnded(resumes.end, false)) console.log(line);
   if (Object.keys(config.maxConcurrent).length > 0) {
-    console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
+    console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every run on the key counts)`);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
   for (const line of formatQueue(poolJobs(config), undefined)) console.log(line);
@@ -3072,13 +3091,14 @@ async function main(): Promise<void> {
     const eligible = eligibleFrom(states);
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
-    const driverCount = new Map<string, number>();
+    const keyCount = new Map<string, number>();
     // Paid policy models in flight, for the paid cap (pinned jobs excluded).
     const billingOf = new Map(states.map((st) => [st.name, st.billing]));
     let paidRunning = 0;
     const pinnedSkips: QueueSkip[] = [];
-    const countDriver = (refs: readonly string[]): void => {
-      for (const r of refs) driverCount.set(driverOf(cfg.roster, r), (driverCount.get(driverOf(cfg.roster, r)) ?? 0) + 1);
+    const keyOf = (n: string): string => concurrencyKeyOfRef(cfg.roster, n, billingOf.get(n));
+    const countKey = (refs: readonly string[]): void => {
+      for (const r of refs) keyCount.set(keyOf(r), (keyCount.get(keyOf(r)) ?? 0) + 1);
     };
     // Pinned jobs: from the file, on their own accounts.
     for (const job of pinnedJobs(cfg)) {
@@ -3095,7 +3115,7 @@ async function main(): Promise<void> {
         // An enabled pinned job spawns this tick if it is not already running,
         // so it counts against the driver cap either way — otherwise the first
         // tick after a restart fills the pool before the pinned session exists.
-        countDriver(job.refs);
+        countKey(job.refs);
       }
     }
     // Pool jobs with a live process: keep running whatever the file now says,
@@ -3109,7 +3129,7 @@ async function main(): Promise<void> {
         } else {
           out.push(jobSpawn(running, cfg.roster, account, stampToday));
           runningRefs.add(running.ref);
-          countDriver(running.refs);
+          countKey(running.refs);
           if (billingOf.get(running.ref) === "paid") paidRunning++;
         }
         continue;
@@ -3122,7 +3142,7 @@ async function main(): Promise<void> {
       }
       out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible));
       for (const r of fromFile.refs) runningRefs.add(r);
-      countDriver(fromFile.refs);
+      countKey(fromFile.refs);
       // A manual pool job on a paid model holds a paid slot too: the cap is
       // about what is billing at once, not about who asked for it.
       for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
@@ -3168,7 +3188,7 @@ async function main(): Promise<void> {
           runningRefs.add(ref);
           if (billingOf.get(ref) === "paid") paidRunning++;
         }
-        countDriver(r.job.refs);
+        countKey(r.job.refs);
       }
       const key = `resume:${r.runId}:${r.pauseCount}`;
       if (!announcedPicks.has(key)) {
@@ -3206,7 +3226,7 @@ async function main(): Promise<void> {
         held,
         queuePlan: lastPlan,
         runningRefs,
-        concurrency: { driverOf: (n) => driverOf(cfg.roster, n), max: cfg.maxConcurrent, running: driverCount },
+        concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount },
         policy: cfg.policy,
         paidRunning,
       });

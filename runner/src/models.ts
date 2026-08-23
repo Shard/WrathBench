@@ -56,7 +56,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
-import { harnessOf, isDriver, type Driver, type Harness } from "./config";
+import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
@@ -171,10 +171,10 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
       throw new Error('policy.maxConcurrent must be an object like { "claude-code": 2 }');
     }
     for (const [k, v] of Object.entries(o.maxConcurrent as Record<string, unknown>)) {
-      if (!isDriver(k)) throw new Error(`policy.maxConcurrent: unknown driver ${k}`);
-      const driver = k;
+      if (!isConcurrencyKey(k)) throw new Error(`policy.maxConcurrent: unknown concurrency key ${k} — allowed: ${CONCURRENCY_KEYS.join(", ")}`);
+      const key = k;
       if (typeof v !== "number" || !Number.isInteger(v) || v < 1) throw new Error(`policy.maxConcurrent.${k} must be a positive integer`);
-      out.maxConcurrent[driver] = v;
+      out.maxConcurrent[key] = v;
     }
   }
   if (o.paid !== undefined) {
@@ -678,6 +678,49 @@ export function readRunFacts(runsDir: string, now = Date.now(), opts: { includeA
  */
 export function platformOf(apiBase: string | undefined, driver: string | undefined): string | null {
   return platformOfBase(apiBase) ?? (driver ?? "openrouter");
+}
+
+/**
+ * The rate-limit keys `policy.maxConcurrent` may cap: every driver, plus the
+ * two shared free-cloud platforms whose free tiers are metered separately by
+ * their upstream provider (`concurrencyKeyOf`). Widening validation from
+ * drivers to these keys is purely additive — an old per-driver cap still parses.
+ */
+export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode"];
+
+export function isConcurrencyKey(k: string): boolean {
+  return (CONCURRENCY_KEYS as readonly string[]).includes(k);
+}
+
+/**
+ * The concurrency key a roster entry counts against for `policy.maxConcurrent`.
+ *
+ * The cap keys on a RATE-LIMIT key, not a driver, because the shared free-cloud
+ * pools (OpenRouter, OpenCode Zen) all drive through the `openai` driver yet
+ * meter their `:free`/`-free` tiers per upstream provider — running several at
+ * once burns one daily budget and breaks the runs. So a FREE model on a shared
+ * free platform lands in that platform's key (`openrouter` / `opencode`);
+ * everything else keeps its driver key: paid models (governed by the separate
+ * `policy.paid` cap even when their platform projects to OpenRouter), the local
+ * box (its one account is its limit), `stub`, and `claude-code`.
+ *
+ * The free branch is gated on `driver === "openai"` and reads the platform from
+ * the api base alone — `platformOfBase(apiBase) ?? "openrouter"`, an absent base
+ * being the OpenRouter default, mirroring `isSharedFreePool` — never from the
+ * driver, so a `:free` slug pinned to `driver: "openai"` with no base still
+ * lands in the openrouter key rather than escaping the cap. The `opencode.ai`
+ * host is normalized to `opencode` here and only here: `platformOfBase` keeps
+ * its host spelling so `run.platform` and the viewer's listing stay stable
+ * against runs already on disk; the key is the one seam that renames it.
+ */
+export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBase">, billing: Billing): string {
+  const driver = driverOf(r);
+  if (driver === "openai" && billing === "free") {
+    const platform = platformOfBase(r.apiBase) ?? "openrouter";
+    if (platform === "openrouter") return "openrouter";
+    if (platform === "opencode.ai" || platform === "opencode") return "opencode";
+  }
+  return driver;
 }
 
 /** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
