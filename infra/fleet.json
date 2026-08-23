@@ -68,7 +68,9 @@
   },
   "policy": {
     "runsPerEpisode": {"e90": 3, "e360": 3},
-    "maxConcurrent": {"claude-code": 2}
+    "maxConcurrent": {"claude-code": 2},
+    "paid": {},
+    "extras": {}
   },
   "queue": [
     { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": "loop", "enabled": true },
