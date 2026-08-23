@@ -375,11 +375,14 @@ retried K)` (processes that exited since the supervisor started; `ok` is exit
 rows: the run directories and `fleet-<stamp>.jsonl` are the record.
 `--dry-run` prints the same anatomy for a supervisor about to start — what
 would spawn on each account now, with the exact argv, and `HELD` lines for
-picks the paid cap or a driver cap held back.
+picks the paid cap, a driver cap, or an account class with no account held
+back (`no paid account configured`, `no local account configured`).
 
-### Switching to the job shape (ADR-0034 amendment, 2026-08-23)
+### Switching to the job shape (ADR-0034 amendment, 2026-08-23) — DONE
 
-`infra/fleet.next.json` is today's fleet under the job schema: `lanes` and
+Kept as the pattern for the next shape change; the swap itself happened on
+2026-08-23 and the sibling files it names are gone. `infra/fleet.next.json`
+was today's fleet under the job schema: `lanes` and
 `accounts.pinned` are gone, nav-probe is a roster entry (objective, watchdogs,
 wiki coords) pinned to SHAKEOUT by a looping `freeplay` job, `sub-opus` a
 disabled pinned job on SHAKEOUT2, `sonnet` and `sonnet-low` back in the roster
@@ -395,7 +398,7 @@ window, in this order:
 docker compose -f infra/compose.yml stop fleet
 
 # 2. swap the file (keep the old one: the new code loads either shape)
-git mv -f infra/fleet.json infra/fleet.prev.json      # or plain mv if you prefer
+git mv -f infra/fleet.json infra/fleet.old.json       # or plain mv if you prefer
 git mv infra/fleet.next.json infra/fleet.json
 
 # 3. check the plan from the new code before anything spawns
@@ -410,7 +413,7 @@ Steps 2 and 4 commute: a new-code supervisor started against the old file runs
 its lanes as pinned jobs (one log line says so), and a later rename is picked
 up on the next 60s re-read like any other edit. What must not happen is the
 reverse — the new file under the old code — which is why the file ships as a
-sibling. Roll back by renaming `fleet.prev.json` back; nothing else changes.
+sibling. Roll back by renaming the old file back; nothing else changes.
 The probe's run ids move from `fleet-nav-probe-…` to `fleet-nav-probe-freeplay-…`
 with the new epoch; nothing resumes across the rename.
 

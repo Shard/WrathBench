@@ -435,28 +435,58 @@ describe("the shipped fleet files", () => {
     expect(onPool).not.toContain("qwen3-8-27b");
   });
 
-  test("fleet.pool.json (pool shape with a lanes list) still loads: lanes read as pinned jobs", async () => {
-    const raw = (await Bun.file(new URL("./fleet.pool.json", import.meta.url).pathname).json()) as unknown;
-    const config = parseFleet(raw);
+  /*
+   * The pool-era shape, inline: a `lanes` list beside `accounts.pinned`, which
+   * is what `fleet.json` looked like between ADR-0031 and ADR-0034's job
+   * concept. It shipped as a file (`infra/fleet.pool.json`) until the shapes
+   * were three generations old; the fixture is here now because what is worth
+   * keeping is the LOADER's behaviour, not a copy of a config nobody runs.
+   * `claude-subscription` is deliberate: a supervisor older than ADR-0035
+   * rejects `claude-code`, so files of this vintage spell the driver the old
+   * way and the parsed value is what must come out right.
+   */
+  const poolShape = {
+    _notes: ["pool-era: lanes beside accounts.pinned (ADR-0031)"],
+    accounts: { pinned: { SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" }, pool: ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"] },
+    lanes: [
+      {
+        name: "nav-probe",
+        enabled: true,
+        loop: true,
+        objective: "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram.",
+        watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
+        maxToolCalls: 2500,
+        wikiCoords: true,
+        entries: [{ model: "sonnet", driver: "claude-subscription", character: "Navprobe", race: 3, class: 2 }],
+      },
+      {
+        name: "sub-opus",
+        enabled: false,
+        loop: true,
+        entries: [
+          { model: "opus", driver: "claude-subscription", character: "Fleetopus", race: 3, class: 2, episodeMs: 5_400_000 },
+          { model: "opus", driver: "claude-subscription", effort: "low", character: "Fleetopuslo", race: 3, class: 2, episodeMs: 5_400_000 },
+        ],
+      },
+    ],
+    roster: { "muse-spark": { model: "muse-spark-1.2-contributor-free", apiBase: "https://opencode.ai/zen/v1", apiKeyEnv: "OPENCODE_KEY" } },
+    policy: { runsPerEpisode: { e90: 3, e360: 3 } },
+    queue: [{ ref: "muse-spark", episode: "e90", repeat: 1, lane: "muse-spark-first" }],
+  };
+
+  test("the pool-era shape (a lanes list beside accounts.pinned) still loads: lanes read as pinned jobs", () => {
+    const config = parseFleet(poolShape);
     expect(config.legacyLanes).toEqual(["nav-probe", "sub-opus"]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
+    // A class the file never heard of is empty, not absent.
+    expect(config.accounts.local).toEqual([]);
     const probe = config.jobs.find((j) => j.name === "nav-probe")!;
     expect(probe).toMatchObject({ account: "SHAKEOUT", repeat: "loop", source: "legacy" });
     expect(probe.legacy).toMatchObject({ loop: true, wikiCoords: true, maxToolCalls: 2500 });
-    // The raw file may still spell `claude-subscription`: a supervisor started
-    // before ADR-0035 rejects `claude-code`. The parsed value is what must be right.
     for (const e of probe.legacy!.entries!) expect(e.driver).toBe("claude-code");
-    lanePolicy(config);
-  });
-
-  test("fleet.prev.json (pre-pool shape) still loads: every lane pinned to its own account, no pool", async () => {
-    const raw = (await Bun.file(new URL("./fleet.prev.json", import.meta.url).pathname).json()) as unknown;
-    const config = parseFleet(raw);
-    expect(config.legacyLanes.length).toBeGreaterThan(3);
-    expect(config.accounts.pool).toEqual([]);
-    expect(config.roster).toEqual({});
-    for (const j of config.jobs) expect(j).toMatchObject({ source: "legacy", account: expect.any(String) });
+    // The queue entry's `lane` is legacy input too: the job keeps its own name.
+    expect(poolJobs(config).map((j) => j.name)).toEqual(["muse-spark-e90"]);
     lanePolicy(config);
   });
 });
