@@ -1,5 +1,6 @@
 {
   "_notes": [
+    "Pruned 2026-08-23 (docs/COSTS.md §1): mimo-v2.5-free 0 snippets in 23 episodes, z-ai/glm-5.2:free 0 in 16 (429 upstream). north-mini-code and deepseek-v4-flash kept one more day on 1–2 samples.",
     "NEXT-SHAPE fleet config (ADR-0031: runner pool and job queue). Equivalent to fleet.json as of",
     "2026-08-23 — same 7 streams — but lanes no longer own accounts. This file is NOT read by the",
     "running supervisor: the code that understands it ships in the same commit, and a supervisor",
@@ -96,13 +97,11 @@
     "ox-alpha": { "model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tiers": ["e90"] },
     "nemotron-ultra": { "model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tiers": ["e90"] },
     "north-mini-code": { "model": "cohere/north-mini-code:free", "tiers": ["e90"] },
-    "glm-5.2": { "model": "z-ai/glm-5.2:free", "tiers": ["e90"] },
     "nemotron-super": { "model": "nvidia/nemotron-3-super-120b-a12b:free", "tiers": ["e90"] },
     "nemotron-nano": { "model": "nvidia/nemotron-nano-9b-v2:free", "tiers": ["e90"] },
     "laguna-or": { "model": "poolside/laguna-s-2.1:free", "tiers": ["e90"] },
     "dots-3": { "model": "dots-studio/dots-3-note-preview:free", "tiers": ["e90"] },
     "hy3": { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
-    "mimo": { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
     "deepseek-flash": { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
     "laguna-oc": { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
     "x-preview-f": { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
@@ -110,9 +109,9 @@
   },
   "queue": [
     { "ref": "ox-alpha", "episode": "e90", "repeat": "loop", "lane": "ox-alpha" },
-    { "ref": ["nemotron-ultra", "north-mini-code", "glm-5.2"], "episode": "e90", "repeat": "loop", "lane": "free-or-a" },
+    { "ref": ["nemotron-ultra", "north-mini-code"], "episode": "e90", "repeat": "loop", "lane": "free-or-a" },
     { "ref": ["nemotron-super", "nemotron-nano", "laguna-or", "dots-3"], "episode": "e90", "repeat": "loop", "lane": "free-or-b" },
-    { "ref": ["hy3", "mimo", "deepseek-flash"], "episode": "e90", "repeat": "loop", "lane": "free-oc-a" },
+    { "ref": ["hy3", "deepseek-flash"], "episode": "e90", "repeat": "loop", "lane": "free-oc-a" },
     { "ref": ["laguna-oc", "x-preview-f"], "episode": "e90", "repeat": "loop", "lane": "free-oc-b" },
     { "ref": "qwen3-8-27b", "episode": "e90", "repeat": "loop", "lane": "local-qwen" },
     { "ref": ["sonnet", "sonnet-low"], "episode": "e90", "repeat": "loop", "lane": "sub-sonnet", "enabled": false },
