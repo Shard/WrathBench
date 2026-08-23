@@ -50,10 +50,10 @@ import {
   type RunConfig,
   type WatchdogOverride,
 } from "./config";
-import { runLoop } from "./loop";
+import { runLoop, type StopRequest } from "./loop";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
-import { Trajectory, readMeta, type RunMeta } from "./trajectory";
+import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 
@@ -208,6 +208,8 @@ async function main(): Promise<void> {
   let resumed = false;
   /** The meta.json a resume loaded, kept so a regenerated token can be persisted. */
   let resumedMeta: RunMeta | undefined;
+  /** The pause mark the resumed meta carried, read before the mark is consumed. */
+  let resumedPause: PauseMark | undefined;
   let tokenRegenerated = false;
   if (resumeId !== undefined) {
     const runsDir = typeof args["runs-dir"] === "string" ? args["runs-dir"] : "data/runs";
@@ -238,6 +240,7 @@ async function main(): Promise<void> {
     const session = resolveSessionToken(c.token);
     config = { ...c, ...overrides, runId: resumeId, token: session.token };
     resumedMeta = meta;
+    resumedPause = meta.pause;
     tokenRegenerated = session.regenerated;
     resumed = true;
   } else {
@@ -316,7 +319,27 @@ async function main(): Promise<void> {
     });
   } else {
     trajectory.clearPause(config.runId);
-    trajectory.append({ t: "resume", harnessVersion: version });
+    trajectory.append({
+      t: "resume",
+      harnessVersion: version,
+      ...(resumedPause !== undefined ? { after: resumedPause.reason, episodeElapsedMs: resumedPause.episodeElapsedMs } : {}),
+    });
+    /*
+     * The pause mark is consumed: meta.json says "paused" only while the run
+     * is. The claude-code driver cannot reattach the CLI's own conversation
+     * (the CLI owns that history; the runner starts a fresh session with the
+     * same fixed prompt and the scratchpad), so such a resume is stamped
+     * `resumedFresh` in meta.json — sticky: the run had at least one fresh
+     * restart in its life, which a reader of its turns should know.
+     */
+    if (resumedMeta !== undefined) {
+      const { pause: _pause, ...rest } = resumedMeta;
+      resumedMeta = {
+        ...rest,
+        ...(config.driver === "claude-code" ? { resumedFresh: true } : {}),
+      };
+      trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
+    }
     /*
      * A resume may tighten the leash (`--max-turns`, `--watchdogs-json`), and a
      * budget stamped at launch would then describe a run that no longer exists.
@@ -381,28 +404,73 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
-  const watchdogs = new Watchdogs(config.watchdogs);
+  /*
+   * The episode clock continues from where the last segment left it: a
+   * paused run's meta.json carries the wall clock it had spent, so a 90-minute
+   * budget is 90 minutes of play however many times the fleet restarted
+   * underneath it. A pause written before the mark existed resumes at zero.
+   */
+  const elapsedBeforeMs = resumedPause?.episodeElapsedMs ?? 0;
+  const watchdogs = new Watchdogs(config.watchdogs, Date.now, elapsedBeforeMs);
+  if (resumed && elapsedBeforeMs > 0) {
+    console.error(`[wrathbench] episode clock resumes at ${Math.round(elapsedBeforeMs / 60_000)}m`);
+  }
 
-  // A killed runner must still leave a finalised run. SIGTERM matters as much
-  // as SIGINT here: that is what `docker compose down`, a supervisor, or an
-  // operator's `kill` sends. The episode driver is asked to unwind (it records
-  // the termination itself and tears down its CLI child); the fixed loop has
-  // no such seam, so the record is written here.
+  // A stopped runner must still leave a run that says what happened to it.
+  // Two signals, two meanings (ADR-0036):
+  //  - SIGTERM is what a supervisor sends — `docker compose stop`, a drain, a
+  //    recreate. The run PAUSES as `operator-pause`: clock stopped, session
+  //    released, resumable with --resume. The fleet's stop must not cost a run.
+  //  - SIGINT is the operator's Ctrl-C on a hand-started run: `manual`.
+  // Either way the driver is asked to unwind cooperatively (the request in
+  // flight is abandoned, the CLI child torn down) and the record is written
+  // by the loop; a backstop writes it if the unwind wedges.
   let stopping = false;
   const abort = new AbortController();
-  const onSignal = (sig: string): void => {
+  const onSignal = (sig: "SIGINT" | "SIGTERM"): void => {
     if (stopping) process.exit(130);
     stopping = true;
-    console.error(`\n${sig}: terminating run as \`manual\``);
-    if (config.driver === "claude-code") {
-      abort.abort(sig);
-      // Backstop: never hang forever waiting for a wedged child.
-      setTimeout(() => process.exit(130), 20_000).unref();
-    } else {
-      trajectory.setTermination(config.runId, "manual", sig);
-      void sandbox.stop().finally(() => process.exit(130));
-    }
+    const req: StopRequest =
+      sig === "SIGTERM"
+        ? { kind: "pause", reason: "operator-pause", detail: `${sig}: supervisor stop` }
+        : { kind: "terminate", detail: sig };
+    console.error(
+      req.kind === "pause"
+        ? `\n${sig}: pausing run as \`operator-pause\` (resume with --resume ${config.runId})`
+        : `\n${sig}: terminating run as \`manual\``,
+    );
+    abort.abort(req);
+    // Backstop: never hang forever waiting for a wedged child or snippet. If
+    // the loop has not written its record by then, write it here so the run
+    // is never left with neither a termination nor a pause.
+    setTimeout(() => {
+      const row = trajectory.runRow(config.runId);
+      const recorded = row !== null && ((row["termination_reason"] ?? null) !== null || (row["pause_reason"] ?? null) !== null);
+      if (!recorded) {
+        if (req.kind === "pause") {
+          trajectory.setPause(config.runId, req.reason, `${req.detail} (backstop)`, watchdogs.elapsedMs());
+          trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(req) });
+        } else {
+          trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`);
+        }
+      }
+      process.exit(130);
+    }, req.kind === "pause" ? 60_000 : 20_000).unref();
   };
+  const metaNow = (): RunMeta => ({
+    runId: config.runId,
+    harnessVersion: version,
+    startedAt: Date.now(),
+    config,
+    comparability,
+    ...(shakeout !== undefined ? { shakeout } : {}),
+  });
+  const pauseMark = (p: { reason: PauseMark["reason"]; detail?: string | undefined }): PauseMark => ({
+    reason: p.reason,
+    ...(p.detail !== undefined ? { detail: p.detail } : {}),
+    at: Date.now(),
+    episodeElapsedMs: watchdogs.elapsedMs(),
+  });
   process.on("SIGINT", () => onSignal("SIGINT"));
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
@@ -515,12 +583,25 @@ async function main(): Promise<void> {
           watchdogs,
           initialNotices,
           turnOffset,
+          signal: abort.signal,
         });
 
-  if (outcome.kind === "terminated") {
+  if (outcome.kind === "paused") {
+    /*
+     * The pause mark: what a supervisor reads to find resumable runs, and
+     * what the next --resume continues the episode clock from. Written before
+     * the session is touched so a crash in the release still leaves a
+     * resumable run.
+     */
+    trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(outcome) });
+  }
+  if (outcome.kind === "terminated" || outcome.reason === "operator-pause") {
     // A finished run frees its module session so the account is not held
-    // (the realm caps characters/sessions per account). A PAUSED run keeps
-    // the session alive on purpose: that is the --resume path.
+    // (the realm caps characters/sessions per account). So does a run the
+    // supervisor paused: the fleet is going down, and the account must be
+    // free for the resume (same character — logout, never a wipe). A run
+    // paused by its provider keeps the session alive on purpose: that is
+    // the in-place retry path, and the roster frees it when it moves on.
     try {
       await sandbox.evalSnippet(
         "if (typeof sdk !== 'undefined' && sdk) { try { await sdk.deleteSession(); } catch {} }",

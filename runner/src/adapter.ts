@@ -29,6 +29,12 @@ import type { ToolDef } from "./tools";
 export interface ChatRequest {
   messages: ChatMessage[];
   tools: ToolDef[];
+  /**
+   * The runner is stopping: abandon the request in flight. A request can run
+   * for minutes under a slow provider, and a supervisor's stop has a grace
+   * period; the loop reads `signal.aborted` before it interprets the error.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 export interface ToolCall {
@@ -304,6 +310,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
     // the loop, so honouring the header means carrying it across one iteration.
     let retryAfterMs: number | null = null;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+      if (req.signal?.aborted === true) throw new AdapterError("request abandoned: the runner is stopping");
       if (attempt > 0) {
         const base = Math.min(1_000 * 2 ** (attempt - 1), 30_000);
         // Jitter is subtractive on the computed backoff but NOT on a
@@ -326,9 +333,13 @@ export class OpenAiChatAdapter implements ChatAdapter {
           method: "POST",
           headers: this.headers,
           body,
-          signal: AbortSignal.timeout(this.requestTimeoutMs),
+          signal:
+            req.signal !== undefined
+              ? AbortSignal.any([AbortSignal.timeout(this.requestTimeoutMs), req.signal])
+              : AbortSignal.timeout(this.requestTimeoutMs),
         });
       } catch (err) {
+        if (req.signal !== undefined && req.signal.aborted) throw new AdapterError("request abandoned: the runner is stopping");
         lastError = `network error: ${err instanceof Error ? err.message : String(err)}`;
         lastStatus = undefined;
         continue;

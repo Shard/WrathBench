@@ -37,12 +37,24 @@ export class Watchdogs {
   private lastProgress: { level: number; xp: number } | null = null;
   private sandboxRestarts = 0;
 
+  /**
+   * `elapsedBeforeMs` is the episode clock a paused run had already spent:
+   * a resumed run's wall clock continues from there, not from this process's
+   * start, so the 90/360-minute budget is a budget of play and not of calendar
+   * time. Persisted by run.ts in meta.json at every pause.
+   */
   constructor(
     private readonly cfg: WatchdogConfig,
     private readonly now: () => number = Date.now,
+    elapsedBeforeMs = 0,
   ) {
-    this.startedAt = this.now();
-    this.lastModelOutputAt = this.startedAt;
+    this.startedAt = this.now() - Math.max(0, elapsedBeforeMs);
+    this.lastModelOutputAt = this.now();
+  }
+
+  /** Episode wall clock spent so far, including what earlier segments spent. */
+  elapsedMs(): number {
+    return this.now() - this.startedAt;
   }
 
   /** A model response arrived. */

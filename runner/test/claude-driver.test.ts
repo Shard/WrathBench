@@ -355,6 +355,27 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 30_000);
 
+  test("a stop request carrying a pause suspends the episode as operator-pause and tears the CLI down", async () => {
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {});
+    const abort = new AbortController();
+    setTimeout(() => abort.abort({ kind: "pause", reason: "operator-pause", detail: "SIGTERM: supervisor stop" }), 300);
+    const outcome = await runClaudeEpisode({
+      ...options,
+      signal: abort.signal,
+      watchdogTickMs: 50,
+      killGraceMs: 200,
+    });
+    expect(outcome).toEqual({ kind: "paused", reason: "operator-pause", detail: "SIGTERM: supervisor stop" });
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(0);
+    const pauses = records.filter((r) => r.t === "pause");
+    expect(pauses).toHaveLength(1);
+    expect(typeof pauses[0]?.["episodeElapsedMs"]).toBe("number");
+    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBe("operator-pause");
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBeNull();
+    trajectory.close();
+  }, 30_000);
+
   test("claudeArgs uses only flags that exist, and never invents --max-turns", () => {
     const args = claudeArgs({ mcpConfigPath: "/tmp/x.json", model: "opus" });
     expect(args.slice(0, 2)).toEqual(["-p", "--verbose"]);
@@ -458,7 +479,8 @@ describe("driver selection and stamping", () => {
     expect(oldRendered).toContain("driver:     claude-code");
   });
 
-  test("an externally delivered SIGTERM finalises the run as manual", async () => {
+  /** Spawn run.ts against the fake CLI, deliver `sig` mid-turn, return what it left behind. */
+  async function stopMidTurn(sig: "SIGTERM" | "SIGINT"): Promise<{ dir: string; runId: string; stderr: string }> {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-"));
     const cwd = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-cwd-"));
     const proc = Bun.spawn({
@@ -490,20 +512,46 @@ describe("driver selection and stamping", () => {
     });
     // let it get into the turn and run some tool calls
     await new Promise((r) => setTimeout(r, 2_500));
-    proc.kill("SIGTERM");
+    proc.kill(sig);
     const stderr = await new Response(proc.stderr).text();
     await proc.exited;
-    expect(stderr).toContain("SIGTERM: terminating run as `manual`");
-
     const runId = readdirSync(dir).find((d) => d.startsWith("run-"));
     expect(runId).toBeDefined();
-    const runDir = join(dir, runId!);
+    return { dir, runId: runId!, stderr };
+  }
+
+  test("an externally delivered SIGTERM pauses the run as operator-pause (ADR-0036)", async () => {
+    const { dir, runId, stderr } = await stopMidTurn("SIGTERM");
+    expect(stderr).toContain("SIGTERM: pausing run as `operator-pause`");
+    const runDir = join(dir, runId);
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(0);
+    const pauses = records.filter((r) => r.t === "pause");
+    expect(pauses).toHaveLength(1);
+    expect(pauses[0]?.["reason"]).toBe("operator-pause");
+    expect(typeof pauses[0]?.["episodeElapsedMs"]).toBe("number");
+    const trajectory = new Trajectory(runDir);
+    expect(trajectory.runRow(runId)?.["pause_reason"]).toBe("operator-pause");
+    expect(trajectory.runRow(runId)?.["termination_reason"]).toBeNull();
+    trajectory.close();
+    // The pause mark in meta.json is what a supervisor resumes from.
+    const meta = readMeta(runDir);
+    expect(meta?.pause?.reason).toBe("operator-pause");
+    expect(meta?.pause?.episodeElapsedMs).toBeGreaterThan(0);
+    expect(meta?.pause?.episodeElapsedMs).toBeLessThan(60_000);
+  }, 40_000);
+
+  test("an externally delivered SIGINT (Ctrl-C) still finalises the run as manual", async () => {
+    const { dir, runId, stderr } = await stopMidTurn("SIGINT");
+    expect(stderr).toContain("SIGINT: terminating run as `manual`");
+    const runDir = join(dir, runId);
     const terminations = readTrajectory(runDir).filter((r) => r.t === "termination");
     expect(terminations).toHaveLength(1);
     expect(terminations[0]?.["reason"]).toBe("manual");
     const trajectory = new Trajectory(runDir);
-    expect(trajectory.runRow(runId!)?.["termination_reason"]).toBe("manual");
-    expect(trajectory.runRow(runId!)?.["ended_at"]).not.toBeNull();
+    expect(trajectory.runRow(runId)?.["termination_reason"]).toBe("manual");
+    expect(trajectory.runRow(runId)?.["ended_at"]).not.toBeNull();
+    expect(readMeta(runDir)?.pause).toBeUndefined();
     trajectory.close();
   }, 40_000);
 

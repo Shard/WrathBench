@@ -35,6 +35,12 @@
  *   from, and runs from another series are shown but not counted — a minor
  *   bump restarts the evidence, a fix commit within the series does not. A
  *   policy with no series (an unversioned checkout) filters nothing.
+ * - **A paused run is suspended, not judged** (ADR-0036). A run with a
+ *   `pause_reason` and no termination — the supervisor stopped under it, or
+ *   its provider ran out of quota — is an attempt but is neither counted nor
+ *   a ladder failure while it is paused, and it holds its model: the policy
+ *   does not start a second stream for a model whose run is waiting to be
+ *   resumed. It is counted, or climbs the ladder, only when it finally ends.
  * - **Billing is a model property** (`model-cost.ts`). A paid model has its own
  *   targets (hard: never extras) and shares one in-flight cap; a free model
  *   gets extra runs at lowest priority once nothing else is schedulable,
@@ -204,6 +210,8 @@ export const LADDER_MS: readonly number[] = [
 
 /** The trajectory record the loop appends for a model turn (viewer/stillborn.ts). */
 export const MODEL_RESPONSE_RECORD = "response";
+/** The trajectory record a pause writes (`Trajectory.setPause`). */
+export const PAUSE_RECORD = "pause";
 
 /** Termination reasons that mean "the model never got to play" for the ladder. */
 export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"]);
@@ -270,8 +278,20 @@ export interface RunFact {
   modelResponses: number | null;
   /** Highest `state.level` observed, or null when there are no rows. */
   bestLevel: number | null;
-  /** No termination row and a trajectory that grew recently. */
+  /** No termination row, not paused, and a trajectory that grew recently. */
   live: boolean;
+  /**
+   * Set while the run is paused (ADR-0036): `pause_reason` in run.sqlite with
+   * no termination. `at` is meta.json's pause mark when present, else the
+   * trajectory's mtime; `count` is how many times this run has paused, which
+   * is what a resume cadence indexes; `episodeElapsedMs` is the clock the run
+   * will continue from (null for a pause written before the mark existed).
+   */
+  pause: { reason: string; at: number; count: number; episodeElapsedMs: number | null } | null;
+  /** The game account the run was launched on; a resume must go back to it. */
+  account: string | null;
+  /** The run's wall-clock budget (`watchdogs.episodeMs`), null when disabled. */
+  episodeMs: number | null;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -326,6 +346,12 @@ export interface ModelState {
   retired?: ModelRetired;
   /** Consecutive no-progress attempts on the ladder (0 when the last attempt progressed). */
   ladder: number;
+  /**
+   * The model's newest paused run in this series (ADR-0036): it holds the
+   * model — nothing new is scheduled for it — until the supervisor resumes
+   * the run or the run goes stale (`isStalePause`).
+   */
+  paused?: { runId: string; reason: string; at: number; episodeElapsedMs: number | null; episodeMs: number | null };
 }
 
 export interface NextJob {
@@ -362,8 +388,13 @@ function str(v: unknown): string | null {
 
 /** Count `response` records in a trajectory without holding the file in memory. */
 export function countModelResponses(path: string): number | null {
+  return countRecords(path, [MODEL_RESPONSE_RECORD])?.get(MODEL_RESPONSE_RECORD) ?? null;
+}
+
+/** One pass over a trajectory, counting the records of each kind named. Null when unreadable. */
+export function countRecords(path: string, kinds: readonly string[]): Map<string, number> | null {
   if (!existsSync(path)) return null;
-  let n = 0;
+  const n = new Map<string, number>(kinds.map((k) => [k, 0]));
   try {
     const text = readFileSync(path, "utf8");
     let from = 0;
@@ -372,12 +403,18 @@ export function countModelResponses(path: string): number | null {
       const line = nl === -1 ? text.slice(from) : text.slice(from, nl);
       if (line.length > 0) {
         // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
-        if (line.includes(`"${MODEL_RESPONSE_RECORD}"`)) {
+        for (const k of kinds) {
+          if (!line.includes(`"${k}"`)) continue;
+          let hit = false;
           try {
             const rec = JSON.parse(line) as { t?: unknown };
-            if (rec.t === MODEL_RESPONSE_RECORD) n++;
+            hit = rec.t === k;
           } catch {
-            /* a torn line is not a response */
+            /* a torn line is not a record */
+          }
+          if (hit) {
+            n.set(k, (n.get(k) ?? 0) + 1);
+            break;
           }
         }
       }
@@ -402,8 +439,9 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
   let meta: {
     harnessVersion?: unknown;
     startedAt?: unknown;
-    config?: { model?: unknown; effort?: unknown; extra?: unknown };
+    config?: { model?: unknown; effort?: unknown; extra?: unknown; account?: unknown; watchdogs?: { episodeMs?: unknown } };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
+    pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown };
   };
   try {
     meta = JSON.parse(readFileSync(metaPath, "utf8")) as typeof meta;
@@ -430,6 +468,9 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     modelResponses: null,
     bestLevel: null,
     live: false,
+    pause: null,
+    account: str(meta.config?.account),
+    episodeMs: num(meta.config?.watchdogs?.episodeMs),
   };
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -441,7 +482,9 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
       /* unreadable stat: treat as no trajectory */
     }
   }
-  fact.modelResponses = countModelResponses(jsonl);
+  const counts = countRecords(jsonl, [MODEL_RESPONSE_RECORD, PAUSE_RECORD]);
+  fact.modelResponses = counts?.get(MODEL_RESPONSE_RECORD) ?? null;
+  let pauseReason: string | null = null;
 
   const dbPath = join(dir, "run.sqlite");
   if (existsSync(dbPath)) {
@@ -457,6 +500,12 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
         fact.endedAt = num(r["ended_at"]);
         fact.terminationReason = str(r["termination_reason"]);
       }
+      try {
+        const p = db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as Record<string, unknown> | null;
+        pauseReason = p === null ? null : str(p["pause_reason"]);
+      } catch {
+        /* a store without the column (synthetic or very old) is not paused */
+      }
       const lv = db.query(`SELECT MAX(level) AS v FROM state WHERE run_id = ? AND level > 0`).get(runId) as Record<
         string,
         unknown
@@ -469,7 +518,18 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     }
   }
   if (fact.endedAt === null && fact.terminationReason !== null) fact.endedAt = mtime;
-  fact.live = fact.terminationReason === null && mtime !== null && now - mtime < LIVE_WINDOW_MS;
+  // A termination wins over a stale pause row (the --resume path clears the
+  // row, but a run can also be classified by hand after a pause).
+  if (pauseReason !== null && fact.terminationReason === null) {
+    const markedAt = num(meta.pause?.at);
+    fact.pause = {
+      reason: pauseReason,
+      at: markedAt ?? mtime ?? fact.startedAt,
+      count: Math.max(1, counts?.get(PAUSE_RECORD) ?? 1),
+      episodeElapsedMs: num(meta.pause?.episodeElapsedMs),
+    };
+  }
+  fact.live = fact.terminationReason === null && fact.pause === null && mtime !== null && now - mtime < LIVE_WINDOW_MS;
   if (!fact.live && fact.endedAt === null) fact.endedAt = mtime;
   return fact;
 }
@@ -510,7 +570,9 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
 /** Whether a run is stillborn by the viewer's definition; null while undecidable. */
 export function stillbornOf(f: RunFact): boolean | null {
   if (f.modelResponses === null) return null;
-  if (f.live) return false;
+  // Paused: undecided. A 0-response rate-limited pause is a launch still in
+  // progress as far as the policy is concerned (the roster retries it).
+  if (f.live || f.pause !== null) return null;
   return f.modelResponses === 0;
 }
 
@@ -522,7 +584,21 @@ export function stillbornOf(f: RunFact): boolean | null {
  */
 export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error"]);
 
+/**
+ * A pause nobody came back for: older than twice the run's own budget (a run
+ * with no wall clock uses the long tier's six hours). Not auto-resumed; listed
+ * for the operator to resume by hand or archive. Measured from the pause, not
+ * the launch — a run that paused three times over a night is still current.
+ */
+export const STALE_PAUSE_FALLBACK_BUDGET_MS = 6 * 60 * 60_000;
+
+export function isStalePause(f: Pick<RunFact, "pause" | "episodeMs">, now: number): boolean {
+  if (f.pause === null) return false;
+  return now - f.pause.at > 2 * (f.episodeMs ?? STALE_PAUSE_FALLBACK_BUDGET_MS);
+}
+
 export function isCounted(f: RunFact): boolean {
+  if (f.pause !== null) return false;
   if (f.extra || f.episodeOverride || f.modelResponses === null || f.modelResponses <= 0) return false;
   if (f.terminationReason !== null && NOT_THE_MODELS_FAULT.has(f.terminationReason)) return false;
   return true;
@@ -530,7 +606,7 @@ export function isCounted(f: RunFact): boolean {
 
 /** A finished attempt the ladder reads as "no progress". */
 export function isNoProgress(f: RunFact): boolean {
-  if (f.live) return false;
+  if (f.live || f.pause !== null) return false;
   if (stillbornOf(f) === true) return true;
   return f.terminationReason !== null && NO_PROGRESS_REASONS.has(f.terminationReason);
 }
@@ -612,7 +688,8 @@ export function projectModel(
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
   let lastFail: RunFact | undefined;
-  const finished = mine.filter((f) => !f.live && f.endedAt !== null && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt));
+  // A paused run is neither rung nor reset: it is skipped on the walk.
+  const finished = mine.filter((f) => !f.live && f.pause === null && f.endedAt !== null && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt));
   for (let i = finished.length - 1; i >= 0; i--) {
     const f = finished[i]!;
     if (!isNoProgress(f)) break;
@@ -632,6 +709,17 @@ export function projectModel(
     perEpisode,
     ladder,
   };
+  // The newest paused run that is not stale holds the model (ADR-0036).
+  const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStalePause(f, opts.now));
+  if (pausedRun !== undefined && pausedRun.pause !== null) {
+    state.paused = {
+      runId: pausedRun.runId,
+      reason: pausedRun.pause.reason,
+      at: pausedRun.pause.at,
+      episodeElapsedMs: pausedRun.pause.episodeElapsedMs,
+      episodeMs: pausedRun.episodeMs,
+    };
+  }
   if (lastFail !== undefined && ladder > 0) {
     const reason = stillbornOf(lastFail) === true ? "stillborn" : (lastFail.terminationReason ?? "no progress");
     if (ladder > LADDER_MS.length) {
@@ -704,6 +792,15 @@ export function schedulability(
     return { ok: false, extras: false, why: `cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})` };
   }
   if (running.has(s.name)) return { ok: false, extras: false, why: "running (one stream per model)" };
+  if (s.paused !== undefined) {
+    const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
+    const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
+    return {
+      ok: false,
+      extras: false,
+      why: `paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — resumed by the supervisor, never rescheduled`,
+    };
+  }
   const open = s.eligible.filter((ep) => {
     const st = s.perEpisode[ep];
     return st !== undefined && st.counted < st.target;

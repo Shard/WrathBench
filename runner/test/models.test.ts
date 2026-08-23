@@ -7,6 +7,10 @@ import {
   DEFAULT_POLICY,
   LADDER_MS,
   countModelResponses,
+  isCounted,
+  isNoProgress,
+  isStalePause,
+  stillbornOf,
   modelStates,
   nextJobs,
   planNextJobs,
@@ -209,6 +213,9 @@ describe("the ladder", () => {
     modelResponses: responses,
     bestLevel: null,
     live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
   });
   const m: RosterModel = { name: "m", model: "m" };
 
@@ -232,6 +239,47 @@ describe("the ladder", () => {
     // It got off the ground, so the ladder resets — but a harness error is not
     // the model's result, so nothing is counted yet and the model is still new.
     expect(s.status).toBe("new");
+  });
+
+  test("a paused run is an attempt, never counted, never a rung, and holds the model (ADR-0036)", () => {
+    const paused: RunFact = {
+      ...fail(9, NOW - 1000, null, 30),
+      pause: { reason: "operator-pause", at: NOW - 1000, count: 1, episodeElapsedMs: 41 * 60_000 },
+      episodeMs: 90 * 60_000,
+      account: "RUNNER3",
+    };
+    // Two stillborn failures, then the pause: the ladder reads the failures
+    // (rung 2, still cooling? no — long ago) and the pause neither adds nor resets.
+    const runs = [fail(1, NOW - 10 * HOUR), fail(2, NOW - 9 * HOUR), paused];
+    const s = projectModel(m, runs, DEFAULT_POLICY, { now: NOW });
+    expect(s.perEpisode.e90).toMatchObject({ attempts: 3, counted: 0, stillborn: 2 });
+    expect(s.ladder).toBe(2);
+    expect(s.paused).toMatchObject({ runId: "f-9", reason: "operator-pause", episodeElapsedMs: 41 * 60_000, episodeMs: 90 * 60_000 });
+    const v = schedulability(s);
+    expect(v.ok).toBe(false);
+    expect(v.why).toContain("paused run f-9 (operator-pause, 41m of 90m elapsed)");
+    expect(nextJobs([s], ["A"])).toEqual([]);
+    expect(isCounted(paused)).toBe(false);
+    expect(isNoProgress(paused)).toBe(false);
+    expect(stillbornOf(paused)).toBeNull();
+  });
+
+  test("a stale pause (older than twice the budget) no longer holds the model", () => {
+    const stale: RunFact = {
+      ...fail(9, NOW - 4 * HOUR, null, 30),
+      pause: { reason: "rate-limited", at: NOW - 4 * HOUR, count: 3, episodeElapsedMs: 5 * 60_000 },
+      episodeMs: 90 * 60_000,
+      account: "RUNNER3",
+    };
+    expect(isStalePause(stale, NOW)).toBe(true);
+    expect(isStalePause({ ...stale, pause: { ...stale.pause!, at: NOW - 2 * HOUR } }, NOW)).toBe(false);
+    // No wall clock: the long tier's budget stands in.
+    expect(isStalePause({ ...stale, episodeMs: null }, NOW)).toBe(false);
+    const s = projectModel(m, [stale], DEFAULT_POLICY, { now: NOW });
+    expect(s.paused).toBeUndefined();
+    expect(schedulability(s).ok).toBe(true);
+    // Still not counted: it has not ended.
+    expect(s.perEpisode.e90).toMatchObject({ attempts: 1, counted: 0 });
   });
 
   test("at the ceiling one more no-progress attempt retires the model; a clear forgives it", () => {
@@ -287,6 +335,9 @@ describe("nextJobs", () => {
     modelResponses: 10,
     bestLevel: level,
     live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
   });
 
   test("priority: never-run first, then e90 before e360, then fewest counted, then roster order", () => {
@@ -347,6 +398,9 @@ describe("paid and free (ADR-0034 amendment)", () => {
     modelResponses: 10,
     bestLevel: level,
     live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
   });
   const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: { characters: [...DEFAULT_EXTRA_CHARACTERS] } };
   const st = (r: RosterModel, runs: RunFact[], p = policy) => projectModel(r, runs, p, { now: NOW });

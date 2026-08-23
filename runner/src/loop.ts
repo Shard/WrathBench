@@ -37,6 +37,30 @@ export interface LoopOptions {
   turnOffset?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The runner's stop request. Its `reason` is a `StopRequest`: a pause
+   * (the supervisor is stopping; the run is suspended, not judged) or a
+   * termination (`manual`, the operator's Ctrl-C). Read at the turn
+   * boundaries and between tool calls, and handed to the adapter so a request
+   * in flight is abandoned rather than waited out.
+   */
+  signal?: AbortSignal | undefined;
+}
+
+/**
+ * What an abort signal's `reason` carries when the runner is asked to stop.
+ * A string reason (older callers, tests) reads as a `manual` termination.
+ */
+export type StopRequest =
+  | { kind: "pause"; reason: PauseReason; detail: string }
+  | { kind: "terminate"; detail: string };
+
+export function stopRequestOf(signal: AbortSignal | undefined): StopRequest | null {
+  if (signal === undefined || !signal.aborted) return null;
+  const r: unknown = signal.reason;
+  if (typeof r === "object" && r !== null && (r as { kind?: unknown }).kind === "pause") return r as StopRequest;
+  if (typeof r === "object" && r !== null && (r as { kind?: unknown }).kind === "terminate") return r as StopRequest;
+  return { kind: "terminate", detail: typeof r === "string" ? r : "aborted" };
 }
 
 export type LoopOutcome =
@@ -223,10 +247,23 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     trajectory.setTermination(runId, reason, detail);
     return { kind: "terminated", reason, detail };
   };
+  /** The stop request, honoured: a pause keeps the run resumable, a terminate ends it. */
+  const stopped = (): LoopOutcome | null => {
+    const s = stopRequestOf(o.signal);
+    if (s === null) return null;
+    if (s.kind === "pause") {
+      trajectory.setPause(runId, s.reason, s.detail, watchdogs.elapsedMs());
+      return { kind: "paused", reason: s.reason, detail: s.detail };
+    }
+    return terminate("manual", s.detail);
+  };
 
   let turn = 0;
   try {
     for (;;) {
+      // 0. a stop request wins over everything, at the turn boundary
+      const stop = stopped();
+      if (stop !== null) return stop;
       // 1. watchdogs
       const verdict = watchdogs.check();
       if (verdict !== null) {
@@ -246,10 +283,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 4. model request
       trajectory.append({ t: "request", turn, adapter: o.adapter.label, messages });
-      const outcome = await o.adapter.complete({ messages, tools: toolsFor(config) });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor(config), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
-        trajectory.setPause(runId, outcome.reason, outcome.detail);
+        trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs());
         return { kind: "paused", reason: outcome.reason, detail: outcome.detail };
       }
       watchdogs.noteModelOutput();
@@ -295,6 +332,11 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 5. execute tool calls in order
       for (const tc of outcome.turn.toolCalls) {
+        // A stop between tool calls: the calls already made are in the
+        // trajectory; the ones not made are simply not made (a resumed run
+        // starts a new turn, so nothing dangles).
+        const stopMid = stopped();
+        if (stopMid !== null) return stopMid;
         let args: unknown = {};
         let argError: string | null = null;
         const coerced = coerceToolArgs(tc.name, tc.arguments);
@@ -333,6 +375,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       await sleep(config.stepIntervalMs);
     }
   } catch (err) {
+    // An abandoned request throws; the stop request is the real outcome.
+    const stop = stopped();
+    if (stop !== null) return stop;
     if (err instanceof AdapterError) {
       return terminate("adapter-error", `${err.message}${err.status !== undefined ? ` (HTTP ${err.status})` : ""}`);
     }

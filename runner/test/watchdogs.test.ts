@@ -92,3 +92,24 @@ describe("Watchdogs", () => {
     expect(w.check()?.reason).toBe("snippet-runaway");
   });
 });
+
+describe("Watchdogs episode clock across a pause", () => {
+  test("elapsedBeforeMs continues the budget instead of restarting it", () => {
+    const c = clock(1_000_000);
+    // A run that had already spent 50s of its 60s budget before it paused.
+    const w = new Watchdogs({ ...cfg, idleMs: null }, c.now, 50_000);
+    expect(w.elapsedMs()).toBe(50_000);
+    c.tick(9_999);
+    expect(w.check()).toBeNull();
+    c.tick(1);
+    expect(w.check()?.reason).toBe("episode-limit");
+    expect(w.elapsedMs()).toBe(60_000);
+  });
+
+  test("the idle clock starts at this process's start, not at the carried offset", () => {
+    const c = clock();
+    const w = new Watchdogs(cfg, c.now, 50_000);
+    c.tick(999);
+    expect(w.check()).toBeNull();
+  });
+});
