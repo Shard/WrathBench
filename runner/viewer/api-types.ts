@@ -665,6 +665,27 @@ export interface ResultRun {
   questsCompleted: number | null;
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];
+  /*
+   * The listing columns. The episodes page is the per-run grain (ADR-0022
+   * amendment, 2026-08-23), so the facts the fleet's run table used to carry
+   * ride on this row rather than being joined against `/api/runs` in a page.
+   */
+  /** The character's name, where `characterLabel` is its race and class. */
+  character: string | null;
+  /** Cumulative active time; the same figure `RunListRow.playtimeMs` carries. */
+  playtimeMs: number | null;
+  /** The run's token totals, or null when the trajectory could not be read. */
+  tokens: TokenTotals | null;
+  /**
+   * What the provider says it charged — `CostView.actual`, and only that.
+   * `CostView`'s own top-level fields are the *expected* figure, so a row that
+   * held the whole view would render an estimate wherever a reader reached for
+   * `cost.usd`; a listing of what runs cost may not quietly show a guess.
+   * `basis: "none"` (with `note` saying which nothing) is the blank.
+   */
+  actualCost: CostFigure | null;
+  /** Why a run is suspended, when it ended for no other reason (ADR-0036). */
+  pauseReason: string | null;
 }
 
 export interface ResultsResponse {

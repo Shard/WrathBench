@@ -58,6 +58,11 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
     money: null,
     questsCompleted: 0,
     maps: [0],
+    character: "Toon",
+    playtimeMs: null,
+    tokens: null,
+    actualCost: null,
+    pauseReason: null,
     ...p,
   };
 }

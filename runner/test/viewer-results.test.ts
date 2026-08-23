@@ -222,6 +222,23 @@ describe("resultRunOf", () => {
     expect(e.levels).toHaveLength(2);
   });
 
+  test("the listing facts ride on the row, and default to null when not supplied", () => {
+    const bare = resultRunOf(run({ character: "Fixturely", pauseReason: "quota-exhausted" }), [], []);
+    expect(bare.character).toBe("Fixturely");
+    expect(bare.pauseReason).toBe("quota-exhausted");
+    expect(bare.playtimeMs).toBeNull();
+    expect(bare.tokens).toBeNull();
+    expect(bare.actualCost).toBeNull();
+
+    const listed = resultRunOf(run(), [], [], null, {
+      playtimeMs: 60_000,
+      tokens: null,
+      actualCost: { usd: 0.5, basis: "reported", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "provider-reported" },
+    });
+    expect(listed.playtimeMs).toBe(60_000);
+    expect(listed.actualCost?.usd).toBe(0.5);
+  });
+
   test("falls back to the run's own level when no sample carried one", () => {
     expect(resultRunOf(run({ level: 7 }), [], []).maxLevel).toBe(7);
   });

@@ -39,6 +39,7 @@ function resultRun(over: Partial<ResultRun> = {}): ResultRun {
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,
     questsCompleted: null, maps: [], xp: null, money: null,
+    character: null, playtimeMs: null, tokens: null, actualCost: null, pauseReason: null,
     ...over,
   };
 }
