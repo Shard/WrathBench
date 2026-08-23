@@ -103,6 +103,7 @@ import {
   extrasSoFar,
   STATS_EPISODES,
   type AccountClass,
+  type BusyAccount,
   type HeldPick,
   type ModelState,
   type NextJob,
@@ -934,7 +935,7 @@ export function policyJob(pick: NextJob): FleetJob {
  * `freeplay`. `attempt` is what makes the job the policy's: a manual freeplay
  * job (the nav probe) is not an extra.
  */
-export function isExtraJob(job: Pick<FleetJob, "episode" | "extra" | "attempt">): boolean {
+export function isExtraJob(job: Omit<Pick<FleetJob, "episode" | "extra" | "attempt">, "episode"> & { episode: EpisodeId | null }): boolean {
   return job.attempt !== undefined && (job.extra !== undefined || job.episode === "freeplay");
 }
 
@@ -990,9 +991,10 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     const declared = opts.classPools?.[cls];
     if (cls !== "pool" && declared !== undefined) splitFree[cls] = usable(declared);
   }
-  // Nothing to place on, and nothing to say. A configured-but-empty class still
-  // has held picks to report, so it does not short-circuit here.
-  const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c]?.length === 0);
+  // Nothing to place on, and nothing to say. A split class with nothing FREE
+  // still has held picks to report — whether it is unconfigured or merely all
+  // busy — so it does not short-circuit here.
+  const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c] !== undefined && splitFree[c]!.length === 0);
   if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
@@ -1007,12 +1009,34 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   /** A class's accounts still free once the picks made so far have taken theirs. */
   const left = (cls: AccountClass, also: readonly NextJob[]): string[] =>
     (splitFree[cls] ?? []).filter((a) => !also.some((p) => listClass(p.name) === cls && p.account === a));
+  /** Who holds an account that is not free: the run id if any, else the job on it. */
+  const holderOf = (account: string): string | undefined =>
+    opts.held(account) ??
+    [...opts.running].find(([, a]) => a.toUpperCase() === account.toUpperCase())?.[0] ??
+    opts.queuePlan.assign.find((a) => a.account.toUpperCase() === account.toUpperCase())?.job.name;
+  /**
+   * A class's accounts that exist but are taken — by a live run, by this
+   * tick's queue, or by a pick already made in this round. Without it an
+   * all-busy class reads as an unconfigured one.
+   */
+  const busy = (cls: AccountClass, also: readonly NextJob[]): BusyAccount[] => [
+    ...(opts.classPools?.[cls] ?? [])
+      .filter((a) => !(splitFree[cls] ?? []).includes(a))
+      .map((a) => {
+        const by = holderOf(a);
+        return by !== undefined ? { account: a, by } : { account: a };
+      }),
+    ...also.filter((p) => listClass(p.name) === cls).map((p) => ({ account: p.account, by: p.name })),
+  ];
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
       classAccounts: Object.fromEntries(
         ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, left(c, also)]),
       ) as Partial<Record<AccountClass, string[]>>,
+      classBusy: Object.fromEntries(
+        ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, busy(c, also)]),
+      ) as Partial<Record<AccountClass, BusyAccount[]>>,
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
     });
   if (opts.concurrency === undefined) {
@@ -1821,7 +1845,8 @@ export interface JobRow {
   name: string;
   /** Model ids the job's roster carries (one, or a rotation). */
   models: string[];
-  episode: EpisodeId;
+  /** `null` when the supervisor could not name it; printed as "episode unknown". */
+  episode: EpisodeId | null;
   runId?: string;
   level?: number;
   xp?: number;
@@ -1875,7 +1900,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     }
     const j = r.job;
     const what =
-      `${j.name}: ${j.models.join("+")} ${j.episode}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}` +
+      `${j.name}: ${j.models.join("+")} ${j.episode ?? "episode unknown"}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}` +
       `${isExtraJob(j) ? (j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : " extra") : ""}`;
     if (j.planned === true) {
       out.push(`${head}${what} — would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`);
@@ -2030,6 +2055,13 @@ function dateStamp(d: Date = new Date()): string {
 
 interface JobProc {
   spawn: JobSpawn;
+  /**
+   * The job this process was spawned for, kept for as long as the process row
+   * exists. `liveJobs` drops a job the moment it exits, and the state row was
+   * reading from there — so every exited row lost its episode, ref, source and
+   * attempt to the fallbacks and came out as a pinned freeplay job.
+   */
+  job?: FleetJob;
   proc: ReturnType<typeof Bun.spawn>;
   pid: number;
   spawnedAt: number;
@@ -2131,7 +2163,8 @@ interface FleetState {
 /** One job in the state file: the job and its process. */
 export interface StateJob {
   ref: string;
-  episode: EpisodeId;
+  /** `null` only when the supervisor genuinely does not know it — never guessed. */
+  episode: EpisodeId | null;
   account: string;
   source: JobSource;
   attempt?: number;
@@ -2205,6 +2238,25 @@ interface PoolView {
   ended: EndedRun[];
 }
 
+/**
+ * What a state row says about the job behind a process. Pure, and the only
+ * place the fallbacks live: a row whose job is unknown says so — `episode` is
+ * `null` rather than a guessed "freeplay", and the rest degrade to the name.
+ */
+export function stateJobFacts(
+  name: string,
+  job: FleetJob | undefined,
+): { ref: string; episode: EpisodeId | null; source: JobSource; attempt?: number; extra?: StartingCharacter } {
+  if (job === undefined) return { ref: name, episode: null, source: "pinned" };
+  return {
+    ref: job.ref,
+    episode: job.episode,
+    source: job.source,
+    ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
+    ...(job.extra !== undefined ? { extra: job.extra } : {}),
+  };
+}
+
 function writeState(
   configPath: string,
   stampToday: string,
@@ -2215,14 +2267,12 @@ function writeState(
 ): void {
   const jobs: Record<string, StateJob> = {};
   for (const [name, p] of procs) {
-    const j = pool?.jobs.get(name);
+    // The process's own copy first: it outlives the job's removal from
+    // `liveJobs` at exit, so an exited row keeps its real episode.
+    const j = p.job ?? pool?.jobs.get(name);
     jobs[name] = {
-      ref: j?.ref ?? name,
-      episode: j?.episode ?? "freeplay",
+      ...stateJobFacts(name, j),
       account: p.spawn.account,
-      source: j?.source ?? "pinned",
-      ...(j?.attempt !== undefined ? { attempt: j.attempt } : {}),
-      ...(j?.extra !== undefined ? { extra: j.extra } : {}),
       ...(p.spawn.resumeRunId !== undefined ? { resuming: p.spawn.resumeRunId } : {}),
       models: p.spawn.entries.map((e) => e.model),
       pid: p.pid,
@@ -2463,7 +2513,7 @@ function printStatus(configPath: string): void {
     const row: JobRow = {
       name,
       models: j.models.length > 0 ? j.models : [j.ref],
-      episode: j.episode,
+      episode: j.episode ?? null,
       ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
       ...(j.extra !== undefined ? { extra: j.extra } : {}),
     };
@@ -3016,6 +3066,7 @@ async function main(): Promise<void> {
       if (sets.running.has(name)) continue;
       const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday);
       if (r.job.account !== undefined) {
+        pending.set(name, r.job);
         const idx = out.findIndex((l) => l.name === name);
         if (idx >= 0) out[idx] = spawn;
         else out.push(spawn);
@@ -3147,7 +3198,8 @@ async function main(): Promise<void> {
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
-    const lp: JobProc = { spawn, proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const pj = pending.get(spawn.name) ?? pinnedJobs(config).find((j) => j.name === spawn.name);
+    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
@@ -3156,7 +3208,6 @@ async function main(): Promise<void> {
     sets.running.add(spawn.name);
     if (spawnedNames.has(spawn.name)) session.retried++;
     spawnedNames.add(spawn.name);
-    const pj = pending.get(spawn.name) ?? pinnedJobs(config).find((j) => j.name === spawn.name);
     if (pj !== undefined) {
       liveJobs.set(spawn.name, pj);
       if (pj.account === undefined) assigned.set(spawn.name, spawn.account);

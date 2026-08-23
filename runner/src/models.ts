@@ -469,6 +469,13 @@ export interface HeldPick {
   why: string;
 }
 
+/** An account that exists but is taken, and (where known) who is holding it. */
+export interface BusyAccount {
+  account: string;
+  /** The run id or job name on it; absent when the caller cannot name one. */
+  by?: string;
+}
+
 // ----------------------------------------------------------- reading runs
 
 /** A trajectory touched more recently than this belongs to a live process. */
@@ -1000,10 +1007,19 @@ export interface NextJobsOptions {
    * `accounts.local`; ADR-0034's account classes). A class missing from this
    * map is not split: its picks share `freeAccounts`, which is what every
    * caller did before the split. A class present takes its accounts from here
-   * and never from `freeAccounts`; an empty array is therefore "this class is
-   * configured but has nowhere to run", and every pick of it is held saying so.
+   * and never from `freeAccounts`; an empty array is therefore "this class has
+   * nowhere free to run", and every pick of it is held saying so — `classBusy`
+   * says which of the two reasons.
    */
   classAccounts?: Partial<Record<AccountClass, readonly string[]>>;
+  /**
+   * Accounts of a split-out class that EXIST but are occupied right now, with
+   * the run or job holding each where the caller knows it. `classAccounts`
+   * carries only what is free, so without this an all-busy class is
+   * indistinguishable from an unconfigured one — and the fleet told operators
+   * to add an account they already had (FOLLOW-UPS: the SHAKEOUT2 report).
+   */
+  classBusy?: Partial<Record<AccountClass, readonly BusyAccount[]>>;
 }
 
 /**
@@ -1081,18 +1097,30 @@ export function planNextJobs(
   }
   const listOf = (cls: AccountClass): string[] => split[cls] ?? accounts;
   const empty = (): boolean => accounts.length === 0 && Object.values(split).every((l) => l.length === 0);
+  // Who took which account of a split class in THIS call: a second local model
+  // is held because the box is busy, not because the box is missing.
+  const tookHere = new Map<AccountClass, BusyAccount[]>();
+  /**
+   * Why a split class has nothing free. Two different operator actions, so
+   * never one message: an empty class needs an account added to the file, a
+   * busy one needs a run to finish (or the cap raised).
+   */
+  const noRoom = (cls: AccountClass): string => {
+    const busy = [...(opts.classBusy?.[cls] ?? []), ...(tookHere.get(cls) ?? [])];
+    if (busy.length === 0) return `no ${cls} account configured — add one to accounts.${cls}`;
+    return `${cls} account(s) busy: ${busy.map((b) => (b.by !== undefined ? `${b.account} held by ${b.by}` : b.account)).join(", ")}`;
+  };
   let paid = opts.paidRunning ?? 0;
   const cap = policy.paid?.maxConcurrent;
   for (const c of cands) {
-    if (empty()) break;
     if (taken.has(c.s.name)) continue;
     const cls = accountClassOf(c.s);
     const isPaid = c.s.billing === "paid";
     const from = listOf(cls);
-    if (split[cls] !== undefined && opts.classAccounts![cls]!.length === 0) {
+    if (split[cls] !== undefined && from.length === 0) {
       // The actionable reason wins over the cap: there is no account to run on.
       taken.add(c.s.name);
-      held.push({ name: c.s.name, episode: c.ep, why: `no ${cls} account configured — add one to accounts.${cls}` });
+      held.push({ name: c.s.name, episode: c.ep, why: noRoom(cls) });
       continue;
     }
     if (isPaid && cap !== undefined && paid >= cap) {
@@ -1101,17 +1129,18 @@ export function planNextJobs(
       continue;
     }
     if (from.length === 0) {
-      if (split[cls] !== undefined) held.push({ name: c.s.name, episode: c.ep, why: `waiting for a free ${cls} account` });
       taken.add(c.s.name);
       continue;
     }
     taken.add(c.s.name);
     if (isPaid) paid++;
     const st = c.s.perEpisode[c.ep]!;
+    const account = from.shift()!;
+    if (split[cls] !== undefined) tookHere.set(cls, [...(tookHere.get(cls) ?? []), { account, by: c.s.name }]);
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account: from.shift()!,
+      account,
       attempt: st.attempts + 1,
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
@@ -1128,16 +1157,19 @@ export function planNextJobs(
     // and the run is unbounded (the tier pins no wall clock).
     const freeplay = c.ep === "freeplay";
     if (!freeplay && chars.length === 0) continue;
-    const from = listOf(accountClassOf(c.s));
+    const xcls = accountClassOf(c.s);
+    const from = listOf(xcls);
     if (from.length === 0) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
     const character = freeplay ? undefined : chars[n % chars.length]!;
+    const account = from.shift()!;
+    if (split[xcls] !== undefined) tookHere.set(xcls, [...(tookHere.get(xcls) ?? []), { account, by: c.s.name }]);
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account: from.shift()!,
+      account,
       attempt: st.attempts + 1,
       why: freeplay
         ? `extra #${n + 1}: freeplay (targets met; one unbounded run at a time)`

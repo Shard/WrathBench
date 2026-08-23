@@ -478,6 +478,42 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(planNextJobs([p1], ["R1"], new Set(), { policy }).jobs.map((j) => j.account)).toEqual(["R1"]);
   });
 
+  test("held reasons: an unconfigured class and an all-busy one are different sentences", () => {
+    const p1 = st({ name: "p1", model: "v/one" }, []);
+    const l1 = st({ name: "l1", model: "q/one", apiBase: "http://192.168.1.20:1234/v1" }, []);
+    const l2 = st({ name: "l2", model: "q/two", apiBase: "http://192.168.1.20:1234/v1" }, []);
+    // Nothing free and nothing busy: the class really is empty, and the fix is
+    // a line in the file.
+    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] } }).held[0]!.why).toBe(
+      "no paid account configured — add one to accounts.paid",
+    );
+    // Nothing free because the one account is taken: the account exists, so we
+    // name it and its holder instead of asking for one that is already there.
+    const busy = planNextJobs([p1], ["R1"], new Set(), {
+      policy,
+      classAccounts: { paid: [] },
+      classBusy: { paid: [{ account: "SHAKEOUT2", by: "fleet-deepseek-flash-e90-20260823-a2" }] },
+      paidRunning: 1,
+    });
+    expect(busy.jobs).toEqual([]);
+    expect(busy.held).toEqual([
+      { name: "p1", episode: "e90", why: "paid account(s) busy: SHAKEOUT2 held by fleet-deepseek-flash-e90-20260823-a2" },
+    ]);
+    // A holder the caller cannot name: still busy, never invented.
+    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] }, classBusy: { paid: [{ account: "SHAKEOUT2" }] } }).held[0]!.why).toBe(
+      "paid account(s) busy: SHAKEOUT2",
+    );
+    // Two local models, one box: the first takes it, the second is busy-by-the
+    // -first — the box is configured, so "no local account" would be a lie.
+    const local = planNextJobs([l1, l2], ["R1"], new Set(), { policy, classAccounts: { local: ["LOCALBOX"] } });
+    expect(local.jobs.map((j) => [j.name, j.account])).toEqual([["l1", "LOCALBOX"]]);
+    expect(local.held).toEqual([{ name: "l2", episode: "e90", why: "local account(s) busy: LOCALBOX held by l1" }]);
+    // And with no box at all, the other sentence.
+    expect(planNextJobs([l1], [], new Set(), { policy, classAccounts: { local: [] } }).held[0]!.why).toBe(
+      "no local account configured — add one to accounts.local",
+    );
+  });
+
   test("the local account class: a local model lands on the box, never the pool, and is held when the box has no account", () => {
     const l1 = st({ name: "l1", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" }, []);
     const f1 = st({ name: "f1", model: "v/three:free" }, []);
