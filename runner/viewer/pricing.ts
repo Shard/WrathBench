@@ -114,16 +114,11 @@ export const FREE_PRICE: PriceRow = {
   note: "free tier — request-capped, not token-billed (docs/COSTS.md §1)",
 };
 
-/**
- * `-contributor-free` slugs (OpenCode Zen) are free because the provider keeps
- * the prompts and completions. The operator accepted that trade on
- * 2026-08-23 for eval runs; the note says so rather than hiding it behind
- * "free tier".
- */
+/** `-contributor-free` slugs (OpenCode Zen): free because the provider keeps prompts and completions. */
 export const CONTRIBUTOR_PRICE: PriceRow = {
   ...FREE_PRICE,
   id: "contributor-free",
-  note: "contributor tier — free; prompts and completions are shared with the provider (accepted 2026-08-23)",
+  note: "contributor tier — free; prompts and completions are shared with the provider",
 };
 
 export const LOCAL_PRICE: PriceRow = {
