@@ -38,7 +38,7 @@ function evalRun(over: Partial<EvalRun> = {}): EvalRun {
     toolCalls: null, snippets: null, modelResponses: null, stillborn: false,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,
-    questsCompleted: null, maps: [],
+    questsCompleted: null, maps: [], xp: null, money: null,
     ...over,
   };
 }
