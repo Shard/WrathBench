@@ -168,6 +168,13 @@ describe("lane-policy", () => {
     expect(isAllowlistedFree("stealth/anything-else")).toBe(false);
   });
 
+  test("a suffixless model on a shared pool passes when it declares billing paid", () => {
+    expect(() => validateEntries(lane(), [{ model: "deepseek/deepseek-v4-flash" }])).toThrow(/lane-policy/);
+    expect(() =>
+      validateEntries(lane(), [{ model: "deepseek/deepseek-v4-flash", billing: "paid" }]),
+    ).not.toThrow();
+  });
+
   test.each([
     [undefined, true], // absent -> run-roster's OpenRouter default -> shared pool
     ["https://openrouter.ai/api/v1", true],
@@ -345,7 +352,8 @@ describe("the shipped fleet files", () => {
   // `enabled` is a steering knob — none of that may turn the suite red. What
   // is durable: the shape, the pinned accounts, the probe's leash, and the
   // lane policy (claude models only through the claude-code harness,
-  // ADR-0035; shared free pools carry free ids only).
+  // ADR-0035; shared free pools carry free ids only unless an entry declares
+  // `billing: "paid"` on purpose, ADR-0034's paid policy).
   const lanePolicy = (config: FleetConfig): void => {
     const entries = [
       ...config.jobs.flatMap((j) => j.legacy?.entries ?? []),
@@ -358,7 +366,7 @@ describe("the shipped fleet files", () => {
       if (isClaudeFamily(e.model)) expect(driver).toBe("claude-code");
       if (driver === "claude-code") expect(isClaudeFamily(e.model)).toBe(true);
       if (driver === "openai" && isSharedFreePool(e.apiBase)) {
-        expect(/(-free$|:free$)/.test(e.model) || isAllowlistedFree(e.model)).toBe(true);
+        expect(/(-free$|:free$)/.test(e.model) || isAllowlistedFree(e.model) || e.billing === "paid").toBe(true);
       }
     }
   };
