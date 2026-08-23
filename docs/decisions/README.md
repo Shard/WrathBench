@@ -52,3 +52,6 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0032 | Scheduling policy from run history | superseded by 0034 | — |
 | 0033 | Run dimensions and the comparability tuple | current | A per-run, recorded, same-shape-for-everyone knob is a dimension, not tuning; the tuple is stamped once and never recomputed. |
 | 0034 | Account pool and a scheduling policy from run history | current | Lanes stop owning accounts; the schedule, including promotion, is derived from run history by one rule for every model. |
+| 0035 | Harness and driver are separate words | current | What runs the loop and what answers the prompt are two dimensions; conflating them made a driver gap read as a harness one. |
+| 0036 | A fleet stop pauses runs | current | Stopping the supervisor used to end live episodes; a stop pauses and a start resumes, on the run's own account. |
+| 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |

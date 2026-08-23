@@ -11,12 +11,13 @@ and status.
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
    ADR-0027 flips to accepted on that run.
-2. **48** — decide whether the flagless watchdog defaults move to 20m/20m.
-3. **46** — same-map teleports visible to the agent; the module sends the stop.
-4. **43** — subscription-lane quota pauses hold the run instead of ending it.
-5. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
+2. **55** — re-measure the `WB_MOVE_RESULT` timeouts now that item 46 is deployed, and
+   decide whether the loot-window half is the same cause.
+3. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
    they exist.
-6. **19** — before anything is public or MCP-exposed: shared secret on the port,
+4. **13** — the ladder ranks models by one integer (`highest`); decide whether that
+   ordering stays or the page shows rows only.
+5. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
 ## Navigation
@@ -62,32 +63,21 @@ and status.
       dimension withheld from scored runs (ADR-0028); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
-51. **ADRs and doc drift owed by the 2026-08-23 `moveTo` change** (da93f0a;
-    worklogs/2026-08-23). `unknown_target` is an SDK-side move status outside
-    ADR-0027's module-owned vocabulary (the `killTarget`-answers-`lost` pattern), and
-    `ConnectOptions.deadline` is a new concept crossing the SDK/runner boundary; both
-    want an ADR. `docs/CONTRACTS.md` and `module/PROTOCOL.md` were not re-read for
-    move-surface drift. `runner/src/prompt.ts` still lists `moveTo` among "the raw
-    actions under them" a line above the clause grouping it with the unit-accepting
-    helpers — left alone because every prompt edit is a comparability boundary; fix it
-    in the next deliberate prompt bump.
-
 ## Quests, combat, economy (SDK surface)
 
-9b. **A wait/until primitive that does not burn snippet turns.** About 20 of opus's 85
-    turns (roster-opus-20260822) were pure 25–28s sleep-polls of a background routine.
-    A `sdk.waitUntil(predicate, timeout)`, or letting a snippet declare "wake me on
-    event X", would cut turn counts for every model. Held: it smells like the
-    convenience middle tier ADR-0015 forbids; decide deliberately with the operator,
-    not inline. Item 17's parked `sdk.wait` alias is the same decision. Partial
-    movement 2026-08-23: ambient `sleep()` now wakes early on attack or death with a
-    reason (worklogs/2026-08-23), which covers the two observed reasons for polling
-    without adding a predicate API.
-
-17. **Failure-surface audit, parked tier.** Tiers 1 and 2 shipped 2026-08-22
-    (worklogs/2026-08-22); ADR-0017 settled the BigInt question; `events.off` shipped
-    2026-08-23. Still parked pending an ADR: a machine-readable error class taxonomy,
-    and a `sdk.wait` alias — the latter is item 9b's decision.
+9b. **A wait/until primitive, and the error taxonomy behind it** (absorbs item 17,
+    2026-08-23: both are one parked decision about how failure and waiting are named).
+    About 20 of opus's 85 turns (roster-opus-20260822) were pure 25–28s sleep-polls of a
+    background routine. A `sdk.waitUntil(predicate, timeout)`, or letting a snippet
+    declare "wake me on event X", would cut turn counts for every model. Held: it smells
+    like the convenience middle tier ADR-0015 forbids; decide deliberately with the
+    operator, not inline. Item 17's `sdk.wait` alias was the same decision and is folded
+    in here. Also still parked from 17: a **machine-readable error class taxonomy** — its
+    tiers 1 and 2 shipped 2026-08-22, ADR-0017 settled the BigInt question and
+    `events.off` shipped 2026-08-23, but nothing yet gives a snippet a stable class to
+    branch on. Partial movement 2026-08-23: ambient `sleep()` now wakes early on attack
+    or death with a reason (worklogs/2026-08-23), which covers the two observed reasons
+    for polling without adding a predicate API. Unblocks on one ADR covering both halves.
 
 50. **Equipped-bag contents are unobservable** (split from item 39, which shipped the
     spellbook and raw hatch 2026-08-22). `state.bag()` is the backpack only; items in
@@ -178,45 +168,47 @@ and status.
 
 ## Episodes and eval
 
-8. **Context policy is not applied on the claude-code harness.** (ADR-0035 names
-   this: the run is tagged `harness: claude-code` and shown alongside wrathbench rows;
-   the policy gap below is recorded, not penalised.) The claude-code harness never
-   applies the policy the prompt describes — no trim, one CLI conversation growing
-   linearly (~200k tokens by the end of a 90-minute episode in roster-sonnet-20260822,
-   COSTS.md), so almost all of that lane's token spend is cache-read replays of a
-   growing prefix, and a `quota-exhausted` pause still loses the CLI's accumulated
+8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
+   not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
+   of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is
+   mostly cache-read replays of a growing prefix and a `quota-exhausted` pause loses the
    context on resume. Either the driver applies a policy or the prompt stops promising
-   one; cost comparisons across drivers are invalid until then. Evidence now exists for
-   the multi-hour case (8c): `fleet-nav-probe-sonnet-20260822-c2` completed a 6h e360
-   naturally at $43.90 as-metered — read its token curve before drafting either half.
-   - **8a — extractive digest, deferred behind an evidence gate.** The 2026-08-21
-     verdict (worklogs/2026-08-21): compaction is unnecessary on the fixed-loop driver,
-     requests plateau at ~8–20k tokens. Build it when either signal appears — genuine
-     context exhaustion in a run, or a trajectory showing a model re-querying facts it
-     lost to a window trim. Design when built: trimmed messages replaced by a
-     deterministic one-line record (tool, truncated args, error flag) in a capped ring
-     buffer inside the regenerated context message. Within a harness version, no model
-     summarization (conflates constructs, breaks replay) and no per-model context
-     scaling (provider-declared context sizes drift for one model id).
-   - **8b — context engine as a labelled run condition; operator direction,
-     deliberately parked.** When picked up: (a) stretch the window well beyond 24–48 in
-     a future harness version, since ~8–12k steady state against 131k–200k contexts
-     makes a much longer stable prefix nearly free under prompt caching; (b) offer
-     threshold-triggered model self-compaction as a versioned **harness** value
-     stamped into run metadata (the `harness` field of the ADR-0033 tuple, ADR-0035) —
-     a third value beside `wrathbench` and `claude-code`, comparable within a harness
-     if the operator chooses to partition, never silently across. Grow-then-self-compact is what end-user agents run
-     under. This supersedes 8a's flat "no model summarization ever": that holds for
-     unlabelled changes to the current engine, not for a future labelled one.
-   - **8c** — merged into 8 (the multi-hour evidence it asked for now exists).
+   one; cross-driver cost comparisons are invalid until then. Read first (merged 8c):
+   `fleet-nav-probe-sonnet-20260822-c2`, a 6h e360 completed naturally at $43.90.
+   - **8a — extractive digest, behind an evidence gate.** Requests plateau at ~8–20k on
+     the fixed-loop driver (worklogs/2026-08-21), so build it only on real context
+     exhaustion or a trajectory re-querying facts lost to a trim. Design then: a trimmed
+     message becomes a deterministic one-line record (tool, truncated args, error flag)
+     in a capped ring buffer in the regenerated context message. Within a harness
+     version, never model summarization (conflates constructs, breaks replay) and never
+     per-model context scaling (declared sizes drift for one id).
+   - **8b — context engine as a labelled harness value; parked, operator direction.**
+     (a) Stretch the window past 24–48 in a future harness version — ~8–12k steady state
+     against 131k–200k contexts makes a long stable prefix nearly free under caching.
+     (b) Offer threshold-triggered self-compaction as a third value of the ADR-0033
+     tuple's `harness` field (ADR-0035), since grow-then-self-compact is what end-user
+     agents run under: comparable within a harness if the operator partitions, never
+     silently across. Supersedes 8a's flat "no model summarization ever" for a future
+     labelled engine, not for unlabelled changes to this one.
 
-13. **Metric design against grind collapse.** RuneBench's raw total-XP metric punished
+13. **Metric design against grind collapse — the ladder's row ordering** (narrowed
+    2026-08-23; not closed, see below). RuneBench's raw total-XP metric punished
     exploration and collapsed to grinding, and their mid-eval metric change is half of
     why aggregators exclude their results; a furthest-level metric has the same
     exposure. ADR-0018 (signals, not scores; derivations offline) is the decision of
-    record and claims to supersede this. Kept open until the ladder's derivations
-    (ADR-0030 promotion, the eval charts) are confirmed to not reintroduce a single
-    collapsible number — close it by noting that in ADR-0018, not by building anything.
+    record, and the per-run derivations honour it: `runner/viewer/eval.ts` emits level
+    marks with the turn and the active time each level cost, maps observed, and no
+    aggregate. **The one place a scalar does appear** is
+    `dashboard/src/lib/eval.ts`: every derivable rung (1, 3, 5, 7, 8) is a max-level
+    threshold, `ladderRows()` computes `highest` — one integer per model — and
+    `rows.sort((a, b) => b.highest - a.highest || …)` ranks models by it. That is a
+    bucketed furthest-level ranking, which is the exposure this item named. Mitigations
+    that are real: it is offline, versioned and recomputable (ADR-0018 rule 3);
+    rungs 2/4/6 are never bridged, so a model at 3 is not credited with 2; and the page
+    shows the whole row beside the number. Not enough to close on: decide whether the
+    ordering stays, becomes a stated derivation with its own version, or the ladder
+    shows rows in roster order. ADR-0018 is not amended until that is decided — a
+    "mostly true" note on an accepted ADR is worse than none.
 
 29. **The local-qwen lane is inference-bound; harness fixes will not move it**
     (2026-08-22). Median 48s per turn, 78 of that episode's 90 minutes inside the model.
@@ -225,17 +217,13 @@ and status.
     surface; closes when the lane is retired or the box changes.
 
 32. **Dashboard parity gaps against the deleted pages** (2026-08-22, ADR-0022; the
-    pages went in item 31). Each deliberate: (1) **Cost estimate** — the old `PRICING`
-    table (dollars per million, input / output / cache read / cache write:
-    `claude-opus-5` 5.00 / 25.00 / 0.50 / 6.25, `claude-sonnet-5` 2.00 / 10.00 / 0.20 /
-    2.50; sonnet's is the introductory rate lapsing 2026-08-31, list 3.00 / 15.00, cache
-    0.30 / 3.75; cache read 0.1x input, 5-minute write 1.25x) was not ported because a
-    hard-coded table drifts silently; its home is the roster, next to the model ids it
-    prices. COSTS.md now carries measured figures instead. (2) **Whole-feed expand
-    preset** (Minimal / Responses / Snippets / All, remembered in localStorage) — the
-    SPA folds per block only. (3) **Compact state samples and called-out harness
-    notices** — rendered through the generic-entry path, readable but unstyled.
-    Unblocked by someone wanting them; none blocks release.
+    pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
+    `runner/viewer/pricing.ts`, priced from dated, sourced rows rather than the old
+    hard-coded table. Left, each deliberate: (2) **Whole-feed expand preset** (Minimal /
+    Responses / Snippets / All, remembered in localStorage) — the SPA folds per block
+    only. (3) **Compact state samples and called-out harness notices** — rendered
+    through the generic-entry path, readable but unstyled. Unblocked by someone wanting
+    them; neither blocks release.
 
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
     ADR-0018 lists deaths, zones, spells learned and talents spent in the signal vector
@@ -263,16 +251,6 @@ and status.
     `infra/README.md`, `infra/fleet.json`, `infra/smoke/local-model.ts` and
     `infra/fleet.test.ts`.
 
-48. **Episode tiers: the flagless defaults** (2026-08-23, ADR-0030). (a)–(f) shipped
-    (worklogs/2026-08-23: `runner/src/episodes.ts`, the tuple fields, `?episode=` on
-    eval and ladder, tiers computed by ADR-0032, EPISODES.md ceilings). Left: (g) the
-    bare watchdog defaults in `runner/src/config.ts` are still idle 10m / no-XP 45m.
-    `--episode` overrides them, so a lane that passes the flag is correct either way;
-    whether the flagless defaults should move to 20m/20m is open, because moving them
-    changes the shape of every run that does not pass `--episode` without saying so in
-    a tuple field. Decide, then either move them with a harness-version note or write
-    down that flagless runs are not tier members and leave them.
-
 54. **`sleep()`'s wake reason is shipped and unread** (2026-08-23, closing fan-out).
     `sleep(ms, options?)` resolving with `"elapsed" | "attacked" | "died"` (68b5a92)
     has been live for every run since harness-0.3-111. Across the 41 run directories of
@@ -285,7 +263,11 @@ and status.
     sleep(20000); if (wake === "attacked") …`) would probably move it. Deferred on
     purpose: a prompt edit moves the prompt hash and the comparability tuple with it,
     so it belongs at a series boundary, not mid-series. Decide at the next series bump
-    whether the example goes in or the feature is left as earned-only surface.
+    whether the example goes in or the feature is left as earned-only surface. Second
+    item for the same bump (from 51, 2026-08-23): `runner/src/prompt.ts` still lists
+    `moveTo` among "the raw actions under them" a line above the clause grouping it with
+    the unit-accepting helpers — a wording bug, left alone because every prompt edit
+    moves the hash and the comparability tuple with it.
 
 ## Module
 
@@ -312,16 +294,16 @@ and status.
     stay behind the earned-by-need rule until a freeplay run asks.
 
 55. **Verdict-opcode timeouts: `WB_MOVE_RESULT` and the loot window** (2026-08-23,
-    closing fan-out; folds into item 46, which is in the resolved ledger as
-    shipped-pending-deploy — 2026-08-23, a97c3c8/2b60cb0 — and still listed under Next
-    up until that deploy is verified). A wait for a verdict the server sometimes
+    closing fan-out). Item 46, its move half, is deployed and verified (resolved ledger;
+    live as `harness-0.4-3-g8f6939d` since 2026-08-23), so the re-measurement it was
+    waiting on can be run. A wait for a verdict the server sometimes
     never sends hangs until its timeout and costs the model a turn with nothing to read.
     Recurring, not rare: 17 `WB_MOVE_RESULT` timeouts in `fleet-nav-probe-sonnet-20260823`
     alone, 5–7 in three other sonnet runs, and 8 `SMSG_LOOT_RESPONSE` timeouts in
     `fleet-sonnet-e90-sonnet-20260823-a2`. The move half is the known item-46 gap (the
     module did not distinguish a near from a far teleport, so `waitForTransfer` and the
-    move verdict could both wait forever); the module regression for that is being fixed
-    and deployed today, which is the first thing to re-measure against. The loot half
+    move verdict could both wait forever); that fix is now live, so the first step is
+    re-measuring `WB_MOVE_RESULT` timeouts on runs after the deploy. The loot half
     looks like the same family and has no fix yet — decide after the deploy whether it
     is the same cause (a verdict the client is not always sent) or its own item.
     Evidence: `data/runs/night-report-20260823/closing-fanout-harness.md`, "Cross-cutting:
@@ -404,4 +386,8 @@ One line per number so citations resolve; the day file carries the detail.
 - 47 (duplicate number, wiki leads) — 2026-08-23 — renumbered to 49
 - 8c — 2026-08-23 — merged into 8
 - 48 (a)–(f) — 2026-08-23 — 56bfdef, 634e58c, 277f948 — episode tiers wiring; (g) stays open under 48
-- 46 — 2026-08-23 — a97c3c8, 2b60cb0 — module `harness-0.3-137` built to `:next`, SHIPPED PENDING DEPLOY (harness-0.4 restart) — `MSG_MOVE_TELEPORT_ACK` tapped, `teleported` status, ground-z ladder with `move_to.guid`, stop on supersede/planning failure; ADR-0027 amendment; verify with `death-recovery.ts` + `module-navigation.ts` post-deploy
+- 46 — 2026-08-23 — a97c3c8, 2b60cb0 — `MSG_MOVE_TELEPORT_ACK` tapped, `teleported` status, ground-z ladder with `move_to.guid`, stop on supersede/planning failure; ADR-0027 amendment. Deployed and verified: live as `harness-0.4-3-g8f6939d` since ~14:00, `infra/smoke/module-navigation.ts` PASS on SMOKE3 and the gate PASS
+- 17 — 2026-08-23 — folded into 9b — failure-surface audit: tiers 1–2 shipped 2026-08-22, ADR-0017 settled BigInt, `events.off` shipped 2026-08-23; the `sdk.wait` alias and the error-class taxonomy are parked under 9b
+- 48 (g) — 2026-08-23 — no code change — flagless runs are not tier members (`episode: null`, counted by nothing in ADR-0034), so the bare idle 10m / no-XP 45m defaults stay; written down in docs/EPISODES.md
+- 51 — 2026-08-23 — ADR-0037 — `unknown_target` as an SDK-side status and `ConnectOptions.deadline` as explain-not-cap; PROTOCOL.md was already in sync, CONTRACTS.md gained the typed map-change outcomes and the teleport-ack observable; the prompt.ts wording moved to item 54
+- 32 (1) — 2026-08-23 — 46e2726, 7423453, 62bc30a — run cost card in `runner/viewer/pricing.ts`; (2) and (3) stay open under 32
