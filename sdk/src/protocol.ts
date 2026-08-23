@@ -652,6 +652,7 @@ export const MOVE_STATUSES = [
   "target_off_mesh",
   "start_off_mesh",
   "path_incomplete",
+  "drop",
   "transferred",
   "teleported",
   "interrupted",
@@ -681,8 +682,12 @@ export const moveResultDataSchema = z.looseObject({
   pos: positionSchema,
   /** `arrived` only: the ground z the mesh walked to when the request's z was off by >1y. */
   meshZ: z.number().optional(),
-  /** `path_incomplete` only: how far the mesh could get toward the request. */
+  /** `path_incomplete`: how far the mesh could get toward the request; `drop`: the ledge edge. */
   reachedPos: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+  /** `drop` only: the signed vertical step the route would have taken past `reachedPos`. */
+  dz: z.number().optional(),
+  /** `drop` only: the requested point, echoed. */
+  target: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
   /** Present when the character ended the move aboard a transport the server is carrying it on. */
   onTransport: z.looseObject({ guid: guidSchema, entry: z.number() }).optional(),
 });
