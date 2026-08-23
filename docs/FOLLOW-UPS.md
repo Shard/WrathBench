@@ -124,7 +124,7 @@ and status.
     entry, and `SPELL_GO` goes back to being a cast-path check.
 
 
-## Episodes and eval
+## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
    not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
