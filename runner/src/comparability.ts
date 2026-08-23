@@ -176,7 +176,7 @@ export function comparabilityOf(
   harnessVersion: string,
   serverBuild: ServerBuild = null,
 ): Comparability {
-  const prompt = buildSystemPrompt(config.objective);
+  const prompt = buildSystemPrompt(config.objective, config.episode);
   return {
     harnessVersion,
     promptHash: promptHash(prompt),
