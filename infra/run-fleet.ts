@@ -14,9 +14,12 @@
  * inferred with kill(pid, 0). Paths in that state file are repo-relative for
  * the same reason.
  *
- * The fleet is the config file. Each lane is one sequential episode stream on
- * one game account; parallelism is exactly the set of enabled lanes. The
- * supervisor re-reads fleet.json every tick (60s):
+ * The fleet is the config file. A PINNED lane is one sequential episode stream
+ * on one game account (accounts.pinned); a queue JOB is the same stream on
+ * whichever POOL account is free when its turn comes (ADR-0031). The old
+ * shape — lanes that each name an account, no accounts/queue blocks — still
+ * loads as "every lane pinned, empty pool". The supervisor re-reads fleet.json
+ * every tick (60s):
  *
  *  - enabled:false  -> the lane drains: no SIGTERM while its roster process
  *    has an episode child; once the process is between episodes it is
@@ -151,10 +154,84 @@ export interface PreflightRecord {
   results: { script: string; ok: boolean; ms: number; tail: string }[];
 }
 
+// ------------------------------------------------------------ pool + queue
+//
+// ADR-0031: lanes stop owning accounts. A lane is either PINNED (one lane, one
+// account, today's behaviour — `accounts.pinned` maps the account to the lane
+// name) or it is a JOB in `queue`, spawned on whichever POOL account is free
+// when its turn comes. The old shape (lanes each carrying an `account`, no
+// `accounts` block, no `queue`) still loads: every lane is then implicitly
+// pinned to its own account, and the pool and queue are empty.
+
+/** Episode tiers (ADR-0030). `freeplay` is unscored and bypasses the tiers gate. */
+export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
+export type EpisodeId = (typeof EPISODE_IDS)[number];
+
+/**
+ * A roster entry as named in the new shape's `roster` map: the exact per-entry
+ * schema plus `tiers`, the tiers the model has been promoted into. Promotion
+ * is a recorded operator/eval decision, never computed here; a job whose
+ * episode is not in its model's tiers is skipped with a logged reason.
+ */
+export interface FleetRosterEntry extends RosterSpec {
+  tiers: EpisodeId[];
+}
+
+export interface FleetJob {
+  /**
+   * Keys into `roster`, one or more. Several refs make one job rotate through
+   * several models on one account exactly as a multi-entry lane does today;
+   * `ref` in the file may be a string or an array, normalised here.
+   */
+  refs: string[];
+  /** `refs.join("+")`: what the job is called in logs and skip reasons. */
+  ref: string;
+  episode: EpisodeId;
+  /** Episodes to run: a count (default 1) or "loop" (run-roster --loop). */
+  repeat: number | "loop";
+  /**
+   * The job's lane name: run ids, roster and log paths hang off it exactly as
+   * a pinned lane's do. Defaults to `<ref>-<episode>`; unique across the queue
+   * and the pinned lanes.
+   */
+  lane: string;
+  enabled: boolean;
+}
+
+export interface FleetAccounts {
+  /** account -> pinned lane name */
+  pinned: Record<string, string>;
+  /** free-for-the-queue accounts, in preference order */
+  pool: string[];
+}
+
 export interface FleetConfig {
   notes: string[];
   lanes: FleetLane[];
   preflight: FleetPreflight;
+  accounts: FleetAccounts;
+  roster: Record<string, FleetRosterEntry>;
+  queue: FleetJob[];
+}
+
+/**
+ * What an episode id means in the flags the runner has today (mirrors
+ * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
+ * owns the id. e90: 90m, idle 20m, no-xp 20m, 500 calls. e360: 6h, idle 20m,
+ * no-xp off — the nav-probe shape — and the tool-call ceiling raised to the
+ * nav-probe precedent (2500), since the 500 default would end a 6h run as
+ * `tool-call-limit` two hours in; the tier's own ceiling is FOLLOW-UPS 48c.
+ * freeplay: no wall clock, unscored, same raised ceiling.
+ */
+export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "watchdogs" | "maxToolCalls"> {
+  switch (id) {
+    case "e90":
+      return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 500 };
+    case "e360":
+      return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 2500 };
+    case "freeplay":
+      return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 2500 };
+  }
 }
 
 export const DEFAULT_PREFLIGHT: FleetPreflight = {
@@ -338,9 +415,18 @@ export function parseFleet(raw: unknown): FleetConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config must be a JSON object with a lanes array");
   }
-  const o = raw as { _notes?: unknown; lanes?: unknown; preflight?: unknown };
+  const o = raw as {
+    _notes?: unknown;
+    lanes?: unknown;
+    preflight?: unknown;
+    accounts?: unknown;
+    roster?: unknown;
+    queue?: unknown;
+  };
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   if (!Array.isArray(o.lanes)) fail("fleet config: lanes must be an array");
+  const accounts = parseAccounts(o.accounts);
+  const newShape = o.accounts !== undefined;
   const lanes: FleetLane[] = [];
   const names = new Set<string>();
   for (const l of o.lanes as Partial<FleetLane>[]) {
@@ -349,6 +435,18 @@ export function parseFleet(raw: unknown): FleetConfig {
     if (names.has(l.name)) fail(`fleet config: duplicate lane name ${l.name}`);
     names.add(l.name);
     if (typeof l.enabled !== "boolean") fail(`lane ${l.name}: enabled must be true or false`);
+    // New shape: the account comes from accounts.pinned (a lane may still
+    // spell it out, and then it must agree). Old shape: the lane owns it.
+    if (newShape) {
+      const pinnedAccount = Object.entries(accounts.pinned).find(([, lane]) => lane === l.name)?.[0];
+      if (pinnedAccount === undefined) {
+        fail(`lane ${l.name}: not in accounts.pinned — a lane in the lanes list must be pinned to an account (pool work goes in queue)`);
+      }
+      if (l.account !== undefined && l.account.toUpperCase() !== pinnedAccount.toUpperCase()) {
+        fail(`lane ${l.name}: account ${l.account} disagrees with accounts.pinned (${pinnedAccount})`);
+      }
+      l.account = pinnedAccount;
+    }
     if (typeof l.account !== "string" || l.account.length === 0) fail(`lane ${l.name}: account is required`);
     const loop = l.loop ?? false;
     if (typeof loop !== "boolean") fail(`lane ${l.name}: loop must be true or false`);
@@ -401,17 +499,253 @@ export function parseFleet(raw: unknown): FleetConfig {
     }
     byAccount.set(key, lane.name);
   }
+  // Old shape: every lane is implicitly pinned to the account it names.
+  if (!newShape) {
+    for (const lane of lanes) accounts.pinned[lane.account] = lane.name;
+  } else {
+    for (const [account, laneName] of Object.entries(accounts.pinned)) {
+      if (!names.has(laneName)) fail(`accounts.pinned: ${account} is pinned to lane ${laneName}, which is not in lanes`);
+    }
+  }
+  for (const account of accounts.pool) {
+    const pinned = byAccount.get(account.toUpperCase());
+    if (pinned !== undefined) fail(`accounts.pool: ${account} is also pinned to enabled lane ${pinned}`);
+  }
   const preflight = parsePreflight(o.preflight);
   // The smokes hold a live session for their whole arc. Sharing an account with
-  // an enabled lane would mean the gate and the lane reclaiming the account from
-  // each other all night, so it is a config error, not a race to discover live.
+  // an enabled lane (or the pool) would mean the gate and the lane reclaiming
+  // the account from each other all night, so it is a config error, not a race
+  // to discover live.
   if (preflight.enabled) {
     for (const account of preflightAccounts(preflight)) {
       const clash = byAccount.get(account.toUpperCase());
       if (clash !== undefined) fail(`preflight account ${account} is also lane ${clash}'s — the gate needs its own account`);
+      if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
+        fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
+      }
     }
   }
-  return { notes, lanes, preflight };
+  const roster = parseRoster(o.roster);
+  const queue = parseQueue(o.queue, roster, names);
+  if (queue.some((j) => j.enabled) && accounts.pool.length === 0) {
+    fail("queue has enabled jobs but accounts.pool is empty — nothing could ever run them");
+  }
+  return { notes, lanes, preflight, accounts, roster, queue };
+}
+
+function parseAccounts(raw: unknown): FleetAccounts {
+  if (raw === undefined) return { pinned: {}, pool: [] };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
+  const o = raw as { pinned?: unknown; pool?: unknown };
+  const pinned: Record<string, string> = {};
+  if (o.pinned !== undefined) {
+    if (typeof o.pinned !== "object" || o.pinned === null || Array.isArray(o.pinned)) {
+      fail("accounts.pinned must be an object of account -> lane name");
+    }
+    for (const [account, lane] of Object.entries(o.pinned as Record<string, unknown>)) {
+      if (typeof lane !== "string" || lane.length === 0) fail(`accounts.pinned: ${account} needs a lane name`);
+      if (account.length === 0) fail("accounts.pinned: empty account name");
+      pinned[account] = lane;
+    }
+  }
+  const seenLanes = new Set<string>();
+  for (const lane of Object.values(pinned)) {
+    if (seenLanes.has(lane)) fail(`accounts.pinned: lane ${lane} is pinned to two accounts — one lane, one account`);
+    seenLanes.add(lane);
+  }
+  const pool: string[] = [];
+  if (o.pool !== undefined) {
+    if (!Array.isArray(o.pool)) fail("accounts.pool must be an array of account names");
+    for (const a of o.pool as unknown[]) {
+      if (typeof a !== "string" || a.length === 0) fail("accounts.pool: entries are account names");
+      if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.pool: ${a} listed twice`);
+      if (Object.keys(pinned).some((p) => p.toUpperCase() === a.toUpperCase())) {
+        fail(`accounts.pool: ${a} is also pinned (to ${pinned[a] ?? "a lane"})`);
+      }
+      pool.push(a);
+    }
+  }
+  return { pinned, pool };
+}
+
+function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
+  if (raw === undefined) return {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: roster must be an object of name -> entry");
+  const out: Record<string, FleetRosterEntry> = {};
+  for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
+    if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
+    if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
+    const { tiers: rawTiers, ...rest } = e as { tiers?: unknown } & Record<string, unknown>;
+    const tiers = rawTiers === undefined ? ["e90"] : rawTiers;
+    if (!Array.isArray(tiers) || tiers.length === 0 || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
+      fail(`roster ${name}: tiers must be a non-empty array of ${EPISODE_IDS.join("|")}`);
+    }
+    if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — the pool assigns one`);
+    // Lane-policy checks are per entry; the pseudo-lane is only there for the
+    // error message and the account-agreement check (vacuous here).
+    const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [rest]);
+    out[name] = { ...validated!, tiers: tiers as EpisodeId[] };
+  }
+  return out;
+}
+
+function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>, laneNames: Set<string>): FleetJob[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) fail("fleet config: queue must be an array of jobs");
+  const out: FleetJob[] = [];
+  const seen = new Set<string>();
+  for (const j of raw as Partial<FleetJob>[]) {
+    if (typeof j !== "object" || j === null) fail("queue: job is not an object");
+    const rawRef = (j as { ref?: unknown }).ref;
+    const refs = typeof rawRef === "string" ? [rawRef] : Array.isArray(rawRef) ? (rawRef as unknown[]) : undefined;
+    if (refs === undefined || refs.length === 0 || !refs.every((r) => typeof r === "string" && r.length > 0)) {
+      fail(`queue: job without a ref (a roster name or a list of them): ${JSON.stringify(j)}`);
+    }
+    for (const r of refs as string[]) if (roster[r] === undefined) fail(`queue: job ref ${r} is not in roster`);
+    if (new Set(refs).size !== refs.length) fail(`queue: job lists a ref twice: ${refs.join(",")}`);
+    const ref = (refs as string[]).join("+");
+    if (typeof j.episode !== "string" || !(EPISODE_IDS as readonly string[]).includes(j.episode)) {
+      fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
+    }
+    const repeat = j.repeat ?? 1;
+    if (repeat !== "loop" && (typeof repeat !== "number" || !Number.isInteger(repeat) || repeat <= 0)) {
+      fail(`queue ${ref}: repeat must be a positive integer or "loop"`);
+    }
+    const lane = j.lane ?? `${(refs as string[])[0]}-${j.episode}`;
+    if (typeof lane !== "string" || lane.length === 0 || !/^[A-Za-z0-9._-]+$/.test(lane)) {
+      fail(`queue ${ref}: lane must be a name matching [A-Za-z0-9._-]+`);
+    }
+    if (seen.has(lane)) fail(`queue: two jobs would share lane name ${lane} — give one an explicit lane`);
+    if (laneNames.has(lane)) fail(`queue: job lane ${lane} collides with a pinned lane of the same name`);
+    seen.add(lane);
+    const enabled = j.enabled ?? true;
+    if (typeof enabled !== "boolean") fail(`queue ${ref}: enabled must be true or false`);
+    out.push({ refs: refs as string[], ref, episode: j.episode as EpisodeId, repeat, lane, enabled });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------- scheduling
+
+export interface QueueSkip {
+  job: FleetJob;
+  reason: string;
+}
+
+export interface QueuePlan {
+  /** Jobs to spawn this tick, in queue order, each on the pool account it was given. */
+  assign: { job: FleetJob; account: string }[];
+  /** Runnable jobs with nothing free to run them on, in queue order. */
+  waiting: FleetJob[];
+  /** Jobs that will not run, and why (logged once per reason by the caller). */
+  skipped: QueueSkip[];
+}
+
+/**
+ * The pool scheduler, pure. Walks the queue in order; every job that is
+ * enabled, not running, not finished, promoted into its episode's tier, not
+ * a second stream on a model already running, and not cooling on the defer
+ * ladder takes the next free pool account. Free means: in `pool`, not
+ * assigned to a running job, and not held live by anything (the roster's own
+ * account-busy inference, injected as `held`).
+ *
+ * `freeplay` bypasses the tiers gate: it is unscored (ADR-0024), so there is no
+ * promotion to record for it.
+ */
+export function planQueue(opts: {
+  queue: FleetJob[];
+  roster: Record<string, FleetRosterEntry>;
+  pool: string[];
+  running: Map<string, string>;
+  finished: Set<string>;
+  held: (account: string) => string | undefined;
+  cooling: (job: FleetJob) => string | undefined;
+}): QueuePlan {
+  const plan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
+  const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
+  const runningRefs = new Set<string>();
+  for (const job of opts.queue) if (opts.running.has(job.lane)) for (const r of job.refs) runningRefs.add(r);
+  for (const job of opts.queue) {
+    if (!job.enabled || opts.running.has(job.lane) || opts.finished.has(job.lane)) continue;
+    const refs = runnableRefs(job, opts.roster);
+    if (refs.length === 0) {
+      const gated = job.refs.filter((r) => opts.roster[r] !== undefined);
+      plan.skipped.push({
+        job,
+        reason:
+          gated.length === 0
+            ? `ref ${job.ref} is not in roster`
+            : `${job.ref} is not promoted into ${job.episode} (tiers: ${gated.map((r) => `${r}=${opts.roster[r]!.tiers.join("/")}`).join(", ")}) — promotion is an operator decision, edit roster.<name>.tiers`,
+      });
+      continue;
+    }
+    const clash = refs.find((r) => runningRefs.has(r));
+    if (clash !== undefined) {
+      plan.skipped.push({ job, reason: `${clash} is already running under another job — one stream per model` });
+      continue;
+    }
+    const cool = opts.cooling(job);
+    if (cool !== undefined) {
+      plan.skipped.push({ job, reason: cool });
+      continue;
+    }
+    const account = free.shift();
+    if (account === undefined) {
+      plan.waiting.push(job);
+      continue;
+    }
+    for (const r of refs) runningRefs.add(r);
+    plan.assign.push({ job, account });
+  }
+  return plan;
+}
+
+/**
+ * The refs of a job that may run in its episode: in the roster and promoted
+ * into the tier (`freeplay` is unscored and needs no promotion). A job runs
+ * with whatever subset passes; a ref gated out is dropped from that job's
+ * roster, and the skip reason names it only when nothing is left.
+ */
+export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEntry>): string[] {
+  return job.refs.filter((r) => {
+    const e = roster[r];
+    return e !== undefined && (job.episode === "freeplay" || e.tiers.includes(job.episode));
+  });
+}
+
+/**
+ * A job as the lane the rest of the supervisor already knows how to run: the
+ * roster entry with the episode's dimensions folded in, `repeat: n` as n
+ * copies with their own run ids (`-r2`, `-r3`, ...) so one roster process runs
+ * them in sequence, `repeat: "loop"` as run-roster's own --loop. `tiers` never
+ * reaches the roster file.
+ */
+export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string): FleetLane {
+  const dims = episodeDimensions(job.episode);
+  const copies = job.repeat === "loop" ? 1 : job.repeat;
+  const entries: RosterSpec[] = [];
+  for (const r of runnableRefs(job, roster)) {
+    const { tiers: _tiers, ...spec } = roster[r]!;
+    const base: RosterSpec = {
+      ...spec,
+      ...dims,
+      watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
+      ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
+    };
+    const runId = `fleet-${job.lane}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}`;
+    for (let k = 1; k <= copies; k++) {
+      entries.push(k === 1 ? base : { ...base, runId: `${runId}-r${k}` });
+    }
+  }
+  if (entries.length === 0) fail(`queue ${job.lane}: no ref of ${job.ref} is promoted into ${job.episode}`);
+  return {
+    name: job.lane,
+    enabled: job.enabled,
+    account,
+    loop: job.repeat === "loop",
+    entries,
+  };
 }
 
 /**
@@ -896,6 +1230,44 @@ export function formatGate(rec: PreflightRecord | undefined, pf: FleetPreflight)
   return out;
 }
 
+/**
+ * --status rendering of the pool and queue (ADR-0031): per account, pinned or
+ * pool and what runs on it; then queue depth and the waiting/skipped rows the
+ * supervisor last recorded. Pure over the config and the state file.
+ */
+export function formatPool(config: FleetConfig, state: { accounts?: FleetState["accounts"]; queue?: FleetState["queue"] } | undefined): string[] {
+  const out: string[] = [];
+  const pinned = Object.entries(config.accounts.pinned);
+  const live = state?.accounts?.pool ?? {};
+  out.push(`accounts: ${pinned.length} pinned, ${config.accounts.pool.length} pool`);
+  for (const [account, laneName] of pinned) out.push(`  ${account.padEnd(9)} pinned -> lane ${laneName}`);
+  for (const account of config.accounts.pool) {
+    const running = live[account];
+    out.push(`  ${account.padEnd(9)} pool   ${running === undefined || running === null ? "free" : `-> job ${running}`}`);
+  }
+  const enabled = config.queue.filter((j) => j.enabled);
+  out.push(`queue: ${enabled.length} enabled job(s) of ${config.queue.length}` + (state?.queue === undefined ? " (supervisor has not reported on it)" : ""));
+  for (const job of config.queue) {
+    const q = state?.queue;
+    const status =
+      !job.enabled
+        ? "disabled"
+        : q === undefined
+          ? "?"
+          : q.running.includes(job.lane)
+            ? "RUNNING"
+            : q.finished.includes(job.lane)
+              ? "finished"
+              : q.skipped.find((sk) => sk.lane === job.lane) !== undefined
+                ? `skipped: ${q.skipped.find((sk) => sk.lane === job.lane)!.reason}`
+                : q.waiting.includes(job.lane)
+                  ? "waiting for a free pool account"
+                  : "pending";
+    out.push(`  ${job.lane.padEnd(28)} ${job.ref} ${job.episode} x${job.repeat} — ${status}`);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ output
 
 let fleetLog = "";
@@ -990,6 +1362,19 @@ interface FleetState {
   configRejected?: ConfigRejection;
   /** The last deploy-window gate result; absent for a pre-gate supervisor. */
   preflight?: PreflightRecord;
+  /** ADR-0031: who holds which account, pinned vs pool, and the queue's shape. */
+  accounts?: {
+    pinned: Record<string, string>;
+    /** pool account -> job lane running on it, or null when free */
+    pool: Record<string, string | null>;
+  };
+  queue?: {
+    depth: number;
+    running: string[];
+    waiting: string[];
+    finished: string[];
+    skipped: { lane: string; reason: string }[];
+  };
   lanes: Record<
     string,
     {
@@ -1039,12 +1424,25 @@ let configRejected: ConfigRejection | undefined;
 /** When the config actually in force was parsed. Set on load and on re-read. */
 let configLoadedAt: number | undefined;
 
+/** Live pool bookkeeping, published into the state file every tick. */
+interface PoolView {
+  pinned: Record<string, string>;
+  pool: string[];
+  /** job lane -> pool account it is running on */
+  assigned: Map<string, string>;
+  queue: FleetJob[];
+  finished: Set<string>;
+  waiting: string[];
+  skipped: { lane: string; reason: string }[];
+}
+
 function writeState(
   configPath: string,
   stampToday: string,
   procs: Map<string, LaneProc>,
   draining: Set<string>,
   preflight?: PreflightRecord,
+  pool?: PoolView,
 ): void {
   const state: FleetState = {
     fleetPid: process.pid,
@@ -1057,6 +1455,23 @@ function writeState(
     ...(configRejected !== undefined ? { configRejected } : {}),
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
+    ...(pool !== undefined
+      ? {
+          accounts: {
+            pinned: pool.pinned,
+            pool: Object.fromEntries(
+              pool.pool.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null]),
+            ),
+          },
+          queue: {
+            depth: pool.queue.filter((j) => j.enabled).length,
+            running: [...pool.assigned.keys()],
+            waiting: pool.waiting,
+            finished: pool.queue.filter((j) => pool.finished.has(j.lane)).map((j) => j.lane),
+            skipped: pool.skipped,
+          },
+        }
+      : {}),
     lanes: {},
   };
   for (const [name, p] of procs) {
@@ -1165,7 +1580,9 @@ function printLiveRuns(configPath: string): number {
   // Lane accounts plus the gate's own and the ad-hoc debugging account: the
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a lane's does.
-  const accounts = [...new Set([...config.lanes.map((l) => l.account), ...preflightAccounts(config.preflight), "PROBE"])];
+  const accounts = [
+    ...new Set([...config.lanes.map((l) => l.account), ...config.accounts.pool, ...preflightAccounts(config.preflight), "PROBE"]),
+  ];
   let live = 0;
   for (const account of accounts) {
     const holder = accountHeldBy(account, "");
@@ -1225,11 +1642,19 @@ function printStatus(configPath: string): void {
   }
   if (config !== undefined) {
     for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
+    for (const line of formatPool(config, state)) console.log(`  ${line}`);
   }
   // Lanes from the file when it loads, else the ones the supervisor last ran.
+  // Pool jobs the supervisor is running (or ran) appear as lanes too, on the
+  // account they were given; queued-but-not-running jobs are in the queue block.
   const laneRows: { name: string; account: string; enabled?: boolean }[] =
     config !== undefined
-      ? config.lanes.map((l) => ({ name: l.name, account: l.account, enabled: l.enabled }))
+      ? [
+          ...config.lanes.map((l) => ({ name: l.name, account: l.account, enabled: l.enabled })),
+          ...Object.entries(state?.lanes ?? {})
+            .filter(([name]) => !config.lanes.some((l) => l.name === name))
+            .map(([name, l]) => ({ name, account: l.account, enabled: config.queue.find((j) => j.lane === name)?.enabled })),
+        ]
       : Object.entries(state?.lanes ?? {}).map(([name, l]) => ({ name, account: l.account }));
   for (const lane of laneRows) {
     const ls = state?.lanes[lane.name];
@@ -1305,12 +1730,12 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
   for (const lane of config.lanes) {
     if (!lane.enabled) {
-      console.log(`\nlane ${lane.name}: DISABLED (account ${lane.account}) — flip enabled:true to spawn`);
+      console.log(`\nlane ${lane.name}: DISABLED (pinned account ${lane.account}) — flip enabled:true to spawn`);
       continue;
     }
     const entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
     const until = laneUntil(lane, cliUntil);
-    console.log(`\nlane ${lane.name}: account ${lane.account}, ${entries.length} entr(ies), loop=${lane.loop}, until=${until ?? "none"}`);
+    console.log(`\nlane ${lane.name}: pinned account ${lane.account}, ${entries.length} entr(ies), loop=${lane.loop}, until=${until ?? "none"}`);
     for (const e of entries) {
       console.log(
         `  - ${e.model}${e.effort !== undefined ? `@${e.effort}` : ""} (${e.driver ?? "openai"}) -> ${e.runId}`,
@@ -1320,6 +1745,28 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     console.log(`  jsonl     ${laneJsonlPath(lane.name, stampToday)}`);
     console.log(`  stdout    ${laneStdoutPath(lane.name, stampToday)}`);
     console.log(`  argv      ${laneArgv(lane, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+  }
+  if (config.queue.length > 0 || config.accounts.pool.length > 0) {
+    const plan = planQueue({
+      queue: config.queue,
+      roster: config.roster,
+      pool: config.accounts.pool,
+      running: new Map(),
+      finished: new Set(),
+      held: (a) => accountHeldBy(a, ""),
+      cooling: () => undefined,
+    });
+    console.log(`\npool: ${config.accounts.pool.join(", ") || "(none)"}; queue: ${config.queue.length} job(s)`);
+    console.log(`first ${plan.assign.length} job(s) would spawn now (one per free pool account):`);
+    for (const { job, account } of plan.assign) {
+      const l = jobLane(job, config.roster, account, stampToday);
+      const entries = fillEntries(l, l.entries!, stampToday);
+      console.log(`  ${job.lane}: account ${account}, ${job.ref} ${job.episode} x${job.repeat} -> ${entries.map((e) => e.runId).join(", ")}`);
+      console.log(`    argv ${laneArgv(l, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+    }
+    for (const job of plan.waiting) console.log(`  ${job.lane}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
+    for (const sk of plan.skipped) console.log(`  ${sk.job.lane}: SKIP — ${sk.reason}`);
+    for (const job of config.queue) if (!job.enabled) console.log(`  ${job.lane}: disabled`);
   }
   console.log("");
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
@@ -1335,7 +1782,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   }
   const enabled = config.lanes.filter((l) => l.enabled);
   console.log(
-    `\n${enabled.length} lane(s) would run in parallel (${enabled.map((l) => `${l.name}=${l.account}`).join(", ")}).` +
+    `\n${enabled.length} pinned lane(s) would run in parallel (${enabled.map((l) => `${l.name}=${l.account}`).join(", ")})` +
+      ` plus up to ${config.accounts.pool.length} pool job(s).` +
       `\nsupervision: re-read fleet.json every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new lanes spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor (ADR-0020), not rolled at midnight.` +
@@ -1380,7 +1828,7 @@ function parseArgs(argv: string[]): {
             "",
             "  --until HH:MM   stop condition passed to every lane (overridden by nothing;",
             "                  a lane's untilDefault applies when this is absent)",
-            "  --dry-run       print the lane plan; spawn nothing",
+            "  --dry-run       print the lane plan and the first queue jobs that would spawn; spawn nothing",
             "  --status        read-only: per-lane process/run/progress report. Works from the",
             "                  host against a containerized supervisor (heartbeat, not kill -0)",
             "  --live-runs     read-only: list live episodes across the lane accounts and exit",
@@ -1431,6 +1879,7 @@ async function main(): Promise<void> {
     if (!lane.enabled) continue;
     loadLaneEntries(lane);
   }
+  for (const job of config.queue) if (runnableRefs(job, config.roster).length > 0) jobLane(job, config.roster, "-", stampToday);
 
   if (args.dryRun) {
     printDryRun(config, args.until, stampToday);
@@ -1442,6 +1891,73 @@ async function main(): Promise<void> {
   const sets: LaneSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
   let wasIdle = false;
+  // Pool bookkeeping (ADR-0031): which job lane holds which pool account, and
+  // the last plan's waiting/skipped rows for --status. A skip reason is logged
+  // once per (job, reason), not once a tick.
+  const assigned = new Map<string, string>();
+  let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  const complainedSkips = new Map<string, string>();
+
+  /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
+  const jobCooling = (job: FleetJob): string | undefined => {
+    const defers = laneDefers(laneJsonlPath(job.lane, stampToday));
+    const now = Date.now();
+    for (const d of defers) {
+      if (d.entry.tainted === true) return `${job.ref} tainted this epoch (${d.entry.defers} defers, ${d.entry.reason})`;
+      if (now < d.entry.notBefore) return `${job.ref} cooling until ${new Date(d.entry.notBefore).toLocaleTimeString()} (${d.entry.reason})`;
+    }
+    return undefined;
+  };
+
+  /**
+   * The lanes the supervisor acts on this tick: every pinned lane, every pool
+   * job already running (on the account it was given; `enabled` follows the
+   * job so a job flipped off or deleted drains like a lane), and the jobs the
+   * scheduler just handed a free account. Jobs with nothing free wait.
+   */
+  const effectiveLanes = (cfg: FleetConfig): FleetLane[] => {
+    const out: FleetLane[] = [...cfg.lanes];
+    const byLane = new Map(cfg.queue.map((j) => [j.lane, j]));
+    for (const [laneName, account] of assigned) {
+      const job = byLane.get(laneName);
+      if (job === undefined || runnableRefs(job, cfg.roster).length === 0) {
+        // Removed from the queue (or its ref vanished): a disabled stand-in
+        // makes diffLanes drain it. The running process keeps its roster.
+        out.push({ name: laneName, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
+        continue;
+      }
+      out.push(jobLane(job, cfg.roster, account, stampToday));
+    }
+    lastPlan = planQueue({
+      queue: cfg.queue,
+      roster: cfg.roster,
+      pool: cfg.accounts.pool,
+      running: assigned,
+      finished: sets.finished,
+      held: (a) => accountHeldBy(a, ""),
+      cooling: jobCooling,
+    });
+    for (const { job, account } of lastPlan.assign) out.push(jobLane(job, cfg.roster, account, stampToday));
+    for (const sk of lastPlan.skipped) {
+      if (complainedSkips.get(sk.job.lane) !== sk.reason) {
+        complainedSkips.set(sk.job.lane, sk.reason);
+        say(`queue ${sk.job.lane}: skipped — ${sk.reason}`);
+        record({ lane: sk.job.lane, event: "queue-skipped", detail: sk.reason });
+      }
+    }
+    for (const j of cfg.queue) if (!lastPlan.skipped.some((sk) => sk.job.lane === j.lane)) complainedSkips.delete(j.lane);
+    return out;
+  };
+  const poolView = (cfg: FleetConfig): PoolView => ({
+    pinned: cfg.accounts.pinned,
+    pool: cfg.accounts.pool,
+    assigned,
+    queue: cfg.queue,
+    finished: sets.finished,
+    waiting: lastPlan.waiting.map((j) => j.lane),
+    skipped: lastPlan.skipped.map((sk) => ({ lane: sk.job.lane, reason: sk.reason })),
+  });
+  const isPoolLane = (cfg: FleetConfig, name: string): boolean => cfg.queue.some((j) => j.lane === name) || assigned.has(name);
 
   const spawnLane = (lane: FleetLane): void => {
     let until: string | undefined;
@@ -1480,8 +1996,9 @@ async function main(): Promise<void> {
     });
     procs.set(lane.name, lp);
     sets.running.add(lane.name);
+    if (isPoolLane(config, lane.name)) assigned.set(lane.name, lane.account);
     say(`lane ${lane.name}: spawned pid ${proc.pid} (account ${lane.account}${resumeRoster ? ", --resume-roster" : ""}) -> ${stdoutLog}`);
-    record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${resumeRoster ? "; resume-roster" : ""}` });
+    record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${resumeRoster ? "; resume-roster" : ""}; account ${lane.account}` });
   };
 
   const requestStop = (): void => {
@@ -1503,7 +2020,8 @@ async function main(): Promise<void> {
   process.on("SIGTERM", requestStop);
 
   say(
-    `fleet ${args.config}: ${config.lanes.filter((l) => l.enabled).length} enabled lane(s), log ${fleetLog}` +
+    `fleet ${args.config}: ${config.lanes.filter((l) => l.enabled).length} enabled pinned lane(s), ` +
+      `${config.queue.filter((j) => j.enabled).length} queued job(s) over ${config.accounts.pool.length} pool account(s), log ${fleetLog}` +
       `, stamp ${stampToday}${CONTAINER ? " (compose service `fleet`)" : ""}` +
       `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer with fleet.json"}`,
   );
@@ -1544,11 +2062,11 @@ async function main(): Promise<void> {
     say(`preflight: smoking the server (identity ${identity!})`);
     record({ lane: "-", event: "preflight-start", detail: identity });
     preflightInFlight = { identity: identity!, since: Date.now() };
-    writeState(args.config, stampToday, procs, sets.draining, gate);
+    writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
     // Keep the heartbeat fresh while the sequence runs: a smoke outlasts the
     // liveness window and an outside observer would otherwise read a busy
     // supervisor as a dead one.
-    const pulse = setInterval(() => writeState(args.config, stampToday, procs, sets.draining, gate), 30_000);
+    const pulse = setInterval(() => writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config)), 30_000);
     try {
       gate = await runPreflight(pf, server!);
     } finally {
@@ -1575,8 +2093,8 @@ async function main(): Promise<void> {
   };
 
   let mayStart = await checkGate(config.preflight);
-  if (mayStart) for (const lane of diffLanes(config.lanes, sets).start) spawnLane(lane);
-  writeState(args.config, stampToday, procs, sets.draining, gate);
+  if (mayStart) for (const lane of diffLanes(effectiveLanes(config), sets).start) spawnLane(lane);
+  writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
     await new Promise((res) => setTimeout(res, TICK_MS));
@@ -1587,7 +2105,9 @@ async function main(): Promise<void> {
         sets.running.delete(name);
         const drained = sets.draining.delete(name);
         if (!drained) sets.finished.add(name);
-        say(`lane ${name}: roster exited ${p.exitCode}${drained ? " (drained)" : ""}`);
+        const acct = assigned.get(name);
+        assigned.delete(name);
+        say(`lane ${name}: roster exited ${p.exitCode}${drained ? " (drained)" : ""}${acct !== undefined ? ` — pool account ${acct} released` : ""}`);
         record({ lane: name, event: "exited", detail: `code ${p.exitCode}${drained ? "; drained" : ""}` });
       }
     }
@@ -1629,7 +2149,7 @@ async function main(): Promise<void> {
     }
     config = next;
 
-    const actions = diffLanes(config.lanes, sets);
+    const actions = diffLanes(effectiveLanes(config), sets);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
       say(`lane ${name}: re-enabled before it drained — keeping it running`);
@@ -1672,8 +2192,8 @@ async function main(): Promise<void> {
       record({ lane: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
     }
 
-    writeState(args.config, stampToday, procs, sets.draining, gate);
-    const toStart = diffLanes(config.lanes, sets).start.length;
+    writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+    const toStart = diffLanes(effectiveLanes(config), sets).start.length + lastPlan.waiting.length;
     if (fleetComplete({ running: sets.running.size, toStart, hasDeadline: args.until !== undefined })) {
       say("all lanes have exited and nothing is left to spawn — fleet complete");
       break;
@@ -1689,7 +2209,7 @@ async function main(): Promise<void> {
       }
     }
   }
-  writeState(args.config, stampToday, procs, sets.draining, gate);
+  writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
   say("fleet exit");
 }
 

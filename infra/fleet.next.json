@@ -1,0 +1,122 @@
+{
+  "_notes": [
+    "NEXT-SHAPE fleet config (ADR-0031: runner pool and job queue). Equivalent to fleet.json as of",
+    "2026-08-23 — same 7 streams — but lanes no longer own accounts. This file is NOT read by the",
+    "running supervisor: the code that understands it ships in the same commit, and a supervisor",
+    "started before that commit keeps its last good config and complains if it sees this shape.",
+    "At the next drain window the operator renames this file over fleet.json and restarts the",
+    "fleet service (docs/OPERATIONS.md, 'Switching to the pool/queue shape'). The new code also",
+    "loads the OLD shape, so either file works after the restart.",
+    "",
+    "accounts.pinned: account -> lane name. A pinned lane is exactly today's lane: one lane, one",
+    "account, its own roster stream, enabled/drain/respawn semantics unchanged. The lanes list",
+    "holds ONLY pinned lanes; every lane there must appear in accounts.pinned.",
+    "",
+    "accounts.pool: the accounts the queue may use, in preference order. Whenever one is free",
+    "(no job on it, not held live per the roster's own account-busy inference) the supervisor",
+    "takes the next runnable job from `queue` and spawns it there. Never PROBE, never SMOKE*.",
+    "",
+    "roster: named entries, the exact per-entry schema of roster JSONs plus `tiers` — the",
+    "episode tiers the model has been PROMOTED into (ADR-0030). Default [\"e90\"]. Promotion is",
+    "a recorded operator/eval decision: edit tiers here, never expect the supervisor to compute",
+    "it. No entry carries an account: the pool assigns one.",
+    "",
+    "queue: ordered jobs { ref, episode, repeat, lane?, enabled? }. `ref` is a roster name or a",
+    "list of them (a list rotates several models on one account exactly as a multi-entry lane",
+    "does today). `episode` is e90 | e360 | freeplay, passed to the runner as --episode <id>",
+    "with the equivalent explicit watchdog flags alongside (e360: 360 min wall clock, idle 20m,",
+    "no-xp off, maxToolCalls 2500; freeplay: no wall clock, unscored). `repeat` is a count or",
+    "\"loop\" (run-roster --loop). `lane` names the job's run ids and logs",
+    "(fleet-<lane>-<model>-<stamp>); default <first ref>-<episode>. A job whose episode is not in",
+    "a ref's tiers runs without that ref; a job with no promoted ref is SKIPPED with a logged",
+    "reason and --status shows it. A model already running under one job is not started under",
+    "another (one stream per model). A loop job holds its pool account until it is disabled or",
+    "removed; with 6 pool accounts the first 6 runnable loop jobs are the fleet and the rest",
+    "wait in order — reorder or disable to rotate. Disabling a running job drains it at the",
+    "next episode boundary, same as a lane. A job that exits stays finished until it is",
+    "disabled and re-enabled (rearm), same as a lane.",
+    "",
+    "Lane policy is unchanged and enforced on every entry: claude models only via the",
+    "claude-subscription driver; shared free pools carry free ids only; a local apiBase is",
+    "exempt from the suffix rule. preflight is unchanged (ADR-0023); its accounts may not be",
+    "in the pool.",
+    "",
+    "e360 jobs for sonnet and qwen3.8-27b are present but DISABLED: enabling one is the",
+    "promotion step — first add \"e360\" to that roster entry's tiers, then flip enabled. Until",
+    "the tiers edit the job is skipped with a reason, by design."
+  ],
+  "preflight": {
+    "enabled": true,
+    "account": "SMOKE",
+    "smokes": [
+      { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
+      { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" }
+    ],
+    "timeoutMs": 130000,
+    "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
+    "deployTimeoutMs": 600000
+  },
+  "accounts": {
+    "pinned": { "SHAKEOUT": "nav-probe", "SHAKEOUT2": "sub-opus" },
+    "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]
+  },
+  "lanes": [
+    {
+      "_comment": [
+        "nav-probe: the long-running UNSCORED navigation probe (ADR-0024), pinned to SHAKEOUT",
+        "exactly as today. Its watchdog override is the hand-written e360 shape; it stays",
+        "explicit here rather than as a queue job because it is a probe with an objective, not",
+        "a tiered episode."
+      ],
+      "name": "nav-probe",
+      "enabled": true,
+      "loop": true,
+      "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
+      "watchdogs": { "episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000 },
+      "maxToolCalls": 2500,
+      "wikiCoords": true,
+      "entries": [
+        { "model": "sonnet", "driver": "claude-subscription", "character": "Navprobe", "race": 3, "class": 2 }
+      ]
+    },
+    {
+      "_comment": ["sub-opus: the burn switch, pinned to SHAKEOUT2; disabled as today."],
+      "name": "sub-opus",
+      "enabled": false,
+      "loop": true,
+      "entries": [
+        { "model": "opus", "driver": "claude-subscription", "character": "Fleetopus", "race": 3, "class": 2, "episodeMs": 5400000 },
+        { "model": "opus", "driver": "claude-subscription", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "episodeMs": 5400000 }
+      ]
+    }
+  ],
+  "roster": {
+    "sonnet": { "model": "sonnet", "driver": "claude-subscription", "character": "Fleetsonn", "race": 3, "class": 2, "tiers": ["e90"] },
+    "sonnet-low": { "model": "sonnet", "driver": "claude-subscription", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "tiers": ["e90"] },
+    "ox-alpha": { "model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tiers": ["e90"] },
+    "nemotron-ultra": { "model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tiers": ["e90"] },
+    "north-mini-code": { "model": "cohere/north-mini-code:free", "tiers": ["e90"] },
+    "glm-5.2": { "model": "z-ai/glm-5.2:free", "tiers": ["e90"] },
+    "nemotron-super": { "model": "nvidia/nemotron-3-super-120b-a12b:free", "tiers": ["e90"] },
+    "nemotron-nano": { "model": "nvidia/nemotron-nano-9b-v2:free", "tiers": ["e90"] },
+    "laguna-or": { "model": "poolside/laguna-s-2.1:free", "tiers": ["e90"] },
+    "dots-3": { "model": "dots-studio/dots-3-note-preview:free", "tiers": ["e90"] },
+    "hy3": { "model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
+    "mimo": { "model": "mimo-v2.5-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
+    "deepseek-flash": { "model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
+    "laguna-oc": { "model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
+    "x-preview-f": { "model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tiers": ["e90"] },
+    "qwen3-8-27b": { "model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "tiers": ["e90"] }
+  },
+  "queue": [
+    { "ref": "ox-alpha", "episode": "e90", "repeat": "loop", "lane": "ox-alpha" },
+    { "ref": ["nemotron-ultra", "north-mini-code", "glm-5.2"], "episode": "e90", "repeat": "loop", "lane": "free-or-a" },
+    { "ref": ["nemotron-super", "nemotron-nano", "laguna-or", "dots-3"], "episode": "e90", "repeat": "loop", "lane": "free-or-b" },
+    { "ref": ["hy3", "mimo", "deepseek-flash"], "episode": "e90", "repeat": "loop", "lane": "free-oc-a" },
+    { "ref": ["laguna-oc", "x-preview-f"], "episode": "e90", "repeat": "loop", "lane": "free-oc-b" },
+    { "ref": "qwen3-8-27b", "episode": "e90", "repeat": "loop", "lane": "local-qwen" },
+    { "ref": ["sonnet", "sonnet-low"], "episode": "e90", "repeat": "loop", "lane": "sub-sonnet", "enabled": false },
+    { "ref": "sonnet", "episode": "e360", "repeat": 1, "lane": "sonnet-e360", "enabled": false },
+    { "ref": "qwen3-8-27b", "episode": "e360", "repeat": 1, "lane": "qwen-e360", "enabled": false }
+  ]
+}

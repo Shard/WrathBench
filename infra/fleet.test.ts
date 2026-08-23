@@ -27,6 +27,13 @@ import {
   loadConfigForRead,
   nextConfigRejection,
   validateEntries,
+  episodeDimensions,
+  formatPool,
+  jobLane,
+  planQueue,
+  runnableRefs,
+  type FleetJob,
+  type FleetRosterEntry,
   type FleetConfig,
   type FleetLane,
   type FleetPreflight,
@@ -824,5 +831,224 @@ describe("config rejection", () => {
     expect(loadConfigForRead("fleet.json", () => dupe).error).toMatch(/shared by enabled lanes/);
     const ok = JSON.stringify(fleetJson([lane({ name: "one" })]));
     expect(loadConfigForRead("fleet.json", () => ok).config!.lanes[0]!.name).toBe("one");
+  });
+});
+
+// ------------------------------------------------------------ ADR-0031 pool + queue
+
+describe("pool and queue (ADR-0031)", () => {
+  const nextShape = (over: Record<string, unknown> = {}): unknown => ({
+    _notes: ["n"],
+    accounts: { pinned: { SHAKEOUT: "nav-probe" }, pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
+    lanes: [lane({ name: "nav-probe", account: undefined as never, loop: true, entries: [{ model: "sonnet", driver: "claude-subscription" }] })],
+    roster: {
+      glm: { model: "z-ai/glm-5.2:free" },
+      ox: { model: "stealth/ox-alpha", tiers: ["e90", "e360"] },
+      qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", apiKeyEnv: "K", tiers: ["e90"] },
+    },
+    queue: [
+      { ref: "glm", episode: "e90", repeat: "loop" },
+      { ref: "ox", episode: "e360", repeat: 2, lane: "ox-long" },
+      { ref: "qwen", episode: "e360" },
+      { ref: ["glm", "qwen"], episode: "e90", lane: "pair" },
+    ],
+    ...over,
+  });
+
+  test("the OLD shape still loads: every lane is implicitly pinned, pool and queue are empty", () => {
+    const config = parseFleet(fleetJson([lane({ name: "a", account: "RUNNER" }), lane({ name: "b", account: "RUNNER2", enabled: false })]));
+    expect(config.accounts).toEqual({ pinned: { RUNNER: "a", RUNNER2: "b" }, pool: [] });
+    expect(config.queue).toEqual([]);
+    expect(config.roster).toEqual({});
+    expect(config.lanes.map((l) => l.account)).toEqual(["RUNNER", "RUNNER2"]);
+  });
+
+  test("the new shape loads: lane accounts come from accounts.pinned, refs normalise, defaults apply", () => {
+    const config = parseFleet(nextShape());
+    expect(config.lanes[0]!.account).toBe("SHAKEOUT");
+    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3"]);
+    expect(config.roster["glm"]!.tiers).toEqual(["e90"]);
+    expect(config.queue.map((j) => j.lane)).toEqual(["glm-e90", "ox-long", "qwen-e360", "pair"]);
+    expect(config.queue[0]).toMatchObject({ refs: ["glm"], ref: "glm", repeat: "loop", enabled: true });
+    expect(config.queue[2]).toMatchObject({ repeat: 1 });
+    expect(config.queue[3]).toMatchObject({ refs: ["glm", "qwen"], ref: "glm+qwen" });
+  });
+
+  test("new-shape guards: unpinned lanes, pool/pinned overlap, bad refs, bad tiers, lane collisions", () => {
+    expect(() => parseFleet(nextShape({ accounts: { pinned: {}, pool: ["RUNNER"] } }))).toThrow(/nav-probe: not in accounts.pinned/);
+    expect(() => parseFleet(nextShape({ accounts: { pinned: { SHAKEOUT: "nav-probe" }, pool: ["SHAKEOUT"] } }))).toThrow(/also pinned/);
+    expect(() => parseFleet(nextShape({ queue: [{ ref: "nope", episode: "e90" }] }))).toThrow(/ref nope is not in roster/);
+    expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e9000" }] }))).toThrow(/episode must be one of/);
+    expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free", tiers: ["e45"] } }, queue: [] }))).toThrow(/tiers/);
+    expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free", account: "RUNNER" } }, queue: [] }))).toThrow(/must not pin an account/);
+    expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90", lane: "nav-probe" }] }))).toThrow(/collides with a pinned lane/);
+    expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share lane name/);
+    // Lane policy still applies to roster entries.
+    expect(() => parseFleet(nextShape({ roster: { bad: { model: "sonnet" } }, queue: [] }))).toThrow(/lane-policy/);
+    // The gate may not borrow a pool account.
+    expect(() =>
+      parseFleet(nextShape({ preflight: { enabled: true, account: "RUNNER", smokes: ["x.ts"] } })),
+    ).toThrow(/also in accounts.pool/);
+  });
+
+  const roster: Record<string, FleetRosterEntry> = {
+    glm: { model: "z-ai/glm-5.2:free", tiers: ["e90"] },
+    ox: { model: "stealth/ox-alpha", tiers: ["e90", "e360"] },
+    mimo: { model: "mimo-v2.5-free", tiers: ["e90"] },
+  };
+  const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
+    refs: [over.ref],
+    episode: "e90",
+    repeat: "loop",
+    lane: `${over.ref}-${over.episode ?? "e90"}`,
+    enabled: true,
+    ...over,
+  });
+  const base = { roster, pool: ["RUNNER", "RUNNER2"], finished: new Set<string>(), held: () => undefined, cooling: () => undefined };
+
+  test("pool assignment: the next runnable job takes the next FREE account, in queue and pool order", () => {
+    const queue = [job({ ref: "glm" }), job({ ref: "ox" }), job({ ref: "mimo" })];
+    const plan = planQueue({ ...base, queue, running: new Map() });
+    expect(plan.assign.map((a) => [a.job.lane, a.account])).toEqual([["glm-e90", "RUNNER"], ["ox-e90", "RUNNER2"]]);
+    expect(plan.waiting.map((j) => j.lane)).toEqual(["mimo-e90"]);
+    // An account a running job holds, or one held live by anything (the
+    // roster's account-busy inference), is not free.
+    const plan2 = planQueue({ ...base, queue, running: new Map([["glm-e90", "RUNNER"]]), held: (a) => (a === "RUNNER2" ? "hand-run" : undefined) });
+    expect(plan2.assign).toEqual([]);
+    expect(plan2.waiting.map((j) => j.lane)).toEqual(["ox-e90", "mimo-e90"]);
+  });
+
+  test("queue drains in order: as accounts come free the next jobs take them; finished jobs are not restarted", () => {
+    const queue = [job({ ref: "glm", repeat: 1 }), job({ ref: "ox", repeat: 1 }), job({ ref: "mimo", repeat: 1 })];
+    const running = new Map<string, string>();
+    const finished = new Set<string>();
+    const order: string[] = [];
+    // Tick 1: two accounts, two jobs.
+    let plan = planQueue({ ...base, queue, running, finished });
+    for (const a of plan.assign) {
+      running.set(a.job.lane, a.account);
+      order.push(a.job.lane);
+    }
+    expect(order).toEqual(["glm-e90", "ox-e90"]);
+    // glm exits: its account frees, mimo takes it.
+    running.delete("glm-e90");
+    finished.add("glm-e90");
+    plan = planQueue({ ...base, queue, running, finished });
+    expect(plan.assign.map((a) => [a.job.lane, a.account])).toEqual([["mimo-e90", "RUNNER"]]);
+    for (const a of plan.assign) running.set(a.job.lane, a.account);
+    // Everything running or finished: nothing to do, nothing waiting.
+    plan = planQueue({ ...base, queue, running, finished });
+    expect(plan.assign).toEqual([]);
+    expect(plan.waiting).toEqual([]);
+  });
+
+  test("tiers gate: a job whose episode the model is not promoted into is skipped with a reason; freeplay bypasses", () => {
+    const queue = [job({ ref: "glm", episode: "e360" }), job({ ref: "ox", episode: "e360" }), job({ ref: "glm", episode: "freeplay" })];
+    const plan = planQueue({ ...base, queue, running: new Map() });
+    expect(plan.skipped.map((s) => s.job.lane)).toEqual(["glm-e360"]);
+    expect(plan.skipped[0]!.reason).toMatch(/not promoted into e360/);
+    expect(plan.skipped[0]!.reason).toMatch(/operator decision/);
+    expect(plan.assign.map((a) => a.job.lane)).toEqual(["ox-e360", "glm-freeplay"]);
+    // A multi-ref job runs with the promoted subset; the gated ref is dropped.
+    const pair = job({ ref: "glm", refs: ["glm", "ox"], episode: "e360", lane: "pair" });
+    expect(runnableRefs(pair, roster)).toEqual(["ox"]);
+    expect(jobLane(pair, roster, "RUNNER", "20260101").entries!.map((e) => e.model)).toEqual(["stealth/ox-alpha"]);
+  });
+
+  test("one stream per model: a ref already running under one job is not started under another", () => {
+    const queue = [job({ ref: "ox", episode: "e90" }), job({ ref: "ox", episode: "e360" })];
+    const plan = planQueue({ ...base, queue, running: new Map([["ox-e90", "RUNNER"]]) });
+    expect(plan.skipped.map((s) => s.reason)).toEqual([expect.stringMatching(/already running under another job/)]);
+  });
+
+  test("the defer ladder is honoured: a cooling or tainted job does not take an account", () => {
+    const queue = [job({ ref: "glm" }), job({ ref: "ox" })];
+    const plan = planQueue({ ...base, queue, running: new Map(), cooling: (j) => (j.ref === "glm" ? "glm cooling until 03:00" : undefined) });
+    expect(plan.skipped.map((s) => s.job.lane)).toEqual(["glm-e90"]);
+    expect(plan.assign.map((a) => [a.job.lane, a.account])).toEqual([["ox-e90", "RUNNER"]]);
+  });
+
+  test("a disabled job is neither assigned nor skipped — it is simply not in the plan", () => {
+    const plan = planQueue({ ...base, queue: [job({ ref: "glm", enabled: false })], running: new Map() });
+    expect(plan).toEqual({ assign: [], waiting: [], skipped: [] });
+  });
+
+  test("a job becomes a lane: episode dimensions fold in, repeat n is n run ids, loop is --loop, tiers never reach the roster", () => {
+    const l = jobLane(job({ ref: "ox", episode: "e360", repeat: 3, lane: "ox-long" }), roster, "RUNNER2", "20260101");
+    expect(l).toMatchObject({ name: "ox-long", account: "RUNNER2", loop: false, enabled: true });
+    const filled = fillEntries(l, l.entries!, "20260101");
+    expect(filled.map((e) => e.runId)).toEqual([
+      "fleet-ox-long-ox-alpha-20260101",
+      "fleet-ox-long-ox-alpha-20260101-r2",
+      "fleet-ox-long-ox-alpha-20260101-r3",
+    ]);
+    expect(filled[0]).toMatchObject({ episode: "e360", account: "RUNNER2", maxToolCalls: 2500, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null } });
+    expect((filled[0] as Record<string, unknown>)["tiers"]).toBeUndefined();
+    expect(laneArgv(jobLane(job({ ref: "ox" }), roster, "RUNNER", "20260101"), { stamp: "20260101", until: undefined })).toContain("--loop");
+    expect(laneArgv(l, { stamp: "20260101", until: undefined })).not.toContain("--loop");
+    // An entry's own watchdog tightening wins key by key over the tier's.
+    const tight = jobLane(job({ ref: "glm" }), { glm: { model: "z-ai/glm-5.2:free", tiers: ["e90"], watchdogs: { idleMs: 60_000 } } }, "RUNNER", "20260101");
+    expect(tight.entries![0]!.watchdogs).toEqual({ episodeMs: 5_400_000, idleMs: 60_000, noXpMs: 1_200_000 });
+  });
+
+  test("episode ids map to today's runner flags until the runner owns --episode", () => {
+    expect(episodeDimensions("e90")).toEqual({ episode: "e90", watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 500 });
+    expect(episodeDimensions("e360").watchdogs).toEqual({ episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null });
+    expect(episodeDimensions("freeplay").watchdogs!.episodeMs).toBeNull();
+  });
+
+  test("pinned lanes are unaffected: diffLanes over pinned + job lanes keeps the old semantics", () => {
+    const config = parseFleet(nextShape());
+    const pinned = config.lanes[0]!;
+    const jobs = config.queue.slice(0, 1).map((j) => jobLane(j, config.roster, "RUNNER", "20260101"));
+    const sets: LaneSets = { running: new Set(), draining: new Set(), finished: new Set() };
+    expect(diffLanes([pinned, ...jobs], sets).start.map((l) => [l.name, l.account])).toEqual([["nav-probe", "SHAKEOUT"], ["glm-e90", "RUNNER"]]);
+    // The pinned lane finishes (exit 0): not respawned while enabled, rearmed by disabling — exactly as before.
+    sets.finished.add("nav-probe");
+    expect(diffLanes([pinned, ...jobs], sets).start.map((l) => l.name)).toEqual(["glm-e90"]);
+    expect(diffLanes([{ ...pinned, enabled: false }, ...jobs], sets).rearm).toEqual(["nav-probe"]);
+    // A running job that is disabled drains like a lane.
+    sets.running.add("glm-e90");
+    expect(diffLanes([pinned, { ...jobs[0]!, enabled: false }], sets).drain).toEqual(["glm-e90"]);
+  });
+
+  test("--status renders accounts (pinned vs pool, what runs where) and queue depth", () => {
+    const config = parseFleet(nextShape());
+    const lines = formatPool(config, {
+      accounts: { pinned: { SHAKEOUT: "nav-probe" }, pool: { RUNNER: "glm-e90", RUNNER2: null, RUNNER3: null } },
+      queue: { depth: 4, running: ["glm-e90"], waiting: ["pair"], finished: [], skipped: [{ lane: "qwen-e360", reason: "qwen is not promoted into e360" }] },
+    }).join("\n");
+    expect(lines).toContain("SHAKEOUT  pinned -> lane nav-probe");
+    expect(lines).toContain("RUNNER    pool   -> job glm-e90");
+    expect(lines).toContain("RUNNER2   pool   free");
+    expect(lines).toContain("queue: 4 enabled job(s) of 4");
+    expect(lines).toMatch(/glm-e90 .*RUNNING/);
+    expect(lines).toMatch(/qwen-e360 .*skipped: qwen is not promoted/);
+    expect(lines).toMatch(/pair .*waiting/);
+  });
+
+  test("the shipped fleet.next.json is today's fleet under the new schema", async () => {
+    const raw = (await Bun.file(new URL("./fleet.next.json", import.meta.url).pathname).json()) as unknown;
+    const config = parseFleet(raw);
+    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });
+    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
+    const byLane = Object.fromEntries(config.queue.map((j) => [j.lane, j]));
+    for (const name of ["ox-alpha", "free-or-a", "free-or-b", "free-oc-a", "free-oc-b", "local-qwen"]) {
+      expect(byLane[name]).toMatchObject({ episode: "e90", repeat: "loop", enabled: true });
+    }
+    // Same run ids as today's lanes produce, so the switch is invisible to the eval surface.
+    const ox = jobLane(byLane["ox-alpha"]!, config.roster, "RUNNER", "20260823");
+    expect(fillEntries(ox, ox.entries!, "20260823")[0]!.runId).toBe("fleet-ox-alpha-ox-alpha-20260823");
+    // Every model is e90-only; the e360 jobs exist, disabled, and would be tier-gated if enabled.
+    for (const e of Object.values(config.roster)) expect(e.tiers).toEqual(["e90"]);
+    expect(byLane["sonnet-e360"]).toMatchObject({ episode: "e360", enabled: false });
+    expect(byLane["qwen-e360"]).toMatchObject({ episode: "e360", enabled: false });
+    const forced = config.queue.map((j) => (j.episode === "e360" ? { ...j, enabled: true } : j));
+    const plan = planQueue({ queue: forced, roster: config.roster, pool: config.accounts.pool, running: new Map(), finished: new Set(), held: () => undefined, cooling: () => undefined });
+    expect(plan.skipped.map((s) => s.job.lane).sort()).toEqual(["qwen-e360", "sonnet-e360"]);
+    // The nav-probe lane is byte-for-byte the pinned lane of today.
+    const nav = config.lanes.find((l) => l.name === "nav-probe")!;
+    expect(nav).toMatchObject({ account: "SHAKEOUT", loop: true, wikiCoords: true, maxToolCalls: 2500 });
+    expect(nav.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
   });
 });
