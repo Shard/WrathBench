@@ -12,7 +12,7 @@
  * rows keep their maths in `format.ts` (see dashboard/README.md).
  */
 
-import type { FleetJobView, FleetPausedView, FleetResponse } from "@viewer/api-types";
+import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -25,6 +25,55 @@ export const HEARTBEAT_STALE_MS = 180_000;
  */
 export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt">, now: number): boolean {
   return fleet.heartbeatAt !== undefined && now - fleet.heartbeatAt < HEARTBEAT_STALE_MS;
+}
+
+/**
+ * True while a deploy holds the server (infra/deploy-worldserver.sh): the
+ * fleet is stopped on purpose, its jobs' processes are gone on purpose, and
+ * the page must say so rather than "NOT RUNNING" and a column of "exited".
+ * A `rolled-back` or `failed` verdict is not a window: by then the script has
+ * brought the fleet back up, and the banner alone carries the news.
+ */
+export function deployWindowOpen(server: Pick<FleetServerView, "phase">): boolean {
+  return server.phase === "draining" || server.phase === "swapping" || server.phase === "verifying" || server.phase === "resuming";
+}
+
+const hhmm = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * The one banner line at the top of the page, stating the server's phase in
+ * plain words. The phase word is ours; everything after the colon is the
+ * deploy script's own `detail`, printed verbatim — the page never guesses at
+ * what the window is doing. `null` at rest with nothing on file.
+ */
+export function serverBanner(server: FleetServerView): { text: string; tone: "info" | "bad" | "dim" } | null {
+  const b = server.build === "" ? "an unnamed build" : server.build;
+  const detail = server.detail === "" ? "" : `: ${server.detail}`;
+  switch (server.phase) {
+    case "running":
+      return server.detail === "" ? null : { text: `server running${detail}`, tone: "dim" };
+    case "draining":
+      return { text: `Deploy window since ${hhmm(server.since)} — stopping the fleet for ${b}, runs are pausing${detail}`, tone: "info" };
+    case "swapping":
+      return { text: `Deploy window since ${hhmm(server.since)} — swapping the worldserver to ${b}${detail}`, tone: "info" };
+    case "verifying":
+      return { text: `Deploy window since ${hhmm(server.since)} — swapped to ${b}, verifying${detail}`, tone: "info" };
+    case "resuming":
+      return { text: `Deploy window since ${hhmm(server.since)} — ${b} verified, starting the fleet; paused runs resume${detail}`, tone: "info" };
+    case "rolled-back":
+      return { text: `Deploy of ${b} FAILED at ${hhmm(server.since)} and was rolled back${server.prevBuild !== undefined ? ` to ${server.prevBuild}` : ""}${detail}`, tone: "bad" };
+    case "failed":
+      return { text: `Deploy of ${b} FAILED at ${hhmm(server.since)}${detail}`, tone: "bad" };
+  }
+}
+
+/**
+ * The supervisor line's verdict. A dead heartbeat during a deploy window is
+ * the script's doing, and the line says so instead of crying NOT RUNNING.
+ */
+export function supervisorLabel(fleet: Pick<FleetResponse, "heartbeatAt" | "server">, now: number): string {
+  if (supervisorAlive(fleet, now)) return "supervisor ALIVE";
+  return deployWindowOpen(fleet.server) ? "fleet stopped for the deploy window" : "supervisor NOT RUNNING";
 }
 
 /** The gate's one-word verdict, as --status prints it. */
@@ -61,7 +110,12 @@ export const FLEET_COLUMNS = ["state", "job", "models", "tier", "account", "sour
  * episodes and an account with nothing on it, which the account column tells
  * apart.
  */
-export type FleetRowState = "exited" | "draining" | "running" | "resuming" | "paused" | "idle";
+export type FleetRowState = "exited" | "paused-deploy" | "draining" | "running" | "resuming" | "paused" | "idle";
+
+/** The badge text for a row state: identifiers above, plain words here. */
+export function rowStateLabel(state: FleetRowState): string {
+  return state === "paused-deploy" ? "paused for deploy" : state;
+}
 
 export interface FleetRow {
   /** Stable key: the job name, or the account for an idle account row. */
@@ -118,8 +172,13 @@ export function runHref(runId: string | null): string | null {
 /** Classes in the order their idle rows are grouped at the bottom. */
 const CLASS_ORDER = ["pool", "paid", "local", "pinned"];
 
-function stateOf(job: FleetJobView): FleetRowState {
-  if (job.alive === false) return "exited";
+/**
+ * A job whose process is gone during a deploy window, driving no run, is a
+ * job the deploy stopped: its run paused (ADR-0036) and resumes when the
+ * script starts the fleet again. The same row outside a window is just exited.
+ */
+function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
+  if (job.alive === false) return windowOpen && (job.runId ?? null) === null ? "paused-deploy" : "exited";
   if (job.draining === true) return "draining";
   if ((job.runId ?? null) !== null) return "running";
   return job.resuming !== undefined ? "resuming" : "idle";
@@ -138,13 +197,15 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const rows: FleetRow[] = [];
   const busy = new Set<string>();
+  const windowOpen = deployWindowOpen(fleet.server);
   for (const job of fleet.jobs) {
     const runId = job.runId ?? null;
     const run = runId === null ? undefined : byId.get(runId);
     busy.add(job.account.toUpperCase());
+    const state = stateOf(job, windowOpen);
     rows.push({
       key: job.name,
-      state: stateOf(job),
+      state,
       job: job.name,
       models: jobModelLabel(job),
       modelsTitle: job.models.join(", "),
@@ -157,7 +218,12 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       level: run?.level ?? null,
       xp: run?.xp ?? null,
       elapsedMs: run?.playtimeMs ?? null,
-      note: job.resuming !== undefined && runId === null ? `resuming ${job.resuming}` : null,
+      note:
+        state === "paused-deploy"
+          ? "paused for the deploy window; the supervisor resumes it when the fleet starts"
+          : job.resuming !== undefined && runId === null
+            ? `resuming ${job.resuming}`
+            : null,
     });
   }
   // Idle accounts, grouped by class. A paused run holds no account, so it is

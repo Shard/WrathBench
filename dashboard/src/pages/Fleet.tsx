@@ -29,7 +29,20 @@
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type ApiInfoResponse, type FleetResponse } from "../api/client";
-import { FLEET_COLUMNS, accountClassSummary, fleetRows, gateVerdict, pausedLabel, runHref, supervisorAlive, type FleetRow } from "../lib/fleet";
+import {
+  FLEET_COLUMNS,
+  accountClassSummary,
+  deployWindowOpen,
+  fleetRows,
+  gateVerdict,
+  pausedLabel,
+  rowStateLabel,
+  runHref,
+  serverBanner,
+  supervisorAlive,
+  supervisorLabel,
+  type FleetRow,
+} from "../lib/fleet";
 import { fmtAge, fmtDuration, num, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -59,6 +72,15 @@ export default function Fleet() {
       </Show>
 
       <h2 class="section">fleet</h2>
+      {/*
+        The server's phase first, in one line, in the deploy script's own words
+        (infra/deploy-worldserver.sh writes data/runs/server-state.json at each
+        transition). Shown even with no fleet state: a deploy can run on a
+        machine the fleet has never run on.
+      */}
+      <Show when={fleet.latest !== undefined && serverBanner(fleet.latest.server)}>
+        {(b) => <div class={b().tone === "bad" ? "banner bad" : b().tone === "info" ? "banner warn" : "dim"}>{b().text}</div>}
+      </Show>
       <Show
         when={fleet.latest?.present === true}
         fallback={<p class="dim">No fleet-state.json — the fleet has never run here.</p>}
@@ -84,11 +106,15 @@ export default function Fleet() {
                 )}
               </Show>
 
-              {/* The supervisor line: alive by heartbeat, where it runs, when its config was loaded. */}
+              {/*
+                The supervisor line: alive by heartbeat, where it runs, when its
+                config was loaded. A dead heartbeat inside a deploy window is
+                the deploy's doing, and the line says so.
+              */}
               <div class="strip">
                 <span>
-                  <span class={`dot ${up() ? "live" : "dead"}`} />
-                  supervisor {up() ? "ALIVE" : "NOT RUNNING"} · pid {f().fleetPid ?? "—"} ·{" "}
+                  <span class={`dot ${up() ? "live" : deployWindowOpen(f().server) ? "" : "dead"}`} />
+                  {supervisorLabel(f(), now())} · pid {f().fleetPid ?? "—"} ·{" "}
                   {f().containerized === true ? "container" : "host"} ·{" "}
                   {age() === null ? "no heartbeat" : `heartbeat ${fmtAge(age()!)}`}
                 </span>
@@ -242,7 +268,7 @@ function FleetRowView(props: { row: FleetRow }) {
     <tr onClick={onClick} class={href() === null ? undefined : "clickable"}>
       <td>
         <span class={`dot ${dot()}`} />
-        <span class={`badge ${r().state}`}>{r().state}</span>
+        <span class={`badge ${r().state}`}>{rowStateLabel(r().state)}</span>
       </td>
       <td title={r().note ?? ""}>{r().job ?? "—"}</td>
       <td class="dim" title={r().modelsTitle}>

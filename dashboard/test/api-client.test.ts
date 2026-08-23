@@ -137,7 +137,7 @@ describe("shapes", () => {
   });
 
   test("an absent fleet reads as present:false with no jobs", async () => {
-    const payload: FleetResponse = { present: false, jobs: [], accounts: [], paused: [], ended: [], now: 1 };
+    const payload: FleetResponse = { present: false, server: { phase: "running", since: 1, build: "", detail: "", updatedAt: 1 }, jobs: [], accounts: [], paused: [], ended: [], now: 1 };
     const got = await createClient({ fetch: stub(payload).fetch }).fleet();
     expect(got.present).toBe(false);
     expect(got.jobs).toHaveLength(0);

@@ -29,6 +29,7 @@ import type {
   FleetJobView,
   FleetPausedView,
   FleetResponse,
+  FleetServerView,
   FleetSessionView,
   HarnessView,
   ModelsResponse,
@@ -266,10 +267,37 @@ export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { r
   return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
 }
 
+const SERVER_PHASES: ReadonlySet<string> = new Set(["running", "draining", "swapping", "verifying", "resuming", "rolled-back", "failed"]);
+
+/**
+ * Read the deploy script's phase file. Absent (or unreadable, or nonsense) is
+ * `running` with nothing to say: the only state a page can safely assume.
+ */
+export function readServerState(runsDir: string, now = Date.now()): FleetServerView {
+  const rest: FleetServerView = { phase: "running", since: now, build: "", detail: "", updatedAt: now };
+  const path = join(runsDir, "server-state.json");
+  if (!existsSync(path)) return rest;
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<FleetServerView>;
+    if (typeof raw.phase !== "string" || !SERVER_PHASES.has(raw.phase)) return rest;
+    return {
+      phase: raw.phase,
+      since: typeof raw.since === "number" ? raw.since : now,
+      build: typeof raw.build === "string" ? raw.build : "",
+      ...(typeof raw.prevBuild === "string" && raw.prevBuild !== "" ? { prevBuild: raw.prevBuild } : {}),
+      detail: typeof raw.detail === "string" ? raw.detail : "",
+      updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
+    };
+  } catch {
+    return rest;
+  }
+}
+
 /** Read the fleet supervisor's published state. Absent is normal, not an error. */
 export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
   const path = join(runsDir, "fleet-state.json");
-  const absent: FleetResponse = { present: false, jobs: [], accounts: [], paused: [], ended: [], now };
+  const server = readServerState(runsDir, now);
+  const absent: FleetResponse = { present: false, server, jobs: [], accounts: [], paused: [], ended: [], now };
   if (!existsSync(path)) return absent;
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as {
@@ -341,6 +369,7 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
     // The rejection's file mtime stays behind for the same reason.
     return {
       present: true,
+      server,
       fleetPid: raw.fleetPid,
       startedAt: raw.startedAt,
       heartbeatAt: raw.heartbeatAt,
