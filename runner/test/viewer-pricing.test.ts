@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
+import { CLAUDE_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
 import { reportedCostUsd, scanRunTotals, summarize } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -42,11 +42,14 @@ const sonnetRun: PriceableRun = {
 };
 
 describe("priceFor", () => {
-  test("a paid open model on OpenRouter is priced by exact id, metered for real", () => {
+  test("a paid open model is priced from the synced table by exact id, metered for real", () => {
     const run: PriceableRun = { model: "deepseek/deepseek-v4-flash-0731", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
     const p = priceFor(run);
-    expect(p?.id).toBe("deepseek-v4-flash-0731");
+    expect(p?.id).toBe("deepseek/deepseek-v4-flash-0731");
     expect(p?.asIfMetered).toBe(false);
+    // Rates are the sync's, not this test's, but they must be real dollars.
+    expect(p?.input).toBeGreaterThan(0);
+    expect(p?.asOf).toBe(SYNCED_PRICES.asOf);
     expect(priceFor({ ...run, model: "deepseek/deepseek-v4-pro" })).toBeNull();
   });
   test("names a claude model through the claude-code harness", () => {
@@ -144,22 +147,47 @@ describe("costOf", () => {
 });
 
 describe("runCost", () => {
-  test("a reported figure wins over the table and is used verbatim", () => {
+  test("actual is the provider's figure, used verbatim, and expected is still computed", () => {
     const c = runCost({
       run: sonnetRun,
       tokens: tokens({ promptTokens: 900_000_000, completionTokens: 1_000_000 }),
       reportedUsd: 43.903071,
     });
-    expect(c.basis).toBe("reported");
-    expect(c.usd).toBe(43.903071);
-    expect(c.breakdown).toBeNull();
-    expect(c.asIfMetered).toBe(true);
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(43.903071);
+    expect(c.actual.breakdown).toBeNull();
+    expect(c.actual.asIfMetered).toBe(true);
+    // The table is applied anyway: a gap between the two is the information.
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.usd).toBeGreaterThan(0);
+    // The old single-figure fields carry `expected` for one release.
+    expect(c.basis).toBe(c.expected.basis);
+    expect(c.usd).toBe(c.expected.usd);
   });
 
   test("a reported zero is a figure, not an absence", () => {
     const c = runCost({ run: sonnetRun, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: 0 });
-    expect(c.basis).toBe("reported");
-    expect(c.usd).toBe(0);
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(0);
+  });
+
+  test("a provider that reports no cost says so, rather than borrowing the estimate", () => {
+    const c = runCost({ run: sonnetRun, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: null });
+    expect(c.actual.basis).toBe("none");
+    expect(c.actual.usd).toBeNull();
+    expect(c.actual.note).toContain("provider reports no cost");
+  });
+
+  test("an OpenRouter cost is not read as a subscription figure", () => {
+    const c = runCost({
+      run: { model: "deepseek/deepseek-v4-flash-0731", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" },
+      tokens: tokens({ promptTokens: 1_000_000, completionTokens: 10_000 }),
+      reportedUsd: 0.0821,
+    });
+    expect(c.actual.usd).toBe(0.0821);
+    expect(c.actual.asIfMetered).toBe(false);
+    expect(c.expected.asIfMetered).toBe(false);
+    expect(c.expected.usd).toBeGreaterThan(0);
   });
 
   test("without a reported figure it falls back to list price, caveated", () => {
@@ -185,7 +213,8 @@ describe("runCost", () => {
     });
     expect(c.basis).toBe("none");
     expect(c.usd).toBeNull();
-    expect(c.note).toContain("no price on file");
+    // An open model the sync has not seen is fixable, and the note says how.
+    expect(c.note).toContain("sync-prices");
   });
 
   test("estimated tokens are not priced at a non-zero rate", () => {
@@ -245,5 +274,47 @@ describe("reportedCostUsd", () => {
     const totals = await scanRunTotals(path);
     expect(totals.reportedCostUsd).toBe(12.5);
     expect(totals.tokens.promptTokens).toBe(10);
+  });
+
+  test("OpenRouter's per-response cost sums, and the request side is not counted twice", () => {
+    const entries = [
+      { t: "request", ts: 1, usage: { prompt: 100, completion: 0, cost: 99 } },
+      { t: "response", ts: 2, usage: { prompt: 100, completion: 10, cost: 0.0004 } },
+      { t: "response", ts: 3, usage: { prompt: 120, completion: 8, cost: 0.0006 } },
+    ];
+    expect(reportedCostUsd(entries)).toBeCloseTo(0.001, 9);
+  });
+
+  test("a driver that reports no cost per response leaves the run's actual blank", () => {
+    expect(reportedCostUsd([{ t: "response", ts: 1, usage: { prompt: 10, completion: 2 } }])).toBeNull();
+  });
+
+  test("the tail summariser and scanRunTotals agree on a run of OpenRouter responses", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "wrathbench-pricing-")), "trajectory.jsonl");
+    const lines = [
+      JSON.stringify({ t: "meta", ts: 1 }),
+      JSON.stringify({
+        t: "response",
+        ts: 2,
+        message: { content: "ok" },
+        usage: { prompt_tokens: 4947, completion_tokens: 121, cost: 0.000418 },
+      }),
+      JSON.stringify({
+        t: "response",
+        ts: 3,
+        message: { content: "ok" },
+        usage: { prompt_tokens: 4921, completion_tokens: 100, cost: 0.000402 },
+      }),
+      "",
+    ];
+    writeFileSync(path, lines.join("\n"));
+    const totals = await scanRunTotals(path);
+    expect(totals.reportedCostUsd).toBeCloseTo(0.00082, 9);
+    // The run page walks `tail.entries` instead; both paths must land on the
+    // same dollars or the two pages quote different bills for one run.
+    const viaSummarize = lines
+      .filter((l) => l.length > 0)
+      .map((l, i) => summarize(JSON.parse(l) as Record<string, unknown>, i, 0, 0));
+    expect(reportedCostUsd(viaSummarize)).toBeCloseTo(0.00082, 9);
   });
 });

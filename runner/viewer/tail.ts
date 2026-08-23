@@ -133,6 +133,10 @@ function reportedUsage(rec: Record<string, unknown>): ReportedUsage | null {
       const write = o["cache_write_tokens"] ?? o["cache_creation_input_tokens"];
       if (typeof read === "number") out.cachedRead = read;
       if (typeof write === "number") out.cacheWrite = write;
+      // The provider's own charge for the call. OpenRouter sends it under the
+      // usage opt-in (`runner/src/adapter.ts`); everyone else omits it.
+      const cost = o["cost"];
+      if (typeof cost === "number" && Number.isFinite(cost)) out.cost = cost;
       return out;
     }
   }
@@ -362,24 +366,35 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
 }
 
 /**
- * The driver's own cost figure for a run, summed off its `claude_result`
- * records, or null when no record carried one.
+ * What the provider says this run cost, or null when it said nothing.
  *
- * `total_cost_usd` is the Claude Agent SDK's total for *one session*, emitted
- * only when that session's turn loop ends cleanly; a hard watchdog kill cuts
- * the stream before it lands, so most runs have none. A run that was paused and
- * resumed opens a new CLI session, so the figures are summed rather than
- * maxed — no run in the corpus has had two yet, and summing is what is right
- * when one does.
+ * Two drivers report it in two shapes and both are summed here:
+ *
+ * - `claude_result.costUsd` — the Claude Agent SDK's `total_cost_usd` for *one
+ *   session*, emitted only when that session's turn loop ends cleanly; a hard
+ *   watchdog kill cuts the stream before it lands, so most runs have none. A
+ *   paused-and-resumed run opens a new CLI session, so figures are summed
+ *   rather than maxed.
+ * - `response.usage.cost` — OpenRouter's per-call charge in credits (dollars),
+ *   under the usage opt-in the adapter sets for that host. Per response, so the
+ *   run's figure is necessarily a sum, and it grows with a live run.
  *
  * A recorded `0` is a figure, not an absence: the test fixture emits one.
  */
 export function reportedCostUsd(entries: readonly { t: string; [k: string]: unknown }[]): number | null {
   let total: number | null = null;
   for (const e of entries) {
-    if (e.t !== "claude_result") continue;
-    const v = e["costUsd"];
-    if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v;
+    if (e.t === "claude_result") {
+      const v = e["costUsd"];
+      if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v;
+      continue;
+    }
+    // Responses only: a `request` record carries no charge, and counting the
+    // usage block on both sides would double the bill.
+    if (e.t !== MODEL_RESPONSE_RECORD) continue;
+    const usage = e["usage"] as ReportedUsage | undefined;
+    const c = usage?.cost;
+    if (typeof c === "number" && Number.isFinite(c)) total = (total ?? 0) + c;
   }
   return total;
 }
@@ -486,7 +501,8 @@ export interface RunTotals {
   modelResponses: number;
   /** Stretches the run was actually being driven; see `segmentsFrom`. */
   segments: ActiveSegment[];
-  /** `total_cost_usd` off the run's `claude_result` records; see `reportedCostUsd`. */
+  /** What the provider charged: `claude_result` totals or summed
+   * `response.usage.cost`; see `reportedCostUsd`. */
   reportedCostUsd: number | null;
 }
 
@@ -550,7 +566,15 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       p["outChars"] = messageChars(rec["message"]);
     }
     const usage = reportedUsage(rec);
-    if (usage !== null) p["usage"] = usage;
+    if (usage !== null) {
+      p["usage"] = usage;
+      // The other half of `reportedCostUsd`: OpenRouter charges per response,
+      // so the run's actual cost accumulates here alongside the claude_result
+      // total above. The two never both appear on one run.
+      if (t === MODEL_RESPONSE_RECORD && typeof usage.cost === "number") {
+        costUsd = (costUsd ?? 0) + usage.cost;
+      }
+    }
     projections.push(p);
   };
 

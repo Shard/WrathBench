@@ -1,16 +1,17 @@
 /**
  * What a run would have cost, in dollars.
  *
- * Two different questions hide behind one number, and this module keeps them
- * apart:
+ * Two different questions hide behind one number, and this module answers both
+ * rather than choosing:
  *
- * - **reported** — the Claude Code driver's own `total_cost_usd`, recorded on a
- *   `claude_result` record (`runner/src/adapter-claude.ts`). That is the SDK's
- *   accounting of its own session and is used verbatim; nothing here recomputes
- *   it. It exists only on a naturally completed session, so most claude-code
- *   runs do not have one.
- * - **list-price** — this table applied to the run's `TokenTotals`. A derived
- *   figure, never an invoice.
+ * - **actual** — what the provider says it charged. OpenRouter reports it per
+ *   response (`usage.cost`, in credits, which are dollars); the Claude Code
+ *   driver reports it per session (`total_cost_usd` on a `claude_result`,
+ *   `runner/src/adapter-claude.ts`). Used verbatim, never recomputed, and null
+ *   whenever the provider reports nothing — which is most runs.
+ * - **expected** — the price table applied to the run's `TokenTotals`. A
+ *   derived figure, never an invoice, and computed even when an actual exists
+ *   so the two can be read against each other.
  *
  * An unknown model gets no cost at all. A guessed price is worse than a blank:
  * the run page is read as evidence, and a number with no source behind it
@@ -22,7 +23,8 @@
  */
 
 import { isAllowlistedFree, isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
-import type { CostBreakdown, CostView, RunRow, TokenTotals } from "./api-types";
+import synced from "./prices.openrouter.json";
+import type { CostBreakdown, CostFigure, CostView, RunRow, TokenTotals } from "./api-types";
 
 /** One priced model: dollars per million tokens, with where the figure is from. */
 export interface PriceRow {
@@ -53,7 +55,7 @@ export interface PriceRow {
  * Anthropic rows only: they are the ones with a non-zero price in this fleet,
  * and they are the ones `docs/COSTS.md` §3 verified. Everything else the fleet
  * runs today is free-tier or local, handled by the two rules below; paid open
- * models live in `OPEN_PRICES`.
+ * models are priced from the synced OpenRouter table (`SYNCED_PRICES`).
  *
  * Sonnet 5 is under introductory pricing **through 2026-08-31** — that is what
  * COSTS.md's cross-check showed is really billing, so it is what the row holds.
@@ -139,38 +141,41 @@ export const LOCAL_PRICE: PriceRow = {
 export { isFreeSlug, isLocalBase } from "../src/model-cost";
 
 /**
- * Paid open models, matched on the exact OpenRouter id. These are genuinely
- * metered (the operator's OpenRouter balance), so `asIfMetered` is false and the
- * figure is a list-price estimate of a real bill. OpenRouter quotes per token;
- * rows hold dollars per million. No cache-write tier on OpenRouter: a cache
- * write is billed as input, so `cacheWrite` equals `input`.
+ * Open-model prices, synced from OpenRouter rather than typed in.
+ *
+ * `prices.openrouter.json` is written by `infra/sync-prices.ts` (`bun run
+ * sync-prices`), which reads the provider's own catalogue and keeps the rows
+ * the roster and the corpus actually need. A rate nobody typed is a rate nobody
+ * can mistype, and the file's `asOf` dates every row in one place.
+ *
+ * These models are genuinely metered against the operator's OpenRouter
+ * balance, so `asIfMetered` is false: the figure is a list-price estimate of a
+ * real bill. OpenRouter has no cache-write tier for most models — the sync
+ * falls back to the input rate, per its own quoting.
+ *
+ * A free slug never reaches here: `priceFor` answers it with `FREE_PRICE`
+ * first, whatever the catalogue quotes.
  */
-export const OPEN_PRICES: (PriceRow & { match: string })[] = [
-  {
-    id: "deepseek-v4-flash-0731",
-    match: "deepseek/deepseek-v4-flash-0731",
-    input: 0.08,
-    output: 0.18,
-    cacheRead: 0.016,
-    cacheWrite: 0.08,
-    asOf: "2026-08-23",
+export type SyncedRow = Pick<PriceRow, "input" | "output" | "cacheRead" | "cacheWrite">;
+
+export const SYNCED_PRICES: { asOf: string; models: Record<string, SyncedRow> } = synced;
+
+/** The synced row for an OpenRouter id, or null when the sync does not carry it. */
+export function syncedPrice(model: string): PriceRow | null {
+  const row = SYNCED_PRICES.models[model];
+  if (row === undefined) return null;
+  return {
+    id: model,
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cacheRead,
+    cacheWrite: row.cacheWrite,
+    asOf: SYNCED_PRICES.asOf,
     source: "list",
     asIfMetered: false,
-    note: "OpenRouter list price (GET /api/v1/models, 2026-08-23); metered against the operator's OpenRouter balance",
-  },
-  {
-    id: "deepseek-v4-flash-0423",
-    match: "deepseek/deepseek-v4-flash",
-    input: 0.052,
-    output: 0.103,
-    cacheRead: 0.0103,
-    cacheWrite: 0.052,
-    asOf: "2026-08-23",
-    source: "list",
-    asIfMetered: false,
-    note: "the April snapshot, run once by mistake on 2026-08-23 and ended by hand; OpenRouter list price",
-  },
-];
+    note: `OpenRouter list price, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts); metered against the operator's OpenRouter balance`,
+  };
+}
 
 /** What a run needs to carry to be priced. A subset of `RunRow`, so tests can be small. */
 export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness">;
@@ -188,7 +193,8 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
-  for (const p of OPEN_PRICES) if (p.match === model) return { ...p };
+  const open = syncedPrice(model);
+  if (open !== null) return open;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;
   for (const p of CLAUDE_PRICES) {
@@ -236,41 +242,57 @@ export function breakdownTotal(b: CostBreakdown): number {
 }
 
 /** No cost, with a reason. The blank is a statement, so it always carries one. */
-function none(note: string): CostView {
+function none(note: string): CostFigure {
   return { usd: null, basis: "none", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note };
 }
 
 /**
- * The cost figure for one run.
+ * Why a run has no price row, in the words the reader can act on.
  *
- * Precedence is not a preference: a driver that reported its own cost has
- * settled the question, and this table is only ever a reconstruction of one.
+ * A Claude model we do not carry and an OpenRouter model the sync has not seen
+ * are different problems: the second is fixed by running the script.
  */
-export function runCost(args: {
+function unpricedNote(run: PriceableRun): string {
+  const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(run.model ?? "");
+  if (claude) return "no price on file for this model — tokens only, never a guess";
+  return "no synced price — run `bun infra/sync-prices.ts`";
+}
+
+/**
+ * The provider's own figure for a run, or a blank saying it reported none.
+ *
+ * Two providers, one meaning: OpenRouter bills per response (`usage.cost`, in
+ * credits, which are dollars) and the Claude Agent SDK bills per session
+ * (`total_cost_usd`). `tail.ts` sums whichever the run carries; this only has
+ * to say what the number is.
+ */
+function actualCost(run: PriceableRun, reportedUsd: number | null): CostFigure {
+  if (reportedUsd === null) return none("provider reports no cost for this run");
+  const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  return {
+    usd: reportedUsd,
+    basis: "reported",
+    // A claude-code run is billed against a flat subscription; the SDK's
+    // figure is what the same session would have cost on the metered API.
+    asIfMetered: claudeCode,
+    breakdown: null,
+    priceId: null,
+    asOf: null,
+    note: claudeCode
+      ? "the Claude Agent SDK's own total_cost_usd for this session — billed against a subscription, so not an invoice"
+      : "the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)",
+  };
+}
+
+/** The price table applied to the run's tokens: an estimate, never a bill. */
+function expectedCost(args: {
   run: PriceableRun & { startedAt?: number | null };
   tokens: TokenTotals | null;
-  /** `total_cost_usd` summed off the run's `claude_result` records, or null. */
-  reportedUsd: number | null;
-}): CostView {
-  const { run, tokens, reportedUsd } = args;
+}): CostFigure {
+  const { run, tokens } = args;
   const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
-  if (reportedUsd !== null) {
-    return {
-      usd: reportedUsd,
-      basis: "reported",
-      // A claude-code run is billed against a flat subscription; the SDK's
-      // figure is what the same session would have cost on the metered API.
-      asIfMetered: claudeCode,
-      breakdown: null,
-      priceId: null,
-      asOf: null,
-      note: claudeCode
-        ? "the Claude Agent SDK's own total_cost_usd for this session — billed against a subscription, so not an invoice"
-        : "reported by the driver",
-    };
-  }
   const price = priceFor(run, run.startedAt ?? null);
-  if (price === null) return none("no price on file for this model — tokens only, never a guess");
+  if (price === null) return none(unpricedNote(run));
   if (tokens === null) return none("no token totals for this run");
   const free = price.input === 0 && price.output === 0;
   if (tokens.source !== "reported" && !free) {
@@ -298,4 +320,27 @@ export function runCost(args: {
     asOf: price.asOf,
     note: `${price.id} ${price.source} price as of ${price.asOf}: ${price.note}${caveat}`,
   };
+}
+
+/**
+ * The two cost figures for one run.
+ *
+ * They are not ranked. `actual` is what the provider charged and `expected` is
+ * what this repo's table says it should have — the point of carrying both is
+ * that a gap between them is information (a stale price row, an opt-in that
+ * never landed), and a single number with a precedence rule hides it.
+ *
+ * The top-level fields are `expected`, kept populated for one release so
+ * consumers written against the old single-figure shape keep working.
+ */
+export function runCost(args: {
+  run: PriceableRun & { startedAt?: number | null };
+  tokens: TokenTotals | null;
+  /** The provider's own total: OpenRouter `usage.cost` summed, or the Claude
+   * SDK's `total_cost_usd`. Null when the run carries neither. */
+  reportedUsd: number | null;
+}): CostView {
+  const actual = actualCost(args.run, args.reportedUsd);
+  const expected = expectedCost(args);
+  return { ...expected, actual, expected };
 }
