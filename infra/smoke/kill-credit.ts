@@ -41,8 +41,10 @@
  * longest fight observed (25.9s, 2026-08-23 logs), a death is a failure, and
  * so is a kobold that never comes into view. The gate re-runs every tick while
  * it fails; a slow failure is the expensive kind. For the same reason the
- * contended-account wait on POST /characters is seconds here, not the twenty
- * minutes travel.ts allows itself.
+ * contended-account wait on POST /characters is ten seconds here, not the
+ * twenty minutes travel.ts allows itself: that wait, apply.ts's online poll
+ * and the arc are sequential, and their sum must close under the gate's
+ * `preflight.timeoutMs`.
  *
  * Run (the fixture tool needs the DB env; see compose.yml's `fixtures`
  * service, and the `fleet` service which carries it for this gate):
@@ -279,8 +281,11 @@ async function endSession(): Promise<void> {
 
 /**
  * The fixture boot, shared with travel.ts. Budgets are the gate's, not a long
- * probe's: a contended account is waited out for 30s in 5s steps and then the
- * run fails, because the gate re-runs on the next tick anyway.
+ * probe's: a contended account is waited out for 10s in 5s steps and then the
+ * run fails, because the gate re-runs on the next tick anyway — and because
+ * the three waits are sequential and their sum has to close under
+ * `preflight.timeoutMs` (130s): 10s here + apply.ts's 90s online poll + a ~23s
+ * arc is ~123s.
  */
 const fixtureCtx: FixtureContext = {
   base: BASE,
@@ -289,7 +294,7 @@ const fixtureCtx: FixtureContext = {
   token: TOKEN,
   log,
   fail,
-  contendedDeadlineMs: 30_000,
+  contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
   createAndLogout: async () => {
     await createSession();
