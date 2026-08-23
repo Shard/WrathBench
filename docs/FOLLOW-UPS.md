@@ -230,8 +230,16 @@ and status.
     `search_reference` description carries the standing warning. A real fix needs
     either a pre-Cataclysm revision of each page (the dump is full history, so the
     revision from before 2010-12 is in it — a second bundle channel, expensive) or
-    per-sentence classification (not deterministic). Revisit only if a trajectory shows
-    a model misled by a lead after the description warning shipped.
+    per-sentence classification (not deterministic). **Triggered 2026-08-24** by
+    `fleet-nav-probe-freeplay-sonnet-20260823-c4-c2`: `search_reference` returned the
+    "prior to its collapse" / "after Coldridge Pass collapses before adventurers can
+    make it through to Kharanos" prose, and the model's scratchpad planned a
+    gyrocopter detour around the pass it believed unreliable (it walked the intact
+    pass in the end, so strategy was shaped, not blocked). Cheaper fix than a second
+    bundle channel: tag the known post-Cataclysm geography changes (collapses,
+    rebuilds) at bundle-build time for at least the starter-zone pages, where new
+    characters are most exposed. Not urgent — the era warning held enough that the run
+    still crossed.
 
 ## Docs and release
 
