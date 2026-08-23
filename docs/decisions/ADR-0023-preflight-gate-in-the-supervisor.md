@@ -1,6 +1,7 @@
 # ADR-0023: The deploy-window smoke is a supervisor gate, not a deploy step
 
-Status: Accepted. Date: 2026-08-22. Amended 2026-08-23 (fast gate), folded in.
+Status: Accepted. Date: 2026-08-22. Amended 2026-08-23 (fast gate), folded in;
+amended again 2026-08-23 (scenario fixtures), as a section below.
 
 ## Context
 Deploying a worldserver image was a manual sequence whose smoke step depended on
@@ -63,4 +64,43 @@ the thing being measured, for an answer that only changes when the server does).
 - An armed gate bound to an unpermitted account parks the whole fleet on a 403;
   new smoke accounts ship disabled until the worldserver recreate permits them.
 - A sub-minute gate that proves late-game claims needs characters that do not
-  start at level 1 (FOLLOW-UPS 45).
+  start at level 1 (FOLLOW-UPS 45); `infra/fixtures/` supplies them — see the
+  amendment below.
+
+## Amendment 2026-08-23: a gate smoke may start from a scenario fixture (FOLLOW-UPS 45)
+
+The fast gate could only ever prove what a level-1 character reaches from the
+Northshire spawn inside a minute. Everything else — the tram, a flight path, a
+trainer with ranks to sell, a death far from a graveyard — is minutes of walking
+away, so it went ungated or lived only in the deploy-time full arc.
+`infra/fixtures/` writes the `acore_characters` rows for a named scenario (level,
+xp, money, position, homebind, spells, quest log) onto a *logged-out* character on
+a `SMOKE*`/`PROBE` account, and a smoke logs into it and proves its claim in
+seconds. **A gate smoke may start from a fixture.**
+
+**A fixture is outside the observation contract, not an exception to it.** Nothing
+in `runner/` or `sdk/` imports the tool and no route reaches it; it is the operator
+arranging the world before the run, the same act as choosing which account a smoke
+logs into. `docs/CONTRACTS.md` is untouched — the character the agent drives is
+still observed and moved through the module alone. What keeps that honest is the
+account allowlist: runner and shakeout accounts are never fixtured, so a benchmark
+run still starts from a character the agent itself created. (No items, ever: item
+guids come from an in-memory generator seeded at boot and ObjectMgr reaps
+externally inserted inventory at the next start — FOLLOW-UPS 57.)
+
+**Persistent characters replace delete-last-run's-character, for fixture smokes.**
+The fast-gate rule above — delete last run's character first, log out last — exists
+because a disconnected session lingers for `expireTime` (60s) and a delete inside
+that window is silently ignored. A fixture smoke wants the opposite: one durable
+character (`Smoketram` on PROBE), reused every run and *re-placed* by the fixture
+rather than recreated, which also makes the start position a written fact instead
+of a spawn point. It pays a different wait — the tool polls for
+`characters.online = 0` before writing, because the module's `DELETE /session` acks
+when the logout is queued, ahead of the core's `LogoutPlayer` save; measured at
+~36s including that wait. Smokes that genuinely want a fresh level-1 keep the
+delete-first rule.
+
+**Dropped: `CMSG_LOGOUT_REQUEST` on the raw allowlist.** It was wanted so a smoke
+could end cleanly in 20s instead of 60. A persistent character never waits on a
+delete, so the saving is gone — and the allowlist is the agent's action surface
+(ADR-0025), which is not the place to spend for operator convenience.

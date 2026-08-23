@@ -30,9 +30,13 @@ and status.
       transport-relative movement. **Gate still open:** `infra/smoke/travel.ts` rides
       the tram IF→SW end to end with a typed success and no undifferentiated
       `no_path`; run it three times on PROBE, record wall clock per leg, then ADR-0027
-      is accepted. Residuals to watch: interpolated-vs-applied position at trigger
-      dispatch (re-armed after 1.5s), and triggers are only tested while a `move_to`
-      is active. The leg-1 waypoints were made mesh-valid 2026-08-23 (42b5c38).
+      is accepted. The gate now starts from a scenario fixture at the Ironforge
+      portal (item 45), so legs 1–2 are skipped and the tram is what is tested. One
+      residual left: triggers are only tested while a `move_to` is active. The other
+      — interpolated-vs-applied position at trigger dispatch — cost the first ride
+      its Stormwind exit and is fixed by afd352c (heartbeat before
+      `CMSG_AREATRIGGER`, ADR-0027 amendment); the 1.5s re-arm went in item 56. The
+      leg-1 waypoints were made mesh-valid 2026-08-23 (42b5c38).
     - **N2 — field-level observations**, each small, each earned, each logged: zone
       and area name on self from position and the client's own DBC (no packet carries
       it; the client computes it, so the module may), with a `milestone` record (item
@@ -97,19 +101,28 @@ and status.
     and `.env` (a Secret mounted at the same path so "never via argv" survives).
 
 
-45. **Scenario-fixture characters for smokes** (2026-08-23, ADR-0023 amendment). The
-    fast gate proves what a level-1 character can reach in under a minute from the
+45. **Scenario-fixture characters for smokes** (2026-08-23, ADR-0023 amendment).
+    The fast gate proves what a level-1 character can reach in under a minute from the
     Northshire spawn. Every late-game claim — a dungeon entrance, a flight path, a
     trainer with ranks to sell, a mailbox with mail, the tram, death far from a
     graveyard — is minutes of play away, so it can only live in the deploy-time arc or
-    go ungated. Want: an `infra/fixtures` operator tool that writes the
-    `acore_characters` rows for a named scenario (level, position, quest log,
-    inventory, spells) while the character is logged out, on the smoke accounts only;
-    a smoke logs into the fixture and proves its claim in seconds. Never reachable from
-    the runner or the SDK, so the contract in docs/CONTRACTS.md is untouched. Same path
-    fixes the smokes left out of the gate: `spellbook.ts` (deletes last, pays the 60s
-    linger) and the cooldown assertion in item 47. Also: `CMSG_LOGOUT_REQUEST` on the
-    raw allowlist would let any smoke end cleanly in 20s instead of 60.
+    go ungated. **Shipped 2026-08-23:** `infra/fixtures/apply.ts` + `scenarios.ts`
+    (96214db) writes the `acore_characters` rows for a named scenario — level, xp,
+    money, position, homebind, spells, quest log — onto a logged-out character on a
+    `SMOKE*`/`PROBE` account, waiting for `characters.online = 0` first because
+    `DELETE /session` acks ahead of the core's save; and `infra/smoke/travel.ts --from
+    tram-ironforge` (614cb08) starts the gate from one, on the persistent character
+    `Smoketram`. Nothing in `runner/` or `sdk/` imports it, so docs/CONTRACTS.md is
+    untouched. **Outstanding: only the gate pass** — the first fixture ride reached
+    Stormwind but missed the exit trigger (item 38, fixed by afd352c); the item closes
+    on the rerun. No items, ever — the guid problem is item 57. What the tool now
+    enables, for whoever wants it: the smokes left out of the gate, `spellbook.ts`
+    (deletes last, pays the 60s linger) and the cooldown assertion in item 47 —
+    uses, not work this item is waiting on. Dropped: `CMSG_LOGOUT_REQUEST` on
+    the raw allowlist, wanted to end a smoke in 20s instead of 60 — a persistent
+    fixture character never waits on a delete, so the saving is gone, and the
+    allowlist is the agent's action surface (ADR-0025), not a place to spend on
+    operator convenience.
 
 47. **A cooldown the agent can actually watch** (2026-08-23; small, after item 45).
     `state.cooldowns()` is fed by `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT`, and no
@@ -121,8 +134,27 @@ and status.
     coverage — the login-time `cooldowns[]` block in `SMSG_INITIAL_SPELLS` is empty at
     level 1. When a smoke has a character past level 1 — or a Hearthstone `use_item`,
     whose 30-minute cooldown the server does send — assert the packet and the cache
-    entry, and `SPELL_GO` goes back to being a cast-path check.
+    entry, and `SPELL_GO` goes back to being a cast-path check. Unblocked as of
+    2026-08-23: item 45 shipped, so `trainer-northshire` (level 4) or any fixture
+    character is available, and the Hearthstone route needs no fixture item row at all
+    — every character is created holding one, server-side, so item 57's guid problem
+    does not apply.
 
+
+57. **Item fixtures need a guid-safe design** (2026-08-23, split out of item 45). A
+    fixture cannot write inventory or mail, so no smoke can be staged with a specific
+    bag or mailbox: `item_instance` guids come from an in-memory generator seeded once
+    at worldserver boot from `SELECT MAX(guid)`, so anything inserted from outside
+    while the server is up collides with guids the running server is about to hand
+    out — and `ObjectMgr.cpp` then *deletes* every row at or above its watermark in
+    `character_inventory`, `mail_items`, `auctionhouse` and `guild_bank_item` on the
+    next start. Externally written items are racy now and reaped later, which is why
+    `infra/fixtures/scenarios.ts` refuses them outright. Two designs are plausible and
+    neither is picked: route the grant through the live server (a vendor purchase or
+    quest reward driven by the module, which is slow but always guid-correct), or
+    write with the world stopped and reseed the watermark. Blocks nothing today —
+    every claim a fixture is wanted for so far is position, level or spells. Do it
+    when a smoke needs gear, mail or a specific consumable to prove its claim.
 
 ## Episodes and results
 
