@@ -41,7 +41,9 @@ import {
   type ActionRequest,
   type ActionResponse,
   type CharacterDeleteResponse,
+  type CorpseReclaimDelayData,
   type CreateSessionRequest,
+  type DeathReleaseLocData,
   type DeleteSessionResponse,
   type ErrorBody,
   type FaceResponse,
@@ -1180,6 +1182,60 @@ export type LearnTalentResult =
       readonly hint: string;
     };
 
+export interface ReclaimCorpseOptions {
+  /**
+   * The whole budget for the call: waiting out the reclaim delay, dispatching,
+   * and confirming. Default 25000 — the same shape as `killTarget`'s, and for
+   * the same reason: it fits under the runner's 30s snippet cap so an
+   * in-snippet call returns a verdict instead of being abandoned mid-wait. A
+   * death whose full 30s delay has not started burning down needs either a
+   * larger `timeout` from a background routine, or a second call.
+   */
+  timeout?: number;
+  /** How long each dispatch is given to be confirmed before it is re-sent. Default 2500. */
+  attemptTimeout?: number;
+}
+
+/**
+ * The outcome of one corpse reclaim, as a value (ADR-0011).
+ *
+ * The core's handler (`WorldSession::HandleReclaimCorpseOpcode`) returns
+ * *silently* for every refusal — alive, spirit not released, no corpse, the
+ * reclaim delay not elapsed, further than `CORPSE_RECLAIM_RADIUS` (~39y) — so
+ * there is no refusal packet to read and the verdict has to come from the
+ * observable outcome instead.
+ *
+ * What is observed: `SMSG_DEATH_RELEASE_LOC` with `map: -1`, which is the
+ * first thing `Player::ResurrectPlayer` sends (it clears the client's spirit-
+ * healer marker), corroborated by the character's own health leaving the
+ * ghost's body value of 1 (`BuildPlayerRepop` sets health to 1; a reclaim
+ * restores 50%). `waitedMs` is the whole time the call spent, delay included.
+ *
+ * `unconfirmed` is the honest third answer: the dispatch went out and neither
+ * signal was observed — re-read `state.self.health` rather than assume.
+ */
+export type ReclaimCorpseResult =
+  | {
+      readonly ok: true;
+      readonly status: "reclaimed";
+      /** Total ms this call spent, including waiting out the delay. */
+      readonly waitedMs: number;
+      /** The delay the server last announced (`SMSG_CORPSE_RECLAIM_DELAY`), when one was seen. */
+      readonly delayMs: number | undefined;
+      /** How many `CMSG_RECLAIM_CORPSE` this call sent. */
+      readonly attempts: number;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "not_reclaimed" | "unconfirmed";
+      readonly waitedMs: number;
+      readonly delayMs: number | undefined;
+      readonly attempts: number;
+      /** Machine-readable: `not_dead`, `not_released`, `still_ghost`, `no_observation`. */
+      readonly reason: string;
+      readonly hint: string;
+    };
+
 export interface RawActionResponse extends ActionResponse {
   /** The opcode name as sent. */
   readonly opcode: string;
@@ -1820,11 +1876,196 @@ export class WrathClient {
     return this.action({ action: "repop" });
   }
 
-  /** `CMSG_RECLAIM_CORPSE` — resurrect at the corpse. */
-  reclaimCorpse(guid?: GuidArg): Promise<ActionResponse> {
+  /**
+   * `CMSG_RECLAIM_CORPSE` — dispatch only, no waiting and no verdict. Prefer
+   * `reclaimCorpse`, which owns the reclaim delay and reports what happened.
+   */
+  reclaimCorpseAsync(guid?: GuidArg): Promise<ActionResponse> {
     return this.action({
       action: "reclaim_corpse",
       guid: guid === undefined ? undefined : guidArg(guid, "reclaimCorpse(guid)"),
+    });
+  }
+
+  /**
+   * Resurrect at your corpse: wait out the server's reclaim delay, send
+   * `CMSG_RECLAIM_CORPSE`, and answer with what was observed.
+   *
+   * The delay is the server's own word, not a constant: `BuildPlayerRepop`
+   * sends `SMSG_CORPSE_RECLAIM_DELAY { delayMs }` immediately before it resets
+   * the corpse's ghost time, so the most recent one on the stream plus its
+   * timestamp is when the reclaim becomes legal. When no such event is in the
+   * retained buffer — none was owed (the core sends nothing when the delay has
+   * already expired), or it aged out of the 500-event window — the call
+   * dispatches *immediately* rather than inventing a 30s wait, and lets the
+   * retry absorb a too-early refusal.
+   *
+   * Refusals are silent (see `ReclaimCorpseResult`), so the loop re-sends
+   * every `attemptTimeout` until the budget runs out, and the verdict is read
+   * off `SMSG_DEATH_RELEASE_LOC { map: -1 }` and the character's own health.
+   * The ambient snippet signal aborts every wait here, as everywhere.
+   *
+   * Every game outcome is a value; the one throw is a refused request — a
+   * `WrathRequestError` from the dispatch itself (`no_session`,
+   * `not_in_world`) surfaces rather than being folded into `unconfirmed`, so a
+   * dead session fails fast instead of retrying into nothing.
+   */
+  async reclaimCorpse(guid?: GuidArg, options: ReclaimCorpseOptions = {}): Promise<ReclaimCorpseResult> {
+    const started = Date.now();
+    const deadline = started + (options.timeout ?? 25_000);
+    const attemptTimeout = Math.max(100, options.attemptTimeout ?? 2_500);
+    const id = guid === undefined ? undefined : guidArg(guid, "reclaimCorpse(guid)");
+
+    /** Own health as the cache last saw it: 0 = dead, 1 = a released ghost, >1 = alive. */
+    const health = (): number | undefined => this.state.self.health?.value.current;
+    const delayEvent = (): { delayMs: number; ts: number } | undefined => {
+      const events = this.events.recent();
+      for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i] as StreamEvent;
+        if (isEvent(e, "SMSG_CORPSE_RECLAIM_DELAY") && !isDecodeError(e.data)) {
+          return { delayMs: (e.data as CorpseReclaimDelayData).delayMs, ts: e.ts };
+        }
+      }
+      return undefined;
+    };
+    const announced = delayEvent();
+    const delayMs = announced?.delayMs;
+
+    // Pre-flight, so the two states that can never work are named rather than
+    // burning the whole budget on a packet the core drops on sight.
+    const before = health();
+    const facts = (attempts: number): { waitedMs: number; delayMs: number | undefined; attempts: number } => ({
+      waitedMs: Date.now() - started,
+      delayMs,
+      attempts,
+    });
+    if (before !== undefined && before === 0) {
+      return {
+        ok: false,
+        status: "not_reclaimed",
+        ...facts(0),
+        reason: "not_released",
+        hint:
+          "your spirit has not been released, so there is no corpse to run back to — call sdk.repop() " +
+          "first, walk the ghost to where you died, then reclaim",
+      };
+    }
+    if (before !== undefined && before > 1) {
+      return {
+        ok: false,
+        status: "not_reclaimed",
+        ...facts(0),
+        reason: "not_dead",
+        hint: `state.self.health is ${before}, so you are alive and there is nothing to reclaim`,
+      };
+    }
+
+    // The resurrect is announced by SMSG_DEATH_RELEASE_LOC clearing the marker
+    // (map -1). Latched from a subscription rather than a wait, so an answer
+    // that lands while the POST is in flight is not missed.
+    let released = false;
+    const offRelease = this.events.on("SMSG_DEATH_RELEASE_LOC", (e) => {
+      if (isDecodeError(e.data)) return;
+      if ((e.data as DeathReleaseLocData).map < 0) released = true;
+    });
+    const alive = (): boolean => released || (health() ?? 0) > 1;
+
+    let attempts = 0;
+    try {
+      for (;;) {
+        this.throwIfAborted("the corpse reclaim delay");
+        // Recomputed each pass: a second death mid-call moves the clock.
+        const latest = delayEvent();
+        const readyAt =
+          latest === undefined ? Date.now() : Math.min(latest.ts + latest.delayMs, Date.now() + latest.delayMs);
+        const wait = Math.min(Math.max(0, readyAt - Date.now()), Math.max(0, deadline - Date.now()));
+        if (wait > 0) await this.sleepAborting(wait);
+        if (Date.now() >= deadline) break;
+
+        attempts++;
+        await this.reclaimCorpseAsync(id);
+        if (alive()) break;
+        const window = Math.min(attemptTimeout, Math.max(0, deadline - Date.now()));
+        if (window > 0) {
+          try {
+            await this.waitEvent(() => alive(), {
+              timeout: window,
+              includeBuffered: false,
+              description:
+                "the resurrect after CMSG_RECLAIM_CORPSE (SMSG_DEATH_RELEASE_LOC clearing the marker, " +
+                "or your health leaving the ghost's 1) — the core refuses silently",
+            });
+          } catch (e) {
+            if (!(e instanceof EventTimeoutError)) throw e;
+          }
+        }
+        if (alive()) break;
+        if (Date.now() >= deadline) break;
+      }
+    } finally {
+      offRelease();
+    }
+
+    if (alive()) return { ok: true, status: "reclaimed", ...facts(attempts) };
+    if (attempts === 0) {
+      // The whole budget went on a delay that had not finished, so nothing was
+      // ever sent. Say how much of it is left rather than blaming the corpse.
+      const latest = delayEvent();
+      const left = latest === undefined ? undefined : Math.max(0, latest.ts + latest.delayMs - Date.now());
+      return {
+        ok: false,
+        status: "not_reclaimed",
+        ...facts(0),
+        reason: "delay_not_elapsed",
+        hint:
+          `the server's corpse reclaim delay outlasted this call's ${Math.round((options.timeout ?? 25_000) / 1000)}s budget` +
+          `${left === undefined ? "" : ` (~${Math.ceil(left / 1000)}s still to run)`} — nothing was sent; ` +
+          "call it again, or pass a larger { timeout } from a background routine",
+      };
+    }
+    const after = health();
+    if (after === undefined) {
+      return {
+        ok: false,
+        status: "unconfirmed",
+        ...facts(attempts),
+        reason: "no_observation",
+        hint:
+          `${attempts} reclaim${attempts === 1 ? "" : "s"} went out and nothing was observed either way — ` +
+          "your own health has not been seen at all, so re-read state.self.health before trying again",
+      };
+    }
+    return {
+      ok: false,
+      status: "not_reclaimed",
+      ...facts(attempts),
+      reason: "still_ghost",
+      hint:
+        `${attempts} reclaim${attempts === 1 ? "" : "s"} went out and you are still a ghost. The core drops ` +
+        "the packet without answering when you are further than ~39y from your corpse, when the reclaim " +
+        "delay has not elapsed, or when the corpse is on another map — walk to where you died and call it " +
+        "again, or use spiritHealerActivate(guid) at a Spirit Healer if the corpse is unreachable",
+    };
+  }
+
+  /** `sleep`, bounded by the ambient signal: rejects with `EventAbortedError` when the snippet is abandoned. */
+  private sleepAborting(ms: number): Promise<void> {
+    const signal = this.currentSignal();
+    if (signal === undefined) return sleep(ms);
+    return new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new EventAbortedError(signal.reason, "a corpse reclaim delay"));
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      function onAbort(): void {
+        clearTimeout(timer);
+        reject(new EventAbortedError(signal?.reason, "a corpse reclaim delay"));
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 

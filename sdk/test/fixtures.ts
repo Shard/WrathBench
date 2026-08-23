@@ -872,3 +872,25 @@ export function questQueryResponse(questId = QUEST_ID, seq = 60): unknown {
     },
   };
 }
+
+// ------------------------------------------------------------------ death
+//
+// Hand-written from PROTOCOL.md's death table. `SMSG_CORPSE_RECLAIM_DELAY`
+// starts the clock the server enforces before a reclaim is legal;
+// `SMSG_DEATH_RELEASE_LOC` with map -1 is what `Player::ResurrectPlayer` sends
+// first, and is the observable a reclaim actually worked.
+
+export function corpseReclaimDelay(delayMs: number, seq: number, ts = Date.now()): unknown {
+  return { seq, opcode: "SMSG_CORPSE_RECLAIM_DELAY", opcodeId: 0x269, ts, data: { delayMs } };
+}
+
+/** `map: -1` clears the client's spirit-healer marker: you are alive again. */
+export function deathReleaseCleared(seq: number): unknown {
+  return {
+    seq,
+    opcode: "SMSG_DEATH_RELEASE_LOC",
+    opcodeId: 0x378,
+    ts: 1_700_000_000_000 + seq,
+    data: { map: -1, x: 0, y: 0, z: 0 },
+  };
+}
