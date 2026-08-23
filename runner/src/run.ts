@@ -16,6 +16,12 @@
  * the default is names-first, and the choice is stamped into the
  * comparability tuple so the two never share a chart.
  *
+ * `--episode <e90|e360|freeplay>` names an episode tier (`episodes.ts`): the
+ * wall clock and both watchdogs come from that one flag, and the id is stamped
+ * into the comparability tuple. An explicit `--idle-ms`/`--no-xp-ms`/
+ * `--episode-ms`/`--watchdogs-json` on top of it still wins, and the run is
+ * then stamped `episodeOverride: true` so it cannot pass as a clean tier run.
+ *
  * `--adapter` is the old name for `--driver` and still works.
  *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
@@ -27,11 +33,13 @@
 
 import { join } from "node:path";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
+import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
 import {
   DRIVERS,
+  episodeOverrideOf,
   loadRunConfig,
   MIN_TOKEN_LENGTH,
   newRunId,
@@ -129,6 +137,7 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     account: typeof args["account"] === "string" ? args["account"] : undefined,
     race: num(args["race"]),
     class: num(args["class"]),
+    episode: typeof args["episode"] === "string" ? args["episode"] : undefined,
     driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
     adapter: typeof args["adapter"] === "string" ? args["adapter"] : undefined,
     model: typeof args["model"] === "string" ? args["model"] : undefined,
@@ -170,6 +179,26 @@ async function main(): Promise<void> {
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
   if (typeof args["driver"] === "string" && !(DRIVERS as readonly string[]).includes(args["driver"])) {
     console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
+    process.exit(2);
+  }
+  if (args["episode"] !== undefined && !isEpisodeId(args["episode"])) {
+    console.error(`unknown --episode ${String(args["episode"])} (one of: ${EPISODE_IDS.join(", ")})`);
+    process.exit(2);
+  }
+  /*
+   * A tier that forbids an objective forbids it at launch, not on the chart.
+   * The alternative — accepting the pair and stamping the run unscored — would
+   * quietly turn a scored lane into an unscored one, which is exactly the kind
+   * of silent downgrade the tuple exists to prevent.
+   */
+  if (
+    isEpisodeId(args["episode"]) &&
+    typeof args["objective"] === "string" &&
+    !EPISODES[args["episode"]].objectiveAllowed
+  ) {
+    console.error(
+      `--episode ${args["episode"]} does not allow --objective; use --episode freeplay for a steered run`,
+    );
     process.exit(2);
   }
 
@@ -378,6 +407,11 @@ async function main(): Promise<void> {
   console.error(
     `[wrathbench] run ${config.runId} (${resumed ? "resumed" : "new"}) — driver ${config.driver}${adapter !== undefined ? ` (${adapter.label})` : ""}, harness ${version}`,
   );
+  if (config.episode !== undefined) {
+    console.error(
+      `[wrathbench] episode ${config.episode}${episodeOverrideOf(config) ? " (OVERRIDDEN — not a clean tier run)" : ""}`,
+    );
+  }
   if (shakeout !== undefined) {
     console.error(`[wrathbench] ${shakeout.toUpperCase()} — this run is NOT a harness result`);
   }

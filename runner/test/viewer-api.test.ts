@@ -498,7 +498,9 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
   test("/api/eval projects each run with its level marks and scorability", async () => {
     const runs = fixture();
     stamped(runs, TUPLE);
-    const body = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+    // `?episode=all`: the default is the e90 *group*, and this fixture's tuple
+    // predates episode ids, so it is labeled at most — never a member.
+    const body = (await (await api(runs)(new Request("http://x/api/eval?episode=all"))).json()) as {
       runs: {
         runId: string;
         effort: string | null;
@@ -514,6 +516,74 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(row.levels).toHaveLength(1);
     // Active time is integrated over the trajectory's own segments, not wall clock.
     expect(row.levels[0]!.playtimeMs).not.toBeNull();
+  });
+
+  test("/api/eval defaults to the e90 group, and says how much it dropped", async () => {
+    const runs = fixture();
+    stamped(runs, TUPLE); // a six-hour tuple with no episode id: not a member
+    const res = await api(runs)(new Request("http://x/api/eval"));
+    const body = (await res.json()) as {
+      runs: { runId: string }[]; episode: string; filteredOut: number; includeOverrides: boolean;
+    };
+    expect(body.episode).toBe("e90");
+    expect(body.includeOverrides).toBe(false);
+    expect(body.runs).toHaveLength(0);
+    expect(body.filteredOut).toBe(1);
+  });
+
+  test("a stamped e90 run is a member; overriding its leash takes it out until asked for", async () => {
+    const runs = fixture();
+    const e90 = { ...TUPLE, episode: "e90", episodeOverride: false };
+    stamped(runs, e90);
+    const members = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+      runs: { runId: string }[]; overridesExcluded: number;
+    };
+    expect(members.runs.map((r) => r.runId)).toEqual([RUN_ID]);
+
+    stamped(runs, { ...e90, episodeOverride: true });
+    const without = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+      runs: unknown[]; overridesExcluded: number;
+    };
+    expect(without.runs).toHaveLength(0);
+    expect(without.overridesExcluded).toBe(1);
+    const with_ = (await (await api(runs)(new Request("http://x/api/eval?includeOverrides=1"))).json()) as {
+      runs: { runId: string; episodeOverride: boolean }[];
+    };
+    expect(with_.runs[0]!.episodeOverride).toBe(true);
+  });
+
+  test("/api/ladder is the same projection under the same filter", async () => {
+    const runs = fixture();
+    stamped(runs, { ...TUPLE, episode: "e360", episodeOverride: false });
+    const e360 = (await (await api(runs)(new Request("http://x/api/ladder?episode=e360"))).json()) as {
+      runs: { runId: string }[]; episode: string;
+    };
+    expect(e360.episode).toBe("e360");
+    expect(e360.runs.map((r) => r.runId)).toEqual([RUN_ID]);
+    const e90 = (await (await api(runs)(new Request("http://x/api/ladder"))).json()) as { runs: unknown[] };
+    expect(e90.runs).toHaveLength(0);
+  });
+
+  test("an unknown ?episode= is a 400, never a silent fallback to the default", async () => {
+    const res = await api(fixture())(new Request("http://x/api/eval?episode=e42"));
+    expect(res.status).toBe(400);
+  });
+
+  test("/api/episodes serves the table and counts members apart from labels", async () => {
+    const runs = fixture();
+    stamped(runs, { ...TUPLE, episode: "e90", episodeOverride: true });
+    const body = (await (await api(runs)(new Request("http://x/api/episodes"))).json()) as {
+      episodes: { id: string; minutes: number | null; toolCalls: number | null; summary: string;
+        members: number; overrides: number; derived: number }[];
+      untiered: number;
+    };
+    expect(body.episodes.map((e) => e.id)).toEqual(["e90", "e360", "freeplay"]);
+    const e90 = body.episodes[0]!;
+    expect(e90.minutes).toBe(90);
+    expect(e90.toolCalls).toBe(3000);
+    expect(e90.summary.length).toBeGreaterThan(80);
+    expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0 });
+    expect(body.untiered).toBe(0);
   });
 
   test("/api/run/<id>/track serves the recorded positions", async () => {

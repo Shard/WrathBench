@@ -1,6 +1,11 @@
 /**
  * The ladder of docs/VISION.md, with the highest rung each model has reached.
  *
+ * Rungs are read from one episode tier at a time — e90 by default (ADR-0030) —
+ * because a rung reached in six hours is not the same claim as the same rung
+ * reached in ninety minutes. The count of what the filter removed is on the
+ * page, not in a footnote.
+ *
  * Three of the eight rungs cannot be answered by anything the harness records
  * today — zone and area changes, flight paths, and group joins are not in the
  * trajectory (FOLLOW-UPS 35). Those read "not instrumented" rather than being
@@ -8,17 +13,25 @@
  * rule it applied so a reader can disagree with the derivation.
  */
 
-import { A } from "@solidjs/router";
-import { For, Show, createMemo } from "solid-js";
-import { api, type EvalRun } from "../api/client";
+import { A, useSearchParams } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, on } from "solid-js";
+import { api, type EvalResponse, type EvalRun } from "../api/client";
+import { EpisodeFilterNote, EpisodePicker, episodeParam } from "../components/EpisodePicker";
 import { RUNGS, ladderRows, scored, type LadderCell } from "../lib/eval";
 import { poll } from "../lib/poll";
 
 const POLL_MS = 30_000;
 
 export default function Ladder() {
-  const feed = poll(() => api.eval().then((r) => r.runs), POLL_MS);
-  const runs = (): EvalRun[] => feed.latest ?? [];
+  const [params, setParams] = useSearchParams();
+  const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
+  const overrides = (): boolean => params.overrides === "1";
+  // `/api/ladder` is the same projection as `/api/eval`; the rung rules stay
+  // client-side, in `lib/eval.ts`, where their tests are.
+  const feed = poll(() => api.ladder(episode(), overrides()), POLL_MS);
+  createEffect(on([episode, overrides], () => feed.refresh(), { defer: true }));
+  const body = (): EvalResponse | undefined => feed.latest;
+  const runs = (): EvalRun[] => body()?.runs ?? [];
   const rows = createMemo(() => ladderRows(runs()));
   const best = createMemo(() => rows().reduce((n, r) => Math.max(n, r.highest), 0));
 
@@ -31,10 +44,22 @@ export default function Ladder() {
       <h2 class="section">ladder</h2>
       <p class="dim">
         The eight rungs of the vision document. Rung 4 — a capital reached unaided — is the public
-        release trigger. Derived from scored runs only.
+        release trigger. Derived from scored runs of one episode tier only.
       </p>
 
+      <EpisodePicker
+        value={episode()}
+        onChange={(v) => setParams({ episode: v }, { replace: true })}
+        includeOverrides={overrides()}
+        onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
+      />
+
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+        <EpisodeFilterNote
+          episode={episode()}
+          filteredOut={body()?.filteredOut ?? 0}
+          overridesExcluded={body()?.overridesExcluded ?? 0}
+        />
         <div class="cards">
           <div class="card">
             <div class="k">highest rung reached</div>

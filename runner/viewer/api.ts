@@ -16,9 +16,13 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import type {
   ApiInfoResponse,
   EntrySummary,
+  EpisodeIdView,
+  EpisodesResponse,
+  EvalResponse,
   EvalRun,
   FleetLane,
   FleetLaneRun,
@@ -382,9 +386,90 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     for (const row of listRuns(runsDir)) {
       const dir = runDir(runsDir, row.runId);
       const totals = dir === null ? null : await runTotals(row.runId, dir);
-      out.push(evalRunOf(row, readStates(runsDir, row.runId), totals?.segments ?? []));
+      out.push(
+        evalRunOf(
+          row,
+          readStates(runsDir, row.runId),
+          totals?.segments ?? [],
+          totals === null ? null : { toolCalls: totals.toolCalls, snippets: totals.snippets },
+        ),
+      );
     }
     return out;
+  }
+
+  /**
+   * The `?episode=` filter, shared by `/api/eval` and `/api/ladder`.
+   *
+   * Defaults to `e90` — the scored tier — because a chart that quietly mixes a
+   * ninety-minute run with a six-hour one is the thing the tiers exist to stop.
+   * `all` is a first-class value, not an escape hatch: the episodes page counts
+   * every tier from one call, and a filtered page has to be able to say how
+   * many rows the filter dropped. An unknown value is a 400 rather than a
+   * silent fallback to the default, which would show the wrong data under the
+   * right heading.
+   */
+  function episodeFilter(url: URL): EpisodeIdView | "all" | null {
+    const raw = url.searchParams.get("episode");
+    if (raw === null) return "e90";
+    if (raw === "all") return "all";
+    return (EPISODE_IDS as readonly string[]).includes(raw) ? (raw as EpisodeIdView) : null;
+  }
+
+  async function evalResponse(url: URL): Promise<Response> {
+    const episode = episodeFilter(url);
+    if (episode === null) {
+      return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
+    }
+    const includeOverrides = url.searchParams.get("includeOverrides") === "1";
+    const all = await evalRuns();
+    /*
+     * Filtering to a tier means filtering to its *members* (ADR-0030): stamped
+     * with the id and not overridden. A derived label is countable but is not
+     * membership, and an overridden run is only shown when asked for by name.
+     */
+    const runs =
+      episode === "all"
+        ? all
+        : all.filter(
+            (r) =>
+              r.episode === episode &&
+              r.episodeSource === "stamped" &&
+              (includeOverrides || !r.episodeOverride),
+          );
+    const body: EvalResponse = {
+      runs,
+      episode,
+      includeOverrides,
+      filteredOut: all.length - runs.length,
+      overridesExcluded:
+        episode === "all" || includeOverrides
+          ? 0
+          : all.filter(
+              (r) => r.episode === episode && r.episodeSource === "stamped" && r.episodeOverride,
+            ).length,
+      now: Date.now(),
+    };
+    return json(body);
+  }
+
+  async function episodesResponse(): Promise<Response> {
+    const all = await evalRuns();
+    const body: EpisodesResponse = {
+      episodes: EPISODE_LIST.map((tier) => {
+        const tagged = all.filter((r) => r.episode === tier.id);
+        const stamped = tagged.filter((r) => r.episodeSource === "stamped");
+        return {
+          ...tier,
+          members: stamped.filter((r) => !r.episodeOverride).length,
+          overrides: stamped.filter((r) => r.episodeOverride).length,
+          derived: tagged.length - stamped.length,
+        };
+      }),
+      untiered: all.filter((r) => r.episode === null).length,
+      now: Date.now(),
+    };
+    return json(body);
   }
 
   async function listWithTotals(): Promise<RunListRow[]> {
@@ -428,7 +513,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
     if (path === "/api/runs") return json({ runs: await listWithTotals() });
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
-    if (path === "/api/eval") return json({ runs: await evalRuns(), now: Date.now() });
+    if (path === "/api/episodes") return await episodesResponse();
+    /*
+     * `/api/ladder` serves the same projection as `/api/eval`. The ladder's own
+     * derivation stays client-side (`dashboard/src/lib/eval.ts`, where its rung
+     * rules and their tests already live); the route exists so the episode
+     * filter has one spelling per page rather than the ladder page having to
+     * know it is really asking the eval endpoint.
+     */
+    if (path === "/api/eval" || path === "/api/ladder") return await evalResponse(url);
     if (path === "/api/fleet") return json(readFleet(runsDir));
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);

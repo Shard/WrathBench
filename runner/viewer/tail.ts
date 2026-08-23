@@ -446,6 +446,14 @@ export interface RunTotals {
   firstTs: number | null;
   lastTs: number | null;
   entries: number;
+  /**
+   * Tool calls the run actually made — `tool_call` records, which is the unit
+   * `maxToolCallsPerEpisode` is enforced in at the MCP boundary. Reported so
+   * the ceiling can be sized against what runs really use rather than guessed.
+   */
+  toolCalls: number;
+  /** Of those, the ones that were `eval_snippet` (a `snippet` record). */
+  snippets: number;
   /** Stretches the run was actually being driven; see `segmentsFrom`. */
   segments: ActiveSegment[];
 }
@@ -466,6 +474,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let firstTs: number | null = null;
   let lastTs: number | null = null;
   let entries = 0;
+  let toolCalls = 0;
+  let snippets = 0;
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -488,6 +498,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     // else out: `meta`, `pause`, `resume` and `termination` are none of them
     // requests or responses.
     if (SEGMENT_MARKS.has(t) || marks.length === 0) marks.push({ t, ts });
+    if (t === "tool_call") toolCalls++;
+    else if (t === "snippet") snippets++;
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
@@ -513,7 +525,15 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   }
   take(carry);
 
-  return { tokens: tokenTotals(projections), firstTs, lastTs, entries, segments: segmentsFrom(marks) };
+  return {
+    tokens: tokenTotals(projections),
+    firstTs,
+    lastTs,
+    entries,
+    toolCalls,
+    snippets,
+    segments: segmentsFrom(marks),
+  };
 }
 
 /** A complete line that is not JSON must surface, never vanish. */

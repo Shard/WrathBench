@@ -9,7 +9,7 @@
  *   bun runner/src/classify.ts  manual termination classification
  */
 
-export { loadRunConfig, newRunId, runConfigSchema, watchdogConfigSchema, TERMINATION_REASONS, PAUSE_REASONS, normalizePauseReason } from "./config";
+export { episodeOverrideOf, loadRunConfig, newRunId, runConfigSchema, watchdogConfigSchema, TERMINATION_REASONS, PAUSE_REASONS, normalizePauseReason } from "./config";
 export type { RunConfig, WatchdogConfig, TerminationReason, PauseReason } from "./config";
 
 export { SandboxHost } from "./sandbox/host";
@@ -39,6 +39,8 @@ export type { RunMeta, StateLine, TrajectoryRecord } from "./trajectory";
 
 export { Scratchpad, SCRATCHPAD_MAX_CHARS } from "./scratchpad";
 export { harnessVersion } from "./version";
+export { EPISODES, EPISODE_IDS, EPISODE_LIST, episodeIdSchema, isEpisodeId, matchesTier, watchdogsFor } from "./episodes";
+export type { EpisodeId, EpisodeTier } from "./episodes";
 export { CONTEXT_ENGINES, comparabilityOf, comparabilitySchema, parseComparability, promptHash, sameComparability } from "./comparability";
 export type { Comparability, EpisodeBudget } from "./comparability";
 export { renderTimeline } from "./timeline";

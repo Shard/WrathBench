@@ -17,7 +17,8 @@
  */
 
 import { SHAKEOUT_DRIVERS } from "../src/config";
-import type { EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
+import { EPISODES } from "../src/episodes";
+import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
 import type { ActiveSegment } from "./tail";
 
 /**
@@ -123,6 +124,57 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
 }
 
 /**
+ * Whether a run is a *member* of its episode tier's comparability group.
+ *
+ * Membership is stamped and un-overridden, and nothing else. ADR-0030: a run
+ * that predates the tiers "reads `episode: null` and is never back-labeled",
+ * because it ran under the watchdog defaults of its day; a run whose leash was
+ * overridden is likewise not what the id describes. Both still carry the label
+ * — that is what makes them countable and findable — and neither is a member.
+ */
+export function isTierMember(run: EvalRun): boolean {
+  return run.episode !== null && run.episodeSource === "stamped" && !run.episodeOverride;
+}
+
+/** How a run came by its episode tier, and whether that tier is intact. */
+export interface EpisodeOf {
+  episode: EpisodeIdView | null;
+  source: "stamped" | "derived" | "none";
+  /** True only for a *stamped* tier whose watchdogs were overridden. */
+  override: boolean;
+}
+
+/** The wall clock that identifies an e90 run written before the tier existed. */
+const E90_MS = 90 * 60_000;
+
+/**
+ * The episode tier of a run — read from the stamp, or derived when there is none.
+ *
+ * Derivation happens **in the reader** and nothing is written back (ADR-0026:
+ * stamped, never recomputed). Two rules, both narrow on purpose:
+ *
+ * - a run with an operator objective was steered, which is what freeplay is;
+ * - a run whose stamped budget is exactly ninety minutes, with no objective, is
+ *   the tier the whole fleet has been running since before it had a name.
+ *
+ * Anything else is `null` rather than a guess. A run with no tuple at all
+ * cannot be derived into `e90`, because its budget was never recorded and
+ * inferring one from today's defaults would assert a comparability that was
+ * never established.
+ */
+export function episodeOf(run: RunRow): EpisodeOf {
+  const stamped = run.comparability?.episode;
+  if (stamped !== undefined && stamped !== null) {
+    return { episode: stamped, source: "stamped", override: run.comparability?.episodeOverride === true };
+  }
+  if (run.objective !== null) return { episode: "freeplay", source: "derived", override: false };
+  if (run.comparability?.budget.episodeMs === E90_MS) {
+    return { episode: "e90", source: "derived", override: false };
+  }
+  return { episode: null, source: "none", override: false };
+}
+
+/**
  * Why a run cannot enter a scored comparison, or null when it can.
  *
  * One predicate, so the charts and the ladder cannot disagree about what counts.
@@ -138,6 +190,20 @@ export function unscoredReason(run: RunRow): string | null {
     return `shakeout driver (${run.driver})`;
   }
   if (run.objective !== null) return "unscored (operator objective)";
+  /*
+   * The tier decides too: `freeplay` is unscored by definition, whether it was
+   * stamped or derived from the objective the run carried.
+   *
+   * An *overridden* tier run is deliberately NOT unscored here. It was given a
+   * leash its tier does not describe, so it is not a member of that tier's
+   * group — but that is a membership question, answered by the episode filter
+   * on `/api/eval` (and reversible with `?includeOverrides=1`). Folding it into
+   * this predicate would make the exclusion permanent and unshowable.
+   */
+  const ep = episodeOf(run);
+  if (ep.episode !== null && !EPISODES[ep.episode].scored) {
+    return `unscored (episode ${ep.episode})`;
+  }
   return null;
 }
 
@@ -146,8 +212,11 @@ export function evalRunOf(
   run: RunRow,
   states: readonly StatePoint[],
   segments: readonly ActiveSegment[],
+  /** Counted off the trajectory; omitted when it could not be read. */
+  calls: { toolCalls: number; snippets: number } | null = null,
 ): EvalRun {
   const levels = levelMarks(states, segments);
+  const ep = episodeOf(run);
   return {
     runId: run.runId,
     model: run.model,
@@ -158,6 +227,11 @@ export function evalRunOf(
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,
     wikiCoords: run.comparability?.wikiCoords ?? null,
+    toolCalls: calls?.toolCalls ?? null,
+    snippets: calls?.snippets ?? null,
+    episode: ep.episode,
+    episodeSource: ep.source,
+    episodeOverride: ep.override,
     unscored: unscoredReason(run),
     startedAt: run.startedAt,
     terminationReason: run.terminationReason,

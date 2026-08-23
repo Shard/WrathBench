@@ -17,6 +17,7 @@
 
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
 
 // ---------------------------------------------------------------- watchdogs
 
@@ -174,6 +175,22 @@ export const runConfigSchema = z.object({
   wikiCoords: z.boolean().default(false),
 
   /**
+   * The episode tier this run was launched under (`runner/src/episodes.ts`).
+   *
+   * A tier names the whole shape of a run at once — wall clock, watchdogs, and
+   * whether an operator objective is allowed — so that "a 90-minute run" is
+   * something the harness knows rather than a convention held in fleet.json.
+   * Absent means the run was launched flag-by-flag and belongs to no tier; the
+   * reader may still *derive* one for such a run (viewer/eval.ts), but nothing
+   * writes it back (ADR-0026).
+   *
+   * The tier supplies watchdog *defaults*: a threshold given explicitly still
+   * wins, and the run is then stamped `episodeOverride` so it cannot pass as a
+   * clean tier run.
+   */
+  episode: episodeIdSchema.optional(),
+
+  /**
    * Reasoning effort for this run — a profile-matrix dimension, not a tuning
    * knob for one model: it is set per roster entry and recorded, so `opus at
    * low` and `opus at high` are two comparable rows.
@@ -289,12 +306,64 @@ export function resolveSessionToken(stored: string | undefined): {
 }
 
 /**
+ * Fill a raw config's unspecified watchdogs from its episode tier.
+ *
+ * Done on the *raw* object, before zod: after parsing, a threshold the caller
+ * gave and one zod defaulted are the same value and cannot be told apart, so
+ * the tier would either be unable to move a default or would trample an
+ * explicit flag. A resumed run's stored config carries every watchdog key
+ * already, so this is a no-op there and the stored leash is preserved.
+ */
+function withEpisodeDefaults(raw: unknown): unknown {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const id = o["episode"];
+  if (!isEpisodeIdValue(id)) return o;
+  const tier = EPISODES[id];
+  const given = (o["watchdogs"] ?? {}) as Record<string, unknown>;
+  const want = watchdogsFor(tier);
+  return {
+    ...o,
+    // A tier that pins a tool-call ceiling supplies it too; `null` there means
+    // the tier does not name one (e360, freeplay) and the lane's value stands.
+    ...(tier.toolCalls !== null && o["maxToolCallsPerEpisode"] === undefined
+      ? { maxToolCallsPerEpisode: tier.toolCalls }
+      : {}),
+    watchdogs: {
+      ...(given["idleMs"] === undefined ? { idleMs: want.idleMs } : {}),
+      ...(given["noXpMs"] === undefined ? { noXpMs: want.noXpMs } : {}),
+      ...(given["episodeMs"] === undefined ? { episodeMs: want.episodeMs } : {}),
+      ...given,
+    },
+  };
+}
+
+function isEpisodeIdValue(v: unknown): v is EpisodeId {
+  return typeof v === "string" && v in EPISODES;
+}
+
+/**
+ * Whether this run's effective leash still is its tier's.
+ *
+ * False for a run with no tier at all — "not a tier run" and "a tier run that
+ * was overridden" are different claims, and only the second is a warning. The
+ * question is asked of the *effective* thresholds, so a resume that tightened
+ * the leash restamps as an override exactly the way a launch flag does.
+ */
+export function episodeOverrideOf(config: RunConfig): boolean {
+  if (config.episode === undefined) return false;
+  return !matchesTier(EPISODES[config.episode], {
+    ...config.watchdogs,
+    maxToolCalls: config.maxToolCallsPerEpisode,
+  });
+}
+
+/**
  * Parse and default a run config object (e.g. from CLI flags or meta.json).
  * `driver` and the legacy `adapter` are reconciled here so exactly one of them
  * has to be supplied and both are recorded.
  */
 export function loadRunConfig(raw: unknown): RunConfig {
-  const parsed = runConfigSchema.parse(raw ?? {});
+  const parsed = runConfigSchema.parse(withEpisodeDefaults(raw));
   const explicitDriver = (raw as { driver?: unknown } | null | undefined)?.driver;
   const driver: Driver =
     parsed.driver ?? (explicitDriver === undefined && parsed.adapter === "stub" ? "stub" : "openai");

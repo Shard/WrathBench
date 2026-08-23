@@ -12,13 +12,20 @@
  * count of what was excluded is shown, because a chart that silently drops
  * three quarters of the runs is a lie of omission.
  *
+ * The same rule governs the episode filter (ADR-0030). A tier is a
+ * comparability group and the page shows one at a time — e90 by default — and
+ * says how many rows that filter removed. Older runs that merely *look* like a
+ * tier are labeled, never enrolled, so they show up under `all` and nowhere
+ * else.
+ *
  * Drawn by hand in SVG. A charting library would be a dependency for two bar
  * charts, and ADR-0022's exception was for a component model, not for widgets.
  */
 
-import { A } from "@solidjs/router";
-import { For, Show, createMemo, createSignal } from "solid-js";
-import { api, type EvalRun } from "../api/client";
+import { A, useSearchParams } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { api, type EvalResponse, type EvalRun } from "../api/client";
+import { EpisodeFilterNote, EpisodePicker, episodeParam } from "../components/EpisodePicker";
 import { CHART_LEVELS, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
 import { fmtDuration, shortHarness } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -32,7 +39,15 @@ const LABEL_W = 260;
 const CHART_W = 720;
 
 export default function Eval() {
-  const feed = poll(() => api.eval().then((r) => r.runs), POLL_MS);
+  // The tier lives in the URL so a link from the episodes page lands on the
+  // right group and a shared link keeps meaning what it meant.
+  const [params, setParams] = useSearchParams();
+  const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
+  const overrides = (): boolean => params.overrides === "1";
+  const feed = poll(() => api.eval(episode(), overrides()), POLL_MS);
+  // `poll` is a timer, not a reactive computation: a changed filter has to ask
+  // for the new data itself.
+  createEffect(on([episode, overrides], () => feed.refresh(), { defer: true }));
   const [level, setLevel] = createSignal<number>(5);
   /*
    * Active time by default. Turns only exist for runs recorded after the turn
@@ -41,7 +56,8 @@ export default function Eval() {
    */
   const [metric, setMetric] = createSignal<"turns" | "time">("time");
 
-  const runs = (): EvalRun[] => feed.latest ?? [];
+  const body = (): EvalResponse | undefined => feed.latest;
+  const runs = (): EvalRun[] => body()?.runs ?? [];
   const groups = createMemo(() => groupsForLevel(runs(), level()));
   const excluded = createMemo(() => runs().length - scored(runs()).length);
   const withTurns = createMemo(() =>
@@ -61,6 +77,13 @@ export default function Eval() {
         so is whether the wiki served coordinates (ADR-0028).
       </p>
 
+      <EpisodePicker
+        value={episode()}
+        onChange={(v) => setParams({ episode: v }, { replace: true })}
+        includeOverrides={overrides()}
+        onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
+      />
+
       <div class="chips">
         <For each={CHART_LEVELS}>
           {(l) => (
@@ -79,6 +102,11 @@ export default function Eval() {
       </div>
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+        <EpisodeFilterNote
+          episode={episode()}
+          filteredOut={body()?.filteredOut ?? 0}
+          overridesExcluded={body()?.overridesExcluded ?? 0}
+        />
         <p class="dim">
           {scored(runs()).length} scorable runs
           <Show when={excluded() > 0}>
@@ -119,6 +147,7 @@ export default function Eval() {
                 <th class="right">median turns</th>
                 <th class="right">best time</th>
                 <th class="right">median time</th>
+                <th class="right">tool calls</th>
                 <th>fastest run</th>
               </tr>
             </thead>
@@ -136,6 +165,10 @@ export default function Eval() {
                     <td class="right mono dim">{g.medianTurn ?? "—"}</td>
                     <td class="right mono">{fmtDuration(g.bestMs)}</td>
                     <td class="right mono dim">{fmtDuration(g.medianMs)}</td>
+                    <td class="right mono dim" title="median (max) tool calls per run">
+                      {g.medianToolCalls ?? "—"}
+                      <Show when={g.maxToolCalls !== null}> ({g.maxToolCalls})</Show>
+                    </td>
                     <td class="dim">
                       <Show when={g.reached[0]} fallback="—">
                         {(r) => <A href={`/run/${encodeURIComponent(r().runId)}`}>{r().runId}</A>}
@@ -150,7 +183,9 @@ export default function Eval() {
         <p class="dim">
           Turns are the driver turn a level was <em>first observed</em> on — state is sampled every
           60s, not once per turn. Time is active time: stretches between a pause and its resume are
-          not charged.
+          not charged. Tool calls are the run's own `tool_call` records — median and, in
+          parentheses, the largest single run — reported so the episode's ceiling can be sized
+          against what runs actually use rather than guessed at.
         </p>
       </Show>
     </div>
