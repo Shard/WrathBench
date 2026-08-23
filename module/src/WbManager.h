@@ -156,6 +156,12 @@ namespace WrathBench
         // TickTeleportAcks.
         int64_t teleportAckQueuedMs{0};
 
+        // Corpse query (world thread only): a client asks MSG_CORPSE_QUERY once
+        // when it becomes a ghost; this latches that ask per death so it is not
+        // re-sent every tick. Reset when the player is alive again. See
+        // TickCorpseQuery.
+        bool corpseQueried{false};
+
         // Client-side object cache mirror, fed by the update-object tap. Needed
         // because UPDATETYPE_VALUES blocks carry no object type (a real client
         // resolves them against its own cache). Also tracks which name/creature
@@ -275,6 +281,11 @@ namespace WrathBench
         // only): MSG_MOVE_TELEPORT_ACK / MSG_MOVE_WORLDPORT_ACK through the
         // stock handlers, so the destination is applied and movement resumes.
         void TickTeleportAcks(int64_t nowMs);
+
+        // Ask MSG_CORPSE_QUERY once per death, after the ghost's graveyard
+        // teleport has been acked, the way a client does on becoming a ghost
+        // (world thread only). The answer is tapped as an event.
+        void TickCorpseQuery();
 
         // In-world session guard for action handlers. Returns the player, or
         // nullptr after setting the error reply. World thread only.

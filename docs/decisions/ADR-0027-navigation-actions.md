@@ -81,3 +81,26 @@ on SMOKE3, gate PASS):
   redirected client would, so the server's last movement word is never a
   stale `MOVEMENTFLAG_FORWARD` heartbeat. The SDK's `MOVE_LEAVES_NO_STOP`
   repair stays as belt to this brace.
+
+## Amendment 2026-08-23: a ghost knows where its corpse is (FOLLOW-UPS 53)
+
+A released ghost in a fleet run called `reclaimCorpse` from 387y away and was
+told `still_ghost` ten times, with no healer in the 100y view and nothing that
+said which way its corpse lay. The same client-parity test as the teleport ack
+settles it: a real client sends `MSG_CORPSE_QUERY` the moment it is a ghost
+and draws the answer as the corpse marker on its map, so the module sends that
+one query per death on the parked client's behalf (after the graveyard port
+has been acked) and serves the reply as an event; the opcode joins the raw
+allowlist so a snippet can re-ask. The SDK folds it into
+`state.self.corpse` (falling back to the position at the death transition
+until the answer lands) and `state.self.graveyard` from
+`SMSG_DEATH_RELEASE_LOC`, and `reclaimCorpse`'s `not_reclaimed` names exactly
+one reason — `too_far` with the distance and the 39y radius, `delay_not_elapsed`
+with the seconds left, `wrong_map`, `no_corpse`, else `still_ghost` — with the
+hint for that reason, including the Spirit Healer's price when the corpse is
+far. Rejected: a server-side resurrect (not a client action), widening the view
+radius (the healer-list emptiness was the view limit, and saying so is the
+honest fix), and a `walkToCorpse` helper (ADR-0015: `moveTo(state.self.corpse)`
+is one line and the need is now visible). Observation widened by one packet a
+client already receives, so the status vocabulary of `reclaimCorpse` changes
+under the same navigation-comparability boundary as the rest of this ADR.

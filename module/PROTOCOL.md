@@ -335,7 +335,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `learn_preview_talents` | `talents` = `[[talentId, rank], ...]` | `CMSG_LEARN_PREVIEW_TALENTS` | the preview-mode "learn" button (at most 150 pairs); `400 missing_talents`, `400 invalid_talents` |
 | `raw` | `opcode`, `payload` | the named opcode | the escape hatch (ADR-0025), below |
 | `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
-| `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional |
+| `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional. Refusals are silent (further than 39y, delay not elapsed, other map, no corpse); the SDK reads them off the corpse-query answer below |
 | `spirit_healer_activate` | `guid` | `CMSG_SPIRIT_HEALER_ACTIVATE` | graveyard resurrection fallback; no dedicated response opcode — the outcome arrives through already-served events (health update fields, res-sickness aura) |
 
 Validation errors (all `400`): `missing_guid`, `missing_option`,
@@ -403,6 +403,9 @@ whose handler does nothing a non-GM client could not do:
   `CMSG_GAMEOBJECT_QUERY`, `CMSG_ITEM_QUERY_SINGLE`, `CMSG_NPC_TEXT_QUERY`,
   `CMSG_PAGE_TEXT_QUERY`, `CMSG_PLAYED_TIME`, `CMSG_QUERY_TIME`,
   `CMSG_SET_WATCHED_FACTION`, `CMSG_SET_ACTION_BUTTON`
+- corpse: `MSG_CORPSE_QUERY` (empty body) — re-ask where the corpse is; the
+  module already asks once per death on the client's behalf (see "Death"), and
+  the answer is whitelisted
 
 Deliberately absent: movement opcodes (the module drives them; a stray one
 desyncs the mover), session lifecycle (login, logout, character create/delete),
@@ -839,6 +842,18 @@ Death:
 | `SMSG_DEATH_RELEASE_LOC` | 0x378 | `{ "map" (-1 = clear marker), "x", "y", "z" }` |
 | `SMSG_CORPSE_RECLAIM_DELAY` | 0x269 | `{ "delayMs" }` |
 | `SMSG_DURABILITY_DAMAGE_DEATH` | 0x2BD | `{}` |
+| `MSG_CORPSE_QUERY` | 0x216 | `{ "found": <bool>, "map"?, "x"?, "y"?, "z"?, "corpseMap"? }` — the server's answer to the ghost's corpse query (`HandleCorpseQueryOpcode`); position fields only when `found`. `map`/`x`/`y`/`z` is where a client draws the corpse marker, `corpseMap` the map the corpse is actually on; they differ only for a corpse inside a dungeon, where the marker sits on the entrance. The trailing unused u32 is consumed |
+
+A ghost knows where its corpse is (2026-08-23, FOLLOW-UPS 53): a real client
+sends `MSG_CORPSE_QUERY` as soon as it is a ghost and the answer is the corpse
+marker on its map. The parked client has no map, so the module sends the same
+one query per death, once the repop teleport has been acked (the handler
+compares corpse map to player map, so the graveyard port must have applied),
+audited as `op: "corpse_query"`, and the reply is served above. The latch
+resets when the character is alive again. A snippet may re-ask through the raw
+hatch. This is the same class as the time-sync reply and the teleport ack:
+module-internal client behaviour. Nothing resurrects server-side; the
+reclaim radius (`CORPSE_RECLAIM_RADIUS`, 39y) and delay are unchanged.
 
 Session:
 
