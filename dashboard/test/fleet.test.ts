@@ -149,9 +149,10 @@ describe("the rows", () => {
     expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, elapsedMs: null });
   });
 
-  test("accounts holding nothing are idle rows at the bottom, grouped by class", () => {
+  test("accounts holding nothing are idle rows below the working ones, grouped by class", () => {
     const rows = fleetRows(fleet(), [run()]);
-    // Jobs first, then idle accounts in class order: pool, paid, local, pinned.
+    // State rank puts the running job first; the idle accounts follow in class
+    // order: pool, paid, local, pinned. The rank list is asserted in "the row order".
     expect(rows.map((r) => r.key)).toEqual(["ox-alpha-e90", "account:RUNNER2", "account:PAID", "account:BOX", "account:SHAKEOUT"]);
     // The account a job is on never doubles as an idle row.
     expect(rows.filter((r) => r.account === "RUNNER")).toHaveLength(1);
