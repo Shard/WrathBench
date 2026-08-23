@@ -8,8 +8,9 @@
  * search) still arrives, with `meshZ` at the ground: the module's ground-z
  * fallback (FOLLOW-UPS 46 part 3) -> a `move_to` to a nearby NPC's position
  * with its `guid` arrives -> a candidate point with no walkable ground is
- * `target_off_mesh`, nothing moved -> a 300y request is `too_far` -> a plain
- * walk still arrives with no `meshZ` -> logout. No dependencies; Bun
+ * `target_off_mesh`, nothing moved -> a 300y request is `too_far` -> a
+ * zero-length `move_to` (still at HOME) arrives -> a plain walk still arrives
+ * with no `meshZ` -> logout. No dependencies; Bun
  * built-ins only.
  *
  * Steps 3–3b are new with the harness-0.4 module (FOLLOW-UPS 46) and FAIL
@@ -238,11 +239,28 @@ async function main() {
   if (far.status !== "too_far") fail(`300y request should be too_far, got ${JSON.stringify(far)}`);
   log("PASS 300y -> too_far");
 
-  // 5. An ordinary walk back carries no meshZ (request z within 1y of the mesh).
+  // 5. ORDERING NOTE: nothing since the walk back in 3b has moved the
+  //    character (3b and 4 are planning failures), so this `move_to(HOME)`
+  //    is a ZERO-LENGTH request — the mesh answers [here, here] and the
+  //    mover must still send its MSG_MOVE_STOP and report `arrived`. On the
+  //    harness-0.4 module (a97c3c8) this hung forever with no WB_MOVE_RESULT
+  //    (TickMover never consumed a zero-length segment); keep this step
+  //    directly after the two failures so that regression stays pinned.
+  const still = await move(HOME, 20000);
+  if (still.status !== "arrived") fail(`zero-length walk should arrive, got ${JSON.stringify(still)}`);
+  if (still.meshZ !== undefined) fail(`zero-length arrival should not carry meshZ: ${JSON.stringify(still)}`);
+  log("PASS zero-length walk after too_far -> arrived");
+
+  // 5a. And a real walk after the failures: the too_far / target_off_mesh
+  //     branches send a client's MSG_MOVE_STOP when the server still has the
+  //     character flagged moving (a97c3c8 part 4); a following run must be
+  //     accepted as normal. HOME is the landmark proven to carry no meshZ.
+  const hop = await move(COURTYARD);
+  if (hop.status !== "arrived") fail(`walk to the courtyard after too_far should arrive, got ${JSON.stringify(hop)}`);
   const back = await move(HOME);
   if (back.status !== "arrived") fail(`walk back should arrive, got ${JSON.stringify(back)}`);
   if (back.meshZ !== undefined) fail(`plain arrival should not carry meshZ: ${JSON.stringify(back)}`);
-  log("PASS plain walk -> arrived, no meshZ");
+  log("PASS plain walk after the failures -> arrived, no meshZ");
 
   // 6. Every status on the record is in the documented vocabulary.
   const VOCAB = new Set([
