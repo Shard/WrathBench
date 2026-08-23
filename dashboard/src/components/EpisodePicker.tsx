@@ -1,5 +1,5 @@
 /**
- * The episode filter, shared by the eval and ladder pages.
+ * The episode filter, shared by the results and ladder pages.
  *
  * One control in one place, because the two pages must not be able to disagree
  * about what "e90" selects. `all` is offered alongside the three tiers: a run
@@ -105,7 +105,7 @@ export function EpisodePicker(props: {
  * The line under a filtered chart saying what the filter removed.
  *
  * A chart that silently drops rows is a lie of omission — the same rule the
- * eval page already applies to unscorable runs, applied to the episode filter.
+ * results page already applies to unscorable runs, applied to the episode filter.
  */
 export function EpisodeFilterNote(props: {
   episode: EpisodeChoice;

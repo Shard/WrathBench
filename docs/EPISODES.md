@@ -81,7 +81,7 @@ because that would silently re-scope every score already carrying this label.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
   labeling machinery as every other steered run, so a freeplay result cannot
-  drift into an eval chart by being forgotten about.
+  drift into a results chart by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
 - **Extras.** A **local** model — one served from the operator's own hardware —

@@ -1,5 +1,5 @@
 /**
- * The eval derivations: what the charts and the ladder read.
+ * The results derivations: what the charts and the ladder read.
  *
  * Everything here is a pure function of a run's state samples plus its active
  * segments, so the two questions the release-point dashboard asks — how many
@@ -19,7 +19,7 @@
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
-import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
+import type { EpisodeIdView, ResultRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
 import type { ActiveSegment } from "./tail";
 
 /**
@@ -151,7 +151,7 @@ export function xpAtLevel(states: readonly StatePoint[], level: number): number 
  * overridden is likewise not what the id describes. Both still carry the label
  * — that is what makes them countable and findable — and neither is a member.
  */
-export function isTierMember(run: EvalRun): boolean {
+export function isTierMember(run: ResultRun): boolean {
   return run.episode !== null && run.episodeSource === "stamped" && !run.episodeOverride;
 }
 
@@ -214,7 +214,7 @@ export function unscoredReason(run: RunRow): string | null {
    * An *overridden* tier run is deliberately NOT unscored here. It was given a
    * leash its tier does not describe, so it is not a member of that tier's
    * group — but that is a membership question, answered by the episode filter
-   * on `/api/eval` (and reversible with `?includeOverrides=1`). Folding it into
+   * on `/api/results` (and reversible with `?includeOverrides=1`). Folding it into
    * this predicate would make the exclusion permanent and unshowable.
    */
   const ep = episodeOf(run);
@@ -224,14 +224,14 @@ export function unscoredReason(run: RunRow): string | null {
   return null;
 }
 
-/** Project one run down to what the eval surface reads. */
-export function evalRunOf(
+/** Project one run down to what the results surface reads. */
+export function resultRunOf(
   run: RunRow,
   states: readonly StatePoint[],
   segments: readonly ActiveSegment[],
   /** Counted off the trajectory; omitted when it could not be read. */
   calls: { toolCalls: number; snippets: number; modelResponses: number } | null = null,
-): EvalRun {
+): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
   const maxLevel = levels.length > 0 ? levels[levels.length - 1]!.level : run.level;

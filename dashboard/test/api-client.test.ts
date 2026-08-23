@@ -57,16 +57,16 @@ describe("paths", () => {
     const s = stub({ runs: [] });
     const c = createClient({ fetch: s.fetch });
     await c.episodes();
-    await c.eval();
-    await c.eval("e360");
-    await c.eval("all");
+    await c.results();
+    await c.results("e360");
+    await c.results("all");
     await c.ladder("e90", true);
     expect(s.calls.map((x) => x.url)).toEqual([
       "/api/episodes",
       // No param at all: the server's own default (e90) is the one default.
-      "/api/eval",
-      "/api/eval?episode=e360",
-      "/api/eval?episode=all",
+      "/api/results",
+      "/api/results?episode=e360",
+      "/api/results?episode=all",
       "/api/ladder?episode=e90&includeOverrides=1",
     ]);
     expect(s.calls.every((x) => x.method === "GET")).toBe(true);

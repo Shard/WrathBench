@@ -63,8 +63,8 @@ research instrument (economy, cooperation, communication, long-horizon
 identity) rather than a longer episode.
 
 **Public release point:** an agent reaches a capital unaided (rung 4) on a
-harness version with a pinned episode budget, so the eval charts are
-comparable from the first day and never re-scored. The release is the eval
+harness version with a pinned episode budget, so the results charts are
+comparable from the first day and never re-scored. The release is the results
 charts, the ladder with its reached rungs, map replays, and the freeplay plan
 stated as a plan. Community access to the freeplay world is a later, separate
 announcement, after the prerequisites below and the pre-publication checklist

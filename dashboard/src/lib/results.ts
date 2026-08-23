@@ -1,5 +1,5 @@
 /**
- * The maths behind the eval charts and the ladder. Pure, so what the release
+ * The maths behind the results charts and the ladder. Pure, so what the release
  * page claims is testable without a browser or a server.
  *
  * The one rule this module exists to enforce: **a chart never mixes runs that
@@ -10,12 +10,12 @@
  * row, a minor bump does. The exact versions a row holds are listed on it.
  */
 
-import type { EvalRun, LevelMark } from "@viewer/api-types";
+import type { ResultRun, LevelMark } from "@viewer/api-types";
 
 /** Levels the charts offer. Chosen to line up with the ladder's rungs. */
 export const CHART_LEVELS = [5, 10, 20, 40, 60, 80] as const;
 
-export function scored(runs: readonly EvalRun[]): EvalRun[] {
+export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
 }
 
@@ -31,23 +31,23 @@ export function scored(runs: readonly EvalRun[]): EvalRun[] {
  * are kept by "all" and dropped by any specific chip, which is what "not
  * recorded" has to mean if it is not to be guessed at.
  */
-export function characterOptions(runs: readonly EvalRun[]): string[] {
+export function characterOptions(runs: readonly ResultRun[]): string[] {
   return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
 }
 
 /** Narrow to one character label. Null (the default) keeps every run. */
-export function byCharacter(runs: readonly EvalRun[], label: string | null): EvalRun[] {
+export function byCharacter(runs: readonly ResultRun[], label: string | null): ResultRun[] {
   if (label === null) return [...runs];
   return runs.filter((r) => r.characterLabel === label);
 }
 
 /** The distinct characters in a set of runs, sorted — a row's label. */
-function charactersOf(runs: readonly EvalRun[]): string[] {
+function charactersOf(runs: readonly ResultRun[]): string[] {
   return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
 }
 
 /** The first mark at or above `level`, or null when the run never got there. */
-export function markAtLeast(run: EvalRun, level: number): LevelMark | null {
+export function markAtLeast(run: ResultRun, level: number): LevelMark | null {
   for (const m of run.levels) if (m.level >= level) return m;
   return null;
 }
@@ -61,7 +61,7 @@ export interface Reach {
 }
 
 /** One row of the charts: a model on a harness series, and what it managed. */
-export interface EvalGroup {
+export interface ResultGroup {
   key: string;
   model: string;
   /**
@@ -129,8 +129,8 @@ function median(values: readonly number[]): number | null {
  * a names-first run and a coords run are not the same task, and a run that
  * never recorded the field groups on its own.
  */
-export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGroup[] {
-  const byKey = new Map<string, EvalGroup>();
+export function groupsForLevel(runs: readonly ResultRun[], level: number): ResultGroup[] {
+  const byKey = new Map<string, ResultGroup>();
   /** Per-group tool-call counts, kept aside so the group stays a plain shape. */
   const calls = new Map<string, number[]>();
   for (const run of scored(runs)) {
@@ -215,7 +215,7 @@ export interface Rung {
    */
   rule: string;
   /** Null when nothing recorded today can answer the rung. */
-  test: ((run: EvalRun) => boolean) | null;
+  test: ((run: ResultRun) => boolean) | null;
 }
 
 /** Outland and Northrend map ids — the only continents past the first two. */
@@ -336,8 +336,8 @@ export interface LadderRow {
  * are real readings, null is "never recorded". No number here is added to
  * another — there is still no aggregate score.
  */
-export function ladderRows(runs: readonly EvalRun[]): LadderRow[] {
-  const byModel = new Map<string, EvalRun[]>();
+export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
+  const byModel = new Map<string, ResultRun[]>();
   for (const r of scored(runs)) {
     const model = r.model ?? "(unnamed)";
     const list = byModel.get(model);
@@ -397,7 +397,7 @@ function desc(x: number | null, y: number | null): number {
  * behind one with the same level and any xp, including zero.
  */
 function furthestOf(
-  runs: readonly EvalRun[],
+  runs: readonly ResultRun[],
 ): { runId: string; level: number; xp: number | null } | null {
   let best: { runId: string; level: number; xp: number | null } | null = null;
   for (const r of runs) {
@@ -410,7 +410,7 @@ function furthestOf(
 }
 
 /** The run that ended holding the most copper. Zero counts; null does not. */
-function richestOf(runs: readonly EvalRun[]): { runId: string; money: number } | null {
+function richestOf(runs: readonly ResultRun[]): { runId: string; money: number } | null {
   let best: { runId: string; money: number } | null = null;
   for (const r of runs) {
     if (r.money === null) continue;

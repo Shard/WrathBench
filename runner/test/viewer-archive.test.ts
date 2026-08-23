@@ -133,10 +133,10 @@ describe("the listings", () => {
     expect("stillbornExcluded" in body).toBe(false);
   });
 
-  test("/api/eval and /api/episodes count what is on disk, and skip the archive", async () => {
+  test("/api/results and /api/episodes count what is on disk, and skip the archive", async () => {
     const runs = fixture();
     archiveIfNoResponses(runs, "dead-on-arrival");
-    const ev = await get(runs, "/api/eval?episode=e90");
+    const ev = await get(runs, "/api/results?episode=e90");
     expect((ev["runs"] as { runId: string }[]).map((r) => r.runId).sort()).toEqual(["spoke-only", "worked"]);
     const eps = await get(runs, "/api/episodes");
     const e90 = (eps["episodes"] as { id: string; members: number }[]).find((e) => e.id === "e90");

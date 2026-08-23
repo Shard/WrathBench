@@ -455,13 +455,13 @@ describe("fleet state", () => {
 
 /**
  * The release-point surface: the comparability tuple on a run, and the two
- * derived routes the eval charts and the map replay read.
+ * derived routes the results charts and the map replay read.
  *
  * The fixture writes an old-shape `state` table with no `turn` column on
  * purpose — that is what every run recorded before this change looks like, and
  * both routes have to keep answering for it.
  */
-describe("comparability, /api/eval and /api/run/<id>/track", () => {
+describe("comparability, /api/results and /api/run/<id>/track", () => {
   const TUPLE = {
     harnessVersion: "harness-test",
     promptHash: "sha256:0123456789abcdef",
@@ -518,12 +518,12 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(d.states[0]!.turn).toBeNull();
   });
 
-  test("/api/eval projects each run with its level marks and scorability", async () => {
+  test("/api/results projects each run with its level marks and scorability", async () => {
     const runs = fixture();
     stamped(runs, TUPLE);
     // `?episode=all`: the default is the e90 *group*, and this fixture's tuple
     // predates episode ids, so it is labeled at most — never a member.
-    const body = (await (await api(runs)(new Request("http://x/api/eval?episode=all"))).json()) as {
+    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
       runs: {
         runId: string;
         effort: string | null;
@@ -541,10 +541,10 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(row.levels[0]!.playtimeMs).not.toBeNull();
   });
 
-  test("/api/eval defaults to the e90 group, and says how much it dropped", async () => {
+  test("/api/results defaults to the e90 group, and says how much it dropped", async () => {
     const runs = fixture();
     stamped(runs, TUPLE); // a six-hour tuple with no episode id: not a member
-    const res = await api(runs)(new Request("http://x/api/eval"));
+    const res = await api(runs)(new Request("http://x/api/results"));
     const body = (await res.json()) as {
       runs: { runId: string }[]; episode: string; filteredOut: number; includeOverrides: boolean;
     };
@@ -558,18 +558,18 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     const runs = fixture();
     const e90 = { ...TUPLE, episode: "e90", episodeOverride: false };
     stamped(runs, e90);
-    const members = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+    const members = (await (await api(runs)(new Request("http://x/api/results"))).json()) as {
       runs: { runId: string }[]; overridesExcluded: number;
     };
     expect(members.runs.map((r) => r.runId)).toEqual([RUN_ID]);
 
     stamped(runs, { ...e90, episodeOverride: true });
-    const without = (await (await api(runs)(new Request("http://x/api/eval"))).json()) as {
+    const without = (await (await api(runs)(new Request("http://x/api/results"))).json()) as {
       runs: unknown[]; overridesExcluded: number;
     };
     expect(without.runs).toHaveLength(0);
     expect(without.overridesExcluded).toBe(1);
-    const with_ = (await (await api(runs)(new Request("http://x/api/eval?includeOverrides=1"))).json()) as {
+    const with_ = (await (await api(runs)(new Request("http://x/api/results?includeOverrides=1"))).json()) as {
       runs: { runId: string; episodeOverride: boolean }[];
     };
     expect(with_.runs[0]!.episodeOverride).toBe(true);
@@ -587,11 +587,11 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(e90.runs).toHaveLength(0);
   });
 
-  test("harness is a tag on every eval row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
+  test("harness is a tag on every results row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
     const runs = fixture();
     stamped(runs, { ...TUPLE, harness: "claude-code" });
 
-    const all = (await (await api(runs)(new Request("http://x/api/eval?episode=all"))).json()) as {
+    const all = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
       harness: string;
       runs: { runId: string; harness: string | null; unscored: string | null }[];
     };
@@ -600,24 +600,24 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(row.harness).toBe("claude-code");
     expect(row.unscored).toBeNull();
 
-    const only = (await (await api(runs)(new Request("http://x/api/eval?episode=all&harness=claude-code"))).json()) as {
+    const only = (await (await api(runs)(new Request("http://x/api/results?episode=all&harness=claude-code"))).json()) as {
       harness: string; runs: { runId: string }[]; filteredOut: number;
     };
     expect(only.harness).toBe("claude-code");
     expect(only.runs.map((r) => r.runId)).toContain(RUN_ID);
 
-    const none = (await (await api(runs)(new Request("http://x/api/eval?episode=all&harness=wrathbench"))).json()) as {
+    const none = (await (await api(runs)(new Request("http://x/api/results?episode=all&harness=wrathbench"))).json()) as {
       runs: { runId: string }[]; filteredOut: number;
     };
     expect(none.runs.map((r) => r.runId)).not.toContain(RUN_ID);
     expect(none.filteredOut).toBeGreaterThanOrEqual(1);
 
-    expect((await api(runs)(new Request("http://x/api/eval?harness=bogus"))).status).toBe(400);
+    expect((await api(runs)(new Request("http://x/api/results?harness=bogus"))).status).toBe(400);
     expect((await api(runs)(new Request("http://x/api/models?harness=bogus"))).status).toBe(400);
   });
 
   test("an unknown ?episode= is a 400, never a silent fallback to the default", async () => {
-    const res = await api(fixture())(new Request("http://x/api/eval?episode=e42"));
+    const res = await api(fixture())(new Request("http://x/api/results?episode=e42"));
     expect(res.status).toBe(400);
   });
 
@@ -652,7 +652,7 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
   test("the new routes leak no secret either", async () => {
     const runs = fixture();
     stamped(runs, TUPLE);
-    for (const p of ["/api/eval", `/api/run/${RUN_ID}/track`]) {
+    for (const p of ["/api/results", `/api/run/${RUN_ID}/track`]) {
       expect(await body(await api(runs)(new Request(`http://x${p}`)))).not.toContain(SENTINEL);
     }
   });

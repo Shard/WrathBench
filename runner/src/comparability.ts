@@ -86,7 +86,7 @@ export const comparabilitySchema = z.object({
   /**
    * The episode tier the run was launched under (`episodes.ts`), or null for a
    * run assembled flag-by-flag. Absent on tuples stamped before the field
-   * existed; a reader may derive a tier for those (viewer/eval.ts) but nothing
+   * existed; a reader may derive a tier for those (viewer/results.ts) but nothing
    * rewrites the stored tuple.
    */
   episode: episodeIdSchema.nullable().optional(),
@@ -132,7 +132,7 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
  * is series `"0.3"`. Commits within a series are fixes and instrumentation;
  * a minor bump is a change to what the run measures. The scheduler keys its
  * targets on the series of the checkout it runs from (ADR-0034: a bump
- * restarts the evidence, a fix commit does not), and the eval surface groups
+ * restarts the evidence, a fix commit does not), and the results surface groups
  * by it, labelling rows with the exact versions they hold. Null when the
  * stamp has no recognisable major.minor (the unversioned fallback included),
  * so a reader says "no series" rather than inventing one.

@@ -152,7 +152,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .side .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 .side .v { margin-bottom: 8px; word-break: break-word; }
 
-/* --- eval, ladder, replay --- */
+/* --- results, ladder, replay --- */
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
 svg text { fill: var(--fg); }
 .tuple { display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr;

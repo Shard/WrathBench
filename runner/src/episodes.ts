@@ -22,7 +22,7 @@
  *   past runs are never back-labeled: they ran under the defaults of their day
  *   (idle 10m, no-XP 45m), which is not what `e90` pins. The reader still
  *   *labels* such a run so it can be found and counted
- *   (`runner/viewer/eval.ts`), but only a stamped, un-overridden run is a
+ *   (`runner/viewer/results.ts`), but only a stamped, un-overridden run is a
  *   member of a tier's comparability group, and nothing is ever written back.
  *
  * The decision is ADR-0030; the operator-facing write-up of what each tier is

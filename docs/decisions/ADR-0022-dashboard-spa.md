@@ -49,3 +49,13 @@ this record.
   root-relative so both serve the same paths.
 - The hand-written pages and `/legacy` routes were deleted on 2026-08-22; a
   checkout with no build gets a plain-text notice naming the build command.
+
+## Amendment, 2026-08-23 — one page per grain, and `eval` is called `results`
+The fleet page is the fleet's grain alone (supervisor, gate, jobs, paused,
+ended); the per-run grain moved to the episodes page, which lists the runs of
+one tier with the character, money, quests, playtime, tokens, actual cost and
+ending reason the fleet's run table used to carry. `eval` was never the word for
+an aggregate view the reader reads as *results*: the route is `/results`, the
+API route is `/api/results`, and there is no alias — pre-v1, a rename is a
+rename (`/api/ladder` still serves the same projection). The ladder page keeps
+its name, and the query parameters (`?episode=`, `?harness=`) keep theirs.
