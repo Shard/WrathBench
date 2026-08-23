@@ -67,7 +67,7 @@ because that would silently re-scope every score already carrying this label.
   `e360` extras once everything else is met (ADR-0034).
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
-  `wikiCoords: false`, and the tool-call ceiling once 48(c) fixes it.
+  `wikiCoords: false`, and the tool-call ceiling.
 
 ## `freeplay` — labeled and unscored
 
