@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PAUSE_REASONS, loadRunConfig, normalizePauseReason } from "../src/config";
+import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 
 function tempRunDir(): string {
@@ -29,11 +29,11 @@ describe("Trajectory", () => {
   test("meta round-trips and lands in sqlite", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
-    const config = loadRunConfig({ runId: "run-x", adapter: "stub", model: "irrelevant" });
+    const config = loadRunConfig({ runId: "run-x", driver: "stub", model: "irrelevant" });
     traj.writeMeta({ runId: "run-x", harnessVersion: "0.0.0-test", startedAt: 5, config });
     const meta = readMeta(dir);
     expect(meta?.runId).toBe("run-x");
-    expect(meta?.config.adapter).toBe("stub");
+    expect(meta?.config.driver).toBe("stub");
     const row = traj.runRow("run-x");
     expect(row?.["harness_version"]).toBe("0.0.0-test");
     traj.close();
@@ -46,7 +46,7 @@ describe("Trajectory", () => {
     const traj = new Trajectory(dir);
     const config = loadRunConfig({
       runId: "run-p",
-      adapter: "openai",
+      driver: "openai",
       model: "some/model",
       character: "Grimbold",
       apiBase: "https://openrouter.ai/api/v1",
@@ -58,16 +58,17 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  test("adds the late run columns to a database written without them", () => {
+  // The one migration left: a 0.4-1..0.4-5 run.sqlite predates these two columns.
+  test("adds character and platform to a run table written without them", () => {
     const dir = tempRunDir();
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE run (
       run_id TEXT PRIMARY KEY, harness_version TEXT NOT NULL, started_at INTEGER NOT NULL,
-      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT, objective TEXT,
       termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT NOT NULL)`);
     db.close();
     const traj = new Trajectory(dir);
-    const config = loadRunConfig({ runId: "run-old", adapter: "stub", model: "irrelevant", character: "Elsie" });
+    const config = loadRunConfig({ runId: "run-old", driver: "stub", model: "irrelevant", character: "Elsie" });
     traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 5, config });
     expect(traj.runRow("run-old")?.["character"]).toBe("Elsie");
     traj.close();
@@ -126,34 +127,6 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  test("a run.sqlite written before the new columns gains them on open", () => {
-    const dir = tempRunDir();
-    // The pre-migration state table, exactly as older runs carry it.
-    const old = new Database(join(dir, "run.sqlite"));
-    old.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER,
-      xp INTEGER, map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER);`);
-    old.query(`INSERT INTO state (run_id, ts, level) VALUES ('run-old', 1, 7)`).run();
-    old.close();
-
-    const traj = new Trajectory(dir);
-    traj.recordState("run-old", { level: 8, money: 42, questsCompleted: 1, turn: 3 });
-    const rows = traj.stateRows("run-old");
-    expect(rows).toHaveLength(2);
-    // The pre-existing row keeps its data and reads null for the new columns.
-    expect(rows[0]!["level"]).toBe(7);
-    expect(rows[0]!["money"]).toBeNull();
-    expect(rows[1]!["money"]).toBe(42);
-    expect(rows[1]!["quests_completed"]).toBe(1);
-    expect(rows[0]!["turn"]).toBeNull();
-    expect(rows[1]!["turn"]).toBe(3);
-    traj.close();
-
-    // Reopening is a no-op: the migration must not fail on an already-migrated file.
-    const again = new Trajectory(dir);
-    expect(again.stateRows("run-old")).toHaveLength(2);
-    again.close();
-  });
-
   test("termination and pause reasons are recorded", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
@@ -166,13 +139,6 @@ describe("Trajectory", () => {
     expect(row?.["termination_reason"]).toBe("no-xp");
     expect(row?.["pause_reason"]).toBeNull();
     traj.close();
-  });
-
-  test("a pause reason stored under the old name reads as the current one", () => {
-    // Nothing validates a stored pause reason, so old rows keep their bytes;
-    // this is the one place the old vocabulary is translated for display.
-    expect(normalizePauseReason("window-exhausted")).toBe("quota-exhausted");
-    for (const r of PAUSE_REASONS) expect(normalizePauseReason(r)).toBe(r);
   });
 
   test("registered secrets are scrubbed from every line", () => {

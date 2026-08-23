@@ -17,7 +17,7 @@
  */
 
 import { harnessSeries } from "../src/comparability";
-import { STUB_STAMP, normalizeDriver, isUnscoredDriver } from "../src/config";
+import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
 import { isStillborn } from "./stillborn";
@@ -202,13 +202,11 @@ export function episodeOf(run: RunRow): EpisodeOf {
  * operator objective stamps unscored (ADR-0033). The driver check is separate
  * from the stamp so a stub run launched before the stamp existed still reads
  * as one. The harness is deliberately *not* a reason (ADR-0035): a
- * `claude-code` run is a tagged row, and a pre-ADR-0035 scaffold stamp was
- * already stripped by the reader (`readUnscoredStamp`).
+ * `claude-code` run is a tagged row.
  */
 export function unscoredReason(run: RunRow): string | null {
   if (run.shakeout !== null) return run.shakeout;
-  const driver = run.driver === null ? undefined : normalizeDriver(run.driver);
-  if (driver !== undefined && isUnscoredDriver(driver)) return STUB_STAMP;
+  if (run.driver !== null && isDriver(run.driver) && isUnscoredDriver(run.driver)) return STUB_STAMP;
   if (run.objective !== null) return "unscored (operator objective)";
   /*
    * The tier decides too: `freeplay` is unscored by definition, whether it was

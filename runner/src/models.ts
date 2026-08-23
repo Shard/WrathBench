@@ -51,7 +51,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
-import { harnessOf, normalizeDriver, type Harness } from "./config";
+import { harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
@@ -141,8 +141,8 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
       throw new Error('policy.maxConcurrent must be an object like { "claude-code": 2 }');
     }
     for (const [k, v] of Object.entries(o.maxConcurrent as Record<string, unknown>)) {
-      const driver = normalizeDriver(k);
-      if (driver === undefined) throw new Error(`policy.maxConcurrent: unknown driver ${k}`);
+      if (!isDriver(k)) throw new Error(`policy.maxConcurrent: unknown driver ${k}`);
+      const driver = k;
       if (typeof v !== "number" || !Number.isInteger(v) || v < 1) throw new Error(`policy.maxConcurrent.${k} must be a positive integer`);
       out.maxConcurrent[driver] = v;
     }
@@ -616,7 +616,14 @@ export function readRunFacts(runsDir: string, now = Date.now()): RunFact[] {
  * calls the operator's own hardware; a public IPv4 reads as itself.
  */
 export function platformOf(apiBase: string | undefined, driver: string | undefined): string | null {
-  return platformOfBase(apiBase) ?? (driver === undefined ? "openrouter" : (normalizeDriver(driver) ?? driver));
+  return platformOfBase(apiBase) ?? (driver ?? "openrouter");
+}
+
+/** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
+export function driverOf(r: { name: string; driver?: string }): Driver {
+  const d = r.driver ?? "openai";
+  if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of openai|claude-code|stub`);
+  return d;
 }
 
 /** Whether a run is stillborn by the viewer's definition; null while undecidable. */
@@ -756,7 +763,7 @@ export function projectModel(
     model: r.model,
     effort: r.effort ?? null,
     platform: platformOf(r.apiBase, r.driver),
-    harness: harnessOf(normalizeDriver(r.driver ?? "openai") ?? "openai"),
+    harness: harnessOf(driverOf(r)),
     status: "active",
     billing,
     eligible,

@@ -10,8 +10,7 @@ import { join } from "node:path";
 import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./stillborn";
-import { harnessOfRun, normalizePauseReason, parseComparability } from "../src/index";
-import { normalizeDriver, readUnscoredStamp } from "../src/config";
+import { harnessOfRun, parseComparability } from "../src/index";
 import { platformOf as sharedPlatformOf } from "../src/platform";
 
 /**
@@ -65,7 +64,6 @@ interface MetaShape {
     model?: string;
     extra?: boolean;
     driver?: string;
-    adapter?: string;
     character?: string;
     race?: number;
     class?: number;
@@ -126,7 +124,6 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     runId,
     model: null,
     driver: null,
-    adapter: null,
     harness: null,
     shakeout: null,
     objective: null,
@@ -163,9 +160,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.model = str(meta.config?.model);
     row.objective = str(meta.config?.objective);
     row.extra = meta.config?.extra === true;
-    // `adapter` is the pre-driver name for the same thing; old runs only have it.
-    row.driver = str(meta.config?.driver) ?? str(meta.config?.adapter);
-    row.adapter = str(meta.config?.adapter);
+    row.driver = str(meta.config?.driver);
     row.character = str(meta.config?.character);
     /*
      * Race and class are config, not comparability: they are read here beside
@@ -204,20 +199,15 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.endedAt = num(r["ended_at"]);
         row.model = str(r["model"]) ?? row.model;
         row.driver = str(r["driver"]) ?? row.driver;
-        row.adapter = str(r["adapter"]) ?? row.adapter;
         row.shakeout = str(r["shakeout"]) ?? row.shakeout;
-        // `objective` is a late column: a run.sqlite written before ADR-0024
-        // simply does not have it, and meta.json (read above) is the fallback.
         row.objective = str(r["objective"]) ?? row.objective;
-        // Later columns still (FOLLOW-UPS 36): a run written before them has
+        // `character`/`platform` landed at 0.4-6: a 0.4-1..5 run.sqlite has
         // neither, and the meta read above / the derivation below answer.
         row.character = str(r["character"]) ?? row.character;
         row.platform = str(r["platform"]);
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
-        // Stored reasons predate the rename; normalise so one vocabulary shows.
-        const pause = str(r["pause_reason"]);
-        row.pauseReason = pause === null ? null : normalizePauseReason(pause);
+        row.pauseReason = str(r["pause_reason"]);
         if (row.apiBase === null && typeof r["config_json"] === "string") {
           try {
             row.apiBase = str((JSON.parse(r["config_json"]) as { apiBase?: unknown }).apiBase);
@@ -268,17 +258,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     }
   }
 
-  /*
-   * Read in today's vocabulary (ADR-0035): `claude-subscription` is spelled
-   * `claude-code`, the old scaffold stamp is no longer an unscored reason, and
-   * the harness tag is derived from whatever the run did record. The stored
-   * files are never rewritten.
-   */
-  const storedStamp = row.shakeout;
-  if (row.driver !== null) row.driver = normalizeDriver(row.driver) ?? row.driver;
-  if (row.adapter !== null) row.adapter = normalizeDriver(row.adapter) ?? row.adapter;
-  row.shakeout = readUnscoredStamp(storedStamp);
-  row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver, shakeout: storedStamp });
+  row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver });
   // The stamped column wins; a run that predates it is derived the same way.
   if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
   row.live =

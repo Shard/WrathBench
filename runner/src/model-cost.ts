@@ -19,7 +19,6 @@
  * rules cannot see (a key on a paid plan for a free-looking id, say).
  */
 
-import { normalizeDriver } from "./config";
 
 export type Billing = "free" | "paid";
 
@@ -70,7 +69,7 @@ export interface BillableModel {
   model: string;
   apiBase?: string | null;
   driver?: string | null;
-  /** The pre-ADR-0035 harness tag, accepted so a stored run reads the same as a roster entry. */
+  /** The harness tag (ADR-0035), for a stored run that recorded one. */
   harness?: string | null;
   /** Operator override; wins over every rule. */
   billing?: Billing;
@@ -80,8 +79,7 @@ export interface BillableModel {
 export function billingOf(m: BillableModel): Billing {
   if (m.billing !== undefined) return m.billing;
   if (isLocalBase(m.apiBase)) return "free";
-  const driver = m.driver === null || m.driver === undefined ? undefined : normalizeDriver(m.driver);
-  if (driver === "claude-code" || m.harness === "claude-code") return "free";
+  if (m.driver === "claude-code" || m.harness === "claude-code") return "free";
   if (isContributorSlug(m.model) || isFreeSlug(m.model) || isAllowlistedFree(m.model)) return "free";
   return "paid";
 }

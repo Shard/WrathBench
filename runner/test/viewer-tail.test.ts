@@ -441,26 +441,25 @@ describe("platformOf", () => {
 });
 
 describe("readRun", () => {
-  test("renders a pre-rename pause reason in the current vocabulary", () => {
+  test("reads the pause reason as stored; no platform column reads null, not a guess", () => {
     const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-runs-"));
     const dir = join(runsDir, "paused-run");
     mkdirSync(dir);
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
-      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT,
       termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT);
       CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
       x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER);`);
     db.query(`INSERT INTO run (run_id, pause_reason, config_json) VALUES (?, ?, ?)`).run(
       "paused-run",
-      "window-exhausted",
+      "quota-exhausted",
       "{}",
     );
     db.close();
 
     expect(readRun(runsDir, "paused-run").pauseReason).toBe("quota-exhausted");
-    // No `platform` column on this pre-FOLLOW-UPS-36 schema: the row is
-    // derived from the api base as it always was, never left empty.
+    // No `platform` column (a 0.4-1..5 schema) and no api base: nothing to derive from.
     expect(readRun(runsDir, "paused-run").platform).toBeNull();
   });
 
@@ -470,7 +469,7 @@ describe("readRun", () => {
     mkdirSync(dir);
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
-      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT, character TEXT,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT, character TEXT,
       platform TEXT, termination_reason TEXT, termination_detail TEXT, pause_reason TEXT,
       config_json TEXT);`);
     db.query(
@@ -491,7 +490,7 @@ describe("readRun", () => {
     mkdirSync(dir);
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
-      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT,
       termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT);
       CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER${columns});`);
     db.query(`INSERT INTO run (run_id, config_json) VALUES (?, ?)`).run(id, "{}");

@@ -25,7 +25,7 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
   const config = loadRunConfig({
     runId,
     token: newSessionToken(),
-    adapter: "stub",
+    driver: "stub",
     stubScript: script,
     stepIntervalMs: 0,
     episode: "e90",

@@ -22,8 +22,6 @@
  * `--episode-ms`/`--watchdogs-json` on top of it still wins, and the run is
  * then stamped `episodeOverride: true` so it cannot pass as a clean tier run.
  *
- * `--adapter` is the old name for `--driver` and still works.
- *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
  * meta.json, keeps its token (so a still-alive module session is reattached by
  * the model's next createSession call), keeps its scratchpad and trajectory,
@@ -140,7 +138,6 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     class: num(args["class"]),
     episode: typeof args["episode"] === "string" ? args["episode"] : undefined,
     driver: typeof args["driver"] === "string" ? args["driver"] : undefined,
-    adapter: typeof args["adapter"] === "string" ? args["adapter"] : undefined,
     model: typeof args["model"] === "string" ? args["model"] : undefined,
     apiBase:
       typeof args["api-base"] === "string"

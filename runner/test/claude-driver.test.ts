@@ -427,14 +427,17 @@ describe("childEnv", () => {
 });
 
 describe("driver selection and stamping", () => {
-  test("config defaults to the openai driver and accepts the legacy adapter name", () => {
+  test("config defaults to the openai driver and refuses pre-0.4 spellings by name", () => {
     expect(loadRunConfig({}).driver).toBe("openai");
-    expect(loadRunConfig({ adapter: "stub" }).driver).toBe("stub");
+    expect(loadRunConfig({ driver: "stub" }).driver).toBe("stub");
     expect(loadRunConfig({ driver: "claude-code" }).driver).toBe("claude-code");
-    // ADR-0035: the old spelling and the legacy `adapter` field read as aliases.
-    expect(loadRunConfig({ driver: "claude-subscription" }).driver).toBe("claude-code");
-    expect(loadRunConfig({ adapter: "claude-subscription" }).driver).toBe("claude-code");
-    expect(loadRunConfig({ driver: "claude-code" }).adapter).toBe("claude-code");
+    // Pre-0.4 shapes are errors that name the 0.4 shape, never aliases.
+    expect(() => loadRunConfig({ driver: "claude-subscription" })).toThrow(/claude-code/);
+    expect(() => loadRunConfig({ adapter: "stub" })).toThrow(/the 0\.4 shape is driver/);
+    // A 0.4 file that wrote the duplicate key reads its driver; the duplicate is dropped.
+    const both = loadRunConfig({ driver: "stub", adapter: "stub" }) as Record<string, unknown>;
+    expect(both["driver"]).toBe("stub");
+    expect("adapter" in both).toBe(false);
     // The claude-code harness scores; only the stub never does.
     expect(isUnscoredDriver("claude-code")).toBe(false);
     expect(isUnscoredDriver("openai")).toBe(false);
@@ -463,20 +466,19 @@ describe("driver selection and stamping", () => {
     expect(rendered).toContain("NOT A SCORED RESULT");
     expect(rendered).toContain("driver:     stub");
 
-    // A pre-ADR-0035 claude run's stored scaffold stamp no longer renders as unscored.
-    const old = mkdtempSync(join(tmpdir(), "wrathbench-oldstamp-"));
-    const t2 = new Trajectory(old);
+    // A claude-code run carries no stamp and renders as a score.
+    const cc = mkdtempSync(join(tmpdir(), "wrathbench-ccstamp-"));
+    const t2 = new Trajectory(cc);
     t2.writeMeta({
-      runId: "run-old",
+      runId: "run-cc",
       harnessVersion: "t",
       startedAt: Date.now(),
-      config: loadRunConfig({ driver: "claude-subscription", model: "opus" }),
-      shakeout: "shakeout-only (external scaffold)",
+      config: loadRunConfig({ driver: "claude-code", model: "opus" }),
     });
     t2.close();
-    const oldRendered = renderTimeline(old, "run-old");
-    expect(oldRendered).not.toContain("NOT A SCORED RESULT");
-    expect(oldRendered).toContain("driver:     claude-code");
+    const ccRendered = renderTimeline(cc, "run-cc");
+    expect(ccRendered).not.toContain("NOT A SCORED RESULT");
+    expect(ccRendered).toContain("driver:     claude-code");
   });
 
   /** Spawn run.ts against the fake CLI, deliver `sig` mid-turn, return what it left behind. */

@@ -13,7 +13,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  LEGACY_CONTEXT_ENGINES,
   comparabilityOf,
   fetchServerBuild,
   parseComparability,
@@ -85,22 +84,13 @@ describe("comparabilityOf", () => {
   test("the claude-code driver stamps the claude-code harness (ADR-0035)", () => {
     const c = comparabilityOf(loadRunConfig({ driver: "claude-code" }), "v");
     expect(c.harness).toBe("claude-code");
-    expect(comparabilityOf(loadRunConfig({ driver: "claude-subscription" }), "v").harness).toBe("claude-code");
     expect(comparabilityOf(loadRunConfig({ driver: "stub", stubScript: "x" }), "v").harness).toBe("wrathbench");
   });
 
-  test("a stored pre-ADR-0035 tuple reads contextEngine as harness, unrewritten", () => {
+  test("a tuple without a harness is not recorded; a pre-0.4 contextEngine is not a harness", () => {
     const base = comparabilityOf(loadRunConfig({ driver: "openai", model: "m" }), "v");
     const { harness: _h, ...rest } = base;
-    for (const [engine, harness] of Object.entries(LEGACY_CONTEXT_ENGINES)) {
-      const stored = { ...rest, contextEngine: engine };
-      const read = parseComparability(stored);
-      expect(read?.harness).toBe(harness);
-      expect((read as Record<string, unknown> | null)?.["contextEngine"]).toBeUndefined();
-      // The raw object is untouched: nothing rewrites a stored tuple.
-      expect((stored as Record<string, unknown>)["harness"]).toBeUndefined();
-    }
-    expect(parseComparability({ ...rest, contextEngine: "something-else" })).toBeNull();
+    expect(parseComparability({ ...rest, contextEngine: "external-scaffold-claude-cli" })).toBeNull();
     expect(parseComparability(rest)).toBeNull();
   });
 

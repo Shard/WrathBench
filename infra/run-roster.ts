@@ -7,8 +7,7 @@
  *   ./infra/run-roster.sh infra/roster-example.json --dry-run
  *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
  *
- * Every entry is config: `model`, `driver` (openai | claude-code; the old
- * `claude-subscription` spelling is read as an alias, ADR-0035),
+ * Every entry is config: `model`, `driver` (openai | claude-code, ADR-0035),
  * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
  * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
@@ -50,7 +49,7 @@ import { Database } from "bun:sqlite";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
-import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -64,10 +63,9 @@ export interface RosterSpec {
   billing?: "free" | "paid";
   /**
    * Defaults to "openai". `claude-code` runs go through the Claude Code CLI,
-   * which is their harness (ADR-0035). `claude-subscription` is accepted as
-   * the pre-ADR-0035 spelling of the same thing; nothing new writes it.
+   * which is their harness (ADR-0035).
    */
-  driver?: Driver | "claude-subscription";
+  driver?: Driver;
   /** Game account for the entry's session. Omitted -> the runner's default. */
   account?: string;
   /** Reasoning effort. Omitted -> the provider's own default, not a level. */
@@ -384,9 +382,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (typeof s.model !== "string" || s.model.length === 0) {
       throw new Error(`roster entry without a model: ${JSON.stringify(s)}`);
     }
-    const driver = normalizeDriver(s.driver ?? "openai");
+    const driver = s.driver ?? "openai";
     if (driver !== "openai" && driver !== "claude-code") {
-      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)}`);
+      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)} (openai | claude-code)`);
     }
     const parsedWatchdogs = watchdogOverrideSchema.safeParse(s.watchdogs ?? {});
     if (!parsedWatchdogs.success) {

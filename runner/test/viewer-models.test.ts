@@ -66,12 +66,12 @@ function writeRun(runsDir: string, r: Synth): void {
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
-    `CREATE TABLE run (run_id TEXT, model TEXT, driver TEXT, adapter TEXT, shakeout TEXT,
+    `CREATE TABLE run (run_id TEXT, model TEXT, driver TEXT, shakeout TEXT,
        harness_version TEXT, started_at INTEGER, ended_at INTEGER, termination_reason TEXT,
        termination_detail TEXT, pause_reason TEXT, config_json TEXT)`,
   );
-  db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    r.id, r.model, "openai", "openai", null, "harness-test", r.startedAt, r.endedAt,
+  db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+    r.id, r.model, "openai", null, "harness-test", r.startedAt, r.endedAt,
     r.reason ?? null, r.detail ?? null, null, JSON.stringify(config),
   ]);
   db.run(
@@ -166,10 +166,10 @@ describe("readFleetRoster", () => {
     ]);
   });
 
-  test("a pre-roster config is legacy and empty, never a synthesised roster", () => {
-    const { fleetPath } = fixture({ lanes: [{ name: "l", entries: [{ model: "vendor/alpha" }] }] });
+  test("a config without a roster map is unreadable and empty, never a synthesised roster", () => {
+    const { fleetPath } = fixture({ queue: [{ ref: "alpha" }] });
     const read = readFleetRoster(fleetPath);
-    expect(read.shape).toBe("legacy");
+    expect(read.shape).toBe("unreadable");
     expect(read.models).toEqual([]);
   });
 
@@ -273,12 +273,12 @@ describe("/api/models", () => {
     expect(lastErrorOf(join(runsDir, "gone"), "gone")).toBeNull();
   });
 
-  test("a legacy fleet config serves an empty, labelled roster", async () => {
-    const { runsDir, fleetPath } = fixture({ lanes: [{ name: "l", entries: [{ model: "vendor/alpha" }] }] });
+  test("a fleet config without a roster serves an empty, labelled roster", async () => {
+    const { runsDir, fleetPath } = fixture({ queue: [{ ref: "alpha" }] });
     writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 2, reason: "idle", startedAt: NOW, endedAt: NOW + HOUR });
     const body = await models(runsDir, fleetPath);
     expect(body.models).toEqual([]);
-    expect(body.roster.shape).toBe("legacy");
+    expect(body.roster.shape).toBe("unreadable");
     expect(body.roster.count).toBe(0);
   });
 
