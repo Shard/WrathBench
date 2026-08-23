@@ -651,6 +651,16 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
             totals === null || runRow === undefined
               ? null
               : runCost({ run: runRow, tokens: totals.tokens, reportedUsd: totals.reportedCostUsd });
+          /*
+           * The starting character rides along from the same row, so the panel
+           * can label an extras-cycle run (ADR-0034) without the scheduler's
+           * projection having to learn about races.
+           */
+          r.race = runRow?.race ?? null;
+          r.raceName = runRow?.raceName ?? null;
+          r.class = runRow?.class ?? null;
+          r.className = runRow?.className ?? null;
+          r.characterLabel = runRow?.characterLabel ?? null;
         }
       }
       return json(body);

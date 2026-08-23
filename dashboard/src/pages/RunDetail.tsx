@@ -207,7 +207,13 @@ export default function RunDetail() {
                 </div>
                 <div class="card">
                   <div class="k">character</div>
-                  <div class="v">{run().character ?? "—"}</div>
+                  <div class="v">
+                    {run().character ?? "—"}
+                    {/* Race and class: the baseline is Human Paladin; extras cycle (ADR-0034). */}
+                    <Show when={run().characterLabel !== null}>
+                      <span class="dim"> · {run().characterLabel}</span>
+                    </Show>
+                  </div>
                   <div class="sub">
                     level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
                   </div>

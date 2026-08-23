@@ -12,6 +12,8 @@ import type { EvalRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
   RUNGS,
+  byCharacter,
+  characterOptions,
   groupsForLevel,
   ladderRows,
   markAtLeast,
@@ -32,6 +34,11 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     harnessSeries: "0.2",
     extra: false,
     effort: null,
+    race: 1,
+    raceName: "Human",
+    class: 2,
+    className: "Paladin",
+    characterLabel: "Human Paladin",
     modelResponses: 1,
     stillborn: false,
     harness: "wrathbench",
@@ -202,5 +209,41 @@ describe("series grouping (ADR-0034)", () => {
       ["gdead", 1, ["gdead"]],
     ]);
     expect(groups[1]!.bestTurn).toBe(8);
+  });
+});
+
+describe("the character filter (ADR-0034's extras cycle)", () => {
+  const rows = [
+    run({ runId: "base", levels: [mark(5, 10, 1000)] }),
+    run({ runId: "extra", extra: true, race: 3, raceName: "Dwarf", class: 3, className: "Hunter", characterLabel: "Dwarf Hunter", levels: [mark(5, 4, 400)] }),
+    run({ runId: "old", race: null, raceName: null, class: null, className: null, characterLabel: null }),
+  ];
+
+  test("the options are the labels actually present, sorted, with unrecorded runs offering none", () => {
+    expect(characterOptions(rows)).toEqual(["Dwarf Hunter", "Human Paladin"]);
+  });
+
+  test("all is the default and keeps every run, including the ones with no character recorded", () => {
+    expect(byCharacter(rows, null).map((r) => r.runId)).toEqual(["base", "extra", "old"]);
+  });
+
+  test("a chip narrows to that character and drops the unrecorded ones rather than guessing", () => {
+    expect(byCharacter(rows, "Dwarf Hunter").map((r) => r.runId)).toEqual(["extra"]);
+    expect(byCharacter(rows, "Human Paladin").map((r) => r.runId)).toEqual(["base"]);
+  });
+
+  test("character is a label, never a group key: one row holds both, and says which", () => {
+    const groups = groupsForLevel(rows, 5);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.attempts).toBe(3);
+    expect(groups[0]!.characters).toEqual(["Dwarf Hunter", "Human Paladin"]);
+    // Filtered, the same call yields the one character's row alone.
+    const dwarf = groupsForLevel(byCharacter(rows, "Dwarf Hunter"), 5);
+    expect(dwarf[0]!.characters).toEqual(["Dwarf Hunter"]);
+    expect(dwarf[0]!.bestTurn).toBe(4);
+  });
+
+  test("a ladder row labels the characters its model was played on", () => {
+    expect(ladderRows(rows)[0]!.characters).toEqual(["Dwarf Hunter", "Human Paladin"]);
   });
 });

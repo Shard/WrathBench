@@ -28,7 +28,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { api, type EvalResponse, type EvalRun, type ModelRowView } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
-import { CHART_LEVELS, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
+import { CHART_LEVELS, byCharacter, characterOptions, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { fmtDuration, shortHarness } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -66,6 +66,15 @@ export default function Eval() {
    * which is a different row from any effort at all.
    */
   const effort = (): string | null => (typeof params.effort === "string" && params.effort.length > 0 ? params.effort : null);
+  /*
+   * The starting character (ADR-0034's extras cycle) is a client-side filter
+   * for the same reason `?model=` is, and it is a *filter*, not a group key:
+   * the baseline character is the comparison set, so a Dwarf Hunter run sits
+   * in the same row as the Human Paladin runs it is being compared against
+   * unless the reader asks to see one character alone.
+   */
+  const character = (): string | null =>
+    typeof params.character === "string" && params.character.length > 0 ? params.character : null;
   const feed = poll(() => api.eval(episode(), overrides(), stillborn(), harness()), POLL_MS);
   // The roster, only so an eval row can name the model it belongs to and link
   // back to it. A failure here must not take the charts down with it.
@@ -86,9 +95,12 @@ export default function Eval() {
   const all = (): EvalRun[] => body()?.runs ?? [];
   const runs = (): EvalRun[] => {
     const m = model();
-    if (m === null) return all();
-    return all().filter((r) => r.model === m && (r.effort ?? null) === effort());
+    const mine = m === null ? all() : all().filter((r) => r.model === m && (r.effort ?? null) === effort());
+    return byCharacter(mine, character());
   };
+  // Options come off the unfiltered response, so choosing a chip never empties
+  // the chip row it was chosen from.
+  const characters = createMemo(() => characterOptions(all()));
   const groups = createMemo(() => groupsForLevel(runs(), level()));
   const excluded = createMemo(() => runs().length - scored(runs()).length);
   const withTurns = createMemo(() =>
@@ -150,6 +162,29 @@ export default function Eval() {
         </button>
       </div>
 
+      <Show when={characters().length > 0}>
+        <div class="chips">
+          <button class={character() === null ? "on" : ""} onClick={() => setParams({ character: null }, { replace: true })}>
+            all characters
+          </button>
+          <For each={characters()}>
+            {(c) => (
+              <button
+                class={character() === c ? "on" : ""}
+                onClick={() => setParams({ character: character() === c ? null : c }, { replace: true })}
+              >
+                {c}
+              </button>
+            )}
+          </For>
+        </div>
+        <p class="dim">
+          Race and class label and filter rows; they are not a group key. The baseline character
+          (Human Paladin) is the comparison set — an extras run on another character (ADR-0034)
+          shares its model's row unless one character is picked here.
+        </p>
+      </Show>
+
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <EpisodeFilterNote
           episode={episode()}
@@ -193,6 +228,7 @@ export default function Eval() {
                 <th>harness</th>
                 <th>effort</th>
                 <th>wiki</th>
+                <th title="starting race and class; a row spanning several says so">character</th>
                 <th class="right">runs</th>
                 <th class="right">reached L{level()}</th>
                 <th class="right">best turns</th>
@@ -227,6 +263,13 @@ export default function Eval() {
                     </td>
                     <td class="dim">{g.effort ?? "—"}</td>
                     <td class="dim">{g.wikiCoords === null ? "—" : g.wikiCoords ? "coords" : "names"}</td>
+                    <td class="dim" title={g.characters.join(", ")}>
+                      {g.characters.length === 0
+                        ? "—"
+                        : g.characters.length === 1
+                          ? g.characters[0]
+                          : `${g.characters.length} characters`}
+                    </td>
                     <td class="right mono">{g.attempts}</td>
                     <td class="right mono">{g.reached.length}</td>
                     <td class="right mono">{g.bestTurn ?? "—"}</td>

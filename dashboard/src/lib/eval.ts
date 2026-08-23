@@ -19,6 +19,33 @@ export function scored(runs: readonly EvalRun[]): EvalRun[] {
   return runs.filter((r) => r.unscored === null);
 }
 
+/* --------------------------------------------------------------- character */
+
+/**
+ * The starting characters present, as chip labels: "Dwarf Hunter", sorted.
+ *
+ * Race and class vary only as a *pair* — the extras cycle (ADR-0034) hands out
+ * `{ race, class }` combinations from a fixed list — so one chip row of pairs
+ * is the filter, not two rows that would offer combinations no run can have.
+ * Runs whose metadata never recorded a character contribute no option; they
+ * are kept by "all" and dropped by any specific chip, which is what "not
+ * recorded" has to mean if it is not to be guessed at.
+ */
+export function characterOptions(runs: readonly EvalRun[]): string[] {
+  return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
+}
+
+/** Narrow to one character label. Null (the default) keeps every run. */
+export function byCharacter(runs: readonly EvalRun[], label: string | null): EvalRun[] {
+  if (label === null) return [...runs];
+  return runs.filter((r) => r.characterLabel === label);
+}
+
+/** The distinct characters in a set of runs, sorted — a row's label. */
+function charactersOf(runs: readonly EvalRun[]): string[] {
+  return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
+}
+
 /** The first mark at or above `level`, or null when the run never got there. */
 export function markAtLeast(run: EvalRun, level: number): LevelMark | null {
   for (const m of run.levels) if (m.level >= level) return m;
@@ -47,6 +74,13 @@ export interface EvalGroup {
   effort: string | null;
   /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
   wikiCoords: boolean | null;
+  /**
+   * The starting characters the group's runs were played on, sorted. A *label*,
+   * not part of the key: the baseline character is the comparison set, and an
+   * extras run (ADR-0034) is compared against it rather than charted apart.
+   * More than one entry means the group mixes characters, and the row says so.
+   */
+  characters: string[];
   /**
    * The harness tags present in the group (ADR-0035), sorted. Not part of the
    * key: the operator chose to tag rather than partition, so a group may hold
@@ -113,6 +147,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
         harnessVersions: [],
         effort: run.effort,
         wikiCoords: run.wikiCoords,
+        characters: [],
         harnesses: [],
         reached: [],
         attempts: 0,
@@ -131,6 +166,9 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
     if (!g.harnessVersions.includes(exact)) g.harnessVersions.push(exact);
     const tag = run.harness ?? "harness?";
     if (!g.harnesses.includes(tag)) g.harnesses.push(tag);
+    if (run.characterLabel !== null && !g.characters.includes(run.characterLabel)) {
+      g.characters.push(run.characterLabel);
+    }
     if (run.toolCalls !== null) calls.get(g.key)!.push(run.toolCalls);
     const mark = markAtLeast(run, level);
     if (mark !== null) g.reached.push({ runId: run.runId, turn: mark.turn, ms: mark.playtimeMs });
@@ -138,6 +176,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
   const out = [...byKey.values()];
   for (const g of out) {
     g.harnesses.sort();
+    g.characters.sort();
     g.harnessVersions.sort();
     g.reached.sort((a, b) => (a.turn ?? Infinity) - (b.turn ?? Infinity));
     const turns = g.reached.map((r) => r.turn).filter((v): v is number => v !== null);
@@ -258,6 +297,8 @@ export interface LadderRow {
   runs: number;
   /** Harness tags among the model's scored runs (ADR-0035), sorted. */
   harnesses: string[];
+  /** Starting characters among those runs, sorted; a label, never a row key. */
+  characters: string[];
 }
 
 /**
@@ -293,6 +334,7 @@ export function ladderRows(runs: readonly EvalRun[]): LadderRow[] {
       cells,
       runs: list.length,
       harnesses: [...new Set(list.map((r) => r.harness ?? "harness?"))].sort(),
+      characters: charactersOf(list),
     });
   }
   rows.sort((a, b) => b.highest - a.highest || b.runs - a.runs || a.model.localeCompare(b.model));

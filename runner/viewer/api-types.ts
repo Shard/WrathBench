@@ -133,6 +133,19 @@ export interface RunRow {
   /** An extra run (ADR-0034): past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
+  /**
+   * The starting character the run was launched with (ADR-0034's extras cycle
+   * gives free models a different one per extra run). Ids are the client's own
+   * 3.3.5a race/class ids; the names are `runner/viewer/characters.ts`
+   * resolving them, with an id no table knows rendering as its own number.
+   * Null is "not recorded" — a run whose metadata predates the fields.
+   */
+  race: number | null;
+  raceName: string | null;
+  class: number | null;
+  className: string | null;
+  /** "Dwarf Hunter" — the compact label a row shows. Null when neither id was recorded. */
+  characterLabel: string | null;
   /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
   platform: string | null;
   apiBase: string | null;
@@ -497,6 +510,18 @@ export interface EvalRun {
   harnessSeries: string | null;
   /** An extra run past the policy target (ADR-0034); scored like any other, reported apart by the fleet. */
   extra: boolean;
+  /**
+   * The run's starting character (ADR-0034's extras cycle). Ids as recorded,
+   * names resolved by `runner/viewer/characters.ts`; null is "not recorded".
+   * A dimension the charts *label and filter on*, never a group key: the
+   * baseline character is the comparison set.
+   */
+  race: number | null;
+  raceName: string | null;
+  class: number | null;
+  className: string | null;
+  /** "Dwarf Hunter", or null when neither id was recorded. */
+  characterLabel: string | null;
   effort: string | null;
   /** The harness tag (ADR-0035). A tag on the row, not a partition. */
   harness: HarnessView | null;
@@ -633,6 +658,16 @@ export interface ModelRunView {
   harnessSeries: string | null;
   /** An extra run (ADR-0034): an attempt past the target, never counted. */
   extra: boolean;
+  /**
+   * The run's starting character, attached by the route from the same run rows
+   * the listing reads. Optional for the reason `cost` is: the projection this
+   * view is built from (`runner/src/models.ts`) does not carry it.
+   */
+  race?: number | null;
+  raceName?: string | null;
+  class?: number | null;
+  className?: string | null;
+  characterLabel?: string | null;
   startedAt: number;
   endedAt: number | null;
   /** Wall clock, start to end — not active time; the run page owns that. */
