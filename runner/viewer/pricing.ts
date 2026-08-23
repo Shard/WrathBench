@@ -266,9 +266,25 @@ function unpricedNote(run: PriceableRun): string {
  * (`total_cost_usd`). `tail.ts` sums whichever the run carries; this only has
  * to say what the number is.
  */
-function actualCost(run: PriceableRun, reportedUsd: number | null): CostFigure {
+function actualCost(
+  run: PriceableRun,
+  reportedUsd: number | null,
+  coverage: { costed: number; uncosted: number } | null,
+): CostFigure {
   if (reportedUsd === null) return none("provider reports no cost for this run");
   const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  /*
+   * A run whose process was replaced mid-flight (the fleet resumes rather than
+   * recreates) can hold responses from before the adapter recorded the
+   * provider's charge and responses from after. The sum is then a bill for part
+   * of the run wearing the shape of a bill for all of it, so it says which.
+   * Only meaningful where the charge is per response: the claude-code figure is
+   * one number for the whole session and never partial this way.
+   */
+  const partial =
+    coverage !== null && coverage.costed > 0 && coverage.uncosted > 0
+      ? ` — partial: ${coverage.uncosted} of ${coverage.costed + coverage.uncosted} responses reported no cost`
+      : "";
   return {
     usd: reportedUsd,
     basis: "reported",
@@ -280,7 +296,7 @@ function actualCost(run: PriceableRun, reportedUsd: number | null): CostFigure {
     asOf: null,
     note: claudeCode
       ? "the Claude Agent SDK's own total_cost_usd for this session — billed against a subscription, so not an invoice"
-      : "the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)",
+      : `the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)${partial}`,
   };
 }
 
@@ -339,8 +355,11 @@ export function runCost(args: {
   /** The provider's own total: OpenRouter `usage.cost` summed, or the Claude
    * SDK's `total_cost_usd`. Null when the run carries neither. */
   reportedUsd: number | null;
+  /** How many of the run's responses carried a charge, from
+   * `responseCostCoverage`. Absent where the caller does not count. */
+  coverage?: { costed: number; uncosted: number } | null;
 }): CostView {
-  const actual = actualCost(args.run, args.reportedUsd);
+  const actual = actualCost(args.run, args.reportedUsd, args.coverage ?? null);
   const expected = expectedCost(args);
   return { ...expected, actual, expected };
 }

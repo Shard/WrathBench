@@ -52,6 +52,7 @@ import {
   TrajectoryTail,
   playtimeMs,
   reportedCostUsd,
+  responseCostCoverage,
   scanRunTotals,
   segmentsFrom,
   tokenTotals,
@@ -622,7 +623,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         cost:
           totals === null
             ? null
-            : runCost({ run: row, tokens: totals.tokens, reportedUsd: totals.reportedCostUsd }),
+            : runCost({
+                run: row,
+                tokens: totals.tokens,
+                reportedUsd: totals.reportedCostUsd,
+                coverage: totals.responseCost,
+              }),
         firstTs: totals?.firstTs ?? null,
         lastTs: totals?.lastTs ?? null,
         playtimeMs:
@@ -709,7 +715,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           r.cost =
             totals === null || runRow === undefined
               ? null
-              : runCost({ run: runRow, tokens: totals.tokens, reportedUsd: totals.reportedCostUsd });
+              : runCost({
+                  run: runRow,
+                  tokens: totals.tokens,
+                  reportedUsd: totals.reportedCostUsd,
+                  coverage: totals.responseCost,
+                });
           /*
            * The starting character rides along from the same row, so the panel
            * can label an extras-cycle run (ADR-0034) without the scheduler's
@@ -765,7 +776,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         states: readStates(runsDir, runId),
         total: entries.length,
         tokens,
-        cost: runCost({ run, tokens, reportedUsd: reportedCostUsd(entries) }),
+        cost: runCost({
+          run,
+          tokens,
+          reportedUsd: reportedCostUsd(entries),
+          coverage: responseCostCoverage(entries),
+        }),
         playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
       };
       return json(body);
