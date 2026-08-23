@@ -161,3 +161,9 @@ svg text { fill: var(--fg); }
 .scrub { display: flex; gap: 8px; align-items: center; }
 .scrub input[type="range"] { flex: 1; min-width: 120px; }
 footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
+
+/* The models page's row-detail panel: a table inside a table cell. */
+.detail { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+          padding: 8px 10px; margin: 6px 0; }
+.detail table { font-size: 12px; }
+.detail p { margin: 0 0 6px; }

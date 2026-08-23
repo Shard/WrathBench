@@ -17,6 +17,7 @@ import type {
   EpisodesResponse,
   EvalResponse,
   FleetResponse,
+  ModelsResponse,
   PositionsResponse,
   RunDetailResponse,
   RunsResponse,
@@ -39,6 +40,12 @@ export type {
   FeedEntry,
   FleetLane,
   FleetResponse,
+  ModelEpisodeView,
+  ModelLastErrorView,
+  ModelRowView,
+  ModelRunView,
+  ModelStatusView,
+  ModelsResponse,
   PositionsResponse,
   RunDetailResponse,
   RunListRow,
@@ -110,6 +117,12 @@ export function createClient(opts: ClientOptions = {}) {
       get<RunsResponse>(`/api/runs${includeStillborn ? "?includeStillborn=1" : ""}`, opts),
     positions: (): Promise<PositionsResponse> => get<PositionsResponse>("/api/positions", opts),
     fleet: (): Promise<FleetResponse> => get<FleetResponse>("/api/fleet", opts),
+    /**
+     * The roster's models with the scheduler's verdict on each (ADR-0031/0032).
+     * The projection is the supervisor's own, so this page and `--status`
+     * cannot disagree about why a model is not running.
+     */
+    models: (): Promise<ModelsResponse> => get<ModelsResponse>("/api/models", opts),
     /** The episode tiers (ADR-0030) and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes", opts),
     /**

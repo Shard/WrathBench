@@ -28,6 +28,9 @@ export function Layout(props: ParentProps) {
           <A href="/episodes" activeClass="on">
             episodes
           </A>
+          <A href="/models" activeClass="on">
+            models
+          </A>
         </nav>
         <span class="spacer" />
       </header>

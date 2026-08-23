@@ -28,10 +28,13 @@ import type {
   FleetLaneRun,
   FleetLaneView,
   FleetResponse,
+  ModelsResponse,
   RunListRow,
   RunsResponse,
 } from "./api-types";
 import { evalRunOf, stillbornOf, trackFrom } from "./eval";
+import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
+import { modelStates } from "../src/models";
 import { readPositions } from "./positions";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./stillborn";
@@ -68,6 +71,14 @@ export interface ApiOptions {
    * a reachable URL.
    */
   moduleUrl?: string;
+  /**
+   * The fleet config whose `roster` block names the models `/api/models` rows
+   * (ADR-0031). Absent, missing or pre-roster is a normal state the route
+   * labels rather than an error: it never invents names from lane entries,
+   * because those would stop matching the day the operator renames
+   * `fleet.next.json` over `fleet.json`.
+   */
+  fleetConfigPath?: string;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -360,6 +371,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
    */
   const totalsCache = new Map<string, { size: number; mtime: number; totals: RunTotals }>();
 
+  /**
+   * Run facts for `/api/models`, memoised per run the same way.
+   *
+   * The projection reads every trajectory in full to count model responses, so
+   * without this a thirty-second poll would re-read the whole runs directory
+   * forever. A finished run's fact is read once per process.
+   */
+  const factCache = new Map<string, FactCacheEntry>();
+
   async function runTotals(runId: string, dir: string): Promise<RunTotals | null> {
     const path = join(dir, "trajectory.jsonl");
     let st: ReturnType<typeof statSync>;
@@ -569,6 +589,21 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
      */
     if (path === "/api/eval" || path === "/api/ladder") return await evalResponse(url);
     if (path === "/api/fleet") return json(readFleet(runsDir));
+    /*
+     * `/api/models` is the scheduler's own verdict, served rather than
+     * recomputed: `modelStates` in `runner/src/models.ts` is what the fleet
+     * supervisor schedules on and what `--status` prints, so the page and the
+     * supervisor cannot disagree about why a model is not running. The route
+     * adds only the run ids behind each count and the last error text.
+     */
+    if (path === "/api/models") {
+      const now = Date.now();
+      const roster = readFleetRoster(opts.fleetConfigPath);
+      const runs = readRunFactsCached(runsDir, factCache, now);
+      const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
+      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now });
+      return json(body);
+    }
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
     if (m === null) return null;

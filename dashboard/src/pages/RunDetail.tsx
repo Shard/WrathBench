@@ -21,11 +21,13 @@ import {
   type ApiInfoResponse,
   type ComparabilityView,
   type FeedEntry,
+  type ModelRowView,
   type RunDetailResponse,
   type TokenTotals,
 } from "../api/client";
 import { Sparkline } from "../components/Sparkline";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { modelsHref, rosterNameFor } from "../lib/models";
 
 const WINDOW = 200;
 
@@ -57,6 +59,15 @@ export default function RunDetail() {
   const [now, setNow] = createSignal(Date.now());
   const [follow, setFollow] = createSignal(true);
   const [disconnected, setDisconnected] = createSignal(false);
+  /*
+   * The roster, only so this run can link back to the model row that scheduled
+   * it. A run records a model string and an effort, never a roster name, and
+   * `(model, effort)` is the key the projection itself matches on. A failed
+   * fetch simply leaves the name unlinked.
+   */
+  const [roster, setRoster] = createSignal<ModelRowView[]>([]);
+  const rosterName = (run: RunDetailResponse["run"]): string | null =>
+    rosterNameFor(roster(), run.model, run.comparability?.effort ?? null);
 
   const live = (): boolean => detail()?.run.terminationReason === null;
 
@@ -81,6 +92,10 @@ export default function RunDetail() {
     });
 
     void api.info().then(setInfo).catch(() => undefined);
+    void api
+      .models()
+      .then((m) => setRoster(m.models))
+      .catch(() => undefined);
 
     void api
       .run(params.id)
@@ -178,7 +193,13 @@ export default function RunDetail() {
               <div class="cards">
                 <div class="card">
                   <div class="k">model</div>
-                  <div class="v">{run().model ?? "—"}</div>
+                  <div class="v">
+                    {/* The roster row this run's model belongs to, when it is on the roster:
+                        a run records a model string, never the name that scheduled it. */}
+                    <Show when={rosterName(run())} fallback={run().model ?? "—"}>
+                      {(name) => <A href={modelsHref(name())}>{run().model}</A>}
+                    </Show>
+                  </div>
                   <div class="sub">
                     {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
                   </div>

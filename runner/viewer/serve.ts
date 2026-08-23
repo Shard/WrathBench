@@ -50,6 +50,18 @@ const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist"
 const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
 /** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
 const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
+/*
+ * The fleet config `/api/models` reads its roster from (ADR-0031). The staged
+ * pool/queue file is preferred while it exists, because it is the one that
+ * carries a `roster` map; after the operator renames it over `fleet.json` the
+ * same lookup finds the same content under the live name. Neither present, or
+ * a config that predates the roster map, is a labelled empty state on the page
+ * rather than a startup failure — the viewer runs on machines that have no
+ * fleet at all.
+ */
+const fleetConfigPath =
+  process.env["WRATHBENCH_FLEET_CONFIG"] ??
+  ["infra/fleet.next.json", "infra/fleet.json"].find((p) => existsSync(p));
 
 if (!existsSync(runsDir)) {
   console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
@@ -63,6 +75,7 @@ const handle = createApi({
   dashboardDir: built ? dashboardDir : undefined,
   publicMode,
   moduleUrl,
+  fleetConfigPath,
 });
 
 const server = Bun.serve({
