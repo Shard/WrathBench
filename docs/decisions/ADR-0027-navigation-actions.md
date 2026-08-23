@@ -136,3 +136,23 @@ Vocabulary change, so the navigation-comparability boundary of this ADR moves
 again. Thresholds are the ones written here; a ramp steeper than 50 degrees
 over more than 2y would trip the guard and show up as a `drop` with the
 polyline in the audit, which is the evidence to retune on.
+
+## Amendment 2026-08-23: an areatrigger fires on crossing, not on lingering (FOLLOW-UPS 56)
+
+nav-probe c4 showed `areatrigger 710` in the audit every ~1.5s for 13s while
+the character walked around the Kharanos crossroads: `CheckAreaTriggers`
+re-armed on a 1.5s timer meant to cover heartbeat lag. A client sends
+`CMSG_AREATRIGGER` once, when it crosses into the volume.
+
+- Per session the module keeps the set of DBC volumes the mover is inside.
+  `CMSG_AREATRIGGER`, the `areatrigger` audit line and `WB_AREATRIGGER` go out
+  only for an id that is newly inside. An id leaves the set when the mover
+  leaves its volume, changes map, or is teleported (the ack path clears it),
+  so re-entry fires again. The 1.5s re-send is gone: a hit the server
+  rejected because its applied position lagged the interpolated one is the
+  same miss a client suffers, and a trigger the server does not act on
+  (exploration already credited, or no world-DB row at all) fires exactly
+  once per entry.
+- Travel gate leg1b lingers inside trigger 710 for >= 5s and asserts exactly
+  one `WB_AREATRIGGER` for that id; the interpolated-vs-applied residual
+  stays as it is.

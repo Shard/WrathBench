@@ -754,8 +754,12 @@ same: it reads `AreaTrigger.dbc` from the server data volume (`DataDir/dbc`,
 the same file a client has), tests the mover's interpolated position after
 each heartbeat with the same sphere/oriented-box geometry as
 `Player::IsInAreaTriggerRadius`, and queues `CMSG_AREATRIGGER` once per entry
-(re-sent after 1.5s if still inside and nothing happened, since the server
-checks its applied position and a heartbeat can lag). Each dispatch is
+and never again while the mover lingers inside: the module keeps the set of
+volumes the character is in, fires only for ids newly inside, and forgets an
+id when the character leaves the volume, changes map or is teleported, so a
+re-entry fires again (FOLLOW-UPS 56; a hit the server rejected because its
+applied position lagged is not retried, the same miss a client suffers). Each
+dispatch is
 audited (`op: "areatrigger"`) and mirrored as `WB_AREATRIGGER`. Consequences
 are whatever the server does for that trigger, as for a client: a map
 transfer (`SMSG_TRANSFER_PENDING` … `transferred`), exploration quest credit

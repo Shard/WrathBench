@@ -2023,45 +2023,51 @@ namespace WrathBench
         return p.IsWithinBox(center, t.boxLength / 2.0f, t.boxWidth / 2.0f, t.boxHeight / 2.0f);
     }
 
-    void Manager::CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t nowMs)
+    void Manager::CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t /*nowMs*/)
     {
         if (!_areaTriggersLoaded)
             return;
-        auto it = _areaTriggers.find(player->GetMapId());
+        uint32 const mapId = player->GetMapId();
+        if (mapId != s.insideTriggersMap)
+        {
+            // A map change (transfer, far teleport) leaves every volume.
+            s.insideTriggers.clear();
+            s.insideTriggersMap = mapId;
+        }
+        auto it = _areaTriggers.find(mapId);
         if (it == _areaTriggers.end())
+        {
+            s.insideTriggers.clear();
             return;
-        uint32 inside = 0;
+        }
+        std::vector<uint32> nowInside;
         for (AreaTriggerRec const& t : it->second)
-        {
             if (InsideAreaTrigger(t, x, y, z))
-            {
-                inside = t.id;
-                break;
-            }
-        }
-        if (inside == 0)
-        {
-            s.lastTriggerId = 0; // left every volume: re-arm
-            return;
-        }
-        // Fire once on entry. Re-send while still inside if nothing happened
-        // within 1.5s: the server checks the *applied* position, the module the
-        // interpolated one, and a heartbeat can lag by up to 500ms.
-        if (inside == s.lastTriggerId && nowMs - s.lastTriggerSentMs < 1500)
-            return;
-        if (inside == s.lastTriggerId && s.pendingTransferMap.load() != 0)
-            return; // the server acted on it; a transfer is in flight
-        s.lastTriggerId = inside;
-        s.lastTriggerSentMs = nowMs;
+                nowInside.push_back(t.id);
 
-        WorldPacket* p = new WorldPacket(CMSG_AREATRIGGER, 4);
-        *p << uint32(inside);
-        s.ws->QueuePacket(p);
-        Audit(s, "action", Json::Writer().Add("op", "areatrigger").Add("triggerId", inside).Add("moveId", s.move.moveId).Str());
-        Json::Writer w;
-        w.Add("triggerId", inside).Add("moveId", s.move.moveId);
-        w.Raw("pos", PosJson(x, y, z, s.move.curO));
-        EmitEvent(s, "WB_AREATRIGGER", 0xFF04, w.Str());
+        // Fire once per entry, as a client does: only ids that were not inside
+        // on the previous check. Nothing is re-sent while the mover lingers —
+        // if the server's applied position lagged the interpolated one and it
+        // rejected the hit, that is the same miss a client suffers, and the
+        // next entry fires again. Exploration triggers the server does not
+        // act on (already credited) therefore fire exactly once per entry.
+        std::vector<uint32> entered;
+        for (uint32 id : nowInside)
+            if (std::find(s.insideTriggers.begin(), s.insideTriggers.end(), id) == s.insideTriggers.end())
+                entered.push_back(id);
+        s.insideTriggers = std::move(nowInside);
+
+        for (uint32 id : entered)
+        {
+            WorldPacket* p = new WorldPacket(CMSG_AREATRIGGER, 4);
+            *p << uint32(id);
+            s.ws->QueuePacket(p);
+            Audit(s, "action", Json::Writer().Add("op", "areatrigger").Add("triggerId", id).Add("moveId", s.move.moveId).Str());
+            Json::Writer w;
+            w.Add("triggerId", id).Add("moveId", s.move.moveId);
+            w.Raw("pos", PosJson(x, y, z, s.move.curO));
+            EmitEvent(s, "WB_AREATRIGGER", 0xFF04, w.Str());
+        }
     }
 
     void Manager::TickMovers(int64_t nowMs)
@@ -2413,6 +2419,8 @@ namespace WrathBench
             if (s->teleportAckQueuedMs && nowMs - s->teleportAckQueuedMs < 1000)
                 continue;
             s->teleportAckQueuedMs = nowMs;
+            // A teleport leaves every areatrigger volume: re-entry fires again.
+            s->insideTriggers.clear();
 
             char const* opcodeName;
             if (player->IsBeingTeleportedNear())
