@@ -72,7 +72,7 @@ class WrathClient {
   vendorList(guid) / buyItem(guid, itemId, slot, count?) / sellItem(guid, itemGuid, count?) / repairAll(guid)
   useItem(bag, slot, targetGuid?) / destroyItem(bag, slot, count?)
   trainerListAsync(guid) / trainerBuySpellAsync(guid, spellId)
-  repop() / reclaimCorpse(guid?) / spiritHealerActivate(guid)
+  repop() / reclaimCorpse(guid?, options?) → { status: reclaimed | not_reclaimed | unconfirmed } (waits out SMSG_CORPSE_RECLAIM_DELAY itself) / spiritHealerActivate(guid)
   deleteCharacter(name, o?: DeleteCharacterOptions): Promise<CharacterDeleteResponse>  // POST /character-delete
 
   // composed helpers — each waits for the game's verdict
