@@ -435,7 +435,13 @@ export interface FleetJobView {
   name: string;
   /** The roster ref, or several joined by `+` for a rotating job. */
   ref: string;
-  episode: string;
+  /**
+   * The tier the job runs under, or **null** when the supervisor could not name
+   * one (commit 95908d5: unknown is written as null, never guessed at). A page
+   * says "episode unknown" for it rather than showing a dash, which is what an
+   * account holding no job shows.
+   */
+  episode: string | null;
   account: string;
   /** The class of the account it landed on (ADR-0034): pool, paid, local, or pinned. */
   accountClass: "pinned" | "pool" | "paid" | "local";

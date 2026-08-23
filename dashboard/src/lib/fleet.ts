@@ -73,7 +73,11 @@ export interface FleetRow {
   models: string;
   /** Every model behind it, for the cell's title. */
   modelsTitle: string;
-  /** The episode tier, or null on an account row. */
+  /**
+   * The episode tier. Null on an account row — and also on a job whose tier the
+   * supervisor could not name, which the page distinguishes: an account row has
+   * no tier to show, a job with none is a job whose tier is *unknown*.
+   */
   tier: string | null;
   account: string;
   /** Which class the account belongs to: pool, paid, local, pinned. */
@@ -144,7 +148,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       job: job.name,
       models: jobModelLabel(job),
       modelsTitle: job.models.join(", "),
-      tier: job.episode,
+      tier: job.episode ?? null,
       account: job.account,
       accountClass: job.accountClass,
       source: job.source,

@@ -97,6 +97,18 @@ describe("row state", () => {
   });
 });
 
+describe("an unnamed tier", () => {
+  test("a job whose episode the supervisor could not name carries null, not a guess", () => {
+    // Commit 95908d5: unknown is written as null. The row keeps it null, and
+    // the page distinguishes that from an account row, which has no tier at all.
+    const rows = fleetRows(fleet({ jobs: [job({ episode: null })] }), []);
+    expect(rows[0]!.tier).toBeNull();
+    expect(rows[0]!.job).toBe("ox-alpha-e90");
+    const account = rows.find((r) => r.job === null);
+    expect(account?.tier ?? null).toBeNull();
+  });
+});
+
 describe("the rows", () => {
   test("a job row carries its account's class, its attempt, and the run's level/xp and elapsed", () => {
     const rows = fleetRows(fleet(), [run()]);
