@@ -11,6 +11,7 @@
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",
     "viewer": "bun runner/viewer/serve.ts",
+    "sync-prices": "bun infra/sync-prices.ts",
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md"
   },
   "devDependencies": {
