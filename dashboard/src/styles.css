@@ -186,3 +186,37 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
           padding: 8px 10px; margin: 6px 0; }
 .detail table { font-size: 12px; }
 .detail p { margin: 0 0 6px; }
+
+/* --- the run view: XP chart on top, feed left, everything else right (sticky) --- */
+/*
+ * The log column is its own scroll container and the sidebar another, so the
+ * run's meta and the autoscroll toggle stay in view while the feed scrolls.
+ * `--log-col` tunes the split. On a short viewport the columns keep a floor
+ * height and `main` scrolls past them rather than crushing the feed to a sliver.
+ */
+.page.runview { --log-col: 70%; display: flex; flex-direction: column; height: 100%; }
+.runview > h2.section:first-of-type { margin-top: 0; }
+
+.xpchart { width: 100%; height: 200px; display: block; margin: 4px 0 12px;
+           background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.xpchart.empty { height: auto; padding: 14px 12px; font-size: 12px; }
+
+.runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }
+.runview-logs { flex: 0 1 var(--log-col); min-width: 0; overflow-y: auto; }
+.runview-side { flex: 1 1 0; min-width: 240px; overflow-y: auto; }
+.runview-logs > h2.section:first-child { margin-top: 0; }
+.runview-side > h2.section:first-child { margin-top: 0; }
+/* One card per row in the narrow sidebar. */
+.runview-side .cards { grid-template-columns: 1fr; }
+
+.side-controls { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+                 margin-bottom: 10px; font-size: 12px; }
+.side-controls .dot { margin-right: 4px; }
+
+@media (max-width: 900px) {
+  .page.runview { height: auto; }
+  .runview-cols { flex-direction: column; min-height: 0; }
+  .runview-side { order: -1; flex: none; }
+  /* Keep the feed a scroll container so the autoscroll logic is the same here. */
+  .runview-logs { flex: none; max-height: 70vh; }
+}
