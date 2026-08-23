@@ -7,6 +7,8 @@ import {
   attackStopped,
   BACKPACK_SLOT,
   chatEcho,
+  corpseReclaimDelay,
+  deathReleaseCleared,
   CREATURE_GUID,
   creatureCreate,
   creatureHealth,
@@ -2201,6 +2203,155 @@ describe("client: talents and the raw escape hatch (FOLLOW-UPS 39, ADR-0025)", (
     const err = await client.raw("CMSG_EMOTE", [{ u32: 1 }]).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WrathRequestError);
     expect((err as WrathRequestError).message).toContain("allowlist");
+    await stub.stop();
+  });
+});
+
+describe("client: reclaimCorpse owns the delay and answers with a verdict", () => {
+  /** Login plus our own create block, then whatever health this world needs. */
+  const deadWorld = (health: number, extra: readonly unknown[] = []) =>
+    frames([...loginSequence, selfCreate, selfHealth(health, 90), ...extra]);
+
+  test("a ghost whose delay has already elapsed reclaims, and says so", async () => {
+    // A delay announced 60s ago: nothing left to wait out, so it dispatches now.
+    const stub = startStub({
+      onConnect: () => deadWorld(1, [corpseReclaimDelay(30_000, 91, Date.now() - 60_000)]),
+    });
+    const client = await inWorld(stub);
+    const pending = client.reclaimCorpse(undefined, { timeout: 4000, attemptTimeout: 1500 });
+    await untilAction(stub, "reclaim_corpse");
+    stub.push(JSON.stringify(deathReleaseCleared(92)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("reclaimed");
+    expect(result.attempts).toBe(1);
+    expect(result.delayMs).toBe(30_000);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("health leaving the ghost's 1 confirms a reclaim on its own", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(1) });
+    const client = await inWorld(stub);
+    const pending = client.reclaimCorpse(undefined, { timeout: 4000, attemptTimeout: 1500 });
+    await untilAction(stub, "reclaim_corpse");
+    stub.push(JSON.stringify(selfHealth(20, 93)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("reclaimed");
+    client.close();
+    await stub.stop();
+  });
+
+  test("the announced delay is waited out before anything is dispatched", async () => {
+    const stub = startStub({
+      onConnect: () => deadWorld(1, [corpseReclaimDelay(400, 91, Date.now())]),
+    });
+    const client = await inWorld(stub);
+    const started = Date.now();
+    const pending = client.reclaimCorpse(undefined, { timeout: 4000, attemptTimeout: 1500 });
+    await untilAction(stub, "reclaim_corpse");
+    const waited = Date.now() - started;
+    expect(waited).toBeGreaterThanOrEqual(300);
+    stub.push(JSON.stringify(deathReleaseCleared(94)));
+    expect((await pending).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+
+  test("no delay event at all means dispatch now, not a made-up 30s wait", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(1) });
+    const client = await inWorld(stub);
+    const started = Date.now();
+    const pending = client.reclaimCorpse(undefined, { timeout: 4000, attemptTimeout: 1500 });
+    await untilAction(stub, "reclaim_corpse");
+    expect(Date.now() - started).toBeLessThan(1000);
+    stub.push(JSON.stringify(deathReleaseCleared(95)));
+    const result = await pending;
+    expect(result.status).toBe("reclaimed");
+    expect(result.delayMs).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("a silent refusal is re-sent, and reported as not_reclaimed with the three reasons", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(1) });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse(undefined, { timeout: 700, attemptTimeout: 150 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("not_reclaimed");
+    expect(result.reason).toBe("still_ghost");
+    expect(result.attempts).toBeGreaterThan(1);
+    expect(result.hint).toContain("39y");
+    expect(result.hint).toContain("spiritHealerActivate");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a corpse still unreleased is named, and nothing is sent", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(0) });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("not_released");
+    expect(result.hint).toContain("repop()");
+    expect(result.attempts).toBe(0);
+    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a living character is told there is nothing to reclaim", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(40) });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse();
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("not_dead");
+    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a delay longer than the budget sends nothing and says how much is left", async () => {
+    const stub = startStub({
+      onConnect: () => deadWorld(1, [corpseReclaimDelay(30_000, 91, Date.now())]),
+    });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse(undefined, { timeout: 300, attemptTimeout: 100 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("delay_not_elapsed");
+    expect(result.attempts).toBe(0);
+    expect(result.hint).toContain("still to run");
+    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("unobserved health with the dispatch out is unconfirmed, not a guess", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence]) });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse(undefined, { timeout: 400, attemptTimeout: 120 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("unconfirmed");
+    expect(result.reason).toBe("no_observation");
+    expect(result.hint).toContain("state.self.health");
+    client.close();
+    await stub.stop();
+  });
+
+  test("reclaimCorpseAsync is still the bare dispatch", async () => {
+    const stub = startStub({ onConnect: () => deadWorld(1) });
+    const client = await inWorld(stub);
+    const ack = await client.reclaimCorpseAsync();
+    expect(ack.ok).toBe(true);
+    expect(stub.actions.at(-1)?.action).toBe("reclaim_corpse");
+    client.close();
     await stub.stop();
   });
 });

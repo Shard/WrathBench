@@ -8,7 +8,11 @@
  *   state       alias for sdk.state (the StateCache)
  *   events      alias for sdk.events (the EventStream)
  *   connect()   open the event stream (idempotent); call before createSession
- *   sleep(ms)   Promise timer; rejects with the abort reason if this snippet is abandoned
+ *   sleep(ms, options?)  Promise timer that resolves with why it woke:
+ *               "elapsed", or early with "attacked" (a unit started attacking
+ *               us) or "died" (our health reached zero, transition only).
+ *               `{ wake: false }` is a pure timer. Rejects with the abort
+ *               reason if this snippet is abandoned
  *   signal      AbortSignal for the *current* snippet; fires when the host
  *               abandons it (timeout). Every SDK wait honors it by default.
  *   scratchpad  { read(), write(content), append(text) } — the run's markdown
@@ -199,6 +203,102 @@ function hostcall(method: "scratchpad_read" | "scratchpad_write" | "scratchpad_a
 // rather than the cwd, which the child does not control.
 const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
 
+/**
+ * Why `sleep` resolves. `elapsed` is the timer; the other two are the world
+ * interrupting a wait the model would want to react to.
+ */
+export type SleepReason = "elapsed" | "attacked" | "died";
+
+/**
+ * `sleep(ms)` — a timer that also wakes for the two things a sleeping snippet
+ * most needs to hear about, and says which happened.
+ *
+ * Sleep is blind: nothing about `await sleep(28000)` notices a mob walking up
+ * behind the character, and the trajectories are full of 28-second naps that
+ * ended in a corpse. So the timer additionally resolves early when the server
+ * says a unit started attacking *us* (`SMSG_ATTACKSTART` with our guid as the
+ * victim) or when our own health is observed reaching zero, and the resolved
+ * value names the reason. Ignoring the value costs nothing, and an early
+ * resolve is harmless inside `Promise.race([routine, sleep(ms)])` — the race's
+ * whole point is that the first settle wins.
+ *
+ * Two deliberate non-wakes:
+ *   - `died` fires on the *transition* only. A snippet that sleeps while
+ *     already dead (waiting out the corpse reclaim delay is the single most
+ *     common long sleep in the runs) is not woken by the death it is already
+ *     handling.
+ *   - `{ wake: false }` is a pure timer for a caller that wants one.
+ *
+ * The ambient snippet signal still aborts it: an abandoned snippet's sleep
+ * rejects rather than resolving.
+ */
+function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+    const shown = ms === undefined ? "undefined" : typeof ms === "number" ? String(ms) : typeof ms;
+    throw new TypeError(
+      `sleep(ms) needs a non-negative number of milliseconds, got ${shown} — e.g. sleep(2000), ` +
+        `or sleep(2000, { wake: false }) for a timer that ignores being attacked`,
+    );
+  }
+  if (options !== undefined && (options === null || typeof options !== "object")) {
+    throw new TypeError(`sleep(ms, options) needs an options object, got ${typeof options} — the only option is { wake }`);
+  }
+  const wakeOpt = options?.wake;
+  if (wakeOpt !== undefined && typeof wakeOpt !== "boolean") {
+    throw new TypeError(`sleep(ms, { wake }) needs a boolean, got ${typeof wakeOpt} — { wake: false } is a pure timer`);
+  }
+
+  return new Promise<SleepReason>((resolve, reject) => {
+    const signal = currentSignal();
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const selfDead = (): boolean => client.state.self.health?.value.current === 0;
+    // Already dead when the sleep started: this snippet is handling that death,
+    // so only a *later* one wakes it.
+    let deadAtLastCheck = selfDead();
+    let offAttack: (() => void) | undefined;
+    let offAny: (() => void) | undefined;
+
+    const settle = (reason: SleepReason): void => {
+      cleanup();
+      resolve(reason);
+    };
+    function cleanup(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      offAttack?.();
+      offAny?.();
+    }
+    function onAbort(): void {
+      cleanup();
+      reject(signal?.reason);
+    }
+    const timer = setTimeout(() => settle("elapsed"), ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    if (wakeOpt === false) return;
+    // Registered after the client's own state fold (`onAny` handlers run in
+    // registration order and the cache is the first one), so both of these see
+    // a state cache that already has this event in it.
+    offAttack = client.events.on("SMSG_ATTACKSTART", (e) => {
+      const d = e.data as { victimGuid?: unknown };
+      const me = client.state.self.guid;
+      if (me !== undefined && typeof d?.victimGuid === "string" && d.victimGuid === me) settle("attacked");
+    });
+    offAny = client.events.onAny(() => {
+      const dead = selfDead();
+      if (!dead) {
+        // Alive again (a reclaim, a resurrect): a later death is a new one.
+        deadAtLastCheck = false;
+        return;
+      }
+      if (!deadAtLastCheck) settle("died");
+    });
+  });
+}
+
 let eventsConnected = false;
 const ambient: Record<string, unknown> = {
   sdk: client,
@@ -210,23 +310,7 @@ const ambient: Record<string, unknown> = {
     await client.events.connect();
     eventsConnected = true;
   },
-  sleep: (ms: number): Promise<void> =>
-    new Promise((resolve, reject) => {
-      const signal = currentSignal();
-      if (signal?.aborted) {
-        reject(signal.reason);
-        return;
-      }
-      const timer = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      function onAbort(): void {
-        clearTimeout(timer);
-        reject(signal?.reason);
-      }
-      signal?.addEventListener("abort", onAbort, { once: true });
-    }),
+  sleep,
   scratchpad: {
     read: (): Promise<unknown> => hostcall("scratchpad_read"),
     write: (content: string): Promise<unknown> => hostcall("scratchpad_write", { content }),

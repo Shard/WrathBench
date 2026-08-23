@@ -103,7 +103,8 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `useItem` | `useItem(bag, slot, targetGuid?: GuidArg): Promise<ActionResponse>` | Use a bag item's on-use effect. |
 | `destroyItem` | `destroyItem(bag, slot, count?): Promise<ActionResponse>` | Destroy a bag item; omit count to destroy the whole stack. |
 | `repop` | `repop(): Promise<ActionResponse>` | Release the spirit while dead. |
-| `reclaimCorpse` | `reclaimCorpse(guid?: GuidArg): Promise<ActionResponse>` | Resurrect at the corpse (accepted only near it, after the delay). |
+| `reclaimCorpse` | `reclaimCorpse(guid?: GuidArg, options?: ReclaimCorpseOptions): Promise<ReclaimCorpseResult>` | Wait out the server's corpse reclaim delay, reclaim, and report the verdict: reclaimed / not_reclaimed / unconfirmed. |
+| `reclaimCorpseAsync` | `reclaimCorpseAsync(guid?: GuidArg): Promise<ActionResponse>` | CMSG_RECLAIM_CORPSE, dispatch only. Prefer reclaimCorpse. |
 | `spiritHealerActivate` | `spiritHealerActivate(guid: GuidArg): Promise<ActionResponse>` | Resurrect at a graveyard spirit healer (durability cost, resurrection sickness). |
 | `trainerListAsync` | `trainerListAsync(guid: GuidArg): Promise<ActionResponse>` | Ask a trainer for its list without waiting (prefer trainerList). |
 | `trainerBuySpellAsync` | `trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>` | Buy a spell without waiting (prefer buySpell). |
