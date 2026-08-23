@@ -45,9 +45,12 @@ because that would silently re-scope every score already carrying this label.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
   continent earns nothing for hours, and that is the behaviour this tier exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
-  would end runs for doing the right thing. The tool-call ceiling is raised to
-  match the length; the 500 default would end a six-hour run early on
-  `tool-call-limit`.
+  would end runs for doing the right thing. The tool-call ceiling **is not fixed
+  yet** — 500 is sized for ninety minutes and would end a six-hour run early on
+  `tool-call-limit`, and the nav-probe lane's 2500 is the only precedent. It is
+  a scored tier, so the number is pinned deliberately rather than invented here;
+  FOLLOW-UPS 48(c) owns it, and until it lands an `e360` run's ceiling is
+  whatever its lane set.
 - **Ends.** As `e90`, minus `no-xp`.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
@@ -57,8 +60,8 @@ because that would silently re-scope every score already carrying this label.
   `e90` only — a model that stalls has stopped using the budget it was given.
   Both directions reset on a harness version bump.
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
-  no-XP disabled (which is not the same as zero), the raised tool-call ceiling,
-  `objective: none`, `wikiCoords: false`.
+  no-XP disabled (which is not the same as zero), `objective: none`,
+  `wikiCoords: false`, and the tool-call ceiling once 48(c) fixes it.
 
 ## `freeplay` — labeled and unscored
 
