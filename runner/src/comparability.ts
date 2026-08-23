@@ -147,7 +147,11 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
  */
 export function harnessSeries(version: string | null | undefined): string | null {
   if (version === null || version === undefined) return null;
-  const v = version.trim();
+  let v = version.trim();
+  // `version.ts` on a host wraps `git describe` as `0.0.0-phase0+g<describe>`;
+  // the container path stamps the describe bare. Both name the same series.
+  const wrapped = /^0\.0\.0-phase0\+g(.+)$/.exec(v);
+  if (wrapped !== null) v = wrapped[1]!;
   // The runner's own fallback stamps (`0.0.0-phase0...`) name no series.
   if (v.startsWith("0.0.0")) return null;
   const m = /^(?:harness-)?v?(\d+)\.(\d+)(?:[.-]|$)/.exec(v);
