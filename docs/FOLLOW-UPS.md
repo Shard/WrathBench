@@ -199,15 +199,6 @@ and status.
     instance-portal triggers are reliable. Trade, mail, bank, auction house and guilds
     stay behind the earned-by-need rule until a freeplay run asks.
 
-56. **`areatrigger` re-fires while the character stands inside the volume** (2026-08-23,
-    item-55 diagnosis). In `fleet-nav-probe-freeplay-sonnet-20260823-c4` the module
-    logged `areatrigger 710` every ~1.5s for 13s during one walk — `CheckAreaTriggers`
-    (`module/src/WbManager.cpp`) re-arms on the 1.5s timer rather than on entry, so a
-    character lingering in a DBC volume sends `CMSG_AREATRIGGER` repeatedly. The real
-    client sends it once on crossing the boundary. Harmless for teleport triggers
-    (the transfer moves the character out) but wrong for quest-explore triggers and
-    noisy in the audit log. Fix: track the set of volumes the character is inside and
-    dispatch only on entry. Module change, so it lands in a deploy window.
 
 ## Wiki
 
@@ -303,3 +294,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 29 — 2026-08-23 — 314156b — local models past their targets play freeplay (`policy.extras.local`), so the inference-bound caveat is a property of the class, not a standing item
 - 53 — 2026-08-23 — 4b82bf9, 4de6da0, 61d683f, 29b33ba — the evidence was one `reclaimCorpse` call (attempts: 10) from 387y, later reclaimed by walking back; the gap was information: the module now asks `MSG_CORPSE_QUERY` on repop like a client, `state.self.corpse`/`graveyard`/`reclaimDelay`, `not_reclaimed` names one reason (too_far with distance, delay_not_elapsed, wrong_map, no_corpse), the ghost HUD line states both options and the healer's cost; module in `:next`, smoke pending deploy
 - 54 — 2026-08-23 — 61d683f — the prompt's sleep line carries a worked wake-reason example (pre-v1 prompt tuning ships as a patch)
+- 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66
