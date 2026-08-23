@@ -243,7 +243,9 @@ function Detail(props: { row: ModelRowView }) {
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
-              <th class="right">cost</th>
+              <th class="right" title="what the provider charged; blank when it reported none — the run page also carries the list-price estimate">
+                cost (actual)
+              </th>
               <th>termination</th>
               <th>counts</th>
             </tr>
@@ -264,9 +266,15 @@ function Detail(props: { row: ModelRowView }) {
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>
                   <td class="right mono dim">{fmtDuration(r.durationMs)}</td>
-                  {/* The run page's own figure, computed there and carried here. */}
-                  <td class="right mono dim" title={r.cost?.note ?? "no price on file for this model"}>
-                    {r.cost == null || r.cost.basis === "none" ? "—" : fmtUsd(r.cost.usd)}
+                  {/* The provider's own charge only. The list-price estimate is
+                      a reconstruction and belongs on the run page next to the
+                      tokens it was computed from, not in a column read as a
+                      bill; a blank here means nobody billed us a number. */}
+                  <td
+                    class="right mono dim"
+                    title={r.cost?.actual.note ?? "provider reports no cost for this run"}
+                  >
+                    {r.cost == null || r.cost.actual.basis === "none" ? "—" : fmtUsd(r.cost.actual.usd)}
                   </td>
                   <td class={r.terminationReason === "adapter-error" ? "err" : "dim"}>
                     {r.terminationReason ?? (r.live ? "—" : "no record")}
