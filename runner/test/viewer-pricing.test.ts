@@ -42,6 +42,13 @@ const sonnetRun: PriceableRun = {
 };
 
 describe("priceFor", () => {
+  test("a paid open model on OpenRouter is priced by exact id, metered for real", () => {
+    const run: PriceableRun = { model: "deepseek/deepseek-v4-flash", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    const p = priceFor(run);
+    expect(p?.id).toBe("deepseek-v4-flash");
+    expect(p?.asIfMetered).toBe(false);
+    expect(priceFor({ ...run, model: "deepseek/deepseek-v4-pro" })).toBeNull();
+  });
   test("names a claude model through the claude-code harness", () => {
     expect(priceFor(sonnetRun)?.id).toBe("claude-sonnet-5");
     expect(priceFor({ ...sonnetRun, model: "opus" })?.id).toBe("claude-opus-5");
