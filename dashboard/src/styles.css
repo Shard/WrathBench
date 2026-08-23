@@ -101,6 +101,14 @@ tbody tr:hover { background: var(--panel); }
 
 tbody tr.clickable { cursor: pointer; }
 
+/*
+ * A stillborn run: shown only when asked for, and greyed so it never reads as
+ * an ordinary row. Dimmed rather than struck through — the run happened, it
+ * just never produced a model response.
+ */
+tbody tr.stillborn { opacity: .45; }
+tbody tr.stillborn:hover { opacity: .8; }
+
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
 

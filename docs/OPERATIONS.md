@@ -313,6 +313,29 @@ One roster, or a whole fleet, from the host:
 Do not run a host supervisor against `infra/fleet.json` while the `fleet`
 service is up: they would both spawn lanes on the same accounts.
 
+### Stillborn runs, and archiving them
+
+A run that never produced a single model response is **stillborn**: the
+provider was dead on the first request, the key was refused, the adapter threw
+before a turn existed. It never got off the ground and it never will, so the
+dashboard hides such runs by default — the runs list, the eval and ladder
+charts, and the episode member counts all exclude them, and each surface says
+how many it is hiding. `show stillborn (N)` reveals them greyed; the API takes
+`?includeStillborn=1` on `/api/runs`, `/api/eval` and `/api/ladder`.
+
+They still sit in `data/runs`. To park them:
+
+```
+bun runner/src/archive.ts --stillborn --dry-run   # list what would move, and why
+bun runner/src/archive.ts --stillborn             # move them
+```
+
+Directories move to `data/runs/archive/<run-id>/` — nothing is deleted, and the
+viewer never reads inside `archive/`. A run the fleet may still be holding is
+refused with the reason rather than moved: its own files written inside the
+last ten minutes, or a fleet lane jsonl naming it inside the same window. Run
+the dry-run first; a live lane is the one thing this must not touch.
+
 ### Secrets
 
 `.env` at the repo root, never argv. Bun loads `/wrathbench/.env` inside the

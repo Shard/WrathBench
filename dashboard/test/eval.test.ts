@@ -30,6 +30,8 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     platform: "openrouter",
     harnessVersion: "harness-0.2",
     effort: null,
+    modelResponses: 1,
+    stillborn: false,
     contextEngine: "harness-fixed-window",
     promptHash: "sha256:aaaa",
     serverBuild: null,

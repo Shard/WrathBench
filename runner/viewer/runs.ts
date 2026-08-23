@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
+import { isArchiveDir } from "./stillborn";
 import { normalizePauseReason, parseComparability } from "../src/index";
 
 /**
@@ -34,6 +35,8 @@ export function isValidRunId(id: string): boolean {
 
 export function runDir(runsDir: string, runId: string): string | null {
   if (!isValidRunId(runId)) return null;
+  // `archive` is a directory of runs, not a run; the viewer never reads inside it.
+  if (isArchiveDir(runId)) return null;
   const dir = join(runsDir, runId);
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
   return dir;
@@ -256,7 +259,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
 export function listRuns(runsDir: string, now = Date.now()): RunRow[] {
   if (!existsSync(runsDir)) return [];
   const ids = readdirSync(runsDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && isValidRunId(d.name))
+    .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name))
     .map((d) => d.name);
   const rows = ids.map((id) => readRun(runsDir, id, now));
   rows.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
