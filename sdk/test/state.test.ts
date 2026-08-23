@@ -874,6 +874,17 @@ describe("WB_SESSION_STATE (reattach)", () => {
     expect(cache.anomalies.length).toBe(0);
   });
 
+  test("seeds zone and area when the snapshot carries them", () => {
+    const f = frame("7");
+    const cache = StateCache.replay(
+      toEvents([{ ...f, data: { ...f.data, zoneId: 12, zoneName: "Elwynn Forest", areaId: 9, areaName: "Northshire Valley" } }]),
+    );
+    expect(cache.self.zone?.value).toEqual({ id: 12, name: "Elwynn Forest" });
+    expect(cache.self.area?.value).toEqual({ id: 9, name: "Northshire Valley" });
+    // A pre-N2 module's snapshot has neither: nothing is invented.
+    expect(StateCache.replay(toEvents([frame("7")])).self.zone).toBeUndefined();
+  });
+
   test("contradicting guid records an anomaly, never overwrites", () => {
     const cache = StateCache.replay(toEvents([frame("999")]), { seed: SEED });
     expect(cache.self.level?.value).toBeUndefined();
@@ -1724,5 +1735,68 @@ describe("game objects: names, goType and transports", () => {
     expect(obj.transport?.value.docked).toBe(true);
     // No create block: objectType is unobserved, so it is not a gameObject row and has no goType.
     expect(c.units().find((r) => r.guid === TRAM_GUID)!.goType).toBeUndefined();
+  });
+});
+
+describe("WB_AREA (zone/subzone as the client names them)", () => {
+  const area = (seq: number, d: Record<string, unknown>) => ({
+    seq,
+    opcode: "WB_AREA",
+    opcodeId: 0xff07,
+    ts: 1000 + seq,
+    data: { mapId: 0, zoneId: 12, zoneName: "Elwynn Forest", areaId: 9, areaName: "Northshire Valley", ...d },
+  });
+
+  test("folds into self.zone / self.area as Observed { id, name }", () => {
+    const cache = StateCache.replay(toEvents([area(1, {})]), { seed: SEED });
+    expect(cache.self.zone).toEqual({ value: { id: 12, name: "Elwynn Forest" }, seq: 1, ts: 1001 });
+    expect(cache.self.area).toEqual({ value: { id: 9, name: "Northshire Valley" }, seq: 1, ts: 1001 });
+  });
+
+  test("a later event replaces both; the zone survives a subzone-only change", () => {
+    const cache = StateCache.replay(
+      toEvents([area(1, {}), area(2, { areaId: 24, areaName: "Northshire Abbey" })]),
+      { seed: SEED },
+    );
+    expect(cache.self.zone?.value).toEqual({ id: 12, name: "Elwynn Forest" });
+    expect(cache.self.area?.value).toEqual({ id: 24, name: "Northshire Abbey" });
+    expect(cache.self.area?.seq).toBe(2);
+  });
+});
+
+describe("units(): NPC roles from UNIT_NPC_FLAGS", () => {
+  const cache = () =>
+    StateCache.replay(
+      toEvents([
+        // questgiver + gossip
+        unitAt("901", 1, { dx: 3, entry: 823, health: 100, maxHealth: 100, npcFlags: 0x3 }),
+        // vendor (general + food) + repair
+        unitAt("902", 2, { dx: 5, entry: 824, health: 100, maxHealth: 100, npcFlags: 0x80 | 0x200 | 0x1000 }),
+        // flight master
+        unitAt("903", 3, { dx: 7, entry: 825, health: 100, maxHealth: 100, npcFlags: 0x2000 }),
+        // flags never observed
+        unitAt("904", 4, { dx: 9, entry: 826, health: 100, maxHealth: 100 }),
+      ]),
+      { seed: SEED },
+    );
+
+  test("rows carry role words in bit order; no flags means an empty array", () => {
+    const c = cache();
+    const by = (g: string) => c.units().find((u) => u.guid === g)!.roles;
+    expect(by("901")).toEqual(["gossip", "questGiver"]);
+    expect(by("902")).toEqual(["vendor", "foodVendor", "repair"]);
+    expect(by("903")).toEqual(["flightMaster"]);
+    expect(by("904")).toEqual([]);
+  });
+
+  test("role filter matches one word or any of a list, nearest first", () => {
+    const c = cache();
+    expect(c.units({ role: "questGiver" }).map((u) => u.guid)).toEqual(["901"]);
+    expect(c.units({ role: ["repair", "flightMaster"] }).map((u) => u.guid)).toEqual(["902", "903"]);
+    expect(c.units({ role: "innkeeper" })).toEqual([]);
+  });
+
+  test("an unknown role word is rejected with the list", () => {
+    expect(() => cache().units({ role: "flight master" as never })).toThrow(/role received "flight master", expected one of/);
   });
 });

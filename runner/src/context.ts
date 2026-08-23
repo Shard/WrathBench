@@ -80,6 +80,8 @@ interface UnitLike {
   distance?: unknown;
   /** `true` only when health was observed and is 0. See the HUD caveat below. */
   dead?: unknown;
+  /** `UNIT_NPC_FLAGS` decoded to role words by the SDK (`questGiver`, `vendor`, …). */
+  roles?: unknown;
 }
 
 /** The backpack as `state.bag()` shapes it, flattened into the rpc JSON. */
@@ -109,6 +111,10 @@ export interface SnapshotLike {
     name?: unknown;
     level?: ObservedLike;
     position?: ObservedLike;
+    /** `{ id, name }` — the zone the client names on screen (SDK `state.self.zone`, from `WB_AREA`). */
+    zone?: ObservedLike;
+    /** `{ id, name }` — the subzone (SDK `state.self.area`). */
+    area?: ObservedLike;
     /** `value` is a `{ current, max }` gauge. Self only (the player frame is numbers). */
     health?: ObservedLike;
     power?: ObservedLike;
@@ -297,6 +303,41 @@ function ghostLine(
   );
 }
 
+/**
+ * "Elwynn Forest / Northshire Valley — " from `self.zone` / `self.area`, the
+ * names the game's own zone text shows; the zone alone when the subzone is the
+ * zone; empty when neither has been observed (the ids ride in the SDK state).
+ */
+function fmtPlace(s: NonNullable<SnapshotLike["self"]>): string {
+  const zone = s.zone?.value as { id?: number; name?: string } | undefined;
+  const area = s.area?.value as { id?: number; name?: string } | undefined;
+  const zoneName = zone?.name ? String(zone.name) : undefined;
+  const areaName = area?.name ? String(area.name) : undefined;
+  if (zoneName === undefined && areaName === undefined) return "";
+  if (zoneName === undefined) return `${areaName} — `;
+  if (areaName === undefined || areaName === zoneName) return `${zoneName} — `;
+  return `${zoneName} / ${areaName} — `;
+}
+
+/**
+ * Roles as the nearby line shows them: the SDK's role words spaced out
+ * ("questGiver" → "quest giver"), `gossip` dropped (nearly every NPC has it and
+ * it says nothing about what the NPC is for), and sub-kinds folded into their
+ * parent (a `foodVendor` is shown as `vendor`; a `classTrainer` as `trainer`).
+ * Role words only, never a recommendation.
+ */
+export function fmtRoles(roles: unknown): string {
+  if (!Array.isArray(roles)) return "";
+  const words: string[] = [];
+  for (const r of roles) {
+    if (typeof r !== "string" || r === "gossip") continue;
+    const parent = r.endsWith("Vendor") ? "vendor" : r.endsWith("Trainer") ? "trainer" : r;
+    const word = parent.replace(/([A-Z])/g, (m) => ` ${m.toLowerCase()}`);
+    if (!words.includes(word)) words.push(word);
+  }
+  return words.join(", ");
+}
+
 export function formatStateSummary(
   snapshot: SnapshotLike | null,
   o: { sessionLive: boolean; /** Wall clock for the reclaim countdown; tests pin it. */ now?: number },
@@ -315,7 +356,7 @@ export function formatStateSummary(
   lines.push(
     pos === undefined
       ? "position: unobserved"
-      : `position: map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
+      : `position: ${fmtPlace(s)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
 
   // health / power (self only — the player frame is numbers)
@@ -372,7 +413,8 @@ export function formatStateSummary(
       const name = u.name != null ? String(u.name) : "(unnamed)";
       const dead = u.dead === true ? " dead" : "";
       const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
-      return `${name}${dead} (${dist})`;
+      const roles = fmtRoles(u.roles);
+      return `${name}${dead} (${roles === "" ? "" : `${roles}, `}${dist})`;
     });
     let nearbyStr = shown.join(", ");
     if (units.length > NEARBY_CAP) nearbyStr += ` +${units.length - NEARBY_CAP} more`;

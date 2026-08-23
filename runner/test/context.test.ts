@@ -81,6 +81,56 @@ describe("assembleContext", () => {
 });
 
 describe("formatStateSummary", () => {
+  test("position names the zone and subzone first, ids and coordinates kept", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          name: "Benchy",
+          guid: "1",
+          position: { value: { map: 0, x: -8949.9, y: -132.4, z: 83.5 }, seq: 5 },
+          zone: { value: { id: 12, name: "Elwynn Forest" }, seq: 6 },
+          area: { value: { id: 9, name: "Northshire Valley" }, seq: 6 },
+        },
+        lastSeq: 6,
+        eventCount: 7,
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("position: Elwynn Forest / Northshire Valley — map 0 (-8949.9, -132.4, 83.5) [seq 5]");
+  });
+
+  test("position collapses to the zone alone when the subzone is the zone, and omits unobserved names", () => {
+    const self = {
+      name: "Benchy",
+      guid: "1",
+      position: { value: { map: 0, x: 1, y: 2, z: 3 }, seq: 5 },
+    };
+    const same = formatStateSummary(
+      { self: { ...self, zone: { value: { id: 1537, name: "Ironforge" } }, area: { value: { id: 1537, name: "Ironforge" } } } },
+      { sessionLive: true },
+    );
+    expect(same).toContain("position: Ironforge — map 0 (1, 2, 3)");
+    const none = formatStateSummary({ self }, { sessionLive: true });
+    expect(none).toContain("position: map 0 (1, 2, 3)");
+  });
+
+  test("nearby appends NPC roles compactly: spaced words, gossip dropped, sub-kinds folded", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        units: [
+          { guid: "9", name: "Gryth Thurden", type: "unit", distance: 4.2, roles: ["gossip", "flightMaster"] },
+          { guid: "10", name: "Brog Hamfist", type: "unit", distance: 8, roles: ["vendor", "foodVendor", "repair"] },
+          { guid: "11", name: "Kobold Vermin", type: "unit", distance: 12, roles: [] },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain(
+      "nearby: Gryth Thurden (flight master, 4.2y), Brog Hamfist (vendor, repair, 8y), Kobold Vermin (12y)",
+    );
+  });
+
   test("unobserved fields say so instead of inventing zeros", () => {
     const text = formatStateSummary(
       { self: { name: "Benchy", guid: "1" }, lastSeq: 3, eventCount: 4 },

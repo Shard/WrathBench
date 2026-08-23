@@ -177,10 +177,28 @@ export interface CorpseLocation extends Point3 {
   readonly source: "corpse_query" | "death_spot";
 }
 
+/**
+ * A zone or subzone as the client names it: the id the client computes from
+ * its own map files and the `AreaTable.dbc` name it draws on screen. `name` is
+ * `""` only for an id the DBC has no row for.
+ */
+export interface AreaRef {
+  readonly id: number;
+  readonly name: string;
+}
+
 export interface SelfState extends UnitFieldsState {
   guid: GuidKey | undefined;
   name: string | undefined;
   position: Observed<WorldPosition> | undefined;
+  /**
+   * The zone the character stands in (`WB_AREA`, seeded by the login
+   * snapshot): the top-level area, e.g. "Elwynn Forest". Changes whether the
+   * character walked, was teleported or transferred.
+   */
+  zone: Observed<AreaRef> | undefined;
+  /** The subzone (`WB_AREA`), e.g. "Northshire Valley"; equals `zone` when there is none. */
+  area: Observed<AreaRef> | undefined;
   /**
    * The corpse, from death until the resurrect (`SMSG_DEATH_RELEASE_LOC` with
    * `map: -1`). `undefined` while alive, before the first death, or when the
@@ -600,6 +618,14 @@ export interface UnitView {
   /** The raw `DIALOG_STATUS_*` byte behind `questGiver`. */
   readonly questGiverStatus: number | undefined;
   /**
+   * What this NPC is for, decoded from its `UNIT_NPC_FLAGS` (the bits a client
+   * uses to pick the cursor and the interaction window): `questGiver`,
+   * `vendor`, `trainer`, `flightMaster`, `innkeeper`, … Role words only, no
+   * recommendation. Empty for players, game objects and creatures with no
+   * flags; empty (not undefined) when the flags were never observed.
+   */
+  readonly roles: readonly NpcRole[];
+  /**
    * Game objects only: what kind of object this is, named from the core's
    * `GameobjectTypes` (`door`, `chest`, `mailbox`, `transport`, …). From the
    * object's own `GAMEOBJECT_BYTES_1` or its template answer; undefined for
@@ -613,6 +639,76 @@ export interface UnitView {
    * everything that is not a transport, and until the first report.
    */
   readonly docked: boolean | undefined;
+}
+
+/**
+ * `UNIT_NPC_FLAGS` bits, 3.3.5a (`UnitDefines.h` NPCFlags), as role words.
+ * Sub-kinds (`classTrainer`, `foodVendor`) come alongside their parent
+ * (`trainer`, `vendor`) when the server sets both bits, which it does.
+ */
+export const NPC_ROLES = [
+  "gossip",
+  "questGiver",
+  "trainer",
+  "classTrainer",
+  "professionTrainer",
+  "vendor",
+  "ammoVendor",
+  "foodVendor",
+  "poisonVendor",
+  "reagentVendor",
+  "repair",
+  "flightMaster",
+  "spiritHealer",
+  "spiritGuide",
+  "innkeeper",
+  "banker",
+  "petitioner",
+  "tabardDesigner",
+  "battlemaster",
+  "auctioneer",
+  "stableMaster",
+  "guildBanker",
+  "spellClick",
+  "playerVehicle",
+  "mailbox",
+] as const;
+export type NpcRole = (typeof NPC_ROLES)[number];
+
+const NPC_ROLE_BITS: readonly (readonly [number, NpcRole])[] = [
+  [0x00000001, "gossip"],
+  [0x00000002, "questGiver"],
+  [0x00000010, "trainer"],
+  [0x00000020, "classTrainer"],
+  [0x00000040, "professionTrainer"],
+  [0x00000080, "vendor"],
+  [0x00000100, "ammoVendor"],
+  [0x00000200, "foodVendor"],
+  [0x00000400, "poisonVendor"],
+  [0x00000800, "reagentVendor"],
+  [0x00001000, "repair"],
+  [0x00002000, "flightMaster"],
+  [0x00004000, "spiritHealer"],
+  [0x00008000, "spiritGuide"],
+  [0x00010000, "innkeeper"],
+  [0x00020000, "banker"],
+  [0x00040000, "petitioner"],
+  [0x00080000, "tabardDesigner"],
+  [0x00100000, "battlemaster"],
+  [0x00200000, "auctioneer"],
+  [0x00400000, "stableMaster"],
+  [0x00800000, "guildBanker"],
+  [0x01000000, "spellClick"],
+  [0x02000000, "playerVehicle"],
+  [0x04000000, "mailbox"],
+];
+
+/** Decode a `UNIT_NPC_FLAGS` value into role words, in bit order. */
+export function npcRolesOf(npcFlags: number | undefined): NpcRole[] {
+  if (npcFlags === undefined || npcFlags === 0) return [];
+  const out: NpcRole[] = [];
+  for (const [bit, role] of NPC_ROLE_BITS) if ((npcFlags & bit) !== 0) out.push(role);
+  return out;
 }
 
 /** The `DIALOG_STATUS_*` names, 3.3.5a. `unknown` covers any byte outside 0-10. */
@@ -675,6 +771,11 @@ export interface UnitFilter {
   maxDistance?: number;
   /** `npcFlags > 0` — a gossip/vendor/questgiver NPC, as observed. */
   npc?: boolean;
+  /**
+   * Keep only NPCs whose observed `roles` include this word (or any of a
+   * list), e.g. `{ role: "flightMaster" }`, `{ role: ["vendor", "repair"] }`.
+   */
+  role?: NpcRole | NpcRole[];
   /**
    * The observed questgiver marker, by name or a list of names — e.g.
    * `{ questGiver: "reward" }` for every NPC ready to take a turn-in, or
@@ -758,6 +859,8 @@ export class StateCache {
     name: undefined,
     level: undefined,
     position: undefined,
+    zone: undefined,
+    area: undefined,
     corpse: undefined,
     graveyard: undefined,
     reclaimDelay: undefined,
@@ -1238,6 +1341,7 @@ export class StateCache {
         const d = event.data as {
           character: string; guid: GuidKey; map: number; x: number; y: number;
           z: number; o: number; level: number;
+          zoneId?: number; zoneName?: string; areaId?: number; areaName?: string;
         };
         if (this.seed.guid !== undefined && this.seed.guid !== d.guid) {
           this.anomalyBuf.push({
@@ -1257,6 +1361,20 @@ export class StateCache {
           ts: event.ts,
         };
         this.self.level = { value: d.level, seq: event.seq, ts: event.ts };
+        if (d.zoneId !== undefined && d.areaId !== undefined) {
+          this.self.zone = { value: { id: d.zoneId, name: d.zoneName ?? "" }, seq: event.seq, ts: event.ts };
+          this.self.area = { value: { id: d.areaId, name: d.areaName ?? "" }, seq: event.seq, ts: event.ts };
+        }
+        return;
+      }
+      case "WB_AREA": {
+        // The module reads the server's zone/area pair for this character —
+        // the same pair a client computes from its own map files — and names
+        // it from the client's AreaTable.dbc (PROTOCOL.md). One event per
+        // change, the first at login.
+        const d = event.data as { mapId: number; zoneId: number; zoneName: string; areaId: number; areaName: string };
+        this.self.zone = { value: { id: d.zoneId, name: d.zoneName }, seq: event.seq, ts: event.ts };
+        this.self.area = { value: { id: d.areaId, name: d.areaName }, seq: event.seq, ts: event.ts };
         return;
       }
       case "SMSG_LOGIN_VERIFY_WORLD":
@@ -2212,6 +2330,7 @@ function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView
     targetGuid: target === undefined || target === "0" ? undefined : target,
     questGiver: obj.questGiver === undefined ? undefined : questGiverStatusName(obj.questGiver.value),
     questGiverStatus: obj.questGiver?.value,
+    roles: npcRolesOf(obj.fields.get("npcFlags")?.value),
     goType: goTypeOf(obj),
     docked: obj.transport?.value.docked,
   };
@@ -2259,6 +2378,7 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
     const isNpc = (obj.fields.get("npcFlags")?.value ?? 0) > 0;
     if (isNpc !== f.npc) return false;
   }
+  if (f.role !== undefined && !view.roles.some((r) => f.role!.has(r))) return false;
   if (f.questGiver !== undefined) {
     if (view.questGiver === undefined) return false;
     if (f.questGiver === ANY_QUEST_GIVER) {
@@ -2278,7 +2398,7 @@ function passesUnitFilter(view: UnitView, obj: NearbyObject, f: NormalizedUnitFi
 // the forbidden outcome — it returns a wrong-but-plausible answer, which is the
 // very failure this helper exists to remove.
 
-const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc", "questGiver"] as const;
+const UNIT_FILTER_KEYS = ["entry", "name", "type", "alive", "maxDistance", "npc", "role", "questGiver"] as const;
 
 /** `questGiver: true` — any marker except `"none"`. Not a status name, so it cannot collide with one. */
 const ANY_QUEST_GIVER = "any" as const;
@@ -2316,6 +2436,7 @@ interface NormalizedUnitFilter {
   alive: boolean | undefined;
   maxDistance: number | undefined;
   npc: boolean | undefined;
+  role: Set<NpcRole> | undefined;
   questGiver: Set<QuestGiverStatusName> | typeof ANY_QUEST_GIVER | undefined;
 }
 
@@ -2326,6 +2447,7 @@ const EMPTY_UNIT_FILTER: NormalizedUnitFilter = {
   alive: undefined,
   maxDistance: undefined,
   npc: undefined,
+  role: undefined,
   questGiver: undefined,
 };
 
@@ -2508,6 +2630,22 @@ function normalizeUnitFilter(filter: UnitFilter | undefined): NormalizedUnitFilt
 
   if (filter.alive !== undefined) out.alive = coerceBoolean(filter.alive, "alive");
   if (filter.npc !== undefined) out.npc = coerceBoolean(filter.npc, "npc");
+
+  if (filter.role !== undefined) {
+    const raw = Array.isArray(filter.role) ? filter.role : [filter.role];
+    if (raw.length === 0) throw filterError('role received an empty array; pass a role word such as "vendor", or omit role.');
+    const roles = new Set<NpcRole>();
+    for (const item of raw) {
+      if (typeof item !== "string" || !(NPC_ROLES as readonly string[]).includes(item)) {
+        throw filterError(
+          `role received ${showValue(item)}, expected one of ${NPC_ROLES.map(showValue).join(", ")} ` +
+            "(exact, case-sensitive) or an array of them.",
+        );
+      }
+      roles.add(item as NpcRole);
+    }
+    out.role = roles;
+  }
 
   if (filter.questGiver !== undefined) {
     // Exact names only: "?"/"!" or "turnin" have more than one reading

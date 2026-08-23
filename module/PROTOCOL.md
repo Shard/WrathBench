@@ -663,7 +663,8 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | `WB_RIDE_PROGRESS` | 0xFF05 | `{ "transportGuid": <guid-string>, "transportEntry": <u32>, "pos": { "x","y","z","o" } }` — at most 1/s while the character rides a transport and is not walking; the server-side position the transport carried it to |
 | `WB_TRANSPORT_PROGRESS` | 0xFF06 | `{ "guid": <guid-string>, "entry": <u32>, "pos": { "x","y","z","o" }, "progressMs": <u32>, "periodMs": <u32?>, "docked": <bool?> }` — at most 1/s per session, one per transport on the character's map whose create block the session has received: the car's current position on its `TransportAnimation.dbc` path (what a client animates locally from `pathProgress`), the clock and period, and `docked` when the keyframe segment the clock is on has no displacement (the car is dwelling at a platform; absent for transports without an animation path) |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
-| `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
+| `WB_AREA` | 0xFF07 | `{ "mapId": <u32>, "zoneId": <u32>, "zoneName": <str>, "areaId": <u32>, "areaName": <str> }` — the zone and subzone the character is in, named as the client names them; once when the character enters the world and once per change of either id, whatever moved it (walking, a teleport, a map transfer). See "Zone and area" below. |
+| `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n>, "zoneId", "zoneName", "areaId", "areaName" }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry, plus the same zone/area fields as `WB_AREA` so a reattached client starts where the stream cannot re-emit. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
 2^53, so it falls under the counter exemption to the u64-as-string rule stated
@@ -770,6 +771,30 @@ transfer (`SMSG_TRANSFER_PENDING` … `transferred`), exploration quest credit
 happen without an agent action, because they happen to a client without a
 player action. Triggers fire only while a `move_to` is in progress; the
 server's own radius check rejects any hit the interpolation got wrong.
+
+#### Zone and area (FOLLOW-UPS 38 N2)
+
+No packet carries "Elwynn Forest / Northshire Valley" to a client. The client
+computes its current area id locally — from the area-id grid of the ADT it
+stands on, or from the WMO group it is inside (WMOAreaTable) — walks the
+parent chain in `AreaTable.dbc` for the zone, and draws both names from the
+same table. The server derives the same pair from the same terrain data
+(`Player::GetZoneAndAreaId`, which reads the map-file area grid and the vmap
+WMO area the extractor took from the client's files), so reading the pair
+off the player is observation-equivalent to what the client computes, not a
+server-side extra; the names come from the client's own `AreaTable.dbc` in the
+data volume, loaded at startup next to `AreaTrigger.dbc` (3.3.5a layout: 36
+fields, 144-byte records; `id`, `mapId`, `parentAreaId`, …, enUS `name` at
+field 11 — a file with any other shape is refused with an error, exactly as
+the areatrigger loader refuses a wrong `AreaTrigger.dbc`, and `WB_AREA` then
+carries ids with empty names). Once per world tick, for every in-world
+session, the module compares the pair to the last one announced and emits
+`WB_AREA` when either changed; the first in-world tick counts as a change, so
+login announces the starting zone, and a teleport or map transfer announces
+its arrival the same way a walk across a subzone edge does. The event is
+audited like every other (`kind: "event"`). What the server does with the
+pair (exploration credit, PvP flags, rest state) is unchanged and was never
+gated on this.
 
 ### Quest/combat extension whitelist (2026-08, additive)
 

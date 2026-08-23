@@ -176,3 +176,40 @@ trigger against a position it has just been told about. Built as afd352c and in
 same rerun. Client parity again
 decides which layer owns the detail: nothing about the agent's action surface
 changes, and no status is added.
+
+## Amendment 2026-08-23: where am I, and what is that NPC for (FOLLOW-UPS 38 N2)
+
+Two field-level observations, each decided by the same client-parity test as
+the areatriggers above, each shipped across module, SDK, HUD, trajectory and
+smoke in one change (`infra/smoke/area-and-roles.ts`, gate-ready; built to
+`:next`, not deployed by this change).
+
+- **Zone and subzone names on self.** No packet carries them; a client
+  computes its area id from its own map files (the ADT area grid outdoors,
+  the WMO group indoors), climbs `AreaTable.dbc` for the zone, and draws
+  both names from that table. The server keeps the same pair from the same
+  terrain data (`Player::GetZoneAndAreaId`), so the module reads it and names
+  it from the client's `AreaTable.dbc` in the data volume, loaded beside
+  `AreaTrigger.dbc` with the same fail-loudly shape check. `WB_AREA` goes out
+  on the first in-world tick and on every change of either id, by foot,
+  teleport or transfer — not only while a `move_to` is active, which is the
+  residual the areatrigger path still carries. The SDK folds it into
+  `state.self.zone` / `state.self.area` (`Observed<{ id, name }>`), the HUD
+  position line leads with the names (`position: Elwynn Forest / Northshire
+  Valley — map 0 (x, y, z)`), and the loop writes the first `milestone`
+  trajectory record of item 35 (`kind: "zone" | "area"`, ids only) plus
+  `zone`/`area` columns on the state table. Rejected: a `here()` helper (the
+  field is one property read; ADR-0015), and names in the milestone record
+  (a locale or DBC choice must never rewrite a trajectory).
+- **NPC roles from `UNIT_NPC_FLAGS`.** The flags were already served; the
+  client uses them to pick the cursor and the window, so naming the bits is
+  rendering, not new observation. `UnitView.roles` lists the role words
+  (`questGiver`, `vendor`, `repair`, `trainer`, `flightMaster`, `innkeeper`,
+  …, verified against `UnitDefines.h`), `units({ role })` filters on them,
+  and the HUD's nearby line appends them (`Gryth Thurden (flight master,
+  4.2y)`, gossip dropped and sub-kinds folded into vendor/trainer). Role, not
+  recommendation: nothing says which NPC to use.
+
+Innkeeper bind (`CMSG_BINDER_ACTIVATE`) stays open under item 38 N2. No status
+vocabulary changes, so the navigation-comparability boundary does not move;
+the HUD text changes, which is the usual 0.4 patch-level boundary.

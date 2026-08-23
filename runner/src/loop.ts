@@ -97,6 +97,9 @@ export class ContextBuilder {
   private live = false;
   /** High-water mark into the snapshot's quest-completion list, for logging. */
   private questsLogged = 0;
+  /** Last zone/area ids a milestone was written for; undefined until the first sample names one. */
+  private lastZoneId: number | undefined;
+  private lastAreaId: number | undefined;
   /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
@@ -164,6 +167,32 @@ export class ContextBuilder {
       trajectory.append({ t: "quest_complete", questId: c.questId });
     }
     this.questsLogged = completions.length;
+    // Zone/area milestones (FOLLOW-UPS 35's first producer): ids only, from
+    // the state cache, never the names — the names are client DBC text the
+    // HUD renders, and a record must stay what the server said. The first
+    // observed pair is a milestone from `undefined` so a run's starting zone
+    // is on the record; a sample with no observation writes nothing.
+    const zone = snap.self?.zone?.value as { id?: number } | undefined;
+    const area = snap.self?.area?.value as { id?: number } | undefined;
+    const turn = this.turn > 0 ? { turn: this.turn } : {};
+    if (typeof zone?.id === "number" && zone.id !== this.lastZoneId) {
+      trajectory.recordMilestone({
+        kind: "zone",
+        from: this.lastZoneId === undefined ? undefined : { id: this.lastZoneId },
+        to: { id: zone.id },
+        ...turn,
+      });
+      this.lastZoneId = zone.id;
+    }
+    if (typeof area?.id === "number" && area.id !== this.lastAreaId) {
+      trajectory.recordMilestone({
+        kind: "area",
+        from: this.lastAreaId === undefined ? undefined : { id: this.lastAreaId },
+        to: { id: area.id },
+        ...turn,
+      });
+      this.lastAreaId = area.id;
+    }
     trajectory.recordState(config.runId, {
       level,
       xp,
@@ -175,7 +204,9 @@ export class ContextBuilder {
       lastSeq: snap.lastSeq,
       money,
       questsCompleted: completions.length,
-      ...(this.turn > 0 ? { turn: this.turn } : {}),
+      ...turn,
+      zone: zone?.id,
+      area: area?.id,
     });
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;

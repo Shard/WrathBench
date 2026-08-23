@@ -175,6 +175,9 @@ namespace WrathBench
         std::string dbcPath = sWorld->GetDataPath() + "dbc/AreaTrigger.dbc";
         if (!LoadAreaTriggerDbc(dbcPath))
             LOG_ERROR("module", "wrathbench: AreaTrigger.dbc not loaded from '{}'; portals and explore triggers will not fire for bench characters", dbcPath);
+        std::string areaPath = sWorld->GetDataPath() + "dbc/AreaTable.dbc";
+        if (!LoadAreaTableDbc(areaPath))
+            LOG_ERROR("module", "wrathbench: AreaTable.dbc not loaded from '{}'; WB_AREA will carry ids without names", areaPath);
 
         _http = std::make_unique<HttpServer>(_bindAddress, _port, this, _threads);
         try
@@ -234,6 +237,7 @@ namespace WrathBench
         // graveyard port included) freezes movement forever.
         TickTeleportAcks(nowMs);
         TickCorpseQuery();
+        TickAreas();
 
         // Keep parked sockets from being reaped by the idle-connection check in
         // WorldSession::Update (it calls CloseSocket once m_timeOutTime hits 0).
@@ -2007,6 +2011,107 @@ namespace WrathBench
         return _areaTriggersLoaded;
     }
 
+    // WDBC reader for AreaTable.dbc (3.3.5a: 36 fields of 4 bytes, record
+    // size 144 — verified against the shipped file: id, mapId, parentAreaId,
+    // exploreFlag, flags, soundProviderPref, soundProviderPrefUnderwater,
+    // ambienceId, zoneMusic, introSound, explorationLevel, name[16 locales +
+    // flags] from field 11 with enUS first, ...). Only id, mapId, parentAreaId
+    // and the enUS name are kept. Same header as AreaTrigger.dbc above.
+    bool Manager::LoadAreaTableDbc(std::string const& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+            return false;
+        char magic[4];
+        uint32 recordCount = 0, fieldCount = 0, recordSize = 0, stringSize = 0;
+        in.read(magic, 4);
+        in.read(reinterpret_cast<char*>(&recordCount), 4);
+        in.read(reinterpret_cast<char*>(&fieldCount), 4);
+        in.read(reinterpret_cast<char*>(&recordSize), 4);
+        in.read(reinterpret_cast<char*>(&stringSize), 4);
+        if (!in || std::memcmp(magic, "WDBC", 4) != 0 || fieldCount != 36 || recordSize != 144)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' is not a 3.3.5a AreaTable.dbc (fields {}, record size {})", path, fieldCount, recordSize);
+            return false;
+        }
+        std::vector<char> recs(size_t(recordCount) * recordSize);
+        in.read(recs.data(), recs.size());
+        std::vector<char> strings(stringSize);
+        in.read(strings.data(), stringSize);
+        if (!in)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' truncated ({} records, {} string bytes expected)", path, recordCount, stringSize);
+            return false;
+        }
+        size_t loaded = 0;
+        for (uint32 i = 0; i < recordCount; ++i)
+        {
+            char const* rec = recs.data() + size_t(i) * recordSize;
+            uint32 id, map, parent, nameOff;
+            std::memcpy(&id, rec, 4);
+            std::memcpy(&map, rec + 4, 4);
+            std::memcpy(&parent, rec + 8, 4);
+            std::memcpy(&nameOff, rec + 11 * 4, 4);
+            AreaTableRec r;
+            r.mapId = map;
+            r.parentAreaId = parent;
+            if (nameOff < stringSize)
+                r.name = std::string(strings.data() + nameOff, strnlen(strings.data() + nameOff, stringSize - nameOff));
+            _areaTable[id] = std::move(r);
+            ++loaded;
+        }
+        _areaTableLoaded = loaded > 0;
+        LOG_INFO("module", "wrathbench: loaded {} areas from '{}'", loaded, path);
+        return _areaTableLoaded;
+    }
+
+    void Manager::AddAreaFields(Json::Writer& w, Player* player)
+    {
+        uint32 zoneId = 0, areaId = 0;
+        player->GetZoneAndAreaId(zoneId, areaId);
+        auto nameOf = [this](uint32 id) -> std::string {
+            auto it = _areaTable.find(id);
+            return it == _areaTable.end() ? std::string() : it->second.name;
+        };
+        w.Add("mapId", player->GetMapId())
+         .Add("zoneId", zoneId).Add("zoneName", nameOf(zoneId))
+         .Add("areaId", areaId).Add("areaName", nameOf(areaId));
+    }
+
+    // A client computes the zone/subzone it is in from its own map files and
+    // names them from AreaTable.dbc, and redraws on every change whether it
+    // walked, was teleported or transferred. The server keeps the same pair
+    // on the Player from the same terrain data, so reading it is the same
+    // observation. Edge-triggered per session; the first in-world tick counts
+    // as a change so login announces where the character is.
+    void Manager::TickAreas()
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load() && s->phase.load() == BenchSession::P_INWORLD)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            Player* player = s->ws->GetPlayer();
+            if (!player || !player->IsInWorld() || player->IsBeingTeleported())
+                continue;
+            uint32 zoneId = 0, areaId = 0;
+            player->GetZoneAndAreaId(zoneId, areaId);
+            if (zoneId == s->lastZoneId && areaId == s->lastAreaId)
+                continue;
+            s->lastZoneId = zoneId;
+            s->lastAreaId = areaId;
+            Json::Writer w;
+            AddAreaFields(w, player);
+            EmitEvent(*s, "WB_AREA", 0xFF07, w.Str());
+        }
+    }
+
     // Same geometry as Player::IsInAreaTriggerRadius with delta 0 (the 5y
     // tavern delta is server-side only): a sphere when radius > 0, otherwise
     // an oriented box with half-extents length/2, width/2, height/2 around
@@ -2877,6 +2982,7 @@ namespace WrathBench
          .Add("z", (double)player->GetPositionZ())
          .Add("o", (double)player->GetOrientation())
          .Add("level", (uint32)player->GetLevel());
+        AddAreaFields(w, player);
         EmitEvent(*s, "WB_SESSION_STATE", 0xFF03, w.Str());
     }
 

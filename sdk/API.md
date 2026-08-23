@@ -114,7 +114,9 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 ## State reads (`state.*`)
 
 `state` (alias for `sdk.state`) is a cache folded from events. `state.self`
-(guid, name, level, position, health, targetGuid) and `state.nearby` (a Map
+(guid, name, level, position, zone and area — `{ id, name }`, the game's own
+zone/subzone as the client names them on screen, e.g. "Elwynn Forest" /
+"Northshire Valley" — health, targetGuid) and `state.nearby` (a Map
 keyed by guid) are plain properties; the members below are getters and methods.
 Observed fields are wrapped as `{ value, seq, ts }` — read `.value`. Every field
 is `undefined` until an event carried it; `undefined` means unobserved, never
@@ -122,8 +124,8 @@ zero.
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done; true means any marker but "none"). Rows carry questGiver / questGiverStatus; game objects are named ("Mailbox", "Subway") and carry goType (door, chest, mailbox, transport, …), and a transport carries docked (true while the car sits at a platform). |
-| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, questGiver }) or a predicate over the raw object. |
+| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, role (an NPC role word or a list: "questGiver", "vendor", "repair", "trainer", "flightMaster", "innkeeper", "spiritHealer", "banker", "auctioneer", …), questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done; true means any marker but "none"). Rows carry roles (the NPC's role words from its npc flags — what it is for, never what to do; empty for non-NPCs) and questGiver / questGiverStatus; game objects are named ("Mailbox", "Subway") and carry goType (door, chest, mailbox, transport, …), and a transport carries docked (true while the car sits at a platform). |
+| `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, role, questGiver }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
 | `bag` | `state.bag(): BagContents` | The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }. |
@@ -153,6 +155,9 @@ zero.
 
 Events are the server's `SMSG_*` packets as JSON, plus a few `WB_*` events for
 what a client knows locally: `WB_MOVE_RESULT` / `WB_MOVE_PROGRESS` (own moves),
+`WB_AREA` (`{ mapId, zoneId, zoneName, areaId, areaName }` on login and whenever
+the zone or subzone changes, by foot, teleport or transfer — what `state.self.zone`
+/ `state.self.area` are folded from),
 `WB_RIDE_PROGRESS` (own position while a transport carries you, ≤1/s) and
 `WB_TRANSPORT_PROGRESS` (`{ guid, entry, pos, docked, progressMs, periodMs }`
 per transport in view, ≤1/s — the same facts as the `docked` column of
