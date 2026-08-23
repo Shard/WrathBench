@@ -16,6 +16,14 @@
  * reclaim_corpse within the 39y radius -> assert resurrection via health
  * (a rejected reclaim is silent) -> logout + character delete.
  *
+ * FOLLOW-UPS 53 additions (module built 2026-08-23, needs that build): after
+ * repop the module asks MSG_CORPSE_QUERY once on the client's behalf and the
+ * answer is served — assert found:1 within 5y of the recorded death spot; then
+ * a reclaim sent from the graveyard is the too_far case — assert the corpse
+ * is further than 39y and the reclaim is silently refused (no release-clear,
+ * health still the ghost's 1). The SDK's `too_far` verdict is this distance
+ * plus the radius; the raw probe checks the facts it is built from.
+ *
  * Each step fails with a named FAIL line and a non-zero exit.
  *
  * Run:
@@ -300,6 +308,33 @@ async function main() {
   if (dist2d(tpAck.data.pos, ghostPos) > 5) fail(`MSG_MOVE_TELEPORT_ACK pos disagrees with the server-truth position by ${dist2d(tpAck.data.pos, ghostPos).toFixed(1)}y`);
   log(`PASS[teleport-ack]: MSG_MOVE_TELEPORT_ACK served for self at (${tpAck.data.pos.x.toFixed(1)}, ${tpAck.data.pos.y.toFixed(1)}), ${ackFromGrave.toFixed(1)}y from the release loc`);
 
+  // 3c. A ghost knows where its corpse is (FOLLOW-UPS 53): the module sends
+  //     MSG_CORPSE_QUERY once after the graveyard port is acked, and the
+  //     server's answer reaches the stream. The corpse is where we died.
+  step = "corpse-query";
+  const cq = await waitFor((e) => e.opcode === "MSG_CORPSE_QUERY", 10000, "MSG_CORPSE_QUERY after repop", mark);
+  if (cq.data?.found !== true) fail(`MSG_CORPSE_QUERY answered ${JSON.stringify(cq.data)}, want found:true`);
+  const corpse = { x: cq.data.x, y: cq.data.y, z: cq.data.z };
+  const corpseFromDeath = dist2d(corpse, deathPos);
+  if (corpseFromDeath > 5) fail(`corpse query puts the corpse ${corpseFromDeath.toFixed(1)}y from the recorded death spot, want <= 5y`);
+  const queries = events.slice(mark).filter((e) => e.opcode === "MSG_CORPSE_QUERY").length;
+  if (queries !== 1) fail(`${queries} MSG_CORPSE_QUERY answers after one repop, want exactly 1 (the latch)`);
+  log(`PASS[corpse-query]: corpse at (${corpse.x.toFixed(1)}, ${corpse.y.toFixed(1)}) map ${cq.data.map}/${cq.data.corpseMap}, ${corpseFromDeath.toFixed(1)}y from the death spot`);
+
+  // 3d. Reclaim from the graveyard: the too_far case. The core drops a reclaim
+  //     further than CORPSE_RECLAIM_RADIUS (39y) without answering, so the
+  //     observable is an absence — no release-clear, health still 1 — and the
+  //     distance the SDK's verdict reports is this one.
+  step = "too-far";
+  const ghostFromCorpse = dist2d(ghostPos, corpse);
+  if (ghostFromCorpse <= 39) fail(`graveyard is only ${ghostFromCorpse.toFixed(1)}y from the corpse; the too_far case cannot be probed here`);
+  const tooFarMark = events.length;
+  await action("reclaim_corpse");
+  await Bun.sleep(3000);
+  const cleared = events.slice(tooFarMark).some((e) => e.opcode === "SMSG_DEATH_RELEASE_LOC" && e.data?.map === -1);
+  if (cleared || self.health > 1) fail(`a reclaim from ${ghostFromCorpse.toFixed(1)}y away resurrected (health ${self.health}); the 39y radius is not what the SDK assumes`);
+  log(`PASS[too-far]: reclaim from the graveyard (${ghostFromCorpse.toFixed(0)}y > 39y) silently refused, still a ghost`);
+
   // 4. Ghost-run back to the corpse. Movement while dead+ghost is the IsAlive
   //    guard fix; tryMoveTo chains midpoint hops if a leg exceeds the 250y cap.
   step = "ghost-run";
@@ -342,7 +377,7 @@ async function main() {
 
   const secs = (Date.now() - startedAt) / 1000;
   log(`stats: ${events.length} events in ${secs.toFixed(1)}s`);
-  log("PASS: death -> repop teleport applied -> ghost corpse run -> reclaim resurrected -> cleanup");
+  log("PASS: death -> repop teleport applied -> corpse query -> too-far refused -> ghost corpse run -> reclaim resurrected -> cleanup");
   process.exit(0); // open WebSockets would otherwise hold the event loop
 }
 
