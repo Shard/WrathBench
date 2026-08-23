@@ -38,6 +38,32 @@ export function fmtDuration(ms: number | null): string {
   return `${m}m${String(s % 60).padStart(2, "0")}s`;
 }
 
+/**
+ * Dollars. Small figures keep three decimals because a cent's resolution is
+ * useless at $0.004, and a recorded $0 prints as "$0.00" rather than the dash —
+ * a free lane costing nothing is a fact, not a missing value.
+ */
+export function fmtUsd(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  if (v === 0) return "$0.00";
+  return v < 1 ? `$${v.toFixed(3)}` : `$${v.toFixed(2)}`;
+}
+
+/**
+ * The one-line reading of a cost, provenance included: a bare number invites
+ * the reader to take a reconstruction for an invoice.
+ */
+export function fmtCost(
+  c: { usd: number | null; basis: string; asIfMetered: boolean; asOf: string | null } | null | undefined,
+): string {
+  if (c === undefined || c === null || c.basis === "none" || c.usd === null) return "— (unpriced model)";
+  if (c.basis === "reported") return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered (reported)" : "reported"}`;
+  // The date is the server's, off the price row that was actually applied: a
+  // rate that lapses must not keep being announced under the old date.
+  const when = c.asOf === null ? "undated" : c.asOf.slice(0, 7);
+  return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered " : ""}(list price, ${when})`;
+}
+
 export function fmtTokens(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   if (n < 1000) return String(n);

@@ -16,7 +16,7 @@ import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
 import type { FleetLaneView } from "@viewer/api-types";
 import { FLEET_COLUMNS, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../lib/fleet";
-import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtWhen, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
 /** The supervisor writes a heartbeat every tick; past this it is not ticking. */
@@ -147,6 +147,7 @@ export default function Fleet() {
                 <th>started</th>
                 <th class="right">playtime</th>
                 <th class="right">tokens</th>
+                <th class="right">cost</th>
                 <th>harness</th>
                 <th>ended</th>
               </tr>
@@ -278,6 +279,10 @@ function RunRowView(props: { row: RunListRow; now: number }) {
       <td class="right mono dim">{fmtDuration(playtime())}</td>
       <td class="right mono dim" title={r().tokens?.source ?? ""}>
         {fmtTokens(r().tokens?.totalTokens ?? null)}
+      </td>
+      {/* Cost where the model is priced; a dash where it is not, never a zero. */}
+      <td class="right mono dim" title={r().cost?.note ?? "no price on file for this model"}>
+        {r().cost?.basis === "none" || r().cost == null ? "—" : fmtUsd(r().cost!.usd)}
       </td>
       <td class="dim" title={r().harnessVersion ?? ""}>
         {shortHarness(r().harnessVersion)}

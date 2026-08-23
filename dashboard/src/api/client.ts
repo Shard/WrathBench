@@ -29,6 +29,8 @@ export type {
   AgentPosition,
   ApiInfoResponse,
   ComparabilityView,
+  CostBreakdown,
+  CostView,
   HarnessView,
   EntriesResponse,
   EpisodeIdView,
