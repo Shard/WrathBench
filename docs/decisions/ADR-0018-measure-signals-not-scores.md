@@ -35,3 +35,36 @@ invitation to farm one number.
   the per-turn-in records, never the final row.)
 - Goodhart pressure moves from the model to the derivation author, where it can
   be revised without re-running anything.
+
+## Amendment (2026-08-23): the ladder's row ordering
+
+The dashboard ladder puts one row per model in an order, and an order over
+models is a claim. FOLLOW-UPS 13 held that claim open rather than let it stand
+unstated. The operator's decision, recorded here so it can be argued with:
+
+**Rows are ordered by highest rung reached, then total XP, then gold.**
+
+- **Total XP** is the pair `(level, xp-within-level)` compared lexicographically,
+  taken from the model's furthest run. It is not a synthesised
+  `level * K + xp` integer: no XP-per-level table exists in what the harness
+  records, so that number would be invented. The pair *is* the total-XP
+  ordering, because xp resets at every ding and level never falls.
+- **Gold** is the copper on the newest sample a run recorded — the same number
+  the fleet listing and the run page show. No state sample the eval surface
+  reads carries money, so a peak is not derivable and none is claimed.
+- Both tie-breaks are maxima over the model's counted runs and are independent,
+  so the gold usually comes from a different run than the level; each names its
+  run on the page. `runs` and the model name break what is left, so the order is
+  total and stable.
+- A missing reading sorts **last**, never as zero: 0 copper and 0 xp are real
+  readings, null is "never recorded" (the consequence above, applied).
+
+This is a derivation over recorded signals under rule 3, not a new metric under
+rule 2: nothing was added to the recording, nothing is summed, and **no
+aggregate score exists** — the row shows the rung, the pair and the gold as
+three separate numbers. It is versioned with the dashboard, in
+`dashboard/src/lib/eval.ts` where its tests are, and is recomputable over every
+past run; changing it invalidates nothing. The Goodhart exposure item 13 named
+is unchanged in kind and is now stated rather than implicit: the ordering is a
+bucketed furthest-level ranking with two sub-orderings, and it is the
+derivation author's to revise.

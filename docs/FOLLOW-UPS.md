@@ -15,9 +15,7 @@ and status.
    decide whether the loot-window half is the same cause.
 3. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
    they exist.
-4. **13** — the ladder ranks models by one integer (`highest`); decide whether that
-   ordering stays or the page shows rows only.
-5. **19** — before anything is public or MCP-exposed: shared secret on the port,
+4. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
 ## Navigation
@@ -190,26 +188,6 @@ and status.
      agents run under: comparable within a harness if the operator partitions, never
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
-
-13. **Metric design against grind collapse — the ladder's row ordering** (narrowed
-    2026-08-23; not closed, see below). RuneBench's raw total-XP metric punished
-    exploration and collapsed to grinding, and their mid-eval metric change is half of
-    why aggregators exclude their results; a furthest-level metric has the same
-    exposure. ADR-0018 (signals, not scores; derivations offline) is the decision of
-    record, and the per-run derivations honour it: `runner/viewer/eval.ts` emits level
-    marks with the turn and the active time each level cost, maps observed, and a
-    per-run `maxLevel` — all of it recording (ADR-0018 rule 2), none of it a score
-    across models. **Where a cross-model scalar does appear** is
-    `dashboard/src/lib/eval.ts`: every derivable rung (1, 3, 5, 7, 8) is a max-level
-    threshold, `ladderRows()` computes `highest` — one integer per model — and
-    `rows.sort((a, b) => b.highest - a.highest || …)` ranks models by it. That is a
-    bucketed furthest-level ranking, which is the exposure this item named. Mitigations
-    that are real: it is offline, versioned and recomputable (ADR-0018 rule 3);
-    rungs 2/4/6 are never bridged, so a model at 3 is not credited with 2; and the page
-    shows the whole row beside the number. Not enough to close on: decide whether the
-    ordering stays, becomes a stated derivation with its own version, or the ladder
-    shows rows in roster order. ADR-0018 is not amended until that is decided — a
-    "mostly true" note on an accepted ADR is worse than none.
 
 29. **The local-qwen lane is inference-bound; harness fixes will not move it**
     (2026-08-22). Median 48s per turn, 78 of that episode's 90 minutes inside the model.
@@ -391,4 +369,5 @@ One line per number so citations resolve; the day file carries the detail.
 - 17 — 2026-08-23 — folded into 9b — failure-surface audit: tiers 1–2 shipped 2026-08-22, ADR-0017 settled BigInt, `events.off` shipped 2026-08-23; the `sdk.wait` alias and the error-class taxonomy are parked under 9b
 - 48 (g) — 2026-08-23 — no code change — flagless runs are not tier members (`episode: null`, counted by nothing in ADR-0034), so the bare idle 10m / no-XP 45m defaults stay; written down in docs/EPISODES.md
 - 51 — 2026-08-23 — ADR-0037 — `unknown_target` as an SDK-side status and `ConnectOptions.deadline` as explain-not-cap; PROTOCOL.md was already in sync, CONTRACTS.md gained the typed map-change outcomes and the teleport-ack observable; the prompt.ts wording moved to item 54
+- 13 — 2026-08-23 — ADR-0018 amendment — the ladder's row ordering is stated and versioned: highest rung, then total XP as the lexicographic `(level, xp)` pair, then gold; both tie-breaks shown on the row with the run each came from, nulls sort last, no aggregate score
 - 32 (1) — 2026-08-23 — 46e2726, 7423453, 62bc30a — run cost card in `runner/viewer/pricing.ts`; (2) and (3) stay open under 32

@@ -55,6 +55,8 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     terminationReason: null,
     levels,
     maxLevel: levels.length > 0 ? levels[levels.length - 1]!.level : null,
+    xp: null,
+    money: null,
     questsCompleted: 0,
     maps: [0],
     ...p,
@@ -245,5 +247,44 @@ describe("the character filter (ADR-0034's extras cycle)", () => {
 
   test("a ladder row labels the characters its model was played on", () => {
     expect(ladderRows(rows)[0]!.characters).toEqual(["Dwarf Hunter", "Human Paladin"]);
+  });
+});
+
+describe("ladder row order", () => {
+  test("the rung decides first, then total XP as a (level, xp) pair, then gold", () => {
+    const rows = ladderRows([
+      // All three below are on rung 5 (L20). `higher` leads them on level alone,
+      // even though it holds the least xp within it — the pair is lexicographic.
+      run({ runId: "a", model: "poorer", levels: [mark(21, 1, 1)], maxLevel: 21, xp: 10, money: 9_999 }),
+      run({ runId: "b", model: "higher", levels: [mark(22, 1, 1)], maxLevel: 22, xp: 5, money: 1 }),
+      // Rung 7 beats all of them regardless of what it holds.
+      run({ runId: "c", model: "rung", levels: [mark(40, 1, 1)], maxLevel: 40, xp: 0, money: 0 }),
+      // Tied with "poorer" on the pair (21, 10); only gold separates the two.
+      run({ runId: "d", model: "richer", levels: [mark(21, 1, 1)], maxLevel: 21, xp: 10, money: 10_000 }),
+    ]);
+    expect(rows.map((r) => r.model)).toEqual(["rung", "higher", "richer", "poorer"]);
+  });
+
+  test("the two tie-breaks are maxima that may come from different runs", () => {
+    const row = ladderRows([
+      run({ runId: "far", levels: [mark(12, 1, 1)], maxLevel: 12, xp: 400, money: 5 }),
+      run({ runId: "rich", levels: [mark(6, 1, 1)], maxLevel: 6, xp: 9_000, money: 50_000 }),
+    ])[0]!;
+    expect(row.bestLevel).toBe(12);
+    // The xp is the one read at the best *level*, never the largest xp seen.
+    expect(row.bestXp).toBe(400);
+    expect(row.bestRunId).toBe("far");
+    expect(row.bestMoney).toBe(50_000);
+    expect(row.bestMoneyRunId).toBe("rich");
+  });
+
+  test("a missing reading sorts last, and zero does not", () => {
+    const rows = ladderRows([
+      run({ runId: "z", model: "zero", levels: [mark(10, 1, 1)], maxLevel: 10, xp: 0, money: 0 }),
+      run({ runId: "n", model: "none", levels: [mark(10, 1, 1)], maxLevel: 10, xp: null, money: null }),
+    ]);
+    expect(rows.map((r) => r.model)).toEqual(["zero", "none"]);
+    expect(rows[1]!.bestXp).toBeNull();
+    expect(rows[1]!.bestMoney).toBeNull();
   });
 });
