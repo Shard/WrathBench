@@ -28,7 +28,9 @@ import type {
   FleetLane,
   FleetLaneRun,
   FleetLaneView,
+  FleetAccountView,
   FleetJobView,
+  FleetPausedView,
   FleetResponse,
   FleetSessionView,
   HarnessView,
@@ -305,6 +307,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       stamp?: string;
       lanes?: Record<string, FleetLane>;
       jobs?: Record<string, Omit<FleetJobView, "name">>;
+      accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null>; paid?: Record<string, string | null>; local?: Record<string, string | null> };
+      paused?: FleetPausedView[];
       session?: FleetSessionView;
     };
     const held = heldAccounts(runsDir, now);
@@ -325,12 +329,46 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
      * holds anything `lanes` does not already expose. A pre-job supervisor
      * wrote neither, and the fields stay absent rather than being invented.
      */
+    const classOf = new Map<string, FleetAccountView["class"]>();
+    for (const cls of ["pool", "paid", "local"] as const) {
+      for (const a of Object.keys(raw.accounts?.[cls] ?? {})) classOf.set(a.toUpperCase(), cls);
+    }
     const jobs =
       raw.jobs === undefined
         ? undefined
         : Object.entries(raw.jobs)
-            .map(([name, j]) => ({ name, ...j }))
+            .map(([name, j]) => {
+              const lane = raw.lanes?.[name];
+              return {
+                name,
+                ...j,
+                ...(classOf.get((j.account ?? "").toUpperCase()) !== undefined ? { accountClass: classOf.get((j.account ?? "").toUpperCase())! } : { accountClass: "pinned" }),
+                // The run the job is driving, resolved from the runs directory
+                // exactly as a lane's is: the supervisor publishes processes.
+                runId: held.get((j.account ?? "").toUpperCase())?.runId ?? null,
+                ...(lane !== undefined
+                  ? { pid: lane.pid, spawnedAt: lane.spawnedAt, exitCode: lane.exitCode, draining: lane.draining, ...(lane.alive !== undefined ? { alive: lane.alive } : {}) }
+                  : {}),
+              };
+            })
             .sort((a, b) => a.name.localeCompare(b.name));
+    /*
+     * Accounts, in class order, with what holds each: the idle rows of the
+     * fleet table. A pinned account that a class also lists (the coexistence
+     * rule, ADR-0034) belongs to the class that schedules it, so `pinned` is
+     * filtered against the classes rather than concatenated with them.
+     */
+    const accounts: FleetAccountView[] | undefined =
+      raw.accounts === undefined
+        ? undefined
+        : [
+            ...Object.entries(raw.accounts.pinned ?? {})
+              .filter(([a]) => !classOf.has(a.toUpperCase()))
+              .map(([account, job]) => ({ account, class: "pinned" as const, job })),
+            ...(["pool", "paid", "local"] as const).flatMap((cls) =>
+              Object.entries(raw.accounts![cls] ?? {}).map(([account, job]) => ({ account, class: cls, job })),
+            ),
+          ];
     // `fleetConfig` is deliberately not forwarded: it is a host path, and the
     // API says what the fleet is doing, not where this machine keeps things.
     return {
@@ -342,6 +380,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       stamp: raw.stamp,
       lanes,
       ...(jobs !== undefined ? { jobs } : {}),
+      ...(accounts !== undefined ? { accounts } : {}),
+      ...(Array.isArray(raw.paused) ? { paused: raw.paused } : {}),
       ...(raw.session !== undefined ? { session: raw.session } : {}),
       now,
     };
