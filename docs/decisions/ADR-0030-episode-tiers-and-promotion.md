@@ -97,8 +97,10 @@ scheduling metadata, computed from run history and written into the roster.
 - **An episode id pins both budget slots, not just the clock.** ADR-0026 keeps
   turns and tool calls separate on purpose, and ADR-0024 records that the
   500-call default is sized for ninety minutes — a six-hour episode on that
-  ceiling ends `tool-call-limit` before its clock. `e360`'s definition carries
-  its own ceiling; a lane that raises it out of band leaves the group.
+  ceiling ends `tool-call-limit` before its clock. The ceiling is a runaway guard,
+  not a budget: 1000 calls per 30 minutes (`e90` 3000, `e360` 12000), sized so
+  a legitimately fast model never meets it; tool calls per episode are reported,
+  not scored. A lane that changes it out of band leaves the group.
 - **Scheduling consequence: lanes stop owning accounts.** A lane that owns one
   account serializes its whole roster behind it, and an `e360` job holds that
   account four times as long as an `e90` — so a roster mixing tiers starves.
