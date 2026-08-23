@@ -51,7 +51,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `moveTo` | `moveTo(target, options?): Promise<MoveResult>` | Walk to a point { x, y, z }, a unit, or a guid (its cached position; the guid rides along so the module resolves z to the ground under the unit) and wait for the server's arrive/target_off_mesh/transferred/teleported/… verdict; a target nothing in view answers to comes back as status "unknown_target". |
+| `moveTo` | `moveTo(target, options?): Promise<MoveResult>` | Walk to a point { x, y, z }, a unit, or a guid (its cached position; the guid rides along so the module resolves z to the ground under the unit) and wait for the server's arrive/target_off_mesh/transferred/teleported/… verdict; a target nothing in view answers to comes back as status "unknown_target". An arrival aboard a tram car or boat carries onTransport { guid, entry }, and state.self.position then follows the ride (WB_RIDE_PROGRESS). |
 | `killTarget` | `killTarget(target: GuidOrUnit, options?): Promise<KillResult>` | Approach and auto-attack until the target or we drop; returns how the fight ended. |
 | `lootCorpse` | `lootCorpse(target: GuidOrUnit, options?): Promise<LootResult>` | Empty a corpse and report what actually entered the bags (confirmed pushes, not the window). |
 | `acceptQuestFrom` | `acceptQuestFrom(npcGuid: GuidOrUnit, questId, options?): Promise<QuestAcceptResult>` | Take a quest from an NPC and confirm it landed in the quest log. |
@@ -122,7 +122,7 @@ zero.
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done; true means any marker but "none"). Rows carry questGiver / questGiverStatus. |
+| `units` | `state.units(filter?: UnitFilter): UnitView[]` | Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc, questGiver (the observed marker name: "available" offers a quest, "reward" takes a turn-in now, "incomplete" ends a quest not yet done; true means any marker but "none"). Rows carry questGiver / questGiverStatus; game objects are named ("Mailbox", "Subway") and carry goType (door, chest, mailbox, transport, …), and a transport carries docked (true while the car sits at a platform). |
 | `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, questGiver }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
@@ -151,7 +151,12 @@ zero.
 
 ## Events (`sdk.events`)
 
-Events are the server's `SMSG_*` packets as JSON.
+Events are the server's `SMSG_*` packets as JSON, plus a few `WB_*` events for
+what a client knows locally: `WB_MOVE_RESULT` / `WB_MOVE_PROGRESS` (own moves),
+`WB_RIDE_PROGRESS` (own position while a transport carries you, ≤1/s) and
+`WB_TRANSPORT_PROGRESS` (`{ guid, entry, pos, docked, progressMs, periodMs }`
+per transport in view, ≤1/s — the same facts as the `docked` column of
+`state.units()`).
 
 | Method | Signature | Purpose |
 | --- | --- | --- |

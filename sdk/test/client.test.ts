@@ -401,6 +401,81 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("target_off_mesh on a known transport dock names the car and says it is not here", async () => {
+    // The tram platform with no car on it: the rail bed is not mesh, so the
+    // module says target_off_mesh. The generic hint ("pick a floor") would
+    // send the agent away from the one point boarding works at; with the car
+    // observed docking there (WB_TRANSPORT_PROGRESS docked:true) the hint
+    // says whose dock it is and where the car is now.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    const tram = (seq: number, pos: { x: number; y: number; z: number }, docked: boolean, progressMs: number) =>
+      JSON.stringify({
+        seq,
+        opcode: "WB_TRANSPORT_PROGRESS",
+        opcodeId: 0xff06,
+        ts: 1_700_000_000_000 + seq,
+        data: { guid: "9001", entry: 176081, pos: { ...pos, o: 0 }, progressMs, periodMs: 143_330, docked },
+      });
+    stub.push(
+      JSON.stringify({
+        seq: 20,
+        opcode: "SMSG_UPDATE_OBJECT",
+        opcodeId: 0x0a9,
+        ts: 1_700_000_000_020,
+        data: {
+          blocks: 1,
+          objects: [{ update: "create", guid: "9001", objectType: "gameObject", pos: { x: 4.5, y: 8.4, z: -4.3, o: 0 }, fields: { entry: 176081, goType: 11 } }],
+        },
+      }),
+    );
+    stub.push(
+      JSON.stringify({
+        seq: 21,
+        opcode: "SMSG_GAMEOBJECT_QUERY_RESPONSE",
+        opcodeId: 0x05f,
+        ts: 1_700_000_000_021,
+        data: { entry: 176081, found: true, name: "Subway", type: 11, displayId: 3831, castBarCaption: "" },
+      }),
+    );
+    stub.push(tram(22, { x: 4.5, y: 8.4, z: -4.3 }, true, 5_000));
+    stub.push(tram(23, { x: 4.5, y: 1200.0, z: -4.3 }, false, 40_000));
+    await client.events.waitFor((e) => e.seq === 23, { timeout: 2000 });
+
+    const p1 = client.moveTo({ x: 4.5, y: 8.4, z: -4.3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("target_off_mesh", 1, 30)));
+    const r1 = await p1;
+    expect(r1.ok).toBe(false);
+    if (r1.ok) throw new Error("unreachable");
+    expect(r1.status).toBe("target_off_mesh");
+    expect(r1.hint).toContain("where Subway (guid 9001) docks");
+    expect(r1.hint).toContain("it is moving, now at (4.5, 1200.0) 40s into its 143s cycle");
+    expect(r1.hint).toContain("not a z problem");
+    expect(r1.hint).not.toContain("Pick a point on a road");
+
+    // Far from any dock the generic hint stands.
+    const p2 = client.moveTo({ x: 400, y: 8.4, z: -4.3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("target_off_mesh", 2, 31)));
+    const r2 = await p2;
+    if (r2.ok) throw new Error("unreachable");
+    expect(r2.hint).toContain("Pick a point on a road");
+
+    // A no-car attempt that the module judged a drop onto the rail bed is a
+    // typed failure, never `arrived` and never aboard.
+    const p3 = client.moveTo({ x: 4.5, y: 8.4, z: -4.3 }, { timeout: 2000 });
+    const ev = moveResult("drop", 3, 32) as { data: Record<string, unknown> };
+    ev.data.reachedPos = { x: 14.0, y: 8.4, z: -4.3 };
+    ev.data.dz = -6.2;
+    stub.push(JSON.stringify(ev));
+    const r3 = await p3;
+    expect(r3.ok).toBe(false);
+    expect(r3.status).toBe("drop");
+    expect((r3 as { onTransport?: unknown }).onTransport).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
   test("drop carries the edge, the step and the target, with a hint about levels", async () => {
     // ADR-0027 amendment (nav-probe c4, map 369): a route that falls 7.64y
     // over 1y of 2D travel is a ledge. The module refuses the walk and says
