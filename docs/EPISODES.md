@@ -84,6 +84,16 @@ because that would silently re-scope every score already carrying this label.
   drift into an eval chart by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
+- **Extras.** A **local** model — one served from the operator's own hardware —
+  takes its extras here rather than as extra `e90`/`e360` runs
+  (`policy.extras.local: "freeplay"`, the default for that class; `"characters"`
+  puts it back on the free models' race/class cycle). Once it has met its
+  scheduled targets the policy gives it one freeplay run at a time, unbounded,
+  with the tier's own watchdogs; when that run ends the next tick starts
+  another. Such a run is stamped `extra: true` — an attempt, shown as an extra
+  on the Models page and as a `freeplay` run on the Episodes page, never counted
+  toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
+  first (counting is series-keyed), and freeplay resumes once they are met.
 - **Pins in the tuple.** `episode: "freeplay"` and the unscored reason. The
   other fields are recorded but carry no comparability claim.
 

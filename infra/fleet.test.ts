@@ -49,6 +49,7 @@ import {
   rosterModels,
   eligibleFrom,
   formatModels,
+  isExtraJob,
   runnableRefs,
   type FleetJob,
   type FleetRosterEntry,
@@ -68,6 +69,7 @@ import {
   formatHeld,
 } from "./run-fleet";
 import { DEFAULT_POLICY, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -698,7 +700,7 @@ function modelStatesOf(roster: RosterModel[], runs: RunFact[] = [], now = 1_800_
 
 describe("scheduling policy (ADR-0032)", () => {
   const NOW = 1_800_000_000_000;
-  const run = (model: string, episode: "e90" | "e360", i: number, over: Partial<RunFact> = {}): RunFact => ({
+  const run = (model: string, episode: EpisodeId, i: number, over: Partial<RunFact> = {}): RunFact => ({
     runId: `${model}-${episode}-${i}`,
     model,
     effort: null,
@@ -807,7 +809,9 @@ describe("scheduling policy (ADR-0032)", () => {
         local: { model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
         forced: { model: "z-ai/other:free", billing: "paid" },
       },
-      policy: { paid: {}, extras: {} },
+      // `extras.local: "characters"` puts the box on the race/class cycle, which
+      // is what this test is about; the default is freeplay (the test below).
+      policy: { paid: {}, extras: { local: "characters" } },
     };
     const config = parseFleet(raw);
     expect(config.policy.paid).toEqual({ runsPerEpisode: { e90: 3, e360: 1 }, maxConcurrent: 1 });
@@ -922,6 +926,65 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(() => parseFleet({ ...raw, policy: { paid: { maxConcurrent: -1 } } })).toThrow(/paid.maxConcurrent/);
     expect(() => parseFleet({ ...raw, policy: { extras: { characters: [{ race: 0, class: 1 }] } } })).toThrow(/characters\[0\]/);
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
+  });
+
+  test("local extras are freeplay: the box past its targets gets one unbounded run at a time (ADR-0034)", () => {
+    const raw = {
+      accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
+      roster: {
+        glm: { model: "z-ai/glm-5.2:free" },
+        local: { model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", character: "Qwenlocal", race: 1, class: 2 },
+      },
+      policy: { extras: {} },
+    };
+    const config = parseFleet(raw);
+    expect(config.policy.extras!.local).toBe("freeplay");
+    expect(() => parseFleet({ ...raw, policy: { extras: { local: "e90" } } })).toThrow(/policy.extras.local/);
+
+    // 1/3 counted on e90: the scheduled runs come first, freeplay is not reached.
+    const one = [run("qwen/q", "e90", 1)].map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    const partial = planTick(config, modelStatesOf(rosterModels(config.roster), one, NOW, config.policy), () => undefined, "20260101");
+    expect(partial.policy.find((p) => p.account === "LOCALBOX")!.job).toMatchObject({ name: "local-e90", episode: "e90" });
+
+    // 3/3 and unpromoted (no counted run reached L5): the extra is freeplay.
+    const met = [1, 2, 3].map((i) => run("qwen/q", "e90", i, { bestLevel: 3 })).map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    const states = modelStatesOf(rosterModels(config.roster), met, NOW, config.policy);
+    expect(states.find((st) => st.name === "local")!.eligible).toEqual(["e90"]);
+    const plan = planTick(config, states, () => undefined, "20260101");
+    const pick = plan.policy.find((p) => p.account === "LOCALBOX")!;
+    expect(pick.job).toMatchObject({ name: "local-freeplay", episode: "freeplay", attempt: 1, source: "policy" });
+    expect(pick.job.extra).toBeUndefined();
+    expect(isExtraJob(pick.job)).toBe(true);
+    expect(pick.why).toContain("freeplay");
+    // The spawn: stamped an extra, the entry's own start, freeplay's watchdogs
+    // (no wall clock, idle only), and no episode ceiling of its own.
+    const spawn = jobSpawn(pick.job, config.roster, "LOCALBOX", "20260101");
+    expect(spawn.entries[0]).toMatchObject({
+      model: "qwen/q",
+      race: 1,
+      class: 2,
+      extra: true,
+      episode: "freeplay",
+      watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null },
+    });
+    expect(spawn.loop).toBe(false);
+    expect(jobArgv(spawn, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-freeplay");
+    // A manual freeplay job (the nav probe) is not an extra.
+    expect(isExtraJob({ episode: "freeplay", attempt: undefined, extra: undefined })).toBe(false);
+    // --status shows it as an extra, on the freeplay row and in the extras column.
+    expect(formatAccounts([{ account: "LOCALBOX", kind: "local", job: { name: "local-freeplay", models: ["qwen/q"], episode: "freeplay", attempt: 1 } }])[1]).toMatch(
+      /LOCALBOX +local +local-freeplay: qwen\/q freeplay extra/,
+    );
+    const after = [...met, run("qwen/q", "freeplay", 4, { extra: true })].map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    const afterStates = modelStatesOf(rosterModels(config.roster), after, NOW, config.policy);
+    const line = formatModels(afterStates, new Set(), NOW, new Map(), config.policy).find((l) => l.trimStart().startsWith("local"))!;
+    // counted/target on e90, no e360, then the extras column: the freeplay run.
+    expect(line).toMatch(/local\s+free\s+active\s+3\/3 L3\s+-\s+1\s+no: targets met on e90 — freeplay extras/);
+    expect(formatModels(afterStates, new Set(), NOW, new Map(), config.policy)[0]).toContain("local: freeplay");
+    // The next freeplay run is attempt 2, so its run id cannot collide with the first.
+    const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;
+    expect(next.job).toMatchObject({ name: "local-freeplay", attempt: 2 });
+    expect(jobSpawn(next.job, config.roster, "LOCALBOX", "20260101").entries[0]!.runId).toContain("-a2");
   });
 });
 

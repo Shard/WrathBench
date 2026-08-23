@@ -68,6 +68,8 @@ describe("the --status columns", () => {
     expect(extrasOf(row())).toBe(0);
     const e90 = row().perEpisode.e90!;
     expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 2 }, e360: { ...e90, extras: 1 } } }))).toBe(3);
+    // A local model's extras are freeplay runs (ADR-0034) and count here too.
+    expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 0 }, freeplay: { ...e90, extras: 2 } } }))).toBe(2);
   });
 });
 

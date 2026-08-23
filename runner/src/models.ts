@@ -45,6 +45,11 @@
  *   targets (hard: never extras) and shares one in-flight cap; a free model
  *   gets extra runs at lowest priority once nothing else is schedulable,
  *   cycling through `extras.characters`. An extra is an attempt, never counted.
+ * - **A local model's extras are freeplay** (`policy.extras.local`, ADR-0034).
+ *   The box is inference-bound, so another 90 minutes of it says little that
+ *   the last three said; one unbounded freeplay run at a time, restarted when
+ *   it ends, is the long-horizon data it can give. Same rule otherwise: an
+ *   attempt, reported apart, never counted toward a target.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -52,14 +57,37 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
 import { harnessOf, isDriver, type Driver, type Harness } from "./config";
-import { isEpisodeId, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 
 // ----------------------------------------------------------------- policy
 
-/** The episode tiers the policy schedules on its own. `freeplay` is manual only. */
+/**
+ * The episode tiers the policy has targets on. `freeplay` has none — it is
+ * never scheduled as evidence — but a local model's extras are freeplay runs
+ * (`ExtrasMode`), so the projection still keeps stats for it.
+ */
 export const POLICY_EPISODES: readonly EpisodeId[] = ["e90", "e360"];
+
+/**
+ * Every episode the projection keeps stats for, in presentation order. Wider
+ * than `POLICY_EPISODES` by `freeplay`, which carries a target of zero and
+ * exists here so that freeplay attempts are numbered (a run id is
+ * `…-<datestamp>-a<attempt>`, so two freeplay extras in one day need real
+ * attempt numbers) and so a freeplay extra is reported like any other.
+ */
+export const STATS_EPISODES: readonly EpisodeId[] = EPISODE_IDS;
+
+/**
+ * How a model past its targets takes its extras (ADR-0034, "Local extras are
+ * freeplay"): `characters` cycles `extras.characters` over the scored tiers,
+ * `freeplay` runs one unbounded freeplay episode at a time.
+ */
+export type ExtrasMode = "characters" | "freeplay";
+
+/** The local class's default: an inference-bound model that just keeps playing. */
+export const DEFAULT_LOCAL_EXTRAS: ExtrasMode = "freeplay";
 
 /** A starting character for an extra run: race and class ids as the client sends them. */
 export interface StartingCharacter {
@@ -85,9 +113,10 @@ export interface SchedulingPolicy {
   paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
   /**
    * Extra runs for free models once nothing else is schedulable, or null for
-   * none. Each extra takes the next character in `characters`, cycling.
+   * none. Each extra takes the next character in `characters`, cycling —
+   * except for the local class, whose extras are whatever `local` says.
    */
-  extras: { characters: StartingCharacter[] } | null;
+  extras: { characters: StartingCharacter[]; local: ExtrasMode } | null;
 }
 
 /** Paid defaults once `policy.paid` is present: one long run is enough to see the shape. */
@@ -173,7 +202,15 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
         return { race: cc.race, class: cc.class };
       });
     }
-    out.extras = { characters };
+    let local: ExtrasMode = DEFAULT_LOCAL_EXTRAS;
+    if ((e as { local?: unknown }).local !== undefined) {
+      const l = (e as { local?: unknown }).local;
+      if (l !== "characters" && l !== "freeplay") {
+        throw new Error('policy.extras.local must be "freeplay" (one unbounded freeplay run at a time) or "characters" (the race/class cycle)');
+      }
+      local = l;
+    }
+    out.extras = { characters, local };
   }
   return out;
 }
@@ -184,7 +221,7 @@ export function parseRunsPerEpisode(raw: unknown, where: string): Partial<Record
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${where} must be an object like { "e90": 3, "e360": 3 }`);
   const out: Partial<Record<"e90" | "e360", number>> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (k !== "e90" && k !== "e360") throw new Error(`${where}: unknown episode ${k} (e90 or e360; freeplay is never scheduled by policy)`);
+    if (k !== "e90" && k !== "e360") throw new Error(`${where}: unknown episode ${k} (e90 or e360; freeplay has no target — it is only ever an extra)`);
     if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new Error(`${where}.${k} must be a non-negative integer`);
     out[k] = v;
   }
@@ -710,7 +747,7 @@ export function projectModel(
   // next run id collide with an older directory (2026-08-23, harness-0.4).
   const mine = all.filter((f) => inSeries(f, policy));
   const perEpisode: Partial<Record<EpisodeId, EpisodeStats>> = {};
-  for (const ep of POLICY_EPISODES) {
+  for (const ep of STATS_EPISODES) {
     const stats: EpisodeStats = {
       counted: 0,
       stillborn: 0,
@@ -867,15 +904,22 @@ export function schedulability(
     return st !== undefined && st.counted < st.target;
   });
   if (open.length === 0) {
-    const extras = policy.extras !== null && policy.extras.characters.length > 0 && s.billing === "free";
-    return { ok: false, extras, why: `targets met on ${s.eligible.join(", ")}${extras ? " — extras when the pool is idle" : ""}` };
+    const mode = extrasModeOf(s, policy);
+    const extras = policy.extras !== null && s.billing === "free" && (mode === "freeplay" || policy.extras.characters.length > 0);
+    const how = mode === "freeplay" ? " — freeplay extras while the box is idle" : " — extras when the pool is idle";
+    return { ok: false, extras, why: `targets met on ${s.eligible.join(", ")}${extras ? how : ""}` };
   }
   return { ok: true, extras: false, why: `schedulable on ${open.join(", ")}` };
 }
 
-/** Extras made so far across the tiers, which is what the character cycle indexes. */
+/** Extras made so far across every episode, which is what the character cycle indexes. */
 export function extrasSoFar(s: ModelState): number {
-  return POLICY_EPISODES.reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
+  return STATS_EPISODES.reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
+}
+
+/** Priority order of an episode: the scored tiers as they are declared, freeplay last. */
+function episodeOrder(ep: EpisodeId): number {
+  return EPISODE_IDS.indexOf(ep);
 }
 
 /**
@@ -905,6 +949,20 @@ export function accountClassOf(s: Pick<ModelState, "billing" | "platform">): Acc
  */
 export function rosterClass(r: RosterModel): AccountClass {
   return accountClassOf({ billing: rosterBilling(r), platform: platformOf(r.apiBase, r.driver) });
+}
+
+/**
+ * How this model takes its extras (ADR-0034, "Local extras are freeplay").
+ *
+ * A knob on the policy rather than a fact about the class, so the choice is
+ * readable in `fleet.json`: `policy.extras.local` is `"freeplay"` by default
+ * and `"characters"` puts the local class back on the race/class cycle the
+ * free models run. Every other class cycles characters; only the local class
+ * asks the knob.
+ */
+export function extrasModeOf(s: Pick<ModelState, "billing" | "platform">, policy: Pick<SchedulingPolicy, "extras">): ExtrasMode {
+  if (policy.extras === null) return "characters";
+  return accountClassOf(s) === "local" ? policy.extras.local : "characters";
 }
 
 export interface NextJobsOptions {
@@ -960,9 +1018,15 @@ export function planNextJobs(
   states.forEach((s, order) => {
     const v = schedulability(s, running, policy);
     if (v.extras) {
+      if (extrasModeOf(s, policy) === "freeplay") {
+        // One candidate, not one per tier: a freeplay extra has no tier, and
+        // there is only ever one of them in flight.
+        extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
+        return;
+      }
       // `eligible` already gates e360 on promotion (or a forced tier).
       for (const ep of s.eligible) {
-        extraCands.push({ s, ep, epOrder: POLICY_EPISODES.indexOf(ep), fresh: 1, counted: extrasSoFar(s), order });
+        extraCands.push({ s, ep, epOrder: episodeOrder(ep), fresh: 1, counted: extrasSoFar(s), order });
       }
       return;
     }
@@ -971,7 +1035,7 @@ export function planNextJobs(
     for (const ep of s.eligible) {
       const st = s.perEpisode[ep];
       if (st === undefined || st.counted >= st.target) continue;
-      cands.push({ s, ep, epOrder: POLICY_EPISODES.indexOf(ep), fresh, counted: st.counted, order });
+      cands.push({ s, ep, epOrder: episodeOrder(ep), fresh, counted: st.counted, order });
     }
   });
   const byPriority = (a: Cand, b: Cand): number => a.fresh - b.fresh || a.epOrder - b.epOrder || a.counted - b.counted || a.order - b.order;
@@ -1032,21 +1096,27 @@ export function planNextJobs(
   // construction, so the paid class is never reached here.
   const chars = policy.extras?.characters ?? [];
   for (const c of extraCands) {
-    if (empty() || chars.length === 0) break;
+    if (empty()) break;
     if (taken.has(c.s.name)) continue;
+    // A freeplay extra rolls no character: the roster entry's own start stands,
+    // and the run is unbounded (the tier pins no wall clock).
+    const freeplay = c.ep === "freeplay";
+    if (!freeplay && chars.length === 0) continue;
     const from = listOf(accountClassOf(c.s));
     if (from.length === 0) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
-    const character = chars[n % chars.length]!;
+    const character = freeplay ? undefined : chars[n % chars.length]!;
     jobs.push({
       name: c.s.name,
       episode: c.ep,
       account: from.shift()!,
       attempt: st.attempts + 1,
-      why: `extra #${n + 1} on ${c.ep} (targets met; race ${character.race} class ${character.class})`,
-      extra: character,
+      why: freeplay
+        ? `extra #${n + 1}: freeplay (targets met; one unbounded run at a time)`
+        : `extra #${n + 1} on ${c.ep} (targets met; race ${character!.race} class ${character!.class})`,
+      ...(character !== undefined ? { extra: character } : {}),
     });
   }
   return { jobs, held };

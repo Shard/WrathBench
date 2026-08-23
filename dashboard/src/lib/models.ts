@@ -57,9 +57,13 @@ export function noteOf(row: ModelRowView): string | null {
   return null;
 }
 
-/** Extras across the tiers: attempts the policy made past the target, never counted. */
+/**
+ * Extras across every episode: attempts the policy made past the target, never
+ * counted. Not just the tier columns — a local model's extras are freeplay runs
+ * (ADR-0034), and they belong in the same number.
+ */
 export function extrasOf(row: ModelRowView): number {
-  return TIER_COLUMNS.reduce((n, t) => n + (row.perEpisode[t]?.extras ?? 0), 0);
+  return Object.values(row.perEpisode).reduce((n, st) => n + (st?.extras ?? 0), 0);
 }
 
 /** `yes: schedulable on e90` / `no: running (one stream per model)` — the verdict as --status prints it. */
