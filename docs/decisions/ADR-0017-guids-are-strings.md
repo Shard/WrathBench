@@ -3,59 +3,31 @@
 Status: Accepted. Date: 2026-08-22.
 
 ## Context
-
-`JSON.stringify cannot serialize BigInt` was the single most frequent error
-models saw in the first measured night (50 of 229), and BigInt friction
-recurs in every weak-model run. The BigInt was never load-bearing where
-models touch it: the wire format is already decimal strings (JSON cannot
-carry 64-bit integers), `GuidArg` already accepted strings, and the one
-genuine 64-bit need — unpacking entry/type from a guid's high bits — is SDK
-internals whose results (`entry`, unit type) are exposed as ordinary fields.
-Models were being handed an exotic numeric type for a value they only ever
-store, compare, and echo back.
-
-The alternative of patching the sandbox (`BigInt.prototype.toJSON`) was
-rejected: it mutates the JS environment instead of fixing the API, and
-ADR-0016 deliberately left environment changes out of softening's scope.
+`JSON.stringify cannot serialize BigInt` was the single most frequent error in
+the first measured night (50 of 229). The BigInt was never load-bearing where
+models touch it: the wire is already decimal strings, and the one real 64-bit
+need — unpacking entry/type from the high bits — is SDK-internal. Models were
+handed an exotic numeric type for a value they only store, compare and echo.
+Patching the sandbox (`BigInt.prototype.toJSON`) was rejected: it mutates the
+environment instead of fixing the API, which ADR-0016 kept out of scope.
 
 ## Decision
+A guid, everywhere a model can see one, is an opaque decimal string: state
+fields, helper returns, event payloads, parameters. The SDK may use bigint
+internally, behind one private pair (`parseGuid`/`formatGuid`), and never lets
+one escape. A bigint passed at runtime is converted (one guid, one reading: a
+deterministic repair under ADR-0016); a `number` is rejected loudly for
+precision loss.
 
-A guid, everywhere a model can see one, is an **opaque decimal string**.
-State fields, helper returns, event payloads, and helper parameters all use
-the string form; `===`, Map keys, template literals, and `JSON.stringify`
-therefore behave exactly as a model expects. The SDK may use bigint
-internally (bit unpacking) but never lets one escape to the model surface,
-and helper argument validation rejects `number` guids loudly (precision
-loss; see the audit) rather than accepting a third representation.
-
-Considered and parked: **session-scoped short ids** (`"u12"`) as a further
-simplification. Rejected for now because aliasing splits the model into two
-id-spaces (raw events keep real guids under the observation contract), the
-alias map dies on reconnect — a stale alias then silently names the wrong
-unit, the exact silent-wrong-behavior class ADR-0016 forbids — and joins
-between model actions and server truth lose their stable key. If weak-model
-liftoff ever justifies revisiting, it enters as a labeled, evaluated harness
-condition (compare runs with and without), never as a quiet default.
+Parked: session-scoped short ids (`"u12"`). They would split the model into two
+id-spaces (raw events keep real guids), die on reconnect so a stale alias
+silently names the wrong unit — the class ADR-0016 forbids — and lose the stable
+join key between actions and server truth. If revisited, it enters as a labeled
+harness condition, never a quiet default.
 
 ## Consequences
-
-- Breaking SDK surface change: ships inside the same harness version bump
-  as the death-recovery and softening work (harness-0.2 boundary); scores
-  do not compare across it (ADR-0004).
-- The BigInt error class ceases to exist rather than getting a better
-  message; the ADR-0016 hint for it becomes dead text and is removed with
-  the refactor. One deliberate exception (implementation, 2026-08-22): the
-  sandbox's JSON.stringify-on-BigInt message rewrite stays, because a model
-  can still conjure a bigint itself (a `123n` literal) — the message now says
-  SDK guids are already strings and names `String(x)` for the model's own
-  values.
-- `GuidArg` narrows to `string`, but a bigint passed at runtime is silently
-  converted to its decimal string rather than rejected: it names exactly one
-  guid, which makes the conversion a deterministic repair under ADR-0016's
-  rule 1. `number` and `undefined`/`null` stay loud rejections as decided.
-- The internal bigint use (bit packing/unpacking) is contained behind one
-  SDK-private pair, `parseGuid`/`formatGuid` in `sdk/src/protocol.ts`, so the
-  string/bigint boundary is auditable in one place.
-- Guid strings are ~20 characters; state summaries pay a modest token cost
-  over short aliases. Accepted — representation is fair game to optimize,
-  referents are not.
+- Breaking surface change; shipped inside the harness-0.2 boundary (ADR-0004).
+- The BigInt error class ceases to exist rather than getting a better message;
+  the one surviving hint covers a model conjuring its own `123n` literal.
+- ~20-character guids cost tokens over short aliases. Accepted: representation
+  is fair game to optimize, referents are not.

@@ -1,68 +1,63 @@
 # ADR-0012: Runner context policy
 
-Status: Accepted. Date: 2026-08-21.
+Status: Accepted. Date: 2026-08-21. Amended 2026-08-21 (block trimming) and
+2026-08-22 (HUD summary); both amendments are folded in below.
 
 ## Context
-
-PHASE-0 fixes the loop context as "last N events, a state summary, the scratchpad, and a search tool", with N and the summary format written down once chosen. This policy moves scores more than most SDK changes and is therefore part of the harness version (ADR-0004): one policy for every model, never tuned per model. The authoritative encoding is `runner/src/context.ts` (`CONTEXT_POLICY` and `assembleContext`); this ADR is the why.
+PHASE-0 fixes the loop context as "recent events, a state summary, the
+scratchpad, and a search tool". This policy moves scores more than most SDK
+changes and is therefore part of the harness version (ADR-0004): one policy for
+every model, never tuned per model. The authoritative encoding is
+`runner/src/context.ts`; this record is the why.
 
 ## Decision
+Every request is rebuilt as: the fixed system prompt; a window of recent
+assistant/tool messages kept verbatim; and one fresh user message assembled
+deterministically from a goal line, harness notices, a fixed-format state
+summary, the last 64 events and the full scratchpad. Old per-turn user messages
+are dropped, never accumulated, so token cost per turn is roughly constant and
+the scratchpad is the only durable memory — the prompt says so, which makes
+writing it part of the task rather than a harness kindness.
 
-Every model request is rebuilt as:
+Why these shapes:
 
-1. The fixed system prompt (`runner/src/prompt.ts`).
-2. A rolling window of at most **24 messages** of recent assistant output and tool results, kept verbatim, trimmed only at assistant-message boundaries so a tool call is never separated from its results.
-3. One fresh user message assembled deterministically from: a goal/turn line, pending harness notices (sandbox restarts, resume notes), the fixed-format state summary, the last **64 events** (data truncated at 220 chars per event), and the full scratchpad.
+- **64 events, ambient motion excluded.** Big enough to span a combat sequence
+  plus its loot and quest updates; small enough not to drown the summary. The
+  first frontier run showed 69% of served events were wandering-NPC movement
+  and 1.8% combat/quest signal, so movement is folded into the state cache and
+  annotated as a count rather than listed.
+- **The message window oscillates between 24 and 48, cut in 24-message blocks.**
+  Providers cache by longest byte-identical prefix; a window that slides one
+  message per turn invalidates the prefix every call, block trimming invalidates
+  it once per block. The cut is a pure function of the whole stored history, so
+  a history rebuilt from disk cuts where the live one did, and the boundary
+  snaps to an assistant message so a tool call is never separated from its
+  result. Each rendered message is capped with an explicit truncation suffix so
+  the model knows to print less, applied at render time because the trajectory
+  stores results in full. The larger average window is the price of the cache.
+- **The state summary is a client HUD.** A running client always shows XP, bags,
+  the quest tracker, nameplates, the target frame and open windows; hiding them
+  made the model re-derive from the stream what a client displays. The summary
+  is presentation of already-observed fields, never new observation: a field no
+  event carried reads `unobserved`, an observed zero is shown, mob health is
+  never exact (CONTRACTS.md), and an open window is shown only when an honest
+  event pair proves it — a truncated buffer yields "omit", never a false "open".
+- **Determinism.** `assembleContext` is pure and tested byte-identical, so a
+  trajectory replays into exactly the context the model saw.
 
-Old per-turn user messages are dropped, never accumulated: the context message is regenerated each turn, so events and state are always current and the token cost per turn is roughly constant. The scratchpad is the only durable memory; the system prompt says so explicitly, which makes writing it part of the task rather than a harness kindness.
+Resume follows from the policy: a restarted runner starts with an empty message
+window, a notice saying so, and the persisted scratchpad — nothing else is
+promised to survive. Rebuilding history from the trajectory log would be a
+different decision.
 
-The state summary format is a fixed line-oriented template (`formatStateSummary`): seq/eventCount header, session status, character/level, position with the seq it was observed at, health/power, nearby count, stream-gap status, a 10-line chat tail and 5-line notification tail. Fields no event has carried read `unobserved` — never a default value — per docs/CONTRACTS.md.
-
-Numbers chosen, and why they are these and not others:
-
-- **N = 64 events.** Big enough to span a combat sequence plus its loot/quest updates at Phase-0 event rates; small enough that a busy window does not drown the summary. Not tuned per model — revisiting it is a harness version bump.
-- **Ambient motion is excluded from the window** (`EVENT_WINDOW_EXCLUDE`: `SMSG_MONSTER_MOVE`, observed `MSG_MOVE_*`). Measured on the first real frontier run (gate2-ox-1, 2026-08-21): 69% of served events were wandering-NPC movement and 1.8% were combat/quest signal, so the window as first specified carried mostly noise. These events still fold into the state cache (nearby positions/motion) and remain available verbatim through the `recent_events` tool; the window annotates how many were folded away. Amended pre-freeze; the policy including this filter is the 0.x policy.
-- **24 messages ≈ 8–12 tool exchanges.** Enough short-term memory to carry a multi-step interaction (gossip → accept → move), small enough to force real use of the scratchpad.
-- **Determinism.** `assembleContext` is pure; the test suite requires byte-identical output for identical inputs, so a trajectory replays into exactly the context the model saw.
-
-Resume semantics follow from the policy: a restarted runner starts with an empty message window, a harness notice saying so, and the persisted scratchpad — nothing else, because nothing else is promised to survive.
-
-## Alternatives
-
-- Growing conversation with summarization: cheaper to build, but the summarizer becomes an unversioned model-dependent part of the harness — exactly what ADR-0004 forbids.
-- Events only since the last turn: no repetition, but any dropped or unlucky turn loses events forever; a sliding window is idempotent across retries and resumes.
-- Larger windows: more context is not free — it dilutes the scratchpad discipline the benchmark wants to measure and multiplies token cost over six-hour episodes.
+Rejected: a growing conversation with summarization makes the summarizer an
+unversioned model-dependent part of the harness (ADR-0004); events-only-since-
+last-turn loses events on any dropped turn, whereas a window is idempotent
+across retries and resumes; larger windows dilute the scratchpad discipline the
+benchmark wants to measure and multiply cost over six-hour episodes.
 
 ## Consequences
-
-- Scores are comparable across models because context handling cannot be a scaffold advantage.
-- Models with weak note-taking will underperform models with strong note-taking at equal reasoning strength. That is signal, not bias: long-horizon memory management is part of what WrathBench measures.
-- Changing any constant in `CONTEXT_POLICY`, the summary template, or the system prompt is a harness version change and re-baselines results.
-
-## Addendum: block trimming for prompt caching (2026-08-21)
-
-This supersedes the "at most 24 messages" in item 2 of the Decision above. The message window still holds recent assistant/tool messages, but it no longer slides one message per turn. It grows to `MESSAGE_WINDOW_MAX` (48) and is then cut back by one block of `MESSAGE_WINDOW_TRIM` (24) oldest messages, so it oscillates between 24 and 48 rather than sitting at a fixed 24.
-
-The reason is prompt caching, not context quality. Providers cache by longest byte-identical prefix. Under the sliding window, every turn past 24 messages dropped the oldest message, so the sent prefix diverged immediately after the system prompt and every call paid a full prefix recompute. Under block trimming the prefix is byte-identical for a whole 24-message block (≈8–12 tool exchanges at Phase-0 rates) and only the deliberate block cut invalidates it: one miss per block instead of one miss per turn. Over a six-hour episode that is the difference between recomputing the window on every call and recomputing it a handful of times.
-
-Two properties keep this from becoming scaffold cleverness:
-
-- **The cut is a pure function of the whole stored history** (`messageWindowCut`), not of accumulated in-memory trim state. It is monotone in history length and constant within a block, which is exactly what makes the prefix stable; and a history rebuilt from persisted records cuts at the same index an in-memory one does. It is computed over the full history rather than over the previously trimmed window on purpose: the boundary snaps forward to the next assistant message so a tool-call is never separated from its results, and that shortening would otherwise delay the next trim and drift the boundaries off the block grid.
-- **Resume semantics are unchanged.** A resumed run still starts with an empty window and the harness notice saying so, per the original decision — nothing else is promised to survive. So a resumed run's first request still differs from a never-paused run's; what this addendum buys is that the window is *reproducible from a history*, not that history is now preserved. Rebuilding history from the trajectory log would be a different decision.
-
-Because the window now holds up to twice as many messages, each one is capped at `WINDOW_MESSAGE_CHARS` (4000) on the way out, with a fixed `…[truncated N chars]` suffix — the same treatment `EVENT_DATA_CHARS` already gives events. A 27k-char snippet result was observed resident for a dozen turns, crowding out the state summary it was supposed to inform; under this loop a tool result reaches the model only through the window, so the cap is a real limit on what the model sees, and the suffix exists so it knows to print less and re-run rather than assume it saw everything. The cap is applied when the window is rendered, not when history is stored: the trajectory logs tool results in full, so capping at store time would make an in-memory history and one rebuilt from the log window to different bytes.
-
-The average window is larger (36 messages against 24), which is the cost paid for the cache. Per the Consequences above this is a harness version change and re-baselines results.
-
-## Addendum: the state summary is a client HUD (2026-08-22)
-
-`formatStateSummary` was thickened from a thin status line into a fixed, line-oriented client HUD, on the reasoning that a running 3.3.5a client always shows XP, bags, the quest tracker, nameplates, the target frame and open windows — hiding them made the model re-derive from the event stream what a client would simply display. The lines are: header, session, character/level, position, health/power, xp/money, bag, quests, target, nearby, an omit-when-empty `ui` line, stream status, and the existing chat/notification tails. This is presentation of already-observed fields, not new observation.
-
-It changes the summary template, so per the Consequences above it is a harness version change and re-baselines results.
-
-Consequences specific to this change:
-
-- **Same two rules hold.** A field no event carried reads `unobserved`, never a guessed zero (docs/CONTRACTS.md); an *observed* zero (0 copper, 0 xp, 0 free slots) is shown as the real value it is. The `nearby` line prints name + distance + dead-when-known and never exact mob health — CONTRACTS.md forbids it — while the self `health` line stays numeric, because the player frame is numbers.
-- **The rpc snapshot now carries three derived views.** The sandbox attaches flattened `state.units()`, `state.bag()`, and an open-window fold to the snapshot JSON (`runner/src/sandbox/entry.ts`); all are pure reads over the cache, invent no observation, and are consumed only by the HUD. Mob `health`/`maxHealth` are stripped from the attached units array so the exact value cannot reach the HUD at all.
-- **The `ui` line folds honest event pairs only.** Gossip open = last `SMSG_GOSSIP_MESSAGE` with no later `SMSG_GOSSIP_COMPLETE`; loot open = last `SMSG_LOOT_RESPONSE` with no later `SMSG_LOOT_RELEASE_RESPONSE`; vendor open = `SMSG_LIST_INVENTORY` only when it is the most recent window event of the three (it has no closing opcode); dead/ghost come from self fields. A kind that cannot be proven open is omitted, never guessed. Buffer truncation fails safe: an opening event cannot sit in a bounded buffer while its later close is gone, so a truncated buffer yields "omit", never a false "open".
-- **Determinism is unchanged.** `formatStateSummary` and the fold are pure functions of their inputs; `assembleContext` stays byte-identical for identical inputs.
+- Models with weak note-taking underperform at equal reasoning strength. That is
+  signal, not bias: long-horizon memory management is part of what is measured.
+- Any constant in the policy, the summary template or the system prompt is a
+  harness version change and re-baselines results. Each amendment above was one.
