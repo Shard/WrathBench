@@ -356,8 +356,8 @@ describe("the shipped fleet files", () => {
     }
   };
 
-  test("fleet.next.json: the job shape — pinned probe, sonnet back in the roster under a concurrency cap", async () => {
-    const raw = (await Bun.file(new URL("./fleet.next.json", import.meta.url).pathname).json()) as unknown;
+  test("fleet.json: the job shape — pinned probe, sonnet back in the roster under a concurrency cap", async () => {
+    const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
     expect(config.legacyLanes).toEqual([]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe-freeplay", SHAKEOUT2: "sub-opus-e90" });
@@ -400,8 +400,8 @@ describe("the shipped fleet files", () => {
     expect(plan.policy.length).toBe(6);
   });
 
-  test("fleet.json (LIVE, pool shape with a lanes list) still loads: lanes read as pinned jobs", async () => {
-    const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
+  test("fleet.pool.json (pool shape with a lanes list) still loads: lanes read as pinned jobs", async () => {
+    const raw = (await Bun.file(new URL("./fleet.pool.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
     expect(config.legacyLanes).toEqual(["nav-probe", "sub-opus"]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });

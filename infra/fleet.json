@@ -1,53 +1,15 @@
 {
   "_notes": [
-    "DRIVER SPELLING (2026-08-23, ADR-0035): `claude-subscription` below is the pre-ADR-0035 alias of `claude-code`. The supervisor running since before that commit only knows the old word and REJECTS the file on `claude-code` (seen 02:23:57: keeps last good config). Switch these entries to `claude-code` at the next fleet restart; new code reads both.",
-    "sonnet / sonnet-low are NOT in the pool roster (2026-08-23): the subscription lane is one session at a time while nav-probe holds SHAKEOUT; queue them manually (example below) when the probe is parked.",
-    "Pruned 2026-08-23 (docs/COSTS.md §1): mimo-v2.5-free 0 snippets in 23 episodes, z-ai/glm-5.2:free 0 in 16 (429 upstream). north-mini-code and deepseek-v4-flash kept one more day on 1–2 samples.",
-    "NEXT-SHAPE fleet config (ADR-0031: runner pool and job queue; ADR-0032: scheduling policy from",
-    "run history). This file is NOT read by the running supervisor: the code that understands it",
-    "ships alongside, and a supervisor started before that code keeps its last good config and",
-    "complains if it sees this shape. At the next drain window the operator renames this file over",
-    "fleet.json and restarts the fleet service (docs/OPERATIONS.md, 'Switching to the pool/queue",
-    "shape'). The new code also loads the OLD shape, so either file works after the restart.",
-    "",
-    "accounts.pinned: account -> lane name. A pinned lane is exactly today's lane: one lane, one",
-    "account, its own roster stream, enabled/drain/respawn semantics unchanged. The lanes list",
-    "holds ONLY pinned lanes; every lane there must appear in accounts.pinned.",
-    "",
-    "accounts.pool: the accounts the policy and the queue may use, in preference order. Never",
-    "PROBE, never SMOKE*.",
-    "",
-    "roster: named entries, the exact per-entry schema of roster JSONs. No entry carries an",
-    "account: the pool assigns one. Two optional scheduling fields (ADR-0032):",
-    "  tiers: a manual FORCE — tiers listed here are eligible regardless of run history. Normally",
-    "         absent: every model is e90-eligible on arrival and e360 is EARNED (one un-overridden",
-    "         e90 run that reached level 5). Use it to push a model into e360 by hand.",
-    "  runsPerEpisode: { e90: n, e360: n } overrides policy.runsPerEpisode for this entry.",
-    "",
-    "policy: runsPerEpisode targets (default 3 and 3). Everything else about the policy is code:",
-    "a stillborn run (zero model responses) never counts toward a target but climbs the defer",
-    "ladder; the ladder is 1m/3m/5m/10m/15m/30m/1h/3h/6h on consecutive no-progress attempts",
-    "(stillborn or adapter-error) and one more failure at the 6h ceiling RETIRES the model until",
-    "`infra/run-fleet.sh --clear-model <name>`. Priority for a free pool account: models with no",
-    "counted run yet, then e90 before e360, then fewest counted runs, ties by roster order. One",
-    "stream per model. --status shows every model's verdict; --dry-run shows the next picks.",
-    "",
-    "queue: ordered MANUAL jobs { ref, episode, repeat, lane?, enabled? }; they outrank the policy,",
-    "which only fills accounts the queue leaves free. `ref` is a roster name or a list of them (a",
-    "list rotates several models on one account as a multi-entry lane does). `episode` is",
-    "e90 | e360 | freeplay (freeplay is never scheduled by the policy; it is only reachable here).",
-    "`repeat` is a count or \"loop\" (run-roster --loop; a loop job holds its account until disabled).",
-    "`lane` names the job's run ids and logs (fleet-<lane>-<model>-<stamp>); default <first",
-    "ref>-<episode>. A job whose episode a ref is not eligible for runs without that ref; a job",
-    "with no eligible ref is SKIPPED with a logged reason. Example entries (the queue below is",
-    "empty on purpose — the policy runs the roster):",
-    "  { \"ref\": \"sonnet\", \"episode\": \"e360\", \"repeat\": 1, \"lane\": \"sonnet-e360\" }",
-    "  { \"ref\": [\"hy3\", \"deepseek-flash\"], \"episode\": \"e90\", \"repeat\": \"loop\", \"lane\": \"free-oc-a\", \"enabled\": false }",
-    "",
-    "Lane policy is unchanged and enforced on every entry: claude models only via the",
-    "claude-code driver (the claude-code harness, ADR-0035); shared free pools carry free ids only; a local apiBase is",
-    "exempt from the suffix rule. preflight is unchanged (ADR-0023); its accounts may not be",
-    "in the pool."
+    "Fleet config (ADR-0034): one concept, the JOB. Hot-reloaded every 60s; history in docs/worklogs.",
+    "accounts.pool: accounts the pool and the policy may use, in preference order. Never PROBE, never SMOKE*.",
+    "roster: name -> roster entry (exact run-roster schema; may carry objective/watchdogs/maxToolCalls/wikiCoords).",
+    "  Optional: tiers (manual FORCE, normally absent), runsPerEpisode { e90, e360 } (per-entry target).",
+    "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <driver>: n } caps streams per driver.",
+    "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
+    "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy.",
+    "  Name is <first ref>-<episode>; one job per (ref, episode). A job with no account and nothing eligible is skipped.",
+    "Lane policy: claude models only via driver claude-code; shared free pools carry free ids only; local apiBase exempt.",
+    "preflight: ADR-0023; its accounts may not be in the pool or on a job."
   ],
   "preflight": {
     "enabled": true,
@@ -72,42 +34,20 @@
     "deployTimeoutMs": 600000
   },
   "accounts": {
-    "pinned": {"SHAKEOUT": "nav-probe", "SHAKEOUT2": "sub-opus"},
     "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]
   },
-  "lanes": [
-    {
-      "_comment": [
-        "nav-probe: the long-running UNSCORED navigation probe (ADR-0024), pinned to SHAKEOUT",
-        "exactly as today. Its watchdog override is the hand-written e360 shape; it stays",
-        "explicit here rather than as a queue job because it is a probe with an objective, not",
-        "a tiered episode."
-      ],
-      "name": "nav-probe",
-      "enabled": true,
-      "loop": true,
+  "roster": {
+    "nav-probe": {
+      "model": "sonnet", "driver": "claude-code", "character": "Navprobe", "race": 3, "class": 2,
       "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
       "watchdogs": {"episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000},
       "maxToolCalls": 2500,
-      "wikiCoords": true,
-      "entries": [
-        {"model": "sonnet", "driver": "claude-subscription", "character": "Navprobe", "race": 3, "class": 2}
-      ]
+      "wikiCoords": true
     },
-    {
-      "_comment": [
-        "sub-opus: the burn switch, pinned to SHAKEOUT2; disabled as today."
-      ],
-      "name": "sub-opus",
-      "enabled": false,
-      "loop": true,
-      "entries": [
-        {"model": "opus", "driver": "claude-subscription", "character": "Fleetopus", "race": 3, "class": 2, "episodeMs": 5400000},
-        {"model": "opus", "driver": "claude-subscription", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "episodeMs": 5400000}
-      ]
-    }
-  ],
-  "roster": {
+    "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2},
+    "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2},
+    "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2},
+    "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnetlo", "race": 3, "class": 2},
     "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2},
     "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
     "north-mini-code": {"model": "cohere/north-mini-code:free"},
@@ -122,8 +62,12 @@
     "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2}
   },
-  "policy": {"runsPerEpisode": {"e90": 3, "e360": 3}},
+  "policy": {
+    "runsPerEpisode": {"e90": 3, "e360": 3},
+    "maxConcurrent": {"claude-code": 2}
+  },
   "queue": [
-    { "ref": "muse-spark", "episode": "e90", "repeat": 1, "lane": "muse-spark-first" }
+    { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": "loop", "enabled": true },
+    { "ref": ["sub-opus", "sub-opus-low"], "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
   ]
 }

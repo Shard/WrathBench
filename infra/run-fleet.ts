@@ -2535,7 +2535,10 @@ async function main(): Promise<void> {
       out.push(jobLane(job, cfg.roster, job.account!, stampToday, eligible));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
-        if (sets.running.has(job.name)) countJob(job);
+        // An enabled pinned job spawns this tick if it is not already running,
+        // so it counts against the driver cap either way — otherwise the first
+        // tick after a restart fills the pool before the pinned session exists.
+        countJob(job);
       }
     }
     // Pool jobs with a live process: keep running whatever the file now says,
