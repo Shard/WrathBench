@@ -43,6 +43,7 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 - Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do.
 - Log at the module boundary (every observation served, every action dispatched) and in the runner (every snippet, result, and event batch the model saw). Trajectory logs are JSONL under `data/runs/<run-id>/`.
 - Tests: `bun test` for sdk/ and runner/. Module changes are verified by the smoke script in `infra/smoke/`.
+- Working memory lives in three places and nowhere else: completed work goes in the day file `docs/worklogs/YYYY-MM-DD.md` (append to today's, create it if absent; `docs/WORKLOG.md` is only the index), open items go in `docs/FOLLOW-UPS.md` (open items only, stable numbers, resolved numbers move to its ledger), decisions go in `docs/decisions/` as ADRs. When an item ships, add a `shipped: item N — commit — where it lives` line to the day file and move the number to the ledger.
 
 ## Style
 - Plain prose in docs. Bullets where they aid scanning. Keep things concise and focused on why not what.

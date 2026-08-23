@@ -26,7 +26,11 @@ Short architecture decision records. One file per decision, numbered. Keep them 
 - ADR-0022: Dashboard as a SolidJS SPA over a read-only viewer API
 - ADR-0023: The deploy-window smoke is a supervisor gate, not a deploy step
 - ADR-0024: Objective and watchdog overrides are run dimensions
+- ADR-0025: The raw-action escape hatch is an allowlist of ordinary client opcodes
 - ADR-0026: The comparability tuple is stamped, never recomputed
 - ADR-0027: Navigation is the module's: typed causes, client-parity triggers and transports
 - ADR-0028: Wiki coordinates are a run dimension, withheld in scored runs
 - ADR-0029: The reference bundle states the quest's ender and the wiki's era
+- ADR-0030: Episode tiers and promotion
+- ADR-0031: Runner pool and job queue
+- ADR-0032: Scheduling policy from run history
