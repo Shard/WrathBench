@@ -439,6 +439,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
    */
   async function resultRuns(): Promise<ResultRun[]> {
     const out: ResultRun[] = [];
+    // One clock for the pass: a live run's playtime is charged up to *now*, and
+    // two rows of one response must not be measured against different nows.
+    const now = Date.now();
     for (const row of listRuns(runsDir)) {
       const dir = runDir(runsDir, row.runId);
       const totals = dir === null ? null : await runTotals(row.runId, dir);
@@ -453,6 +456,29 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 toolCalls: totals.toolCalls,
                 snippets: totals.snippets,
                 modelResponses: totals.modelResponses,
+              },
+          totals === null
+            ? null
+            : {
+                playtimeMs: playtimeMs(totals.segments, {
+                  lastTs: totals.lastTs,
+                  live: row.live,
+                  now,
+                }),
+                tokens: totals.tokens,
+                /*
+                 * The actual figure only: what the provider says it charged.
+                 * The episodes listing is a record of what runs cost, and an
+                 * estimate standing in for a bill is the one thing it must not
+                 * show. `runCost` is the listing's own, over the same memoised
+                 * totals, so the two pages cannot quote different dollars.
+                 */
+                actualCost: runCost({
+                  run: row,
+                  tokens: totals.tokens,
+                  reportedUsd: totals.reportedCostUsd,
+                  coverage: totals.responseCost,
+                }).actual,
               },
         ),
       );

@@ -19,7 +19,16 @@
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
-import type { EpisodeIdView, ResultRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
+import type {
+  CostFigure,
+  EpisodeIdView,
+  LevelMark,
+  ResultRun,
+  RunRow,
+  StatePoint,
+  TokenTotals,
+  TrackPoint,
+} from "./api-types";
 import type { ActiveSegment } from "./tail";
 
 /**
@@ -231,6 +240,18 @@ export function resultRunOf(
   segments: readonly ActiveSegment[],
   /** Counted off the trajectory; omitted when it could not be read. */
   calls: { toolCalls: number; snippets: number; modelResponses: number } | null = null,
+  /**
+   * The listing facts the episodes page shows per run. Passed in rather than
+   * derived here: the caller already holds the memoised trajectory totals, and
+   * the cost must be the same `runCost` the fleet listing and the run page
+   * quote or the pages would disagree about dollars. `actualCost` is
+   * `CostView.actual` — never the expected figure (see `ResultRun`).
+   */
+  listing: {
+    playtimeMs: number | null;
+    tokens: TokenTotals | null;
+    actualCost: CostFigure | null;
+  } | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -276,5 +297,10 @@ export function resultRunOf(
     money: run.money,
     questsCompleted: run.questsCompleted,
     maps: mapsOf(states),
+    character: run.character,
+    playtimeMs: listing?.playtimeMs ?? null,
+    tokens: listing?.tokens ?? null,
+    actualCost: listing?.actualCost ?? null,
+    pauseReason: run.pauseReason,
   };
 }

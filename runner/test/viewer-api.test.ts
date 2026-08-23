@@ -541,6 +541,49 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(row.levels[0]!.playtimeMs).not.toBeNull();
   });
 
+  test("a results row carries the listing facts, and the actual cost only", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: {
+        runId: string;
+        character: string | null;
+        playtimeMs: number | null;
+        tokens: { totalTokens: number | null } | null;
+        actualCost: { basis: string; note: string } | null;
+        terminationReason: string | null;
+        pauseReason: string | null;
+      }[];
+    };
+    const row = body.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.character).toBe("Fixturely");
+    expect(row.playtimeMs).not.toBeNull();
+    expect(row.tokens).not.toBeNull();
+    // The actual figure is present as a figure — with a basis and a note — even
+    // when there is nothing to bill; a blank cost must still say which nothing.
+    expect(row.actualCost).not.toBeNull();
+    expect(["reported", "none"]).toContain(row.actualCost!.basis);
+    expect(row.actualCost!.note.length).toBeGreaterThan(0);
+    // `expected` is deliberately absent: this row may not carry an estimate.
+    expect(row.actualCost).not.toHaveProperty("expected");
+  });
+
+  test("?episode=all is every run /api/runs lists — the episodes page replaces the fleet's table", async () => {
+    const runs = fixture();
+    const listing = (await (await api(runs)(new Request("http://x/api/runs"))).json()) as {
+      runs: { runId: string }[];
+    };
+    const results = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string }[];
+    };
+    expect(results.runs.map((r) => r.runId).sort()).toEqual(listing.runs.map((r) => r.runId).sort());
+  });
+
+  test("/api/eval is gone: a rename is a rename, with no alias behind it", async () => {
+    const runs = fixture();
+    expect((await api(runs)(new Request("http://x/api/eval"))).status).toBe(404);
+    expect((await api(runs)(new Request("http://x/api/ladder?episode=all"))).status).toBe(200);
+  });
+
   test("/api/results defaults to the e90 group, and says how much it dropped", async () => {
     const runs = fixture();
     stamped(runs, TUPLE); // a six-hour tuple with no episode id: not a member
