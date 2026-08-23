@@ -91,6 +91,17 @@ because that would silently re-scope every score already carrying this label.
 separates them — steering is. `e360` is the standing goal with a longer clock;
 `freeplay` is where a human is allowed to point.
 
+## Runs launched without an episode
+
+A run launched without `--episode` is not a member of any tier. It reads
+`episode: null`, ADR-0034's policy counts it toward nothing (no target, no
+promotion, no chart), and it therefore carries no comparability claim to
+protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
+stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m
+(FOLLOW-UPS 48(g), decided 2026-08-23). They are the shape of an untagged
+one-off, not a quiet third ruleset: moving them would change every flagless run
+without any tuple field saying so, and every run that is scored passes the flag.
+
 ## Runs before this page
 
 A run launched before episode ids existed reads `episode: null`, and is never
