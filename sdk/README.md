@@ -54,7 +54,7 @@ class WrathClient {
   health(): Promise<HealthResponse>                                   // GET /health
   createSession(req: Omit<CreateSessionRequest, "token">): Promise<SessionResponse>  // POST /session
   say(text: string): Promise<ActionResponse>                          // POST /action
-  moveToAsync(point: MovePoint): Promise<MoveToResponse>              // POST /action, ack only
+  moveToAsync(target: MoveTarget): Promise<MoveToResponse>            // POST /action, ack only
   stop(): Promise<ActionResponse>                                     // POST /action
   face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>  // POST /action
   deleteSession(): Promise<DeleteSessionResponse>                     // DELETE /session
@@ -77,7 +77,7 @@ class WrathClient {
 
   // composed helpers — each waits for the game's verdict
   waitForChat(match: string | ((e: ChatEntry) => boolean), o?: WaitForChatOptions): Promise<ChatEntry>
-  moveTo(point: MovePoint, o?: MoveToOptions): Promise<MoveResult>
+  moveTo(target: MoveTarget, o?: MoveToOptions): Promise<MoveResult>
   waitForNearby(p: (o: NearbyObject) => boolean, o?: WaitForNearbyOptions): Promise<NearbyObject>
   killTarget(guid, o?: KillTargetOptions): Promise<KillResult>
   lootCorpse(guid, o?: LootOptions): Promise<LootResult>
@@ -203,6 +203,14 @@ const result = await client.moveTo({ x, y, z }, { timeout: 90_000 });
 if (result.ok) console.log("arrived at", result.position);
 else console.log("did not get there:", result.status, "stopped at", result.position);
 ```
+
+`moveTo` takes a point, a unit from `state.units(...)`/`state.closest(...)`, or
+a guid — the unit forms resolve to that unit's position in the state cache at
+call time, and a guid nothing in view answers to comes back as `ok: false,
+status: "unknown_target"` with a hint, the one arm with no move (and so no
+`moveId`/`position`) behind it. `moveToAsync` takes the same targets and is the
+call for a walk longer than your own time budget: dispatch, then watch
+`WB_MOVE_RESULT`.
 
 `moveTo` issues `move_to`, then resolves on the `WB_MOVE_RESULT` carrying the
 same `moveId`. **Game outcomes are returned, not thrown** (`docs/decisions/ADR-0011`):

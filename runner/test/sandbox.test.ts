@@ -342,6 +342,28 @@ describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
     await stub.stop();
   });
 
+  test("the abandon message states the interrupted move and names moveToAsync (2026-08-23 fan-out)", async () => {
+    // 6 of 7 runs in the navigation fan-out hit this wall with a moveTo in
+    // flight; one re-issued the identical blocking call five times. The message
+    // now carries what the SDK knew as it unwound, and the call that survives.
+    const stub = startModuleStub();
+    const host = makeHost({ moduleUrl: stub.url, snippetTimeoutMs: 400 });
+    await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
+    const res = await host.evalSnippet("await sdk.moveTo({ x: 1, y: 2, z: 3 }); 'walked'");
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("a moveTo was still walking when this was abandoned");
+    // This stub never reports a position, so the distances degrade to saying so
+    // rather than to a made-up number.
+    expect(res.error).toContain("(1.0, 2.0)");
+    expect(res.error).toContain("sdk.moveToAsync(target)");
+    // The note is drained: a later, move-free abandon does not repeat it.
+    const again = await host.evalSnippet("await new Promise(() => {});");
+    expect(again.timedOut).toBe(true);
+    expect(again.error).not.toContain("still walking when this was abandoned");
+    await host.stop();
+    await stub.stop();
+  });
+
   test("a routine launched by a snippet that returned normally is never aborted by a later timeout", async () => {
     const host = makeHost({ snippetTimeoutMs: 300 });
     // The trailing value matters: a lone expression is awaited REPL-style,

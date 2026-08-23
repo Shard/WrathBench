@@ -48,6 +48,21 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain('questGiver: true means any marker but "none"');
   });
 
+  test("long moves are named as the thing that does not fit one snippet", () => {
+    // 2026-08-23 navigation fan-out: 6 of 7 runs hit the 30s abandon with a
+    // moveTo in flight; nav-probe-c4 re-issued the identical blocking call to
+    // one coordinate five times.
+    expect(SYSTEM_PROMPT).toContain("a move of more than roughly 200y cannot finish inside one snippet");
+    expect(SYSTEM_PROMPT).toContain("await sdk.moveToAsync(target)");
+  });
+
+  test("moveTo is documented as taking a unit or guid, with a typed miss", () => {
+    // 4 of 7 runs in the same fan-out threw a raw TypeError reading .x off a
+    // unit lookup that found nothing.
+    expect(SYSTEM_PROMPT).toContain("moveTo and moveToAsync take a unit or a guid as well as a point");
+    expect(SYSTEM_PROMPT).toContain('status: "unknown_target"');
+  });
+
   test("tools are distinguished from ambient snippet objects", () => {
     // laguna and hy3 called write_scratchpad(...) / search_reference(...) as
     // bare globals inside snippets.

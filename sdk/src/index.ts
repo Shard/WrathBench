@@ -32,6 +32,7 @@ export type {
   LootResult,
   MovePoint,
   MoveResult,
+  MoveTarget,
   MoveToOptions,
   QuestAcceptResult,
   QuestOptions,

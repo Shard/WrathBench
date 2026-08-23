@@ -193,8 +193,10 @@ function showTarget(target: object): string {
  * valid reading, and weak models write it across every family (nemotron, hy3,
  * gpt-oss trajectories 2026-08-22). Returns the repaired point, or null when
  * the call is not that shape — every other bad shape still hits the loud
- * assertMovePoint reject. Only the helper `moveTo` repairs; raw `moveToAsync`
- * stays strict (ADR-0015: raw actions do not soften).
+ * assertMovePoint reject. Only the helper `moveTo` repairs the positional form;
+ * raw `moveToAsync` stays strict about it (ADR-0015: raw actions do not soften).
+ * Target *resolution* — point, unit, or guid — is shared by both: it is what the
+ * call names, not a rewriting of what it said.
  */
 function repairThreeArgMove(
   point: unknown,
@@ -223,6 +225,86 @@ function assertMovePoint(point: unknown, method: string): asserts point is MoveP
       throw new TypeError(`${method} position ${axis} must be a finite number, got ${shown}`);
     }
   }
+}
+
+/**
+ * What a move target resolved to: a point to walk to (with a note when the
+ * resolution is worth stating), or nothing walkable at all.
+ */
+type ResolvedMoveTarget = { point: MovePoint; note?: string } | { unknown: string };
+
+/** The guid a move target names, or undefined when it is (meant to be) a point. */
+function moveTargetGuid(target: unknown): string | bigint | undefined {
+  if (typeof target === "string" || typeof target === "bigint") return target;
+  if (target !== null && typeof target === "object") {
+    const guid = (target as { guid?: unknown }).guid;
+    if (typeof guid === "string" && guid.length > 0) return guid;
+    if (typeof guid === "bigint") return guid;
+  }
+  return undefined;
+}
+
+/** The finite x/y/z the caller's own object carries, when it carries all three. */
+function ownPoint(target: unknown): MovePoint | undefined {
+  if (target === null || typeof target !== "object") return undefined;
+  const t = target as Record<string, unknown>;
+  const { x, y, z } = t;
+  if (typeof x !== "number" || typeof y !== "number" || typeof z !== "number") return undefined;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return undefined;
+  return { x, y, z };
+}
+
+/**
+ * Resolve `moveTo`'s target to a point (ADR-0015 earned surface: 4 of 7 runs in
+ * the 2026-08-23 fan-out threw a raw `TypeError: moveTo position x must be a
+ * finite number, got undefined` from `.x` on a lookup that found nothing).
+ *
+ * A point is untouched — same validation, same messages, same wire call. A unit
+ * or guid resolves through the state cache, exactly the position `state.units()`
+ * would report; a unit the cache has lost falls back to the coordinates that
+ * unit object itself carries *and says so*, because walking to where something
+ * was without mentioning it is the silent-wrong-behaviour ADR-0016 forbids; and
+ * a guid nothing can be found for is a typed answer, not a throw.
+ */
+function resolveMoveTarget(target: unknown, state: StateCache, method: string): ResolvedMoveTarget {
+  const guid = moveTargetGuid(target);
+  if (guid === undefined) {
+    // Not a guid-shaped argument: the point path, byte-identical to before —
+    // including the message a bare number or a two-axis object earns.
+    assertMovePoint(target, method);
+    return { point: { x: target.x, y: target.y, z: target.z } };
+  }
+  let key: string;
+  try {
+    key = guidKey(guid);
+  } catch {
+    throw new TypeError(
+      `${method} got ${JSON.stringify(String(guid))}, which is neither a point nor a decimal guid string — ` +
+        `pass a point { x, y, z }, a unit from state.units(...) / state.closest(...), or that unit's .guid`,
+    );
+  }
+  const obj = state.nearby.get(key);
+  const seen = obj === undefined ? undefined : pointOf(obj)?.value;
+  if (seen !== undefined) return { point: { x: seen.x, y: seen.y, z: seen.z } };
+  const own = ownPoint(target);
+  if (own !== undefined) {
+    return {
+      point: own,
+      note:
+        `guid ${key} is not in view any more, so this walked to (${fmtXY(own)}) — where the object you ` +
+        `passed last saw it, not a live position. Re-read state.units(...) on arrival.`,
+    };
+  }
+  const where = obj === undefined ? "not in view" : "in view but has no observed position yet";
+  return {
+    unknown:
+      `${method}: guid ${key} is ${where}, so there is no position to walk to (undefined means unobserved, ` +
+      `never zero). ` +
+      (obj === undefined
+        ? `Re-read a current unit with state.units(...) / state.closest(...) — guids go stale when a unit ` +
+          `leaves view — or pass a point { x, y, z }.`
+        : `Read it again from state.units(...) in a moment, or pass a point { x, y, z }.`),
+  };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -459,6 +541,15 @@ export interface ConnectOptions {
    * explicit `signal` on a call still wins. Undefined means no default.
    */
   signal?: AbortSignal | (() => AbortSignal | undefined);
+  /**
+   * When the caller's current budget runs out, as an epoch-ms instant (or a
+   * function consulted per call, the way `signal` is). The runner passes the
+   * moment the sandbox will abandon the running snippet; nothing about a wait
+   * changes because of it — it is used only to say, in a `moveTo` result's
+   * `hint`, that the walk was always longer than the snippet had left
+   * (ADR-0016 rule 2: explain, do not cap). Undefined means no budget is known.
+   */
+  deadline?: number | (() => number | undefined);
 }
 
 export interface WaitForChatOptions {
@@ -473,6 +564,18 @@ export interface MovePoint {
   y: number;
   z: number;
 }
+
+/**
+ * What `moveTo`/`moveToAsync` accept: a world point, or the thing standing at
+ * one — a unit from `state.units(...)` / `state.closest(...)`, or its guid.
+ * The unit forms resolve to that unit's position in the state cache at call
+ * time (ADR-0015: earned by the 2026-08-23 fan-out, where 4 of 7 runs threw a
+ * raw `TypeError` reading `.x` off a lookup that returned nothing).
+ */
+export type MoveTarget = MovePoint | GuidOrUnit;
+
+/** Base run speed in yards per second, 3.3.5a. Used only for the ETA hint. */
+const RUN_SPEED_YPS = 7;
 
 export interface MoveToOptions {
   /**
@@ -513,7 +616,11 @@ export type MoveResult =
        * is the z it actually walked to. Quote it next time.
        */
       readonly meshZ?: number;
-      /** Present with a hint only when `meshZ` is: what the z difference means. */
+      /**
+       * What the result means beyond the status: the z the mesh chose (`meshZ`
+       * above), and/or the note that this walk was longer than the caller's
+       * remaining snippet budget. Absent when there is nothing to say.
+       */
       readonly hint?: string;
       /**
        * Present when the move ended aboard a transport (tram car, boat) that
@@ -532,6 +639,25 @@ export type MoveResult =
       readonly ts: number;
       /** The map and arrival point `SMSG_NEW_WORLD` announced, server-confirmed. */
       readonly to: WorldPosition;
+      readonly hint: string;
+    }
+  | {
+      /**
+       * Nothing was dispatched: the unit or guid handed to `moveTo` names no
+       * position the state cache can see, so there is no point to walk to and
+       * no move to have an outcome. Not a `WB_MOVE_RESULT` status — the module's
+       * status vocabulary is the module's word (ADR-0027); this arm is the SDK
+       * answering before the wire, the way `killTarget` answers `lost`.
+       */
+      readonly ok: false;
+      readonly status: "unknown_target";
+      /** Never present here: there was no move. */
+      readonly moveId?: undefined;
+      readonly position?: undefined;
+      readonly seq?: undefined;
+      readonly ts?: undefined;
+      readonly reachedPos?: undefined;
+      /** Why the target resolved to nothing, and what to pass instead. */
       readonly hint: string;
     }
   | {
@@ -1269,12 +1395,15 @@ export class WrathClient {
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
   private readonly defaultSignal: (() => AbortSignal | undefined) | undefined;
+  private readonly deadlineAt: (() => number | undefined) | undefined;
 
   constructor(options: ConnectOptions) {
     this.token = options.token;
     this.boundAccount = options.account;
     const sig = options.signal;
     this.defaultSignal = sig === undefined ? undefined : typeof sig === "function" ? sig : () => sig;
+    const dl = options.deadline;
+    this.deadlineAt = dl === undefined ? undefined : typeof dl === "function" ? dl : () => dl;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
@@ -1474,10 +1603,24 @@ export class WrathClient {
 
   /**
    * POST /action with `action: "move_to"`. Acks "queued and pathing"; the
-   * outcome is a `WB_MOVE_RESULT` event. Prefer `moveTo`, which waits for it.
+   * outcome is a `WB_MOVE_RESULT` event. Prefer `moveTo`, which waits for it —
+   * but this is the call for a walk longer than the caller's own time budget:
+   * dispatch here, then watch `WB_MOVE_RESULT` (or `state.self.position`).
+   *
+   * Takes the same targets `moveTo` does: a point, a unit, or a guid. A target
+   * that resolves to no position throws here rather than returning a verdict —
+   * this is the raw tier, and there is no result object to put an answer in;
+   * `moveTo` answers the same case with `status: "unknown_target"`.
    */
-  moveToAsync(point: MovePoint): Promise<MoveToResponse> {
-    assertMovePoint(point, "moveTo");
+  moveToAsync(target: MoveTarget): Promise<MoveToResponse> {
+    const resolved = resolveMoveTarget(target, this.state, "moveTo");
+    if ("unknown" in resolved) {
+      throw new TypeError(
+        `${resolved.unknown} (moveTo(target) answers this case with { ok: false, status: "unknown_target" } ` +
+          `instead of throwing.)`,
+      );
+    }
+    const point = resolved.point;
     return this.request(
       "POST",
       "/action",
@@ -2261,14 +2404,40 @@ export class WrathClient {
    * A `moveTo` issued while another is running supersedes it; the older call
    * resolves with `status: "superseded"`.
    */
-  async moveTo(point: MovePoint, options: MoveToOptions = {}, ...rest: unknown[]): Promise<MoveResult> {
+  async moveTo(target: MoveTarget, options: MoveToOptions = {}, ...rest: unknown[]): Promise<MoveResult> {
     // Repair moveTo(x, y, z) → moveTo({ x, y, z }) before anything else; a
     // legitimate two-arg call passes rest empty and is untouched.
-    const repaired = repairThreeArgMove(point, options, rest);
+    const repaired = repairThreeArgMove(target, options, rest);
     if (repaired !== null) {
-      point = repaired.point;
+      target = repaired.point;
       options = repaired.options;
     }
+    const resolved = resolveMoveTarget(target, this.state, "moveTo");
+    if ("unknown" in resolved) return { ok: false, status: "unknown_target", hint: resolved.unknown };
+    const point = resolved.point;
+    // Notes that belong on whatever verdict comes back: a stale-position
+    // fallback, and the budget estimate below. They explain the call, so they
+    // ride the `hint` rather than changing the module's status (ADR-0027).
+    const extras: string[] = [];
+    if (resolved.note !== undefined) extras.push(resolved.note);
+    const from = this.state.self.position?.value;
+    const budgetMs = this.remainingBudgetMs();
+    if (from !== undefined && budgetMs !== undefined) {
+      const yards = distance2d(from, point);
+      const walkMs = (yards / RUN_SPEED_YPS) * 1000;
+      if (walkMs > budgetMs) {
+        extras.push(
+          `this move is ~${Math.round(yards)}y in a straight line — about ${Math.round(walkMs / 1000)}s at a ` +
+            `base run speed of ${RUN_SPEED_YPS}yd/s, and the caller had ~${Math.round(budgetMs / 1000)}s of ` +
+            `its budget left when it was issued. Awaiting a move this long does not fit one snippet: dispatch ` +
+            `it with sdk.moveToAsync(target) or from a background routine, then poll state.self.position.`,
+        );
+      }
+    }
+    const withNotes = (hint?: string): string | undefined => {
+      const all = hint === undefined ? extras : [hint, ...extras];
+      return all.length === 0 ? undefined : all.join(" ");
+    };
     const epoch = this.events.epoch;
     // Stream position before the move: a portal's SMSG_NEW_WORLD can land
     // before the WB_MOVE_RESULT that says `transferred`, so the transfer wait
@@ -2309,7 +2478,27 @@ export class WrathClient {
       // existing `stop` — no game semantics beyond "stop walking" — and let
       // the abort propagate. Its ack is not awaited: the signal holder has
       // already moved on, and a refusal (`no_session`, …) has nothing to add.
-      if (err instanceof EventAbortedError) void this.stop().catch(() => {});
+      if (err instanceof EventAbortedError) {
+        void this.stop().catch(() => {});
+        // The abandoning caller (the runner's snippet timeout) sees only the
+        // error, so the error is where the two facts it needs go: how far this
+        // walk got, and the call that would have survived (ADR-0016 rule 2).
+        // `moveAbandon` carries the same sentence structurally, for the sandbox
+        // to splice into its abandon notice.
+        const at = this.state.self.position?.value;
+        const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
+        const remaining = at !== undefined ? distance2d(at, point) : undefined;
+        const progress =
+          covered !== undefined && remaining !== undefined
+            ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
+            : `no position was observed for it (target (${fmtXY(point)}))`;
+        const note =
+          `a moveTo was still walking when this was abandoned: ${progress}. A move that long does not fit one ` +
+          `snippet — issue it with sdk.moveToAsync(target), or from a background routine, and poll ` +
+          `state.self.position (or watch the WB_MOVE_RESULT event) instead of awaiting it inline.`;
+        err.message = `${err.message} — ${note}`;
+        (err as { moveAbandon?: string }).moveAbandon = note;
+      }
       throw err;
     }
     const data = event.data as MoveResultData;
@@ -2323,16 +2512,20 @@ export class WrathClient {
     const common = { moveId: data.moveId, position, seq: event.seq, ts: event.ts } as const;
     if (status === "arrived") {
       const aboard = data.onTransport !== undefined ? { onTransport: data.onTransport } : {};
-      if (data.meshZ === undefined) return { ok: true, status: "arrived", ...common, ...aboard };
+      if (data.meshZ === undefined) {
+        const hint = withNotes();
+        return { ok: true, status: "arrived", ...common, ...aboard, ...(hint !== undefined ? { hint } : {}) };
+      }
       return {
         ok: true,
         status: "arrived",
         ...common,
         ...aboard,
         meshZ: data.meshZ,
-        hint:
+        hint: withNotes(
           `arrived at (${fmtXY(point)}), but the ground there is at z ${data.meshZ.toFixed(1)}, not ` +
-          `${point.z.toFixed(1)}. The mesh owns z; quote ${data.meshZ.toFixed(1)} for this spot next time.`,
+            `${point.z.toFixed(1)}. The mesh owns z; quote ${data.meshZ.toFixed(1)} for this spot next time.`,
+        ) as string,
       };
     }
     if (status === "transferred") {
@@ -2347,12 +2540,13 @@ export class WrathClient {
           status: "transferred",
           ...common,
           to: transfer.to,
-          hint:
+          hint: withNotes(
             `a portal took the character to map ${transfer.to.map} at (${fmtXY(transfer.to)}); ` +
-            `state.self.position is on the new map now. Coordinates from the old map no longer apply.`,
+              `state.self.position is on the new map now. Coordinates from the old map no longer apply.`,
+          ) as string,
         };
       }
-      return { ok: false, status: "transferred", ...common, hint: transfer.hint };
+      return { ok: false, status: "transferred", ...common, hint: withNotes(transfer.hint) };
     }
     if (MOVE_LEAVES_NO_STOP.has(status)) {
       // Nothing moved — and that is exactly when the character can be left
@@ -2380,7 +2574,7 @@ export class WrathClient {
       // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
-    const hint = MOVE_HINTS[status]?.(point, data);
+    const hint = withNotes(MOVE_HINTS[status]?.(point, data));
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
     return {
       ok: false,
@@ -3260,6 +3454,25 @@ export class WrathClient {
   /** The signal in force for a wait started now (see `ConnectOptions.signal`). */
   private currentSignal(): AbortSignal | undefined {
     return this.defaultSignal?.();
+  }
+
+  /**
+   * How much of the caller's budget is left, per `ConnectOptions.deadline`.
+   * Undefined when no budget is known — and never used to shorten, cap or
+   * refuse anything: it only lets a `moveTo` result say the walk was longer
+   * than the snippet that awaited it.
+   */
+  private remainingBudgetMs(): number | undefined {
+    const at = this.deadlineAt?.();
+    if (at === undefined || !Number.isFinite(at)) return undefined;
+    const left = at - Date.now();
+    // A deadline already past is not a budget of zero, it is a budget we do not
+    // know: a background routine inherits the async context (and therefore the
+    // deadline) of the snippet that launched it, and that snippet's clock ran
+    // out long ago. Reporting zero there would append "this does not fit your
+    // budget — use a background routine" to every leg of a walk already running
+    // in one.
+    return left > 0 ? left : undefined;
   }
 
   /** `events.waitFor` with the client's default signal threaded in. */
