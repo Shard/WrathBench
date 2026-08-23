@@ -104,3 +104,35 @@ honest fix), and a `walkToCorpse` helper (ADR-0015: `moveTo(state.self.corpse)`
 is one line and the need is now visible). Observation widened by one packet a
 client already receives, so the status vocabulary of `reclaimCorpse` changes
 under the same navigation-comparability boundary as the rest of this ADR.
+
+## Amendment 2026-08-23: a mesh path that falls is a ledge, not a route
+
+nav-probe c4 on map 369 (session `956b315b…`, moveIds 186 and 277):
+`ResolvePathAt` accepted a mesh endpoint 7.64y below the requested z,
+`TickMover` interpolated one segment with dz -7.64 over 1.0y of 2D travel,
+the 2D-only arrival check said `arrived`, and the next move from the landing
+was `start_off_mesh`. The `meshZ` hint then told the agent the ground there
+was at z -6.9 and to quote it next time — the mesh's choice of a drop was
+being reported as the agent's stale z.
+
+- `drop` joins the vocabulary. A resolved polyline (main path or the leg2
+  splice) with any segment whose |dz| > 2.0y **and** |dz| > 1.2 x its 2D
+  length is a cliff, not a ramp: the walk is not dispatched, and the result
+  carries `reachedPos` (the last point before the step), `dz` (signed) and
+  `target` (the request). `TickMover` runs the same test per segment as a
+  defensive twin, stopping at the edge with the same status. The core's
+  `SetSlopeCheck` is not used: that steers pathing; this judges the route the
+  mesh already chose. `meshZ` stays for small-dz stale-z corrections.
+- Every `move_to` that reaches the mesh audits `op: "move_path"` with the
+  polyline (cap 64) at dispatch, so the next diagnosis reads the route rather
+  than rebuilding it from heartbeats.
+- SDK: `drop` hint names the ledge height and edge and says to pick a point
+  on this level or find the ramp/stairs. The `meshZ` hint only claims "the
+  mesh owns z, quote it" when |dz| <= 3y; beyond that it says the character
+  ended N yards below/above the requested point and that the request's z was
+  not what put it there.
+
+Vocabulary change, so the navigation-comparability boundary of this ADR moves
+again. Thresholds are the ones written here; a ramp steeper than 50 degrees
+over more than 2y would trip the guard and show up as a `drop` with the
+polyline in the audit, which is the evidence to retune on.
