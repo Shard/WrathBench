@@ -52,8 +52,8 @@ export interface PriceRow {
  *
  * Anthropic rows only: they are the ones with a non-zero price in this fleet,
  * and they are the ones `docs/COSTS.md` §3 verified. Everything else the fleet
- * runs today is free-tier or local, handled by the two rules below, and a paid
- * open model would earn its own row here the day one is scheduled.
+ * runs today is free-tier or local, handled by the two rules below; paid open
+ * models live in `OPEN_PRICES`.
  *
  * Sonnet 5 is under introductory pricing **through 2026-08-31** — that is what
  * COSTS.md's cross-check showed is really billing, so it is what the row holds.
@@ -138,6 +138,28 @@ export const LOCAL_PRICE: PriceRow = {
  */
 export { isFreeSlug, isLocalBase } from "../src/model-cost";
 
+/**
+ * Paid open models, matched on the exact OpenRouter id. These are genuinely
+ * metered (the operator's OpenRouter balance), so `asIfMetered` is false and the
+ * figure is a list-price estimate of a real bill. OpenRouter quotes per token;
+ * rows hold dollars per million. No cache-write tier on OpenRouter: a cache
+ * write is billed as input, so `cacheWrite` equals `input`.
+ */
+export const OPEN_PRICES: (PriceRow & { match: string })[] = [
+  {
+    id: "deepseek-v4-flash",
+    match: "deepseek/deepseek-v4-flash",
+    input: 0.052,
+    output: 0.103,
+    cacheRead: 0.0103,
+    cacheWrite: 0.052,
+    asOf: "2026-08-23",
+    source: "list",
+    asIfMetered: false,
+    note: "OpenRouter list price (GET /api/v1/models, 2026-08-23); metered against the operator's OpenRouter balance",
+  },
+];
+
 /** What a run needs to carry to be priced. A subset of `RunRow`, so tests can be small. */
 export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness">;
 
@@ -154,6 +176,7 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
+  for (const p of OPEN_PRICES) if (p.match === model) return { ...p };
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;
   for (const p of CLAUDE_PRICES) {
