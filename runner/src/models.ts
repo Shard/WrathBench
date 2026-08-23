@@ -54,6 +54,7 @@ import { harnessSeries } from "./comparability";
 import { harnessOf, normalizeDriver, type Harness } from "./config";
 import { isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
+import { platformOfBase } from "./platform";
 
 // ----------------------------------------------------------------- policy
 
@@ -549,22 +550,15 @@ export function readRunFacts(runsDir: string, now = Date.now()): RunFact[] {
 
 // ------------------------------------------------------------- projection
 
-/** Same rules as the viewer's `platformOf`: the api base is the honest source. */
+/**
+ * The roster entry's platform: the shared classifier (`platform.ts`, which the
+ * writer and the viewer also read), over this projection's own fallback — a
+ * roster entry with no api base is the openai-compatible default, which is
+ * OpenRouter. `local` is loopback and RFC-1918 only, the same test `billingOf`
+ * calls the operator's own hardware; a public IPv4 reads as itself.
+ */
 export function platformOf(apiBase: string | undefined, driver: string | undefined): string | null {
-  if (apiBase !== undefined) {
-    let host = apiBase;
-    try {
-      host = new URL(apiBase).hostname;
-    } catch {
-      /* fall through with the raw string */
-    }
-    if (host.includes("openrouter.ai")) return "openrouter";
-    if (host.includes("api.anthropic.com")) return "anthropic";
-    if (host.includes("api.openai.com")) return "openai";
-    if (host.includes("localhost") || host.startsWith("127.") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return "local";
-    return host.replace(/^api\./, "");
-  }
-  return driver === undefined ? "openrouter" : (normalizeDriver(driver) ?? driver);
+  return platformOfBase(apiBase) ?? (driver === undefined ? "openrouter" : (normalizeDriver(driver) ?? driver));
 }
 
 /** Whether a run is stillborn by the viewer's definition; null while undecidable. */
