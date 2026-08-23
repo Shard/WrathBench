@@ -21,7 +21,7 @@ import { A } from "@solidjs/router";
 import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
-import { fmtDuration, fmtWhen } from "../lib/format";
+import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
 import { TIER_COLUMNS, countedOf, isPromoted, noteOf, statusClass } from "../lib/models";
 import { poll } from "../lib/poll";
 
@@ -212,6 +212,7 @@ function Detail(props: { row: ModelRowView }) {
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
+              <th class="right">cost</th>
               <th>termination</th>
               <th>counts</th>
             </tr>
@@ -230,6 +231,10 @@ function Detail(props: { row: ModelRowView }) {
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>
                   <td class="right mono dim">{fmtDuration(r.durationMs)}</td>
+                  {/* The run page's own figure, computed there and carried here. */}
+                  <td class="right mono dim" title={r.cost?.note ?? "no price on file for this model"}>
+                    {r.cost == null || r.cost.basis === "none" ? "—" : fmtUsd(r.cost.usd)}
+                  </td>
                   <td class={r.terminationReason === "adapter-error" ? "err" : "dim"}>
                     {r.terminationReason ?? (r.live ? "—" : "no record")}
                   </td>

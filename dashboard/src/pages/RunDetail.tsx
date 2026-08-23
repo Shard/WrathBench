@@ -27,7 +27,7 @@ import {
 } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { Sparkline } from "../components/Sparkline";
-import { fmtAge, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
 
 const WINDOW = 200;
@@ -237,6 +237,27 @@ export default function RunDetail() {
                   <div class="sub">
                     cache r/w {fmtTokens(tokens()?.cacheReadTokens ?? null)} /{" "}
                     {fmtTokens(tokens()?.cacheWriteTokens ?? null)}
+                  </div>
+                </div>
+                {/*
+                  * Cost sits with the token cards because it is the same
+                  * measurement read in another unit — and because the basis has
+                  * to travel with the number: a `reported` figure is the SDK's
+                  * own accounting, a `list-price` one is this repo's table
+                  * applied to the tokens above, and an unpriced model says so
+                  * rather than showing a zero.
+                  */}
+                <div class="card">
+                  <div class="k">cost</div>
+                  <div class="v mono" title={detail()?.cost.note ?? ""}>
+                    {fmtCost(detail()?.cost)}
+                  </div>
+                  <div class="sub" title={detail()?.cost.note ?? ""}>
+                    {detail()?.cost.basis === "none"
+                      ? (detail()?.cost.note ?? "")
+                      : detail()?.cost.basis === "reported"
+                        ? "the driver's own total_cost_usd"
+                        : "from the token totals at list price"}
                   </div>
                 </div>
                 <div class="card">

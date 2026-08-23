@@ -198,6 +198,44 @@ export interface TokenTotals {
   turns: number;
 }
 
+/** The four priced components of a run's tokens, in dollars. */
+export interface CostBreakdown {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * What a run cost, or why we will not say (`runner/viewer/pricing.ts`).
+ *
+ * `basis` is the provenance, and it is the field to read first:
+ * - `reported` — the driver's own figure (the Claude Agent SDK's
+ *   `total_cost_usd`), used verbatim.
+ * - `list-price` — this repo's price table applied to `TokenTotals`.
+ * - `none` — the model is not priced, or the tokens were estimated. `usd` is
+ *   null and `note` says which.
+ *
+ * `asIfMetered` marks a figure the operator did not actually pay: a flat
+ * subscription, a free tier, or local hardware. The number is then a
+ * comparison, never an invoice.
+ */
+export interface CostView {
+  usd: number | null;
+  basis: "reported" | "list-price" | "none";
+  asIfMetered: boolean;
+  /** Per-component dollars, when the figure was computed. Null when reported. */
+  breakdown: CostBreakdown | null;
+  /** The price row the figure was computed at, and when that row was taken.
+   * Both null unless `basis` is `list-price` — a reported figure has no table
+   * behind it. The date is on the wire rather than baked into a display string
+   * so a stale price cannot go on reading as a current one. */
+  priceId: string | null;
+  asOf: string | null;
+  /** Always present: a blank cost states something and must say what. */
+  note: string;
+}
+
 /**
  * The fields every summarised entry carries. The open index signature is what
  * the server writes through; readers should narrow to `FeedEntry` below.
@@ -304,6 +342,8 @@ export interface AgentPosition {
 /** A run row as the listing serves it: the row plus whole-file totals. */
 export interface RunListRow extends RunRow {
   tokens: TokenTotals | null;
+  /** The run's cost, on the same basis the run page shows. Null when unreadable. */
+  cost: CostView | null;
   firstTs: number | null;
   lastTs: number | null;
   /**
@@ -345,6 +385,8 @@ export interface RunDetailResponse {
   states: StatePoint[];
   total: number;
   tokens: TokenTotals;
+  /** What the run cost, or why not. Accumulates with the trajectory on a live run. */
+  cost: CostView;
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
 }
@@ -582,6 +624,12 @@ export interface ModelRunView {
   live: boolean;
   counted: boolean;
   stillborn: boolean;
+  /**
+   * The run's cost, attached by the route from the same memoised trajectory
+   * totals the listing uses. Optional because the projection this view is built
+   * from (`runner/src/models.ts`) does not know about prices.
+   */
+  cost?: CostView | null;
 }
 
 /** The last error a model died of, off the end of that run's trajectory. */

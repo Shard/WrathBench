@@ -361,6 +361,29 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   };
 }
 
+/**
+ * The driver's own cost figure for a run, summed off its `claude_result`
+ * records, or null when no record carried one.
+ *
+ * `total_cost_usd` is the Claude Agent SDK's total for *one session*, emitted
+ * only when that session's turn loop ends cleanly; a hard watchdog kill cuts
+ * the stream before it lands, so most runs have none. A run that was paused and
+ * resumed opens a new CLI session, so the figures are summed rather than
+ * maxed — no run in the corpus has had two yet, and summing is what is right
+ * when one does.
+ *
+ * A recorded `0` is a figure, not an absence: the test fixture emits one.
+ */
+export function reportedCostUsd(entries: readonly { t: string; [k: string]: unknown }[]): number | null {
+  let total: number | null = null;
+  for (const e of entries) {
+    if (e.t !== "claude_result") continue;
+    const v = e["costUsd"];
+    if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v;
+  }
+  return total;
+}
+
 /** One stretch of a run during which the harness was actually driving. */
 export interface ActiveSegment {
   start: number;
@@ -463,6 +486,8 @@ export interface RunTotals {
   modelResponses: number;
   /** Stretches the run was actually being driven; see `segmentsFrom`. */
   segments: ActiveSegment[];
+  /** `total_cost_usd` off the run's `claude_result` records; see `reportedCostUsd`. */
+  reportedCostUsd: number | null;
 }
 
 /**
@@ -484,6 +509,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let toolCalls = 0;
   let snippets = 0;
   let modelResponses = 0;
+  let costUsd: number | null = null;
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -509,6 +535,12 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     if (t === "tool_call") toolCalls++;
     else if (t === "snippet") snippets++;
     else if (t === MODEL_RESPONSE_RECORD) modelResponses++;
+    // Read before the token projection drops everything that is not a turn:
+    // the driver's own cost lives on a `claude_result`, which is neither.
+    if (t === "claude_result") {
+      const v = rec["costUsd"];
+      if (typeof v === "number" && Number.isFinite(v)) costUsd = (costUsd ?? 0) + v;
+    }
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
@@ -543,6 +575,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     snippets,
     modelResponses,
     segments: segmentsFrom(marks),
+    reportedCostUsd: costUsd,
   };
 }
 

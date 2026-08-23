@@ -31,6 +31,7 @@ import type {
   FleetResponse,
   HarnessView,
   ModelsResponse,
+  RunDetailResponse,
   RunListRow,
   RunsResponse,
 } from "./api-types";
@@ -38,6 +39,7 @@ import { evalRunOf, stillbornOf, trackFrom } from "./eval";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates } from "../src/models";
 import { readPositions } from "./positions";
+import { runCost } from "./pricing";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./stillborn";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
@@ -45,6 +47,7 @@ import {
   SEGMENT_MARKS,
   TrajectoryTail,
   playtimeMs,
+  reportedCostUsd,
   scanRunTotals,
   segmentsFrom,
   tokenTotals,
@@ -557,6 +560,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         modelResponses: totals?.modelResponses ?? null,
         stillborn: stillbornOf(row, totals?.modelResponses ?? null),
         tokens: totals?.tokens ?? null,
+        cost:
+          totals === null
+            ? null
+            : runCost({ run: row, tokens: totals.tokens, reportedUsd: totals.reportedCostUsd }),
         firstTs: totals?.firstTs ?? null,
         lastTs: totals?.lastTs ?? null,
         playtimeMs:
@@ -626,6 +633,26 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       const runs = readRunFactsCached(runsDir, factCache, now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness });
+      /*
+       * Cost is attached here rather than in the projection: `runner/src/models.ts`
+       * is what the supervisor schedules on and knows nothing about prices, and
+       * the figure must be the listing's own — same memoised totals, same
+       * `runCost` — or the two pages would quote different dollars for one run.
+       */
+      const rows = new Map(listRuns(runsDir).map((r) => [r.runId, r]));
+      for (const row of body.models) {
+        for (const r of row.runs) {
+          const dir = runDir(runsDir, r.runId);
+          const totals = dir === null ? null : await runTotals(r.runId, dir);
+          // The run's own record, not the roster entry: whether a model is local
+          // is a fact about the `apiBase` it was actually served from.
+          const runRow = rows.get(r.runId);
+          r.cost =
+            totals === null || runRow === undefined
+              ? null
+              : runCost({ run: runRow, tokens: totals.tokens, reportedUsd: totals.reportedCostUsd });
+        }
+      }
       return json(body);
     }
 
@@ -658,13 +685,21 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           marks.push({ t: e.t, ts: e.ts });
         }
       }
-      return json({
+      /*
+       * Cost rides the same incremental path as tokens: both are computed off
+       * the tail's entries, so a live run's figure grows with its trajectory
+       * instead of waiting for the (size, mtime) totals cache to miss.
+       */
+      const tokens = tokenTotals(entries);
+      const body: RunDetailResponse = {
         run,
         states: readStates(runsDir, runId),
         total: entries.length,
-        tokens: tokenTotals(entries),
+        tokens,
+        cost: runCost({ run, tokens, reportedUsd: reportedCostUsd(entries) }),
         playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
-      });
+      };
+      return json(body);
     }
 
     if (rest === "/track") {
