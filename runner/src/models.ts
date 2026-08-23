@@ -871,19 +871,48 @@ export function extrasSoFar(s: ModelState): number {
   return POLICY_EPISODES.reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
 }
 
+/**
+ * The account class a pick belongs to (ADR-0034, "Account classes"): which of
+ * `accounts.pool` / `accounts.paid` / `accounts.local` it may land on. `pool`
+ * is the base class — every account that is not split out belongs to it.
+ */
+export type AccountClass = "pool" | "paid" | "local";
+
+/** Every class, pool first: the order `--status` and `--dry-run` print them in. */
+export const ACCOUNT_CLASSES = ["pool", "paid", "local"] as const;
+
+/**
+ * Which class a model's picks belong to. Local wins over billing: the LM Studio
+ * box is free by `model-cost.ts` and still has exactly one runner, so its models
+ * are kept off the shared pool for the same reason paid models are.
+ */
+export function accountClassOf(s: Pick<ModelState, "billing" | "platform">): AccountClass {
+  if (s.platform === "local") return "local";
+  return s.billing === "paid" ? "paid" : "pool";
+}
+
+/**
+ * The same verdict from a roster entry, for callers that have the file rather
+ * than the projection (`--status` renders its accounts table before the
+ * projection is read). One classifier, two entry points.
+ */
+export function rosterClass(r: RosterModel): AccountClass {
+  return accountClassOf({ billing: rosterBilling(r), platform: platformOf(r.apiBase, r.driver) });
+}
+
 export interface NextJobsOptions {
   /** Paid models already in flight (pinned jobs excluded), for the paid cap. */
   paidRunning?: number;
   policy?: Pick<SchedulingPolicy, "paid" | "extras">;
   /**
-   * The accounts a PAID pick may use (`accounts.paid`; ADR-0034 amendment
-   * 2026-08-23). Absent means no account split: paid picks share
-   * `freeAccounts`, which is what every caller did before the split. Present
-   * means the split is on — a paid pick takes one of these and never an
-   * account from `freeAccounts`; an empty array is therefore "paid work is
-   * configured but has nowhere to run", and every paid pick is held saying so.
+   * The accounts each SPLIT-OUT class may use (`accounts.paid`,
+   * `accounts.local`; ADR-0034's account classes). A class missing from this
+   * map is not split: its picks share `freeAccounts`, which is what every
+   * caller did before the split. A class present takes its accounts from here
+   * and never from `freeAccounts`; an empty array is therefore "this class is
+   * configured but has nowhere to run", and every pick of it is held saying so.
    */
-  paidAccounts?: readonly string[];
+  classAccounts?: Partial<Record<AccountClass, readonly string[]>>;
 }
 
 /**
@@ -894,9 +923,10 @@ export interface NextJobsOptions {
  *
  * Two additions under ADR-0034's paid/free split. A paid pick is held when
  * `policy.paid.maxConcurrent` paid models are already in flight, and the
- * next candidate takes its account; `held` says so. Paid picks draw from
- * `opts.paidAccounts` when that split is configured — never from
- * `freeAccounts` — so a paid model can only ever land on a paid account.
+ * next candidate takes its account; `held` says so. A pick of a SPLIT-OUT
+ * class (paid, local) draws from `opts.classAccounts[class]` — never from
+ * `freeAccounts` — so a paid model can only ever land on a paid account and a
+ * local one only on the local box's account.
  * When every account still
  * free has nothing schedulable left, free models with an extras policy get an
  * **extra** run: fewest extras first, the shorter tier first (`e360` only for
@@ -945,20 +975,27 @@ export function planNextJobs(
   const held: HeldPick[] = [];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
-  // The paid accounts, when the split is on. Absent: paid picks share `accounts`.
-  const split = opts.paidAccounts !== undefined;
-  const paidAccounts = [...(opts.paidAccounts ?? [])];
+  // The split-out classes' accounts, each drawn down separately. A class absent
+  // here is not split and shares `accounts` — the pre-split behaviour.
+  const split: Partial<Record<AccountClass, string[]>> = {};
+  for (const cls of ACCOUNT_CLASSES) {
+    const declared = opts.classAccounts?.[cls];
+    if (cls !== "pool" && declared !== undefined) split[cls] = [...declared];
+  }
+  const listOf = (cls: AccountClass): string[] => split[cls] ?? accounts;
+  const empty = (): boolean => accounts.length === 0 && Object.values(split).every((l) => l.length === 0);
   let paid = opts.paidRunning ?? 0;
   const cap = policy.paid?.maxConcurrent;
   for (const c of cands) {
-    if (accounts.length === 0 && (!split || paidAccounts.length === 0)) break;
+    if (empty()) break;
     if (taken.has(c.s.name)) continue;
+    const cls = accountClassOf(c.s);
     const isPaid = c.s.billing === "paid";
-    const from = isPaid && split ? paidAccounts : accounts;
-    if (isPaid && split && (opts.paidAccounts ?? []).length === 0) {
+    const from = listOf(cls);
+    if (split[cls] !== undefined && opts.classAccounts![cls]!.length === 0) {
       // The actionable reason wins over the cap: there is no account to run on.
       taken.add(c.s.name);
-      held.push({ name: c.s.name, episode: c.ep, why: "no paid account configured — add one to accounts.paid" });
+      held.push({ name: c.s.name, episode: c.ep, why: `no ${cls} account configured — add one to accounts.${cls}` });
       continue;
     }
     if (isPaid && cap !== undefined && paid >= cap) {
@@ -967,7 +1004,7 @@ export function planNextJobs(
       continue;
     }
     if (from.length === 0) {
-      if (isPaid) held.push({ name: c.s.name, episode: c.ep, why: "waiting for a free paid account" });
+      if (split[cls] !== undefined) held.push({ name: c.s.name, episode: c.ep, why: `waiting for a free ${cls} account` });
       taken.add(c.s.name);
       continue;
     }
@@ -982,12 +1019,16 @@ export function planNextJobs(
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
   }
-  // Extras: lowest priority, only for FREE accounts nothing else wanted — an
-  // extra is a free model's run by construction, so it never sees a paid one.
+  // Extras: lowest priority, only for accounts nothing else wanted — and only
+  // ever on the candidate's own class, so a local model's extra takes the local
+  // box and never a pool account. An extra is a free model's run by
+  // construction, so the paid class is never reached here.
   const chars = policy.extras?.characters ?? [];
   for (const c of extraCands) {
-    if (accounts.length === 0 || chars.length === 0) break;
+    if (empty() || chars.length === 0) break;
     if (taken.has(c.s.name)) continue;
+    const from = listOf(accountClassOf(c.s));
+    if (from.length === 0) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
@@ -995,7 +1036,7 @@ export function planNextJobs(
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account: accounts.shift()!,
+      account: from.shift()!,
       attempt: st.attempts + 1,
       why: `extra #${n + 1} on ${c.ep} (targets met; race ${character.race} class ${character.class})`,
       extra: character,
