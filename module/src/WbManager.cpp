@@ -231,6 +231,7 @@ namespace WrathBench
         // Answer pending teleports; without this every teleport (repop's
         // graveyard port included) freezes movement forever.
         TickTeleportAcks(nowMs);
+        TickCorpseQuery();
 
         // Keep parked sockets from being reaped by the idle-connection check in
         // WorldSession::Update (it calls CloseSocket once m_timeOutTime hits 0).
@@ -514,6 +515,9 @@ namespace WrathBench
         { "CMSG_QUERY_TIME", CMSG_QUERY_TIME },
         { "CMSG_SET_WATCHED_FACTION", CMSG_SET_WATCHED_FACTION },
         { "CMSG_SET_ACTION_BUTTON", CMSG_SET_ACTION_BUTTON },
+        // a ghost asking where its corpse is (the module asks once per death
+        // on the client's behalf; this lets a snippet re-ask)
+        { "MSG_CORPSE_QUERY", MSG_CORPSE_QUERY },
         { nullptr, 0 },
     };
     static constexpr size_t kRawPayloadMaxBytes = 512;
@@ -2261,6 +2265,44 @@ namespace WrathBench
                 opcodeName = "MSG_MOVE_WORLDPORT_ACK";
             }
             Audit(*s, "action", Json::Writer().Add("op", "teleport_ack").Add("opcode", opcodeName).Str());
+        }
+    }
+
+    // A real client sends MSG_CORPSE_QUERY once it is a ghost (after the repop
+    // teleport lands), and draws the answer as the corpse marker on its map.
+    // The parked client has no map, so the module issues the same one-shot
+    // query and the tapped MSG_CORPSE_QUERY reply is served as an event
+    // (PROTOCOL.md "Death"; FOLLOW-UPS 53). Client behaviour, not an agent
+    // action: nothing here resurrects or moves anyone, and the handler answers
+    // from the corpse the player already owns. Waiting for the teleport to be
+    // acked matters: the handler compares the corpse map to the player's map,
+    // and the graveyard port must have applied for that to be the right map.
+    void Manager::TickCorpseQuery()
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load() && s->phase.load() == BenchSession::P_INWORLD)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            Player* player = s->ws->GetPlayer();
+            if (!player)
+                continue;
+            if (player->IsAlive() || !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
+            {
+                s->corpseQueried = false;
+                continue;
+            }
+            if (s->corpseQueried || player->IsBeingTeleported())
+                continue;
+            s->corpseQueried = true;
+            s->ws->QueuePacket(new WorldPacket(MSG_CORPSE_QUERY, 0));
+            Audit(*s, "action", Json::Writer().Add("op", "corpse_query").Add("opcode", "MSG_CORPSE_QUERY").Str());
         }
     }
 
@@ -4198,6 +4240,26 @@ namespace WrathBench
                 case SMSG_DURABILITY_DAMAGE_DEATH:
                     name = "SMSG_DURABILITY_DAMAGE_DEATH";
                     break;
+                case MSG_CORPSE_QUERY:
+                {
+                    // The server's answer to the ghost's corpse query
+                    // (HandleCorpseQueryOpcode): found flag, then the point the
+                    // client draws the corpse marker at and the corpse's own
+                    // map. For a corpse in a dungeon the point is the entrance
+                    // on the outer map, which is why the two map ids differ.
+                    // The trailing u32 is unused by the client and dropped.
+                    name = "MSG_CORPSE_QUERY";
+                    uint8 found = 0; p >> found;
+                    w.Add("found", found != 0);
+                    if (found)
+                    {
+                        int32 map, corpseMap; float x, y, z;
+                        p >> map >> x >> y >> z >> corpseMap;
+                        w.Add("map", map).Add("x", (double)x).Add("y", (double)y).Add("z", (double)z)
+                         .Add("corpseMap", corpseMap);
+                    }
+                    break;
+                }
                 // --------------------------------------------------- session
                 case SMSG_CHAR_DELETE:
                 {
