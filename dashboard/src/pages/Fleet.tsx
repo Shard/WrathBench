@@ -2,70 +2,36 @@
  * Fleet overview: what the supervisor is running, right now.
  *
  * One grain per page (ADR-0022 amendment, 2026-08-23). This one is the fleet's:
- * the supervisor, the gate, the accounts and jobs, what is paused and what it
- * ended. The per-run grain is the episodes page, and a job's run link is the
- * only per-run reference here.
+ * one table keyed by the job (ADR-0034) with the idle accounts under it, the
+ * paused and ended runs. The per-run grain is the episodes page, and a job's
+ * run link is the only per-run reference here.
+ *
+ * The table is the page. The supervisor's liveness, the deploy phase, the
+ * outstanding work and the account counts that used to head it as four lines
+ * of counters (the "stats strip") now live in the service status badge in the
+ * top bar (`components/StatusBadge.tsx`), where they are about the service
+ * and not about this page. What remains above the table is only what needs
+ * acting on: a deploy window or verdict, a REJECTED fleet.json, a failed gate.
  *
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
- * published view — jobs, accounts, a heartbeat, the gate — and it is the only
- * honest liveness signal across a container boundary. `/api/runs` is the
- * filesystem's view, where "live" means an unterminated run whose trajectory
- * grew recently. A job can be alive with no live run (between episodes), and a
- * run can look live with a dead process (a killed job writes no termination),
- * so the page shows both rather than reconciling them into one number.
- *
- * The page carries what `run-fleet --status` prints, in the same order: the
- * supervisor line, the REJECTED banner, the gate, the account classes, one
- * table keyed by the job (ADR-0034) with the idle accounts under it, the
- * paused and ended runs. The models table is the Models page — same
- * projection, its own entity — and is linked, not repeated. The assembly is
- * in `lib/fleet.ts`.
- *
- * `/api/runs` is still read, because the job rows carry the level, xp and
- * elapsed time of the run each job is driving; what is gone is the table that
- * listed every run on disk underneath them.
+ * published view — jobs, accounts, a heartbeat, the gate — shared with the
+ * badge through `lib/feeds.ts` so it is polled once. `/api/runs` is the
+ * filesystem's view, read because the job rows carry the level, xp and
+ * elapsed time of the run each job is driving.
  */
 
 import { A, useNavigate } from "@solidjs/router";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
-import { api, type ApiInfoResponse, type FleetResponse } from "../api/client";
-import {
-  FLEET_COLUMNS,
-  accountClassSummary,
-  deployWindowOpen,
-  fleetRows,
-  gateVerdict,
-  pausedLabel,
-  rowStateLabel,
-  runHref,
-  outstandingLabel,
-  outstandingTitle,
-  serverBanner,
-  supervisorAlive,
-  supervisorLabel,
-  type FleetRow,
-} from "../lib/fleet";
-import { fmtAge, fmtDuration, num, stamp } from "../lib/format";
+import { For, Show } from "solid-js";
+import { api, type FleetResponse } from "../api/client";
+import { FLEET_COLUMNS, fleetRows, gateVerdict, pausedLabel, rowStateLabel, runHref, serverBanner, type FleetRow } from "../lib/fleet";
+import { useFeeds } from "../lib/feeds";
+import { fmtDuration, fmtTokens, fmtUsd, num, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
 export default function Fleet() {
-  // Every run on disk — read for the job rows, the live count, and the link to
-  // the episodes page, not to be listed here.
+  // Every run on disk — read for the job rows and the link to the episodes page, not to be listed here.
   const runs = poll(() => api.runs().then((r) => r.runs), 10_000);
-  const fleet = poll(() => api.fleet(), 5_000);
-  /*
-   * Server identity (FOLLOW-UPS 42). Slow on purpose: a build stamp changes on
-   * a deploy, not on a tick, and the viewer caches the module's /health for ten
-   * seconds behind this anyway.
-   */
-  const info = poll(() => api.info(), 60_000);
-
-  // One clock for the whole page, so every relative time ticks together.
-  const [now, setNow] = createSignal(Date.now());
-  const timer = setInterval(() => setNow(Date.now()), 1000);
-  onCleanup(() => clearInterval(timer));
-
-  const live = createMemo(() => (runs.latest ?? []).filter((r) => r.live));
+  const { fleet } = useFeeds();
 
   return (
     <div class="page">
@@ -80,8 +46,13 @@ export default function Fleet() {
         transition). Shown even with no fleet state: a deploy can run on a
         machine the fleet has never run on.
       */}
+      {/* A deploy window or verdict, in the deploy script's own words; nothing at rest. */}
       <Show when={fleet.latest !== undefined && serverBanner(fleet.latest.server)}>
-        {(b) => <div class={b().tone === "bad" ? "banner bad" : b().tone === "info" ? "banner warn" : "dim"}>{b().text}</div>}
+        {(b) => (
+          <Show when={b().tone !== "dim"}>
+            <div class={b().tone === "bad" ? "banner bad" : "banner warn"}>{b().text}</div>
+          </Show>
+        )}
       </Show>
       <Show
         when={fleet.latest?.present === true}
@@ -89,8 +60,6 @@ export default function Fleet() {
       >
         {(() => {
           const f = (): FleetResponse => fleet.latest!;
-          const up = (): boolean => supervisorAlive(f(), now());
-          const age = (): number | null => (f().heartbeatAt === undefined ? null : now() - f().heartbeatAt!);
           return (
             <>
               {/*
@@ -108,67 +77,19 @@ export default function Fleet() {
                 )}
               </Show>
 
-              {/*
-                The supervisor line: alive by heartbeat, where it runs, when its
-                config was loaded. A dead heartbeat inside a deploy window is
-                the deploy's doing, and the line says so.
-              */}
-              <div class="strip">
-                <span>
-                  <span class={`dot ${up() ? "live" : deployWindowOpen(f().server) ? "" : "dead"}`} />
-                  {supervisorLabel(f(), now())} ·{" "}
-                  {age() === null ? "no heartbeat" : `heartbeat ${fmtAge(age()!)}`}
-                </span>
-                {/*
-                  How much of the schedule is left (the same line --status
-                  prints). The identity items that used to sit here — pid,
-                  container, stamp, config-loaded — said nothing an operator
-                  acts on; this says whether tonight is enough. The tooltip
-                  carries the formula.
-                */}
-                <Show when={f().outstanding}>
-                  {(o) => <span title={outstandingTitle(o())}>{outstandingLabel(o())}</span>}
-                </Show>
-                <span class="dim">{f().jobs.length} jobs · {live().length} live runs</span>
-                <span class="dim">
-                  <Show when={f().session !== undefined} fallback={<>session not reported</>}>
-                    session: {f().session!.finished} finished · ok {f().session!.ok} · retried {f().session!.retried}
-                  </Show>
-                </span>
-                <span class="dim">
-                  {/* The per-run grain lives on the episodes page; this is the way in. */}
-                  <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A>
-                </span>
-              </div>
+              {/* The gate (ADR-0023) only when it blocks: a PASS is not news. */}
+              <Show when={gateVerdict(f().preflight) === "FAIL"}>
+                <div class="banner bad">
+                  preflight FAIL — jobs blocked
+                  <For each={f().preflight?.results.filter((r) => !r.ok) ?? []}>
+                    {(r) => <span title={r.tail}> · {r.script} ({Math.round(r.ms / 1000)}s)</span>}
+                  </For>
+                </div>
+              </Show>
 
-              {/* The gate (ADR-0023): the last result per smoke, against the identity it smoked, and the server build. */}
-              <div class="strip">
-                <span class={gateVerdict(f().preflight) === "FAIL" ? "err" : gateVerdict(f().preflight) === "PASS" ? "ok" : "dim"}>
-                  preflight {gateVerdict(f().preflight)}
-                  <Show when={gateVerdict(f().preflight) === "FAIL"}> — jobs blocked</Show>
-                </span>
-                <Show when={f().preflight} fallback={<span class="dim">no gate result recorded yet</span>}>
-                  {(pf) => (
-                    <>
-                      <span class="dim" title={stamp(pf().at)}>gated {fmtAge(now() - pf().at)}</span>
-                      <span class="dim mono" title={pf().serverIdentity}>identity {pf().serverIdentity}</span>
-                      <span class="dim">server build <span class="mono">{pf().build ?? "—"}</span></span>
-                      <For each={pf().results}>
-                        {(r) => (
-                          <span class={r.ok ? "ok" : "err"} title={r.tail}>
-                            {r.ok ? "ok" : "FAIL"} {r.script} ({Math.round(r.ms / 1000)}s)
-                          </span>
-                        )}
-                      </For>
-                    </>
-                  )}
-                </Show>
-              </div>
-
-              {/* Account classes (ADR-0034): the counts line, then one table with a row per job and per idle account. */}
               <p class="dim">
-                accounts: {accountClassSummary(f().accounts)} · the <A href="/models">models table</A> carries the
-                scheduler's verdict per roster entry.
+                <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
+                <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
               <div class="scroller">
                 <table>
@@ -216,40 +137,7 @@ export default function Fleet() {
         })()}
       </Show>
 
-      <ServerIdentity info={info.latest} now={now()} />
     </div>
-  );
-}
-
-/**
- * Which worldserver these runs were driven against (FOLLOW-UPS 41/42).
- *
- * `null` is the normal answer on the host: compose does not publish the
- * module's port, so the viewer cannot reach /health unless it is given a URL.
- * It says so rather than showing an empty stamp, because "unknown build" and
- * "no server" are different facts.
- */
-function ServerIdentity(props: { info: ApiInfoResponse | undefined; now: number }) {
-  const ws = (): ApiInfoResponse["worldserver"] | undefined => props.info?.worldserver ?? undefined;
-  return (
-    <footer class="identity">
-      <Show when={props.info !== undefined} fallback={<>viewer: —</>}>
-        <Show
-          when={ws()}
-          fallback={
-            <>worldserver: unreachable from the viewer (set WRATHBENCH_MODULE_URL to name it)</>
-          }
-        >
-          {(w) => (
-            <>
-              worldserver <span class="mono">{w().build}</span> · up {fmtDuration(props.now - w().startedAtMs)}{" "}
-              (since <span title={stamp(w().startedAtMs)}>{stamp(w().startedAtMs)}</span>)
-            </>
-          )}
-        </Show>
-        <Show when={props.info?.publicMode === true}> · public mode</Show>
-      </Show>
-    </footer>
   );
 }
 
@@ -282,16 +170,15 @@ function FleetRowView(props: { row: FleetRow }) {
         {r().models}
       </td>
       {/*
-        A job with no tier is a job whose tier the supervisor could not name
-        (null, never a guess); an account row has no tier to name at all.
+        A job with no episode is a job whose episode the supervisor could not
+        name (null, never a guess); an account row has no episode to name at all.
       */}
       <td class="dim">
-        {r().tier ?? (r().job === null ? "—" : "episode unknown")}
+        {r().episode ?? (r().job === null ? "—" : "episode unknown")}
       </td>
       <td class="dim">
         {r().account} <span class="dim">({r().accountClass})</span>
       </td>
-      <td class="dim">{r().source ?? "—"}</td>
       <td class="dim">{r().attempt === null ? "—" : `#${r().attempt}`}</td>
       <td class="dim" title={r().note ?? ""}>
         <Show when={href()} fallback={r().note ?? "—"}>
@@ -299,6 +186,9 @@ function FleetRowView(props: { row: FleetRow }) {
         </Show>
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
+      <td class="right mono dim">{fmtTokens(r().tokens)}</td>
+      {/* The actual figure only, as the episodes page shows it; blank is "not reported", never an estimate. */}
+      <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : fmtUsd(r().costUsd)}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
     </tr>
   );

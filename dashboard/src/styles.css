@@ -58,6 +58,25 @@ header.top nav { display: inline-flex; gap: 10px; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
+/* The service status badge (top right) and its popout; derivation in lib/status.ts. */
+.status { position: relative; align-self: center; }
+.status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; }
+.status-badge .dot { margin: 0; }
+.status-badge.green, .dot.green { color: var(--ok); }
+.status-badge.yellow, .dot.yellow { color: var(--warn); }
+.status-badge.red, .dot.red { color: var(--err); }
+.status-badge.grey, .dot.grey { color: var(--dim); }
+.dot.green { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+.dot.yellow { background: var(--warn); }
+.dot.red { background: var(--err); }
+.dot.grey { background: var(--dim); }
+.status-popout { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 280px; max-width: min(480px, 90vw);
+                 background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
+                 font-size: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+.status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
+.status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+.status-popout dd { margin: 0; overflow-wrap: anywhere; }
+
 main { flex: 1; min-height: 0; overflow: auto; }
 main.flush { overflow: hidden; }
 .page { padding: 16px; }
@@ -92,9 +111,6 @@ tbody tr:hover { background: var(--panel); }
 .dot.dead { background: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
-/* The fleet header strip: one line of counters above the one fleet table. */
-.strip { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; font-size: 13px;
-         background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; }
 
 /* Row state, as a compact badge: the column an operator scans first. */
 .badge { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;

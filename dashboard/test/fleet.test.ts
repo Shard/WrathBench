@@ -8,14 +8,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetOutstandingView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
+import type { FleetJobView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
 import type { FleetRow } from "../src/lib/fleet";
 import {
-  outstandingLabel,
-  outstandingTitle,
   FLEET_COLUMNS,
   HEARTBEAT_STALE_MS,
-  accountClassSummary,
   deployWindowOpen,
   fleetRows,
   gateVerdict,
@@ -25,7 +22,6 @@ import {
   runHref,
   serverBanner,
   supervisorAlive,
-  supervisorLabel,
 } from "../src/lib/fleet";
 
 const REST: FleetServerView = { phase: "running", since: 0, build: "", detail: "", updatedAt: 0 };
@@ -72,15 +68,26 @@ function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
 }
 
 function run(over: Partial<RunListRow> = {}): RunListRow {
-  return { runId: "fleet-ox-alpha-e90-20260823", level: 4, xp: 546, playtimeMs: 60_000, ...over } as unknown as RunListRow;
+  return {
+    runId: "fleet-ox-alpha-e90-20260823",
+    level: 4,
+    xp: 546,
+    playtimeMs: 60_000,
+    tokens: { totalTokens: 103_744 },
+    cost: { actual: { usd: 0.42, basis: "reported", note: "" } },
+    ...over,
+  } as unknown as RunListRow;
 }
 
 describe("columns", () => {
   test("state leads; one table carries the job, its account and the run it is driving", () => {
-    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "models", "tier", "account", "source", "attempt", "run", "lvl / xp", "elapsed"]);
-    // The process is bookkeeping, not something an operator scans a table for.
+    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "cost", "elapsed"]);
+    // The process is bookkeeping, not something an operator scans a table for;
+    // the source (file, queue, policy) maps to the account class and says nothing more.
     expect(FLEET_COLUMNS).not.toContain("pid");
     expect(FLEET_COLUMNS).not.toContain("lane");
+    expect(FLEET_COLUMNS).not.toContain("source");
+    expect(FLEET_COLUMNS).not.toContain("tier");
   });
 });
 
@@ -118,35 +125,43 @@ describe("row state", () => {
   });
 });
 
-describe("an unnamed tier", () => {
+describe("an unnamed episode", () => {
   test("a job whose episode the supervisor could not name carries null, not a guess", () => {
     // Commit 95908d5: unknown is written as null. The row keeps it null, and
-    // the page distinguishes that from an account row, which has no tier at all.
+    // the page distinguishes that from an account row, which has no episode at all.
     const rows = fleetRows(fleet({ jobs: [job({ episode: null })] }), []);
-    expect(rows[0]!.tier).toBeNull();
+    expect(rows[0]!.episode).toBeNull();
     expect(rows[0]!.job).toBe("ox-alpha-e90");
     const account = rows.find((r) => r.job === null);
-    expect(account?.tier ?? null).toBeNull();
+    expect(account?.episode ?? null).toBeNull();
   });
 });
 
 describe("the rows", () => {
-  test("a job row carries its account's class, its attempt, and the run's level/xp and elapsed", () => {
+  test("a job row carries its account's class, its attempt, and the run's level/xp, tokens, actual cost and elapsed", () => {
     const rows = fleetRows(fleet(), [run()]);
     expect(rows[0]).toMatchObject({
       job: "ox-alpha-e90",
-      tier: "e90",
+      episode: "e90",
       account: "RUNNER",
       accountClass: "pool",
-      source: "policy",
       attempt: 2,
       runId: "fleet-ox-alpha-e90-20260823",
       level: 4,
       xp: 546,
+      tokens: 103_744,
+      costUsd: 0.42,
       elapsedMs: 60_000,
     });
     // A run the runs feed has not caught up with still gets its row.
-    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, elapsedMs: null });
+    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, costUsd: null, elapsedMs: null });
+  });
+
+  test("cost is the actual figure only: an unreported or absent cost is null, never the estimate", () => {
+    const at = (r: RunListRow): number | null => fleetRows(fleet(), [r])[0]!.costUsd;
+    expect(at(run({ cost: { usd: 0.5, actual: { usd: null, basis: "none", note: "provider reports no cost" } } } as unknown as Partial<RunListRow>))).toBeNull();
+    expect(at(run({ cost: null } as Partial<RunListRow>))).toBeNull();
+    expect(at(run({ tokens: null } as Partial<RunListRow>))).toBe(0.42);
   });
 
   test("accounts holding nothing are idle rows below the working ones, grouped by class", () => {
@@ -156,7 +171,7 @@ describe("the rows", () => {
     expect(rows.map((r) => r.key)).toEqual(["ox-alpha-e90", "account:RUNNER2", "account:PAID", "account:BOX", "account:SHAKEOUT"]);
     // The account a job is on never doubles as an idle row.
     expect(rows.filter((r) => r.account === "RUNNER")).toHaveLength(1);
-    expect(rows[1]).toMatchObject({ state: "idle", job: null, accountClass: "pool", tier: null });
+    expect(rows[1]).toMatchObject({ state: "idle", job: null, accountClass: "pool", episode: null });
     // A pinned account whose job holds nothing says which job is parked on it.
     expect(rows[4]!.note).toBe("job nav-probe-freeplay holds nothing right now");
   });
@@ -250,11 +265,6 @@ describe("the --status indicators", () => {
     expect(gateVerdict({ ...rec, skipped: true })).toBe("SKIPPED");
   });
 
-  test("the accounts line counts each class that has a row, in class order", () => {
-    expect(accountClassSummary(fleet().accounts)).toBe("1 pinned, 2 pool, 1 paid, 1 local");
-    expect(accountClassSummary([])).toBe("");
-  });
-
   test("a paused run is labelled with its reason, pause count and resume-after time", () => {
     const p = { runId: "r", model: "m", account: "A", reason: "quota-exhausted", since: 1, pauseCount: 3, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" };
     expect(pausedLabel(p)).toBe("quota-exhausted (pause 3)");
@@ -326,13 +336,6 @@ describe("the deploy window (server-state.json)", () => {
     for (const phase of ["running", "rolled-back", "failed"] as const) expect(deployWindowOpen({ phase })).toBe(false);
   });
 
-  test("a dead heartbeat inside the window is the deploy's doing; outside it the supervisor is NOT RUNNING", () => {
-    const dead = { heartbeatAt: 0 };
-    expect(supervisorLabel({ ...dead, server: server({ phase: "verifying" }) }, HEARTBEAT_STALE_MS + 1)).toBe("fleet stopped for the deploy window");
-    expect(supervisorLabel({ ...dead, server: REST }, HEARTBEAT_STALE_MS + 1)).toBe("supervisor NOT RUNNING");
-    expect(supervisorLabel({ heartbeatAt: 1000, server: server({ phase: "verifying" }) }, 2000)).toBe("supervisor ALIVE");
-  });
-
   test("a job whose process is gone and whose run is not held reads 'paused for deploy' inside the window, 'exited' outside it", () => {
     const gone = job({ alive: false, runId: null, model: null, exitCode: 0 });
     const jobRow = (f: FleetResponse): FleetRow => fleetRows(f, []).find((r) => r.job !== null)!;
@@ -347,26 +350,3 @@ describe("the deploy window (server-state.json)", () => {
   });
 });
 
-describe("outstandingLabel", () => {
-  const o = (over: Partial<FleetOutstandingView> = {}): FleetOutstandingView => ({
-    lower: 11,
-    upper: 23,
-    etaLowerMs: 4 * 3_600_000,
-    etaUpperMs: 9 * 3_600_000,
-    breakdown: [{ group: "pool", concurrency: 5, lowerRuns: 11, upperRuns: 23, lowerMinutes: 990, upperMinutes: 2070 }],
-    ...over,
-  });
-
-  test("the bounded pair and its eta, in --status's own words", () => {
-    expect(outstandingLabel(o())).toBe("outstanding: 11\u201323 scheduled runs, \u2248 4h\u20139h to exhaust");
-    expect(outstandingLabel(o({ lower: 5, upper: 5, etaLowerMs: 3_600_000, etaUpperMs: 3_600_000 }))).toBe(
-      "outstanding: 5 scheduled runs, \u2248 1h to exhaust",
-    );
-    expect(outstandingLabel(o({ lower: 0, upper: 0 }))).toBe("outstanding: exhausted");
-    // Work with nowhere to run has no eta rather than a made-up one.
-    expect(outstandingLabel(o({ etaLowerMs: null }))).toContain("eta unknown");
-    // The tooltip carries the formula and the per-class arithmetic behind it.
-    expect(outstandingTitle(o())).toContain("pool: 11\u201323 runs, 990\u20132070 min at 5 at a time");
-    expect(outstandingTitle(o())).toContain("ETA =");
-  });
-});
