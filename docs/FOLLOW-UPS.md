@@ -119,13 +119,6 @@ and status.
     so the `git describe` stamp comes from a build arg rather than a mounted `.git`),
     and `.env` (a Secret mounted at the same path so "never via argv" survives).
 
-24. **`accountHeldBy` rescans every run directory** (2026-08-22). It `readdirSync`s
-    `data/runs/` and reads a `meta.json` per entry on every launch and every
-    `--status`; the ADR-0032 projection reads every trajectory in full for the same
-    reason (memoised on size+mtime, but the set only grows). Not a problem yet — the
-    stillborn archive (2026-08-23) halved the directory once — noted so it is not a
-    mystery slowdown in three weeks. Fix: an index keyed on account, or a scan capped
-    to recently-modified directories.
 
 45. **Scenario-fixture characters for smokes** (2026-08-23, ADR-0023 amendment). The
     fast gate proves what a level-1 character can reach in under a minute from the
@@ -153,14 +146,6 @@ and status.
     whose 30-minute cooldown the server does send — assert the packet and the cache
     entry, and `SPELL_GO` goes back to being a cast-path check.
 
-52. **The viewer's roster read does not know pinned refs or probes** (2026-08-23,
-    ADR-0034 amendment). `runner/viewer/models.ts` lists every `roster` entry on
-    `/api/models`, so `nav-probe` (model `sonnet`, an objective) shows beside `sonnet`
-    with the same counts, and `policy.maxConcurrent` is not surfaced. `--status`
-    marks them `pinned`; the viewer should read the same exclusion (`policyRefs`) —
-    which means lifting that predicate into `runner/src/models.ts` rather than
-    importing the supervisor. Also: the supervisor's `session` counters and `jobs`
-    block in `fleet-state.json` are new and unread by the dashboard's fleet page.
 
 ## Episodes and eval
 
@@ -216,17 +201,6 @@ and status.
     and the freeplay firsts ladder is a derivation over these records plus the model
     label. N2's zone/area observation (item 38) is the first producer.
 
-36. **Run metadata is scattered and `platform` is derived, not stored** (2026-08-22).
-    `model` is a column; `character` is only inside `config_json`; `platform` is
-    computed at read time by `platformOf()` in `runner/viewer/runs.ts` from `apiBase`,
-    special-casing only `localhost`/`127.*`, so the LM Studio box at `192.168.1.20`
-    surfaces as a bare IP. Lane name and host are not recorded. Consolidate: promote
-    `character` and `platform` to `run` columns written at `writeMeta` (migrated
-    additively like `money` and `turn`), classify RFC-1918 or loopback `apiBase` as
-    `local`, and have the viewer read the column. No contributor field yet. Scrub note
-    for DATA-AND-LEGAL's pre-publication checklist: the private LAN IP is hardcoded in
-    `infra/README.md`, `infra/fleet.json`, `infra/smoke/local-model.ts` and
-    `infra/fleet.test.ts`.
 
 54. **`sleep()`'s wake reason is shipped and unread** (2026-08-23, closing fan-out).
     `sleep(ms, options?)` resolving with `"elapsed" | "attacked" | "died"` (68b5a92)
@@ -364,3 +338,6 @@ One line per number so citations resolve; the day file carries the detail.
 - 13 — 2026-08-23 — ADR-0018 amendment — the ladder's row ordering is stated and versioned: highest rung, then total XP as the lexicographic `(level, xp)` pair, then gold; both tie-breaks shown on the row with the run each came from, nulls sort last, no aggregate score
 - 32 (1) — 2026-08-23 — 46e2726, 7423453, 62bc30a — run cost card in `runner/viewer/pricing.ts`; (2) and (3) stay open under 32
 - 55 — 2026-08-23 — c89d984 — not a lost verdict: every "timed-out" `WB_MOVE_RESULT` in the post-deploy nav-probe c4 arrived later (27/27, audit log cross-reference); the caller's own short `timeout` sized from straight-line distance was the cause, so the SDK now says how far is covered/left and that the move is still walking, and hints pre-flight when a timeout is under 1.5× the walk. Loot half: zero `SMSG_LOOT_RESPONSE` timeouts across every run on `harness-0.4-3` (3000+ loots); reopen only if a sonnet-lane run with real loot volume shows them again
+- 24 — 2026-08-23 — 4f5cb8a — `accountHeldBy` tests activity age before opening a run dir; paused runs are deliberately not "held" (the supervisor's resume-before-fill reserves their account)
+- 36 — 2026-08-23 — 6f1ffd5 — `character` and `platform` are run columns (`runner/src/platform.ts`); `local` = loopback/RFC-1918/.local, the same test billing uses
+- 52 — 2026-08-23 — 56bdb8d, 1345621 — one policy-membership predicate in `runner/src/models.ts`; `/api/models` excludes pinned refs and serves `policy.maxConcurrent`; fleet page reads `session` and `jobs`
