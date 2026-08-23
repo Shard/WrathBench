@@ -36,7 +36,7 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 
 | route | what |
 | --- | --- |
-| `/` | fleet overview: lanes, accounts, heartbeat, and every run |
+| `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused runs, and every run |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 

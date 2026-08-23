@@ -432,45 +432,16 @@ export interface EntriesResponse {
   entries: FeedEntry[];
 }
 
-/** One lane of the fleet supervisor, as `fleet-state.json` records it. */
-export interface FleetLane {
-  pid: number;
-  account: string;
-  rosterPath: string;
-  jsonl: string;
-  stdoutLog: string;
-  spawnedAt: number;
-  exitCode: number | null;
-  draining: boolean;
-  alive?: boolean;
-}
-
 /**
- * What the viewer resolves about a lane that `fleet-state.json` does not record:
- * which run currently holds the lane's account, and what the lane will run next.
- *
- * The supervisor publishes processes, not runs; the run a lane is driving is
- * inferred the same way `run-fleet.ts --status` infers it (see `accountHeldBy`
- * in `run-roster.ts`) — from the run directories themselves.
- */
-export interface FleetLaneRun {
-  /** The run holding this lane's account, or null when the account is free. */
-  runId: string | null;
-  /** That run's model. Null whenever `runId` is. */
-  model: string | null;
-  /** Models the lane's roster will work through, in roster order. */
-  rosterModels: string[];
-}
-
-/** A lane as `/api/fleet` serves it: the state file's record plus what we resolved. */
-export type FleetLaneView = FleetLane & { name: string } & FleetLaneRun;
-
-/**
- * One job with a live process, as the supervisor publishes it (ADR-0034: the
- * job is the one unit of work, and a lane is how it is spawned). A job names
- * the roster entry it is running, the tier, the account it landed on, and
+ * One job with a process, as the supervisor publishes it (ADR-0034: the job
+ * is the one unit of work; an account, with a class, is where it runs). A job
+ * names the roster entry it is running, the tier, the account it landed on,
  * where it came from — the file's pinned list, the manual queue, or the
- * policy's own pick — which is what the lane block cannot say (FOLLOW-UPS 52).
+ * policy's own pick — and the process that runs it.
+ *
+ * The supervisor publishes processes, not runs; the run a job is driving is
+ * resolved the same way `run-fleet.ts --status` resolves it (see
+ * `accountHeldBy` in `run-roster.ts`) — from the run directories themselves.
  */
 export interface FleetJobView {
   name: string;
@@ -479,7 +450,7 @@ export interface FleetJobView {
   episode: string;
   account: string;
   /** The class of the account it landed on (ADR-0034): pool, paid, local, or pinned. */
-  accountClass?: string;
+  accountClass: "pinned" | "pool" | "paid" | "local";
   source: string;
   /** The n-th attempt on (model, episode); absent on a job from the file. */
   attempt?: number;
@@ -487,17 +458,16 @@ export interface FleetJobView {
   resuming?: string;
   /** The models behind `ref`, in roster order. */
   models: string[];
-  /**
-   * The run holding this job's account, resolved the same way a lane's is
-   * (`heldAccounts`). Null between episodes and while a resume is spawning.
-   */
-  runId?: string | null;
-  /** The supervisor's process record for this job: what it published as a lane. */
-  pid?: number;
-  spawnedAt?: number;
-  exitCode?: number | null;
-  draining?: boolean;
-  alive?: boolean;
+  /** The run holding this job's account (`heldAccounts`). Null between episodes and while a resume is spawning. */
+  runId: string | null;
+  /** That run's model. Null whenever `runId` is. */
+  model: string | null;
+  /** The supervisor's process record for this job. */
+  pid: number;
+  spawnedAt: number;
+  exitCode: number | null;
+  draining: boolean;
+  alive: boolean;
 }
 
 /**
@@ -523,6 +493,10 @@ export interface FleetPausedView {
   account: string | null;
   reason: string;
   since: number;
+  /** How many times this run has paused; what the resume cadence indexes. */
+  pauseCount: number;
+  /** When the supervisor will try again; null when it is not a matter of time. */
+  resumeAfter: number | null;
   elapsedMs: number | null;
   budgetMs: number | null;
   why: string;
@@ -533,6 +507,32 @@ export interface FleetSessionView {
   finished: number;
   ok: number;
   retried: number;
+}
+
+/** A paused run the supervisor ended instead of resuming (its ref names another model now). */
+export interface FleetEndedView {
+  runId: string;
+  model: string;
+  ref: string;
+  detail: string;
+}
+
+/** The preflight gate's last result (ADR-0023), as the supervisor recorded it. */
+export interface FleetPreflightView {
+  at: number;
+  serverIdentity: string;
+  /** The server's /health `build` stamp. */
+  build?: string;
+  ok: boolean;
+  /** The gate was disabled: nothing ran, the gate is open. */
+  skipped?: boolean;
+  results: { script: string; ok: boolean; ms: number; tail: string }[];
+}
+
+/** The file on disk is rejected; the supervisor runs on its last good config. */
+export interface FleetConfigRejectedView {
+  since: number;
+  error: string;
 }
 
 /**
@@ -546,21 +546,21 @@ export interface FleetResponse {
   heartbeatAt?: number;
   containerized?: boolean;
   stamp?: string;
-  lanes: FleetLaneView[];
-  /**
-   * Every job with a live process, newest supervisors only: a state written
-   * before ADR-0034's job concept has lanes and no jobs, and the field is
-   * absent rather than synthesised from them.
-   */
-  jobs?: FleetJobView[];
-  /**
-   * Every account the supervisor knows, with its class and what holds it.
-   * Absent on a supervisor that published no `accounts` block.
-   */
-  accounts?: FleetAccountView[];
-  /** Paused runs the supervisor is not resuming right now; absent on an older one. */
-  paused?: FleetPausedView[];
-  /** Runs finished since this supervisor started; absent on an older one. */
+  /** When the config in force was last parsed. */
+  configLoadedAt?: number;
+  /** Set while fleet.json on disk does not load; the file's enabled flags are not in effect. */
+  configRejected?: FleetConfigRejectedView;
+  /** The last gate result; absent until the supervisor has gated once. */
+  preflight?: FleetPreflightView;
+  /** Every job with a process, as the supervisor published it. */
+  jobs: FleetJobView[];
+  /** Every account the supervisor knows, with its class and what holds it. */
+  accounts: FleetAccountView[];
+  /** Paused runs the supervisor is not resuming right now, with why. */
+  paused: FleetPausedView[];
+  /** Paused runs the supervisor ended instead of resuming, this session. */
+  ended: FleetEndedView[];
+  /** Runs finished since this supervisor started. */
   session?: FleetSessionView;
   /** Server clock at read time, so a client can age the heartbeat honestly. */
   now: number;
@@ -831,6 +831,13 @@ export interface ModelRowView {
   retired?: { at: number; reason: string };
   /** Consecutive no-progress attempts on the defer ladder. */
   ladder: number;
+  /**
+   * The scheduler's verdict on this model right now — `schedulability` in
+   * `runner/src/models.ts`, the function `run-fleet --status` prints — over
+   * the jobs the supervisor has in flight. `extras` means the only thing left
+   * to run is an extra past the target.
+   */
+  schedulable: { ok: boolean; why: string; extras: boolean };
   /** This model's stamped runs, newest first. */
   runs: ModelRunView[];
   newestRunId: string | null;

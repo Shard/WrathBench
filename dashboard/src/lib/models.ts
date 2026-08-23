@@ -11,8 +11,12 @@
 
 import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/api-types";
 
-/** The table, left to right. Status leads: it is what an operator scans for. */
-export const MODEL_COLUMNS = ["status", "model", "platform", "e90", "e360", "note", "newest"] as const;
+/**
+ * The table, left to right. Status leads: it is what an operator scans for.
+ * The same columns `run-fleet --status` prints — billing, status, the tiers,
+ * extras, the verdict — plus where the model is served and its newest run.
+ */
+export const MODEL_COLUMNS = ["status", "model", "billing", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
 
 /** The tiers the page shows a counted/target cell for, in policy order. */
 export const TIER_COLUMNS = ["e90", "e360"] as const;
@@ -51,6 +55,16 @@ export function noteOf(row: ModelRowView): string | null {
   }
   if (row.eligible.includes("e360")) return "promoted to e360";
   return null;
+}
+
+/** Extras across the tiers: attempts the policy made past the target, never counted. */
+export function extrasOf(row: ModelRowView): number {
+  return TIER_COLUMNS.reduce((n, t) => n + (row.perEpisode[t]?.extras ?? 0), 0);
+}
+
+/** `yes: schedulable on e90` / `no: running (one stream per model)` — the verdict as --status prints it. */
+export function schedulableOf(row: ModelRowView): string {
+  return `${row.schedulable.ok ? "yes" : "no"}: ${row.schedulable.why}`;
 }
 
 /** Whether a row has earned the long tier — the marker beside its name. */

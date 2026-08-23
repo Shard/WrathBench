@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { countedOf, isPromoted, modelsHref, noteOf, rosterNameFor, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, countedOf, extrasOf, isPromoted, modelsHref, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -37,6 +37,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
       },
     },
     ladder: 0,
+    schedulable: { ok: true, why: "schedulable on e90", extras: false },
     runs: [],
     newestRunId: "a-3",
     lastError: null,
@@ -56,6 +57,17 @@ describe("cells", () => {
     expect(statusClass("retired")).toBe("exited");
     expect(statusClass("new")).toBe("");
     expect(statusClass("active")).toBe("");
+  });
+});
+
+describe("the --status columns", () => {
+  test("billing, extras and the scheduler's verdict are the CLI's, phrased once", () => {
+    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "billing", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"]);
+    expect(schedulableOf(row())).toBe("yes: schedulable on e90");
+    expect(schedulableOf(row({ schedulable: { ok: false, why: "running (one stream per model)", extras: false } }))).toBe("no: running (one stream per model)");
+    expect(extrasOf(row())).toBe(0);
+    const e90 = row().perEpisode.e90!;
+    expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 2 }, e360: { ...e90, extras: 1 } } }))).toBe(3);
   });
 });
 

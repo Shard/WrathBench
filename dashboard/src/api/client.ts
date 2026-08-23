@@ -42,7 +42,6 @@ export type {
   TrackPoint,
   TrackResponse,
   FeedEntry,
-  FleetLane,
   FleetResponse,
   ModelEpisodeView,
   ModelLastErrorView,

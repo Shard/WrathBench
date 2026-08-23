@@ -22,7 +22,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { TIER_COLUMNS, countedOf, isPromoted, noteOf, statusClass } from "../lib/models";
+import { TIER_COLUMNS, countedOf, extrasOf, isPromoted, noteOf, schedulableOf, statusClass } from "../lib/models";
 import { poll } from "../lib/poll";
 
 /** The roster moves when a run ends or an operator edits the config. */
@@ -84,9 +84,12 @@ export default function Models() {
               <tr>
                 <th>status</th>
                 <th>model</th>
+                <th>billing</th>
                 <th>platform</th>
                 <th>harness</th>
                 <For each={TIER_COLUMNS}>{(t) => <th class="right">{t}</th>}</For>
+                <th class="right">extras</th>
+                <th>schedulable</th>
                 <th>note</th>
                 <th>newest run</th>
               </tr>
@@ -117,6 +120,7 @@ export default function Models() {
                           <Show when={row.effort !== null}> · {row.effort}</Show>
                         </div>
                       </td>
+                      <td class="dim">{row.billing}</td>
                       <td class="dim">{row.platform ?? "—"}</td>
                       <td>
                         <HarnessTag harness={row.harness} />
@@ -147,6 +151,10 @@ export default function Models() {
                           );
                         }}
                       </For>
+                      <td class="right mono dim">{extrasOf(row)}</td>
+                      <td class={row.schedulable.ok ? "ok" : "dim"} title={row.schedulable.why}>
+                        {schedulableOf(row)}
+                      </td>
                       <td class={row.retired !== undefined ? "err" : row.cooling !== undefined ? "warn" : "dim"}>
                         {noteOf(row) ?? "—"}
                       </td>
@@ -158,7 +166,7 @@ export default function Models() {
                     </tr>
                     <Show when={open() === row.name}>
                       <tr>
-                        <td colSpan={5 + TIER_COLUMNS.length}>
+                        <td colSpan={8 + TIER_COLUMNS.length}>
                           <Detail row={row} />
                         </td>
                       </tr>

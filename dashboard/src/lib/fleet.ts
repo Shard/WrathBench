@@ -2,19 +2,52 @@
  * The fleet table's pure layer: its columns, and the rows it is made of.
  *
  * One table, keyed by the JOB (ADR-0034: the job is the unit of work, an
- * account is where it runs). The page used to show the same fleet three times —
- * lanes, jobs, accounts — which meant three answers to "what is RUNNER3 doing"
- * and no answer at all to "which of these is the same thing". A row is now
- * either a job with an account or an account with no job, and the accounts that
- * hold nothing sort to the bottom under their class.
+ * account — with a class — is where it runs). A row is either a job with an
+ * account or an account with no job, and the accounts that hold nothing sort
+ * to the bottom under their class. The indicators above the table are the
+ * same ones `run-fleet --status` prints, phrased here once.
  *
  * The component renders its header from `FLEET_COLUMNS` and its body from
  * `fleetRows`, so what is asserted here is what ships — the same reason the run
  * rows keep their maths in `format.ts` (see dashboard/README.md).
  */
 
-import type { FleetJobView, FleetResponse } from "@viewer/api-types";
+import type { FleetJobView, FleetPausedView, FleetResponse } from "@viewer/api-types";
 import type { RunListRow } from "@viewer/api-types";
+
+/** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
+export const HEARTBEAT_STALE_MS = 180_000;
+
+/**
+ * The supervisor's liveness, as --status decides it: a heartbeat inside the
+ * window. No heartbeat at all is "not running" — the only honest reading
+ * across a container boundary.
+ */
+export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt">, now: number): boolean {
+  return fleet.heartbeatAt !== undefined && now - fleet.heartbeatAt < HEARTBEAT_STALE_MS;
+}
+
+/** The gate's one-word verdict, as --status prints it. */
+export function gateVerdict(pf: FleetResponse["preflight"]): "PASS" | "FAIL" | "SKIPPED" | "none" {
+  if (pf === undefined) return "none";
+  if (pf.skipped === true) return "SKIPPED";
+  return pf.ok ? "PASS" : "FAIL";
+}
+
+/** `1 pinned, 5 pool, 1 paid, 1 local` — the accounts line of --status, classes with nothing listed left out. */
+export function accountClassSummary(accounts: FleetResponse["accounts"]): string {
+  const n = (cls: string): number => accounts.filter((a) => a.class === cls).length;
+  return ["pinned", "pool", "paid", "local"]
+    .filter((cls) => n(cls) > 0)
+    .map((cls) => `${n(cls)} ${cls}`)
+    .join(", ");
+}
+
+/** One paused run as --status lists it: reason, pause count, and when the supervisor tries again. */
+export function pausedLabel(p: FleetPausedView): string {
+  const again = p.resumeAfter === null ? "" : `, resumes after ${new Date(p.resumeAfter).toLocaleTimeString()}`;
+  return `${p.reason} (pause ${p.pauseCount})${again}`;
+}
 
 /** The fleet table, left to right. State leads: it is what an operator scans for. */
 export const FLEET_COLUMNS = ["state", "job", "models", "tier", "account", "source", "attempt", "run", "lvl / xp", "elapsed"] as const;
@@ -101,7 +134,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const rows: FleetRow[] = [];
   const busy = new Set<string>();
-  for (const job of fleet.jobs ?? []) {
+  for (const job of fleet.jobs) {
     const runId = job.runId ?? null;
     const run = runId === null ? undefined : byId.get(runId);
     busy.add(job.account.toUpperCase());
@@ -113,7 +146,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       modelsTitle: job.models.join(", "),
       tier: job.episode,
       account: job.account,
-      accountClass: job.accountClass ?? "pinned",
+      accountClass: job.accountClass,
       source: job.source,
       attempt: job.attempt ?? null,
       runId: runId ?? job.resuming ?? null,
@@ -125,8 +158,8 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
   }
   // Idle accounts, grouped by class. A paused run holds no account, so it is
   // reported against the account it paused on rather than as a job of its own.
-  const paused = fleet.paused ?? [];
-  const idle = (fleet.accounts ?? []).filter((a) => !busy.has(a.account.toUpperCase()));
+  const paused = fleet.paused;
+  const idle = fleet.accounts.filter((a) => !busy.has(a.account.toUpperCase()));
   idle.sort((a, b) => CLASS_ORDER.indexOf(a.class) - CLASS_ORDER.indexOf(b.class) || a.account.localeCompare(b.account));
   for (const a of idle) {
     const here = paused.find((p) => (p.account ?? "").toUpperCase() === a.account.toUpperCase());
@@ -146,7 +179,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       level: run?.level ?? null,
       xp: run?.xp ?? null,
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,
-      note: here !== undefined ? `${here.reason} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,
+      note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,
     });
   }
   return rows;

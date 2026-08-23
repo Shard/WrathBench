@@ -72,7 +72,7 @@ export default function Episodes() {
                     <td class="right mono">{mins(t.minutes)}</td>
                     <td class="right mono">{mins(t.idleMinutes)}</td>
                     <td class="right mono">{t.noXpMinutes === null ? "off" : mins(t.noXpMinutes)}</td>
-                    <td class="right mono">{t.toolCalls === null ? "per lane" : t.toolCalls}</td>
+                    <td class="right mono">{t.toolCalls === null ? "per job" : t.toolCalls}</td>
                     <td class="dim">{t.objectiveAllowed ? "allowed" : "none"}</td>
                     <td class={t.scored ? "" : "warn"}>{t.scored ? "scored" : "unscored"}</td>
                     <td class="right mono">{t.members}</td>

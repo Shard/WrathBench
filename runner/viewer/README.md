@@ -139,7 +139,7 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/info` | what mode the viewer is in: public, dashboard built |
 | `/api/runs` | run listing, with per-run token totals and active playtime |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
-| `/api/fleet` | the fleet supervisor's lanes, accounts and heartbeat |
+| `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
 | `/api/run/<id>` | run row, state series, entry count, token totals, playtime |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |

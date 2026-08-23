@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FleetJobView, FleetResponse, RunListRow } from "../../runner/viewer/api-types";
-import { FLEET_COLUMNS, fleetRows, jobModelLabel, runHref } from "../src/lib/fleet";
+import { FLEET_COLUMNS, HEARTBEAT_STALE_MS, accountClassSummary, fleetRows, gateVerdict, jobModelLabel, pausedLabel, runHref, supervisorAlive } from "../src/lib/fleet";
 
 function job(over: Partial<FleetJobView> = {}): FleetJobView {
   return {
@@ -22,6 +22,7 @@ function job(over: Partial<FleetJobView> = {}): FleetJobView {
     attempt: 2,
     models: ["stealth/ox-alpha"],
     runId: "fleet-ox-alpha-e90-20260823",
+    model: "stealth/ox-alpha",
     pid: 13,
     spawnedAt: 1,
     exitCode: null,
@@ -34,7 +35,6 @@ function job(over: Partial<FleetJobView> = {}): FleetJobView {
 function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
   return {
     present: true,
-    lanes: [],
     jobs: [job()],
     accounts: [
       { account: "RUNNER", class: "pool", job: "ox-alpha-e90" },
@@ -43,6 +43,8 @@ function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
       { account: "PAID", class: "paid", job: null },
       { account: "SHAKEOUT", class: "pinned", job: "nav-probe-freeplay" },
     ],
+    paused: [],
+    ended: [],
     session: { finished: 1, ok: 1, retried: 0 },
     now: 1000,
     ...over,
@@ -135,6 +137,8 @@ describe("the rows", () => {
           account: "RUNNER2",
           reason: "rate-limited",
           since: 1,
+          pauseCount: 2,
+          resumeAfter: null,
           elapsedMs: 1_410_000,
           budgetMs: 5_400_000,
           why: "waiting: account RUNNER2 is busy",
@@ -143,13 +147,35 @@ describe("the rows", () => {
     });
     const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
     expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
-    expect(row.note).toBe("rate-limited — waiting: account RUNNER2 is busy");
+    expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
+  });
+});
+
+describe("the --status indicators", () => {
+  test("the supervisor is alive by heartbeat inside three ticks; no heartbeat is not running", () => {
+    expect(supervisorAlive({ heartbeatAt: 1000 }, 1000 + HEARTBEAT_STALE_MS - 1)).toBe(true);
+    expect(supervisorAlive({ heartbeatAt: 1000 }, 1000 + HEARTBEAT_STALE_MS)).toBe(false);
+    expect(supervisorAlive({}, 1000)).toBe(false);
   });
 
-  test("a supervisor that published no accounts block gets job rows and nothing invented", () => {
-    const { accounts: _dropped, ...noAccounts } = fleet();
-    const rows = fleetRows(noAccounts, []);
-    expect(rows.map((r) => r.job)).toEqual(["ox-alpha-e90"]);
+  test("the gate verdict is the CLI's word: PASS, FAIL, SKIPPED, or none recorded", () => {
+    const rec = { at: 1, serverIdentity: "build:x@1", ok: true, results: [] };
+    expect(gateVerdict(undefined)).toBe("none");
+    expect(gateVerdict(rec)).toBe("PASS");
+    expect(gateVerdict({ ...rec, ok: false })).toBe("FAIL");
+    expect(gateVerdict({ ...rec, skipped: true })).toBe("SKIPPED");
+  });
+
+  test("the accounts line counts each class that has a row, in class order", () => {
+    expect(accountClassSummary(fleet().accounts)).toBe("1 pinned, 2 pool, 1 paid, 1 local");
+    expect(accountClassSummary([])).toBe("");
+  });
+
+  test("a paused run is labelled with its reason, pause count and resume-after time", () => {
+    const p = { runId: "r", model: "m", account: "A", reason: "quota-exhausted", since: 1, pauseCount: 3, resumeAfter: null, elapsedMs: null, budgetMs: null, why: "w" };
+    expect(pausedLabel(p)).toBe("quota-exhausted (pause 3)");
+    const at = new Date(2026, 7, 23, 17, 21).getTime();
+    expect(pausedLabel({ ...p, resumeAfter: at })).toBe(`quota-exhausted (pause 3), resumes after ${new Date(at).toLocaleTimeString()}`);
   });
 });
 
