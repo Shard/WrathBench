@@ -1,7 +1,7 @@
 # ADR-0034: Account pool and a scheduling policy from run history
 
 Status: Accepted. Date: 2026-08-23. Consolidates ADR-0031 and ADR-0032 (both
-superseded by this record). **This is the single statement of the promotion rule**;
+superseded by this record). Amended the same day: one job concept (below). **This is the single statement of the promotion rule**;
 docs/EPISODES.md, docs/OPERATIONS.md and docs/COSTS.md point here.
 
 ## Context
@@ -77,3 +77,36 @@ config, the new code reads both, so the restart and the rename commute.
 - The model is never told its tier; only the wall clock and watchdogs vary, and
   the tuple records both. The loop stays model-agnostic.
 - A dead provider costs at most ten launches over ~10 hours before retirement.
+
+## Amendment (2026-08-23): one concept, the job
+
+The first cut of this record left two generations stacked: a `lanes` list
+beside `accounts.pinned` for pinned work, a `queue` for pool work, and the
+policy's picks as a third kind of thing, each with its own spawn bookkeeping
+and its own `--status` rows. Consolidated:
+
+- **A job is the one unit of work**: `{ ref | [refs], episode, repeat, enabled,
+  account? }`. A job that names an `account` is pinned to it — exactly the old
+  lane — and a job without one takes a free pool account. The policy's picks
+  are jobs too, synthetic and never persisted. Every job reaches the spawner
+  through one path (`jobLane` → `spawnLane`); a job's name is always
+  `<first ref>-<episode>`, one job per (ref, episode).
+- **The roster is the only place a model is described.** A probe with an
+  objective is a roster entry like any other (the entry carries `objective`,
+  `watchdogs`, `maxToolCalls`, `wikiCoords`), referenced by a pinned job. An
+  entry referenced by a pinned job, or carrying an objective, is outside the
+  policy: the account is spoken for, and unscored runs are not evidence.
+- **`policy.maxConcurrent { <driver>: n }`** caps the policy's streams per
+  driver, counting every job on that driver, pinned ones included. It exists
+  so that a subscription that tolerates two sessions is a number in the file
+  rather than a model removed from the roster (`sonnet`/`sonnet-low` are back
+  under `"claude-code": 2`; ADR-0035 makes their runs scored, tagged).
+- **`accounts.pinned` is derived**, never authored; `lanes` and a queue
+  entry's `lane` are legacy input. Both older shapes — pre-pool lanes that
+  name their accounts, and pool-era lanes beside `accounts.pinned` — load as
+  pinned jobs carrying their entries verbatim, with one log line saying so.
+- `--status` is accounts (what runs where), models (the projection), one
+  session line, and a queue block only when a manual queue exists. Finished
+  runs get no rows.
+
+The shape change ships as `fleet.next.json` again, for the reason above.
