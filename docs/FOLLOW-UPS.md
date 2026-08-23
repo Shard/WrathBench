@@ -82,32 +82,9 @@ and status.
     is a run that needs it. Evidence pointer when it comes: an `inventory_full` turn-in
     with free slots in an equipped bag.
 
-53. **No escape hatch for a stuck ghost** (2026-08-23, closing fan-out). In
-    `fleet-hy3-e90-hy3-free-20260823-a3` the model died, released, and called
-    `reclaimCorpse` ten times in a row for ten `not_reclaimed` verdicts with
-    `spiritHealer: []` — no healer in range to activate, no corpse it could reach, and
-    the run sat at level 4 until the no-XP watchdog ended it. The verdict shape is not
-    the problem (`nemotron-super` branched on 86 of them correctly the same night); the
-    problem is that the one documented recovery path can be genuinely unavailable and
-    nothing tells the agent what else a player would do. Client-parity options, in
-    order of how little they invent: (a) walk the ghost to its own corpse — a ghost has
-    its own movement and its own mesh, so `moveTo(corpsePosition)` is a legal client
-    action and the SDK could report the corpse position it already sees; (b) widen the
-    spirit-healer search — the client shows healers well past our current view radius,
-    so `state.units({npc: "spiritHealer"})` returning empty may be a view limit rather
-    than an absence, and the honest fix is to say which; (c) accept resurrection
-    sickness as the priced exit and name it in the `not_reclaimed` hint. What we must
-    not do is resurrect server-side. Evidence pointer:
-    `data/runs/fleet-hy3-e90-hy3-free-20260823-a3`, the ten consecutive
-    `reclaimCorpse` results.
 
 ## Fleet and gate
 
-10. **Per-character credentials** (PHASE-0 deferred list). Required before any run
-    parallelism beyond one account per run. The fleet layer stays inside that scheme by
-    construction (one lane or pool job, one account; two enabled lanes sharing an
-    account is a config error), so ADR-0031's pool does not move this item. Needed by
-    the group tier (item 40) and VISION.md's public-MCP path.
 
 23. **Helm chart for the fleet** (2026-08-22). ADR-0020 made the supervisor a compose
     service shaped as the chart's rehearsal: Deployment (the `fleet` service, `restart:
@@ -172,11 +149,6 @@ and status.
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
 
-29. **The local-qwen lane is inference-bound; harness fixes will not move it**
-    (2026-08-22). Median 48s per turn, 78 of that episode's 90 minutes inside the model.
-    Read its results as a throughput measurement of the local box, never as evidence
-    that a harness change helped or not. Open only as a standing caveat on the eval
-    surface; closes when the lane is retired or the box changes.
 
 32. **Dashboard parity gaps against the deleted pages** (2026-08-22, ADR-0022; the
     pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
@@ -202,23 +174,6 @@ and status.
     label. N2's zone/area observation (item 38) is the first producer.
 
 
-54. **`sleep()`'s wake reason is shipped and unread** (2026-08-23, closing fan-out).
-    `sleep(ms, options?)` resolving with `"elapsed" | "attacked" | "died"` (68b5a92)
-    has been live for every run since harness-0.3-111. Across the 41 run directories of
-    the 2026-08-23 fan-out, `.wake` is read exactly zero times; the one run that found
-    the second argument at all passed `{wake: false}` on every long sleep, i.e. it read
-    the signature and opted out. Models poll with `await sleep(28000)` dozens of times
-    a run (66× in `sonnet-e90-a2`) and never look at what woke them. The feature works;
-    it is invisible. The likely fix is prompt visibility — `runner/src/prompt.ts` states
-    it in one clause among many one-liners, and a worked line (`const { wake } = await
-    sleep(20000); if (wake === "attacked") …`) would probably move it. Deferred on
-    purpose: a prompt edit moves the prompt hash and the comparability tuple with it,
-    so it belongs at a series boundary, not mid-series. Decide at the next series bump
-    whether the example goes in or the feature is left as earned-only surface. Second
-    item for the same bump (from 51, 2026-08-23): `runner/src/prompt.ts` still lists
-    `moveTo` among "the raw actions under them" a line above the clause grouping it with
-    the unit-accepting helpers — a wording bug, left alone because every prompt edit
-    moves the hash and the comparability tuple with it.
 
 ## Module
 
@@ -284,7 +239,10 @@ and status.
     port can delete any character on an allowlisted account that is not logged in — a
     token-to-character binding plus a shared secret on the port is the floor. (3) A
     snippet can still fs-read `.env` by absolute path; needs filesystem sandboxing (a
-    trajectory audit found no run ever did). Distinct from item 10.
+    trajectory audit found no run ever did). Item 10 (per-character credentials) is
+    folded in here: the account pool delivered run parallelism, and what remained of 10
+    — nothing binds a caller to an account or a token to a character — is exactly (1)
+    and (2).
 
 33. **Public hosting checklist for the dashboard** (2026-08-22, ADR-0022). Before any
     of it is exposed: **Legal, first and blocking** — minimap tiles are Blizzard
@@ -341,3 +299,7 @@ One line per number so citations resolve; the day file carries the detail.
 - 24 — 2026-08-23 — 4f5cb8a — `accountHeldBy` tests activity age before opening a run dir; paused runs are deliberately not "held" (the supervisor's resume-before-fill reserves their account)
 - 36 — 2026-08-23 — 6f1ffd5 — `character` and `platform` are run columns (`runner/src/platform.ts`); `local` = loopback/RFC-1918/.local, the same test billing uses
 - 52 — 2026-08-23 — 56bdb8d, 1345621 — one policy-membership predicate in `runner/src/models.ts`; `/api/models` excludes pinned refs and serves `policy.maxConcurrent`; fleet page reads `session` and `jobs`
+- 10 — 2026-08-23 — folded into 19 — parallelism came from the account pool and classes (ADR-0034); the credential binding that remained is item 19's (1)/(2)
+- 29 — 2026-08-23 — 314156b — local models past their targets play freeplay (`policy.extras.local`), so the inference-bound caveat is a property of the class, not a standing item
+- 53 — 2026-08-23 — 4b82bf9, 4de6da0, 61d683f, 29b33ba — the evidence was one `reclaimCorpse` call (attempts: 10) from 387y, later reclaimed by walking back; the gap was information: the module now asks `MSG_CORPSE_QUERY` on repop like a client, `state.self.corpse`/`graveyard`/`reclaimDelay`, `not_reclaimed` names one reason (too_far with distance, delay_not_elapsed, wrong_map, no_corpse), the ghost HUD line states both options and the healer's cost; module in `:next`, smoke pending deploy
+- 54 — 2026-08-23 — 61d683f — the prompt's sleep line carries a worked wake-reason example (pre-v1 prompt tuning ships as a patch)
