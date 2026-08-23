@@ -882,6 +882,17 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
   }
   for (const id of dirs) {
     if (id === ownRunId) continue;
+    /*
+     * The age test first, because it is two stats and every other test is a
+     * file parse or a database open. A run whose newest artefact is colder
+     * than LIVE_TRAJECTORY_MS cannot be the holder however it ended, so
+     * hoisting the cheapest term of the conjunction skips the meta.json read
+     * and the run.sqlite open for every finished run in the directory —
+     * which is all of them but a handful (FOLLOW-UPS 24). The answer is
+     * unchanged: same conjunction, same readdir order, same first match.
+     */
+    const age = activityAgeMs(id);
+    if (age === undefined || age >= LIVE_TRAJECTORY_MS) continue;
     const acct = accountOfRun(id);
     if (acct === undefined || acct.toUpperCase() !== want) continue;
     const row = readRunRow(id);
@@ -889,14 +900,13 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
     // A pause row means the session is already gone: every path in attemptSpec
     // that leaves a paused run behind frees its session first, and
     // pause_reason is only cleared by --resume. Without this skip, the
-    // activity-age check below parks the lane for LIVE_TRAJECTORY_MS behind
+    // activity-age test parks the lane for LIVE_TRAJECTORY_MS behind
     // its own just-deferred run's still-warm trajectory (fleet-free-or-a
     // waited 3m behind its deferred glm run, 2026-08-22). A hand-paused run
     // whose operator kept the session alive is the module's to defend: the
     // next createSession fails loudly with account_owned_by_other_token.
     if (row !== undefined && row.pause_reason !== null && row.pause_reason !== "") continue;
-    const age = activityAgeMs(id);
-    if (age !== undefined && age < LIVE_TRAJECTORY_MS) return id;
+    return id;
   }
   return undefined;
 }
