@@ -300,6 +300,16 @@ services:
     command: ["bun", "infra/run-fleet.ts", "infra/fleet.json"]
     environment:
       WRATHBENCH_IN_CONTAINER: "1"
+      # For the preflight gate's fixture staging only: kill-credit.ts starts
+      # from the `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts`
+      # writes the characters DB directly (same four vars as the `fixtures`
+      # service). The supervisor itself never touches the DB, and `runner`
+      # deliberately does not carry these: a benchmark episode must not be able
+      # to reach a fixture tool.
+      WRATHBENCH_DB_HOST: db
+      WRATHBENCH_DB_PORT: "3306"
+      WRATHBENCH_DB_USER: root
+      WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
       # git lives in the image and the repo mount carries .git, so every episode
       # is stamped with a real `git describe` (dirty trees included) rather than
       # a version frozen at `up` time. The repo is uid 1000 and so is `bun`, but

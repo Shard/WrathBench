@@ -77,11 +77,12 @@
  * direct-bun branch below hands to `infra/fixtures/apply.ts`; use whatever
  * that tool documents if it differs, and note that branch assumes it can
  * reach MySQL from the runner image. How the fixture is applied is chosen by
- * the environment; see FIXTURES_CMD below. The legacy walk is the same
- * command without `--from` (and needs no DB env at all).
+ * the environment; see `fixturesCmd()` in lib/fixture.ts. The legacy walk is
+ * the same command without `--from` (and needs no DB env at all).
  */
 
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
+import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -90,8 +91,6 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
-/** Repo root as this script sees it: the fixtures tool is spawned from there. */
-const REPO_ROOT = `${import.meta.dir}/../..`;
 // The module's per-session audit (WrathBench.AuditDir, `<token>.jsonl`), as
 // the runner container sees the repo mount. Leg 4 reads it for the
 // `move_transport_leg` boarding record.
@@ -127,27 +126,6 @@ const FROM = (() => {
 const CHARACTER = FROM
   ? (flag("--character") ?? "Smoketram")
   : "Tr" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
-
-/**
- * How `infra/fixtures/apply.ts` is invoked. It talks to the characters DB
- * directly, and the DB port is not published to the host:
- *   - WRATHBENCH_FIXTURES_CMD, if set, is the command verbatim (space-split),
- *     with --account/--character/--scenario appended;
- *   - else, with WRATHBENCH_DB_HOST set (inside a container on the compose
- *     network), run it in-process with bun;
- *   - else, from the host, through compose. The `fixtures` service carries
- *     the DB env and an `entrypoint` of `bun run infra/fixtures/apply.ts`, so
- *     only the flags are passed here — apply.ts rejects positional arguments.
- *     `--no-deps` is load-bearing: without it compose may decide a dependency
- *     is stale and recreate the worldserver underneath live episodes (see
- *     infra/README.md and the fleet service comment in compose.yml).
- */
-const FIXTURES_CMD: string[] = (() => {
-  const explicit = process.env.WRATHBENCH_FIXTURES_CMD;
-  if (explicit) return explicit.split(" ").filter(Boolean);
-  if (process.env.WRATHBENCH_DB_HOST) return ["bun", "infra/fixtures/apply.ts"];
-  return ["docker", "compose", "-f", "infra/compose.yml", "run", "--rm", "--no-deps", "fixtures"];
-})();
 
 const started = Date.now();
 const log = (m: string) =>
@@ -673,70 +651,25 @@ async function createSessionWithBackoff(): Promise<void> {
 }
 
 /**
- * The character names this account holds right now, via POST /characters.
- * Its parked utility session contends for the account exactly as a real one
- * does, so `account_in_use` (another probe holds PROBE) and the module's own
- * `504 timeout` are waited out on the same 20-minute budget
- * `createSessionWithBackoff` uses — this is the fixture path's first module
- * call, and a contended account must cost a wait, not a gate failure.
+ * The fixture boot — enumerate, create if missing, place the scenario — lives
+ * in lib/fixture.ts, shared with kill-credit.ts. This probe is long-running
+ * and single-purpose, so it keeps the generous contended-account budget
+ * (20 minutes, retried each minute) the fixture path has always had here.
  */
-async function characterNames(): Promise<string[]> {
-  const deadline = Date.now() + 20 * 60_000;
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${BASE}/characters`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // A fresh token per attempt: a reused one can still be held by the
-      // parked session the previous attempt timed out on.
-      body: JSON.stringify({ token: `${TOKEN}-list${attempt}`, account: ACCOUNT }),
-    });
-    const json = (await res.json().catch(() => undefined)) as
-      | { ok?: boolean; error?: string; enum?: { characters?: { name: string }[] } }
-      | undefined;
-    if (res.ok && json?.ok) return (json.enum?.characters ?? []).map((c) => c.name);
-    const transient = json?.error === "account_in_use" || json?.error === "timeout" || res.status === 504;
-    if (!transient || Date.now() > deadline) {
-      throw new LegFailure(`POST /characters on ${ACCOUNT} failed: ${res.status} ${JSON.stringify(json)}`);
-    }
-    log(`  /characters says ${json?.error ?? res.status}; retrying in 60s`);
-    await Bun.sleep(60_000);
-  }
-}
-
-/**
- * The fixture tool writes a *logged-out* character's rows and exits non-zero
- * if the character does not exist — creating one is the module's job, through
- * the same CMSG_CHAR_CREATE path a client uses. So: enumerate, and only if the
- * name is absent create it with a session and log straight back out.
- */
-async function ensureFixtureCharacter(): Promise<void> {
-  const names = await characterNames();
-  log(`  ${ACCOUNT} holds: ${names.join(", ") || "(no characters)"}`);
-  if (names.some((n) => n.toLowerCase() === CHARACTER.toLowerCase())) return;
-  log(`  ${CHARACTER} does not exist yet: creating it through the module (Dwarf Warrior)`);
-  await createSessionWithBackoff();
-  await client.logout();
-  log(`  ${CHARACTER} created and logged out`);
-}
-
-/** Place the fixture character for `scenario`. apply.ts waits for online=0 itself. */
-async function applyScenario(scenario: string): Promise<void> {
-  const argv = [...FIXTURES_CMD, "--account", ACCOUNT, "--character", CHARACTER, "--scenario", scenario];
-  log(`fixture: ${argv.join(" ")}`);
-  let proc: ReturnType<typeof Bun.spawn>;
-  try {
-    proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit", env: process.env });
-  } catch (e) {
-    throw new LegFailure(
-      `could not run the fixtures tool (${argv[0]}): ${String(e instanceof Error ? e.message : e)} — ` +
-        `set WRATHBENCH_FIXTURES_CMD to the exact command for this environment, or WRATHBENCH_DB_HOST=db ` +
-        `to run \`bun infra/fixtures/apply.ts\` directly from inside the compose network`,
-    );
-  }
-  const code = await proc.exited;
-  if (code !== 0) throw new LegFailure(`fixtures apply --scenario ${scenario} exited ${code}; the smoke cannot start from a scenario it could not place`);
-  log(`  scenario ${scenario} applied to ${CHARACTER}`);
-}
+const fixtureCtx: FixtureContext = {
+  base: BASE,
+  account: ACCOUNT,
+  character: CHARACTER,
+  token: TOKEN,
+  log,
+  fail: (m) => {
+    throw new LegFailure(m);
+  },
+  createAndLogout: async () => {
+    await createSessionWithBackoff();
+    await client.logout();
+  },
+};
 
 /**
  * The fixture's postcondition, checked in world rather than trusted: level and
@@ -768,8 +701,8 @@ const legTimes: [string, number][] = [];
 try {
   if (FROM) {
     log(`--from ${FROM}: fixture character ${CHARACTER} on ${ACCOUNT}, legs 1-2 skipped`);
-    await ensureFixtureCharacter();
-    await applyScenario(FROM);
+    await ensureFixtureCharacter(fixtureCtx);
+    await applyScenario(fixtureCtx, FROM);
     await createSessionWithBackoff();
     const spawn = selfPos();
     log(`in world as ${CHARACTER} at ${spawn ? fmt(spawn) : "?"} map ${spawn?.map}; ${RIDES} gated ride(s)`);

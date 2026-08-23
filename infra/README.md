@@ -130,9 +130,16 @@ reach from the Northshire spawn.
 `--dry-run` prints the statements it would run and touches nothing. The
 scenarios live in `infra/fixtures/scenarios.ts`; today they are
 `tram-ironforge` (level 10, 1g, standing at the Deeprun Tram portal facing the
-areatrigger), `trainer-northshire` (level 4, 50s, in front of Brother Sammuel)
-and `northshire-fresh` (a reset to the level-1 human start with an empty quest
-log). Adding one is a data edit in that file.
+areatrigger), `trainer-northshire` (level 4, 50s, in front of Brother Sammuel),
+`northshire-fresh` (a reset to the level-1 human start with an empty quest log)
+and `vineyard-kill-credit` (level 1 at the Northshire vineyard edge with
+"Kobold Camp Cleanup" already in the log). Adding one is a data edit in that
+file.
+
+The preflight gate uses fixtures too: `kill-credit.ts` starts from
+`vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
+quest, which is why the `fleet` service carries the same `WRATHBENCH_DB_*` env
+as `fixtures`. `runner` deliberately does not.
 
 This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
 agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only

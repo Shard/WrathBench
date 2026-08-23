@@ -96,6 +96,15 @@ const SAMMUEL_FRONT = {
   z: 82.3,
 };
 
+// The near edge of the Northshire vineyard, verbatim from kill-credit.ts's
+// proven fight position: from here the closest Kobold Vermin spawns (entry 6,
+// `acore_world.creature` rows at x -8783..-8795, y -134..-171) are inside
+// update range. Ground here is z 81.5..82.0 by those neighbouring spawns, so
+// 82.5 is a fraction above it and the character settles on login. The facing
+// looks at guid 79992 (-8783.05, -161.565), the nearest spawn.
+const VINEYARD_EDGE = { x: -8790, y: -160, z: 82.5 };
+const VINEYARD_NEAREST_VERMIN = { x: -8783.05, y: -161.565 };
+
 // The human starting position, verbatim from acore_world.playercreateinfo
 // race 1 (every human class shares it): map 0, zone 12 (Elwynn Forest, which
 // is the zone id the core stores for Northshire Valley's parent).
@@ -138,6 +147,33 @@ export const SCENARIOS = {
     position: { ...HUMAN_START },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
     clearQuests: true,
+  },
+  "vineyard-kill-credit": {
+    description:
+      "level 1, no money, at the Northshire vineyard edge with Kobold Camp Cleanup (7) in the log and A Threat Within (783) already rewarded",
+    level: 1,
+    xp: 0,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 12,
+      ...VINEYARD_EDGE,
+      o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    // The log is rebuilt from scratch every time: `character_queststatus`
+    // carries mobcount1..4, and the inProgress insert is INSERT IGNORE, so
+    // without the wipe the second run would start with last run's kill already
+    // counted and the `current === 1` assertion would fail.
+    clearQuests: true,
+    quests: {
+      // 7's PrevQuestID is 783 (quest_template_addon), ExclusiveGroup 0 and no
+      // other gate, so one rewarded row is the whole prerequisite. The core
+      // does not re-check it when loading the log, but a character that holds
+      // 7 without having finished 783 is a state a player could not reach.
+      rewarded: [783],
+      inProgress: [7],
+    },
   },
 } as const satisfies Record<string, Scenario>;
 
