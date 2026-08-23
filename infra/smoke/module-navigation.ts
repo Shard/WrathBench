@@ -3,11 +3,17 @@
  *
  * End to end against a booted worldserver, from inside the compose network:
  * session in world (Human in Northshire) -> a `move_to` whose z is 5y above
- * the ground arrives and reports `meshZ` (the mesh owns z; no z-ladder) -> a
- * `move_to` whose z is 100y above the ground (far outside the navmesh's
- * vertical poly search) is `target_off_mesh`, nothing moved -> a 300y request is `too_far`
- * -> a plain walk still arrives with no `meshZ` -> logout. No dependencies;
- * Bun built-ins only.
+ * the ground arrives and reports `meshZ` (the mesh owns z) -> a `move_to`
+ * whose z is 100y above the ground (far outside the navmesh's vertical poly
+ * search) still arrives, with `meshZ` at the ground: the module's ground-z
+ * fallback (FOLLOW-UPS 46 part 3) -> a `move_to` to a nearby NPC's position
+ * with its `guid` arrives -> a candidate point with no walkable ground is
+ * `target_off_mesh`, nothing moved -> a 300y request is `too_far` -> a plain
+ * walk still arrives with no `meshZ` -> logout. No dependencies; Bun
+ * built-ins only.
+ *
+ * Steps 3–3b are new with the harness-0.4 module (FOLLOW-UPS 46) and FAIL
+ * against an older one: a pre-46 module answers z+100 with `target_off_mesh`.
  *
  * Not staged here, deliberately: `no_mesh` needs an unmapped map, and
  * `path_incomplete` / `start_off_mesh` need specific terrain (a transport
@@ -118,7 +124,7 @@ async function deletePreviousCharacter(): Promise<void> {
 }
 
 /** Issue move_to and return the terminal WB_MOVE_RESULT data for it. */
-async function move(target: { x: number; y: number; z: number }, timeoutMs = 60000): Promise<any> {
+async function move(target: { x: number; y: number; z: number; guid?: string }, timeoutMs = 60000): Promise<any> {
   const ack = await req("POST", "/action", { token: TOKEN, action: "move_to", ...target });
   if (ack.status !== 200 || !ack.json?.ok) fail(`move_to refused: ${ack.status} ${JSON.stringify(ack.json)}`);
   const result = await waitFor(
@@ -181,12 +187,51 @@ async function main() {
   log(`PASS z+5 -> arrived with meshZ ${high.meshZ.toFixed(1)} (requested ${(COURTYARD.z + 5).toFixed(1)})`);
 
   // 3. Far outside the poly search box (±50y vertically): no polygon under the
-  //    target. Typed target_off_mesh, and the character did not move.
-  const before = { ...high.pos };
+  //    request's z. Until harness-0.4 this was target_off_mesh; the module now
+  //    resolves the ground height at x,y after that verdict (the z-ladder in
+  //    front of the cause ladder, FOLLOW-UPS 46 part 3: terrain a client has
+  //    too) and walks there, reporting meshZ relative to the z asked for.
   const sky = await move({ x: HOME.x, y: HOME.y, z: HOME.z + 100 });
-  if (sky.status !== "target_off_mesh") fail(`z+100 request should be target_off_mesh, got ${JSON.stringify(sky)}`);
-  if (dist2d(sky.pos, before) > 1) fail(`target_off_mesh moved the character: ${JSON.stringify(sky.pos)}`);
-  log("PASS z+100 -> target_off_mesh, nothing moved");
+  if (sky.status !== "arrived") fail(`z+100 request should arrive on the ground-z fallback, got ${JSON.stringify(sky)}`);
+  if (dist2d(sky.pos, HOME) > 4) fail(`z+100 arrived ${dist2d(sky.pos, HOME).toFixed(1)}m from target`);
+  if (typeof sky.meshZ !== "number" || Math.abs(sky.meshZ - HOME.z) > 3) fail(`z+100 arrival should carry the ground meshZ (~${HOME.z}): ${JSON.stringify(sky)}`);
+  log(`PASS z+100 -> arrived on the ground-z fallback, meshZ ${sky.meshZ.toFixed(1)}`);
+
+  // 3a. A unit target: the guid rides along as the planning hint and the
+  //     module resolves z to the ground under the NPC before pathing. The
+  //     starter NPCs stand on flat ground, so the assertion here is only that
+  //     the param is accepted and the move arrives; the sloped-NPC case that
+  //     earned the repair ("Ironforge Mountaineer", nav-probe c3/c4) is Dun
+  //     Morogh's and not reachable from here.
+  const npc = events
+    .filter((e) => e.opcode === "SMSG_UPDATE_OBJECT")
+    .flatMap((e) => e.data?.objects ?? [])
+    .filter((o: any) => o.update === "create" && o.objectType === "unit" && !o.self && o.pos)
+    .map((o: any) => ({ guid: o.guid as string, pos: o.pos as { x: number; y: number; z: number } }))
+    .filter((u) => dist2d(u.pos, HOME) < 60)
+    .sort((a, b) => dist2d(a.pos, HOME) - dist2d(b.pos, HOME))[0];
+  if (!npc) fail("no unit in view within 60y of the start to use as a guid target");
+  const toNpc = await move({ x: npc.pos.x, y: npc.pos.y, z: npc.pos.z, guid: npc.guid });
+  if (toNpc.status !== "arrived") fail(`move_to with guid ${npc.guid} should arrive, got ${JSON.stringify(toNpc)}`);
+  if (dist2d(toNpc.pos, npc.pos) > 4) fail(`guid move arrived ${dist2d(toNpc.pos, npc.pos).toFixed(1)}m from the unit`);
+  log(`PASS unit target (guid ${npc.guid}) -> arrived`);
+
+  // 3b. A true off-mesh target still says so. Candidate: 12/12
+  //     target_off_mesh in the 2026-08-22 trajectories from this valley. If
+  //     it ARRIVES on the new module, the candidate's ground is walkable after
+  //     all and the point must be replaced with one that is not (steep valley
+  //     wall, inside a wall) — that is a probe defect, not a module one.
+  const OFF_MESH = { x: -8897, y: 100, z: 98 };
+  const walkBack = await move(HOME);
+  if (walkBack.status !== "arrived") fail(`walk back to HOME before the off-mesh probe: ${JSON.stringify(walkBack)}`);
+  const before = { ...walkBack.pos };
+  const off = await move(OFF_MESH);
+  if (off.status !== "target_off_mesh") {
+    fail(`off-mesh candidate (${OFF_MESH.x}, ${OFF_MESH.y}) should be target_off_mesh, got ${JSON.stringify(off)}` +
+      (off.status === "arrived" ? " — the candidate has walkable ground; replace it in this probe" : ""));
+  }
+  if (dist2d(off.pos, before) > 1) fail(`target_off_mesh moved the character: ${JSON.stringify(off.pos)}`);
+  log("PASS off-mesh candidate -> target_off_mesh, nothing moved");
 
   // 4. Beyond the single-move cap.
   const far = await move({ x: HOME.x + 300, y: HOME.y, z: HOME.z });
@@ -202,7 +247,7 @@ async function main() {
   // 6. Every status on the record is in the documented vocabulary.
   const VOCAB = new Set([
     "arrived", "too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete",
-    "transferred", "interrupted", "stopped", "superseded",
+    "transferred", "teleported", "interrupted", "stopped", "superseded",
   ]);
   const seen = new Set(events.filter((e) => e.opcode === "WB_MOVE_RESULT").map((e) => e.data?.status));
   for (const s of seen) if (!VOCAB.has(s)) fail(`undocumented move status on the stream: ${s}`);
@@ -214,7 +259,7 @@ async function main() {
   if (del.status !== 200 || !del.json?.ok) fail(`session delete failed: ${del.status} ${JSON.stringify(del.json)}`);
   ws.close();
 
-  log("PASS: meshZ arrival -> target_off_mesh -> too_far -> plain arrival; vocabulary clean");
+  log("PASS: meshZ arrival -> ground-z fallback -> unit target -> target_off_mesh -> too_far -> plain arrival; vocabulary clean");
   process.exit(0);
 }
 

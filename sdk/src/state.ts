@@ -1400,8 +1400,13 @@ export class StateCache {
         // old-map x/y/z with the new map id — a WorldPosition the character was
         // never at, which is the invention `self_position_without_map` exists
         // to refuse. The arrival comes from `SMSG_NEW_WORLD` alone.
+        //
+        // Likewise on `teleported` (a same-map port): `pos` is the pre-teleport
+        // position, and the arrival point came on the `MSG_MOVE_TELEPORT_ACK`
+        // the server sent *before* this result — folding `pos` here would
+        // overwrite the arrival with where the character left from.
         const d = event.data as { pos: PositionData; status?: string };
-        if (event.opcode === "WB_MOVE_RESULT" && d.status === "transferred") return;
+        if (event.opcode === "WB_MOVE_RESULT" && (d.status === "transferred" || d.status === "teleported")) return;
         this.applySelfPosition(d.pos, event.seq, event.ts);
         return;
       }
@@ -1465,9 +1470,12 @@ export class StateCache {
         if (isMoveOpcode(event.opcode)) {
           const d = event.data as MoveUpdateData;
           if (this.self.guid !== undefined && d.guid === this.self.guid) {
-            // PROTOCOL.md says our own synthesized movement is never echoed, so
-            // this should not happen — but if the server ever does relay it,
-            // it is still our position and belongs on `self`.
+            // Our own guid: `MSG_MOVE_TELEPORT_ACK`, the server's side of a
+            // same-map teleport, carrying the arrival point (PROTOCOL.md; no
+            // SMSG_NEW_WORLD follows a same-map port, so this is how self
+            // position follows a Hearthstone). Our own synthesized movement
+            // is never echoed, but if the server ever relays any other
+            // MSG_MOVE_* under our guid it is still our position.
             this.applySelfPosition(d.pos, event.seq, event.ts);
             return;
           }

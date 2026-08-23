@@ -185,7 +185,10 @@ describe("event frames", () => {
       expect((parsed.event as { schemaError?: string }).schemaError).toBeUndefined();
       expect((parsed.event.data as { guid: string }).guid).toBe("42");
     }
-    expect(isMoveOpcode("MSG_MOVE_TELEPORT_ACK")).toBe(false);
+    // The server's own-guid teleport ack is in the observed set since
+    // FOLLOW-UPS 46; the client's WORLDPORT echo never is.
+    expect(isMoveOpcode("MSG_MOVE_TELEPORT_ACK")).toBe(true);
+    expect(isMoveOpcode("MSG_MOVE_WORLDPORT_ACK")).toBe(false);
   });
 
   test("every fixture frame parses, envelope intact", () => {

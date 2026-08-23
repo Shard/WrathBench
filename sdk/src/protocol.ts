@@ -209,7 +209,7 @@ export interface CreateSessionRequest {
  */
 export type ActionRequest =
   | { token: string; action: "say"; text: string }
-  | { token: string; action: "move_to"; x: number; y: number; z: number }
+  | { token: string; action: "move_to"; x: number; y: number; z: number; guid?: string }
   | { token: string; action: "stop" }
   | { token: string; action: "face"; orientation: number }
   | { token: string; action: "face"; x: number; y: number }
@@ -634,6 +634,9 @@ export const MOVE_OPCODES = [
   "MSG_MOVE_STOP_SWIM",
   "MSG_MOVE_SET_RUN_MODE",
   "MSG_MOVE_SET_WALK_MODE",
+  // The one entry about self: the server's side of a same-map teleport
+  // (Hearthstone, graveyard port). `guid` is our own, `pos` the arrival point.
+  "MSG_MOVE_TELEPORT_ACK",
   "MSG_MOVE",
 ] as const;
 export type MoveOpcode = (typeof MOVE_OPCODES)[number];
@@ -650,6 +653,7 @@ export const MOVE_STATUSES = [
   "start_off_mesh",
   "path_incomplete",
   "transferred",
+  "teleported",
   "interrupted",
   "stopped",
   "superseded",

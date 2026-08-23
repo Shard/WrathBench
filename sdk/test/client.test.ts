@@ -33,6 +33,7 @@ import {
   moveResult,
   newWorld,
   transferAborted,
+  teleportAck,
   transferPending,
   offerReward,
   OTHER_QUEST_ID,
@@ -463,6 +464,54 @@ describe("client: movement", () => {
     client.close();
     await stub.stop();
   });
+
+  test("teleported (same-map port) resolves on the own-guid MSG_MOVE_TELEPORT_ACK, never waits for NEW_WORLD", async () => {
+    // FOLLOW-UPS 46: a Hearthstone mid-move used to answer `transferred`, and
+    // moveTo then waited 90s for an SMSG_NEW_WORLD that never comes on a
+    // same-map port. The module now says `teleported`, and the arrival point
+    // is the server's own teleport ack, sent before the result.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const pending = client.moveTo({ x: -4839, y: -1330, z: 508 }, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(teleportAck(30)));
+    stub.push(JSON.stringify(moveResult("teleported", 1, 31)));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.status !== "teleported") throw new Error("unreachable");
+    expect(result.to).toEqual({ x: -8833.4, y: 625.9, z: 93.9, o: 0.5 });
+    expect(result.position.x).toBe(-1205); // pre-teleport position from the result
+    expect(result.hint).toContain("same-map teleport");
+    // Self position is the arrival, on the same map; the result's pre-teleport
+    // `pos` (seq 31, later) did not overwrite it.
+    expect(client.state.self.position?.value).toEqual({ map: 0, x: -8833.4, y: 625.9, z: 93.9, o: 0.5 });
+    expect(client.state.self.position?.seq).toBe(30);
+    client.close();
+    await stub.stop();
+  });
+
+  test("teleported with no teleport ack observed is ok:false, status intact, no 90s wait", async () => {
+    // The ack wait is a fixed 5s (it normally hits the buffer), so give the
+    // test room for exactly that.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const started = Date.now();
+    const pending = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 60_000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("teleported", 1, 31)));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("teleported");
+    if (result.ok) throw new Error("unreachable");
+    expect(result.hint).toContain("MSG_MOVE_TELEPORT_ACK");
+    expect(Date.now() - started).toBeLessThan(20_000);
+    client.close();
+    await stub.stop();
+  }, 15_000);
 
   test("transferred with the transfer still pending at the deadline is ok:false, status intact", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
@@ -2384,6 +2433,10 @@ describe("client: moveTo target resolution", () => {
     const byUnit = client.moveTo(unit, { timeout: 2000 });
     await untilAction(stub, "move_to");
     expect(movePos(stub)).toEqual({ x: -1200, y: 980, z: 42 });
+    // A unit target carries its guid as the module's planning hint (ground-z
+    // resolution, PROTOCOL.md move_to); a point (below, in the next test)
+    // sends none.
+    expect(stub.actions.filter((a) => a.action === "move_to").at(-1)?.guid).toBe(CREATURE_GUID);
     stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
     expect((await byUnit).ok).toBe(true);
 
@@ -2420,6 +2473,7 @@ describe("client: moveTo target resolution", () => {
     // A point is untouched by any of this.
     const walk = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
     await untilAction(stub, "move_to");
+    expect(stub.actions.filter((a) => a.action === "move_to").at(-1)?.guid).toBeUndefined();
     stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
     expect((await walk).status).toBe("arrived");
 

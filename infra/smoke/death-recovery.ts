@@ -284,6 +284,22 @@ async function main() {
   self.pos = ghostPos;
   log(`PASS[repop]: graveyard teleport applied (moved ${fromDeath.toFixed(1)}y off the death spot)`);
 
+  // 3b. The same-map teleport is OBSERVABLE (FOLLOW-UPS 46 part 1): the
+  //     server's MSG_MOVE_TELEPORT_ACK reaches the stream under our own guid
+  //     carrying the arrival point, the way a client is told where it landed.
+  //     Before this tap the only positional fact between repop and the next
+  //     move result was the reattach WB_SESSION_STATE read above — which a
+  //     live agent never issues. Same-map graveyard only: a cross-map release
+  //     (none in the starter zones) would be SMSG_NEW_WORLD instead.
+  const tpAck = events
+    .slice(mark)
+    .find((e) => e.opcode === "MSG_MOVE_TELEPORT_ACK" && e.data?.guid === self.guid);
+  if (!tpAck) fail("no own-guid MSG_MOVE_TELEPORT_ACK on the stream after repop (same-map teleport invisible; module predates FOLLOW-UPS 46?)");
+  const ackFromGrave = dist2d(tpAck.data.pos, grave);
+  if (ackFromGrave > 30) fail(`MSG_MOVE_TELEPORT_ACK pos (${tpAck.data.pos.x.toFixed(1)}, ${tpAck.data.pos.y.toFixed(1)}) is ${ackFromGrave.toFixed(1)}y from the release loc, want <= 30y`);
+  if (dist2d(tpAck.data.pos, ghostPos) > 5) fail(`MSG_MOVE_TELEPORT_ACK pos disagrees with the server-truth position by ${dist2d(tpAck.data.pos, ghostPos).toFixed(1)}y`);
+  log(`PASS[teleport-ack]: MSG_MOVE_TELEPORT_ACK served for self at (${tpAck.data.pos.x.toFixed(1)}, ${tpAck.data.pos.y.toFixed(1)}), ${ackFromGrave.toFixed(1)}y from the release loc`);
+
   // 4. Ghost-run back to the corpse. Movement while dead+ghost is the IsAlive
   //    guard fix; tryMoveTo chains midpoint hops if a leg exceeds the 250y cap.
   step = "ghost-run";
