@@ -618,7 +618,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // A cwd outside the repo: `claude` walks parents for CLAUDE.md, and the run
   // directory lives under a checkout that has one.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-claude-"));
-  const systemPrompt = buildSystemPrompt(config.objective);
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,

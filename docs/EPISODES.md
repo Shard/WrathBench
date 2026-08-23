@@ -20,6 +20,7 @@ told which one it is in.
 - **Start state.** A fresh level-1 character, deleted and recreated per episode
   (ADR-0006). Nothing carries over between episodes.
 - **Objective.** None. The standing goal only — an operator objective is what
+- **Prompt.** The standing goal plus one sentence of fact the model is owed: "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes." Not an objective — the goal and the scoring are unchanged — and identical for every model.
   makes a run unscored (ADR-0033).
 - **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
@@ -48,6 +49,7 @@ because that would silently re-scope every score already carrying this label.
 - **Start state.** Identical to `e90`: a fresh level-1 character, same prompt,
   same tools, no carry-over.
 - **Objective.** None. This is a scored tier.
+- **Prompt.** The standing goal plus "This episode lasts six hours." Nothing about levels: past the gate, breadth is the point.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
   continent earns nothing for hours, and that is the behaviour this tier exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here

@@ -276,7 +276,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const contextText = await builder.build(turn, pendingNotices);
 
       const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(config.objective) },
+        { role: "system", content: buildSystemPrompt(config.objective, config.episode) },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];

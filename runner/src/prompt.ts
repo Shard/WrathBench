@@ -76,11 +76,33 @@ export function objectiveSection(objective: string): string {
 }
 
 /**
- * The system prompt for a run. With no objective this returns `SYSTEM_PROMPT`
- * unchanged; with one, the delimited block sits between the standing goal and
- * the runtime description.
+ * What the episode tier tells the model about itself (ADR-0034, EPISODES.md).
+ * Facts a player has — the clock and the rule — not an objective: the standing
+ * goal and the scoring are unchanged. Identical for every model; it varies only
+ * with `episode`, which the comparability tuple already carries. `freeplay`
+ * adds nothing (its objective block speaks for it).
  */
-export function buildSystemPrompt(objective?: string | undefined): string {
-  if (objective === undefined || objective.trim().length === 0) return SYSTEM_PROMPT;
-  return `${GOAL_SECTION}\n\n${objectiveSection(objective.trim())}\n\n${BODY}`;
+export function episodeSection(episode: string | undefined): string | undefined {
+  switch (episode) {
+    case "e90":
+      return "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes.";
+    case "e360":
+      return "This episode lasts six hours.";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The system prompt for a run. With no objective and no episode this returns
+ * `SYSTEM_PROMPT` unchanged; the episode sentence, then the delimited
+ * objective block, sit between the standing goal and the runtime description.
+ */
+export function buildSystemPrompt(objective?: string | undefined, episode?: string | undefined): string {
+  const parts = [GOAL_SECTION];
+  const tier = episodeSection(episode);
+  if (tier !== undefined) parts.push(tier);
+  if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
+  parts.push(BODY);
+  return parts.join("\n\n");
 }

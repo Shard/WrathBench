@@ -70,3 +70,26 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("is a ReferenceError");
   });
 });
+
+describe("episode sentence", () => {
+  const { buildSystemPrompt, episodeSection, GOAL_SECTION, objectiveSection } = require("../src/prompt");
+  test("no episode and no objective is byte-identical to SYSTEM_PROMPT", () => {
+    expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
+    expect(buildSystemPrompt(undefined, "freeplay")).toBe(SYSTEM_PROMPT);
+  });
+  test("e90 states the clock and the promotion bar; e360 only the clock", () => {
+    expect(episodeSection("e90")).toContain("90 minutes");
+    expect(episodeSection("e90")).toContain("level 5");
+    expect(episodeSection("e360")).toBe("This episode lasts six hours.");
+    expect(episodeSection("freeplay")).toBeUndefined();
+  });
+  test("the sentence sits after the goal and before the objective block", () => {
+    const p = buildSystemPrompt("walk to Ironforge", "e90");
+    const goal = p.indexOf(GOAL_SECTION);
+    const tier = p.indexOf(episodeSection("e90"));
+    const obj = p.indexOf(objectiveSection("walk to Ironforge"));
+    expect(goal).toBe(0);
+    expect(tier).toBeGreaterThan(goal);
+    expect(obj).toBeGreaterThan(tier);
+  });
+});
