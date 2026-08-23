@@ -92,6 +92,9 @@ import {
   parseRunsPerEpisode,
   parseModelsSidecar,
   planNextJobs,
+  pinnedRefs as pinnedRefsOf,
+  policyExclusion as policyExclusionOf,
+  policyRefs as policyRefsOf,
   readModelsSidecar,
   schedulability,
   serializeModelsSidecar,
@@ -328,9 +331,13 @@ export function poolJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
   return config.jobs.filter((j) => j.account === undefined);
 }
 
-/** Roster names a pinned job references: never the policy's to schedule. */
+/**
+ * Roster names a pinned job references: never the policy's to schedule.
+ * The predicate itself lives in `runner/src/models.ts`, beside the projection
+ * it gates, so the viewer answers it the same way (FOLLOW-UPS 52).
+ */
 export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
-  return new Set(pinnedJobs(config).flatMap((j) => j.refs));
+  return pinnedRefsOf(config.jobs);
 }
 
 /**
@@ -793,23 +800,14 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
   }));
 }
 
-/**
- * The roster names the policy may schedule: not referenced by a pinned job
- * (that account is spoken for, and a probe's runs are not the model's
- * evidence), and not carrying an objective (an objective stamps every run
- * unscored, and the policy schedules evidence).
- */
+/** The roster names the policy may schedule (`policyRefsOf`, models.ts). */
 export function policyRefs(config: Pick<FleetConfig, "jobs" | "roster">): Set<string> {
-  const pinned = pinnedRefs(config);
-  return new Set(Object.entries(config.roster).filter(([n, e]) => !pinned.has(n) && e.objective === undefined).map(([n]) => n));
+  return policyRefsOf(config.jobs, config.roster);
 }
 
 /** Why a roster name is outside the policy, or undefined when it is inside. */
 export function policyExclusion(config: Pick<FleetConfig, "jobs" | "roster">, name: string): string | undefined {
-  const job = pinnedJobs(config).find((j) => j.refs.includes(name));
-  if (job !== undefined) return `pinned to ${job.account} by job ${job.name}`;
-  if (config.roster[name]?.objective !== undefined) return "carries an objective (unscored probe)";
-  return undefined;
+  return policyExclusionOf(config.jobs, config.roster, name);
 }
 
 /** The driver a roster name runs on, for the concurrency cap. */

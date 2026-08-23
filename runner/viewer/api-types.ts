@@ -446,6 +446,35 @@ export interface FleetLaneRun {
 export type FleetLaneView = FleetLane & { name: string } & FleetLaneRun;
 
 /**
+ * One job with a live process, as the supervisor publishes it (ADR-0034: the
+ * job is the one unit of work, and a lane is how it is spawned). A job names
+ * the roster entry it is running, the tier, the account it landed on, and
+ * where it came from — the file's pinned list, the manual queue, or the
+ * policy's own pick — which is what the lane block cannot say (FOLLOW-UPS 52).
+ */
+export interface FleetJobView {
+  name: string;
+  /** The roster ref, or several joined by `+` for a rotating job. */
+  ref: string;
+  episode: string;
+  account: string;
+  source: string;
+  /** The n-th attempt on (model, episode); absent on a job from the file. */
+  attempt?: number;
+  /** The paused run this spawn is resuming (ADR-0036), when it is resuming one. */
+  resuming?: string;
+  /** The models behind `ref`, in roster order. */
+  models: string[];
+}
+
+/** The supervisor's counters since it started (`session` in fleet-state.json). */
+export interface FleetSessionView {
+  finished: number;
+  ok: number;
+  retried: number;
+}
+
+/**
  * The supervisor's published state. `present: false` is the normal answer on a
  * machine where the fleet has never run — it is not an error.
  */
@@ -457,6 +486,14 @@ export interface FleetResponse {
   containerized?: boolean;
   stamp?: string;
   lanes: FleetLaneView[];
+  /**
+   * Every job with a live process, newest supervisors only: a state written
+   * before ADR-0034's job concept has lanes and no jobs, and the field is
+   * absent rather than synthesised from them.
+   */
+  jobs?: FleetJobView[];
+  /** Runs finished since this supervisor started; absent on an older one. */
+  session?: FleetSessionView;
   /** Server clock at read time, so a client can age the heartbeat honestly. */
   now: number;
 }
@@ -728,7 +765,14 @@ export interface ModelsResponse {
   roster: {
     path: string | null;
     shape: "roster" | "legacy" | "missing" | "unreadable";
+    /** Every entry the roster names, excluded ones included. */
     count: number;
+    /**
+     * Entries the policy does not schedule and this response does not row:
+     * a name a pinned job holds (a probe on its own account) or one carrying
+     * an objective. Same predicate as `run-fleet --status` (FOLLOW-UPS 52).
+     */
+    excluded: { name: string; reason: string }[];
   };
   policy: {
     runsPerEpisode: { e90: number; e360: number };
@@ -739,6 +783,12 @@ export interface ModelsResponse {
     paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
     /** The extras policy when on: how many characters the cycle holds. */
     extras: { characters: number } | null;
+    /**
+     * `policy.maxConcurrent`: streams the policy may have in flight per
+     * driver, counting every job on that driver. An absent driver is
+     * unlimited; an empty object is a file that names no cap.
+     */
+    maxConcurrent: Record<string, number>;
   };
   /** The defer ladder's rungs, so the page can say "rung 3 of 9" honestly. */
   ladderMs: number[];

@@ -7,10 +7,13 @@
  * tests cover the pure layer, not a DOM harness (see dashboard/README.md).
  */
 
-import type { FleetLaneView } from "@viewer/api-types";
+import type { FleetJobView, FleetLaneView } from "@viewer/api-types";
 
 /** The lane table, left to right. State leads: it is what an operator scans for. */
 export const FLEET_COLUMNS = ["state", "lane", "model", "account", "spawned", "exit"] as const;
+
+/** The job table, left to right. The name leads: it is what --status prints. */
+export const JOB_COLUMNS = ["job", "models", "episode", "account", "source", "attempt", "resuming"] as const;
 
 export type LaneState = "exited" | "draining" | "running" | "idle";
 
@@ -44,6 +47,18 @@ export function laneModelLabel(lane: FleetLaneView): string {
   if (roster.length === 0) return "—";
   if (roster.length <= ROSTER_SHOWN) return roster.join(", ");
   return `${roster.slice(0, ROSTER_SHOWN).join(", ")} +${roster.length - ROSTER_SHOWN}`;
+}
+
+/**
+ * A job's model cell: the models behind its ref, truncated the same way a
+ * lane's roster is, with the full list in the cell's title. A job with no
+ * models resolved falls back to the ref itself, which is what it was called.
+ */
+export function jobModelLabel(job: FleetJobView): string {
+  const models = job.models;
+  if (models.length === 0) return job.ref;
+  if (models.length <= ROSTER_SHOWN) return models.join(", ");
+  return `${models.slice(0, ROSTER_SHOWN).join(", ")} +${models.length - ROSTER_SHOWN}`;
 }
 
 /** The hover text behind that cell: the run id when there is one, else the roster. */

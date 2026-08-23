@@ -37,9 +37,11 @@ import {
   LADDER_MS,
   isCounted,
   parsePolicyBlock,
+  policyExclusion,
   readRunFact,
   stillbornOf,
   type ModelState,
+  type PolicyJob,
   type RosterModel,
   type SchedulingPolicy,
   type RunFact,
@@ -73,14 +75,31 @@ const rosterEntrySchema = z
     driver: z.string().min(1).optional(),
     apiBase: z.string().min(1).optional(),
     billing: z.enum(["free", "paid"]).optional(),
+    /** An objective puts the entry outside the policy (`policyExclusion`). */
+    objective: z.string().min(1).optional(),
     tiers: z.array(z.string()).optional(),
     runsPerEpisode: z.record(z.string(), z.number()).optional(),
+  })
+  .loose();
+
+/**
+ * A job, as narrowly as the membership predicate needs it: the roster names it
+ * holds and the account it is pinned to. The file calls the list `queue`
+ * (ADR-0034's amendment kept the key while the concept became "job"); a job
+ * with an `account` is pinned.
+ */
+const fleetJobSchema = z
+  .object({
+    ref: z.union([z.string(), z.array(z.string())]),
+    account: z.string().min(1).optional(),
+    episode: z.string().optional(),
   })
   .loose();
 
 const fleetRosterSchema = z
   .object({
     roster: z.record(z.string(), rosterEntrySchema).optional(),
+    queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
   })
   .loose();
@@ -95,6 +114,19 @@ export interface RosterRead {
   path: string | null;
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
+  /**
+   * `policy.maxConcurrent`: streams the policy may have in flight per driver.
+   * Absent driver means unlimited; an empty object means the file names no cap.
+   */
+  maxConcurrent: Record<string, number>;
+  /**
+   * Roster names the policy does not schedule, with why (`policyRefs` in
+   * `runner/src/models.ts` — the supervisor's own predicate): a name a pinned
+   * job holds, or one carrying an objective. Their runs are a probe's, not the
+   * model's evidence, so `/api/models` lists them apart from the rows rather
+   * than beside a model whose counts they would duplicate (FOLLOW-UPS 52).
+   */
+  excluded: { name: string; reason: string }[];
 }
 
 /** The series this viewer runs from — what the projection counts against (ADR-0034). */
@@ -112,24 +144,27 @@ export function currentSeries(): string | null {
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
+  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [] };
   if (path === undefined || path.length === 0) {
-    return { models: [], shape: "missing", path: null, policy: defaults };
+    return { ...empty, shape: "missing", path: null };
   }
-  if (!existsSync(path)) return { models: [], shape: "missing", path, policy: defaults };
+  if (!existsSync(path)) return { ...empty, shape: "missing", path };
   let parsed: z.infer<typeof fleetRosterSchema>;
   try {
     parsed = fleetRosterSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   } catch {
-    return { models: [], shape: "unreadable", path, policy: defaults };
+    return { ...empty, shape: "unreadable", path };
   }
   let policy: SchedulingPolicy = defaults;
+  let maxConcurrent: Record<string, number> = {};
   try {
-    const { maxConcurrent: _cap, ...rest } = parsePolicyBlock(parsed.policy, series);
+    const { maxConcurrent: cap, ...rest } = parsePolicyBlock(parsed.policy, series);
     policy = rest;
+    maxConcurrent = cap;
   } catch {
     /* a malformed policy block is the supervisor's to refuse; the page shows the defaults */
   }
-  if (parsed.roster === undefined) return { models: [], shape: "legacy", path, policy };
+  if (parsed.roster === undefined) return { ...empty, shape: "legacy", path, policy, maxConcurrent };
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
     const tiers = (e.tiers ?? []).filter(isEpisodeId);
@@ -148,7 +183,25 @@ export function readFleetRoster(path: string | undefined, series: string | null 
       ...(Object.keys(per).length > 0 ? { runsPerEpisode: per } : {}),
     });
   }
-  return { models, shape: "roster", path, policy };
+  /*
+   * The exclusion, from the supervisor's own predicate. A legacy `lanes` list
+   * beside a roster names lane names, not roster refs — its entries are inline
+   * — so there is nothing there to exclude and only `queue` is read.
+   */
+  const jobs: PolicyJob[] = (parsed.queue ?? []).map((j) => {
+    const refs = typeof j.ref === "string" ? [j.ref] : j.ref;
+    return {
+      refs,
+      ...(j.account !== undefined ? { account: j.account } : {}),
+      name: `${refs[0] ?? "job"}-${typeof j.episode === "string" ? j.episode : "e90"}`,
+    };
+  });
+  const excluded: { name: string; reason: string }[] = [];
+  for (const m of models) {
+    const reason = policyExclusion(jobs, parsed.roster, m.name);
+    if (reason !== undefined) excluded.push({ name: m.name, reason });
+  }
+  return { models, shape: "roster", path, policy, maxConcurrent, excluded };
 }
 
 // ------------------------------------------------------------- run facts
@@ -402,16 +455,31 @@ export function modelsResponse(opts: {
   harness?: HarnessView | "all";
 }): ModelsResponse {
   const harness = opts.harness ?? "all";
-  const states = harness === "all" ? opts.states : opts.states.filter((s) => s.harness === harness);
+  const byHarness = harness === "all" ? opts.states : opts.states.filter((s) => s.harness === harness);
+  /*
+   * Excluded entries are not rows. `nav-probe` is the model `sonnet` under an
+   * objective, so its projection is `sonnet`'s counts wearing another name:
+   * listed as a row it reads as a second model with the same evidence. The
+   * names and the reasons ride along under `roster.excluded`, so the page can
+   * say what it is not showing (FOLLOW-UPS 52).
+   */
+  const outside = new Set(opts.roster.excluded.map((e) => e.name));
+  const states = byHarness.filter((s) => !outside.has(s.name));
   return {
     models: states.map((s) => rowOf(s, opts.runs, opts.runsDir)),
-    roster: { path: opts.roster.path, shape: opts.roster.shape, count: opts.roster.models.length },
+    roster: {
+      path: opts.roster.path,
+      shape: opts.roster.shape,
+      count: opts.roster.models.length,
+      excluded: opts.roster.excluded,
+    },
     policy: {
       runsPerEpisode: opts.roster.policy.runsPerEpisode,
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
       series: opts.roster.policy.series,
       paid: opts.roster.policy.paid,
       extras: opts.roster.policy.extras === null ? null : { characters: opts.roster.policy.extras.characters.length },
+      maxConcurrent: opts.roster.maxConcurrent,
     },
     ladderMs: [...LADDER_MS],
     harness,

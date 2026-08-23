@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetLaneView } from "../../runner/viewer/api-types";
-import { FLEET_COLUMNS, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../src/lib/fleet";
+import type { FleetJobView, FleetLaneView } from "../../runner/viewer/api-types";
+import { FLEET_COLUMNS, JOB_COLUMNS, jobModelLabel, laneModelLabel, laneModelTitle, laneRunHref, laneState } from "../src/lib/fleet";
 
 function lane(over: Partial<FleetLaneView> = {}): FleetLaneView {
   return {
@@ -34,6 +34,33 @@ describe("columns", () => {
   test("state leads, then lane and model, and there is no pid column", () => {
     expect([...FLEET_COLUMNS]).toEqual(["state", "lane", "model", "account", "spawned", "exit"]);
     expect(FLEET_COLUMNS).not.toContain("pid");
+  });
+});
+
+describe("the job table (FOLLOW-UPS 52)", () => {
+  const job = (over: Partial<FleetJobView> = {}): FleetJobView => ({
+    name: "sonnet-e90",
+    ref: "sonnet",
+    episode: "e90",
+    account: "RUNNER",
+    source: "policy",
+    models: ["sonnet"],
+    ...over,
+  });
+
+  test("the job name leads, and where the job came from is a column", () => {
+    expect([...JOB_COLUMNS]).toEqual([
+      "job", "models", "episode", "account", "source", "attempt", "resuming",
+    ]);
+  });
+
+  test("the model cell truncates the way a lane's roster does", () => {
+    expect(jobModelLabel(job())).toBe("sonnet");
+    expect(jobModelLabel(job({ models: ["a", "b", "c", "d"] }))).toBe("a, b +2");
+  });
+
+  test("a job whose models did not resolve is called by its ref", () => {
+    expect(jobModelLabel(job({ ref: "a+b", models: [] }))).toBe("a+b");
   });
 });
 

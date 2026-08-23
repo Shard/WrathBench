@@ -423,6 +423,32 @@ describe("fleet state", () => {
     expect(readFleet(runs).lanes[0]!.runId).toBeNull();
   });
 
+  // FOLLOW-UPS 52: the supervisor's own job and session blocks, forwarded.
+  test("jobs and the session counters are served; an older state has neither", () => {
+    const runs = fixture();
+    laneState(runs, "RUNNER");
+    const raw = JSON.parse(readFileSync(join(runs, "fleet-state.json"), "utf8")) as Record<string, unknown>;
+    expect(readFleet(runs).jobs).toBeUndefined();
+    expect(readFleet(runs).session).toBeUndefined();
+
+    writeFileSync(
+      join(runs, "fleet-state.json"),
+      JSON.stringify({
+        ...raw,
+        session: { finished: 12, ok: 11, retried: 3 },
+        jobs: {
+          "sonnet-e90": { ref: "sonnet", episode: "e90", account: "RUNNER", source: "policy", attempt: 3, models: ["sonnet"] },
+          "alpha-e90": { ref: "alpha", episode: "e90", account: "RUNNER2", source: "queue", models: ["vendor/alpha"] },
+        },
+      }),
+    );
+    const f = readFleet(runs);
+    expect(f.session).toEqual({ finished: 12, ok: 11, retried: 3 });
+    // Named and sorted, so the table does not reorder itself between ticks.
+    expect(f.jobs?.map((j) => j.name)).toEqual(["alpha-e90", "sonnet-e90"]);
+    expect(f.jobs?.[1]?.attempt).toBe(3);
+  });
+
   test("a truncated fleet-state.json degrades to absent rather than throwing", () => {
     const runs = fixture();
     writeFileSync(join(runs, "fleet-state.json"), '{"lanes": {');
