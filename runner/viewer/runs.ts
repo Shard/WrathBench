@@ -12,6 +12,7 @@ import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./stillborn";
 import { harnessOfRun, normalizePauseReason, parseComparability } from "../src/index";
 import { normalizeDriver, readUnscoredStamp } from "../src/config";
+import { platformOf as sharedPlatformOf } from "../src/platform";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -74,24 +75,14 @@ interface MetaShape {
 }
 
 /**
- * Name the platform a run's model came from. The api base is the honest source
- * — the driver only says how we talked to it, not who served the weights.
+ * Name the platform a run's model came from, for a run that did not record
+ * one. The rule lives in `runner/src/platform.ts` — the same one the writer
+ * stamps into the `platform` column (FOLLOW-UPS 36) — so a historical run and
+ * a stamped one are labelled alike, and a LAN box reads `local` here exactly
+ * where `billingOf` calls it free.
  */
 export function platformOf(apiBase: string | null, driver: string | null): string | null {
-  if (apiBase !== null) {
-    let host = apiBase;
-    try {
-      host = new URL(apiBase).hostname;
-    } catch {
-      /* a malformed base still tells us something; fall through with the raw string */
-    }
-    if (host.includes("openrouter.ai")) return "openrouter";
-    if (host.includes("api.anthropic.com")) return "anthropic";
-    if (host.includes("api.openai.com")) return "openai";
-    if (host.includes("localhost") || host.startsWith("127.")) return "local";
-    return host.replace(/^api\./, "");
-  }
-  return driver;
+  return sharedPlatformOf(apiBase, driver);
 }
 
 function readMetaSafe(dir: string): MetaShape | null {
@@ -218,6 +209,10 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         // `objective` is a late column: a run.sqlite written before ADR-0024
         // simply does not have it, and meta.json (read above) is the fallback.
         row.objective = str(r["objective"]) ?? row.objective;
+        // Later columns still (FOLLOW-UPS 36): a run written before them has
+        // neither, and the meta read above / the derivation below answer.
+        row.character = str(r["character"]) ?? row.character;
+        row.platform = str(r["platform"]);
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
         // Stored reasons predate the rename; normalise so one vocabulary shows.
@@ -284,7 +279,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
   if (row.adapter !== null) row.adapter = normalizeDriver(row.adapter) ?? row.adapter;
   row.shakeout = readUnscoredStamp(storedStamp);
   row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver, shakeout: storedStamp });
-  row.platform = platformOf(row.apiBase, row.driver);
+  // The stamped column wins; a run that predates it is derived the same way.
+  if (row.platform === null) row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;
   return row;

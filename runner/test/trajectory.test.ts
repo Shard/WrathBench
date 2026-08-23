@@ -39,6 +39,40 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  // FOLLOW-UPS 36: both were derivable from config_json; a column means the
+  // listing reads a fact rather than re-deriving a rule that could drift.
+  test("writes the character and the platform as run columns", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({
+      runId: "run-p",
+      adapter: "openai",
+      model: "some/model",
+      character: "Grimbold",
+      apiBase: "https://openrouter.ai/api/v1",
+    });
+    traj.writeMeta({ runId: "run-p", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    const row = traj.runRow("run-p");
+    expect(row?.["character"]).toBe("Grimbold");
+    expect(row?.["platform"]).toBe("openrouter");
+    traj.close();
+  });
+
+  test("adds the late run columns to a database written without them", () => {
+    const dir = tempRunDir();
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE run (
+      run_id TEXT PRIMARY KEY, harness_version TEXT NOT NULL, started_at INTEGER NOT NULL,
+      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT NOT NULL)`);
+    db.close();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({ runId: "run-old", adapter: "stub", model: "irrelevant", character: "Elsie" });
+    traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    expect(traj.runRow("run-old")?.["character"]).toBe("Elsie");
+    traj.close();
+  });
+
   test("periodic state goes to jsonl and sqlite", () => {
     const dir = tempRunDir();
     let t = 0;

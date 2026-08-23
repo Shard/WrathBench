@@ -427,6 +427,17 @@ describe("platformOf", () => {
     expect(platformOf(null, "claude-code")).toBe("claude-code");
     expect(platformOf(null, null)).toBeNull();
   });
+
+  // FOLLOW-UPS 36: the LAN box is `local` — the same test `billingOf` calls
+  // the operator's own hardware — while a public IPv4 is a platform like any
+  // other host and is not laundered into "local".
+  test("classifies the private ranges as local and leaves public hosts alone", () => {
+    expect(platformOf("http://192.168.1.50:1234/v1", "openai")).toBe("local");
+    expect(platformOf("http://10.0.0.4:1234/v1", "openai")).toBe("local");
+    expect(platformOf("http://172.16.3.9:1234/v1", "openai")).toBe("local");
+    expect(platformOf("http://studio.local:1234/v1", "openai")).toBe("local");
+    expect(platformOf("http://203.0.113.7:8080/v1", "openai")).toBe("203.0.113.7");
+  });
 });
 
 describe("readRun", () => {
@@ -448,6 +459,28 @@ describe("readRun", () => {
     db.close();
 
     expect(readRun(runsDir, "paused-run").pauseReason).toBe("quota-exhausted");
+    // No `platform` column on this pre-FOLLOW-UPS-36 schema: the row is
+    // derived from the api base as it always was, never left empty.
+    expect(readRun(runsDir, "paused-run").platform).toBeNull();
+  });
+
+  test("the stamped platform and character columns win over the derivation", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-cols-"));
+    const dir = join(runsDir, "stamped-run");
+    mkdirSync(dir);
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
+      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT, character TEXT,
+      platform TEXT, termination_reason TEXT, termination_detail TEXT, pause_reason TEXT,
+      config_json TEXT);`);
+    db.query(
+      `INSERT INTO run (run_id, driver, character, platform, config_json) VALUES (?, ?, ?, ?, ?)`,
+    ).run("stamped-run", "openai", "Grimbold", "local", '{"apiBase":"http://192.168.1.50:1234/v1"}');
+    db.close();
+
+    const row = readRun(runsDir, "stamped-run");
+    expect(row.platform).toBe("local");
+    expect(row.character).toBe("Grimbold");
   });
 
   /** The `state` table grows columns; an old run directory never gets them. */

@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "./jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
+import { platformOf } from "./platform";
 
 export interface StateLine {
   level?: number | undefined;
@@ -118,6 +119,12 @@ CREATE TABLE IF NOT EXISTS run (
   -- own column for the same reason the driver has one: a cross-run SELECT must
   -- be able to exclude steered runs without parsing config_json.
   objective TEXT,
+  -- The character this run played and the platform that served the model
+  -- (FOLLOW-UPS 36). Both were derivable from config_json and from the api
+  -- base; a column means a cross-run SELECT — and the viewer's listing — does
+  -- not have to parse a blob or re-derive a rule that could drift.
+  character TEXT,
+  platform TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
@@ -155,6 +162,8 @@ const STATE_ADDED_COLUMNS: Record<string, string> = {
 /** The same, for `run`: a resumed pre-ADR-0024 run.sqlite has no `objective`. */
 const RUN_ADDED_COLUMNS: Record<string, string> = {
   objective: "TEXT",
+  character: "TEXT",
+  platform: "TEXT",
 };
 
 export class Trajectory {
@@ -217,8 +226,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, objective, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, objective, character, platform, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -230,6 +239,8 @@ export class Trajectory {
         meta.shakeout ?? null,
         meta.config.model ?? null,
         meta.config.objective ?? null,
+        meta.config.character ?? null,
+        platformOf(meta.config.apiBase, meta.config.driver),
         this.scrub(jsonLine(meta.config)),
       );
     this.append({ t: "meta", ...meta });
