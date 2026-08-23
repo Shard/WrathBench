@@ -113,11 +113,23 @@ field on a queue entry is read and ignored.
 docker compose -f infra/compose.yml stop fleet
 ```
 
-This is a **drain**, not a kill: SIGTERM reaches the supervisor, which SIGTERMs
-each job, each of which terminates its episode gracefully (30s of grace) —
-which is why the service has a 180s stop grace period. To stop launching
-*without* killing what is running, set every job to `"enabled": false` and wait
-for `--status` to go quiet. The supervisor does not exit when it runs out of
+A stop **pauses** the live runs, it does not cost them (ADR-0036). SIGTERM
+reaches the supervisor, which SIGTERMs each job's roster, which SIGTERMs the
+runner; the runner pauses its run as `operator-pause`: the episode clock stops
+(the minutes spent so far are written to meta.json and the budget resumes from
+there), the request or tool call in flight is abandoned, the game session is
+logged out so the account is free, and the run is marked paused — not
+terminated, not counted, not a ladder failure. The roster records
+`paused-operator` and exits; the supervisor waits for every roster (polling
+every 2s while stopping) and exits. The runner's own backstop is 60s, the
+roster's SIGKILL grace 90s, the service's `stop_grace_period` 180s, in that
+order. The next `up -d` resumes the paused runs before it launches anything
+fresh (below). Ctrl-C on a hand-started `infra/run-episode.sh` still ends the
+run as `manual`: SIGINT is the operator's cut, SIGTERM is the supervisor's
+pause.
+
+To stop launching *without* pausing what is running, set every job to
+`"enabled": false` and wait for `--status` to go quiet. The supervisor does not exit when it runs out of
 work — with no deadline it idles (logging so once) and waits for the config to
 give it something, because exiting under `restart: unless-stopped` would just
 restart it a minute later with a new epoch.
@@ -135,13 +147,57 @@ day it started. To roll it — and to pick up edits to `run-fleet.ts`,
 `run-roster.ts` or the runner image:
 
 ```
-docker compose -f infra/compose.yml stop fleet          # drains
+docker compose -f infra/compose.yml stop fleet          # runs pause
 docker compose -f infra/compose.yml build fleet         # only if the image changed
-docker compose -f infra/compose.yml up -d --no-deps fleet
+docker compose -f infra/compose.yml up -d --no-deps fleet   # runs resume, then the pool fills
 ```
 
+The restart procedure is therefore **stop → (runs pause) → start → (runs
+resume)**. On boot, before the queue or the policy spawns anything, the
+supervisor finds every paused run whose model and tier are still in
+`fleet.json`, maps it back to its job (a pinned or queued job from the file,
+else a synthetic policy job with the attempt read off the run id), and spawns
+that job's roster with the paused run id first and `--resume-roster`, on the
+**same account** — the character lives there, and a fresh launch on that
+account would wipe it. `--resume` reattaches the trajectory and scratchpad,
+recreates the game session with the same character, and continues the episode
+budget; the claude-code driver cannot reattach the CLI's own conversation, so
+such a run restarts with a fresh CLI session (the same fixed prompt, the
+scratchpad, the same "runner restarted, this run resumed" notice every driver
+gets) and is stamped `resumedFresh: true` in meta.json. Only once every resume
+has its account does the pool fill. The same planner runs every tick, so a run
+paused by its provider (`rate-limited`, `quota-exhausted`) is resumed once its
+cooling is over — see "Paused runs" below.
+
 Note that `restart: unless-stopped` also rolls the epoch on its own after a
-crash or a machine reboot, so run ids change there too.
+crash or a machine reboot, so run ids change there too; resumes do not care
+about the epoch (the run id is read from disk).
+
+### Paused runs
+
+`--status` shows a paused run on its account as `paused (reason, Xm elapsed
+of Ym) — <run id> Lx xp`, then a `paused runs not resumed` block for every
+paused run the supervisor is not resuming right now, with why:
+
+- **not in config** — the model or tier is gone from `fleet.json` (or the
+  pinned job is disabled, or on another account). Resume it by hand
+  (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
+- **stale** — paused longer than twice its own budget (a run with no wall
+  clock uses 6h). Not auto-resumed; by hand or archive.
+- **cooling** — a provider pause on the roster's defer ladder
+  (`1m/3m/5m/10m/15m/30m/1h/3h/6h`), indexed by how many times *that run* has
+  paused. This is how FOLLOW-UPS 43 is answered: the roster retries a
+  mid-episode provider pause in place (2m/5m/10m) while its process lives;
+  once it gives up and exits, the supervisor takes over on the longer ladder,
+  resuming in place on the same run id. Past the ladder the run is listed,
+  not hammered.
+- **waiting** — its account is busy with another job or held by a
+  hand-started run. A resume never moves to another account.
+
+While a run is paused its model is held: the projection reports `no: paused
+run … — resumed by the supervisor, never rescheduled`, so no second attempt
+starts for that model. A paused run counts toward nothing until it finally
+ends.
 
 ### Deploy window (worldserver changes)
 
@@ -196,8 +252,8 @@ asserts the rollback branch and the exit codes.
 Getting to zero live runs is still yours to do, and it is the same drain as
 ever: set every job in `infra/fleet.json` to `"enabled": false` and wait until
 `./infra/run-fleet.sh --status` shows no account with a live run (an episode can
-take up to 90 minutes; `docker compose -f infra/compose.yml stop fleet` cuts it
-to the 30s graceful path). `./infra/run-fleet.sh --live-runs` is the same check
+take up to 90 minutes; `docker compose -f infra/compose.yml stop fleet` pauses
+them instead, and they resume on the next start). `./infra/run-fleet.sh --live-runs` is the same check
 the script uses — it lists live episodes and exits non-zero if there are any.
 Re-enable the jobs afterwards.
 
@@ -304,13 +360,15 @@ gate (last result, per smoke); the **accounts** table — every account, pinned
 first then the pool in preference order, with the job on it (`name: model
 episode — run id — Lx xp, elapsed`, plus `cooling until …` when its roster is
 between episodes on the defer ladder) or `free` (with `held by run … — not
-fleet-managed` when something outside the fleet has the account, or the
-pinned job's enabled/disabled state); the **models** table from the projection
+fleet-managed` when something outside the fleet has the account, `paused (…)`
+when a paused run sits on it, or the pinned job's enabled/disabled state); the
+**models** table from the projection
 (`runner/src/models.ts`) — the series it counts against in the header, then
 per model its billing, status, counted/target per episode with best level
 (`+2sb` is two stillborn attempts), extras made, and `yes: …`/`no: …` for
 schedulability (runs from another series are noted, not counted);
-the concurrency cap when one is set; one line `finished this session: N (ok M,
+the concurrency cap when one is set; the `paused runs not resumed` block when
+there are any; one line `finished this session: N (ok M,
 retried K)` (processes that exited since the supervisor started; `ok` is exit
 0, `retried` counts respawns of a name already spawned this epoch); and a
 **queue** block only when the file has manual pool jobs. Finished runs get no
@@ -333,7 +391,7 @@ window, in this order:
 
 ```
 # 1. drain: set every job's enabled:false, wait for --status to show no live run
-#    (or `stop fleet`, which cuts a running episode to the 30s graceful path)
+#    (or `stop fleet`, which pauses running episodes; they resume on start)
 docker compose -f infra/compose.yml stop fleet
 
 # 2. swap the file (keep the old one: the new code loads either shape)

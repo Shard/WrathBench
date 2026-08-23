@@ -122,14 +122,6 @@ and status.
     mystery slowdown in three weeks. Fix: an index keyed on account, or a scan capped
     to recently-modified directories.
 
-43. **Subscription-lane quota pauses should be resumable** (2026-08-22). When the
-    claude-code lane hits its quota window the pause ends the run instead of
-    holding it; a long nav-probe episode loses its progress to a window that reopens
-    on its own hours later. Want: pause in place, resume when the window reopens.
-    Interacts with item 8 (the CLI's accumulated context is lost on resume today) and
-    with ADR-0032's cooling deadline, which is the place a "held" state would be
-    reported.
-
 45. **Scenario-fixture characters for smokes** (2026-08-23, ADR-0023 amendment). The
     fast gate proves what a level-1 character can reach in under a minute from the
     Northshire spawn. Every late-game claim — a dungeon entrance, a flight path, a
@@ -355,6 +347,7 @@ One line per number so citations resolve; the day file carries the detail.
 - 31 — 2026-08-22 — 04b2eae — hand-written viewer pages deleted
 - 34 — 2026-08-22 — 0bfe207 — nested-template id kinds (in the swapped bundle)
 - 38 N1 — 2026-08-22 code, deployed 2026-08-23 — ADR-0027 — item stays open for the gate run and N2–N4
+- 43 — 2026-08-23 — ADR-0036 — pauses are held and resumed by the supervisor: operator-pause at once, provider pauses on the defer ladder by pause count; the claude-code CLI conversation is still not reattached (item 8) — the run resumes fresh, stamped `resumedFresh`
 - 39 — 2026-08-22 — d739071, b4c5928, ADR-0025 — spellbook/cooldowns/talents, raw hatch; equipped bags split to 50
 - 41 — 2026-08-22, deployed 2026-08-23 — d1255d7 — `/health` build id
 - 42 — 2026-08-22 — 1a2d6a9, d3e39d6 — server identity in the dashboard; per-run server build in the tuple
