@@ -1536,3 +1536,21 @@ describe("state cache: spellbook, cooldowns and talents (FOLLOW-UPS 39)", () => 
     expect(c.snapshot().talents?.unspentPoints).toBe(2);
   });
 });
+
+describe("xp is read off the state object, not off self", () => {
+  test("state.self.xp and state.self.experience throw and name state.xp", () => {
+    const cache = new StateCache();
+    expect(() => (cache.self as unknown as { xp: unknown }).xp).toThrow(/state\.xp/);
+    expect(() => (cache.self as unknown as { experience: unknown }).experience).toThrow(
+      /state\.nextLevelXp/,
+    );
+  });
+
+  test("the guards are invisible to snapshot, spread and JSON", () => {
+    const cache = new StateCache();
+    expect(() => cache.snapshot()).not.toThrow();
+    expect(() => JSON.stringify(cache.self)).not.toThrow();
+    expect(() => ({ ...cache.self })).not.toThrow();
+    expect(Object.keys(cache.self)).not.toContain("xp");
+  });
+});

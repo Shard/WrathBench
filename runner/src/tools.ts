@@ -514,6 +514,7 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         const lines: string[] = [];
         lines.push(res.ok ? `ok (${res.durationMs}ms)` : `error (${res.durationMs}ms)`);
         if (res.value !== undefined) lines.push(`=> ${res.value}`);
+        if (res.hint !== undefined) lines.push(res.hint);
         if (res.error !== undefined) lines.push(res.error);
         if (res.logs.length > 0) {
           lines.push("--- console ---");

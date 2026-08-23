@@ -135,6 +135,26 @@ describe("alias normalization", () => {
   });
 });
 
+describe("snippet result rendering", () => {
+  test("the uncalled-function hint reaches the model under the value", async () => {
+    const ctx = makeCtx({
+      sandbox: {
+        evalSnippet: async () => ({
+          ok: true,
+          value: "[AsyncFunction (anonymous)]",
+          hint: "the snippet returned a function it never called — call it (await fn()).",
+          logs: [],
+          durationMs: 3,
+        }),
+      } as unknown as SandboxHost,
+    });
+    const res = await callTool(ctx, "run_snippet", { code: "async () => 1" });
+    expect(res.isError ?? false).toBe(false);
+    expect(res.text).toContain("=> [AsyncFunction (anonymous)]");
+    expect(res.text).toContain("the snippet returned a function it never called");
+  });
+});
+
 describe("strict schemas", () => {
   test("an unknown key is an error naming it and the valid keys", async () => {
     const res = await callTool(makeCtx(), "run_snippet", { code: "1", foo: 1, bar: 2 });

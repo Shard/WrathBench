@@ -31,6 +31,9 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
     episode: "e90",
     runsDir,
     moduleUrl: "http://127.0.0.1:9",
+    character: "Navprobe",
+    race: 3,
+    class: 2,
   });
   traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
   traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", elapsedMs);
@@ -84,5 +87,21 @@ describe("--resume after a pause", () => {
     expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("turn-limit");
     // A wrathbench-harness resume reattaches its own loop: never stamped resumedFresh.
     expect(readMeta(join(runsDir, runId))?.resumedFresh).toBeUndefined();
+  }, 30_000);
+
+  test("the resume note names the character, its race and class, and the clock", async () => {
+    // fleet-nav-probe-freeplay-sonnet-20260823-c3 resumed with a note that said
+    // `createSession({...})`, guessed a name, and rolled a second character
+    // beside the one the pause had preserved.
+    const { runsDir, runId } = pausedStubRun(10 * 60_000);
+    await resume(runsDir, runId, ["--max-turns", "1"]);
+    const records = readTrajectory(join(runsDir, runId));
+    const req = records.find((r) => r.t === "request");
+    const sent = JSON.stringify(req?.["messages"] ?? "");
+    expect(sent).toContain("Navprobe");
+    expect(sent).toContain("Dwarf");
+    expect(sent).toContain("Paladin");
+    expect(sent).toContain("resumed after a pause, 10 minutes elapsed of 90");
+    expect(sent).not.toContain("createSession({...})");
   }, 30_000);
 });

@@ -96,6 +96,25 @@ and status.
     is a run that needs it. Evidence pointer when it comes: an `inventory_full` turn-in
     with free slots in an equipped bag.
 
+53. **No escape hatch for a stuck ghost** (2026-08-23, closing fan-out). In
+    `fleet-hy3-e90-hy3-free-20260823-a3` the model died, released, and called
+    `reclaimCorpse` ten times in a row for ten `not_reclaimed` verdicts with
+    `spiritHealer: []` — no healer in range to activate, no corpse it could reach, and
+    the run sat at level 4 until the no-XP watchdog ended it. The verdict shape is not
+    the problem (`nemotron-super` branched on 86 of them correctly the same night); the
+    problem is that the one documented recovery path can be genuinely unavailable and
+    nothing tells the agent what else a player would do. Client-parity options, in
+    order of how little they invent: (a) walk the ghost to its own corpse — a ghost has
+    its own movement and its own mesh, so `moveTo(corpsePosition)` is a legal client
+    action and the SDK could report the corpse position it already sees; (b) widen the
+    spirit-healer search — the client shows healers well past our current view radius,
+    so `state.units({npc: "spiritHealer"})` returning empty may be a view limit rather
+    than an absence, and the honest fix is to say which; (c) accept resurrection
+    sickness as the priced exit and name it in the `not_reclaimed` hint. What we must
+    not do is resurrect server-side. Evidence pointer:
+    `data/runs/fleet-hy3-e90-hy3-free-20260823-a3`, the ten consecutive
+    `reclaimCorpse` results.
+
 ## Fleet and gate
 
 10. **Per-character credentials** (PHASE-0 deferred list). Required before any run
@@ -254,6 +273,20 @@ and status.
     a tuple field. Decide, then either move them with a harness-version note or write
     down that flagless runs are not tier members and leave them.
 
+54. **`sleep()`'s wake reason is shipped and unread** (2026-08-23, closing fan-out).
+    `sleep(ms, options?)` resolving with `"elapsed" | "attacked" | "died"` (68b5a92)
+    has been live for every run since harness-0.3-111. Across the 41 run directories of
+    the 2026-08-23 fan-out, `.wake` is read exactly zero times; the one run that found
+    the second argument at all passed `{wake: false}` on every long sleep, i.e. it read
+    the signature and opted out. Models poll with `await sleep(28000)` dozens of times
+    a run (66× in `sonnet-e90-a2`) and never look at what woke them. The feature works;
+    it is invisible. The likely fix is prompt visibility — `runner/src/prompt.ts` states
+    it in one clause among many one-liners, and a worked line (`const { wake } = await
+    sleep(20000); if (wake === "attacked") …`) would probably move it. Deferred on
+    purpose: a prompt edit moves the prompt hash and the comparability tuple with it,
+    so it belongs at a series boundary, not mid-series. Decide at the next series bump
+    whether the example goes in or the feature is left as earned-only surface.
+
 ## Module
 
 37. **World-level log, via achievements** (2026-08-22; later, when the freeplay server
@@ -277,6 +310,20 @@ and status.
     client-legal way to attempt Deadmines before cross-continent travel and
     instance-portal triggers are reliable. Trade, mail, bank, auction house and guilds
     stay behind the earned-by-need rule until a freeplay run asks.
+
+55. **Verdict-opcode timeouts: `WB_MOVE_RESULT` and the loot window** (2026-08-23,
+    closing fan-out; folds into item 46). A wait for a verdict the server sometimes
+    never sends hangs until its timeout and costs the model a turn with nothing to read.
+    Recurring, not rare: 17 `WB_MOVE_RESULT` timeouts in `fleet-nav-probe-sonnet-20260823`
+    alone, 5–7 in three other sonnet runs, and 8 `SMSG_LOOT_RESPONSE` timeouts in
+    `fleet-sonnet-e90-sonnet-20260823-a2`. The move half is the known item-46 gap (the
+    module did not distinguish a near from a far teleport, so `waitForTransfer` and the
+    move verdict could both wait forever); the module regression for that is being fixed
+    and deployed today, which is the first thing to re-measure against. The loot half
+    looks like the same family and has no fix yet — decide after the deploy whether it
+    is the same cause (a verdict the client is not always sent) or its own item.
+    Evidence: `data/runs/night-report-20260823/closing-fanout-harness.md`, "Cross-cutting:
+    move statuses".
 
 ## Wiki
 

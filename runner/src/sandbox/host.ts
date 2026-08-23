@@ -23,6 +23,8 @@ export interface SnippetResult {
   ok: boolean;
   value?: string | undefined;
   error?: string | undefined;
+  /** A note about the completion value; see `EvalResultMsg.hint`. */
+  hint?: string | undefined;
   logs: LogEntry[];
   durationMs: number;
   timedOut?: boolean;
@@ -302,6 +304,7 @@ export class SandboxHost {
         ok: res.ok,
         value: res.value,
         error: res.error,
+        hint: res.hint,
         logs: res.logs,
         durationMs: res.durationMs,
       };
