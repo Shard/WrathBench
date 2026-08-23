@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, countedOf, extrasOf, isPromoted, modelsHref, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -117,5 +117,26 @@ describe("rosterNameFor", () => {
     expect(modelsHref("alpha-low")).toBe("/models#alpha-low");
     expect(modelsHref("a b")).toBe("/models#a%20b");
     expect(modelsHref(null)).toBe("/models");
+  });
+});
+
+describe("the cross-page run filter", () => {
+  test("effort travels with the model, so a link cannot over-match", () => {
+    expect(episodesHref({ model: "vendor/alpha", effort: "low", episode: "e90" })).toBe(
+      "/episodes?episode=e90&model=vendor%2Falpha&effort=low",
+    );
+    // No effort is its own value — the roster entry with none — and is simply
+    // absent from the query rather than being spelled as a wildcard.
+    expect(episodesHref({ model: "vendor/alpha", effort: null, episode: "e90" })).toBe(
+      "/episodes?episode=e90&model=vendor%2Falpha",
+    );
+  });
+
+  test("the server's defaults are omitted, so a link is the shortest URL that means it", () => {
+    expect(resultsHref({ harness: "all" })).toBe("/results");
+    expect(resultsHref({ harness: "claude-code", episode: "all" })).toBe(
+      "/results?episode=all&harness=claude-code",
+    );
+    expect(episodesHref({})).toBe("/episodes");
   });
 });

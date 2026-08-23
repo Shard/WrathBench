@@ -19,6 +19,7 @@ import {
   markAtLeast,
   scored,
 } from "../src/lib/results";
+import { episodeParam } from "../src/lib/episodes";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
   return { level, ts: level * 1000, turn, playtimeMs: ms };
@@ -290,5 +291,16 @@ describe("ladder row order", () => {
     expect(rows.map((r) => r.model)).toEqual(["zero", "none"]);
     expect(rows[1]!.bestXp).toBeNull();
     expect(rows[1]!.bestMoney).toBeNull();
+  });
+});
+
+describe("the shared episode param", () => {
+  test("the default is the page's, so an inventory opens on all and a chart on one tier", () => {
+    expect(episodeParam(undefined)).toBe("e90");
+    expect(episodeParam(undefined, "all")).toBe("all");
+    // A typo in a shared link falls back visibly rather than being sent to the
+    // API, which would answer 400 and blank the page.
+    expect(episodeParam("e42", "all")).toBe("all");
+    expect(episodeParam("e360", "all")).toBe("e360");
   });
 });
