@@ -314,3 +314,24 @@ disk, since a run id is `fleet-<job>-<model>-<datestamp>` plus `-a<attempt>`.
 So `readRunFacts` takes `includeArchived`, the projection asks for it, and the
 viewer does not. `run-fleet --status` keeps its `+Nsb` column for the same
 reason: it is the operator's window onto the ladder, not a listing of runs.
+
+## Amendment 2026-08-24: the concurrency cap keys on a rate-limit key
+
+`policy.maxConcurrent` used to key on the driver (`claude-code`/`openai`/`stub`),
+but every free model on a shared free-cloud pool — OpenRouter's `:free` slugs,
+OpenCode Zen's `-free` ids — drives through the one `openai` driver, and those
+pools meter their free tiers per upstream provider. Running several at once
+burns one daily budget and returns broken runs, and a single driver cap could
+not separate them. So the cap now keys on a **rate-limit key** (`concurrencyKeyOf`,
+`runner/src/models.ts`): a FREE model on a shared free platform counts under that
+platform's key (`openrouter` / `opencode`); everything else keeps its driver key
+— paid models (governed by the separate `policy.paid` cap even when their
+platform projects to OpenRouter), the local box (its one account is its limit),
+`stub`, and `claude-code`. `fleet.json` ships `{ claude-code: 2, openrouter: 1,
+opencode: 1 }`, so at most one free run is in flight against each shared pool.
+The word for this axis in prose is a rate-limit *lane*, but the code deliberately
+says *key*: the identifier `lane` was retired above (the 0.3 scheduling-slot
+block), and this is a different concept that must not resurrect it. Widening
+validation from drivers to these keys is purely additive — an old per-driver
+cap still parses — so no existing config breaks; the running supervisor keeps
+the old per-driver cap until it is recreated against the new booted code.

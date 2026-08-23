@@ -29,6 +29,10 @@ import {
   type ModelState,
   outstandingWork,
   formatOutstanding,
+  concurrencyKeyOf,
+  isConcurrencyKey,
+  CONCURRENCY_KEYS,
+  parsePolicyBlock,
 } from "../src/models";
 import type { EpisodeId } from "../src/episodes";
 
@@ -714,5 +718,39 @@ describe("outstandingWork", () => {
     expect(none).toMatchObject({ lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0 });
     expect(formatOutstanding(none)).toContain("exhausted");
     expect(formatOutstanding(outstandingWork(input))).toBe("outstanding: 20–30 scheduled runs, ≈ 20h–57h to exhaust");
+  });
+});
+
+describe("concurrency lanes (ADR-0034: cap keys on the rate-limit key)", () => {
+  const key = (r: { name?: string; driver?: string; apiBase?: string }, billing: "free" | "paid") =>
+    concurrencyKeyOf({ name: r.name ?? "x", ...(r.driver !== undefined ? { driver: r.driver } : {}), ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}) }, billing);
+
+  test("free models on a shared pool key on the platform; everything else on the driver", () => {
+    // claude-code keeps its driver key (a subscription, not a shared free pool).
+    expect(key({ driver: "claude-code" }, "free")).toBe("claude-code");
+    // Free OpenRouter: a `:free` slug with no apiBase is the OpenRouter default.
+    expect(key({}, "free")).toBe("openrouter");
+    // Advisor's case: a `:free` slug pinned to driver openai, still no base — must
+    // not escape the cap via the driver fallback.
+    expect(key({ driver: "openai" }, "free")).toBe("openrouter");
+    // Free OpenCode Zen: the opencode.ai host normalizes to the `opencode` key.
+    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "free")).toBe("opencode");
+    // Paid on OpenRouter (deepseek-flash): governed by policy.paid, NOT a free key.
+    expect(key({}, "paid")).toBe("openai");
+    // Local (qwen3-8-27b): free by billing but its one box is its limit — driver key.
+    expect(key({ driver: "openai", apiBase: "http://192.168.1.20:1234/v1" }, "free")).toBe("openai");
+    // Stub keeps its driver key.
+    expect(key({ driver: "stub" }, "free")).toBe("stub");
+  });
+
+  test("parsePolicyBlock accepts the keys and rejects an unknown concurrency key", () => {
+    expect(isConcurrencyKey("openrouter")).toBe(true);
+    expect(isConcurrencyKey("opencode")).toBe(true);
+    expect(isConcurrencyKey("claude-code")).toBe(true);
+    expect(isConcurrencyKey("warp")).toBe(false);
+    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "stub", "openrouter", "opencode"]);
+    expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
+    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, stub, openrouter, opencode/);
+    expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
   });
 });

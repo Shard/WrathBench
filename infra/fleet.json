@@ -14,7 +14,11 @@
     "  (\"no local account configured\"), never spilled into the pool. Free and paid picks never take a local account.",
     "roster: name -> roster entry (exact run-roster schema; may carry objective/watchdogs/maxToolCalls/wikiCoords).",
     "  Optional: tiers (manual FORCE, normally absent), runsPerEpisode { e90, e360 } (per-entry target).",
-    "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <driver>: n } caps streams per driver.",
+    "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <key>: n } caps streams per rate-limit key (concurrencyKeyOf).",
+    "  A key is a driver (claude-code/openai/stub) EXCEPT free models on a shared free pool, which key on their platform:",
+    "  \"openrouter\" (the :free slugs + the no-apiBase openai default) and \"opencode\" (the opencode.ai zen entries). OpenRouter and",
+    "  OpenCode meter their free tiers per provider, so 1 each keeps the daily budget intact. Paid (deepseek-flash, governed by",
+    "  policy.paid) and local (qwen3-8-27b, its one box is its limit) stay on their driver key and are NOT capped by these free keys.",
     "  Optional (ADR-0034 amendment 2026-08-23; absent = off): paid { runsPerEpisode {e90 3, e360 1}, maxConcurrent 1 } gives paid models",
     "  hard targets and one-in-flight; extras { characters [{race,class}...] } gives free models extra runs when the pool is idle.",
     "  extras.local says how the LOCAL class takes its extras: \"freeplay\" (default) is one unbounded freeplay run at a time, restarted",
@@ -82,7 +86,7 @@
   },
   "policy": {
     "runsPerEpisode": {"e90": 3, "e360": 3},
-    "maxConcurrent": {"claude-code": 2},
+    "maxConcurrent": {"claude-code": 2, "openrouter": 1, "opencode": 1},
     "paid": {"runsPerEpisode": {"e90": 3, "e360": 1}, "maxConcurrent": 1},
     "extras": { "local": "freeplay" }
   },

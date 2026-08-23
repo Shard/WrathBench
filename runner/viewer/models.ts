@@ -126,8 +126,9 @@ export interface RosterRead {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
-   * `policy.maxConcurrent`: streams the policy may have in flight per driver.
-   * Absent driver means unlimited; an empty object means the file names no cap.
+   * `policy.maxConcurrent`: streams the policy may have in flight per key
+   * (`concurrencyKeyOf`). Absent key means unlimited; an empty object means
+   * the file names no cap.
    */
   maxConcurrent: Record<string, number>;
   /**
