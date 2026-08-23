@@ -1,6 +1,10 @@
 /**
- * Fleet overview: what the supervisor is running, and every run it has left
- * behind.
+ * Fleet overview: what the supervisor is running, right now.
+ *
+ * One grain per page (ADR-0022 amendment, 2026-08-23). This one is the fleet's:
+ * the supervisor, the gate, the accounts and jobs, what is paused and what it
+ * ended. The per-run grain is the episodes page, and a job's run link is the
+ * only per-run reference here.
  *
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
  * published view — jobs, accounts, a heartbeat, the gate — and it is the only
@@ -16,18 +20,22 @@
  * paused and ended runs. The models table is the Models page — same
  * projection, its own entity — and is linked, not repeated. The assembly is
  * in `lib/fleet.ts`.
+ *
+ * `/api/runs` is still read, because the job rows carry the level, xp and
+ * elapsed time of the run each job is driving; what is gone is the table that
+ * listed every run on disk underneath them.
  */
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
-import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
+import { api, type ApiInfoResponse, type FleetResponse } from "../api/client";
 import { FLEET_COLUMNS, accountClassSummary, fleetRows, gateVerdict, pausedLabel, runHref, supervisorAlive, type FleetRow } from "../lib/fleet";
-import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, num, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
 export default function Fleet() {
-  // Every run on disk: a launch that produced no model response is archived by
-  // the runner as it terminates, so this table has nothing to hide.
+  // Every run on disk — read for the job rows, the live count, and the link to
+  // the episodes page, not to be listed here.
   const runs = poll(() => api.runs().then((r) => r.runs), 10_000);
   const fleet = poll(() => api.fleet(), 5_000);
   /*
@@ -94,7 +102,10 @@ export default function Fleet() {
                     session: {f().session!.finished} finished · ok {f().session!.ok} · retried {f().session!.retried}
                   </Show>
                 </span>
-                <span class="dim">{runs.latest?.length ?? "—"} runs recorded</span>
+                <span class="dim">
+                  {/* The per-run grain lives on the episodes page; this is the way in. */}
+                  <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A>
+                </span>
               </div>
 
               {/* The gate (ADR-0023): the last result per smoke, against the identity it smoked, and the server build. */}
@@ -172,39 +183,6 @@ export default function Fleet() {
         })()}
       </Show>
 
-      <h2 class="section">runs</h2>
-      <p class="dim">
-        Every recorded run. A launch that never produced a model response — a dead provider on
-        the first request, a refused key — is archived by the runner as it exits and never
-        appears here.
-      </p>
-      <Show when={runs.latest !== undefined} fallback={<p class="dim">loading…</p>}>
-        <div class="scroller">
-          <table>
-            <thead>
-              <tr>
-                <th>run</th>
-                <th>model</th>
-                <th>character</th>
-                <th class="right">lvl</th>
-                <th class="right">xp</th>
-                <th class="right">money</th>
-                <th class="right">quests</th>
-                <th>started</th>
-                <th class="right">playtime</th>
-                <th class="right">tokens</th>
-                <th class="right">cost</th>
-                <th>harness</th>
-                <th>ended</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={runs.latest}>{(r) => <RunRowView row={r} now={now()} />}</For>
-            </tbody>
-          </table>
-        </div>
-      </Show>
-
       <ServerIdentity info={info.latest} now={now()} />
     </div>
   );
@@ -270,7 +248,13 @@ function FleetRowView(props: { row: FleetRow }) {
       <td class="dim" title={r().modelsTitle}>
         {r().models}
       </td>
-      <td class="dim">{r().tier ?? "—"}</td>
+      {/*
+        A job with no tier is a job whose tier the supervisor could not name
+        (null, never a guess); an account row has no tier to name at all.
+      */}
+      <td class="dim">
+        {r().tier ?? (r().job === null ? "—" : "episode unknown")}
+      </td>
       <td class="dim">
         {r().account} <span class="dim">({r().accountClass})</span>
       </td>
@@ -283,65 +267,6 @@ function FleetRowView(props: { row: FleetRow }) {
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
-    </tr>
-  );
-}
-
-function RunRowView(props: { row: RunListRow; now: number }) {
-  const r = (): RunListRow => props.row;
-  /*
-   * Playtime is the API's: cumulative time the run spent being driven, with the
-   * stretches between a `pause` and its `resume` taken out. Server-side so this
-   * table and the run page cannot drift apart.
-   */
-  const playtime = (): number | null => r().playtimeMs ?? null;
-  return (
-    <tr>
-      <td>
-        <Show when={r().live}>
-          <span class="dot live" />
-        </Show>
-        <A href={`/run/${encodeURIComponent(r().runId)}`}>{r().runId}</A>
-      </td>
-      <td class="dim">
-        {r().model ?? "—"}
-        <Show when={r().shakeout !== null}>
-          {" "}
-          <span class="warn" title={r().shakeout ?? ""}>unscored</span>
-        </Show>
-        <Show when={r().objective !== null}>
-          {" "}
-          <span class="warn" title={r().objective ?? ""}>objective</span>
-        </Show>
-      </td>
-      <td class="dim" title={r().characterLabel ?? "race and class not recorded for this run"}>
-        {r().character ?? "—"}
-        <Show when={r().characterLabel !== null}>
-          {" "}
-          <span class="dim">({r().characterLabel})</span>
-        </Show>
-      </td>
-      <td class="right mono">{num(r().level)}</td>
-      <td class="right mono">{num(r().xp)}</td>
-      <td class="right mono">{fmtMoney(r().money)}</td>
-      <td class="right mono">{num(r().questsCompleted)}</td>
-      <td class="dim" title={stamp(r().startedAt)}>
-        {fmtWhen(r().startedAt, props.now)}
-      </td>
-      <td class="right mono dim">{fmtDuration(playtime())}</td>
-      <td class="right mono dim" title={r().tokens?.source ?? ""}>
-        {fmtTokens(r().tokens?.totalTokens ?? null)}
-      </td>
-      {/* Cost where the model is priced; a dash where it is not, never a zero. */}
-      <td class="right mono dim" title={r().cost?.note ?? "no price on file for this model"}>
-        {r().cost?.basis === "none" || r().cost == null ? "—" : fmtUsd(r().cost!.usd)}
-      </td>
-      <td class="dim" title={r().harnessVersion ?? ""}>
-        {shortHarness(r().harnessVersion)}
-      </td>
-      <td class={r().terminationReason === null ? "dim" : ""} title={r().terminationDetail ?? ""}>
-        {r().terminationReason ?? (r().pauseReason !== null ? `paused: ${r().pauseReason}` : "—")}
-      </td>
     </tr>
   );
 }

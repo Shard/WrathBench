@@ -304,7 +304,8 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
         return {
           name,
           ref: j.ref,
-          episode: j.episode,
+          // Unknown stays unknown: the supervisor writes null rather than a guess.
+          episode: j.episode ?? null,
           account: j.account,
           accountClass: classOf.get(j.account.toUpperCase()) ?? "pinned",
           source: j.source,
