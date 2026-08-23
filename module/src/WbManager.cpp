@@ -2023,7 +2023,7 @@ namespace WrathBench
         return p.IsWithinBox(center, t.boxLength / 2.0f, t.boxWidth / 2.0f, t.boxHeight / 2.0f);
     }
 
-    void Manager::CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t /*nowMs*/)
+    void Manager::CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t nowMs)
     {
         if (!_areaTriggersLoaded)
             return;
@@ -2047,15 +2047,36 @@ namespace WrathBench
 
         // Fire once per entry, as a client does: only ids that were not inside
         // on the previous check. Nothing is re-sent while the mover lingers —
-        // if the server's applied position lagged the interpolated one and it
-        // rejected the hit, that is the same miss a client suffers, and the
-        // next entry fires again. Exploration triggers the server does not
-        // act on (already credited) therefore fire exactly once per entry.
+        // exploration triggers the server does not act on (already credited)
+        // therefore fire exactly once per entry.
         std::vector<uint32> entered;
         for (uint32 id : nowInside)
             if (std::find(s.insideTriggers.begin(), s.insideTriggers.end(), id) == s.insideTriggers.end())
                 entered.push_back(id);
         s.insideTriggers = std::move(nowInside);
+        if (entered.empty())
+            return;
+
+        // A client never reports a trigger from a position it has not sent:
+        // CMSG_AREATRIGGER always follows a movement packet carrying the entry
+        // position. Heartbeats go out every ~500ms while the position is
+        // tested every tick, so an entry between heartbeats would otherwise
+        // be judged by the server against a position up to ~3.5y behind
+        // (run speed), fail IsInAreaTriggerRadius and, being fired once per
+        // entry, never be retried (smoke-travel 9c44d77a: tram exit 2171 hit
+        // at 9.98y from a r10 centre, no transfer). So send a heartbeat at the
+        // entry position first; both go through the same ordered
+        // WorldSession queue (QueuePacket), so the server applies the
+        // position before it evaluates the trigger.
+        if (s.move.active)
+        {
+            MoveState& m = s.move;
+            SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, x, y, z, m.curO,
+                FindTransportAt(player->GetMap(), x, y, z));
+            m.lastPacketMs = nowMs;
+            Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_HEARTBEAT")
+                .Add("moveId", m.moveId).Add("cause", "areatrigger").Raw("pos", PosJson(x, y, z, m.curO)).Str());
+        }
 
         for (uint32 id : entered)
         {

@@ -757,9 +757,12 @@ each heartbeat with the same sphere/oriented-box geometry as
 and never again while the mover lingers inside: the module keeps the set of
 volumes the character is in, fires only for ids newly inside, and forgets an
 id when the character leaves the volume, changes map or is teleported, so a
-re-entry fires again (FOLLOW-UPS 56; a hit the server rejected because its
-applied position lagged is not retried, the same miss a client suffers). Each
-dispatch is
+re-entry fires again (FOLLOW-UPS 56). Because a client never reports a
+trigger from a position it has not sent, each entry packet is preceded by a
+`MSG_MOVE_HEARTBEAT` at the entry position (audited as a `move_pkt` with
+`cause: "areatrigger"`), so the server's applied position is the tested one
+when it evaluates the trigger rather than one up to a heartbeat interval
+behind. A hit the server still rejects is not retried. Each dispatch is
 audited (`op: "areatrigger"`) and mirrored as `WB_AREATRIGGER`. Consequences
 are whatever the server does for that trigger, as for a client: a map
 transfer (`SMSG_TRANSFER_PENDING` … `transferred`), exploration quest credit
