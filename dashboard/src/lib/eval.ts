@@ -295,6 +295,23 @@ export interface LadderRow {
   highest: number;
   cells: LadderCell[];
   runs: number;
+  /**
+   * The furthest the model's best run got, as the pair `(bestLevel, bestXp)`:
+   * the highest level any counted run observed, and the highest xp *within*
+   * that level. The pair travels together and comes from one run — `bestRunId`
+   * names it — because an xp reading paired with another run's level would be
+   * a number nothing observed. Null when nothing recorded it.
+   */
+  bestLevel: number | null;
+  bestXp: number | null;
+  bestRunId: string | null;
+  /**
+   * The most copper any counted run ended holding, and the run that held it.
+   * Independently maxed, so it is usually *not* the `bestRunId` run — the row
+   * names both so the three numbers are not misread as one run's ledger.
+   */
+  bestMoney: number | null;
+  bestMoneyRunId: string | null;
   /** Harness tags among the model's scored runs (ADR-0035), sorted. */
   harnesses: string[];
   /** Starting characters among those runs, sorted; a label, never a row key. */
@@ -307,6 +324,17 @@ export interface LadderRow {
  * "Highest derivable": rungs 2, 4 and 6 can never be reached here, so a model
  * sitting at rung 3 is not claimed to have passed rung 2 — the page shows the
  * whole row and lets the gaps speak.
+ *
+ * The row order is a stated derivation, versioned with this file (ADR-0018
+ * amendment, 2026-08-23): **highest rung reached, then total XP, then gold.**
+ * Total XP is the `(level, xp)` pair compared lexicographically — xp resets at
+ * every ding and level never falls, so the pair *is* the total-XP ordering, and
+ * no `level * K + xp` integer is synthesised because no XP-per-level table
+ * exists in what the harness records. Both are maxima over the model's counted
+ * runs; `runs` and the model name break what is left, so the order is total and
+ * stable. A missing reading sorts last rather than as zero: 0 copper and 0 xp
+ * are real readings, null is "never recorded". No number here is added to
+ * another — there is still no aggregate score.
  */
 export function ladderRows(runs: readonly EvalRun[]): LadderRow[] {
   const byModel = new Map<string, EvalRun[]>();
@@ -328,15 +356,65 @@ export function ladderRows(runs: readonly EvalRun[]): LadderRow[] {
       };
     });
     const reached = cells.filter((c) => c.status === "reached").map((c) => c.n);
+    const furthest = furthestOf(list);
+    const richest = richestOf(list);
     rows.push({
       model,
       highest: reached.length > 0 ? Math.max(...reached) : 0,
       cells,
       runs: list.length,
+      bestLevel: furthest?.level ?? null,
+      bestXp: furthest?.xp ?? null,
+      bestRunId: furthest?.runId ?? null,
+      bestMoney: richest?.money ?? null,
+      bestMoneyRunId: richest?.runId ?? null,
       harnesses: [...new Set(list.map((r) => r.harness ?? "harness?"))].sort(),
       characters: charactersOf(list),
     });
   }
-  rows.sort((a, b) => b.highest - a.highest || b.runs - a.runs || a.model.localeCompare(b.model));
+  rows.sort(
+    (a, b) =>
+      b.highest - a.highest ||
+      desc(b.bestLevel, a.bestLevel) ||
+      desc(b.bestXp, a.bestXp) ||
+      desc(b.bestMoney, a.bestMoney) ||
+      b.runs - a.runs ||
+      a.model.localeCompare(b.model),
+  );
   return rows;
+}
+
+/** Descending compare where "not recorded" sorts last, and 0 does not. */
+function desc(x: number | null, y: number | null): number {
+  return (x ?? -1) - (y ?? -1);
+}
+
+/**
+ * The run that got furthest, as the `(level, xp)` pair it was observed at.
+ *
+ * Lexicographic: a higher level always wins, and xp only separates runs that
+ * ended on the same level. A run with a level but no xp reading counts as
+ * behind one with the same level and any xp, including zero.
+ */
+function furthestOf(
+  runs: readonly EvalRun[],
+): { runId: string; level: number; xp: number | null } | null {
+  let best: { runId: string; level: number; xp: number | null } | null = null;
+  for (const r of runs) {
+    if (r.maxLevel === null) continue;
+    if (best === null || r.maxLevel > best.level || (r.maxLevel === best.level && (r.xp ?? -1) > (best.xp ?? -1))) {
+      best = { runId: r.runId, level: r.maxLevel, xp: r.xp };
+    }
+  }
+  return best;
+}
+
+/** The run that ended holding the most copper. Zero counts; null does not. */
+function richestOf(runs: readonly EvalRun[]): { runId: string; money: number } | null {
+  let best: { runId: string; money: number } | null = null;
+  for (const r of runs) {
+    if (r.money === null) continue;
+    if (best === null || r.money > best.money) best = { runId: r.runId, money: r.money };
+  }
+  return best;
 }

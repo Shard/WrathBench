@@ -6,6 +6,12 @@
  * reached in ninety minutes. The count of what the filter removed is on the
  * page, not in a footnote.
  *
+ * Rows are ordered by highest rung reached, then total XP, then gold — a stated
+ * derivation over recorded signals, versioned with `lib/eval.ts` (ADR-0018
+ * amendment). The two tie-breaks are printed in their own columns so the order
+ * is legible rather than mysterious, and neither is added to anything: there is
+ * no aggregate score.
+ *
  * Three of the eight rungs cannot be answered by anything the harness records
  * today — zone and area changes, flight paths, and group joins are not in the
  * trajectory (FOLLOW-UPS 35). Those read "not instrumented" rather than being
@@ -17,7 +23,8 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type EvalResponse, type EvalRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
-import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell } from "../lib/eval";
+import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/eval";
+import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
 
 const POLL_MS = 30_000;
@@ -129,6 +136,10 @@ export default function Ladder() {
                 <th title="starting race and class among this model's scored runs">character</th>
                 <th class="right">runs</th>
                 <th class="right">highest</th>
+                <th class="right" title="first tie-break: the furthest a run got — level, then xp within it">
+                  level · xp
+                </th>
+                <th class="right" title="second tie-break: the most a run ended holding">gold</th>
                 <For each={RUNGS}>
                   {(rung) => (
                     <th class="right" title={`${rung.title} — ${rung.rule}`}>
@@ -155,13 +166,19 @@ export default function Ladder() {
                     </td>
                     <td class="right mono dim">{row.runs}</td>
                     <td class="right mono">{row.highest === 0 ? "—" : row.highest}</td>
+                    <td class="right mono dim" title={row.bestRunId ?? "not recorded"}>
+                      <Furthest row={row} />
+                    </td>
+                    <td class="right mono dim" title={row.bestMoneyRunId ?? "not recorded"}>
+                      {row.bestMoney === null ? "—" : fmtMoney(row.bestMoney)}
+                    </td>
                     <For each={row.cells}>{(cell) => <RungCell cell={cell} />}</For>
                   </tr>
                 )}
               </For>
               <Show when={rows().length === 0}>
                 <tr>
-                  <td colSpan={5 + RUNGS.length} class="dim">
+                  <td colSpan={7 + RUNGS.length} class="dim">
                     No scorable runs recorded yet.
                   </td>
                 </tr>
@@ -169,6 +186,14 @@ export default function Ladder() {
             </tbody>
           </table>
         </div>
+
+        <p class="dim">
+          Rows are ordered by highest rung reached, then total XP, then gold. Total XP is the
+          level and the xp within it compared as a pair — xp resets at every ding, so the pair is
+          the ordering and no single XP number is invented. Both tie-breaks are maxima over the
+          model's scored runs and each names the run it came from; the gold column is usually a
+          different run from the level column. Nothing here is summed into a score.
+        </p>
 
         <h2 class="section">the rungs, and how each is decided</h2>
         <div class="scroller">
@@ -197,6 +222,21 @@ export default function Ladder() {
         </div>
       </Show>
     </div>
+  );
+}
+
+/** The furthest a model's run got: `L14 · 4,120 xp`, or what was recorded of it. */
+function Furthest(props: { row: LadderRow }) {
+  const r = (): LadderRow => props.row;
+  return (
+    <Show when={r().bestLevel !== null} fallback={<span>—</span>}>
+      <span>
+        L{r().bestLevel}
+        <Show when={r().bestXp !== null}>
+          <span class="dim"> · {r().bestXp!.toLocaleString()} xp</span>
+        </Show>
+      </span>
+    </Show>
   );
 }
 

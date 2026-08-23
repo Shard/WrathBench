@@ -227,4 +227,25 @@ describe("evalRunOf", () => {
   test("falls back to the run's own level when no sample carried one", () => {
     expect(evalRunOf(run({ level: 7 }), [], []).maxLevel).toBe(7);
   });
+
+  test("xp is the furthest reading at the run's highest level, and money is the last one", () => {
+    const e = evalRunOf(run({ money: 4_242 }), [
+      state({ ts: 1000, level: 4, xp: 9_000 }),
+      state({ ts: 2000, level: 5, xp: 100 }),
+      state({ ts: 3000, level: 5, xp: 700 }),
+    ], []);
+    expect(e.maxLevel).toBe(5);
+    // Not 9_000: xp resets at every ding, so only the reading at L5 pairs with it.
+    expect(e.xp).toBe(700);
+    expect(e.money).toBe(4_242);
+  });
+
+  test("an xp read at another level is never paired with the max level", () => {
+    // The newest sample's level is the run's level, so run.xp only applies when
+    // the two agree; here no sample carried the max level's xp at all.
+    const e = evalRunOf(run({ level: 3, xp: 55 }), [state({ ts: 1000, level: 3 })], []);
+    expect(e.maxLevel).toBe(3);
+    expect(e.xp).toBe(55);
+    expect(evalRunOf(run({ level: 2, xp: 55 }), [state({ ts: 1000, level: 3 })], []).xp).toBeNull();
+  });
 });

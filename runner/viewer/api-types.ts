@@ -594,6 +594,20 @@ export interface EvalRun {
   terminationReason: string | null;
   levels: LevelMark[];
   maxLevel: number | null;
+  /**
+   * XP *within* `maxLevel`: the highest reading any sample carried at that
+   * level. Together with `maxLevel` it is the ladder's total-XP ordering
+   * (ADR-0018 amendment) — the pair is lexicographic because xp resets at each
+   * level and level never goes down. Null when no sample recorded xp there.
+   */
+  xp: number | null;
+  /**
+   * Copper on the newest sample that carried a reading — the same number the
+   * fleet listing and the run page show, not a peak (no state sample the eval
+   * surface reads carries money, so a peak is not derivable). Null when never
+   * recorded; zero is a real reading.
+   */
+  money: number | null;
   questsCompleted: number | null;
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];

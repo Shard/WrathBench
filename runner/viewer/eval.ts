@@ -126,6 +126,24 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
 }
 
 /**
+ * The highest XP reading observed *at* a given level.
+ *
+ * XP resets to zero at every ding, so a run's xp only means something paired
+ * with the level it was read at. Taking the maximum at the run's highest
+ * observed level is the furthest the character got into that level, which is
+ * what the ladder's second ordering compares (ADR-0018 amendment). Null when
+ * no sample carried xp at that level — never 0, which is a real reading.
+ */
+export function xpAtLevel(states: readonly StatePoint[], level: number): number | null {
+  let best: number | null = null;
+  for (const s of states) {
+    if (s.level !== level || s.xp === null) continue;
+    if (best === null || s.xp > best) best = s.xp;
+  }
+  return best;
+}
+
+/**
  * Whether a run is a *member* of its episode tier's comparability group.
  *
  * Membership is stamped and un-overridden, and nothing else. ADR-0030: a run
@@ -233,6 +251,16 @@ export function evalRunOf(
 ): EvalRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
+  const maxLevel = levels.length > 0 ? levels[levels.length - 1]!.level : run.level;
+  /*
+   * `run.xp` is the newest sample's reading, so it belongs to `run.level`; it
+   * is only the xp *at* `maxLevel` when those agree. Anything else stays null
+   * rather than pairing an xp with a level it was not read at.
+   */
+  const xp =
+    maxLevel === null
+      ? null
+      : (xpAtLevel(states, maxLevel) ?? (run.level === maxLevel ? run.xp : null));
   return {
     runId: run.runId,
     model: run.model,
@@ -261,7 +289,9 @@ export function evalRunOf(
     startedAt: run.startedAt,
     terminationReason: run.terminationReason,
     levels,
-    maxLevel: levels.length > 0 ? levels[levels.length - 1]!.level : run.level,
+    maxLevel,
+    xp,
+    money: run.money,
     questsCompleted: run.questsCompleted,
     maps: mapsOf(states),
   };
