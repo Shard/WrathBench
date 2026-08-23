@@ -414,7 +414,8 @@ describe("client: movement", () => {
     expect(r1.meshZ).toBe(42);
     expect(r1.hint).toContain("z 42.0, not 80.0");
 
-    const p2 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    // A short walk, so the caller's 2s timeout draws no mesh-slack note either.
+    const p2 = client.moveTo({ x: -1200, y: 983, z: 42 }, { timeout: 2000 });
     stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
     const r2 = await p2;
     if (!r2.ok || r2.status !== "arrived") throw new Error("unreachable");
@@ -431,7 +432,7 @@ describe("client: movement", () => {
     expect(r4.onTransport).toEqual({ guid: "12345", entry: 176081 });
 
     // A status the SDK has no recipe for passes through with no hint invented.
-    const p3 = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    const p3 = client.moveTo({ x: -1200, y: 983, z: 42 }, { timeout: 2000 });
     stub.push(JSON.stringify(moveResult("stopped", 4, 34)));
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
@@ -527,6 +528,66 @@ describe("client: movement", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.hint).toContain("map 369");
     expect(result.hint).toContain("waitForTransfer");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a moveTo timeout says the character is still walking and how far is left", async () => {
+    // fleet-nav-probe-freeplay-sonnet-20260823-c4: 27/27 short-timeout moves
+    // had their verdict arrive *after* the timeout, and the bare "timed out"
+    // message led the model to supersede a move that was about to succeed.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await inWorld(stub);
+
+    const walk = client.moveTo({ x: -1000, y: 987.25, z: 42 }, { timeout: 1500 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveProgress)); // walked ~15y of the way, no verdict
+    const err = (await walk.catch((e: unknown) => e)) as EventTimeoutError;
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("~15y covered");
+    expect(err.message).toContain("~220y still to go");
+    expect(err.message).toContain("the character is still walking");
+    expect(err.message).toContain("this move's verdict will arrive later");
+    expect(err.message).toContain("1.5–2× the straight line");
+    expect(err.message).toContain("sdk.moveToAsync(target)");
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a timeout shorter than the likely walk is called out on the verdict, with no deadline set", async () => {
+    // The pre-flight hint must not depend on a caller budget: the probes that
+    // hit this had no deadline at all.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await inWorld(stub);
+
+    const pending = client.moveTo({ x: -1000, y: 987.25, z: 42 }, { timeout: 5000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("arrived", 1, 31)));
+    const result = await pending;
+
+    expect(result.status).toBe("arrived");
+    expect(result.hint).toContain("~235y in a straight line");
+    expect(result.hint).toContain("against the 5s timeout it was given");
+    expect(result.hint).toContain("1.5–2× the straight line");
+    expect(result.hint).toContain("sdk.moveToAsync(target)");
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a generous caller timeout draws no mesh-slack hint", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await inWorld(stub);
+
+    const pending = client.moveTo({ x: -1234.5, y: 990, z: 42 }, { timeout: 10_000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("arrived", 1, 31)));
+    const result = await pending;
+
+    expect(result.status).toBe("arrived");
+    expect(result.hint).toBeUndefined();
+
     client.close();
     await stub.stop();
   });
@@ -2573,7 +2634,11 @@ describe("client: moveTo target resolution", () => {
     const leg = routine.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 2000 });
     await untilAction(stub, "move_to", 1);
     stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
-    expect((await leg).hint).toBeUndefined();
+    // The budget sentence is gone; the caller's own short timeout is still
+    // worth saying, and says nothing about budgets.
+    const legHint = (await leg).hint ?? "";
+    expect(legHint).not.toContain("of its budget left");
+    expect(legHint).toContain("often outlasts a timeout that short");
     routine.close();
 
     // With no deadline known, nothing is said either.
@@ -2582,7 +2647,9 @@ describe("client: moveTo target resolution", () => {
     const plain = quiet.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 2000 });
     await untilAction(stub, "move_to", 2);
     stub.push(JSON.stringify(moveResult("arrived", 3, 32)));
-    expect((await plain).hint).toBeUndefined();
+    const plainHint = (await plain).hint ?? "";
+    expect(plainHint).not.toContain("of its budget left");
+    expect(plainHint).toContain("often outlasts a timeout that short");
 
     quiet.close();
     client.close();
