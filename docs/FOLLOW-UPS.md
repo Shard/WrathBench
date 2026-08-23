@@ -644,9 +644,7 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
    (b) The watchdog defaults in `runner/src/config.ts` are idle 10m / no-XP 45m;
    `e90` pins 20m/20m, so adopting the id means changing them, and the first
    `e90` run is the first run after that change (nothing is back-labeled).
-   (c) An episode id must pin the tool-call ceiling as well as the clock: the
-   500 default is sized for ninety minutes and would end an `e360` run on
-   `tool-call-limit`. (d) A run whose recorded leash differs from its id's
+   (c) Decided 2026-08-23: e90 500, e360 2000, freeplay none (EPISODES.md). (d) A run whose recorded leash differs from its id's
    definition should be visible as *not* a member of that group rather than
    silently averaged into it. (e) `tiers` becomes a roster field, computed from
    run history by the promotion rule, and consumed by the runner pool.
