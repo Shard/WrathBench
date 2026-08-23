@@ -379,7 +379,7 @@ describe("the shipped fleet files", () => {
     for (const [n, e] of Object.entries(config.roster)) if (n !== "nav-probe") expect(e.wikiCoords).toBeUndefined();
     const pinned = pinnedJobs(config);
     expect(pinned.map((j) => [j.name, j.account, j.repeat, j.enabled])).toEqual([
-      ["nav-probe-freeplay", "SHAKEOUT", "loop", true],
+      ["nav-probe-freeplay", "SHAKEOUT", 1, true],
       ["sub-opus-e90", "SHAKEOUT2", "loop", false],
     ]);
     const probeSpawn = jobSpawn(pinned[0]!, config.roster, "SHAKEOUT", "20260101");
@@ -399,10 +399,18 @@ describe("the shipped fleet files", () => {
     expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-freeplay"]);
     const claude = plan.policy.filter((p) => config.roster[p.job.ref]!.driver === "claude-code");
     expect(claude).toHaveLength(1);
-    // Five pool accounts, the paid one, the local one: deepseek-flash is the
-    // only paid model and lands on SHAKEOUT2; qwen3-8-27b is the only local one
-    // and lands on RUNNER4. Neither ever takes a pool account.
-    expect(plan.policy.length).toBe(7);
+    // Under the free-key caps (openrouter <= 1, opencode <= 1) the pool no
+    // longer fills every account: one openrouter free model (ox-alpha) and one
+    // opencode free model (muse-spark) take two pool accounts, one claude-code
+    // model (sonnet) takes a third, and two pool accounts (RUNNER5/RUNNER6) go
+    // idle for want of an uncapped free model — that is the cap working.
+    // deepseek-flash is the only paid model and lands on SHAKEOUT2 (governed by
+    // policy.paid, not a free key); qwen3-8-27b is the only local one and lands
+    // on RUNNER4. Neither ever takes a pool account.
+    expect(plan.policy.length).toBe(5);
+    // Exactly one openrouter-free and one opencode-free model got a pool slot.
+    const freeOnPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account) && config.roster[p.job.ref]!.driver !== "claude-code");
+    expect(freeOnPool).toHaveLength(2);
     expect(plan.policy.filter((p) => p.job.ref === "deepseek-flash").map((p) => p.account)).toEqual(["SHAKEOUT2"]);
     expect(plan.policy.filter((p) => p.job.ref === "qwen3-8-27b").map((p) => p.account)).toEqual(["RUNNER4"]);
     const onPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account)).map((p) => p.job.ref);
