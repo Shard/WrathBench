@@ -4,15 +4,16 @@
  * One table, keyed by the JOB (ADR-0034: the job is the unit of work, an
  * account — with a class — is where it runs). A row is either a job with an
  * account or an account with no job, and the table is ordered by state: see
- * `STATE_RANK` for the list and why it runs that way. The indicators above the
- * table are the same ones `run-fleet --status` prints, phrased here once.
+ * `STATE_RANK` for the list and why it runs that way. The service-level
+ * verdicts (heartbeat, deploy window) are shared with the status badge's
+ * derivation in `status.ts`.
  *
  * The component renders its header from `FLEET_COLUMNS` and its body from
  * `fleetRows`, so what is asserted here is what ships — the same reason the run
  * rows keep their maths in `format.ts` (see dashboard/README.md).
  */
 
-import type { FleetJobView, FleetOutstandingView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
+import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -67,15 +68,6 @@ export function serverBanner(server: FleetServerView): { text: string; tone: "in
   }
 }
 
-/**
- * The supervisor line's verdict. A dead heartbeat during a deploy window is
- * the script's doing, and the line says so instead of crying NOT RUNNING.
- */
-export function supervisorLabel(fleet: Pick<FleetResponse, "heartbeatAt" | "server">, now: number): string {
-  if (supervisorAlive(fleet, now)) return "supervisor ALIVE";
-  return deployWindowOpen(fleet.server) ? "fleet stopped for the deploy window" : "supervisor NOT RUNNING";
-}
-
 /** The gate's one-word verdict, as --status prints it. */
 export function gateVerdict(pf: FleetResponse["preflight"]): "PASS" | "FAIL" | "SKIPPED" | "none" {
   if (pf === undefined) return "none";
@@ -83,57 +75,12 @@ export function gateVerdict(pf: FleetResponse["preflight"]): "PASS" | "FAIL" | "
   return pf.ok ? "PASS" : "FAIL";
 }
 
-/** `1 pinned, 5 pool, 1 paid, 1 local` — the accounts line of --status, classes with nothing listed left out. */
-export function accountClassSummary(accounts: FleetResponse["accounts"]): string {
-  const n = (cls: string): number => accounts.filter((a) => a.class === cls).length;
-  return ["pinned", "pool", "paid", "local"]
-    .filter((cls) => n(cls) > 0)
-    .map((cls) => `${n(cls)} ${cls}`)
-    .join(", ");
-}
-
-/**
- * How much of the schedule is left, in the words `run-fleet --status` uses.
- *
- * Both halves are bounds, not estimates: `lower` assumes nothing else
- * promotes into the long tier, `upper` assumes everything still eligible
- * does. The ETA divides the runs' own wall clock (90m / 360m, from the
- * episode table) by how many can be in flight at once. The wire carries the
- * numbers — `outstandingWork` in `runner/src/models.ts` computes them, and the
- * viewer, the fleet page and `--status` all print that one answer.
- */
-export function outstandingLabel(o: FleetOutstandingView): string {
-  if (o.upper === 0) return "outstanding: exhausted";
-  const runs = o.lower === o.upper ? `${o.lower}` : `${o.lower}\u2013${o.upper}`;
-  const lo = etaHours(o.etaLowerMs);
-  const hi = etaHours(o.etaUpperMs);
-  const eta = lo === null || hi === null ? "eta unknown" : lo === hi ? `\u2248 ${lo}` : `\u2248 ${lo}\u2013${hi}`;
-  return `outstanding: ${runs} scheduled runs, ${eta} to exhaust`;
-}
-
-/** Hours from now, coarse on purpose: a planning figure, not a clock. */
+/** Hours from now, coarse on purpose: a planning figure, not a clock (the badge's exhaust row). */
 export function etaHours(ms: number | null): string | null {
   if (ms === null) return null;
   if (ms === 0) return "0h";
   if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))}m`;
   return `${Math.round(ms / 3_600_000)}h`;
-}
-
-/** The formula, spelled out for the strip's tooltip. */
-export function outstandingTitle(o: FleetOutstandingView): string {
-  const groups = o.breakdown
-    .map((g) => `${g.group}: ${g.lowerRuns}\u2013${g.upperRuns} runs, ${g.lowerMinutes}\u2013${g.upperMinutes} min at ${g.concurrency} at a time`)
-    .join("\n");
-  return (
-    "Counted (non-extra) runs the policy still owes.\n" +
-    "lower = unmet e90 targets + unmet e360 targets of models already eligible for e360.\n" +
-    "upper = the same, assuming every model still eligible promotes into e360.\n" +
-    "Pinned, objective-carrying and retired models are excluded; extras never count.\n" +
-    "ETA = sum over account classes of (remaining minutes / that class's concurrency),\n" +
-    "with 90m per e90 run and 360m per e360; claude-code models are capped by their driver.\n" +
-    "The classes actually drain in parallel, so this reads as a pessimistic bound.\n" +
-    groups
-  );
 }
 
 /** One paused run as --status lists it: reason, pause count, and when the supervisor tries again. */
@@ -143,7 +90,7 @@ export function pausedLabel(p: FleetPausedView): string {
 }
 
 /** The fleet table, left to right. State leads: it is what an operator scans for. */
-export const FLEET_COLUMNS = ["state", "job", "models", "tier", "account", "source", "attempt", "run", "lvl / xp", "elapsed"] as const;
+export const FLEET_COLUMNS = ["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "cost", "elapsed"] as const;
 
 /**
  * What a row is doing.
@@ -172,21 +119,29 @@ export interface FleetRow {
   /** Every model behind it, for the cell's title. */
   modelsTitle: string;
   /**
-   * The episode tier. Null on an account row — and also on a job whose tier the
-   * supervisor could not name, which the page distinguishes: an account row has
-   * no tier to show, a job with none is a job whose tier is *unknown*.
+   * The episode id (e90, e360, freeplay). Null on an account row — and also on
+   * a job whose episode the supervisor could not name, which the page
+   * distinguishes: an account row has no episode to show, a job with none is a
+   * job whose episode is *unknown*.
    */
-  tier: string | null;
+  episode: string | null;
   account: string;
-  /** Which class the account belongs to: pool, paid, local, pinned. */
+  /**
+   * Which class the account belongs to: pool, paid, local, pinned. (The job's
+   * `source` — file, queue, policy — is not a column: it maps to the class.)
+   */
   accountClass: string;
-  /** Where the job came from: the file's pinned list, the manual queue, the policy. */
-  source: string | null;
   attempt: number | null;
   /** The run this row is about: the one being driven, or the paused one. */
   runId: string | null;
   level: number | null;
   xp: number | null;
+  /** The run's token total, from the runs feed; null when there is no run or no trajectory. */
+  tokens: number | null;
+  /** What the provider said it charged (the actual figure, as the episodes page shows it); null when unreported. */
+  costUsd: number | null;
+  /** Why the cost is blank, in the pricing layer's words; "" when there is a figure. */
+  costNote: string;
   /** Active time in the episode, from the runs feed; null when there is no run. */
   elapsedMs: number | null;
   /** Why an idle or paused row is what it is. */
@@ -272,6 +227,16 @@ function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
 }
 
 /**
+ * The actual cost only — `CostView.actual`, what the provider said it charged,
+ * as the episodes page shows it — never the estimate, and null for any of the
+ * ways there is none (no run, unreadable trajectory, a provider that reports no cost).
+ */
+function actualUsd(run: RunListRow | undefined): number | null {
+  const c = run?.cost?.actual ?? null;
+  return c === null || c.basis === "none" ? null : c.usd;
+}
+
+/**
  * The whole table: every job the supervisor has a process for, plus every
  * account holding nothing, ordered by state through `byState`.
  *
@@ -296,14 +261,16 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       job: job.name,
       models: jobModelLabel(job),
       modelsTitle: job.models.join(", "),
-      tier: job.episode ?? null,
+      episode: job.episode ?? null,
       account: job.account,
       accountClass: job.accountClass,
-      source: job.source,
       attempt: job.attempt ?? null,
       runId: runId ?? job.resuming ?? null,
       level: run?.level ?? null,
       xp: run?.xp ?? null,
+      tokens: run?.tokens?.totalTokens ?? null,
+      costUsd: actualUsd(run),
+      costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: run?.playtimeMs ?? null,
       note:
         state === "paused-deploy"
@@ -326,14 +293,16 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       job: null,
       models: here?.model ?? "—",
       modelsTitle: here?.model ?? "",
-      tier: null,
+      episode: null,
       account: a.account,
       accountClass: a.class,
-      source: null,
       attempt: null,
       runId: here?.runId ?? null,
       level: run?.level ?? null,
       xp: run?.xp ?? null,
+      tokens: run?.tokens?.totalTokens ?? null,
+      costUsd: actualUsd(run),
+      costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,
       note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,
     });

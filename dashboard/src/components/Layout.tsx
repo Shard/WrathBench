@@ -1,12 +1,20 @@
-/* The shell: one nav, one scroll container. The map opts out of scrolling. */
+/*
+ * The shell: one nav, the service status badge, one scroll container. The map
+ * opts out of scrolling. The shell owns the shared feeds (`lib/feeds.ts`) so
+ * the badge and the fleet page read one `/api/fleet` poller between them.
+ */
 
 import { A, useLocation } from "@solidjs/router";
 import type { ParentProps } from "solid-js";
+import { FeedsContext, createFeeds } from "../lib/feeds";
+import { StatusBadge } from "./StatusBadge";
 
 export function Layout(props: ParentProps) {
   const location = useLocation();
   const flush = (): boolean => location.pathname === "/map";
+  const feeds = createFeeds();
   return (
+    <FeedsContext.Provider value={feeds}>
     <div class="app">
       <header class="top">
         <h1>
@@ -33,8 +41,10 @@ export function Layout(props: ParentProps) {
           </A>
         </nav>
         <span class="spacer" />
+        <StatusBadge />
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>
     </div>
+    </FeedsContext.Provider>
   );
 }
