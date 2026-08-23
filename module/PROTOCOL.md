@@ -163,7 +163,7 @@ Errors:
 
 Create reclaims a permitted account (2026-08). `POST /session` on an account
 that passed the allowlist **always takes ownership** instead of dead-ending on a
-stale/leaked session — the invariant is one account = one lane = one live
+stale/leaked session — the invariant is one account = one job = one live
 episode (enforced by the fleet's duplicate-account guard and the roster's
 account-busy guard), so any session found holding the account at create time is
 stale, and reclaiming it is correct, not a race:

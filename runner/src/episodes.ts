@@ -50,7 +50,7 @@ export interface EpisodeTier {
   noXpMinutes: number | null;
   /**
    * Tool calls for the whole episode. **Null means the tier does not pin one**
-   * — the lane's or the config's own value stands — which is not the same as
+   * — the job's or the config's own value stands — which is not the same as
    * "unbounded": `maxToolCallsPerEpisode` is always a positive number, because
    * it is the runaway guard.
    */
@@ -170,7 +170,7 @@ export function matchesTier(
 ): boolean {
   const want = watchdogsFor(tier);
   // A ceiling the tier does not pin cannot be departed from: e360 leaves it to
-  // the lane on purpose, and comparing against a number it never named would
+  // the job on purpose, and comparing against a number it never named would
   // read every e360 run as overridden.
   const ceilingOk =
     tier.toolCalls === null ||

@@ -188,7 +188,7 @@ async function main(): Promise<void> {
   /*
    * A tier that forbids an objective forbids it at launch, not on the chart.
    * The alternative — accepting the pair and stamping the run unscored — would
-   * quietly turn a scored lane into an unscored one, which is exactly the kind
+   * quietly turn a scored run into an unscored one, which is exactly the kind
    * of silent downgrade the tuple exists to prevent.
    */
   if (

@@ -143,95 +143,104 @@ where before it launched and failed in seconds. It
 only ever *frees* its own session (`DELETE /session` is keyed on
 `token == runId`); another process's session is never touched.
 
-Two rosters ship for the subscription lane:
+Two rosters ship for the subscription driver:
 
 - `roster-claude.json` — opus and sonnet alternating on `SHAKEOUT`, 90m each.
   Runnable today: `./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30`.
 - `roster-claude-2wide.json` — opus on `SHAKEOUT`, sonnet on `SHAKEOUT2`, for
-  running the two lanes at the same time. **Not runnable until the worldserver
+  running both at the same time. **Not runnable until the worldserver
   is next recreated**: the account exists in auth, but `SHAKEOUT2` only enters
   the module's `AC_WRATH_BENCH_ACCOUNTS` allowlist on container recreate, and
   until then every createSession on it answers 403 `account_not_permitted`.
 
-The roster runs its entries sequentially by design. Two lanes in parallel means
+The roster runs its entries sequentially by design. Two streams in parallel means
 two roster processes, one per JSON, each with its own account and its own
 `--log` path so the two JSONLs do not interleave. **Superseded by the fleet**
 (next section) — hand-launching parallel rosters with `--skip` and `&` still
-works, but the fleet is the supported way to run more than one lane. If you do
+works, but the fleet is the supported way to run more than one stream. If you do
 launch by hand, do not run `roster-claude.json` and `roster-claude-2wide.json`
 on the same day at the same time: both derive their run ids from the model name
 (`roster-opus-<date>`), so the two opus entries would be the same run. Fleet
-run ids carry the lane name (`fleet-<lane>-...`), which is how the fleet
+run ids carry the job name (`fleet-<job>-...`), which is how the fleet
 sidesteps that collision.
 
 ## The fleet
 
-`infra/fleet.json` is the whole answer to "what is running right now": a list
-of **lanes**, where one lane = one sequential episode stream = one game
-account, and parallelism is exactly the number of enabled lanes. Inspect the
-config, and you have inspected the fleet.
+`infra/fleet.json` is the whole answer to "what is running right now". Its
+unit of work is the **job** (ADR-0034): a roster entry (or a rotation of
+several), an episode tier, a repeat count, run as one `run-roster` process on
+one game **account**. Accounts have a **class** — `pool`, `paid`, `local`, or
+pinned to one job — and the class decides which job may land on them. A job
+that names an `account` is pinned to it; a job without one is pool work; and
+the scheduling policy makes up jobs of its own for whatever the manual queue
+leaves free. Inspect the config, and you have inspected the fleet.
 
     ./infra/run-fleet.sh infra/fleet.json --until 18:00   # run it
     ./infra/run-fleet.sh infra/fleet.json --dry-run       # print the plan
     ./infra/run-fleet.sh --status                         # read-only report
 
-Each lane has `name`, `enabled`, `account`, `loop`, an optional
-`untilDefault` (used when no `--until` is passed), and either inline
-`entries` (the exact per-entry schema the roster accepts) or a `rosterFile`
-path. The fleet spawns one `run-roster` process per enabled lane —
-materialized roster at `data/runs/fleet-<lane>-<date>.roster.json`, roster
-JSONL at `fleet-<lane>-<date>.jsonl`, stdout at `fleet-<lane>-<date>.log` —
-and supervises them.
+The file has a `roster` map (name → the exact per-entry schema the roster
+accepts, plus `tiers`/`runsPerEpisode`/`billing`), an `accounts` block
+(`pool`, `paid`, `local` lists), a `queue` of jobs (`ref`, `episode`,
+`repeat`, optional `account`, optional `enabled`), a `policy` block and a
+`preflight` block. A job's name is always `<first ref>-<episode>`. The fleet
+spawns one `run-roster` process per job it places — materialized roster at
+`data/runs/fleet-<job>-<date>.roster.json`, roster JSONL at
+`fleet-<job>-<date>.jsonl`, stdout at `fleet-<job>-<date>.log` — and
+supervises them. There is no other shape: a file that still says `lanes` or
+`accounts.pinned` is refused by name.
 
 **The tuning knob is the file.** The supervisor re-reads `fleet.json` every
 60 seconds:
 
-- `enabled: false` **drains** the lane: the roster process is only SIGTERMed
+- `enabled: false` **drains** the job: the roster process is only SIGTERMed
   once it is between episodes (no child process), so the episode in flight
   finishes. Worst case — an episode spawning in the instant between the idle
   check and the signal — gets run-roster's own graceful 30s-grace episode
   termination, never a hard kill. Disable takes effect at the next episode
   boundary.
-- `enabled: true`, or a newly added lane, spawns on the next tick. A lane
+- `enabled: true`, or a newly added job, spawns on the next tick. A job
   respawned the same day gets `--resume-roster` so finished runs are skipped.
-- A malformed or guard-violating edit never touches running lanes: the fleet
+- A malformed or guard-violating edit never touches running jobs: the fleet
   logs a complaint and keeps the last good config.
-- A lane whose process exits while enabled is *finished*, not respawned; flip
+- A job whose process exits while enabled is *finished*, not respawned; flip
   it off and on again to re-arm it.
 
-Guards, at startup and on every re-read: two enabled lanes must not share an
-account (one live session per account), and the **lane policy** — claude
+Guards, at startup and on every re-read: two enabled jobs must not share an
+account (one live session per account), and the **roster policy** — claude
 models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
 `claude-code` driver, and that driver runs claude models only. The
-free lanes exist because OpenRouter's and OpenCode Zen's free tiers are
+free entries exist because OpenRouter's and OpenCode Zen's free tiers are
 pooled per upstream provider: a single sequential stream per pool is both the
 polite and the effective shape — two streams on one pool just trip the same
-rate limits twice. So an openai lane on a **shared free-cloud pool**
+rate limits twice. So an openai entry on a **shared free-cloud pool**
 (`openrouter.ai` / `opencode.ai`, or no `apiBase` at all, which defaults to
-OpenRouter) must carry free model ids only — ending `-free` or `:free`. The
-roster's own account-busy guard still runs under every lane, so a lane pointed
-at an account a hand-started run holds waits rather than clobbering.
+OpenRouter) must carry free model ids only — ending `-free` or `:free` — unless
+it declares `billing: "paid"` on purpose. The roster's own account-busy guard
+still runs under every job, so a job pointed at an account a hand-started run
+holds waits rather than clobbering.
 
-### Local (self-hosted) lanes
+### Local (self-hosted) models
 
-An openai lane may point `apiBase` at a self-hosted OpenAI-compatible endpoint
-instead of a cloud pool — the shipped `local-qwen` lane targets an LM Studio box
-on the LAN (`http://192.168.1.20:1234/v1`, model `qwen/qwen3.8-27b`). A local
-apiBase is a distinct category in the lane policy:
+An openai entry may point `apiBase` at a self-hosted OpenAI-compatible endpoint
+instead of a cloud pool — the shipped `qwen3-8-27b` entry targets an LM Studio
+box on the LAN (`http://192.168.1.20:1234/v1`, model `qwen/qwen3.8-27b`). A
+local apiBase is a distinct category in the roster policy, and its runs land
+only on the `local` account class:
 
 - **Exempt from the free-suffix rule.** There is no shared free tier to meter,
   so the model id need not end `-free`/`:free`. The guard treats any apiBase
   that is not an `openrouter.ai`/`opencode.ai` host as local.
-- **Still claude-barred.** No `claude-*` id ever rides an openai lane, local or
+- **Still claude-barred.** No `claude-*` id ever rides an openai entry, local or
   cloud; claude runs only on the `claude-code` driver.
 - **`apiKeyEnv` names a dummy key.** LM Studio ignores the bearer value, but the
   pipeline needs the env var to exist, so `.env` carries a non-secret
-  `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud lanes
+  `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud entries
   exactly: the key travels only in `.env` (Bun autoloads `/wrathbench/.env`
   inside the runner container), never through argv. The adapter still sends its
   attribution headers unconditionally; a local server just ignores them.
 
-Before enabling a local lane, prove the endpoint can drive the tool loop:
+Before adding a local model, prove the endpoint can drive the tool loop:
 
     bun infra/smoke/local-model.ts
 
@@ -240,17 +249,17 @@ It hits the endpoint directly with one tool definition and no `tool_choice`
 satisfies the adapter's exact contract — `id` a non-empty string, `arguments` a
 JSON string. It prints the round-trip latency and `finish_reason`, and reports a
 clear no-go if the model answers in prose or returns a shape the adapter would
-reject. No game account or module needed. `local-qwen` ships `enabled: false`
-until `RUNNER6` enters the running module allowlist at the next worldserver
-recreate.
+reject. No game account or module needed.
 
-`--status` reads `data/runs/fleet-state.json` plus each lane's logs and
-sqlite: per lane it prints enabled, roster pid liveness, the current run id
-with level/xp, the last stdout line, and — honestly — which run currently
-holds the lane's account even when that run is a hand-started roster the
-fleet does not manage. `sub-opus` ships `enabled: false` on purpose: it is
-the "burn subscription budget" switch. Flip it to true when there is budget
-to burn; flip it back and the lane stops after the episode in flight.
+`--status` reads `data/runs/fleet-state.json` plus each job's logs and
+sqlite: the supervisor's heartbeat, the gate's last result, one row per
+account with the job on it (run id, level/xp, elapsed, cooling), the models
+table with the scheduler's verdict, the paused runs it is not resuming and
+why, and — honestly — which run currently holds an account even when that run
+is a hand-started roster the fleet does not manage. The dashboard's fleet page
+carries the same indicators. `sub-opus-e90` ships `enabled: false` on purpose:
+it is the "burn subscription budget" switch. Flip it to true when there is
+budget to burn; flip it back and the job stops after the episode in flight.
 
 ## Where data lives
 

@@ -73,3 +73,16 @@ chose pause over terminate, and a supervisor that went looking for paused runs.
   on their last stop; every run launched after it pauses.
 - A pinned loop job resumed mid-cycle numbers its next cycle from the resumed
   id (`…-c2-c2`): unique, ugly, and honest about what happened.
+
+## Amendment 2026-08-23: a paused run whose ref was re-pointed is ended
+
+A paused run is matched back to the job it was launched under by its run id's
+`fleet-<ref>-<episode>-` prefix. When that ref's roster entry now names a
+different model (or effort), the run has nothing to come back under: the
+supervisor ENDS it at resume-planning time — `manual`, detail `ended by the
+supervisor: model X no longer under ref Y` — through the runner's own
+termination writer (`Trajectory.setTermination`, the path `classify.ts`
+takes), never a second sqlite writer. It is never resumed and never listed as
+"resume by hand"; the policy schedules the ref's current model fresh. A run
+with no fleet prefix (hand-launched) or whose ref is gone entirely stays
+listed for the operator, as before.

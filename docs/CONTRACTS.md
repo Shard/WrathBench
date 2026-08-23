@@ -72,7 +72,7 @@ finding: predictable bearer tokens; tracked as FOLLOW-UPS item 19):
   per-run isolation boundary and can silently corrupt what the harness
   measures.
 
-This is accepted for now because every lane is operator-launched from one
+This is accepted for now because every job is operator-launched from one
 tree on a private compose network with no external callers, and the audit log
 records every dispatched action per token. It is a blocker, before any public
 or MCP-exposed deployment and before any adversarial multi-run result is

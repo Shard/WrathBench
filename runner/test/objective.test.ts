@@ -208,8 +208,8 @@ describe("watchdog overrides", () => {
 });
 
 describe("argv -> run config", () => {
-  test("the nav-probe lane's generated argv lands as the config the probe needs", () => {
-    // Verbatim what `episodeArgv` produces for the nav-probe lane entry. If any
+  test("the nav-probe job's generated argv lands as the config the probe needs", () => {
+    // Verbatim what `episodeArgv` produces for the nav-probe roster entry. If any
     // of it silently failed to land, the 6h probe would die at 45 minutes as
     // `no-xp` and read like a harness fault.
     const config = configFromArgs([

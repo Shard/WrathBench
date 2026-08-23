@@ -13,7 +13,7 @@
  *
  * A threshold of `null` (which is what `0` normalises to at the config
  * boundary) disables that watchdog outright: it is checked for `null` here,
- * never compared, so a long-running probe lane can turn off `no-xp` without
+ * never compared, so a long-running probe job can turn off `no-xp` without
  * the threshold quietly firing on its first check.
  *
  * `environment-defect` is deliberately not detected here: it is a human

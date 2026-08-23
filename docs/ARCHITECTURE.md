@@ -47,7 +47,7 @@ the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api` (run listing, run
   detail and state series, summarised trajectory entries, the position feed, the
-  fleet supervisor's published lane state), an SSE tail per run, minimap tiles
+  fleet supervisor's published job state), an SSE tail per run, minimap tiles
   from `data/minimap/`, and the built SPA as static files. Every database is
   opened readonly, so a run being written inside the container is never
   disturbed. Bearer tokens are stripped from anything that forwards a raw
