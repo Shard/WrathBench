@@ -116,6 +116,12 @@ export interface SnapshotLike {
     targetGuid?: ObservedLike;
     /** Raw per-field record (a Map serialized to an object). Read for the ghost flag. */
     fields?: Record<string, ObservedLike | undefined>;
+    /** Where the corpse is while dead: `{ map, x, y, z, source }` (SDK `state.self.corpse`). */
+    corpse?: ObservedLike;
+    /** The graveyard the spirit was released to: `{ map, x, y, z }`. */
+    graveyard?: ObservedLike;
+    /** `{ delayMs, readyAt }` — when a reclaim becomes legal (wall-clock ms). */
+    reclaimDelay?: ObservedLike;
   };
   /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
   xp?: ObservedLike;
@@ -251,7 +257,50 @@ export function foldUiOpenWindows(
  * client shows for itself). Every line is a pure function of the snapshot, so
  * `assembleContext` stays byte-deterministic.
  */
-export function formatStateSummary(snapshot: SnapshotLike | null, o: { sessionLive: boolean }): string {
+/**
+ * One sentence for a released ghost: where it stands, where its corpse is, and
+ * the two ways back with their prices — the facts a client shows on its map
+ * and in its tooltips, no more (FOLLOW-UPS 53). Distances are straight-line
+ * and rounded; "after Ns" is the server's own reclaim delay. The healer's
+ * price is a paraphrased rule, not client text.
+ */
+function ghostLine(
+  s: NonNullable<SnapshotLike["self"]>,
+  pos: { map?: number; x?: number; y?: number } | undefined,
+  now: number,
+): string {
+  const xy = (p: { x?: unknown; y?: unknown } | undefined): string =>
+    p !== undefined && typeof p.x === "number" && typeof p.y === "number"
+      ? `${Math.round(p.x)},${Math.round(p.y)}`
+      : "?,?";
+  const grave = s.graveyard?.value as { x?: number; y?: number } | undefined;
+  const corpse = s.corpse?.value as { map?: number; x?: number; y?: number } | undefined;
+  const delay = s.reclaimDelay?.value as { readyAt?: number } | undefined;
+  const where = grave !== undefined ? `ghost at graveyard (${xy(grave)})` : "ghost";
+  let corpsePart: string;
+  if (corpse === undefined) {
+    corpsePart = "corpse position not observed yet (state.self.corpse)";
+  } else if (pos !== undefined && typeof pos.map === "number" && typeof corpse.map === "number" && corpse.map !== pos.map) {
+    corpsePart = `corpse on map ${corpse.map} at (${xy(corpse)}), you are on map ${pos.map}`;
+  } else {
+    const d =
+      pos !== undefined && typeof pos.x === "number" && typeof pos.y === "number" && typeof corpse.x === "number" && typeof corpse.y === "number"
+        ? `${Math.round(Math.hypot(corpse.x - pos.x, corpse.y - pos.y))}y away `
+        : "";
+    corpsePart = `corpse ${d}at (${xy(corpse)})`;
+  }
+  const secs = typeof delay?.readyAt === "number" ? Math.max(0, Math.ceil((delay.readyAt - now) / 1000)) : undefined;
+  const when = secs === undefined ? "after the reclaim delay" : secs === 0 ? "now" : `after ${secs}s`;
+  return (
+    `${where}; ${corpsePart}: reclaim within 39y ${when} (no sickness), ` +
+    "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)"
+  );
+}
+
+export function formatStateSummary(
+  snapshot: SnapshotLike | null,
+  o: { sessionLive: boolean; /** Wall clock for the reclaim countdown; tests pin it. */ now?: number },
+): string {
   if (snapshot === null) {
     return "== state ==\nno sandbox state yet (no snippet has connected a session)";
   }
@@ -339,8 +388,10 @@ export function formatStateSummary(snapshot: SnapshotLike | null, o: { sessionLi
   const healthVal = s.health?.value as { current?: unknown } | null | undefined;
   if (healthVal != null && typeof healthVal === "object" && healthVal.current === 0) uiParts.push("dead");
   const playerFlags = s.fields?.["playerFlags"]?.value;
-  if (typeof playerFlags === "number" && (playerFlags & PLAYER_FLAGS_GHOST) !== 0) uiParts.push("ghost");
+  const isGhost = typeof playerFlags === "number" && (playerFlags & PLAYER_FLAGS_GHOST) !== 0;
+  if (isGhost) uiParts.push("ghost");
   if (uiParts.length > 0) lines.push(`ui: ${uiParts.join(" | ")}`);
+  if (isGhost) lines.push(ghostLine(s, pos, o.now ?? Date.now()));
 
   // stream
   const gaps = snapshot.gaps?.length ?? 0;

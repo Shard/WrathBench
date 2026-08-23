@@ -205,6 +205,40 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(text).toContain("ui: dead | ghost");
+    expect(text).toContain("ghost; corpse position not observed yet");
+  });
+
+  test("a ghost is told where it stands, where its corpse is, and both ways back", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          name: "B",
+          guid: "1",
+          position: { value: { map: 0, x: -8600.2, y: -30.7, z: 90 } },
+          health: { value: { current: 1, max: 100 } },
+          fields: { playerFlags: { value: 0x10 } },
+          corpse: { value: { map: 0, x: -8790, y: -160, z: 82.5, source: "corpse_query" } },
+          graveyard: { value: { map: 0, x: -8600, y: -30, z: 90 } },
+          reclaimDelay: { value: { delayMs: 30_000, readyAt: 1_000_000 + 12_400 } },
+        },
+      },
+      { sessionLive: true, now: 1_000_000 },
+    );
+    expect(text).toContain(
+      "ghost at graveyard (-8600,-30); corpse 230y away at (-8790,-160): reclaim within 39y after 13s (no sickness), " +
+        "or Spirit Healer at the graveyard (-25% durability; resurrection sickness from level 11)",
+    );
+    const later = formatStateSummary(
+      {
+        self: {
+          fields: { playerFlags: { value: 0x10 } },
+          position: { value: { map: 0, x: 0, y: 0, z: 0 } },
+          corpse: { value: { map: 1, x: 5, y: 5, z: 5, source: "death_spot" } },
+        },
+      },
+      { sessionLive: true },
+    );
+    expect(later).toContain("corpse on map 1 at (5,5), you are on map 0: reclaim within 39y after the reclaim delay");
   });
 });
 
