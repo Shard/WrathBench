@@ -124,7 +124,9 @@ export default function Models() {
                           return (
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
-                                <A href={`/eval?model=${encodeURIComponent(row.model)}&episode=${t}`}>
+                                <A
+                                  href={`/eval?model=${encodeURIComponent(row.model)}${row.effort === null ? "" : `&effort=${encodeURIComponent(row.effort)}`}&episode=${t}`}
+                                >
                                   {countedOf(st())}
                                 </A>
                                 <Show when={(st()?.bestLevel ?? null) !== null}>

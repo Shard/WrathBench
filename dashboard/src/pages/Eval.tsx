@@ -55,6 +55,13 @@ export default function Eval() {
    * from the runs behind it.
    */
   const model = (): string | null => (typeof params.model === "string" && params.model.length > 0 ? params.model : null);
+  /*
+   * Effort travels with the model, because `(model, effort)` is the pair the
+   * projection matches runs on: without it a link from the `sonnet-low` row
+   * would show `sonnet`'s runs too. Absent means "the entry with no effort",
+   * which is a different row from any effort at all.
+   */
+  const effort = (): string | null => (typeof params.effort === "string" && params.effort.length > 0 ? params.effort : null);
   const feed = poll(() => api.eval(episode(), overrides(), stillborn()), POLL_MS);
   // The roster, only so an eval row can name the model it belongs to and link
   // back to it. A failure here must not take the charts down with it.
@@ -75,7 +82,8 @@ export default function Eval() {
   const all = (): EvalRun[] => body()?.runs ?? [];
   const runs = (): EvalRun[] => {
     const m = model();
-    return m === null ? all() : all().filter((r) => r.model === m);
+    if (m === null) return all();
+    return all().filter((r) => r.model === m && (r.effort ?? null) === effort());
   };
   const groups = createMemo(() => groupsForLevel(runs(), level()));
   const excluded = createMemo(() => runs().length - scored(runs()).length);
@@ -108,9 +116,13 @@ export default function Eval() {
 
       <Show when={model() !== null}>
         <p class="dim">
-          Filtered to <span class="mono">{model()}</span> ({runs().length} of {all().length} runs in
-          this tier){" "}
-          <button class="toggle" onClick={() => setParams({ model: null }, { replace: true })}>
+          Filtered to{" "}
+          <span class="mono">
+            {model()}
+            <Show when={effort() !== null}> ({effort()})</Show>
+          </span>{" "}
+          ({runs().length} of {all().length} runs in this tier){" "}
+          <button class="toggle" onClick={() => setParams({ model: null, effort: null }, { replace: true })}>
             clear
           </button>
         </p>
