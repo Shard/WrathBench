@@ -1,8 +1,7 @@
 # ADR-0027: Navigation is the module's: typed causes, client-parity triggers and transports
 
-Status: Proposed — accepted once `infra/smoke/travel.ts` passes end to end on a
-deployed build (FOLLOW-UPS 38 N1 gate). Date: 2026-08-22. The code shipped ahead
-of that run; the run turns this from a design into a record.
+Status: Accepted 2026-08-23 — `infra/smoke/travel.ts --from tram-ironforge --rides 3`
+passed 3/3 on `harness-0.4-73-gafd352c` (FOLLOW-UPS 38 N1 gate). Date: 2026-08-22.
 
 ## Context
 The travel probe made long-range travel the obstacle between the starter zone

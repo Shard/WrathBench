@@ -27,16 +27,11 @@ and status.
       92f7df1..b88dd1d, live as `harness-0.3-68` since 2026-08-23). Typed `no_path`
       causes with the subdivision retry in the module, `CMSG_AREATRIGGER` on entering
       a DBC volume, transfer packets tapped and `waitForTransfer` typed,
-      transport-relative movement. **Gate still open:** `infra/smoke/travel.ts` rides
-      the tram IF→SW end to end with a typed success and no undifferentiated
-      `no_path`; run it three times on PROBE, record wall clock per leg, then ADR-0027
-      is accepted. The gate now starts from a scenario fixture at the Ironforge
-      portal (item 45), so legs 1–2 are skipped and the tram is what is tested. One
-      residual left: triggers are only tested while a `move_to` is active. The other
-      — interpolated-vs-applied position at trigger dispatch — cost the first ride
-      its Stormwind exit and is fixed by afd352c (heartbeat before
-      `CMSG_AREATRIGGER`, ADR-0027 amendment); the 1.5s re-arm went in item 56. The
-      leg-1 waypoints were made mesh-valid 2026-08-23 (42b5c38).
+      transport-relative movement. **Gate passed 2026-08-23** on `harness-0.4-73-gafd352c`:
+      `travel.ts --from tram-ironforge --rides 3` (item 45 fixture) rode IF→SW three
+      times with typed success on every leg, boarding on attempt 1 each time, rides
+      60s; ADR-0027 is accepted. One residual left: triggers are only tested while a
+      `move_to` is active.
     - **N2 — field-level observations**, each small, each earned, each logged: zone
       and area name on self from position and the client's own DBC (no packet carries
       it; the client computes it, so the module may), with a `milestone` record (item
@@ -100,29 +95,6 @@ and status.
     so the `git describe` stamp comes from a build arg rather than a mounted `.git`),
     and `.env` (a Secret mounted at the same path so "never via argv" survives).
 
-
-45. **Scenario-fixture characters for smokes** (2026-08-23, ADR-0023 amendment).
-    The fast gate proves what a level-1 character can reach in under a minute from the
-    Northshire spawn. Every late-game claim — a dungeon entrance, a flight path, a
-    trainer with ranks to sell, a mailbox with mail, the tram, death far from a
-    graveyard — is minutes of play away, so it can only live in the deploy-time arc or
-    go ungated. **Shipped 2026-08-23:** `infra/fixtures/apply.ts` + `scenarios.ts`
-    (96214db) writes the `acore_characters` rows for a named scenario — level, xp,
-    money, position, homebind, spells, quest log — onto a logged-out character on a
-    `SMOKE*`/`PROBE` account, waiting for `characters.online = 0` first because
-    `DELETE /session` acks ahead of the core's save; and `infra/smoke/travel.ts --from
-    tram-ironforge` (614cb08) starts the gate from one, on the persistent character
-    `Smoketram`. Nothing in `runner/` or `sdk/` imports it, so docs/CONTRACTS.md is
-    untouched. **Outstanding: only the gate pass** — the first fixture ride reached
-    Stormwind but missed the exit trigger (item 38, fixed by afd352c); the item closes
-    on the rerun. No items, ever — the guid problem is item 57. What the tool now
-    enables, for whoever wants it: the smokes left out of the gate, `spellbook.ts`
-    (deletes last, pays the 60s linger) and the cooldown assertion in item 47 —
-    uses, not work this item is waiting on. Dropped: `CMSG_LOGOUT_REQUEST` on
-    the raw allowlist, wanted to end a smoke in 20s instead of 60 — a persistent
-    fixture character never waits on a delete, so the saving is gone, and the
-    allowlist is the agent's action surface (ADR-0025), not a place to spend on
-    operator convenience.
 
 47. **A cooldown the agent can actually watch** (2026-08-23; small, after item 45).
     `state.cooldowns()` is fed by `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT`, and no
@@ -286,6 +258,7 @@ and status.
 
 One line per number so citations resolve; the day file carries the detail.
 
+- 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`
 - 14 — 2026-08-22 — 8ab861e, 4801a35, c422620 — death recovery (teleport acks, ghost movement, spirit healer)
