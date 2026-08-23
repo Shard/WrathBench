@@ -10,11 +10,22 @@
  * with its `guid` arrives -> a candidate point with no walkable ground is
  * `target_off_mesh`, nothing moved -> a 300y request is `too_far` -> a
  * zero-length `move_to` (still at HOME) arrives -> a plain walk still arrives
- * with no `meshZ` -> logout. No dependencies; Bun
- * built-ins only.
+ * with no `meshZ` -> (optional leg) a route off a ledge is `drop`, nothing
+ * moved -> logout. No dependencies; Bun built-ins only.
  *
  * Steps 3–3b are new with the harness-0.4 module (FOLLOW-UPS 46) and FAIL
  * against an older one: a pre-46 module answers z+100 with `target_off_mesh`.
+ *
+ * The `drop` leg (5b) is OPTIONAL and labelled as such: it needs a ledge the
+ * mesh connects by a cliff-steep segment, and no such point has been verified
+ * reachable from Northshire in this probe's budget (the one that earned the
+ * status is Deeprun's walkway on map 369, nav-probe c4). Pin one with
+ * NAV_LEDGE="x,y,z" (a point ~5-10y beyond a ledge lip, on the lower level)
+ * and the leg asserts `drop` with reachedPos on this level and no z change;
+ * unpinned it tries the candidate list below and reports which, if any,
+ * produced `drop`, failing only when a candidate is walked down a ledge (an
+ * `arrived` whose server z is >3y below the z it started from over a short
+ * walk — the exact c4 defect).
  *
  * Not staged here, deliberately: `no_mesh` needs an unmapped map, and
  * `path_incomplete` / `start_off_mesh` need specific terrain (a transport
@@ -136,7 +147,8 @@ async function move(target: { x: number; y: number; z: number; guid?: string }, 
   log(
     `move_to (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)}) -> ${result.data.status}` +
       (result.data.meshZ !== undefined ? ` meshZ=${result.data.meshZ.toFixed(1)}` : "") +
-      (result.data.reachedPos ? ` reachedPos=${JSON.stringify(result.data.reachedPos)}` : ""),
+      (result.data.reachedPos ? ` reachedPos=${JSON.stringify(result.data.reachedPos)}` : "") +
+      (result.data.dz !== undefined ? ` dz=${result.data.dz}` : ""),
   );
   return result.data;
 }
@@ -262,10 +274,53 @@ async function main() {
   if (back.meshZ !== undefined) fail(`plain arrival should not carry meshZ: ${JSON.stringify(back)}`);
   log("PASS plain walk after the failures -> arrived, no meshZ");
 
+  // 5b. OPTIONAL LEG — a route that steps off a ledge is `drop` (ADR-0027
+  //     amendment 2026-08-23, nav-probe c4). The guard is |dz| > 2.0y and
+  //     |dz| > 1.2x the segment's 2D length. Candidates are points a few yards
+  //     past a lip near the abbey (UNVERIFIED: none has been confirmed to
+  //     draw a drop segment from the mesh; pin NAV_LEDGE to make this leg
+  //     load-bearing). A hard failure here is only ever the c4 shape: the
+  //     character was walked down a ledge and told `arrived`.
+  const pinned = process.env.NAV_LEDGE?.split(",").map(Number);
+  const LEDGE_CANDIDATES: { x: number; y: number; z: number }[] =
+    pinned && pinned.length === 3 && pinned.every(Number.isFinite)
+      ? [{ x: pinned[0]!, y: pinned[1]!, z: pinned[2]! }]
+      : [
+          // Below the abbey's east retaining wall, from the courtyard's level.
+          { x: -8888.0, y: -160.0, z: 76.0 },
+          // The drop from the road's shoulder toward the vineyard stream.
+          { x: -8990.0, y: -170.0, z: 77.0 },
+        ];
+  let dropSeen: string | undefined;
+  for (const cand of LEDGE_CANDIDATES) {
+    const stand = await move(HOME);
+    if (stand.status !== "arrived") fail(`walk home before the ledge candidate: ${JSON.stringify(stand)}`);
+    const from = { ...stand.pos };
+    const r = await move(cand, 30000);
+    if (r.status === "drop") {
+      if (!r.reachedPos) fail(`drop carries no reachedPos: ${JSON.stringify(r)}`);
+      if (typeof r.dz !== "number" || Math.abs(r.dz) <= 2) fail(`drop dz should exceed 2y: ${JSON.stringify(r)}`);
+      if (Math.abs(r.reachedPos.z - from.z) > 3) fail(`drop's reachedPos is not on the character's level: ${JSON.stringify(r)}`);
+      if (Math.abs(r.pos.z - from.z) > 0.5 || dist2d(r.pos, from) > 1) fail(`drop moved the character: ${JSON.stringify(r.pos)} from ${JSON.stringify(from)}`);
+      if (!r.target || dist2d(r.target, cand) > 0.01) fail(`drop should echo the requested target: ${JSON.stringify(r)}`);
+      dropSeen = `(${cand.x}, ${cand.y}, ${cand.z}) dz ${r.dz.toFixed(2)} edge (${r.reachedPos.x.toFixed(1)}, ${r.reachedPos.y.toFixed(1)})`;
+      log(`PASS ledge candidate -> drop ${dropSeen}, nothing moved`);
+      break;
+    }
+    if (r.status === "arrived" && from.z - r.pos.z > 3 && dist2d(from, cand) < 40) {
+      fail(`ledge candidate (${cand.x}, ${cand.y}) was WALKED DOWN ${(from.z - r.pos.z).toFixed(1)}y and reported arrived — the nav-probe c4 defect; ${JSON.stringify(r)}`);
+    }
+    log(`optional ledge candidate (${cand.x}, ${cand.y}) -> ${r.status}${r.meshZ !== undefined ? ` meshZ ${r.meshZ.toFixed(1)}` : ""} (not a drop; candidate not load-bearing)`);
+  }
+  if (!dropSeen) log(pinned ? "FAIL-SOFT optional leg: pinned NAV_LEDGE did not produce drop" : "optional leg: no candidate produced drop; pin NAV_LEDGE=x,y,z once a ledge is known");
+  if (pinned && !dropSeen) fail("NAV_LEDGE was pinned, so the drop leg is load-bearing and it did not produce drop");
+  const home2 = await move(HOME);
+  if (home2.status !== "arrived") fail(`walk home after the ledge leg: ${JSON.stringify(home2)}`);
+
   // 6. Every status on the record is in the documented vocabulary.
   const VOCAB = new Set([
     "arrived", "too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete",
-    "transferred", "teleported", "interrupted", "stopped", "superseded",
+    "drop", "transferred", "teleported", "interrupted", "stopped", "superseded",
   ]);
   const seen = new Set(events.filter((e) => e.opcode === "WB_MOVE_RESULT").map((e) => e.data?.status));
   for (const s of seen) if (!VOCAB.has(s)) fail(`undocumented move status on the stream: ${s}`);
@@ -277,7 +332,7 @@ async function main() {
   if (del.status !== 200 || !del.json?.ok) fail(`session delete failed: ${del.status} ${JSON.stringify(del.json)}`);
   ws.close();
 
-  log("PASS: meshZ arrival -> ground-z fallback -> unit target -> target_off_mesh -> too_far -> plain arrival; vocabulary clean");
+  log(`PASS: meshZ arrival -> ground-z fallback -> unit target -> target_off_mesh -> too_far -> plain arrival -> drop leg ${dropSeen ? "PASS" : "optional/skipped"}; vocabulary clean`);
   process.exit(0);
 }
 
