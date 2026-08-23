@@ -188,11 +188,19 @@ describe("the ladder", () => {
     expect(s.cooling).toMatchObject({ rung: 3, until: NOW - 1000 + LADDER_MS[2]! });
   });
 
+  test("an operator cut or a harness error numbers an attempt but never counts toward the target", () => {
+    const runs = [fail(1, NOW - 2 * HOUR, "manual", 40), fail(2, NOW - HOUR, "harness-error", 12), fail(3, NOW - 1000, "episode-limit", 90)];
+    const s = projectModel(m, runs, DEFAULT_POLICY, { now: NOW });
+    expect(s.perEpisode.e90).toMatchObject({ attempts: 3, counted: 1 });
+  });
+
   test("a run that got off the ground resets the ladder even if it ended badly", () => {
     const runs = [fail(1, NOW - 10 * HOUR), fail(2, NOW - 9 * HOUR), fail(3, NOW - 1000, "harness-error", 7)];
     const s = projectModel(m, runs, DEFAULT_POLICY, { now: NOW });
     expect(s.ladder).toBe(0);
-    expect(s.status).toBe("active");
+    // It got off the ground, so the ladder resets — but a harness error is not
+    // the model's result, so nothing is counted yet and the model is still new.
+    expect(s.status).toBe("new");
   });
 
   test("at the ceiling one more no-progress attempt retires the model; a clear forgives it", () => {

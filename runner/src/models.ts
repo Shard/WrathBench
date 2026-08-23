@@ -366,8 +366,17 @@ export function stillbornOf(f: RunFact): boolean | null {
 }
 
 /** A run that counts toward a target: a member of its tier's group that got off the ground. */
+/**
+ * Terminations that say nothing about the model: an operator cut the run, or the
+ * harness itself failed. They still number attempts (run ids) but never count
+ * toward the per-episode target, so the policy reruns them.
+ */
+export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error"]);
+
 export function isCounted(f: RunFact): boolean {
-  return !f.episodeOverride && f.modelResponses !== null && f.modelResponses > 0;
+  if (f.episodeOverride || f.modelResponses === null || f.modelResponses <= 0) return false;
+  if (f.terminationReason !== null && NOT_THE_MODELS_FAULT.has(f.terminationReason)) return false;
+  return true;
 }
 
 /** A finished attempt the ladder reads as "no progress". */
