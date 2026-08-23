@@ -71,6 +71,10 @@ export interface StatusRow {
   value: string;
   /** A fuller form for the row's title, when the value is abbreviated. */
   title?: string;
+  /** What the value means, on the label: the row stays terse and the words are a hover away. */
+  labelTitle?: string;
+  /** Value lines rendered one under another (the accounts row); `value` is the joined form. */
+  lines?: string[];
 }
 
 /** How far past the stale bound a heartbeat reads before the badge's word is echoed in the row. */
@@ -101,9 +105,13 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
     });
     const live = f.jobs.filter((j) => j.alive && j.runId !== null).length;
     const o = f.outstanding;
-    const owed = o === undefined ? "outstanding unknown" : o.upper === 0 ? "outstanding exhausted" : `outstanding ${o.lower === o.upper ? o.lower : `${o.lower}–${o.upper}`}`;
-    rows.push({ label: "jobs", value: `live ${live} / ${owed}` });
-    rows.push({ label: "exhaust", value: o === undefined ? "unknown" : exhaustEta(o.etaLowerMs, o.etaUpperMs) });
+    const owed = o === undefined ? "unknown" : o.upper === 0 ? "exhausted" : o.lower === o.upper ? `${o.lower}` : `${o.lower}–${o.upper}`;
+    rows.push({ label: "jobs", value: `${live} / ${owed}`, labelTitle: "live now / outstanding scheduled runs, lower–upper bound" });
+    rows.push({
+      label: "exhaust",
+      value: o === undefined ? "unknown" : exhaustEta(o.etaLowerMs, o.etaUpperMs),
+      labelTitle: "time until the outstanding work is exhausted at current concurrency, lower–upper",
+    });
     rows.push({
       label: "uptime",
       value: f.startedAt === undefined ? "unknown" : fmtDuration(now - f.startedAt),
@@ -118,20 +126,23 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
   const ws = info?.worldserver ?? null;
   if (ws !== null && ws.build !== harness) rows.push({ label: "worldserver", value: ws.build, title: `up since ${stamp(ws.startedAtMs)}` });
   if (f.server.phase !== "running" && f.server.detail !== "") rows.push({ label: f.server.phase, value: f.server.detail });
-  if (f.present) rows.push({ label: "accounts", value: accountsBusy(f) });
+  if (f.present) {
+    const lines = accountsBusy(f);
+    rows.push({ label: "accounts", value: lines.join(", "), lines });
+  }
   return rows;
 }
 
-/** `≈ 4h–9h`, or what is missing: the same reading the old strip gave, shorter. */
+/** `4h–9h`, or what is missing: the same reading the old strip gave, shorter. */
 function exhaustEta(lo: number | null, hi: number | null): string {
   const a = etaHours(lo);
   const b = etaHours(hi);
   if (a === null || b === null) return "unknown";
-  return a === b ? `≈ ${a}` : `≈ ${a}–${b}`;
+  return a === b ? a : `${a}–${b}`;
 }
 
-/** `pool 4/5 · paid 0/1 · local 0/1` — busy over total per schedulable class; classes with no accounts left out. */
-export function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): string {
+/** `pool 4/5`, `paid 0/1`, `local 0/1` — busy over total per schedulable class, one line each; classes with no accounts left out. */
+export function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): string[] {
   const busy = new Set(f.jobs.filter((j) => j.alive).map((j) => j.account.toUpperCase()));
   const parts: string[] = [];
   for (const cls of ["pool", "paid", "local"] as const) {
@@ -139,5 +150,5 @@ export function accountsBusy(f: Pick<FleetResponse, "accounts" | "jobs">): strin
     if (of.length === 0) continue;
     parts.push(`${cls} ${of.filter((a) => busy.has(a.account.toUpperCase())).length}/${of.length}`);
   }
-  return parts.length === 0 ? "none" : parts.join(" · ");
+  return parts.length === 0 ? ["none"] : parts;
 }

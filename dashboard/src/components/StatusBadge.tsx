@@ -68,8 +68,12 @@ export function StatusBadge() {
             <For each={rows()}>
               {(r) => (
                 <>
-                  <dt>{r.label}</dt>
-                  <dd title={r.title ?? ""}>{r.value}</dd>
+                  <dt title={r.labelTitle ?? ""}>{r.label}</dt>
+                  <dd title={r.title ?? ""}>
+                    <Show when={r.lines} fallback={r.value}>
+                      {(lines) => <For each={lines()}>{(l) => <div>{l}</div>}</For>}
+                    </Show>
+                  </dd>
                 </>
               )}
             </For>
