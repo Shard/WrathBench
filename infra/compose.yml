@@ -102,6 +102,39 @@ services:
       db-import:
         condition: service_completed_successfully
 
+  # ------------------------------------------------------------ fixtures
+  # One-off operator tool. Puts a logged-out smoke character into a named
+  # scenario by writing acore_characters rows directly, so a smoke can prove a
+  # late-game claim in seconds instead of playing minutes to reach it. Smoke and
+  # PROBE accounts only, never reachable from runner/ or sdk/. See
+  # infra/fixtures/apply.ts and the "Scenario fixtures" section of infra/README.
+  #
+  # `entrypoint`, not `command`: `docker compose run fixtures --account ...`
+  # replaces the service's *command*, so the flags have to land after the
+  # entrypoint or they would clobber `bun run apply.ts` itself.
+  #
+  # The profile keeps it out of `up`, and depends_on names only the database:
+  # this runs against a live stack, and `--no-deps` on top keeps compose from
+  # deciding db-import needs a rerun.
+  fixtures:
+    image: oven/bun:1.4.0
+    profiles: [tools]
+    working_dir: /wrathbench
+    entrypoint: ["bun", "run", "infra/fixtures/apply.ts"]
+    environment:
+      WRATHBENCH_DB_HOST: db
+      WRATHBENCH_DB_PORT: "3306"
+      WRATHBENCH_DB_USER: root
+      WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
+      WRATHBENCH_CHARACTERS_DB: acore_characters
+    volumes:
+      - ..:/wrathbench
+    networks: [wrathbench]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
   # ------------------------------------------------------------------ servers
   authserver:
     image: wrathbench/authserver

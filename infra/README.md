@@ -39,6 +39,8 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 - **authserver** / **worldserver** — AzerothCore, built from
   `infra/docker/server.Dockerfile` with `module/` compiled in.
 - **runner** — placeholder today (`sleep infinity`). Becomes the agent loop.
+- **fixtures** — one-off operator tool, behind the `tools` profile. Puts a
+  logged-out smoke character into a named scenario. See "Scenario fixtures".
 - **fleet** — the fleet supervisor (`infra/run-fleet.ts`) as a long-lived
   service, same image and mounts as `runner`. Behind the `fleet` compose profile
   so it only starts when named. See `docs/OPERATIONS.md` ("Running the fleet as
@@ -109,6 +111,66 @@ Override the defaults with `WRATHBENCH_ACCOUNT_USER`,
 `WRATHBENCH_DB_ROOT_PASSWORD` in the environment or a local `.env`. Usernames
 and passwords are uppercased before hashing, as AzerothCore does; use uppercase
 values to keep that a non-question.
+
+## Scenario fixtures
+
+`infra/fixtures/` puts a **logged-out smoke character** into a named scenario —
+level, money, position, homebind, spells, quest log — so a smoke can prove a
+late-game claim in seconds instead of playing the minutes it would take to walk
+there. The fast gate otherwise only ever sees what a level-1 character can
+reach from the Northshire spawn.
+
+    docker compose -f infra/compose.yml run --rm --no-deps fixtures \
+      --account SMOKE3 --character Smoketram --scenario tram-ironforge
+
+    # or, inside a container that can already reach the db:
+    bun infra/fixtures/apply.ts --account SMOKE3 --character Smoketram \
+      --scenario tram-ironforge [--wait-ms 90000] [--dry-run]
+
+`--dry-run` prints the statements it would run and touches nothing. The
+scenarios live in `infra/fixtures/scenarios.ts`; today they are
+`tram-ironforge` (level 10, 1g, standing at the Deeprun Tram portal facing the
+areatrigger), `trainer-northshire` (level 4, 50s, in front of Brother Sammuel)
+and `northshire-fresh` (a reset to the level-1 human start with an empty quest
+log). Adding one is a data edit in that file.
+
+This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
+agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only
+observes what a client could observe and still only acts through the module. A
+fixture is the operator arranging the world before a run, the same way the
+operator picks which account a smoke logs into.
+
+**Why direct SQL.** The same reason as bootstrap above: the harness has no
+privileged control path into the running world. SOAP is off by contract and the
+worldserver console is interactive and racy. Setting up a *character* has the
+extra constraint that it must never be something the agent can reach, which is
+why it lives in `infra/` and refuses any account not matching
+`^(SMOKE\d*|PROBE)$`. Runner and shakeout accounts are never fixtured — a
+benchmark run must start from a character the agent itself created.
+
+**The `online = 0` wait.** The core reads the `characters` row on login and
+writes it back on logout, so a fixture applied under a live session is simply
+overwritten by that session's save. The tool polls `characters.online` every
+500ms (up to `--wait-ms`, default 90s) and only writes once it reads 0.
+`online = 0` is written by the logout `SaveToDB`, so it is the signal that the
+*late save has landed*, not merely that the session was asked to end — the
+module's `DELETE /session` acknowledges as soon as the logout is queued, and
+`LogoutPlayer` runs on a later world tick (with the core's own logout timer in
+front of it).
+
+**No items.** `item_instance` guids come from an in-memory sequence generator
+seeded once at worldserver boot from `SELECT MAX(guid) FROM item_instance`, so
+rows written from outside a running server collide with guids the server is
+handing out — and the next boot *deletes* everything at or above its own
+watermark (`ObjectMgr.cpp` runs one-time DELETEs against `character_inventory`,
+`mail_items`, `auctionhouse`, `guild_bank_item`). Gear a smoke needs has to
+come through the module: a vendor purchase, a quest reward. `at_login` is left
+alone for the same "leave the core's own flags to the core" reason.
+
+The `fixtures` compose service sits behind the `tools` profile so a bare `up`
+never starts it, and its flags come after an `entrypoint` (not a `command`), so
+`compose run fixtures --account ...` appends rather than clobbers. `--no-deps`
+keeps compose from deciding `db-import` needs a rerun against a live stack.
 
 ## Rosters
 
