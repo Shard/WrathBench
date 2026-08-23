@@ -73,6 +73,7 @@ export type {
   AuraEntry,
   BagContents,
   BagSlotItem,
+  WornBag,
   ChatEntry,
   CharacterSummary,
   CreatureInfo,

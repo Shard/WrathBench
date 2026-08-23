@@ -2018,8 +2018,9 @@ export class WrathClient {
   }
 
   /**
-   * `CMSG_AUTOEQUIP_ITEM` — equip what is at `bag`/`slot` (bag 255 is the
-   * backpack, slots 23-38) and wait for the server's verdict.
+   * `CMSG_AUTOEQUIP_ITEM` — equip what is at `bag`/`slot` (as `state.bag()`
+   * lists it: bag 255 / slots 23-38 for the backpack, a worn bag's equip slot
+   * 19-22 / slots 0..numSlots-1) and wait for the server's verdict.
    *
    * Races the item arriving in an equipment slot (the character's own
    * `invSlot0..22` update fields) against `SMSG_INVENTORY_CHANGE_FAILURE`, so
@@ -2041,9 +2042,10 @@ export class WrathClient {
       const at = this.state.inventory.find((i) => i.guid === guid);
       return at !== undefined && at.slot < BACKPACK_FIRST_SLOT ? at.slot : undefined;
     };
-    // Weaker but still the server's word: the item is no longer anywhere in the
-    // backpack. Only read when no equipment slot claimed it, so a bag-to-bag
-    // shuffle cannot be mistaken for an equip.
+    // Weaker but still the server's word: the item is no longer anywhere in
+    // the carried inventory (backpack or worn bags). Only read when no
+    // equipment slot claimed it, so a bag-to-bag shuffle cannot be mistaken
+    // for an equip.
     const leftBackpack = (): boolean =>
       guid !== undefined && !this.state.bag().items.some((i) => i.guid === guid);
 

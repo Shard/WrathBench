@@ -124,7 +124,7 @@ describe("shapes", () => {
           character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
           characterLabel: "Dwarf Hunter", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
-          pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, mtime: 5,
+          pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, items: null, mtime: 5,
           bytes: 9, live: true, tokens: null, cost: null, firstTs: 1, lastTs: 2, playtimeMs: 1,
           modelResponses: 3,
         },

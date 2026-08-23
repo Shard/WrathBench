@@ -3194,6 +3194,20 @@ namespace WrathBench
             if (index == ITEM_FIELD_OWNER + 1)     { f.Add("ownerHi", v); return true; }
             if (index == ITEM_FIELD_CONTAINED)     { f.Add("containedLo", v); return true; }
             if (index == ITEM_FIELD_CONTAINED + 1) { f.Add("containedHi", v); return true; }
+            // Worn-bag contents (FOLLOW-UPS 50): a container's slot guids as
+            // lo/hi u32 halves keyed by bag slot 0-35, plus its slot count.
+            // PUBLIC fields every client in range receives; same idiom as
+            // the player's invSlot<n>. The SDK joins halves into guids.
+            if (typeId == TYPEID_CONTAINER)
+            {
+                if (index == CONTAINER_FIELD_NUM_SLOTS) { f.Add("numSlots", v); return true; }
+                if (index >= CONTAINER_FIELD_SLOT_1 && index < CONTAINER_FIELD_SLOT_1 + 72)
+                {
+                    uint32 rel = index - CONTAINER_FIELD_SLOT_1;
+                    f.Add("bagSlot" + std::to_string(rel / 2) + (rel % 2 ? "Hi" : "Lo"), v);
+                    return true;
+                }
+            }
         }
         else if (typeId == TYPEID_GAMEOBJECT)
         {

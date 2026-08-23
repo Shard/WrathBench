@@ -100,3 +100,18 @@ export function stamp(ts: number | null): string {
 export function shortHarness(v: string | null | undefined): string {
   return v === null || v === undefined || v === "" ? "—" : v.replace(/^harness-/, "");
 }
+
+/**
+ * One inventory list as plain text: "name ×count, name, …" for the rows on
+ * one side of `equipped` (FOLLOW-UPS 50). Null items (a run that predates the
+ * column) is the dash; a recorded empty side reads "none".
+ */
+export function fmtItems(
+  items: readonly { name: string; count: number; equipped: boolean }[] | null | undefined,
+  equipped: boolean,
+): string {
+  if (items === null || items === undefined) return "—";
+  const rows = items.filter((i) => i.equipped === equipped);
+  if (rows.length === 0) return "none";
+  return rows.map((i) => (i.count > 1 ? `${i.name} ×${i.count}` : i.name)).join(", ");
+}

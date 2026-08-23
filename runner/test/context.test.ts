@@ -201,6 +201,12 @@ describe("formatStateSummary", () => {
     expect(text).toContain("ui: gossip (3 options)");
   });
 
+  test("the bag line totals across worn bags when the snapshot says how many slots there are", () => {
+    const items = [{ bag: 255, slot: 23, name: "Hearthstone", count: 1 }, { bag: 19, slot: 0, name: "Linen Cloth", count: 3 }];
+    const text = formatStateSummary({ bag: { freeSlots: 20, totalSlots: 22, items } }, { sessionLive: true });
+    expect(text).toContain("bag: 20 free / 22    items: Hearthstone, Linen Cloth x3");
+  });
+
   test("bag caps the item list at 8 with a '+K more' tail", () => {
     const items = Array.from({ length: 11 }, (_, i) => ({ slot: 23 + i, itemId: i, name: `it${i}`, count: 1 }));
     const text = formatStateSummary({ bag: { freeSlots: 5, items } }, { sessionLive: true });

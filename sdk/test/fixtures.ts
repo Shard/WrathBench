@@ -424,6 +424,63 @@ export const itemCreate = {
   },
 };
 
+/**
+ * A worn bag in equipment slot 19 (FOLLOW-UPS 50): the player's `invSlot19`
+ * halves name the container, the container's own create block carries
+ * `numSlots` and its `bagSlot<n>Lo/Hi` halves, and one of those names a second
+ * copy of the charm. Guid high halves are non-zero to prove reassembly.
+ */
+export const BAG_SLOT = 19;
+export const BAG_GUID_LO = 777;
+export const BAG_GUID_HI = 0x4000_0000;
+export const BAG_GUID = ((BigInt(BAG_GUID_HI) << 32n) | BigInt(BAG_GUID_LO)).toString();
+export const BAG_ENTRY = 4496;
+export const BAG_NUM_SLOTS = 6;
+export const BAGGED_GUID_LO = 9999;
+export const BAGGED_GUID_HI = 0x4000_0000;
+export const BAGGED_GUID = ((BigInt(BAGGED_GUID_HI) << 32n) | BigInt(BAGGED_GUID_LO)).toString();
+export const wornBagSlot = selfFields(36, {
+  [`invSlot${BAG_SLOT}Lo`]: BAG_GUID_LO,
+  [`invSlot${BAG_SLOT}Hi`]: BAG_GUID_HI,
+});
+export const wornBagCreate = {
+  seq: 37,
+  opcode: "SMSG_UPDATE_OBJECT",
+  opcodeId: 0x0a9,
+  ts: 1_700_000_000_371,
+  data: {
+    blocks: 2,
+    objects: [
+      {
+        update: "create",
+        guid: BAG_GUID,
+        objectType: "container",
+        fields: {
+          entry: BAG_ENTRY,
+          numSlots: BAG_NUM_SLOTS,
+          bagSlot0Lo: 0,
+          bagSlot0Hi: 0,
+          bagSlot2Lo: BAGGED_GUID_LO,
+          bagSlot2Hi: BAGGED_GUID_HI,
+        },
+      },
+      {
+        update: "create",
+        guid: BAGGED_GUID,
+        objectType: "item",
+        fields: { entry: ITEM_ENTRY, stackCount: 2 },
+      },
+    ],
+  },
+};
+export const wornBagQuery = {
+  seq: 38,
+  opcode: "SMSG_ITEM_QUERY_SINGLE_RESPONSE",
+  opcodeId: 0x058,
+  ts: 1_700_000_000_381,
+  data: { itemId: BAG_ENTRY, found: true, name: "Small Brown Pouch", quality: 1 },
+};
+
 /** The item query the module fired on first sight of that entry. */
 export const itemQuery = {
   seq: 38,

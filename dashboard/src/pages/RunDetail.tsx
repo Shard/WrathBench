@@ -27,7 +27,7 @@ import {
 } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { Sparkline } from "../components/Sparkline";
-import { fmtAge, fmtCost, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
 
 const WINDOW = 200;
@@ -217,6 +217,9 @@ export default function RunDetail() {
                   <div class="sub">
                     level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
                   </div>
+                  {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
+                  <div class="sub">carrying: {fmtItems(run().items, false)}</div>
+                  <div class="sub">equipped: {fmtItems(run().items, true)}</div>
                 </div>
                 <div class="card">
                   <div class="k">context / total tokens</div>

@@ -105,6 +105,29 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("items are recorded as JSON, null when the sample carried none, and the column migrates in", () => {
+    const dir = tempRunDir();
+    // A state table from before the `items` column (harness 0.4, pre item 50).
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,
+      map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
+      quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER)`);
+    db.close();
+    const traj = new Trajectory(dir);
+    const items = [
+      { name: "Worn Mace", count: 1, equipped: true },
+      { name: "Tough Jerky", count: 5, equipped: false },
+    ];
+    traj.recordState("run-i", { level: 1, items });
+    traj.recordState("run-i", { level: 1 });
+    const rows = traj.stateRows("run-i");
+    expect(JSON.parse(String(rows[0]!["items"]))).toEqual(items);
+    expect(rows[1]!["items"]).toBeNull();
+    const line = readTrajectory(dir).find((r) => r.t === "state");
+    expect(line?.["items"]).toEqual(items);
+    traj.close();
+  });
+
   test("the turn index is recorded, and absent rather than zero before the first turn", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);

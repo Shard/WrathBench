@@ -7,7 +7,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
+import type { ComparabilityView, ItemSample, RunRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/index";
@@ -118,6 +118,34 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
+/**
+ * The newest `items` sample (FOLLOW-UPS 50), parsed and shape-checked: a run
+ * written before the column existed, or a sample that carried none, is null.
+ */
+function latestItems(db: Database, runId: string, cols: Set<string>): ItemSample[] | null {
+  if (!cols.has("items")) return null;
+  try {
+    const r = db
+      .query(`SELECT items AS v FROM state WHERE run_id = ? AND items IS NOT NULL ORDER BY ts DESC LIMIT 1`)
+      .get(runId) as Record<string, unknown> | null;
+    if (r === null || typeof r["v"] !== "string") return null;
+    const parsed: unknown = JSON.parse(r["v"]);
+    if (!Array.isArray(parsed)) return null;
+    const out: ItemSample[] = [];
+    for (const it of parsed as { name?: unknown; count?: unknown; equipped?: unknown }[]) {
+      if (typeof it?.name !== "string") continue;
+      out.push({
+        name: it.name,
+        count: typeof it.count === "number" ? it.count : 1,
+        equipped: it.equipped === true,
+      });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 export function readRun(runsDir: string, runId: string, now = Date.now()): RunRow {
   const dir = join(runsDir, runId);
   const row: RunRow = {
@@ -147,6 +175,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     xp: null,
     money: null,
     questsCompleted: null,
+    items: null,
     mtime: null,
     bytes: null,
     live: false,
@@ -251,6 +280,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
       };
       row.money = latest("money");
       row.questsCompleted = latest("quests_completed");
+      row.items = latestItems(db, runId, cols);
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
     } finally {

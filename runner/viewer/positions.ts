@@ -120,6 +120,7 @@ export function readPositions(
       xp: run.xp,
       money: run.money,
       questsCompleted: run.questsCompleted,
+      items: run.items,
       harnessVersion: run.harnessVersion,
     });
   }
