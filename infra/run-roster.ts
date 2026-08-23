@@ -168,7 +168,14 @@ const DEFER_BACKOFF_MS = [
 const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
-const CHILD_TERM_GRACE_MS = 30_000;
+/**
+ * SIGTERM → SIGKILL grace for the episode child. The runner pauses on SIGTERM
+ * (ADR-0036): it abandons the request in flight, tears down a CLI child, writes
+ * the pause record and releases the session; its own backstop fires at 60s.
+ * This must outlast that, and stay inside the fleet container's 180s
+ * `stop_grace_period` with room for the supervisor's own reap.
+ */
+const CHILD_TERM_GRACE_MS = 90_000;
 const RUNS_DIR = "data/runs";
 /** A trajectory touched more recently than this belongs to a live process. */
 const LIVE_TRAJECTORY_MS = 3 * 60_000;
@@ -990,7 +997,7 @@ function requestStop(sig: string): void {
   if (child !== undefined) {
     const c = child;
     const id = childRunId;
-    say(`${sig}: terminating the running episode (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
+    say(`${sig}: pausing the running episode — the runner pauses as operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
     c.kill("SIGTERM");
     if (id !== undefined) signalInContainer(id, "TERM");
     setTimeout(() => {
@@ -1212,6 +1219,25 @@ async function attemptSpec(
     }
 
     // paused
+    if (verdict.reason === "operator-pause") {
+      // The supervisor stopped under it (or an operator SIGTERMed the runner):
+      // the run is suspended with its clock and session released by the
+      // runner itself (ADR-0036). The fleet resumes it on its next boot — same
+      // run id, same account, same character. Nothing to free, nothing to
+      // retry here.
+      say(
+        `paused ${spec.runId}: operator-pause${level !== undefined ? `, level ${level}` : ""} — ` +
+          (stopping ? "stopping; the fleet resumes it on boot" : "left for the supervisor to resume, advancing"),
+      );
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "paused-operator",
+        ...(level !== undefined ? { level } : {}),
+        detail: `operator-pause; ${stopping ? "supervisor stop" : "runner was signalled"}; resumable with --resume; turns ${turns}`,
+      });
+      return "done";
+    }
     if (!RATE_PAUSES.has(verdict.reason)) {
       say(`paused ${spec.runId}: ${verdict.reason} — leaving it for the operator, advancing`);
       record({
@@ -1369,7 +1395,10 @@ async function main(): Promise<void> {
         pending.push({ spec, resume: false, doneCycle1: true });
         continue;
       }
-      say(`resume-roster: ${spec.model} (${spec.runId}) will continue with --resume`);
+      say(
+        `resume-roster: ${spec.model} (${spec.runId}) will continue with --resume` +
+          (row.pause_reason !== null && row.pause_reason !== "" ? ` (paused ${row.pause_reason})` : ""),
+      );
       pending.push({ spec, resume: true });
       continue;
     }

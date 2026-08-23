@@ -38,6 +38,10 @@ import {
   policyExclusion,
   planTick,
   jobLane,
+  planResumes,
+  formatPaused,
+  resumeNotBefore,
+  withResume,
   planQueue,
   planPolicy,
   policyJob,
@@ -58,7 +62,7 @@ import {
   planPolicyHeld,
   formatHeld,
 } from "./run-fleet";
-import { modelStates, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, modelStates, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -895,5 +899,144 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(() => parseFleet({ ...raw, policy: { paid: { maxConcurrent: -1 } } })).toThrow(/paid.maxConcurrent/);
     expect(() => parseFleet({ ...raw, policy: { extras: { characters: [{ race: 0, class: 1 }] } } })).toThrow(/characters\[0\]/);
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
+  });
+});
+
+describe("pause and resume across a fleet stop (ADR-0036)", () => {
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    glm: { model: "z-ai/glm-5.2:free", tiers: [] },
+    ox: { model: "stealth/ox-alpha", tiers: [] },
+    nav: { model: "sonnet", driver: "claude-code", objective: "probe", tiers: [] },
+  };
+  const paused = (over: Partial<RunFact> & { runId: string; model: string; account: string }): RunFact => ({
+    effort: null,
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: "0.0.0-phase0+gharness-0.3-1-gabc",
+    harnessSeries: "0.3",
+    extra: false,
+    startedAt: NOW - 2 * H,
+    endedAt: NOW - H,
+    terminationReason: null,
+    modelResponses: 30,
+    bestLevel: 3,
+    live: false,
+    pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 },
+    episodeMs: 90 * 60_000,
+    ...over,
+  });
+  const config = (jobs: FleetJob[] = []): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
+    jobs,
+    roster,
+    policy: DEFAULT_POLICY,
+    accounts: { pinned: Object.fromEntries(jobs.filter((j) => j.account !== undefined).map((j) => [j.account!, j.name])), pool: ["RUNNER3", "RUNNER4"] },
+  });
+  const held = (): string | undefined => undefined;
+
+  test("boot: a policy model's paused run resumes on its own account, ahead of the policy, with its run id", () => {
+    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260823-a2", model: "z-ai/glm-5.2:free", account: "RUNNER4" });
+    const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume).toHaveLength(1);
+    const r = plan.resume[0]!;
+    expect(r.account).toBe("RUNNER4");
+    expect(r.job).toMatchObject({ name: "glm-e90", source: "policy", attempt: 2, resume: { runId: run.runId, model: "z-ai/glm-5.2:free" } });
+    expect(r.why).toContain("operator-pause, 41m elapsed of 1h30m");
+    // The lane: the paused run id on the first entry, the roster told to reattach.
+    const lane = jobLane(r.job, roster, "RUNNER4", "20260823");
+    expect(lane.resumeRunId).toBe(run.runId);
+    expect(lane.entries?.[0]?.runId).toBe(run.runId);
+    expect(laneArgv(lane, { stamp: "20260823", until: undefined })).toContain("--resume-roster");
+    // Ordering: the tick's plan gives the resume its account before the queue or the policy can.
+    const states = modelStatesOf(rosterModels(roster), [run], NOW);
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, maxConcurrent: {}, legacyLanes: [] };
+    const tick = planTick(cfg, states, held, "20260823", plan.resume);
+    expect(tick.policy.map((p) => p.account)).toEqual(["RUNNER3"]);
+    expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox"]); // glm is held by its paused run, never rescheduled
+  });
+
+  test("a pinned job's paused run replaces the job's lane with a resume lane on the pinned account", () => {
+    const job: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER", source: "pinned" };
+    const run = paused({ runId: "fleet-nav-freeplay-sonnet-20260823", model: "sonnet", account: "RUNNER", episode: "freeplay", episodeMs: null, pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: 3 * H } });
+    const plan = planResumes({ runs: [run], config: config([job]), running: new Map(), held, now: NOW });
+    expect(plan.resume.map((r) => [r.job.name, r.account, r.runId])).toEqual([["nav-freeplay", "RUNNER", run.runId]]);
+    expect(plan.resume[0]!.why).toContain("3h00m elapsed");
+    const lane = jobLane(plan.resume[0]!.job, roster, "RUNNER", "20260823");
+    expect(lane.loop).toBe(true);
+    expect(lane.entries?.[0]).toMatchObject({ model: "sonnet", runId: run.runId });
+    // Disabled: stays paused, listed with the reason.
+    const off = planResumes({ runs: [run], config: config([{ ...job, enabled: false }]), running: new Map(), held, now: NOW });
+    expect(off.resume).toEqual([]);
+    expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
+  });
+
+  test("not in config: listed for the operator, never resumed, never counted", () => {
+    const run = paused({ runId: "fleet-gone-e90-old-model-20260823", model: "gone/model", account: "RUNNER3" });
+    const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed).toHaveLength(1);
+    expect(plan.listed[0]!.why).toBe("paused, not in config — resume by hand or archive");
+    expect(formatPaused(plan.listed)[1]).toContain("fleet-gone-e90-old-model-20260823 — gone/model on RUNNER3: operator-pause, 41m elapsed of 1h30m");
+    // And the account it sits on is free for the policy: a not-in-config run holds nothing.
+    const states = modelStatesOf(rosterModels(roster), [run], NOW);
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, maxConcurrent: {}, legacyLanes: [] };
+    expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
+  });
+
+  test("a stale pause (older than twice the budget) is listed, not resumed; the model is free again", () => {
+    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260822", model: "z-ai/glm-5.2:free", account: "RUNNER3", pause: { reason: "operator-pause", at: NOW - 4 * H, count: 1, episodeElapsedMs: 10 * 60_000 } });
+    const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed[0]!.why).toContain("stale: paused 4h00m ago, past twice its 1h30m budget — resume by hand (--resume fleet-glm-e90-z-ai-glm-5-2-free-20260822) or archive");
+    const states = modelStatesOf(rosterModels(roster), [run], NOW);
+    expect(states.find((s) => s.name === "glm")?.paused).toBeUndefined();
+  });
+
+  test("provider pauses resume on the roster's defer ladder by pause count; past the ladder they are listed", () => {
+    const base = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3" });
+    const at = NOW - 2 * 60_000;
+    // First rate-limited pause: 1m rung, already due.
+    let plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume.map((r) => r.runId)).toEqual([base.runId]);
+    expect(plan.resume[0]!.why).toContain("rate-limited, 0m elapsed of 1h30m");
+    // Fourth pause: 10m rung, not yet due.
+    plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed[0]!.why).toContain("rate-limited, pause 4: resuming after");
+    expect(resumeNotBefore({ reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 })).toBe(at + 10 * 60_000);
+    // Past the ladder: by hand.
+    plan = planResumes({ runs: [{ ...base, pause: { reason: "quota-exhausted", at, count: 10, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.listed[0]!.why).toContain("past the defer ladder");
+    expect(resumeNotBefore({ reason: "operator-pause", at, count: 10, episodeElapsedMs: 0 })).toBeNull();
+  });
+
+  test("a resume waits for its own account — never a different one — and a running job handles its own pause", () => {
+    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260823", model: "z-ai/glm-5.2:free", account: "RUNNER3" });
+    let plan = planResumes({ runs: [run], config: config(), running: new Map([["ox-e90", "RUNNER3"]]), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed[0]!.why).toBe("waiting: account RUNNER3 is busy (ox-e90)");
+    plan = planResumes({ runs: [run], config: config(), running: new Map(), held: (a) => (a === "RUNNER3" ? "run-by-hand" : undefined), now: NOW });
+    expect(plan.listed[0]!.why).toBe("waiting: account RUNNER3 is held by run run-by-hand");
+    // The job's own roster is running (mid-retry): nothing to do, nothing to list.
+    plan = planResumes({ runs: [run], config: config(), running: new Map([["glm-e90", "RUNNER3"]]), held, now: NOW });
+    expect(plan).toEqual({ resume: [], listed: [] });
+  });
+
+  test("withResume puts the paused entry first so a lane-mate's fresh launch cannot wipe its character", () => {
+    const lane: FleetLane = {
+      name: "mix",
+      enabled: true,
+      account: "RUNNER",
+      loop: false,
+      entries: [
+        { model: "a", runId: "fleet-mix-a-20260823" },
+        { model: "b", effort: "low", runId: "fleet-mix-b-low-20260823" },
+      ],
+    };
+    const out = withResume(lane, { runId: "fleet-mix-b-low-20260823", model: "b", effort: "low" });
+    expect(out.entries?.map((e) => e.runId)).toEqual(["fleet-mix-b-low-20260823", "fleet-mix-a-20260823"]);
+    expect(out.resumeRunId).toBe("fleet-mix-b-low-20260823");
   });
 });
