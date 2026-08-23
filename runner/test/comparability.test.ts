@@ -247,6 +247,8 @@ describe("harnessSeries (ADR-0034: the schedule keys on major.minor)", () => {
     expect(harnessSeries("harness-0.2-33-g9bba93b-dirty")).toBe("0.2");
     expect(harnessSeries("harness-1.10")).toBe("1.10");
     expect(harnessSeries("harness-0.3-test")).toBe("0.3");
+    // The host-side wrapper version.ts produces around a describe.
+    expect(harnessSeries("0.0.0-phase0+gharness-0.3-133-g6e4b5bb-dirty")).toBe("0.3");
   });
   test("no recognisable series reads as null, never as a guess", () => {
     expect(harnessSeries("0.0.0-phase0-unversioned")).toBeNull();
