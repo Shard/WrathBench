@@ -1143,6 +1143,40 @@ namespace WrathBench
             && pts.size() >= 2;
     }
 
+    // A mesh path that falls is a ledge, not a route (ADR-0027 amendment,
+    // nav-probe c4 on map 369: a polyline segment with dz -7.64 over 1.0y of
+    // 2D travel was walked, `arrived` was reported from a 2D-only check, and
+    // the next move from down there was `start_off_mesh`). A segment is a
+    // drop when it is both tall (> 2.0y, so stairs and stale-z corrections
+    // stay `meshZ`) and steeper than a ramp (|dz| > 1.2 x its 2D length).
+    // Deliberately not the core's SetSlopeCheck: that is a pathing-time
+    // preference, this is a verdict on the route the mesh already chose.
+    static constexpr float DROP_MIN_DZ = 2.0f;
+    static constexpr float DROP_SLOPE = 1.2f;
+    static bool IsDropSegment(WbVec const& a, WbVec const& b, float* dzOut)
+    {
+        float dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+        float d2 = std::sqrt(dx * dx + dy * dy);
+        if (dzOut) *dzOut = dz;
+        return std::fabs(dz) > DROP_MIN_DZ && std::fabs(dz) > DROP_SLOPE * d2;
+    }
+
+    // Audit shape of a resolved polyline (op: move_path), capped so a 200-point
+    // sweep does not flood the log; `truncated` says when the cap bit.
+    static std::string PathPointsJson(std::vector<WbVec> const& pts, size_t cap = 64)
+    {
+        std::ostringstream ss;
+        ss << '[';
+        size_t n = std::min(pts.size(), cap);
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (i) ss << ',';
+            ss << Json::Writer().Add("x", (double)pts[i].x).Add("y", (double)pts[i].y).Add("z", (double)pts[i].z).Str();
+        }
+        ss << ']';
+        return ss.str();
+    }
+
     // The cause ladder behind a move_to (PROTOCOL.md, WB_MOVE_RESULT.status).
     // Returns status == nullptr with `points` filled on success. Order matters:
     // no_mesh must be tested before CalculatePath, because the core hides a
@@ -1251,6 +1285,22 @@ namespace WrathBench
             r.status = "path_incomplete";
             return r;
         }
+        // Per-segment drop guard over the whole polyline (the main path and,
+        // when spliced, the leg2 continuation): the walk is not dispatched.
+        // `points` is kept so the move_path audit shows the route that fell.
+        for (size_t i = 0; i + 1 < r.points.size(); ++i)
+        {
+            float dz = 0.0f;
+            if (IsDropSegment(r.points[i], r.points[i + 1], &dz))
+            {
+                r.status = "drop";
+                r.hasReached = true;
+                r.reachedX = r.points[i].x; r.reachedY = r.points[i].y; r.reachedZ = r.points[i].z;
+                r.hasDrop = true;
+                r.dropDz = dz;
+                return r;
+            }
+        }
         float endZ = r.points.back().z;
         if (std::fabs(endZ - reqZ) > 1.0f)
         {
@@ -1332,6 +1382,15 @@ namespace WrathBench
         if (m.hasMeshZ)
             w.Add("meshZ", (double)m.meshZ);
         m.hasMeshZ = false;
+        // A ledge found while walking (TickMover's defensive check): the edge
+        // is where the mover stopped, dz is the step it refused to take.
+        if (m.hasDrop)
+        {
+            w.Raw("reachedPos", Json::Writer().Add("x", (double)m.curX).Add("y", (double)m.curY).Add("z", (double)m.curZ).Str());
+            w.Add("dz", (double)m.dropDz);
+            w.Raw("target", Json::Writer().Add("x", (double)m.reqX).Add("y", (double)m.reqY).Add("z", (double)m.reqZ).Str());
+        }
+        m.hasDrop = false;
         EmitEvent(s, "WB_MOVE_RESULT", 0xFF01, w.Str());
     }
 
@@ -1424,6 +1483,12 @@ namespace WrathBench
                         .Add("unitTarget", !guid.empty()).Add("z", (double)z).Add("groundZ", (double)groundZ).Str());
             }
         }
+        // The resolved polyline, at dispatch, so a diagnosis reads the route
+        // the mesh chose instead of reconstructing it from heartbeats.
+        Audit(*s, "action", Json::Writer().Add("op", "move_path").Add("moveId", moveId)
+            .Add("status", r.status ? r.status : "ok")
+            .Add("pointCount", (uint64_t)r.points.size()).Add("truncated", r.points.size() > 64)
+            .Raw("points", PathPointsJson(r.points)).Str());
         if (r.status != nullptr)
         {
             if (player->isMoving()) // see failEvent
@@ -1435,12 +1500,19 @@ namespace WrathBench
             w.Raw("pos", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()));
             if (r.hasReached)
                 w.Raw("reachedPos", Json::Writer().Add("x", (double)r.reachedX).Add("y", (double)r.reachedY).Add("z", (double)r.reachedZ).Str());
+            if (r.hasDrop)
+            {
+                w.Add("dz", (double)r.dropDz);
+                w.Raw("target", Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str());
+            }
             EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
             return;
         }
         std::vector<WbVec> const& pts = r.points;
         m.meshZ = r.meshZ;
         m.hasMeshZ = r.hasMeshZ;
+        m.reqX = x; m.reqY = y; m.reqZ = z;
+        m.hasDrop = false;
 
         int64_t now = NowMs();
         m.points.clear();
@@ -2102,6 +2174,26 @@ namespace WrathBench
                 ++m.seg;
                 m.segDone = 0.0f;
                 continue;
+            }
+            // Defensive twin of ResolvePathAt's guard: a segment that would
+            // step off a ledge is not walked. Stop at the segment's start (the
+            // edge) and say `drop` rather than interpolate down the cliff.
+            if (m.segDone <= 0.0f)
+            {
+                float dz = 0.0f;
+                if (IsDropSegment(a, b, &dz))
+                {
+                    m.curX = a.x; m.curY = a.y; m.curZ = a.z;
+                    SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO,
+                        FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
+                    Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_STOP")
+                        .Add("moveId", m.moveId).Add("cause", "drop").Add("dz", (double)dz)
+                        .Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
+                    m.hasDrop = true;
+                    m.dropDz = dz;
+                    FinishMove(s, "drop");
+                    return;
+                }
             }
             float remain = segLen - m.segDone;
             if (advance < remain)

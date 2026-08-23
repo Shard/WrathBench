@@ -655,7 +655,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | opcode | id | `data` fields |
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
-| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` only on `path_incomplete`; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
+| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` on `path_incomplete` and `drop`; `"dz": <f>, "target": { "x","y","z" }` only on `drop`; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
 | `WB_RIDE_PROGRESS` | 0xFF05 | `{ "transportGuid": <guid-string>, "transportEntry": <u32>, "pos": { "x","y","z","o" } }` — at most 1/s while the character rides a transport and is not walking; the server-side position the transport carried it to |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
@@ -687,6 +687,16 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
   destination. The module already tried once to subdivide (path to where the
   mesh got, then onward); `reachedPos` is how far the mesh could get, so the
   agent can route around or approach from another side. Nothing moved.
+- `drop` — the mesh's route steps off a ledge: some segment of the resolved
+  polyline falls (or climbs) more than 2.0y and steeper than 1.2x its 2D
+  length — a cliff, not a ramp (stairs and ramps pass; a stale z within the
+  `meshZ` band passes). A mesh path that falls is a ledge, not a route, so the
+  walk is not dispatched: `reachedPos` is the last point before the step
+  (the edge, on the character's level), `dz` is the signed vertical step the
+  route would have taken there, and `target` echoes the requested point. Pick
+  a destination on this level, or find the ramp/stairs. The same guard runs
+  per segment while walking; a ledge that slips past planning stops the
+  character at the edge with the same status and `pos` at the edge.
 - `transferred` — a map transfer took the character mid-move (an areatrigger
   portal, a cross-map port); the server applies the destination itself. `pos`
   is the last old-map position; the new map and arrival point follow on
@@ -916,3 +926,8 @@ Synthesized movement logs one `action` record per `move_to`/`stop`/`face`
 request plus one per dispatched movement packet (`op: "move_pkt"` with the
 opcode and position), so the packet sequence the "client" sent is fully
 reconstructable from the audit log.
+Each `move_to` that reaches the mesh also logs one `op: "move_path"` record at
+dispatch — `moveId`, `status` (`"ok"` when the walk was dispatched, else the
+`WB_MOVE_RESULT` status), `pointCount`, and `points` (the resolved polyline,
+capped at 64 points with `truncated: true` when the cap bit) — so a route the
+mesh chose is read from the log, not reconstructed from heartbeats.

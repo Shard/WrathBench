@@ -81,6 +81,9 @@ namespace WrathBench
         float destX{0}, destY{0}, destZ{0};
         bool hasMeshZ{false};       // the mesh resolved the request to a different z
         float meshZ{0};
+        float reqX{0}, reqY{0}, reqZ{0}; // the point the agent asked for (echoed on `drop`)
+        bool hasDrop{false};        // TickMover found a ledge in the polyline: FinishMove says `drop`
+        float dropDz{0};
     };
 
     // Per-token headless session. See ADR-0009 for the parked-socket design.
@@ -247,8 +250,10 @@ namespace WrathBench
             std::vector<WbVec> points;
             bool hasMeshZ{false};
             float meshZ{0};
-            bool hasReached{false};     // path_incomplete: how far the mesh got
+            bool hasReached{false};     // path_incomplete / drop: how far the mesh got / the ledge edge
             float reachedX{0}, reachedY{0}, reachedZ{0};
+            bool hasDrop{false};        // drop: the vertical step the polyline takes past reachedPos
+            float dropDz{0};
         };
         // One pass of the cause ladder at x,y,z; reqZ is the z the agent asked
         // for (meshZ is reported relative to it).
