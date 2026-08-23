@@ -442,19 +442,22 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
       );
     }
     // Shared free-cloud pools (OpenRouter, OpenCode Zen) carry free models
-    // only; the suffix is how we keep a lane off a paid tier. Local/self-hosted
+    // only; the suffix is how we keep a lane off a paid tier, and an explicit
+    // `billing: "paid"` is how the operator opts one in on purpose. Local/self-hosted
     // openai lanes have no such pool and are exempt — but still claude-barred
     // above.
     if (
       driver === "openai" &&
       isSharedFreePool(e.apiBase) &&
       !/(-free$|:free$)/.test(e.model) &&
-      !isAllowlistedFree(e.model)
+      !isAllowlistedFree(e.model) &&
+      e.billing !== "paid"
     ) {
       fail(
         `lane ${lane.name}: entry ${e.model}: lane-policy — a shared free-cloud pool ` +
           `(OpenRouter/OpenCode) carries free models only (id must end -free or :free, ` +
-          `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST); ` +
+          `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST) unless the entry ` +
+          `declares "billing": "paid" — a deliberate paid model under policy.paid (ADR-0034); ` +
           `a local/self-hosted apiBase is exempt`,
       );
     }
@@ -764,7 +767,9 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
     // Lane-policy checks are per entry; the pseudo-lane is only there for the
     // error message and the account-agreement check (vacuous here).
-    const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [rest]);
+    const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [
+      rawBilling === undefined ? rest : { ...rest, billing: rawBilling },
+    ]);
     out[name] = {
       ...validated!,
       tiers: tiers as EpisodeId[],
