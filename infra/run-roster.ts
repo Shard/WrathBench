@@ -60,6 +60,8 @@ type Driver = "openai" | "claude-code";
 
 export interface RosterSpec {
   model: string;
+  /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
+  billing?: "free" | "paid";
   /**
    * Defaults to "openai". `claude-code` runs go through the Claude Code CLI,
    * which is their harness (ADR-0035). `claude-subscription` is accepted as
