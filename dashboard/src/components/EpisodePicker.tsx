@@ -1,5 +1,5 @@
 /**
- * The episode filter, shared by the results and ladder pages.
+ * The episode filter, shared by the episodes, results and ladder pages.
  *
  * One control in one place, because the two pages must not be able to disagree
  * about what "e90" selects. `all` is offered alongside the three tiers: a run
@@ -10,37 +10,7 @@
 
 import { For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import type { EpisodeIdView, HarnessView } from "../api/client";
-
-export type EpisodeChoice = EpisodeIdView | "all";
-
-export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "freeplay", "all"];
-
-/**
- * The `?episode=` search param, defaulted and validated.
- *
- * Anything unrecognised falls back to `e90` rather than being sent to the API,
- * which would answer 400 and blank the page over a typo in a shared link. The
- * chips always show what is actually selected, so the fallback is visible.
- */
-export function episodeParam(raw: string | string[] | undefined): EpisodeChoice {
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  return EPISODE_CHOICES.includes(v as EpisodeChoice) ? (v as EpisodeChoice) : "e90";
-}
-
-export type HarnessChoice = HarnessView | "all";
-
-export const HARNESS_CHOICES: readonly HarnessChoice[] = ["all", "wrathbench", "claude-code"];
-
-/**
- * The `?harness=` search param (ADR-0035). Defaults to `all`: the harness is
- * a tag on every row, and the operator chose not to partition on it, so the
- * filter is an optional narrowing rather than the default view.
- */
-export function harnessParam(raw: string | string[] | undefined): HarnessChoice {
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  return HARNESS_CHOICES.includes(v as HarnessChoice) ? (v as HarnessChoice) : "all";
-}
+import { EPISODE_CHOICES, HARNESS_CHOICES, type EpisodeChoice, type HarnessChoice } from "../lib/episodes";
 
 /** A harness tag as every row shows it. Null reads as "not recorded". */
 export function HarnessTag(props: { harness: string | null | undefined }) {

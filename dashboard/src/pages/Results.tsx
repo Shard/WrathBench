@@ -27,9 +27,10 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun, type ModelRowView } from "../api/client";
-import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
+import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { episodeParam, harnessParam } from "../lib/episodes";
 import { CHART_LEVELS, byCharacter, characterOptions, groupsForLevel, scored, type ResultGroup } from "../lib/results";
-import { modelsHref, rosterNameFor } from "../lib/models";
+import { episodesHref, modelsHref, rosterNameFor } from "../lib/models";
 import { fmtDuration, shortHarness } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -221,7 +222,7 @@ export default function Results() {
                 <th>effort</th>
                 <th>wiki</th>
                 <th title="starting race and class; a row spanning several says so">character</th>
-                <th class="right">runs</th>
+                <th class="right" title="runs considered; the number links to them">runs</th>
                 <th class="right">reached L{level()}</th>
                 <th class="right">best turns</th>
                 <th class="right">median turns</th>
@@ -262,7 +263,26 @@ export default function Results() {
                           ? g.characters[0]
                           : `${g.characters.length} characters`}
                     </td>
-                    <td class="right mono">{g.attempts}</td>
+                    {/*
+                      The drill-down. A row is an aggregate; the runs behind it
+                      are the episodes page with this row's filters applied, so
+                      there is one place runs are listed and no expander here
+                      that would be a second one. `effort` travels with the
+                      model because `(model, effort)` is the pair runs match on.
+                    */}
+                    <td class="right mono">
+                      <A
+                        href={episodesHref({
+                          model: g.model,
+                          effort: g.effort,
+                          episode: episode(),
+                          harness: harness(),
+                        })}
+                        title="the runs behind this row, on the episodes page"
+                      >
+                        {g.attempts}
+                      </A>
+                    </td>
                     <td class="right mono">{g.reached.length}</td>
                     <td class="right mono">{g.bestTurn ?? "—"}</td>
                     <td class="right mono dim">{g.medianTurn ?? "—"}</td>

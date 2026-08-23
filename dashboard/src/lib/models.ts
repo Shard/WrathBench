@@ -102,3 +102,46 @@ export function rosterNameFor(
 export function modelsHref(name: string | null): string {
   return name === null ? "/models" : `/models#${encodeURIComponent(name)}`;
 }
+
+/**
+ * The query every cross-page run filter is spelled with.
+ *
+ * One builder, because the pages that link to each other must not disagree
+ * about what "this row's runs" means. `effort` travels with `model` and is not
+ * optional in spirit: `(model, effort)` is the pair the projection matches runs
+ * on (`matchesRoster` in `runner/src/models.ts`), so a link from a `sonnet-low`
+ * row that dropped it would show `sonnet`'s runs too. Absent effort is its own
+ * value — the entry with no effort — never "any effort".
+ *
+ * `harness` and `episode` are omitted at their server defaults, so a link is
+ * the shortest URL that means what it says.
+ */
+export function runFilterQuery(f: {
+  model?: string | null;
+  effort?: string | null;
+  episode?: string | null;
+  harness?: string | null;
+}): string {
+  const q = new URLSearchParams();
+  if (f.episode != null && f.episode !== "") q.set("episode", f.episode);
+  if (f.model != null && f.model !== "") q.set("model", f.model);
+  if (f.effort != null && f.effort !== "") q.set("effort", f.effort);
+  if (f.harness != null && f.harness !== "" && f.harness !== "all") q.set("harness", f.harness);
+  const s = q.toString();
+  return s === "" ? "" : `?${s}`;
+}
+
+/** The aggregate view, filtered. */
+export function resultsHref(f: Parameters<typeof runFilterQuery>[0]): string {
+  return `/results${runFilterQuery(f)}`;
+}
+
+/**
+ * The per-run view, filtered — the drill-down under an aggregate row.
+ *
+ * The episodes page is the per-run grain (ADR-0022 amendment), so "show me the
+ * runs behind this number" is a link there rather than an expander here.
+ */
+export function episodesHref(f: Parameters<typeof runFilterQuery>[0]): string {
+  return `/episodes${runFilterQuery(f)}`;
+}

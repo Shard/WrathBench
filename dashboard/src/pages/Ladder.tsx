@@ -22,7 +22,8 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
-import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
+import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { episodeParam, harnessParam } from "../lib/episodes";
 import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/results";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
