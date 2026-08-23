@@ -58,8 +58,9 @@ obvious).
 
 ## Amendment 2026-08-23: same-map teleports and the z-ladder (FOLLOW-UPS 46)
 
-Three repairs in the same spirit, shipped in module build `harness-0.3-137`
-pending the harness-0.4 deploy:
+Three repairs in the same spirit, built as `harness-0.3-137` and live since
+2026-08-23 as `harness-0.4-3-g8f6939d` (`infra/smoke/module-navigation.ts` PASS
+on SMOKE3, gate PASS):
 
 - `teleported` joins the vocabulary as its own status rather than a `sameMap`
   flag on `transferred`. Decision 1 says the status is what a snippet branches

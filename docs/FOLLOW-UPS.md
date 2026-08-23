@@ -183,8 +183,8 @@ and status.
      version, never model summarization (conflates constructs, breaks replay) and never
      per-model context scaling (declared sizes drift for one id).
    - **8b — context engine as a labelled harness value; parked, operator direction.**
-     (a) Stretch the window past 24–48 in a future harness version — ~8–12k steady state
-     against 131k–200k contexts makes a long stable prefix nearly free under caching.
+     (a) Stretch the window past 24–48 in a future harness version: caching makes a much
+     longer prefix nearly free at ~8–12k steady state against 131k–200k contexts.
      (b) Offer threshold-triggered self-compaction as a third value of the ADR-0033
      tuple's `harness` field (ADR-0035), since grow-then-self-compact is what end-user
      agents run under: comparable within a harness if the operator partitions, never
@@ -197,8 +197,9 @@ and status.
     why aggregators exclude their results; a furthest-level metric has the same
     exposure. ADR-0018 (signals, not scores; derivations offline) is the decision of
     record, and the per-run derivations honour it: `runner/viewer/eval.ts` emits level
-    marks with the turn and the active time each level cost, maps observed, and no
-    aggregate. **The one place a scalar does appear** is
+    marks with the turn and the active time each level cost, maps observed, and a
+    per-run `maxLevel` — all of it recording (ADR-0018 rule 2), none of it a score
+    across models. **Where a cross-model scalar does appear** is
     `dashboard/src/lib/eval.ts`: every derivable rung (1, 3, 5, 7, 8) is a max-level
     threshold, `ladderRows()` computes `highest` — one integer per model — and
     `rows.sort((a, b) => b.highest - a.highest || …)` ranks models by it. That is a
