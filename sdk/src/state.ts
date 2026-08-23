@@ -39,6 +39,7 @@ import {
   type AuraData,
   type AuraUpdateData,
   type CreateBlock,
+  type GameObjectQueryResponseData,
   type GuidKey,
   type CooldownEventData,
   type InitialSpellsData,
@@ -49,6 +50,7 @@ import {
   type SpellCooldownData,
   type SupersededSpellData,
   type TalentsInfoData,
+  type TransportProgressData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
   type QuestQueryResponseData,
@@ -426,6 +428,82 @@ export interface CreatureInfo {
   readonly rank: number | undefined;
 }
 
+/** A game object template as `SMSG_GAMEOBJECT_QUERY_RESPONSE` describes it. */
+export interface GameObjectInfo {
+  readonly entry: number;
+  readonly name: string;
+  /** The core's `GameobjectTypes` value; `gameObjectTypeName` names it. */
+  readonly type: number | undefined;
+  readonly displayId: number | undefined;
+  readonly castBarCaption: string | undefined;
+}
+
+/**
+ * The core's `GameobjectTypes` enum (SharedDefines.h, 3.3.5a), by value. A
+ * value outside the enum reads as `unknown`.
+ */
+export const GAME_OBJECT_TYPE_NAMES = [
+  "door",
+  "button",
+  "questgiver",
+  "chest",
+  "binder",
+  "generic",
+  "trap",
+  "chair",
+  "spell_focus",
+  "text",
+  "goober",
+  "transport",
+  "areadamage",
+  "camera",
+  "map_object",
+  "mo_transport",
+  "duel_arbiter",
+  "fishingnode",
+  "summoning_ritual",
+  "mailbox",
+  "do_not_use",
+  "guardpost",
+  "spellcaster",
+  "meetingstone",
+  "flagstand",
+  "fishinghole",
+  "flagdrop",
+  "mini_game",
+  "do_not_use_2",
+  "capture_point",
+  "aura_generator",
+  "dungeon_difficulty",
+  "barber_chair",
+  "destructible_building",
+  "guild_bank",
+  "trapdoor",
+] as const;
+export type GameObjectTypeName = (typeof GAME_OBJECT_TYPE_NAMES)[number] | "unknown";
+
+export function gameObjectTypeName(type: number): GameObjectTypeName {
+  return GAME_OBJECT_TYPE_NAMES[type] ?? "unknown";
+}
+
+/**
+ * What a client animates for a transport it has been sent: the car's clock
+ * on its `TransportAnimation.dbc` period and whether the segment under that
+ * clock has no displacement (the car is dwelling at a platform). Folded from
+ * `WB_TRANSPORT_PROGRESS`; the position itself goes on `position`.
+ */
+export interface TransportState {
+  readonly progressMs: number;
+  readonly periodMs: number | undefined;
+  readonly docked: boolean | undefined;
+  /**
+   * Every point this car has been observed dwelling at (`docked: true`),
+   * deduplicated within 5y: where it stops, as far as this session has seen.
+   * A tram car accrues its two platforms over one round trip.
+   */
+  readonly docks: readonly Point3[];
+}
+
 /** One selectable row of an open gossip menu, as `gossipSelect` resolves against. */
 export interface GossipMenuOption {
   readonly optionId: number;
@@ -463,6 +541,12 @@ export interface NearbyObject extends UnitFieldsState {
   /** From `SMSG_MONSTER_MOVE`: creatures move by spline, not by `MSG_MOVE_*`. */
   motion: Observed<Motion> | undefined;
   targetGuid: Observed<GuidKey> | undefined;
+  /**
+   * Transports only: the animation clock and `docked`, from the create block's
+   * `pathProgress` and then every `WB_TRANSPORT_PROGRESS`. Undefined for
+   * everything else and for a transport the module has not yet reported on.
+   */
+  transport: Observed<TransportState> | undefined;
   /**
    * The questgiver marker the client draws over this object (`!`/`?`/grey),
    * from `SMSG_QUESTGIVER_STATUS` / `_MULTIPLE`. The wire `DIALOG_STATUS_*`
@@ -515,6 +599,20 @@ export interface UnitView {
   readonly questGiver: QuestGiverStatusName | undefined;
   /** The raw `DIALOG_STATUS_*` byte behind `questGiver`. */
   readonly questGiverStatus: number | undefined;
+  /**
+   * Game objects only: what kind of object this is, named from the core's
+   * `GameobjectTypes` (`door`, `chest`, `mailbox`, `transport`, …). From the
+   * object's own `GAMEOBJECT_BYTES_1` or its template answer; undefined for
+   * units and players, and for a game object neither has described yet.
+   */
+  readonly goType: GameObjectTypeName | undefined;
+  /**
+   * Transports only: `true` while the car is dwelling at a platform, `false`
+   * while it is between ends — from the same `TransportAnimation.dbc` clock a
+   * client animates the car with (`WB_TRANSPORT_PROGRESS`). Undefined for
+   * everything that is not a transport, and until the first report.
+   */
+  readonly docked: boolean | undefined;
 }
 
 /** The `DIALOG_STATUS_*` names, 3.3.5a. `unknown` covers any byte outside 0-10. */
@@ -685,6 +783,13 @@ export class StateCache {
    * re-approached creature permanently nameless. Same reasoning for `names`.
    */
   readonly creatures = new Map<number, Observed<CreatureInfo>>();
+
+  /**
+   * entry -> game object template info, from `SMSG_GAMEOBJECT_QUERY_RESPONSE`.
+   * Never pruned, for the same reason as `creatures`: the module issues the
+   * query once per entry per session.
+   */
+  readonly gameObjects = new Map<number, Observed<GameObjectInfo>>();
 
   /**
    * itemId -> item template info, from `SMSG_ITEM_QUERY_SINGLE_RESPONSE`.
@@ -1377,6 +1482,48 @@ export class StateCache {
         }
         return;
       }
+      case "SMSG_GAMEOBJECT_QUERY_RESPONSE": {
+        const d = event.data as GameObjectQueryResponseData;
+        if (!d.found || d.name === undefined) return;
+        this.gameObjects.set(d.entry, {
+          value: {
+            entry: d.entry,
+            name: d.name,
+            type: d.type,
+            displayId: d.displayId,
+            castBarCaption: d.castBarCaption === undefined || d.castBarCaption === "" ? undefined : d.castBarCaption,
+          },
+          seq: event.seq,
+          ts: event.ts,
+        });
+        for (const obj of this.nearby.values()) {
+          if (obj.objectType?.value === "gameObject" && obj.entry?.value === d.entry) this.joinName(obj);
+        }
+        return;
+      }
+      case "WB_TRANSPORT_PROGRESS": {
+        // The car moved (or did not): a client animating the transport from
+        // its own DBC knows exactly this. The object stays in `nearby` only
+        // if the update stream put it there; a report for a guid never
+        // created still means the server sent the car, so it is upserted the
+        // way a `values` delta for an unseen guid is.
+        const d = event.data as TransportProgressData;
+        this.upsertNearby(d.guid, event.seq, (obj) => {
+          if (obj.entry === undefined) obj.entry = { value: d.entry, seq: event.seq, ts: event.ts };
+          obj.position = { value: toUnitPosition(d.pos), seq: event.seq, ts: event.ts };
+          const docks = [...(obj.transport?.value.docks ?? [])];
+          if (d.docked === true && !docks.some((k) => Math.hypot(k.x - d.pos.x, k.y - d.pos.y) < 5)) {
+            docks.push({ x: d.pos.x, y: d.pos.y, z: d.pos.z });
+          }
+          obj.transport = {
+            value: { progressMs: d.progressMs, periodMs: d.periodMs, docked: d.docked, docks },
+            seq: event.seq,
+            ts: event.ts,
+          };
+          this.joinName(obj);
+        });
+        return;
+      }
       case "SMSG_ITEM_QUERY_SINGLE_RESPONSE": {
         const d = event.data as ItemQueryResponseData;
         if (!d.found || d.name === undefined) return;
@@ -1792,6 +1939,13 @@ export class StateCache {
       if (block.moveFlags !== undefined) obj.fields.set("moveFlags", { value: block.moveFlags, seq, ts });
       if (block.runSpeed !== undefined) obj.fields.set("runSpeed", { value: block.runSpeed, seq, ts });
       if (block.targetGuid !== undefined) obj.targetGuid = { value: block.targetGuid, seq, ts };
+      if (block.pathProgress !== undefined) {
+        obj.transport = {
+          value: { progressMs: block.pathProgress, periodMs: undefined, docked: undefined, docks: [] },
+          seq,
+          ts,
+        };
+      }
       this.mergeFields(obj, block.fields, seq, ts);
       this.joinName(obj);
     });
@@ -1952,6 +2106,20 @@ export class StateCache {
       if (info) obj.name = { value: info.value.name, seq: info.seq, ts: info.ts };
       return;
     }
+    if (type === "gameObject" && entry !== undefined) {
+      // Game object and creature entries are separate id spaces: a chest's
+      // entry can equal some creature's, so only the game object answer names it.
+      const info = this.gameObjects.get(entry);
+      if (info) {
+        obj.name = { value: info.value.name, seq: info.seq, ts: info.ts };
+        // The template's type stands in when the create block's
+        // GAMEOBJECT_BYTES_1 was not in the mask; both are client-cache facts.
+        if (!obj.fields.has("goType") && info.value.type !== undefined) {
+          obj.fields.set("goType", { value: info.value.type, seq: info.seq, ts: info.ts });
+        }
+      }
+      return;
+    }
     if (type !== "player" && entry !== undefined) {
       const info = this.creatures.get(entry);
       if (info) {
@@ -1999,6 +2167,7 @@ export class StateCache {
         health: undefined,
         power: undefined,
         targetGuid: undefined,
+        transport: undefined,
         questGiver: undefined,
         fields: new Map<string, Observed<number>>(),
         firstSeq: seq,
@@ -2043,7 +2212,20 @@ function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView
     targetGuid: target === undefined || target === "0" ? undefined : target,
     questGiver: obj.questGiver === undefined ? undefined : questGiverStatusName(obj.questGiver.value),
     questGiverStatus: obj.questGiver?.value,
+    goType: goTypeOf(obj),
+    docked: obj.transport?.value.docked,
   };
+}
+
+/**
+ * A game object's type name from its `goType` field (the create block's
+ * `GAMEOBJECT_BYTES_1`, or the template answer joined in by `joinName`).
+ * Units and players have no type here.
+ */
+function goTypeOf(obj: NearbyObject): GameObjectTypeName | undefined {
+  if (obj.objectType?.value !== "gameObject") return undefined;
+  const own = obj.fields.get("goType")?.value;
+  return own === undefined ? undefined : gameObjectTypeName(own);
 }
 
 /**

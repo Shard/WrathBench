@@ -534,6 +534,8 @@ export const createBlockSchema = z.looseObject({
   runSpeed: z.number().optional(),
   pos: positionSchema.optional(),
   targetGuid: guidSchema.optional(),
+  /** Transports only: ms into the `TransportAnimation.dbc` period when the block was built. */
+  pathProgress: z.number().optional(),
   fields: updateFieldsSchema.optional(),
 });
 
@@ -602,6 +604,21 @@ export const creatureQueryResponseDataSchema = z.looseObject({
   rank: z.number().optional(),
 });
 export type CreatureQueryResponseData = z.infer<typeof creatureQueryResponseDataSchema>;
+
+/**
+ * The answer to the `CMSG_GAMEOBJECT_QUERY` the module fires on first sight of
+ * a game object entry, exactly as it does for creatures. `type` is the core's
+ * `GameobjectTypes` value; `found: false` carries the entry and nothing else.
+ */
+export const gameObjectQueryResponseDataSchema = z.looseObject({
+  entry: z.number(),
+  found: z.boolean(),
+  name: z.string().optional(),
+  type: z.number().optional(),
+  displayId: z.number().optional(),
+  castBarCaption: z.string().optional(),
+});
+export type GameObjectQueryResponseData = z.infer<typeof gameObjectQueryResponseDataSchema>;
 
 /** Movement of another nearby unit or player, relayed by the server. */
 export const moveUpdateDataSchema = z.looseObject({
@@ -704,6 +721,24 @@ export const rideProgressDataSchema = z.looseObject({
   pos: positionSchema,
 });
 export type RideProgressData = z.infer<typeof rideProgressDataSchema>;
+
+/**
+ * Module-synthesized: where a transport the session has been sent (a tram
+ * car, a boat) is right now, at most once a second. A client animates the car
+ * itself from `TransportAnimation.dbc` and the clock its create block carried;
+ * the module reports the same animation's result. `docked` is whether the
+ * keyframe segment the clock is on has no displacement — the car is dwelling
+ * at a platform; absent for transports without an animation path.
+ */
+export const transportProgressDataSchema = z.looseObject({
+  guid: guidSchema,
+  entry: z.number(),
+  pos: positionSchema,
+  progressMs: z.number(),
+  periodMs: z.number().optional(),
+  docked: z.boolean().optional(),
+});
+export type TransportProgressData = z.infer<typeof transportProgressDataSchema>;
 
 // ---------------------------------------------------------- map transfers
 //
@@ -1287,10 +1322,12 @@ export const eventDataSchemas = {
   SMSG_UPDATE_OBJECT: updateObjectDataSchema,
   SMSG_DESTROY_OBJECT: destroyObjectDataSchema,
   SMSG_CREATURE_QUERY_RESPONSE: creatureQueryResponseDataSchema,
+  SMSG_GAMEOBJECT_QUERY_RESPONSE: gameObjectQueryResponseDataSchema,
   WB_MOVE_PROGRESS: moveProgressDataSchema,
   WB_SESSION_STATE: sessionStateDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
   WB_RIDE_PROGRESS: rideProgressDataSchema,
+  WB_TRANSPORT_PROGRESS: transportProgressDataSchema,
   ...moveOpcodeSchemas,
   // map transfers
   SMSG_TRANSFER_PENDING: transferPendingDataSchema,

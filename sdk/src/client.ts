@@ -794,6 +794,42 @@ export function meshZHint(point: { x: number; y: number; z: number }, meshZ: num
   );
 }
 
+/**
+ * The `target_off_mesh` reading that fits a transport platform: the point is
+ * where a car in view has been observed docking (`WB_TRANSPORT_PROGRESS`
+ * with `docked: true`, kept on `state.nearby.*.transport.docks`) and the car
+ * is not there now — an empty rail bed is not walkable, so the generic "pick
+ * a floor" advice would send the agent away from the one place boarding
+ * works. Undefined when no known transport docks within 12y of the point,
+ * in which case the generic hint stands.
+ */
+function transportDockHint(state: StateCache, point: MovePoint): string | undefined {
+  for (const obj of state.nearby.values()) {
+    const t = obj.transport?.value;
+    if (!t || obj.objectType?.value !== "gameObject") continue;
+    if (!t.docks.some((k) => distance2d(k, point) <= 12)) continue;
+    const name = obj.name?.value ?? `transport ${obj.entry?.value ?? "?"}`;
+    const at = obj.position?.value;
+    const where =
+      at === undefined
+        ? "its position has not been reported yet"
+        : t.docked === true
+          ? `it is docked at the other end, (${fmtXY(at)})`
+          : `it is moving, now at (${fmtXY(at)})`;
+    const clock =
+      t.periodMs !== undefined
+        ? ` ${Math.round(t.progressMs / 1000)}s into its ${Math.round(t.periodMs / 1000)}s cycle`
+        : "";
+    return (
+      `(${fmtXY(point)}) is where ${name} (guid ${obj.guid}) docks, and the car is not there now: ${where}${clock}. ` +
+      `The empty rail bed is not walkable, so this is not a z problem. Wait until the car's row in ` +
+      `state.units({ type: "gameObject" }) reads docked: true near this point (or watch WB_TRANSPORT_PROGRESS), ` +
+      `then moveTo the car's guid or this point again; once aboard, state.self.position follows the ride.`
+    );
+  }
+  return undefined;
+}
+
 function fmtXY(p: { x: number; y: number }): string {
   return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
 }
@@ -2813,7 +2849,10 @@ export class WrathClient {
       // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
-    const hint = withNotes(MOVE_HINTS[status]?.(point, data));
+    const hint = withNotes(
+      (status === "target_off_mesh" ? transportDockHint(this.state, point) : undefined) ??
+        MOVE_HINTS[status]?.(point, data),
+    );
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
     return {
       ok: false,

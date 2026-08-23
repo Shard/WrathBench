@@ -94,10 +94,12 @@ describe("event frames", () => {
       "SMSG_UPDATE_OBJECT",
       "SMSG_DESTROY_OBJECT",
       "SMSG_CREATURE_QUERY_RESPONSE",
+      "SMSG_GAMEOBJECT_QUERY_RESPONSE",
       "WB_MOVE_PROGRESS",
     "WB_SESSION_STATE",
       "WB_MOVE_RESULT",
       "WB_RIDE_PROGRESS",
+      "WB_TRANSPORT_PROGRESS",
       ...MOVE_OPCODES,
       // map transfers
       "SMSG_TRANSFER_PENDING",

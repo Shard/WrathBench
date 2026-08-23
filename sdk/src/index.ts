@@ -65,7 +65,7 @@ export type {
   WaitForOptions,
 } from "./events";
 
-export { pointOf, questGiverStatusName, StateCache } from "./state";
+export { GAME_OBJECT_TYPE_NAMES, gameObjectTypeName, pointOf, questGiverStatusName, StateCache } from "./state";
 export type {
   Anomaly,
   AuraEntry,
@@ -74,6 +74,9 @@ export type {
   ChatEntry,
   CharacterSummary,
   CreatureInfo,
+  GameObjectInfo,
+  GameObjectTypeName,
+  TransportState,
   GapRecord,
   Gauge,
   GossipMenu,
@@ -182,6 +185,8 @@ export type {
   VendorItem,
   CreateSessionRequest,
   CreatureQueryResponseData,
+  GameObjectQueryResponseData,
+  TransportProgressData,
   DecodeErrorData,
   DeleteSessionRequest,
   DeleteSessionResponse,

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { parseEventFrame, type GameEvent } from "../src/protocol";
 import { STREAM_GAP, type StreamEvent, type StreamGapEvent } from "../src/events";
-import { pointOf, StateCache, type UnitFilter } from "../src/state";
+import { gameObjectTypeName, pointOf, StateCache, type UnitFilter } from "../src/state";
 import {
   addKill,
   auraRemoved,
@@ -987,6 +987,34 @@ function namedEntry(entry: number, name: string, seq: number): unknown {
   };
 }
 
+/** The game object template answer the module fires on first sight of a gameObject entry. */
+function namedGameObject(entry: number, name: string, seq: number, type = 5): unknown {
+  return {
+    seq,
+    opcode: "SMSG_GAMEOBJECT_QUERY_RESPONSE",
+    opcodeId: 0x05f,
+    ts: 1_700_000_000_000 + seq,
+    data: { entry, found: true, name, type, displayId: 1, castBarCaption: "" },
+  };
+}
+
+function transportProgress(
+  guid: string,
+  entry: number,
+  seq: number,
+  pos: { x: number; y: number; z: number },
+  docked: boolean | undefined,
+  progressMs = 1000,
+): unknown {
+  return {
+    seq,
+    opcode: "WB_TRANSPORT_PROGRESS",
+    opcodeId: 0xff06,
+    ts: 1_700_000_000_000 + seq,
+    data: { guid, entry, pos: { ...pos, o: 0 }, progressMs, periodMs: 143_330, ...(docked === undefined ? {} : { docked }) },
+  };
+}
+
 /** worldStream (self + Thistlebore at ~35y) plus a populated neighbourhood. */
 const scanStream: unknown[] = [
   ...worldStream,
@@ -1109,9 +1137,9 @@ describe("state.units(): the flat scan helper", () => {
   const treeStream: unknown[] = [
     ...worldStream,
     unitAt(STUMP_GUID, 60, { dx: 2, objectType: "gameObject", entry: STUMP_ENTRY }),
-    namedEntry(STUMP_ENTRY, "tree stump", 61),
+    namedGameObject(STUMP_ENTRY, "tree stump", 61),
     unitAt(TREE_GUID, 62, { dx: 20, objectType: "gameObject", entry: TREE_ENTRY }),
-    namedEntry(TREE_ENTRY, "tree", 63),
+    namedGameObject(TREE_ENTRY, "tree", 63),
   ];
   const treeCache = () => StateCache.replay(toEvents(treeStream), { seed: SEED });
 
@@ -1599,5 +1627,102 @@ describe("xp is read off the state object, not off self", () => {
     expect(() => JSON.stringify(cache.self)).not.toThrow();
     expect(() => ({ ...cache.self })).not.toThrow();
     expect(Object.keys(cache.self)).not.toContain("xp");
+  });
+});
+
+describe("game objects: names, goType and transports", () => {
+  const TRAM_GUID = "9001";
+  const TRAM_ENTRY = 176081;
+  const BOX_GUID = "9002";
+  const BOX_ENTRY = 32571;
+
+  test("a game object is named from its own query answer, never from a creature with the same entry", () => {
+    const c = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        unitAt(BOX_GUID, 60, { dx: 3, objectType: "gameObject", entry: BOX_ENTRY }),
+        namedEntry(BOX_ENTRY, "Not A Mailbox", 61),
+      ]),
+      { seed: SEED },
+    );
+    expect(c.units({ type: "gameObject" })[0]!.name).toBeUndefined();
+    c.apply(toEvents([namedGameObject(BOX_ENTRY, "Mailbox", 62, 19)])[0]!);
+    const row = c.units({ type: "gameObject" })[0]!;
+    expect(row.name).toBe("Mailbox");
+    expect(row.goType).toBe("mailbox");
+    expect(c.gameObjects.get(BOX_ENTRY)?.value.type).toBe(19);
+  });
+
+  test("goType comes from the create block's GAMEOBJECT_BYTES_1 when present, named from the core enum", () => {
+    const c = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        {
+          seq: 60,
+          opcode: "SMSG_UPDATE_OBJECT",
+          opcodeId: 0x0a9,
+          ts: 1_700_000_000_060,
+          data: {
+            blocks: 1,
+            objects: [
+              {
+                update: "create",
+                guid: TRAM_GUID,
+                objectType: "gameObject",
+                pos: { x: 4.5, y: 8.4, z: -4.3, o: 0 },
+                pathProgress: 12_000,
+                fields: { entry: TRAM_ENTRY, goState: 1, goType: 11 },
+              },
+            ],
+          },
+        },
+      ]),
+      { seed: SEED },
+    );
+    const row = c.units({ type: "gameObject" }).find((r) => r.guid === TRAM_GUID)!;
+    expect(row.goType).toBe("transport");
+    expect(row.docked).toBeUndefined(); // the clock alone says nothing about dwelling
+    expect(c.nearby.get(TRAM_GUID)?.transport?.value.progressMs).toBe(12_000);
+    // A unit never has a goType, and a value outside the enum is "unknown".
+    expect(c.units({ type: "unit" })[0]!.goType).toBeUndefined();
+    expect(gameObjectTypeName(99)).toBe("unknown");
+  });
+
+  test("WB_TRANSPORT_PROGRESS moves the car, sets docked, and accrues the places it stops", () => {
+    const c = StateCache.replay(
+      toEvents([
+        ...worldStream,
+        unitAt(TRAM_GUID, 60, { dx: 0, objectType: "gameObject", entry: TRAM_ENTRY }),
+        namedGameObject(TRAM_ENTRY, "Subway", 61, 11),
+        transportProgress(TRAM_GUID, TRAM_ENTRY, 62, { x: 4.5, y: 8.4, z: -4.3 }, true, 1000),
+        transportProgress(TRAM_GUID, TRAM_ENTRY, 63, { x: 4.5, y: 9.0, z: -4.3 }, true, 2000),
+        transportProgress(TRAM_GUID, TRAM_ENTRY, 64, { x: 4.5, y: 900.0, z: -4.3 }, false, 40_000),
+      ]),
+      { seed: SEED },
+    );
+    const row = c.units({ type: "gameObject" }).find((r) => r.guid === TRAM_GUID)!;
+    expect(row.name).toBe("Subway");
+    expect(row.goType).toBe("transport");
+    expect(row.docked).toBe(false);
+    expect(row.y).toBe(900);
+    const t = c.nearby.get(TRAM_GUID)!.transport!.value;
+    expect(t.progressMs).toBe(40_000);
+    expect(t.periodMs).toBe(143_330);
+    expect(t.docks).toEqual([{ x: 4.5, y: 8.4, z: -4.3 }]); // 0.6y apart: one dock, not two
+    c.apply(toEvents([transportProgress(TRAM_GUID, TRAM_ENTRY, 65, { x: 4.5, y: 2480.0, z: -4.3 }, true, 70_000)])[0]!);
+    expect(c.nearby.get(TRAM_GUID)!.transport!.value.docks).toHaveLength(2);
+    expect(c.units({ type: "gameObject" }).find((r) => r.guid === TRAM_GUID)!.docked).toBe(true);
+  });
+
+  test("a report for a car the update stream never created still puts it in view, typed by its report", () => {
+    const c = StateCache.replay(
+      toEvents([...worldStream, transportProgress(TRAM_GUID, TRAM_ENTRY, 62, { x: 4.5, y: 8.4, z: -4.3 }, true)]),
+      { seed: SEED },
+    );
+    const obj = c.nearby.get(TRAM_GUID)!;
+    expect(obj.entry?.value).toBe(TRAM_ENTRY);
+    expect(obj.transport?.value.docked).toBe(true);
+    // No create block: objectType is unobserved, so it is not a gameObject row and has no goType.
+    expect(c.units().find((r) => r.guid === TRAM_GUID)!.goType).toBeUndefined();
   });
 });
