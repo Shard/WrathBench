@@ -163,10 +163,41 @@ export interface UnitFieldsState {
   fields: Map<string, Observed<number>>;
 }
 
+/**
+ * Where the corpse is, while dead. `source` says which packet it came from:
+ * `corpse_query` is the server's own answer to the ghost's `MSG_CORPSE_QUERY`
+ * (the one a client draws its corpse marker from); `death_spot` is the own
+ * position at the moment health reached 0, held until that answer lands. Both
+ * are things a client shows a player.
+ */
+export interface CorpseLocation extends Point3 {
+  readonly map: number;
+  readonly source: "corpse_query" | "death_spot";
+}
+
 export interface SelfState extends UnitFieldsState {
   guid: GuidKey | undefined;
   name: string | undefined;
   position: Observed<WorldPosition> | undefined;
+  /**
+   * The corpse, from death until the resurrect (`SMSG_DEATH_RELEASE_LOC` with
+   * `map: -1`). `undefined` while alive, before the first death, or when the
+   * server answered the corpse query with "no corpse" (a spirit-healer
+   * resurrection or a corpse that expired). A ghost walks here to reclaim.
+   */
+  corpse: Observed<CorpseLocation> | undefined;
+  /**
+   * The graveyard the spirit was released to, from `SMSG_DEATH_RELEASE_LOC`
+   * (the packet a client draws the spirit-healer marker from). Cleared by the
+   * same packet with `map: -1`, which is what a resurrect sends first.
+   */
+  graveyard: Observed<Point3 & { readonly map: number }> | undefined;
+  /**
+   * The server's reclaim delay for this death (`SMSG_CORPSE_RECLAIM_DELAY`):
+   * `readyAt` is the event's wall-clock `ts` plus `delayMs`, when a reclaim
+   * becomes legal. Cleared by the resurrect.
+   */
+  reclaimDelay: Observed<{ readonly delayMs: number; readonly readyAt: number }> | undefined;
   /**
    * A map transfer the server announced (`SMSG_TRANSFER_PENDING`) and has not
    * yet completed (`SMSG_NEW_WORLD`) or abandoned (`SMSG_TRANSFER_ABORTED`).
@@ -629,6 +660,9 @@ export class StateCache {
     name: undefined,
     level: undefined,
     position: undefined,
+    corpse: undefined,
+    graveyard: undefined,
+    reclaimDelay: undefined,
     transfer: undefined,
     targetGuid: undefined,
     health: undefined,
@@ -1143,6 +1177,47 @@ export class StateCache {
       }
       case "SMSG_TRANSFER_ABORTED": {
         this.self.transfer = undefined;
+        return;
+      }
+      case "SMSG_DEATH_RELEASE_LOC": {
+        // `map: -1` is the clear marker — the first thing `ResurrectPlayer`
+        // sends — so it ends both the corpse and the graveyard. Otherwise it
+        // is the graveyard the spirit was released to.
+        const d = event.data as { map: number; x: number; y: number; z: number };
+        if (d.map < 0) {
+          this.self.corpse = undefined;
+          this.self.graveyard = undefined;
+          this.self.reclaimDelay = undefined;
+          return;
+        }
+        this.self.graveyard = { value: { map: d.map, x: d.x, y: d.y, z: d.z }, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_CORPSE_RECLAIM_DELAY": {
+        const d = event.data as { delayMs: number };
+        this.self.reclaimDelay = {
+          value: { delayMs: d.delayMs, readyAt: event.ts + d.delayMs },
+          seq: event.seq,
+          ts: event.ts,
+        };
+        return;
+      }
+      case "MSG_CORPSE_QUERY": {
+        // The server's own word on where the corpse is, replacing the
+        // death-spot fallback. "Not found" is an answer too: there is no
+        // corpse to reclaim (healer resurrection, expiry), so nothing is kept.
+        const d = event.data as {
+          found: boolean; map?: number; x?: number; y?: number; z?: number;
+        };
+        if (!d.found || d.map === undefined || d.x === undefined || d.y === undefined || d.z === undefined) {
+          this.self.corpse = undefined;
+          return;
+        }
+        this.self.corpse = {
+          value: { map: d.map, x: d.x, y: d.y, z: d.z, source: "corpse_query" },
+          seq: event.seq,
+          ts: event.ts,
+        };
         return;
       }
       case "SMSG_QUESTGIVER_QUEST_COMPLETE": {
@@ -1801,6 +1876,7 @@ export class StateCache {
     ts: number,
   ): void {
     if (!fields) return;
+    const healthBefore = target === this.self ? target.fields.get("health")?.value : undefined;
     for (const [key, raw] of Object.entries(fields)) {
       if (key === "targetGuid") {
         if (typeof raw === "string" && "targetGuid" in target) {
@@ -1818,6 +1894,16 @@ export class StateCache {
     const entry = target.fields.get("entry");
     if (entry && "entry" in target) target.entry = entry;
     this.deriveGauges(target);
+    if (target === this.self) {
+      const healthAfter = target.fields.get("health")?.value;
+      const pos = this.self.position?.value;
+      // The died transition: own health reaching 0 from a living value. Until
+      // the corpse query answers, the corpse is where the character stood —
+      // what a client knows from having been there.
+      if (healthAfter === 0 && healthBefore !== undefined && healthBefore > 0 && pos !== undefined) {
+        this.self.corpse = { value: { map: pos.map, x: pos.x, y: pos.y, z: pos.z, source: "death_spot" }, seq, ts };
+      }
+    }
   }
 
   /**

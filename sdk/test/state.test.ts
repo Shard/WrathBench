@@ -45,6 +45,10 @@ import {
   creatureOutOfRange,
   creatureQuery,
   creatureValues,
+  corpseQuery,
+  corpseReclaimDelay,
+  deathReleaseCleared,
+  deathReleaseLoc,
   fullStream,
   loginSequence,
   moveProgress,
@@ -55,6 +59,7 @@ import {
   playerName,
   SELF_GUID,
   selfCreate,
+  selfHealth,
   worldStream,
 } from "./fixtures";
 
@@ -404,6 +409,48 @@ describe("state cache: self, from the wire", () => {
     const cache = StateCache.replay(toEvents([moveProgress]), { seed: SEED });
     expect(cache.self.position).toBeUndefined();
     expect(cache.anomalies[0]?.kind).toBe("self_position_without_map");
+  });
+});
+
+describe("state cache: a ghost knows where its corpse is", () => {
+  const GRAVE = { map: 0, x: -1500, y: 900, z: 50 };
+  const CORPSE = { map: 0, x: -1240.1, y: 990.4, z: 42.5 };
+
+  test("the died transition pins the corpse to the death spot until the query answers", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, selfHealth(0, 30)]), { seed: SEED });
+    expect(cache.self.corpse?.value).toEqual({ map: 0, x: -1234.5, y: 987.25, z: 42.125, source: "death_spot" });
+    expect(cache.self.graveyard).toBeUndefined();
+  });
+
+  test("the corpse query and the release loc are the server's word, and the resurrect clears both", () => {
+    const events = toEvents([
+      ...loginSequence,
+      selfCreate,
+      selfHealth(0, 30),
+      deathReleaseLoc(31, GRAVE),
+      selfHealth(1, 32),
+      corpseQuery(33, CORPSE),
+    ]);
+    const cache = StateCache.replay(events, { seed: SEED });
+    expect(cache.self.graveyard?.value).toEqual(GRAVE);
+    expect(cache.self.corpse?.value).toEqual({ ...CORPSE, source: "corpse_query" });
+    expect(cache.self.corpse?.seq).toBe(33);
+    cache.apply(toEvents([corpseReclaimDelay(30_000, 34, 1_000)])[0]!);
+    expect(cache.self.reclaimDelay?.value).toEqual({ delayMs: 30_000, readyAt: 31_000 });
+    cache.apply(toEvents([deathReleaseCleared(40)])[0]!);
+    expect(cache.self.corpse).toBeUndefined();
+    expect(cache.self.graveyard).toBeUndefined();
+    expect(cache.self.reclaimDelay).toBeUndefined();
+  });
+
+  test("a corpse query answered not-found leaves no corpse, and a values delta without a death does not invent one", () => {
+    const cache = StateCache.replay(
+      toEvents([...loginSequence, selfCreate, selfHealth(0, 30), corpseQuery(31)]),
+      { seed: SEED },
+    );
+    expect(cache.self.corpse).toBeUndefined();
+    const living = StateCache.replay(toEvents([...loginSequence, selfCreate, selfHealth(50, 30)]), { seed: SEED });
+    expect(living.self.corpse).toBeUndefined();
   });
 });
 

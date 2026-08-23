@@ -157,6 +157,7 @@ describe("event frames", () => {
       "SMSG_DEATH_RELEASE_LOC",
       "SMSG_CORPSE_RECLAIM_DELAY",
       "SMSG_DURABILITY_DAMAGE_DEATH",
+      "MSG_CORPSE_QUERY",
       "SMSG_CHAR_DELETE",
       "SMSG_MONSTER_MOVE",
     ]);

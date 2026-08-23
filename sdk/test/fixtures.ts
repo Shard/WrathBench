@@ -909,3 +909,36 @@ export function deathReleaseCleared(seq: number): unknown {
     data: { map: -1, x: 0, y: 0, z: 0 },
   };
 }
+
+/** The graveyard the spirit was released to (`SMSG_DEATH_RELEASE_LOC` with a real map). */
+export function deathReleaseLoc(seq: number, at: { map: number; x: number; y: number; z: number }): unknown {
+  return { seq, opcode: "SMSG_DEATH_RELEASE_LOC", opcodeId: 0x378, ts: 1_700_000_000_000 + seq, data: at };
+}
+
+/**
+ * The server's answer to the ghost's `MSG_CORPSE_QUERY` (the module asks once
+ * per death on the client's behalf). `found: false` carries no position.
+ */
+export function corpseQuery(
+  seq: number,
+  at?: { map: number; x: number; y: number; z: number; corpseMap?: number },
+): unknown {
+  return {
+    seq,
+    opcode: "MSG_CORPSE_QUERY",
+    opcodeId: 0x216,
+    ts: 1_700_000_000_000 + seq,
+    data: at === undefined ? { found: false } : { found: true, corpseMap: at.map, ...at },
+  };
+}
+
+/** Our own position moving (a ghost walking), as the module's WB_MOVE_RESULT reports it. */
+export function selfArrived(seq: number, pos: { x: number; y: number; z: number }): unknown {
+  return {
+    seq,
+    opcode: "WB_MOVE_RESULT",
+    opcodeId: 0xff01,
+    ts: 1_700_000_000_000 + seq,
+    data: { moveId: seq, status: "arrived", pos: { ...pos, o: 0 } },
+  };
+}
