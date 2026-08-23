@@ -200,61 +200,147 @@ ends.
 
 ### Deploy window (worldserver changes)
 
-Two scripts, from the host:
+Two scripts, from the host; the deploy is **one command** that owns the whole
+window and needs nothing from you while it runs:
 
 ```
 ./infra/build-worldserver.sh                   # build wrathbench/worldserver:next, stamped
-./infra/deploy-worldserver.sh                  # promote wrathbench/worldserver:next
+./infra/deploy-worldserver.sh                  # the whole window, start to finish
 ./infra/deploy-worldserver.sh --next-tag wrathbench/worldserver:mybuild
+./infra/deploy-worldserver.sh --dry-run        # print the plan and every resolved value; do nothing
 ```
 
 The build script stamps the image with this checkout's
 `git describe --tags --always --dirty` (docker build-arg `WRATHBENCH_BUILD`),
-which the module serves as `/health.build` alongside `startedAtMs`; the fleet
-gate, `run-fleet --status` and the viewer's `/api/info` name the server by it.
-Commit before building so the stamp names a commit rather than `-dirty`. A
-bare `docker compose build worldserver` without `WRATHBENCH_BUILD` in the
-environment produces an image that reports `"unknown"`.
+which the module serves as `/health.build` alongside `startedAtMs` and the
+image carries as the `wrathbench.build` label; the fleet gate, `run-fleet
+--status`, the viewer's `/api/info` and the deploy script name the server by
+it. Commit before building so the stamp names a commit rather than `-dirty`.
 
-It refuses to run while any episode is live, tags the running image `:prev`,
-promotes the new one to `:latest`, recreates the worldserver (`--no-deps`; the
-one time recreation is the point), waits for the module to answer `/health`
-ready, and then waits for the fleet's own preflight gate to record a pass
-against the new server. On a smoke failure it retags `:prev`, recreates, and
-exits non-zero. `--no-smoke` deploys unverified and says so; `--allow-live`
-skips the refusal and kills whatever is running.
+You do not drain anything first, you do not wait for anything, and you do not
+kill anything. If a deploy ever needs a wait loop or a `pkill` from the
+operator, that is a bug in the script, not a procedure. Run it with the fleet
+up; run it again if it failed; it is safe both ways.
+
+#### What each phase means
+
+The script writes `data/runs/server-state.json` at every transition
+(`{ phase, since, build, prevBuild?, detail, pid, updatedAt }`), the viewer
+serves it as `server` on `/api/fleet`, and the Fleet page prints one banner
+line at the top: the phase in plain words, then the script's own `detail`
+sentence verbatim. The page never guesses at what the window is doing.
+
+- **draining** — `docker compose stop fleet`. SIGTERM reaches the supervisor,
+  every live run pauses (ADR-0036), the supervisor writes its final state and
+  exits. The script then waits for that state file to say no job is alive —
+  the supervisor's own word, never a process listing — for at most 60s after
+  `stop` returns, and fails loudly if it never does (a SIGKILL inside the
+  grace period is the only way that happens). Page: *"Deploy window since
+  18:52 — stopping the fleet for harness-0.4-52, runs are pausing: replacing
+  harness-0.4-3; 7 job(s) live — each run pauses and resumes after the
+  deploy"*. While the window is open the supervisor line reads *"fleet stopped
+  for the deploy window"* instead of *NOT RUNNING*, and a job row whose
+  process is gone reads *paused for deploy* instead of *exited*.
+- **swapping** — `:latest` is tagged `:prev` (the rollback target), `:next`
+  becomes `:latest`, the worldserver is recreated (`--no-deps`: the one time
+  recreation is the point) and the script waits up to 300s for `/health` to
+  answer ready. Page: *"— swapping the worldserver to harness-0.4-52: worldserver
+  recreated, waiting for /health ready (up to 300s); fleet stopped, 7 job(s)
+  paused and will resume"*.
+- **verifying** — the gate smokes (`preflight.smokes`) and then the
+  deploy-only full arc (`preflight.deploySmokes`, `module-quest.ts`) run
+  directly through `docker compose exec runner`, each against its budget. The
+  fleet is down, so nothing else is on the smoke accounts. The detail names the
+  smoke in flight: *"— swapped to harness-0.4-52, verifying: full-arc smoke
+  infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its
+  budget; fleet stopped, 7 job(s) paused and will resume"*.
+- **resuming** — every smoke passed; `docker compose up -d fleet`. The
+  supervisor boots, re-gates on the new server identity and resumes every
+  paused run on its own account before the queue or the policy gets one.
+- **running** — the window is over. The banner drops to a dim line: *"server
+  running: deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s) + 1
+  full-arc smoke(s); fleet resumed"*. The script's last line is `DEPLOYED and
+  verified by …`, exit 0.
+- **rolled-back** — a smoke failed on the new build. `:prev` is retagged
+  `:latest`, the worldserver recreated, health waited for, and the **old** build
+  is re-verified with the gate smokes; then the fleet is started on it. Exit 1.
+  Page, red: *"Deploy of harness-0.4-52 FAILED at 18:52 and was rolled back to
+  harness-0.4-3: gate smoke failed on harness-0.4-52; harness-0.4-3 verified by
+  2 direct smoke(s); fleet resumed on the old build"*.
+- **failed** — the deploy failed *and* nothing is verified: the drain never
+  completed (nothing was swapped; the old server is still live), there was no
+  `:prev` to roll back to, the rolled-back build would not verify either, or
+  the fleet would not start. The fleet is started regardless — its own
+  preflight gate blocks spawning until a build passes — and the detail says
+  which case it was. Exit 1. Page, red: *"Deploy of harness-0.4-52 FAILED at
+  18:52: …"*.
+
+Whatever happens after the fleet is stopped, the script's EXIT trap brings it
+back up: a deploy never leaves the fleet stopped, on any path, including an
+unexpected error. `set -Eeuo pipefail` plus an ERR trap means any failed step
+after the swap is a failed deploy (rollback, verify old, fleet up, exit 1),
+never a warning.
+
+The script holds an `flock` on `data/runs/server-state.lock` for its lifetime:
+a second deploy refuses to start while one runs, and the supervisor writes
+`running` over whatever phase it finds only when that lock is free — on boot
+over any phase (a restart is your acknowledgement of a `rolled-back` or
+`failed` notice), and on every tick over a *window* phase (`draining`,
+`swapping`, `verifying`, `resuming`), which with no lock holder can only be the
+leftovers of a deploy that died. So a crashed deploy cannot leave the page
+claiming a window is open.
+
+#### If it says failed (or rolled-back)
+
+Read the detail: it names the smoke that failed and its tail is in the script's
+output. Then:
+
+1. **rolled-back** — the old build is live, verified, and the fleet is running
+   on it. Nothing to do for the fleet. Fix the module, rebuild `:next`, deploy
+   again. The red banner stays until the supervisor next boots (a `stop` /
+   `up -d fleet`, or the next deploy), so it is not missed.
+2. **failed, "the server was not swapped"** — the drain did not complete, so
+   the old build is still live and untouched. The fleet was started again;
+   check `data/runs/fleet-<stamp>.jsonl` for why the supervisor did not exit
+   cleanly (a roster that ignored SIGTERM, a runner past its 60s backstop),
+   then deploy again.
+3. **failed, "ROLLBACK IMPOSSIBLE"** — the new build is live and unverified
+   because there was no `:latest` to keep. The fleet is up and its gate is the
+   only check; `run-fleet --status` and the gate strip on the Fleet page say
+   whether it passed. If the gate fails, build a known-good `:next` and deploy
+   it.
+4. **failed, "could not verify it"** — the rollback happened but the old build
+   failed the gate smokes too, which means the failure is not in the build
+   (auth, the database, the smoke accounts, the runner image). The fleet is up
+   and gated shut. Run a smoke by hand (`docker compose exec -e
+   MODULE_ACCOUNT=SMOKE runner bun infra/smoke/quest-accept-status.ts`) and
+   read its output.
+5. **failed, "the fleet service did not start"** — the one case with a command
+   for you: `docker compose -f infra/compose.yml up -d fleet`, after reading
+   why compose refused (`docker compose logs fleet`).
+
+`--no-smoke` is the honest escape hatch for a machine where the preflight
+accounts do not exist yet: it drains, swaps, waits for health, verifies
+nothing, says `DEPLOYED UNVERIFIED`, and hands the server to the fleet — whose
+own gate is then the only check. An enabled preflight with no `smokes`
+configured is not that: it rolls back and exits 1, because nobody asked for an
+unverified deploy.
 
 `--dry-run` prints the plan and every resolved value — which config and state
-files it will read, the rollback target, the preflight account, budget and
-smoke list, whether the fleet supervisor is gating, and which verification path
-it would take — and executes nothing. Run it first if the deploy window
-matters; it is read-only and safe while the fleet is up.
+files it will read, the next and rollback builds, the smoke list and budgets,
+whether the fleet container is running and how many jobs its state lists
+alive, whether the deploy lock is free, and which verification path it would
+take — and executes nothing. It is read-only and safe while the fleet is up.
 
 Verification is **fail-closed**: the closing line names what verified the
-deploy (`DEPLOYED and verified by fleet gate` or `by N direct smoke(s)`), and
-it can only be reached by a step that actually ran and exited zero. Each direct
-smoke logs its start, its duration and its exit code. Anything else — a failed
-smoke, a failing gate record, an unexpected error anywhere after the promote —
-rolls back and exits non-zero. The two paths that verify nothing say
-`DEPLOYED UNVERIFIED` and never `verified`: `--no-smoke` (exit 0, you asked for
-it) and an enabled preflight with no `smokes` configured (exit 1, you did not).
-
-"Is the supervisor gating?" needs both halves: the `fleet` container running
-*and* a heartbeat newer than 180s. A stopped fleet leaves a fresh heartbeat
-behind for three minutes, and trusting it alone is what produced the incident
-below.
+deploy (`DEPLOYED and verified by N direct smoke(s) + M full-arc smoke(s)`),
+and it can only be reached by a step that actually ran and exited zero. Each
+smoke logs its start, its duration and its exit code.
 
 `infra/deploy-worldserver.test.ts` covers this without a daemon: it runs the
 real script with `docker` replaced by a PATH shim, under `FORCE_COLOR=3`, and
-asserts the rollback branch and the exit codes.
-
-Getting to zero live runs is still yours to do, and it is the same drain as
-ever: set every job in `infra/fleet.json` to `"enabled": false` and wait until
-`./infra/run-fleet.sh --status` shows no account with a live run (an episode can
-take up to 90 minutes; `docker compose -f infra/compose.yml stop fleet` pauses
-them instead, and they resume on the next start). `./infra/run-fleet.sh --live-runs` is the same check
-the script uses — it lists live episodes and exits non-zero if there are any.
-Re-enable the jobs afterwards.
+asserts the phase sequence, the drain, the rollback branch, the fleet-up
+invariant on every exit path, and the exit codes.
 
 ### The preflight gate
 

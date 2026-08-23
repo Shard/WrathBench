@@ -55,3 +55,4 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0035 | Harness and driver are separate words | current | What runs the loop and what answers the prompt are two dimensions; conflating them made a driver gap read as a harness one. |
 | 0036 | A fleet stop pauses runs | current | Stopping the supervisor used to end live episodes; a stop pauses and a start resumes, on the run's own account. |
 | 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |
+| 0038 | The deploy owns the window | current | One command drains (runs pause), swaps, verifies, resumes — and publishes its phase so the page states what the server is doing instead of guessing. |
