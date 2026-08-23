@@ -203,7 +203,9 @@ export default function Models() {
               {(e, i) => (
                 <>
                   <Show when={i() > 0}>, </Show>
-                  <span title={e.reason}>{e.name}</span> ({e.reason})
+                  {/* The name stays an address (`/models#<name>`) even though
+                      it is no longer a row, so an older link still lands. */}
+                  <span id={e.name} title={e.reason}>{e.name}</span> ({e.reason})
                 </>
               )}
             </For>
