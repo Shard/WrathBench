@@ -147,7 +147,19 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  */
 export const OPEN_PRICES: (PriceRow & { match: string })[] = [
   {
-    id: "deepseek-v4-flash",
+    id: "deepseek-v4-flash-0731",
+    match: "deepseek/deepseek-v4-flash-0731",
+    input: 0.08,
+    output: 0.18,
+    cacheRead: 0.016,
+    cacheWrite: 0.08,
+    asOf: "2026-08-23",
+    source: "list",
+    asIfMetered: false,
+    note: "OpenRouter list price (GET /api/v1/models, 2026-08-23); metered against the operator's OpenRouter balance",
+  },
+  {
+    id: "deepseek-v4-flash-0423",
     match: "deepseek/deepseek-v4-flash",
     input: 0.052,
     output: 0.103,
@@ -156,7 +168,7 @@ export const OPEN_PRICES: (PriceRow & { match: string })[] = [
     asOf: "2026-08-23",
     source: "list",
     asIfMetered: false,
-    note: "OpenRouter list price (GET /api/v1/models, 2026-08-23); metered against the operator's OpenRouter balance",
+    note: "the April snapshot, run once by mistake on 2026-08-23 and ended by hand; OpenRouter list price",
   },
 ];
 

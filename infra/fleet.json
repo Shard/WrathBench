@@ -63,7 +63,7 @@
     "north-mini-code": {"model": "cohere/north-mini-code:free"},
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free"},
     "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free"},
-    "deepseek-flash": {"model": "deepseek/deepseek-v4-flash", "billing": "paid", "character": "Deepflash", "race": 1, "class": 2},
+    "deepseek-flash": {"model": "deepseek/deepseek-v4-flash-0731", "billing": "paid", "character": "Deepflash", "race": 1, "class": 2},
     "laguna-or": {"model": "poolside/laguna-s-2.1:free"},
     "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
