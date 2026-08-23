@@ -119,7 +119,7 @@ describe("shapes", () => {
     const payload: RunsResponse = {
       runs: [
         {
-          runId: "r1", model: "m", driver: "openai", adapter: "openai", harness: "wrathbench", shakeout: null, objective: null, extra: false,
+          runId: "r1", model: "m", driver: "openai", harness: "wrathbench", shakeout: null, objective: null, extra: false,
           comparability: null,
           character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
           characterLabel: "Dwarf Hunter", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
@@ -138,10 +138,10 @@ describe("shapes", () => {
     expect(got.runs[0]!.money).toBe(0);
   });
 
-  test("an absent fleet reads as present:false with no lanes", async () => {
-    const payload: FleetResponse = { present: false, lanes: [], now: 1 };
+  test("an absent fleet reads as present:false with no jobs", async () => {
+    const payload: FleetResponse = { present: false, jobs: [], accounts: [], paused: [], ended: [], now: 1 };
     const got = await createClient({ fetch: stub(payload).fetch }).fleet();
     expect(got.present).toBe(false);
-    expect(got.lanes).toHaveLength(0);
+    expect(got.jobs).toHaveLength(0);
   });
 });

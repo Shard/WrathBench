@@ -3,26 +3,27 @@
  * behind.
  *
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
- * published view — jobs, accounts, a heartbeat — and it is the only honest
- * liveness signal across a container boundary. `/api/runs` is the filesystem's
- * view, where "live" means an unterminated run whose trajectory grew recently.
- * A job can be alive with no live run (between episodes), and a run can look
- * live with a dead process (a killed job writes no termination), so the page
- * shows both rather than reconciling them into one number.
+ * published view — jobs, accounts, a heartbeat, the gate — and it is the only
+ * honest liveness signal across a container boundary. `/api/runs` is the
+ * filesystem's view, where "live" means an unterminated run whose trajectory
+ * grew recently. A job can be alive with no live run (between episodes), and a
+ * run can look live with a dead process (a killed job writes no termination),
+ * so the page shows both rather than reconciling them into one number.
  *
- * One table for the fleet, keyed by the job (ADR-0034), with the accounts that
- * hold nothing as idle rows under it; the assembly is in `lib/fleet.ts`.
+ * The page carries what `run-fleet --status` prints, in the same order: the
+ * supervisor line, the REJECTED banner, the gate, the account classes, one
+ * table keyed by the job (ADR-0034) with the idle accounts under it, the
+ * paused and ended runs. The models table is the Models page — same
+ * projection, its own entity — and is linked, not repeated. The assembly is
+ * in `lib/fleet.ts`.
  */
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { api, type ApiInfoResponse, type FleetResponse, type RunListRow } from "../api/client";
-import { FLEET_COLUMNS, fleetRows, runHref, type FleetRow } from "../lib/fleet";
+import { FLEET_COLUMNS, accountClassSummary, fleetRows, gateVerdict, pausedLabel, runHref, supervisorAlive, type FleetRow } from "../lib/fleet";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
-
-/** The supervisor writes a heartbeat every tick; past this it is not ticking. */
-const HEARTBEAT_STALE_MS = 120_000;
 
 export default function Fleet() {
   /*
@@ -56,8 +57,6 @@ export default function Fleet() {
     setShowStillborn(!showStillborn());
     runs.refresh();
   };
-  const heartbeatAge = (f: FleetResponse): number | null =>
-    f.heartbeatAt === undefined ? null : now() - f.heartbeatAt;
 
   return (
     <div class="page">
@@ -72,25 +71,38 @@ export default function Fleet() {
       >
         {(() => {
           const f = (): FleetResponse => fleet.latest!;
-          const age = (): number | null => heartbeatAge(f());
-          const stale = (): boolean => age() === null || age()! > HEARTBEAT_STALE_MS;
+          const up = (): boolean => supervisorAlive(f(), now());
+          const age = (): number | null => (f().heartbeatAt === undefined ? null : now() - f().heartbeatAt!);
           return (
             <>
               {/*
-                The header strip: the supervisor's liveness, what it has in
-                flight, and its own counters since it started (absent on a
-                supervisor that predates them — it says so rather than showing
-                a zero). Everything else about a job is a row in the table.
+                The REJECTED banner first, as --status prints it: the failure it
+                covers is silent by construction — the operator's edit parses
+                for them and is ignored by the supervisor.
               */}
+              <Show when={f().configRejected}>
+                {(rej) => (
+                  <div class="banner bad">
+                    fleet.json REJECTED since {stamp(rej().since)}: {rej().error} — running on config loaded at{" "}
+                    {f().configLoadedAt === undefined ? "an unrecorded time" : stamp(f().configLoadedAt!)}; job enabled
+                    flags in the file are NOT in effect. The supervisor retries every tick and clears this by itself.
+                  </div>
+                )}
+              </Show>
+
+              {/* The supervisor line: alive by heartbeat, where it runs, when its config was loaded. */}
               <div class="strip">
                 <span>
-                  <span class={`dot ${stale() ? "dead" : "live"}`} />
-                  {stale() ? "stale" : "beating"} · pid {f().fleetPid ?? "—"} ·{" "}
+                  <span class={`dot ${up() ? "live" : "dead"}`} />
+                  supervisor {up() ? "ALIVE" : "NOT RUNNING"} · pid {f().fleetPid ?? "—"} ·{" "}
                   {f().containerized === true ? "container" : "host"} ·{" "}
-                  {age() === null ? "no heartbeat" : fmtAge(age()!)}
+                  {age() === null ? "no heartbeat" : `heartbeat ${fmtAge(age()!)}`}
                 </span>
                 <span class="dim">stamp {f().stamp ?? "—"}</span>
-                <span class="dim">{(f().jobs ?? []).length} jobs · {live().length} live runs</span>
+                <span class="dim" title={f().configLoadedAt === undefined ? "" : stamp(f().configLoadedAt!)}>
+                  config loaded {f().configLoadedAt === undefined ? "—" : fmtAge(now() - f().configLoadedAt!)}
+                </span>
+                <span class="dim">{f().jobs.length} jobs · {live().length} live runs</span>
                 <span class="dim">
                   <Show when={f().session !== undefined} fallback={<>session not reported</>}>
                     session: {f().session!.finished} finished · ok {f().session!.ok} · retried {f().session!.retried}
@@ -99,6 +111,35 @@ export default function Fleet() {
                 <span class="dim">{runs.latest?.length ?? "—"} runs recorded</span>
               </div>
 
+              {/* The gate (ADR-0023): the last result per smoke, against the identity it smoked, and the server build. */}
+              <div class="strip">
+                <span class={gateVerdict(f().preflight) === "FAIL" ? "err" : gateVerdict(f().preflight) === "PASS" ? "ok" : "dim"}>
+                  preflight {gateVerdict(f().preflight)}
+                  <Show when={gateVerdict(f().preflight) === "FAIL"}> — jobs blocked</Show>
+                </span>
+                <Show when={f().preflight} fallback={<span class="dim">no gate result recorded yet</span>}>
+                  {(pf) => (
+                    <>
+                      <span class="dim" title={stamp(pf().at)}>gated {fmtAge(now() - pf().at)}</span>
+                      <span class="dim mono" title={pf().serverIdentity}>identity {pf().serverIdentity}</span>
+                      <span class="dim">server build <span class="mono">{pf().build ?? "—"}</span></span>
+                      <For each={pf().results}>
+                        {(r) => (
+                          <span class={r.ok ? "ok" : "err"} title={r.tail}>
+                            {r.ok ? "ok" : "FAIL"} {r.script} ({Math.round(r.ms / 1000)}s)
+                          </span>
+                        )}
+                      </For>
+                    </>
+                  )}
+                </Show>
+              </div>
+
+              {/* Account classes (ADR-0034): the counts line, then one table with a row per job and per idle account. */}
+              <p class="dim">
+                accounts: {accountClassSummary(f().accounts)} · the <A href="/models">models table</A> carries the
+                scheduler's verdict per roster entry.
+              </p>
               <div class="scroller">
                 <table>
                   <thead>
@@ -111,6 +152,35 @@ export default function Fleet() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Paused runs the supervisor is not resuming, and why (ADR-0036); the ones it ended instead. */}
+              <Show when={f().paused.length > 0}>
+                <p class="dim">paused runs not resumed ({f().paused.length}):</p>
+                <ul class="dim">
+                  <For each={f().paused}>
+                    {(p) => (
+                      <li>
+                        <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
+                        <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
+                        {fmtDuration(p.elapsedMs)} elapsed
+                        <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+              <Show when={f().ended.length > 0}>
+                <p class="dim">ended by the supervisor this session ({f().ended.length}):</p>
+                <ul class="dim">
+                  <For each={f().ended}>
+                    {(e) => (
+                      <li>
+                        <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
             </>
           );
         })()}

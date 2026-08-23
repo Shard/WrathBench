@@ -41,7 +41,7 @@ export function fmtDuration(ms: number | null): string {
 /**
  * Dollars. Small figures keep three decimals because a cent's resolution is
  * useless at $0.004, and a recorded $0 prints as "$0.00" rather than the dash —
- * a free lane costing nothing is a fact, not a missing value.
+ * a free model costing nothing is a fact, not a missing value.
  */
 export function fmtUsd(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";

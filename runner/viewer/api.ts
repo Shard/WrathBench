@@ -15,7 +15,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
 import type {
@@ -25,9 +25,6 @@ import type {
   EpisodesResponse,
   EvalResponse,
   EvalRun,
-  FleetLane,
-  FleetLaneRun,
-  FleetLaneView,
   FleetAccountView,
   FleetJobView,
   FleetPausedView,
@@ -83,10 +80,8 @@ export interface ApiOptions {
   moduleUrl?: string;
   /**
    * The fleet config whose `roster` block names the models `/api/models` rows
-   * (ADR-0031). Absent, missing or pre-roster is a normal state the route
-   * labels rather than an error: it never invents names from lane entries,
-   * because those would stop matching the day the operator renames
-   * `fleet.next.json` over `fleet.json`.
+   * (ADR-0031). Absent, missing or unreadable is a normal state the route
+   * labels rather than an error; a roster map is the one source of names.
    */
   fleetConfigPath?: string;
 }
@@ -190,9 +185,9 @@ function staticFile(root: string, rel: string): Response | null {
  * How stale a run's files may be and still be read as holding its account.
  *
  * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runs.ts`'s
- * `LIVE_WINDOW_MS` (120s): the lane's run has to be resolved the same way the
+ * `LIVE_WINDOW_MS` (120s): the job's run has to be resolved the same way the
  * account guard and `--status` resolve it, or the dashboard would disagree with
- * the supervisor about which run a lane holds near the boundary. The constant
+ * the supervisor about which run a job holds near the boundary. The constant
  * is duplicated rather than imported because importing from `infra/` would drag
  * its repo-root and process assumptions into the viewer.
  */
@@ -231,14 +226,14 @@ function accountOfRun(dir: string): string | undefined {
  * Which run holds each account right now, by the same inference `--status`
  * makes (`accountHeldBy` in `run-roster.ts`): a run whose files are warm, with
  * no termination row and no pause row. A paused run has already given its
- * session back, so it holds nothing — the lane reads as idle, not as driving a
+ * session back, so it holds nothing — the job reads as idle, not as driving a
  * run it has finished with.
  *
- * The map is keyed on account, not on lane: a hand-started run, or a previous
+ * The map is keyed on account, not on job: a hand-started run, or a previous
  * cycle that has not gone cold, holds the account just as hard as a fleet one
- * and will show under the lane that shares it. That is the honest reading of
+ * and will show under the job that shares it. That is the honest reading of
  * "what has this account" — `--status` says the same, adding only that the
- * holder is "not fleet-managed" when the lane's own process is gone.
+ * holder is "not fleet-managed" when the job's own process is gone.
  *
  * The prefilter is the point. `/api/fleet` polls every five seconds and a runs
  * directory holds hundreds of finished runs; only the handful whose files were
@@ -271,34 +266,11 @@ export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { r
   return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
 }
 
-/**
- * The models a lane's roster will work through, in order.
- *
- * Only the model names are projected: the roster entries also carry api bases,
- * key environment names and accounts, and the boundary rule is to project what
- * the UI needs rather than forward a file. The stored `rosterPath` is
- * repo-relative and written by a supervisor that may live in another container,
- * so only its basename is trusted and it is resolved inside the runs directory.
- */
-export function rosterModels(runsDir: string, rosterPath: string): string[] {
-  if (typeof rosterPath !== "string" || rosterPath.length === 0) return [];
-  const file = join(runsDir, basename(rosterPath));
-  if (!existsSync(file)) return [];
-  try {
-    const raw = JSON.parse(readFileSync(file, "utf8")) as { model?: unknown }[];
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .map((e) => (e !== null && typeof e === "object" && typeof e.model === "string" ? e.model : null))
-      .filter((m): m is string => m !== null);
-  } catch {
-    return [];
-  }
-}
-
 /** Read the fleet supervisor's published state. Absent is normal, not an error. */
 export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
   const path = join(runsDir, "fleet-state.json");
-  if (!existsSync(path)) return { present: false, lanes: [], now };
+  const absent: FleetResponse = { present: false, jobs: [], accounts: [], paused: [], ended: [], now };
+  if (!existsSync(path)) return absent;
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as {
       fleetPid?: number;
@@ -306,72 +278,66 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       heartbeatAt?: number;
       containerized?: boolean;
       stamp?: string;
-      lanes?: Record<string, FleetLane>;
-      jobs?: Record<string, Omit<FleetJobView, "name">>;
+      configLoadedAt?: number;
+      configRejected?: { since: number; error: string; mtime: number };
+      preflight?: FleetResponse["preflight"];
+      jobs?: Record<string, Omit<FleetJobView, "name" | "accountClass" | "runId" | "model">>;
       accounts?: { pinned?: Record<string, string>; pool?: Record<string, string | null>; paid?: Record<string, string | null>; local?: Record<string, string | null> };
       paused?: FleetPausedView[];
+      ended?: FleetResponse["ended"];
       session?: FleetSessionView;
     };
     const held = heldAccounts(runsDir, now);
-    const lanes: FleetLaneView[] = Object.entries(raw.lanes ?? {}).map(([name, lane]) => {
-      const run = held.get((lane.account ?? "RUNNER").toUpperCase());
-      const resolved: FleetLaneRun = {
-        runId: run?.runId ?? null,
-        model: run?.model ?? null,
-        rosterModels: rosterModels(runsDir, lane.rosterPath),
-      };
-      return { name, ...lane, ...resolved };
-    });
-    lanes.sort((a, b) => a.name.localeCompare(b.name));
-    /*
-     * Jobs and the session counters are forwarded as the supervisor wrote them
-     * (FOLLOW-UPS 52): a job names a roster ref, a tier, an account and where
-     * it came from, none of which the lane block carries, and neither block
-     * holds anything `lanes` does not already expose. A pre-job supervisor
-     * wrote neither, and the fields stay absent rather than being invented.
-     */
     const classOf = new Map<string, FleetAccountView["class"]>();
     for (const cls of ["pool", "paid", "local"] as const) {
       for (const a of Object.keys(raw.accounts?.[cls] ?? {})) classOf.set(a.toUpperCase(), cls);
     }
-    const jobs =
-      raw.jobs === undefined
-        ? undefined
-        : Object.entries(raw.jobs)
-            .map(([name, j]) => {
-              const lane = raw.lanes?.[name];
-              return {
-                name,
-                ...j,
-                ...(classOf.get((j.account ?? "").toUpperCase()) !== undefined ? { accountClass: classOf.get((j.account ?? "").toUpperCase())! } : { accountClass: "pinned" }),
-                // The run the job is driving, resolved from the runs directory
-                // exactly as a lane's is: the supervisor publishes processes.
-                runId: held.get((j.account ?? "").toUpperCase())?.runId ?? null,
-                ...(lane !== undefined
-                  ? { pid: lane.pid, spawnedAt: lane.spawnedAt, exitCode: lane.exitCode, draining: lane.draining, ...(lane.alive !== undefined ? { alive: lane.alive } : {}) }
-                  : {}),
-              };
-            })
-            .sort((a, b) => a.name.localeCompare(b.name));
+    /*
+     * Jobs as the supervisor wrote them — the job (ref, tier, account, source)
+     * and its process — plus what only the runs directory knows: the run
+     * holding the job's account. `rosterPath`/`jsonl`/`log` stay behind: they
+     * are paths on the supervisor's side of the mount.
+     */
+    const jobs: FleetJobView[] = Object.entries(raw.jobs ?? {})
+      .map(([name, j]) => {
+        const run = held.get(j.account.toUpperCase());
+        return {
+          name,
+          ref: j.ref,
+          episode: j.episode,
+          account: j.account,
+          accountClass: classOf.get(j.account.toUpperCase()) ?? "pinned",
+          source: j.source,
+          ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
+          ...(j.resuming !== undefined ? { resuming: j.resuming } : {}),
+          models: Array.isArray(j.models) ? j.models : [],
+          runId: run?.runId ?? null,
+          model: run?.model ?? null,
+          pid: j.pid,
+          spawnedAt: j.spawnedAt,
+          exitCode: j.exitCode ?? null,
+          draining: j.draining === true,
+          alive: j.alive === true,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
     /*
      * Accounts, in class order, with what holds each: the idle rows of the
      * fleet table. A pinned account that a class also lists (the coexistence
      * rule, ADR-0034) belongs to the class that schedules it, so `pinned` is
      * filtered against the classes rather than concatenated with them.
      */
-    const accounts: FleetAccountView[] | undefined =
-      raw.accounts === undefined
-        ? undefined
-        : [
-            ...Object.entries(raw.accounts.pinned ?? {})
-              .filter(([a]) => !classOf.has(a.toUpperCase()))
-              .map(([account, job]) => ({ account, class: "pinned" as const, job })),
-            ...(["pool", "paid", "local"] as const).flatMap((cls) =>
-              Object.entries(raw.accounts![cls] ?? {}).map(([account, job]) => ({ account, class: cls, job })),
-            ),
-          ];
+    const accounts: FleetAccountView[] = [
+      ...Object.entries(raw.accounts?.pinned ?? {})
+        .filter(([a]) => !classOf.has(a.toUpperCase()))
+        .map(([account, job]) => ({ account, class: "pinned" as const, job })),
+      ...(["pool", "paid", "local"] as const).flatMap((cls) =>
+        Object.entries(raw.accounts?.[cls] ?? {}).map(([account, job]) => ({ account, class: cls, job })),
+      ),
+    ];
     // `fleetConfig` is deliberately not forwarded: it is a host path, and the
     // API says what the fleet is doing, not where this machine keeps things.
+    // The rejection's file mtime stays behind for the same reason.
     return {
       present: true,
       fleetPid: raw.fleetPid,
@@ -379,15 +345,18 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
       heartbeatAt: raw.heartbeatAt,
       containerized: raw.containerized,
       stamp: raw.stamp,
-      lanes,
-      ...(jobs !== undefined ? { jobs } : {}),
-      ...(accounts !== undefined ? { accounts } : {}),
-      ...(Array.isArray(raw.paused) ? { paused: raw.paused } : {}),
+      ...(raw.configLoadedAt !== undefined ? { configLoadedAt: raw.configLoadedAt } : {}),
+      ...(raw.configRejected !== undefined ? { configRejected: { since: raw.configRejected.since, error: raw.configRejected.error } } : {}),
+      ...(raw.preflight !== undefined ? { preflight: raw.preflight } : {}),
+      jobs,
+      accounts,
+      paused: Array.isArray(raw.paused) ? raw.paused : [],
+      ended: Array.isArray(raw.ended) ? raw.ended : [],
       ...(raw.session !== undefined ? { session: raw.session } : {}),
       now,
     };
   } catch {
-    return { present: false, lanes: [], now };
+    return absent;
   }
 }
 
@@ -697,7 +666,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       const roster = readFleetRoster(opts.fleetConfigPath);
       const runs = readRunFactsCached(runsDir, factCache, now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
-      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness });
+      // The refs with a job in flight, off the supervisor's state: the verdict
+      // says "running (one stream per model)" exactly where --status does.
+      const running = new Set(readFleet(runsDir, now).jobs.flatMap((j) => j.ref.split("+")));
+      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running });
       /*
        * Cost is attached here rather than in the projection: `runner/src/models.ts`
        * is what the supervisor schedules on and knows nothing about prices, and

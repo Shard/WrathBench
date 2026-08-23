@@ -319,8 +319,8 @@ describe("static hosting of the dashboard", () => {
   });
 });
 
-/** A one-lane fleet-state.json on `account`, with a roster beside it. */
-function laneState(runs: string, account: string): void {
+/** A one-job fleet-state.json on `account`. */
+function jobState(runs: string, account: string, extra: Record<string, unknown> = {}): void {
   writeFileSync(
     join(runs, "fleet-state.json"),
     JSON.stringify({
@@ -329,20 +329,31 @@ function laneState(runs: string, account: string): void {
       heartbeatAt: 2,
       containerized: true,
       stamp: "20260822",
-      lanes: {
-        "lane-a": {
-          pid: 13,
+      fleetConfig: "/wrathbench/infra/fleet.json",
+      configLoadedAt: 3,
+      accounts: { pinned: { SHAKEOUT: "probe-freeplay" }, pool: { [account]: "job-a" }, paid: { PAID: null } },
+      jobs: {
+        "job-a": {
+          ref: "a",
+          episode: "e90",
           account,
-          // Repo-relative and written by a container: only the basename is trusted.
+          source: "policy",
+          attempt: 2,
+          models: ["test/model", "next/model"],
+          pid: 13,
+          // Repo-relative and written by a container: never forwarded.
           rosterPath: "data/runs/fleet-a.roster.json",
           jsonl: "j",
-          stdoutLog: "l",
+          log: "l",
           spawnedAt: 1,
           exitCode: null,
           draining: false,
           alive: true,
         },
       },
+      paused: [],
+      ended: [],
+      ...extra,
     }),
   );
 }
@@ -352,106 +363,92 @@ describe("fleet state", () => {
     const runs = fixture();
     const f = readFleet(runs);
     expect(f.present).toBe(false);
-    expect(f.lanes).toEqual([]);
+    expect(f.jobs).toEqual([]);
+    expect(f.accounts).toEqual([]);
   });
 
-  test("lanes are flattened and named, host paths are not forwarded", () => {
+  test("jobs are named and sorted, classed by their account, and host paths are not forwarded", () => {
     const runs = fixture();
-    writeFileSync(
-      join(runs, "fleet-state.json"),
-      JSON.stringify({
-        fleetPid: 7,
-        startedAt: 1,
-        heartbeatAt: 2,
-        containerized: true,
-        stamp: "20260822",
-        fleetConfig: "/wrathbench/infra/fleet.json",
-        lanes: {
-          "ox-alpha": { pid: 13, account: "RUNNER", rosterPath: "r", jsonl: "j", stdoutLog: "l", spawnedAt: 1, exitCode: null, draining: false, alive: true },
-        },
-      }),
-    );
+    jobState(runs, "RUNNER", {
+      jobs: {
+        "z-e90": { ref: "z", episode: "e90", account: "PAID", source: "queue", models: ["z"], pid: 1, rosterPath: "r", jsonl: "j", log: "l", spawnedAt: 1, exitCode: null, draining: false, alive: true },
+        "probe-freeplay": { ref: "probe", episode: "freeplay", account: "SHAKEOUT", source: "pinned", models: ["sonnet"], pid: 2, rosterPath: "r", jsonl: "j", log: "l", spawnedAt: 1, exitCode: 0, draining: true, alive: false },
+      },
+    });
     const f = readFleet(runs);
     expect(f.present).toBe(true);
-    expect(f.lanes.map((l) => l.name)).toEqual(["ox-alpha"]);
-    expect(f.lanes[0]!.account).toBe("RUNNER");
+    expect(f.jobs.map((j) => [j.name, j.accountClass])).toEqual([["probe-freeplay", "pinned"], ["z-e90", "paid"]]);
+    expect(f.jobs[0]).toMatchObject({ alive: false, draining: true, exitCode: 0, pid: 2 });
+    expect(f.configLoadedAt).toBe(3);
     expect(JSON.stringify(f)).not.toContain("fleet.json");
+    expect(JSON.stringify(f)).not.toContain("rosterPath");
+    // Accounts: pinned first (filtered against the classes), then the classes in order.
+    expect(f.accounts).toEqual([
+      { account: "SHAKEOUT", class: "pinned", job: "probe-freeplay" },
+      { account: "RUNNER", class: "pool", job: "job-a" },
+      { account: "PAID", class: "paid", job: null },
+    ]);
   });
 
-  test("each lane names the run holding its account, and its roster", () => {
+  test("each job names the run holding its account, and its models", () => {
     const runs = fixture();
-    laneState(runs, "RUNNER");
-    writeFileSync(
-      join(runs, "fleet-a.roster.json"),
-      JSON.stringify([
-        { model: "test/model", apiKeyEnv: "SECRET_ENV", apiBase: "https://x/v1" },
-        { model: "next/model" },
-      ]),
-    );
+    jobState(runs, "RUNNER");
     const f = readFleet(runs);
-    expect(f.lanes[0]!.runId).toBe(RUN_ID);
-    expect(f.lanes[0]!.model).toBe("test/model");
-    expect(f.lanes[0]!.rosterModels).toEqual(["test/model", "next/model"]);
-    // The roster is projected, never forwarded: nothing but the model names.
-    expect(JSON.stringify(f)).not.toContain("SECRET_ENV");
+    expect(f.jobs[0]!.runId).toBe(RUN_ID);
+    expect(f.jobs[0]!.model).toBe("test/model");
+    expect(f.jobs[0]!.models).toEqual(["test/model", "next/model"]);
+    expect(f.jobs[0]!.attempt).toBe(2);
   });
 
-  test("a lane whose account nobody holds reads as idle, not as driving a run", () => {
+  test("a job whose account nobody holds reads as idle, not as driving a run", () => {
     const runs = fixture();
-    laneState(runs, "RUNNER9");
+    jobState(runs, "RUNNER9");
     const f = readFleet(runs);
-    expect(f.lanes[0]!.runId).toBeNull();
-    expect(f.lanes[0]!.model).toBeNull();
+    expect(f.jobs[0]!.runId).toBeNull();
+    expect(f.jobs[0]!.model).toBeNull();
   });
 
   test("a paused run has already freed its session, so it holds no account", () => {
     const runs = fixture();
-    laneState(runs, "RUNNER");
+    jobState(runs, "RUNNER");
     const db = new Database(join(runs, RUN_ID, "run.sqlite"));
     db.run(`UPDATE run SET pause_reason = 'deferred'`);
     db.close();
-    expect(readFleet(runs).lanes[0]!.runId).toBeNull();
+    expect(readFleet(runs).jobs[0]!.runId).toBeNull();
   });
 
   test("a run whose files have gone cold has let its account go", () => {
     const runs = fixture();
-    laneState(runs, "RUNNER");
+    jobState(runs, "RUNNER");
     const old = new Date(Date.now() - 10 * 60_000);
     for (const name of ["trajectory.jsonl", "run.sqlite"]) {
       utimesSync(join(runs, RUN_ID, name), old, old);
     }
-    expect(readFleet(runs).lanes[0]!.runId).toBeNull();
+    expect(readFleet(runs).jobs[0]!.runId).toBeNull();
   });
 
-  // FOLLOW-UPS 52: the supervisor's own job and session blocks, forwarded.
-  test("jobs and the session counters are served; an older state has neither", () => {
+  test("the --status indicators ride along: session, gate, rejection, paused and ended", () => {
     const runs = fixture();
-    laneState(runs, "RUNNER");
-    const raw = JSON.parse(readFileSync(join(runs, "fleet-state.json"), "utf8")) as Record<string, unknown>;
-    expect(readFleet(runs).jobs).toBeUndefined();
-    expect(readFleet(runs).session).toBeUndefined();
-
-    writeFileSync(
-      join(runs, "fleet-state.json"),
-      JSON.stringify({
-        ...raw,
-        session: { finished: 12, ok: 11, retried: 3 },
-        jobs: {
-          "sonnet-e90": { ref: "sonnet", episode: "e90", account: "RUNNER", source: "policy", attempt: 3, models: ["sonnet"] },
-          "alpha-e90": { ref: "alpha", episode: "e90", account: "RUNNER2", source: "queue", models: ["vendor/alpha"] },
-        },
-      }),
-    );
+    const preflight = { at: 5, serverIdentity: "build:x@1", build: "harness-0.4-3-gabc", ok: true, results: [{ script: "infra/smoke/a.ts", ok: true, ms: 20_000, tail: "PASS" }] };
+    jobState(runs, "RUNNER", {
+      session: { finished: 12, ok: 11, retried: 3 },
+      preflight,
+      configRejected: { since: 9, error: "queue: bad", mtime: 10 },
+      paused: [{ runId: "p-1", model: "m", account: "RUNNER2", reason: "rate-limited", since: 1, elapsedMs: 2, budgetMs: 3, why: "resuming after 17:00" }],
+      ended: [{ runId: "e-1", model: "m", ref: "r", detail: "ended by the supervisor: model m no longer under ref r" }],
+    });
     const f = readFleet(runs);
     expect(f.session).toEqual({ finished: 12, ok: 11, retried: 3 });
-    // Named and sorted, so the table does not reorder itself between ticks.
-    expect(f.jobs?.map((j) => j.name)).toEqual(["alpha-e90", "sonnet-e90"]);
-    expect(f.jobs?.[1]?.attempt).toBe(3);
+    expect(f.preflight).toEqual(preflight);
+    // The rejection's file mtime is the supervisor's business, not the page's.
+    expect(f.configRejected).toEqual({ since: 9, error: "queue: bad" });
+    expect(f.paused).toHaveLength(1);
+    expect(f.ended[0]!.runId).toBe("e-1");
   });
 
   test("a truncated fleet-state.json degrades to absent rather than throwing", () => {
     const runs = fixture();
-    writeFileSync(join(runs, "fleet-state.json"), '{"lanes": {');
+    writeFileSync(join(runs, "fleet-state.json"), '{"jobs": {');
     expect(readFleet(runs).present).toBe(false);
   });
 });
