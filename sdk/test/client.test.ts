@@ -9,9 +9,11 @@ import {
   chatEcho,
   corpseReclaimDelay,
   deathReleaseCleared,
+  CREATURE_ENTRY,
   CREATURE_GUID,
   creatureCreate,
   creatureHealth,
+  creatureMove,
   creatureOutOfRange,
   creatureQuery,
   frames,
@@ -27,6 +29,7 @@ import {
   loginSequence,
   lootRelease,
   lootResponse,
+  moveProgress,
   moveResult,
   newWorld,
   transferAborted,
@@ -268,11 +271,12 @@ describe("client: movement", () => {
     expect(result.ok).toBe(true);
     expect(result.position).toEqual({ x: -1205, y: 981, z: 42, o: 1.2 });
 
-    // A genuinely broken shape is still rejected loudly.
+    // A genuinely broken shape is still rejected loudly, with the message the
+    // shape earns: two numbers are a half-written point, not a guid.
     // @ts-expect-error — deliberately wrong
-    await expect(client.moveTo(-1205, 981)).rejects.toBeInstanceOf(TypeError);
-    // @ts-expect-error — deliberately wrong
-    await expect(client.moveTo("here")).rejects.toBeInstanceOf(TypeError);
+    await expect(client.moveTo(-1205, 981)).rejects.toThrow(/needs a point object \{ x, y, z \}, got number/);
+    // A string is a guid-shaped argument now, so this is rejected as a guid.
+    await expect(client.moveTo("here")).rejects.toThrow(/neither a point nor a decimal guid string/);
 
     client.close();
     await stub.stop();
@@ -291,7 +295,7 @@ describe("client: movement", () => {
       expect(result.ok).toBe(false);
       expect(result.status).toBe(status);
       // Where the character actually ended up — what the next decision needs.
-      expect(result.position.x).toBe(-1205);
+      expect(result.position?.x).toBe(-1205);
       client.close();
       await stub.stop();
     }
@@ -2351,6 +2355,182 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     const ack = await client.reclaimCorpseAsync();
     expect(ack.ok).toBe(true);
     expect(stub.actions.at(-1)?.action).toBe("reclaim_corpse");
+    client.close();
+    await stub.stop();
+  });
+});
+
+/**
+ * `moveTo` taking the thing at the destination, not only the destination
+ * (ADR-0015 earned surface). The trajectory: the 2026-08-23 navigation fan-out,
+ * where 4 of 7 runs threw a raw `TypeError` reading `.x` off a unit lookup that
+ * had returned nothing — the model never learned it was the lookup that failed.
+ */
+describe("client: moveTo target resolution", () => {
+  const movePos = (stub: StubServer): { x: number; y: number; z: number } => {
+    const move = stub.actions.filter((a) => a.action === "move_to").at(-1) as unknown as {
+      x: number;
+      y: number;
+      z: number;
+    };
+    return { x: move.x, y: move.y, z: move.z };
+  };
+
+  test("a unit and its guid both resolve to the position the state cache holds", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const unit = client.state.units({ entry: CREATURE_ENTRY })[0]!;
+
+    const byUnit = client.moveTo(unit, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    expect(movePos(stub)).toEqual({ x: -1200, y: 980, z: 42 });
+    stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
+    expect((await byUnit).ok).toBe(true);
+
+    // The guid form reads the cache at call time, so a unit that has moved
+    // since is walked to where it is now, not where the caller last saw it.
+    stub.push(JSON.stringify(creatureMove));
+    await Bun.sleep(20);
+    const byGuid = client.moveTo(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "move_to", 1);
+    expect(movePos(stub)).toEqual({ x: -1210, y: 985, z: 42 });
+    stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
+    expect((await byGuid).ok).toBe(true);
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a guid nothing in view answers to is a typed verdict, never a TypeError", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+
+    const result = await client.moveTo("123456789");
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("unknown_target");
+    expect(result.position).toBeUndefined();
+    expect(result.hint).toContain("not in view");
+    expect(result.hint).toContain("state.closest(...)");
+    // Nothing was dispatched: there was nowhere to walk.
+    expect(stub.actions.filter((a) => a.action === "move_to")).toHaveLength(0);
+
+    // The raw tier has no result object to answer in, so it throws — and says
+    // which call does answer.
+    expect(() => client.moveToAsync("123456789")).toThrow(/unknown_target/);
+    // A point is untouched by any of this.
+    const walk = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
+    expect((await walk).status).toBe("arrived");
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a unit that left view walks to the coordinates it carried, and says so", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const unit = client.state.units({ entry: CREATURE_ENTRY })[0]!;
+    stub.push(JSON.stringify(creatureOutOfRange));
+    await Bun.sleep(20);
+    expect(client.state.nearby.has(CREATURE_GUID)).toBe(false);
+
+    const walk = client.moveTo(unit, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    expect(movePos(stub)).toEqual({ x: -1200, y: 980, z: 42 });
+    stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
+    const result = await walk;
+    expect(result.ok).toBe(true);
+    // Silent wrong behaviour is the one forbidden outcome (ADR-0016).
+    expect(result.hint).toContain("not in view any more");
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("the abandon error names the distance covered, the distance left, and moveToAsync", async () => {
+    // The 2026-08-23 fan-out: 6 of 7 runs hit the 30s snippet abandon with a
+    // moveTo in flight, and one re-issued the identical blocking call 5 times.
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    let current: AbortSignal | undefined;
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      events: { reconnect: false },
+      signal: () => current,
+    });
+    await client.createSession({ character: "Fenwick" });
+    await client.events.waitForOpcode("SMSG_LOGIN_VERIFY_WORLD", { timeout: 2000 });
+
+    const ac = new AbortController();
+    current = ac.signal;
+    const walk = client.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 5000 });
+    await untilAction(stub, "move_to");
+    // It got a third of the way before the snippet ran out of time.
+    stub.push(JSON.stringify(moveProgress));
+    await Bun.sleep(20);
+    ac.abort(new Error("snippet abandoned by the harness (timeout)"));
+
+    const err = (await walk.catch((e: unknown) => e)) as Error & { moveAbandon?: string };
+    expect(err).toBeInstanceOf(EventAbortedError);
+    expect(err.message).toContain("~15y covered");
+    expect(err.message).toContain("~220y still to go");
+    expect(err.message).toContain("sdk.moveToAsync(target)");
+    expect(err.moveAbandon).toContain("still walking when this was abandoned");
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a walk longer than the caller's remaining budget says so in the hint, and still walks", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
+    const client = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      events: { reconnect: false },
+      // The runner passes the instant the snippet will be abandoned.
+      deadline: () => Date.now() + 5_000,
+    });
+    await client.createSession({ character: "Fenwick" });
+    await client.events.waitForOpcode("SMSG_LOGIN_VERIFY_WORLD", { timeout: 2000 });
+
+    const walk = client.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("arrived", 1, 30)));
+    const result = await walk;
+    // No status change and no cap: the move was issued exactly as asked.
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("arrived");
+    expect(result.hint).toContain("~235y");
+    expect(result.hint).toContain("7yd/s");
+    expect(result.hint).toContain("sdk.moveToAsync(target)");
+
+    // A deadline already past is an unknown budget, not a budget of zero: a
+    // background routine inherits the launching snippet's deadline and keeps
+    // walking legitimately, and telling it to use a background routine would be
+    // the remediation contradicting itself.
+    const routine = await connect({
+      baseUrl: stub.baseUrl,
+      token: "t",
+      events: { reconnect: false },
+      deadline: () => Date.now() - 60_000,
+    });
+    await routine.createSession({ character: "Fenwick" });
+    const leg = routine.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 2000 });
+    await untilAction(stub, "move_to", 1);
+    stub.push(JSON.stringify(moveResult("arrived", 2, 31)));
+    expect((await leg).hint).toBeUndefined();
+    routine.close();
+
+    // With no deadline known, nothing is said either.
+    const quiet = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await quiet.createSession({ character: "Fenwick" });
+    const plain = quiet.moveTo({ x: -1000, y: 987.25, z: 42.125 }, { timeout: 2000 });
+    await untilAction(stub, "move_to", 2);
+    stub.push(JSON.stringify(moveResult("arrived", 3, 32)));
+    expect((await plain).hint).toBeUndefined();
+
+    quiet.close();
     client.close();
     await stub.stop();
   });

@@ -290,7 +290,11 @@ export class SandboxHost {
     const id = this.nextId++;
     try {
       const res = await this.request<EvalResultMsg>(
-        { t: "eval", id, code },
+        // The budget is the host's fact, so the host states it: the child hands
+        // it to the SDK, which uses it to explain a walk that never fit (see
+        // ipc.ts). Wall-clock, not `opts.now` — it is compared against
+        // `Date.now()` in another process.
+        { t: "eval", id, code, deadline: Date.now() + this.opts.snippetTimeoutMs },
         this.opts.snippetTimeoutMs,
       );
       this.consecutiveRestarts = 0;
@@ -335,7 +339,16 @@ export class SandboxHost {
             `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned: its \`signal\` was ` +
             `aborted, so pending SDK waits (moveTo, killTarget, waitForTransfer, …) rejected with ` +
             `EventAbortedError and any move in flight was stopped. ` +
+            // What the abort itself learned, when it learned anything: today
+            // that is the distance an in-flight moveTo had covered and had
+            // left, named by the SDK and carried home on the pong. A generic
+            // "it timed out" is what the 2026-08-23 fan-out showed models
+            // failing to act on (one retried the same blocking call 5 times).
+            (ping.note !== undefined ? `${ping.note} ` : "") +
             `The runtime (bindings, routines, session) is still alive. ` +
+            `A walk longer than this limit is dispatched, not awaited: sdk.moveToAsync(target) returns as soon ` +
+            `as the move is queued, and you poll state.self.position or the WB_MOVE_RESULT event for the ` +
+            `verdict. ` +
             `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
             `routine (launch it without awaiting, e.g. ` +
             `\`globalThis.trip = (async () => { for (const p of waypoints) await sdk.moveTo(p); return "done"; })().catch(String); "started"\` ` +
@@ -359,14 +372,14 @@ export class SandboxHost {
     }
   }
 
-  private async pingAlive(): Promise<{ alive: boolean; logs: LogEntry[] }> {
+  private async pingAlive(): Promise<{ alive: boolean; logs: LogEntry[]; note?: string }> {
     const id = this.nextId++;
     try {
-      const pong = await this.request<{ t: "pong"; id: number; logs?: LogEntry[] }>(
+      const pong = await this.request<{ t: "pong"; id: number; logs?: LogEntry[]; note?: string }>(
         { t: "ping", id },
         this.opts.pingGraceMs,
       );
-      return { alive: true, logs: pong.logs ?? [] };
+      return { alive: true, logs: pong.logs ?? [], ...(pong.note !== undefined ? { note: pong.note } : {}) };
     } catch {
       return { alive: false, logs: [] };
     }

@@ -51,7 +51,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 
 | Method | Signature | Purpose |
 | --- | --- | --- |
-| `moveTo` | `moveTo(point, options?): Promise<MoveResult>` | Walk to a world position and wait for the server's arrive/target_off_mesh/… verdict. |
+| `moveTo` | `moveTo(target, options?): Promise<MoveResult>` | Walk to a point { x, y, z }, a unit, or a guid (its cached position) and wait for the server's arrive/target_off_mesh/… verdict; a target nothing in view answers to comes back as status "unknown_target". |
 | `killTarget` | `killTarget(target: GuidOrUnit, options?): Promise<KillResult>` | Approach and auto-attack until the target or we drop; returns how the fight ended. |
 | `lootCorpse` | `lootCorpse(target: GuidOrUnit, options?): Promise<LootResult>` | Empty a corpse and report what actually entered the bags (confirmed pushes, not the window). |
 | `acceptQuestFrom` | `acceptQuestFrom(npcGuid: GuidOrUnit, questId, options?): Promise<QuestAcceptResult>` | Take a quest from an NPC and confirm it landed in the quest log. |
@@ -71,7 +71,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | Method | Signature | Purpose |
 | --- | --- | --- |
 | `say` | `say(text): Promise<ActionResponse>` | Say something in local chat. |
-| `moveToAsync` | `moveToAsync(point): Promise<MoveToResponse>` | Queue a move without waiting; prefer moveTo, which waits for the verdict. |
+| `moveToAsync` | `moveToAsync(target): Promise<MoveToResponse>` | Queue a move without waiting — the call for a walk longer than your own time budget; same targets as moveTo. |
 | `stop` | `stop(): Promise<ActionResponse>` | Queue a movement stop; the in-flight moveTo resolves with status 'stopped'. |
 | `face` | `face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>` | Turn in place toward an orientation (radians) or a point. |
 | `setTarget` | `setTarget(guid: GuidArg): Promise<ActionResponse>` | Set the current target (guid string only). |

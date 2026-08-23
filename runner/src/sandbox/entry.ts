@@ -172,8 +172,17 @@ function drainLogs(): LogEntry[] {
 // -------------------------------------------------------- ambient snippet API
 
 /** The eval whose async context we are in, if any. Set by `evaluate`. */
-const evalContext = new AsyncLocalStorage<{ signal: AbortSignal }>();
+const evalContext = new AsyncLocalStorage<{ signal: AbortSignal; deadline?: number }>();
 const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
+/** When the host will abandon the snippet we are inside, if it said. */
+const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
+/**
+ * What the last abandoned eval learned as it unwound — set from an SDK error
+ * that carried a `moveAbandon` sentence, drained by the liveness pong that
+ * follows the abort. One slot: the host pings immediately after aborting, and
+ * only the abandoned snippet is unwinding at that moment.
+ */
+let abandonNote: string | undefined;
 /** Live controllers by eval id, for the host's `abort`. */
 const evalControllers = new Map<number, AbortController>();
 
@@ -183,6 +192,7 @@ const client = new WrathClient({
   account: ACCOUNT,
   subscribeEvents: false,
   signal: currentSignal,
+  deadline: currentDeadline,
 });
 
 let hostcallId = 0;
@@ -398,7 +408,7 @@ export function renderError(err: unknown): string {
 // A timed-out evaluation's late result is discarded host-side (the host
 // abandons the id), so the child always reports. What it does track is the
 // eval's AbortController, so a host `abort` can fire the snippet's signal.
-async function evaluate(id: number, code: string): Promise<void> {
+async function evaluate(id: number, code: string, deadline?: number): Promise<void> {
   const started = Date.now();
   const controller = new AbortController();
   evalControllers.set(id, controller);
@@ -415,7 +425,9 @@ async function evaluate(id: number, code: string): Promise<void> {
     }
     fn ??= new AsyncFunction(compiled.statementsBody);
     const run = fn;
-    const value: unknown = await evalContext.run({ signal: controller.signal }, () => run.call(globalThis));
+    const value: unknown = await evalContext.run({ signal: controller.signal, deadline }, () =>
+      run.call(globalThis),
+    );
     const msg: ChildToHost = {
       t: "result",
       id,
@@ -426,6 +438,12 @@ async function evaluate(id: number, code: string): Promise<void> {
     if (value !== undefined) msg.value = Bun.inspect(value, { depth: 4 }).slice(0, VALUE_MAX_CHARS);
     send(msg);
   } catch (err) {
+    // An aborted eval's result is discarded host-side, and with it the one
+    // thing the abort knew: how far the move it interrupted had got. The SDK
+    // hangs that sentence on the error as `moveAbandon`; keep it for the pong,
+    // which is the only channel the model still sees (ADR-0016 rule 2).
+    const carried = (err as { moveAbandon?: unknown }).moveAbandon;
+    if (controller.signal.aborted && typeof carried === "string") abandonNote = carried;
     // An aborted eval's result is discarded host-side; its logs must not go
     // with it — leave them in the buffer for the liveness pong that follows.
     send({
@@ -492,7 +510,7 @@ function stateSnapshot(): unknown {
 function handle(msg: HostToChild | HostcallResult): void {
   switch (msg.t) {
     case "eval":
-      void evaluate(msg.id, msg.code);
+      void evaluate(msg.id, msg.code, msg.deadline);
       return;
     case "abort":
       abortEval(msg.id);
@@ -501,7 +519,11 @@ function handle(msg: HostToChild | HostcallResult): void {
       // Pings carry any buffered console output home: the host pings after a
       // snippet times out, and this is how the abandoned snippet's logs reach
       // the model instead of `logs: []`.
-      send({ t: "pong", id: msg.id, logs: drainLogs() });
+      {
+        const note = abandonNote;
+        abandonNote = undefined;
+        send({ t: "pong", id: msg.id, logs: drainLogs(), ...(note !== undefined ? { note } : {}) });
+      }
       return;
     case "rpc": {
       try {
