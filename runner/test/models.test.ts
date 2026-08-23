@@ -26,6 +26,9 @@ import {
   serializeModelsSidecar,
   type RosterModel,
   type RunFact,
+  type ModelState,
+  outstandingWork,
+  formatOutstanding,
 } from "../src/models";
 import type { EpisodeId } from "../src/episodes";
 
@@ -627,5 +630,89 @@ describe("paid and free (ADR-0034 amendment)", () => {
     // An extra is a free model's run and only ever lands on a free account.
     expect(planNextJobs([allMet], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
     expect(planNextJobs([allMet], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs.map((j) => j.account)).toEqual(["R1"]);
+  });
+});
+
+describe("outstandingWork", () => {
+  const good = (model: string, ep: EpisodeId, i: number, level = 3): RunFact => ({
+    runId: `${model}-${ep}-${i}`,
+    model,
+    effort: null,
+    episode: ep,
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW - (100 - i) * HOUR,
+    endedAt: NOW - (99 - i) * HOUR,
+    terminationReason: "episode-limit",
+    modelResponses: 10,
+    bestLevel: level,
+    live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
+  });
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: null };
+  const st = (r: RosterModel, runs: RunFact[]): ModelState => projectModel(r, runs, policy, { now: NOW });
+
+  // One of each thing the metric has to tell apart: a promoted model (owes
+  // e360 now), an unpromoted one (owes it only in the upper bound), a paid one
+  // (its own 3/1 targets and a cap of 1), a local one (its own single box), a
+  // force-tiered one (eligible without a witness), a claude-code one (the
+  // driver cap), and a pinned one that owes runs nobody schedules.
+  const promoted = st({ name: "promoted", model: "v/promoted:free" }, [1, 2, 3].map((i) => good("v/promoted:free", "e90", i, 5)));
+  const unpromoted = st({ name: "unpromoted", model: "v/unpromoted:free" }, [good("v/unpromoted:free", "e90", 1)]);
+  const paid = st({ name: "paid", model: "vendor/paid" }, []);
+  const local = st({ name: "local", model: "vendor/local", apiBase: "http://192.168.1.20:1234/v1" }, []);
+  const forced = st({ name: "forced", model: "v/forced:free", tiers: ["e360"] }, []);
+  const cc = st({ name: "cc", model: "opus", driver: "claude-code" }, []);
+  const pinned = st({ name: "pinned", model: "v/pinned:free" }, []);
+  const states = [promoted, unpromoted, paid, local, forced, cc, pinned];
+  const input = {
+    states,
+    policy,
+    excluded: ["pinned"],
+    accounts: { pool: 5, paid: 1, local: 1 },
+    maxConcurrent: { "claude-code": 2 },
+  };
+
+  test("bounds: promotion is the only unknown, and extras and excluded models are not work", () => {
+    const o = outstandingWork(input);
+    // lower: promoted 3xe360, unpromoted 2xe90, forced 3xe90 + 3xe360, cc 3xe90, paid 3xe90, local 3xe90.
+    expect(o.lower).toBe(20);
+    // upper adds the e360 target of everyone still eligible: unpromoted 3, cc 3, local 3, paid 1.
+    expect(o.upper).toBe(30);
+    expect(o.upper).toBeGreaterThanOrEqual(o.lower);
+    // The pinned model owes 3 e90 runs and contributes none of them.
+    expect(pinned.perEpisode.e90!.target - pinned.perEpisode.e90!.counted).toBe(3);
+    expect(outstandingWork({ ...input, excluded: [] }).lower).toBe(23);
+    // A retired model is not work either, however much it still owes.
+    const dead = { ...pinned, name: "dead", retired: { at: NOW, reason: "gave up" } };
+    expect(outstandingWork({ ...input, states: [...states, dead] }).lower).toBe(20);
+  });
+
+  test("eta: class-wise minutes over class concurrency, claude-code carved out of the pool", () => {
+    const o = outstandingWork(input);
+    const by = new Map(o.breakdown.map((g) => [g.group, g]));
+    expect([...by.keys()].sort()).toEqual(["claude-code", "local", "paid", "pool"]);
+    expect(by.get("pool")).toMatchObject({ concurrency: 5, lowerRuns: 11, lowerMinutes: 2610, upperRuns: 14, upperMinutes: 3690 });
+    // The driver cap binds tighter than the five pool accounts.
+    expect(by.get("claude-code")).toMatchObject({ concurrency: 2, lowerMinutes: 270, upperMinutes: 1350 });
+    // policy.paid.maxConcurrent caps the paid class at one in flight.
+    expect(by.get("paid")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });
+    expect(by.get("local")).toMatchObject({ concurrency: 1, lowerRuns: 3 });
+    const min = (ms: number | null): number => Math.round((ms ?? 0) / 60_000);
+    expect(min(o.etaLowerMs)).toBe(2610 / 5 + 270 / 2 + 270 + 270);
+    expect(min(o.etaUpperMs)).toBe(3690 / 5 + 1350 / 2 + 630 + 1350);
+    expect(o.etaLowerMs!).toBeLessThanOrEqual(o.etaUpperMs!);
+  });
+
+  test("work with nowhere to run has no eta; nothing owed is exhausted", () => {
+    expect(outstandingWork({ ...input, accounts: { pool: 5, paid: 0, local: 1 } }).etaLowerMs).toBeNull();
+    const none = outstandingWork({ states: [], accounts: { pool: 5 } });
+    expect(none).toMatchObject({ lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0 });
+    expect(formatOutstanding(none)).toContain("exhausted");
+    expect(formatOutstanding(outstandingWork(input))).toBe("outstanding: 20–30 scheduled runs, ≈ 20h–57h to exhaust");
   });
 });

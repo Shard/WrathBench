@@ -38,6 +38,8 @@ import {
   pausedLabel,
   rowStateLabel,
   runHref,
+  outstandingLabel,
+  outstandingTitle,
   serverBanner,
   supervisorAlive,
   supervisorLabel,
@@ -114,14 +116,19 @@ export default function Fleet() {
               <div class="strip">
                 <span>
                   <span class={`dot ${up() ? "live" : deployWindowOpen(f().server) ? "" : "dead"}`} />
-                  {supervisorLabel(f(), now())} · pid {f().fleetPid ?? "—"} ·{" "}
-                  {f().containerized === true ? "container" : "host"} ·{" "}
+                  {supervisorLabel(f(), now())} ·{" "}
                   {age() === null ? "no heartbeat" : `heartbeat ${fmtAge(age()!)}`}
                 </span>
-                <span class="dim">stamp {f().stamp ?? "—"}</span>
-                <span class="dim" title={f().configLoadedAt === undefined ? "" : stamp(f().configLoadedAt!)}>
-                  config loaded {f().configLoadedAt === undefined ? "—" : fmtAge(now() - f().configLoadedAt!)}
-                </span>
+                {/*
+                  How much of the schedule is left (the same line --status
+                  prints). The identity items that used to sit here — pid,
+                  container, stamp, config-loaded — said nothing an operator
+                  acts on; this says whether tonight is enough. The tooltip
+                  carries the formula.
+                */}
+                <Show when={f().outstanding}>
+                  {(o) => <span title={outstandingTitle(o())}>{outstandingLabel(o())}</span>}
+                </Show>
                 <span class="dim">{f().jobs.length} jobs · {live().length} live runs</span>
                 <span class="dim">
                   <Show when={f().session !== undefined} fallback={<>session not reported</>}>

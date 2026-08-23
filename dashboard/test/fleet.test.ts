@@ -8,8 +8,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
+import type { FleetJobView, FleetOutstandingView, FleetResponse, FleetServerView, RunListRow } from "../../runner/viewer/api-types";
 import {
+  outstandingLabel,
+  outstandingTitle,
   FLEET_COLUMNS,
   HEARTBEAT_STALE_MS,
   accountClassSummary,
@@ -288,5 +290,29 @@ describe("the deploy window (server-state.json)", () => {
     // A gone process still holding a run is not a paused run, whatever the phase.
     expect(fleetRows(fleet({ server: server({ phase: "swapping" }), jobs: [job({ alive: false })] }), [])[0]!.state).toBe("exited");
     expect(rowStateLabel("running")).toBe("running");
+  });
+});
+
+describe("outstandingLabel", () => {
+  const o = (over: Partial<FleetOutstandingView> = {}): FleetOutstandingView => ({
+    lower: 11,
+    upper: 23,
+    etaLowerMs: 4 * 3_600_000,
+    etaUpperMs: 9 * 3_600_000,
+    breakdown: [{ group: "pool", concurrency: 5, lowerRuns: 11, upperRuns: 23, lowerMinutes: 990, upperMinutes: 2070 }],
+    ...over,
+  });
+
+  test("the bounded pair and its eta, in --status's own words", () => {
+    expect(outstandingLabel(o())).toBe("outstanding: 11\u201323 scheduled runs, \u2248 4h\u20139h to exhaust");
+    expect(outstandingLabel(o({ lower: 5, upper: 5, etaLowerMs: 3_600_000, etaUpperMs: 3_600_000 }))).toBe(
+      "outstanding: 5 scheduled runs, \u2248 1h to exhaust",
+    );
+    expect(outstandingLabel(o({ lower: 0, upper: 0 }))).toBe("outstanding: exhausted");
+    // Work with nowhere to run has no eta rather than a made-up one.
+    expect(outstandingLabel(o({ etaLowerMs: null }))).toContain("eta unknown");
+    // The tooltip carries the formula and the per-class arithmetic behind it.
+    expect(outstandingTitle(o())).toContain("pool: 11\u201323 runs, 990\u20132070 min at 5 at a time");
+    expect(outstandingTitle(o())).toContain("ETA =");
   });
 });
