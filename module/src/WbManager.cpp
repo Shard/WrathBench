@@ -2084,11 +2084,26 @@ namespace WrathBench
             WbVec const& b = m.points[m.seg + 1];
             float sx = b.x - a.x, sy = b.y - a.y, sz = b.z - a.z;
             float segLen = std::sqrt(sx * sx + sy * sy + sz * sz);
+            // A zero-length segment is consumed, never "walked": a request for
+            // the point the character already stands on resolves to the
+            // two-point path [here, here] (same poly, straight line), and the
+            // old `advance < remain || segLen <= 0.0001f` branch broke out of
+            // this loop without ever advancing `seg` — so the geometric-end
+            // check below never fired, no MSG_MOVE_STOP was sent, and the
+            // move heartbeated in place forever with no WB_MOVE_RESULT
+            // (module-navigation step 5 on the harness-0.4 smoke shape,
+            // 2026-08-23: walk home, off-mesh, too_far, then "walk home" again).
+            if (segLen <= 0.0001f)
+            {
+                ++m.seg;
+                m.segDone = 0.0f;
+                continue;
+            }
             float remain = segLen - m.segDone;
-            if (advance < remain || segLen <= 0.0001f)
+            if (advance < remain)
             {
                 m.segDone += advance;
-                float t = segLen > 0.0001f ? m.segDone / segLen : 1.0f;
+                float t = m.segDone / segLen;
                 m.curX = a.x + sx * t;
                 m.curY = a.y + sy * t;
                 m.curZ = a.z + sz * t;
