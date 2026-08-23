@@ -68,10 +68,14 @@ describe("priceFor", () => {
     expect(p?.output).toBe(0);
   });
 
+  test("a verified-free stealth id (the allowlist) prices as free", () => {
+    expect(priceFor({ model: "stealth/ox-alpha", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })?.id).toBe("free-tier");
+  });
+
   test("an unknown paid model has no price at all — tokens only, never a guess", () => {
     expect(
       priceFor({
-        model: "stealth/ox-alpha",
+        model: "vendor/big-paid",
         apiBase: "https://openrouter.ai/api/v1",
         platform: "openrouter",
         driver: "openai",
@@ -168,7 +172,7 @@ describe("runCost", () => {
 
   test("an unknown model gets no cost and says why", () => {
     const c = runCost({
-      run: { model: "stealth/ox-alpha", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" },
+      run: { model: "vendor/big-paid", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" },
       tokens: tokens({ promptTokens: 500_000 }),
       reportedUsd: null,
     });

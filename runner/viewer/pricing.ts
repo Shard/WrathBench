@@ -21,6 +21,7 @@
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
  */
 
+import { isAllowlistedFree, isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
 import type { CostBreakdown, CostView, RunRow, TokenTotals } from "./api-types";
 
 /** One priced model: dollars per million tokens, with where the figure is from. */
@@ -130,29 +131,12 @@ export const LOCAL_PRICE: PriceRow = {
   note: "local — served from the operator's own hardware, no marginal token cost",
 };
 
-/** A `:free` (OpenRouter) or `-free` (OpenCode Zen) slug. */
-export function isFreeSlug(model: string): boolean {
-  return /(?::free$|-free$)/.test(model);
-}
-
-/** An api base that is not on the public internet: LM Studio and friends. */
-export function isLocalBase(apiBase: string | null): boolean {
-  if (apiBase === null || apiBase === "") return false;
-  let host: string;
-  try {
-    host = new URL(apiBase).hostname;
-  } catch {
-    return false;
-  }
-  return (
-    host === "localhost" ||
-    host.endsWith(".local") ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  );
-}
+/**
+ * The free/local/paid split is a model property decided once in
+ * `runner/src/model-cost.ts` (the scheduler reads the same verdict, ADR-0034);
+ * the predicates are re-exported so existing callers keep their names.
+ */
+export { isFreeSlug, isLocalBase } from "../src/model-cost";
 
 /** What a run needs to carry to be priced. A subset of `RunRow`, so tests can be small. */
 export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness">;
@@ -168,8 +152,8 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
 export function priceFor(run: PriceableRun, at: number | null = null): PriceRow | null {
   const model = run.model ?? "";
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
-  if (/contributor-free/i.test(model)) return CONTRIBUTOR_PRICE;
-  if (isFreeSlug(model)) return FREE_PRICE;
+  if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
+  if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;
   for (const p of CLAUDE_PRICES) {

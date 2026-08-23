@@ -29,6 +29,8 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     model: "m",
     platform: "openrouter",
     harnessVersion: "harness-0.2",
+    harnessSeries: "0.2",
+    extra: false,
     effort: null,
     modelResponses: 1,
     stillborn: false,
@@ -182,5 +184,23 @@ describe("ladderRows", () => {
   test("every rung either has a rule to apply or says it has none", () => {
     expect(RUNGS).toHaveLength(8);
     for (const r of RUNGS) expect(r.rule.length).toBeGreaterThan(10);
+  });
+});
+
+describe("series grouping (ADR-0034)", () => {
+  test("two builds in one series share a row and the row lists both; a minor bump is its own row", () => {
+    const rows = [
+      run({ runId: "a", harnessVersion: "harness-0.3-10-gaaa", harnessSeries: "0.3", levels: [mark(5, 10, 1000)] }),
+      run({ runId: "b", harnessVersion: "harness-0.3-12-gbbb-dirty", harnessSeries: "0.3", levels: [mark(5, 8, 900)] }),
+      run({ runId: "c", harnessVersion: "harness-0.2-33-gccc", harnessSeries: "0.2", levels: [mark(5, 4, 400)] }),
+      run({ runId: "d", harnessVersion: "gdead", harnessSeries: null }),
+    ];
+    const groups = groupsForLevel(rows, 5).sort((x, y) => x.harnessVersion.localeCompare(y.harnessVersion));
+    expect(groups.map((g) => [g.harnessVersion, g.attempts, g.harnessVersions])).toEqual([
+      ["0.2", 1, ["harness-0.2-33-gccc"]],
+      ["0.3", 2, ["harness-0.3-10-gaaa", "harness-0.3-12-gbbb-dirty"]],
+      ["gdead", 1, ["gdead"]],
+    ]);
+    expect(groups[1]!.bestTurn).toBe(8);
   });
 });

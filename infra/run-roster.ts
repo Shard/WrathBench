@@ -95,6 +95,8 @@ export interface RosterSpec {
    * should set it. Stamped into the run's comparability tuple.
    */
   wikiCoords?: boolean;
+  /** An extra run past the policy target (ADR-0034): stamped `extra: true`, never counted. */
+  extra?: boolean;
   /**
    * Episode tier id (ADR-0030/0031): `e90`, `e360` or `freeplay`. Passed to the
    * runner verbatim as `--episode <id>`; the explicit watchdog/maxToolCalls
@@ -121,6 +123,7 @@ export interface Resolved {
   watchdogs: WatchdogOverride;
   maxToolCalls: number | undefined;
   wikiCoords: boolean;
+  extra: boolean;
   episode: string | undefined;
 }
 
@@ -415,6 +418,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       watchdogs,
       maxToolCalls: s.maxToolCalls,
       wikiCoords: s.wikiCoords === true,
+      extra: s.extra === true,
       episode: s.episode,
     });
   }
@@ -459,6 +463,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.
   if (spec.wikiCoords) argv.push("--wiki-coords", "true");
+  if (spec.extra) argv.push("--extra", "true");
   // The tier id rides its own flag (a string, never interpreted here); the
   // runner's argv parser ignores flags it does not know, so this is safe to
   // emit before the runner learns it.

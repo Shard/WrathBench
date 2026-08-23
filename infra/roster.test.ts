@@ -162,6 +162,16 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
+  test("an extra run reaches argv as `--extra true` and is off by default (ADR-0034)", () => {
+    const [s] = resolve([{ model: "m", extra: true }], "20260101");
+    expect(s!.extra).toBe(true);
+    const argv = episodeArgv(s!, false);
+    expect(argv[argv.indexOf("--extra") + 1]).toBe("true");
+    const [plain] = resolve([{ model: "m" }], "20260101");
+    expect(plain!.extra).toBe(false);
+    expect(episodeArgv(plain!, false)).not.toContain("--extra");
+  });
+
   test("an empty objective or a bad watchdog key is a config error", () => {
     expect(() => resolve([{ model: "m", objective: "" }], "20260101")).toThrow(/objective/);
     expect(() => resolve([{ model: "m", watchdogs: { noXpMS: 5 } as never }], "20260101")).toThrow(/watchdogs/);

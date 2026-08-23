@@ -119,7 +119,7 @@ describe("shapes", () => {
     const payload: RunsResponse = {
       runs: [
         {
-          runId: "r1", model: "m", driver: "openai", adapter: "openai", harness: "wrathbench", shakeout: null, objective: null,
+          runId: "r1", model: "m", driver: "openai", adapter: "openai", harness: "wrathbench", shakeout: null, objective: null, extra: false,
           comparability: null,
           character: "Chr", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,

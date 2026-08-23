@@ -155,6 +155,8 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity too (ADR-0028): what the reference surface served is part of
     // what the run was, so a resume keeps the stored value.
     wikiCoords: flag(args["wiki-coords"]),
+    // Identity as well: a resumed extra is still an extra.
+    extra: flag(args["extra"]),
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
     maxTurns: num(args["max-turns"]),
     maxToolCallsPerEpisode: num(args["max-tool-calls"]),

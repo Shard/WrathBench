@@ -130,6 +130,8 @@ export interface RunRow {
   shakeout: string | null;
   /** The operator objective this run was steered with (ADR-0024), or null. */
   objective: string | null;
+  /** An extra run (ADR-0034): past the policy target, scored like any other, never counted by the fleet. */
+  extra: boolean;
   character: string | null;
   /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
   platform: string | null;
@@ -487,6 +489,14 @@ export interface EvalRun {
   model: string | null;
   platform: string | null;
   harnessVersion: string | null;
+  /**
+   * `major.minor` of the harness version (ADR-0034): the comparability group
+   * the charts key on, with the exact versions listed on the row. Null when
+   * the stamp has none.
+   */
+  harnessSeries: string | null;
+  /** An extra run past the policy target (ADR-0034); scored like any other, reported apart by the fleet. */
+  extra: boolean;
   effort: string | null;
   /** The harness tag (ADR-0035). A tag on the row, not a partition. */
   harness: HarnessView | null;
@@ -596,6 +606,10 @@ export interface ModelEpisodeView {
   stillborn: number;
   /** Every stamped run on this tier, counted or not. */
   attempts: number;
+  /** Attempts past the target (`extra: true`), reported apart and never counted. */
+  extras: number;
+  /** Runs from another harness series: listed, never counted, never attempts. */
+  otherSeries: number;
   /** Runs the policy wants at this tier before it stops scheduling them. */
   target: number;
   bestLevel: number | null;
@@ -615,6 +629,10 @@ export interface ModelRunView {
   episode: EpisodeIdView;
   episodeOverride: boolean;
   harnessVersion: string | null;
+  /** The series the run's version belongs to; the schedule counts only the current one. */
+  harnessSeries: string | null;
+  /** An extra run (ADR-0034): an attempt past the target, never counted. */
+  extra: boolean;
   startedAt: number;
   endedAt: number | null;
   /** Wall clock, start to end — not active time; the run page owns that. */
@@ -649,6 +667,8 @@ export interface ModelRowView {
   platform: string | null;
   /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
   harness: HarnessView;
+  /** Free or paid (`runner/src/model-cost.ts`): what the policy's targets, cap and extras key on. */
+  billing: "free" | "paid";
   status: ModelStatusView;
   /** Tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeIdView[];
@@ -678,6 +698,12 @@ export interface ModelsResponse {
   policy: {
     runsPerEpisode: { e90: number; e360: number };
     promoteAtLevel: number;
+    /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
+    series: string | null;
+    /** The paid policy when the file turns it on (ADR-0034); null is no split. */
+    paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
+    /** The extras policy when on: how many characters the cycle holds. */
+    extras: { characters: number } | null;
   };
   /** The defer ladder's rungs, so the page can say "rung 3 of 9" honestly. */
   ladderMs: number[];

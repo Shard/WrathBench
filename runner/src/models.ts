@@ -30,33 +30,159 @@
  *   deadline is the last failure's end plus the rung. The only persisted state
  *   is the operator's `clear`, kept in a sidecar the supervisor owns, and it
  *   works by ignoring attempts that ended before it.
- * - **Harness version is recorded but not filtered.** The operator's policy is
- *   three runs per (model, episode) regardless of version; the comparability
- *   surface is where versions are separated, not the schedule.
+ * - **The harness series is the schedule's key.** A run records its exact
+ *   version; the policy (`series`) names the series of the checkout it runs
+ *   from, and runs from another series are shown but not counted — a minor
+ *   bump restarts the evidence, a fix commit within the series does not. A
+ *   policy with no series (an unversioned checkout) filters nothing.
+ * - **Billing is a model property** (`model-cost.ts`). A paid model has its own
+ *   targets (hard: never extras) and shares one in-flight cap; a free model
+ *   gets extra runs at lowest priority once nothing else is schedulable,
+ *   cycling through `extras.characters`. An extra is an attempt, never counted.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { harnessSeries } from "./comparability";
 import { harnessOf, normalizeDriver, type Harness } from "./config";
 import { isEpisodeId, type EpisodeId } from "./episodes";
+import { billingOf, type Billing } from "./model-cost";
 
 // ----------------------------------------------------------------- policy
 
 /** The episode tiers the policy schedules on its own. `freeplay` is manual only. */
 export const POLICY_EPISODES: readonly EpisodeId[] = ["e90", "e360"];
 
+/** A starting character for an extra run: race and class ids as the client sends them. */
+export interface StartingCharacter {
+  race: number;
+  class: number;
+}
+
 export interface SchedulingPolicy {
   /** Runs per (model, episode) the policy aims for; a roster entry may override. */
   runsPerEpisode: { e90: number; e360: number };
   /** The level an e90 run must reach to promote the model into e360. */
   promoteAtLevel: number;
+  /**
+   * The harness series (`comparability.ts`) runs must carry to count. Null:
+   * no filter, every stamped run counts (the pre-series behaviour).
+   */
+  series: string | null;
+  /**
+   * The paid-model policy, or null to treat paid and free alike (the
+   * pre-split behaviour). Paid targets are hard — never extras — and at most
+   * `maxConcurrent` paid models are in flight across the pool at once.
+   */
+  paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
+  /**
+   * Extra runs for free models once nothing else is schedulable, or null for
+   * none. Each extra takes the next character in `characters`, cycling.
+   */
+  extras: { characters: StartingCharacter[] } | null;
 }
+
+/** Paid defaults once `policy.paid` is present: one long run is enough to see the shape. */
+export const DEFAULT_PAID = { runsPerEpisode: { e90: 3, e360: 1 }, maxConcurrent: 1 } as const;
+
+/**
+ * Sensible level-1 combos for the Alliance starting zones the wiki bundle
+ * covers: human (1), dwarf (3), night elf (4), gnome (7); classes a fresh
+ * character can play solo — warrior 1, paladin 2, hunter 3, rogue 4, priest 5,
+ * mage 8, warlock 9, druid 11.
+ */
+export const DEFAULT_EXTRA_CHARACTERS: readonly StartingCharacter[] = [
+  { race: 1, class: 1 },
+  { race: 3, class: 3 },
+  { race: 4, class: 11 },
+  { race: 7, class: 8 },
+  { race: 1, class: 9 },
+  { race: 3, class: 2 },
+  { race: 4, class: 4 },
+  { race: 1, class: 5 },
+];
 
 export const DEFAULT_POLICY: SchedulingPolicy = {
   runsPerEpisode: { e90: 3, e360: 3 },
   promoteAtLevel: 5,
+  series: null,
+  paid: null,
+  extras: null,
 };
+
+/**
+ * The file's `policy` block (`infra/fleet.json`) over the defaults, in one
+ * place so the supervisor, `--status` and the viewer read the same answer.
+ *
+ * Every field is optional and absent means today's behaviour: `paid` absent
+ * is no paid/free split, `extras` absent is no extras, and a present block
+ * with nothing in it takes `DEFAULT_PAID` / `DEFAULT_EXTRA_CHARACTERS`. The
+ * series is the caller's (the checkout it runs from), never the file's.
+ * Throws on a malformed block with a message naming the field; the viewer
+ * catches and shows the defaults, the supervisor refuses the config.
+ */
+export function parsePolicyBlock(raw: unknown, series: string | null = null): SchedulingPolicy & { maxConcurrent: Record<string, number> } {
+  const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
+  if (raw === undefined) return base;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown };
+  const runs = parseRunsPerEpisode(o.runsPerEpisode, "policy.runsPerEpisode");
+  const out = { ...base, runsPerEpisode: { ...DEFAULT_POLICY.runsPerEpisode, ...runs } };
+  if (o.maxConcurrent !== undefined) {
+    if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
+      throw new Error('policy.maxConcurrent must be an object like { "claude-code": 2 }');
+    }
+    for (const [k, v] of Object.entries(o.maxConcurrent as Record<string, unknown>)) {
+      const driver = normalizeDriver(k);
+      if (driver === undefined) throw new Error(`policy.maxConcurrent: unknown driver ${k}`);
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) throw new Error(`policy.maxConcurrent.${k} must be a positive integer`);
+      out.maxConcurrent[driver] = v;
+    }
+  }
+  if (o.paid !== undefined) {
+    if (typeof o.paid !== "object" || o.paid === null || Array.isArray(o.paid)) throw new Error('policy.paid must be an object like { "runsPerEpisode": { "e90": 3, "e360": 1 }, "maxConcurrent": 1 }');
+    const p = o.paid as { runsPerEpisode?: unknown; maxConcurrent?: unknown };
+    const pr = parseRunsPerEpisode(p.runsPerEpisode, "policy.paid.runsPerEpisode");
+    let cap: number = DEFAULT_PAID.maxConcurrent;
+    if (p.maxConcurrent !== undefined) {
+      if (typeof p.maxConcurrent !== "number" || !Number.isInteger(p.maxConcurrent) || p.maxConcurrent < 0) throw new Error("policy.paid.maxConcurrent must be a non-negative integer");
+      cap = p.maxConcurrent;
+    }
+    out.paid = { runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode, ...pr }, maxConcurrent: cap };
+  }
+  if (o.extras !== undefined) {
+    if (typeof o.extras !== "object" || o.extras === null || Array.isArray(o.extras)) throw new Error('policy.extras must be an object like { "characters": [{ "race": 1, "class": 1 }] }');
+    const e = o.extras as { characters?: unknown };
+    let characters: StartingCharacter[] = [...DEFAULT_EXTRA_CHARACTERS];
+    if (e.characters !== undefined) {
+      if (!Array.isArray(e.characters)) throw new Error("policy.extras.characters must be an array of { race, class }");
+      characters = (e.characters as unknown[]).map((c, i) => {
+        const cc = c as { race?: unknown; class?: unknown };
+        const ok = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 11;
+        if (typeof c !== "object" || c === null || !ok(cc.race) || !ok(cc.class)) {
+          throw new Error(`policy.extras.characters[${i}] must be { race: 1..11, class: 1..11 }`);
+        }
+        return { race: cc.race, class: cc.class };
+      });
+    }
+    out.extras = { characters };
+  }
+  return out;
+}
+
+/** `{ e90?, e360? }` as targets; `where` names the field in the error. */
+export function parseRunsPerEpisode(raw: unknown, where: string): Partial<Record<"e90" | "e360", number>> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${where} must be an object like { "e90": 3, "e360": 3 }`);
+  const out: Partial<Record<"e90" | "e360", number>> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k !== "e90" && k !== "e360") throw new Error(`${where}: unknown episode ${k} (e90 or e360; freeplay is never scheduled by policy)`);
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new Error(`${where}.${k} must be a non-negative integer`);
+    out[k] = v;
+  }
+  return out;
+}
 
 /**
  * The supervisor's defer ladder, in milliseconds per consecutive no-progress
@@ -96,6 +222,8 @@ export interface RosterModel {
   tiers?: EpisodeId[];
   /** Per-entry target override. */
   runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
+  /** Operator override of the billing verdict (`model-cost.ts`). */
+  billing?: Billing;
 }
 
 /** Operator overrides the supervisor persists (`fleet-models.json`). */
@@ -130,6 +258,10 @@ export interface RunFact {
   episode: EpisodeId;
   episodeOverride: boolean;
   harnessVersion: string | null;
+  /** `harnessSeries(harnessVersion)`; what the schedule keys on. */
+  harnessSeries: string | null;
+  /** An extra run (ADR-0034): an attempt the policy made past the target, never counted. */
+  extra: boolean;
   startedAt: number;
   /** `ended_at` from run.sqlite, else the trajectory's mtime. */
   endedAt: number | null;
@@ -153,6 +285,10 @@ export interface EpisodeStats {
   stillborn: number;
   /** Every stamped run, counted or not — what the next run id is numbered after. */
   attempts: number;
+  /** Attempts the policy made past the target (`extra: true`); reported apart, never counted. */
+  extras: number;
+  /** Runs from another harness series: shown, never counted, never attempts. */
+  otherSeries: number;
   target: number;
   bestLevel: number | null;
   /** A counted, un-overridden run reached `promoteAtLevel` — the promotion witness on e90. */
@@ -181,6 +317,8 @@ export interface ModelState {
   /** The harness this entry's runs go through (ADR-0035), from its driver; a tag, not a partition. */
   harness: Harness;
   status: ModelStatus;
+  /** Free or paid, decided by `model-cost.ts` (or the roster's override). */
+  billing: Billing;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
@@ -196,6 +334,15 @@ export interface NextJob {
   account: string;
   /** 1-based attempt number on this (model, episode): `attempts + 1`. */
   attempt: number;
+  why: string;
+  /** An extra run past the target (free models only), with the character it rolls. */
+  extra?: StartingCharacter;
+}
+
+/** A pick the policy would have made but held back, with the reason — what `--dry-run` explains. */
+export interface HeldPick {
+  name: string;
+  episode: EpisodeId;
   why: string;
 }
 
@@ -255,7 +402,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
   let meta: {
     harnessVersion?: unknown;
     startedAt?: unknown;
-    config?: { model?: unknown; effort?: unknown };
+    config?: { model?: unknown; effort?: unknown; extra?: unknown };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
   };
   try {
@@ -275,6 +422,8 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     episode,
     episodeOverride: meta.comparability?.episodeOverride === true,
     harnessVersion: str(meta.harnessVersion),
+    harnessSeries: harnessSeries(str(meta.harnessVersion)),
+    extra: meta.config?.extra === true,
     startedAt: num(meta.startedAt) ?? 0,
     endedAt: null,
     terminationReason: null,
@@ -374,7 +523,7 @@ export function stillbornOf(f: RunFact): boolean | null {
 export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error"]);
 
 export function isCounted(f: RunFact): boolean {
-  if (f.episodeOverride || f.modelResponses === null || f.modelResponses <= 0) return false;
+  if (f.extra || f.episodeOverride || f.modelResponses === null || f.modelResponses <= 0) return false;
   if (f.terminationReason !== null && NOT_THE_MODELS_FAULT.has(f.terminationReason)) return false;
   return true;
 }
@@ -390,9 +539,20 @@ function matchesRoster(f: RunFact, r: RosterModel): boolean {
   return f.model === r.model && (f.effort ?? null) === (r.effort ?? null);
 }
 
-function targetFor(r: RosterModel, ep: EpisodeId, policy: SchedulingPolicy): number {
+function targetFor(r: RosterModel, ep: EpisodeId, policy: SchedulingPolicy, billing: Billing): number {
   if (ep === "freeplay") return 0;
-  return r.runsPerEpisode?.[ep] ?? policy.runsPerEpisode[ep];
+  const base = billing === "paid" && policy.paid !== null ? policy.paid.runsPerEpisode : policy.runsPerEpisode;
+  return r.runsPerEpisode?.[ep] ?? base[ep];
+}
+
+/** The billing verdict for a roster entry, as the projection stamps it. */
+export function rosterBilling(r: RosterModel): Billing {
+  return billingOf({ model: r.model, apiBase: r.apiBase, driver: r.driver, billing: r.billing });
+}
+
+/** Whether a run belongs to the policy's series (a policy with no series takes every run). */
+export function inSeries(f: RunFact, policy: SchedulingPolicy): boolean {
+  return policy.series === null || f.harnessSeries === policy.series;
 }
 
 /**
@@ -406,14 +566,21 @@ export function projectModel(
   policy: SchedulingPolicy,
   opts: { now: number; clearedAt?: number },
 ): ModelState {
-  const mine = runs.filter((f) => matchesRoster(f, r));
+  const billing = rosterBilling(r);
+  const all = runs.filter((f) => matchesRoster(f, r));
+  // Another series' runs are shown, never counted: not attempts, not witnesses,
+  // not ladder. The ladder is about the provider, but a run that old says
+  // nothing about tonight's provider either.
+  const mine = all.filter((f) => inSeries(f, policy));
   const perEpisode: Partial<Record<EpisodeId, EpisodeStats>> = {};
   for (const ep of POLICY_EPISODES) {
     const stats: EpisodeStats = {
       counted: 0,
       stillborn: 0,
       attempts: 0,
-      target: targetFor(r, ep, policy),
+      extras: 0,
+      otherSeries: all.filter((f) => f.episode === ep && !inSeries(f, policy)).length,
+      target: targetFor(r, ep, policy, billing),
       bestLevel: null,
       reachedL5: false,
       lastEnded: null,
@@ -422,6 +589,7 @@ export function projectModel(
     for (const f of mine) {
       if (f.episode !== ep) continue;
       stats.attempts++;
+      if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
       if (isCounted(f)) {
         stats.counted++;
@@ -459,6 +627,7 @@ export function projectModel(
     platform: platformOf(r.apiBase, r.driver),
     harness: harnessOf(normalizeDriver(r.driver ?? "openai") ?? "openai"),
     status: "active",
+    billing,
     eligible,
     perEpisode,
     ladder,
@@ -520,19 +689,41 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
 
 // -------------------------------------------------------------- scheduling
 
-/** Why a model is or is not schedulable right now — the `--status` line. */
-export function schedulability(s: ModelState, running: ReadonlySet<string> = new Set()): { ok: boolean; why: string } {
-  if (s.retired !== undefined) return { ok: false, why: `retired: ${s.retired.reason} — clear with --clear-model ${s.name}` };
+/**
+ * Why a model is or is not schedulable right now — the `--status` line.
+ * `extras` is true when the model has met its targets but may still take
+ * an extra run (free billing, an extras policy, not cooling or retired).
+ */
+export function schedulability(
+  s: ModelState,
+  running: ReadonlySet<string> = new Set(),
+  policy: Pick<SchedulingPolicy, "extras"> = DEFAULT_POLICY,
+): { ok: boolean; why: string; extras: boolean } {
+  if (s.retired !== undefined) return { ok: false, extras: false, why: `retired: ${s.retired.reason} — clear with --clear-model ${s.name}` };
   if (s.cooling !== undefined) {
-    return { ok: false, why: `cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})` };
+    return { ok: false, extras: false, why: `cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})` };
   }
-  if (running.has(s.name)) return { ok: false, why: "running (one stream per model)" };
+  if (running.has(s.name)) return { ok: false, extras: false, why: "running (one stream per model)" };
   const open = s.eligible.filter((ep) => {
     const st = s.perEpisode[ep];
     return st !== undefined && st.counted < st.target;
   });
-  if (open.length === 0) return { ok: false, why: `targets met on ${s.eligible.join(", ")}` };
-  return { ok: true, why: `schedulable on ${open.join(", ")}` };
+  if (open.length === 0) {
+    const extras = policy.extras !== null && policy.extras.characters.length > 0 && s.billing === "free";
+    return { ok: false, extras, why: `targets met on ${s.eligible.join(", ")}${extras ? " — extras when the pool is idle" : ""}` };
+  }
+  return { ok: true, extras: false, why: `schedulable on ${open.join(", ")}` };
+}
+
+/** Extras made so far across the tiers, which is what the character cycle indexes. */
+export function extrasSoFar(s: ModelState): number {
+  return POLICY_EPISODES.reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
+}
+
+export interface NextJobsOptions {
+  /** Paid models already in flight (pinned jobs excluded), for the paid cap. */
+  paidRunning?: number;
+  policy?: Pick<SchedulingPolicy, "paid" | "extras">;
 }
 
 /**
@@ -540,12 +731,22 @@ export function schedulability(s: ModelState, running: ReadonlySet<string> = new
  * (1) models with zero counted runs on any eligible episode, (2) the shorter
  * episode first, (3) fewest counted runs toward target, ties by roster order.
  * One job per model. `running` holds roster names with a stream in flight.
+ *
+ * Two additions under ADR-0034's paid/free split. A paid pick is held when
+ * `policy.paid.maxConcurrent` paid models are already in flight, and the
+ * next candidate takes its account; `held` says so. When every account still
+ * free has nothing schedulable left, free models with an extras policy get an
+ * **extra** run: fewest extras first, the shorter tier first (`e360` only for
+ * a promoted model), roster order — and the pick carries the next character
+ * in the cycle.
  */
-export function nextJobs(
+export function planNextJobs(
   states: readonly ModelState[],
   freeAccounts: readonly string[],
   running: ReadonlySet<string> = new Set(),
-): NextJob[] {
+  opts: NextJobsOptions = {},
+): { jobs: NextJob[]; held: HeldPick[] } {
+  const policy = opts.policy ?? DEFAULT_POLICY;
   interface Cand {
     s: ModelState;
     ep: EpisodeId;
@@ -555,8 +756,17 @@ export function nextJobs(
     order: number;
   }
   const cands: Cand[] = [];
+  const extraCands: Cand[] = [];
   states.forEach((s, order) => {
-    if (!schedulability(s, running).ok) return;
+    const v = schedulability(s, running, policy);
+    if (v.extras) {
+      // `eligible` already gates e360 on promotion (or a forced tier).
+      for (const ep of s.eligible) {
+        extraCands.push({ s, ep, epOrder: POLICY_EPISODES.indexOf(ep), fresh: 1, counted: extrasSoFar(s), order });
+      }
+      return;
+    }
+    if (!v.ok) return;
     const fresh = s.eligible.every((ep) => (s.perEpisode[ep]?.counted ?? 0) === 0) ? 0 : 1;
     for (const ep of s.eligible) {
       const st = s.perEpisode[ep];
@@ -564,16 +774,28 @@ export function nextJobs(
       cands.push({ s, ep, epOrder: POLICY_EPISODES.indexOf(ep), fresh, counted: st.counted, order });
     }
   });
-  cands.sort((a, b) => a.fresh - b.fresh || a.epOrder - b.epOrder || a.counted - b.counted || a.order - b.order);
-  const out: NextJob[] = [];
+  const byPriority = (a: Cand, b: Cand): number => a.fresh - b.fresh || a.epOrder - b.epOrder || a.counted - b.counted || a.order - b.order;
+  cands.sort(byPriority);
+  extraCands.sort(byPriority);
+
+  const jobs: NextJob[] = [];
+  const held: HeldPick[] = [];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
+  let paid = opts.paidRunning ?? 0;
+  const cap = policy.paid?.maxConcurrent;
   for (const c of cands) {
     if (accounts.length === 0) break;
     if (taken.has(c.s.name)) continue;
+    if (c.s.billing === "paid" && cap !== undefined && paid >= cap) {
+      taken.add(c.s.name);
+      held.push({ name: c.s.name, episode: c.ep, why: `paid cap: ${paid}/${cap} paid model(s) already in flight` });
+      continue;
+    }
     taken.add(c.s.name);
+    if (c.s.billing === "paid") paid++;
     const st = c.s.perEpisode[c.ep]!;
-    out.push({
+    jobs.push({
       name: c.s.name,
       episode: c.ep,
       account: accounts.shift()!,
@@ -581,5 +803,33 @@ export function nextJobs(
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
   }
-  return out;
+  // Extras: lowest priority, only for accounts nothing else wanted.
+  const chars = policy.extras?.characters ?? [];
+  for (const c of extraCands) {
+    if (accounts.length === 0 || chars.length === 0) break;
+    if (taken.has(c.s.name)) continue;
+    taken.add(c.s.name);
+    const st = c.s.perEpisode[c.ep]!;
+    const n = extrasSoFar(c.s);
+    const character = chars[n % chars.length]!;
+    jobs.push({
+      name: c.s.name,
+      episode: c.ep,
+      account: accounts.shift()!,
+      attempt: st.attempts + 1,
+      why: `extra #${n + 1} on ${c.ep} (targets met; race ${character.race} class ${character.class})`,
+      extra: character,
+    });
+  }
+  return { jobs, held };
+}
+
+/** `planNextJobs` without the explanation — what the supervisor consumes. */
+export function nextJobs(
+  states: readonly ModelState[],
+  freeAccounts: readonly string[],
+  running: ReadonlySet<string> = new Set(),
+  opts: NextJobsOptions = {},
+): NextJob[] {
+  return planNextJobs(states, freeAccounts, running, opts).jobs;
 }

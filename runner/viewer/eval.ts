@@ -16,6 +16,7 @@
  *   playtime comes from is what is integrated here, so the two agree.
  */
 
+import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, normalizeDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
@@ -237,6 +238,8 @@ export function evalRunOf(
     model: run.model,
     platform: run.platform,
     harnessVersion: run.harnessVersion,
+    harnessSeries: harnessSeries(run.harnessVersion),
+    extra: run.extra,
     effort: run.comparability?.effort ?? null,
     harness: run.harness,
     promptHash: run.comparability?.promptHash ?? null,

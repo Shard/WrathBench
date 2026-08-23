@@ -36,6 +36,7 @@ import {
   DEFAULT_POLICY,
   LADDER_MS,
   isCounted,
+  parsePolicyBlock,
   readRunFact,
   stillbornOf,
   type ModelState,
@@ -43,7 +44,9 @@ import {
   type SchedulingPolicy,
   type RunFact,
 } from "../src/models";
+import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
+import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { isArchiveDir } from "./stillborn";
 import { redactSecrets } from "./tail";
@@ -69,6 +72,7 @@ const rosterEntrySchema = z
     effort: z.string().min(1).optional(),
     driver: z.string().min(1).optional(),
     apiBase: z.string().min(1).optional(),
+    billing: z.enum(["free", "paid"]).optional(),
     tiers: z.array(z.string()).optional(),
     runsPerEpisode: z.record(z.string(), z.number()).optional(),
   })
@@ -77,10 +81,7 @@ const rosterEntrySchema = z
 const fleetRosterSchema = z
   .object({
     roster: z.record(z.string(), rosterEntrySchema).optional(),
-    policy: z
-      .object({ runsPerEpisode: z.object({ e90: z.number().optional(), e360: z.number().optional() }).loose().optional() })
-      .loose()
-      .optional(),
+    policy: z.unknown().optional(),
   })
   .loose();
 
@@ -92,8 +93,13 @@ export interface RosterRead {
   shape: RosterShape;
   /** The file that was consulted, as it was given — never a host path guess. */
   path: string | null;
-  /** The file's `policy` block over the defaults; only targets are configurable. */
+  /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
+}
+
+/** The series this viewer runs from — what the projection counts against (ADR-0034). */
+export function currentSeries(): string | null {
+  return harnessSeries(harnessVersion());
 }
 
 /**
@@ -104,25 +110,25 @@ export interface RosterRead {
  * same posture `readFleet` takes to a missing `fleet-state.json` — say the file
  * is not there, do not synthesise what it would have said.
  */
-export function readFleetRoster(path: string | undefined): RosterRead {
+export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
+  const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
   if (path === undefined || path.length === 0) {
-    return { models: [], shape: "missing", path: null, policy: DEFAULT_POLICY };
+    return { models: [], shape: "missing", path: null, policy: defaults };
   }
-  if (!existsSync(path)) return { models: [], shape: "missing", path, policy: DEFAULT_POLICY };
+  if (!existsSync(path)) return { models: [], shape: "missing", path, policy: defaults };
   let parsed: z.infer<typeof fleetRosterSchema>;
   try {
     parsed = fleetRosterSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   } catch {
-    return { models: [], shape: "unreadable", path, policy: DEFAULT_POLICY };
+    return { models: [], shape: "unreadable", path, policy: defaults };
   }
-  const per = parsed.policy?.runsPerEpisode;
-  const policy: SchedulingPolicy = {
-    ...DEFAULT_POLICY,
-    runsPerEpisode: {
-      e90: typeof per?.e90 === "number" ? per.e90 : DEFAULT_POLICY.runsPerEpisode.e90,
-      e360: typeof per?.e360 === "number" ? per.e360 : DEFAULT_POLICY.runsPerEpisode.e360,
-    },
-  };
+  let policy: SchedulingPolicy = defaults;
+  try {
+    const { maxConcurrent: _cap, ...rest } = parsePolicyBlock(parsed.policy, series);
+    policy = rest;
+  } catch {
+    /* a malformed policy block is the supervisor's to refuse; the page shows the defaults */
+  }
   if (parsed.roster === undefined) return { models: [], shape: "legacy", path, policy };
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
@@ -137,6 +143,7 @@ export function readFleetRoster(path: string | undefined): RosterRead {
       ...(e.effort !== undefined ? { effort: e.effort } : {}),
       ...(e.driver !== undefined ? { driver: e.driver } : {}),
       ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+      ...(e.billing !== undefined ? { billing: e.billing } : {}),
       ...(tiers.length > 0 ? { tiers } : {}),
       ...(Object.keys(per).length > 0 ? { runsPerEpisode: per } : {}),
     });
@@ -326,6 +333,8 @@ function runView(f: RunFact): ModelRunView {
     episode: f.episode as EpisodeIdView,
     episodeOverride: f.episodeOverride,
     harnessVersion: f.harnessVersion,
+    harnessSeries: f.harnessSeries,
+    extra: f.extra,
     startedAt: f.startedAt,
     endedAt: f.endedAt,
     durationMs: durationOf(f),
@@ -369,6 +378,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     effort: state.effort,
     platform: state.platform,
     harness: state.harness,
+    billing: state.billing,
     status: state.status,
     eligible: state.eligible as EpisodeIdView[],
     perEpisode,
@@ -399,6 +409,9 @@ export function modelsResponse(opts: {
     policy: {
       runsPerEpisode: opts.roster.policy.runsPerEpisode,
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
+      series: opts.roster.policy.series,
+      paid: opts.roster.policy.paid,
+      extras: opts.roster.policy.extras === null ? null : { characters: opts.roster.policy.extras.characters.length },
     },
     ladderMs: [...LADDER_MS],
     harness,

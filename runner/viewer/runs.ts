@@ -61,6 +61,7 @@ interface MetaShape {
   comparability?: unknown;
   config?: {
     model?: string;
+    extra?: boolean;
     driver?: string;
     adapter?: string;
     character?: string;
@@ -135,6 +136,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     harness: null,
     shakeout: null,
     objective: null,
+    extra: false,
     comparability: null,
     character: null,
     platform: null,
@@ -161,6 +163,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.shakeout = str(meta.shakeout);
     row.model = str(meta.config?.model);
     row.objective = str(meta.config?.objective);
+    row.extra = meta.config?.extra === true;
     // `adapter` is the pre-driver name for the same thing; old runs only have it.
     row.driver = str(meta.config?.driver) ?? str(meta.config?.adapter);
     row.adapter = str(meta.config?.adapter);
