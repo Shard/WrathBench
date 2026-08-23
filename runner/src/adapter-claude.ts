@@ -1,5 +1,9 @@
 /**
- * The claude-subscription driver — SHAKEOUT ONLY, never a scored result.
+ * The claude-code driver: the Claude Code CLI as harness and transport (ADR-0035).
+ *
+ * Runs launched here belong to the `claude-code` harness — a comparability
+ * group of their own, scored against each other and never against the fixed
+ * loop's (`wrathbench`) rows. Not a shakeout, not a penalty: a different loop.
  *
  * ## Why this is an episode driver and not a `ChatAdapter`
  *
@@ -40,7 +44,8 @@
  *  1. Claude Code keeps its own conversation history across turns and applies
  *     its own compaction. ADR-0012's 24-message window is therefore NOT in
  *     force. This is the big one: an unversioned, model-side summarizer sits
- *     inside the scaffold, which is exactly what ADR-0004 forbids in a result.
+ *     inside the scaffold, which is why these runs are their own harness
+ *     group rather than `wrathbench` rows (ADR-0035).
  *  2. Two system blocks precede our prompt: a billing header and
  *     "You are a Claude agent, built on Anthropic's Claude Agent SDK."
  *  3. Every user message is prefixed with a `<system-reminder>` block (the
@@ -54,7 +59,8 @@
  *     and the `maxToolCallsPerEpisode` ceiling, and a coarse timer covers a
  *     turn that makes no tool calls at all.
  *
- * That list is why the run is stamped `shakeout-only (external scaffold)`.
+ * That list is why `harness: "claude-code"` is in the comparability tuple, and
+ * why the tool-call ceiling exists at all.
  */
 
 import type { Database } from "bun:sqlite";
@@ -62,7 +68,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { SHAKEOUT_STAMP, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
@@ -603,8 +609,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
   trajectory.append({
     t: "driver",
-    driver: "claude-subscription",
-    shakeout: SHAKEOUT_STAMP,
+    driver: "claude-code",
+    harness: harnessOf("claude-code"),
     bin: o.claudeBin ?? "claude",
     args,
     cwd,
@@ -797,7 +803,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       trajectory.append({
         t: "request",
         turn,
-        adapter: `claude-subscription:${config.model ?? "default"}`,
+        adapter: `claude-code:${config.model ?? "default"}`,
         messages: [{ role: "user", content: contextText }],
       });
 

@@ -77,11 +77,20 @@ export interface EpisodesResponse {
   now: number;
 }
 
+/**
+ * The harness a run ran under (ADR-0035): `wrathbench` is the fixed loop,
+ * `claude-code` the Claude Code CLI scaffold. Literal union rather than an
+ * import, because this module is import-free by construction.
+ */
+export type HarnessView = "wrathbench" | "claude-code";
+
 export interface ComparabilityView {
+  /** `git describe` of this repo's build — the same for either harness. */
   harnessVersion: string;
   promptHash: string;
   promptChars: number;
-  contextEngine: string;
+  /** Which loop owned the run. A pre-ADR-0035 `contextEngine` is mapped here on read. */
+  harness: HarnessView;
   effort: string | null;
   budget: EpisodeBudgetView;
   /** True when an operator objective steered the run, which makes it unscored. */
@@ -112,6 +121,12 @@ export interface RunRow {
   model: string | null;
   driver: string | null;
   adapter: string | null;
+  /**
+   * The harness tag (ADR-0035): from the tuple, else the legacy stamp, else
+   * the driver. Null only when none of those was recorded.
+   */
+  harness: HarnessView | null;
+  /** The unscored stamp, in today's vocabulary (legacy key name). Null when the run can score. */
   shakeout: string | null;
   /** The operator objective this run was steered with (ADR-0024), or null. */
   objective: string | null;
@@ -431,7 +446,8 @@ export interface EvalRun {
   platform: string | null;
   harnessVersion: string | null;
   effort: string | null;
-  contextEngine: string | null;
+  /** The harness tag (ADR-0035). A tag on the row, not a partition. */
+  harness: HarnessView | null;
   promptHash: string | null;
   /** The worldserver build this run was stamped against, or null (ADR-0026). */
   serverBuild: string | null;
@@ -474,6 +490,8 @@ export interface EvalResponse {
   /** The tier the response was filtered to, or "all". Echoed so a page can
    * render what it actually asked for rather than what it meant to ask for. */
   episode: EpisodeIdView | "all";
+  /** The `?harness=` filter the response honoured; "all" (the default) means no filter. */
+  harness: HarnessView | "all";
   /** Whether `?includeOverrides=1` widened the filter to overridden tier runs. */
   includeOverrides: boolean;
   /** Runs dropped by that filter. A chart that silently drops rows is a lie of
@@ -581,6 +599,8 @@ export interface ModelRowView {
   model: string;
   effort: string | null;
   platform: string | null;
+  /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
+  harness: HarnessView;
   status: ModelStatusView;
   /** Tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeIdView[];
@@ -613,5 +633,7 @@ export interface ModelsResponse {
   };
   /** The defer ladder's rungs, so the page can say "rung 3 of 9" honestly. */
   ladderMs: number[];
+  /** The `?harness=` filter honoured; "all" (the default) lists every roster row. */
+  harness: HarnessView | "all";
   now: number;
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * A scripted stand-in for the `claude` CLI, used by the claude-subscription
+ * A scripted stand-in for the `claude` CLI, used by the claude-code
  * driver tests. It speaks the same stream-json protocol on stdin/stdout and,
  * crucially, really connects to the MCP server named in `--mcp-config` — so
  * the loopback-socket bridge and the runner's tool dispatch are exercised for

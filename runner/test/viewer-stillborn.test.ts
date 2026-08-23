@@ -40,7 +40,7 @@ function run(runs: string, id: string, lines: object[], opts: { warm?: boolean }
         harnessVersion: "harness-test",
         promptHash: "abc",
         promptChars: 10,
-        contextEngine: "v1",
+        harness: "wrathbench",
         effort: null,
         budget: {
           maxTurns: null,

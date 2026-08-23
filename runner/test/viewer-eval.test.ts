@@ -40,6 +40,7 @@ function run(p: Partial<RunRow> = {}): RunRow {
     model: "m",
     driver: "openai",
     adapter: "openai",
+    harness: "wrathbench",
     shakeout: null,
     objective: null,
     character: "Benchy",
@@ -169,14 +170,14 @@ describe("unscoredReason", () => {
     expect(unscoredReason(run())).toBeNull();
   });
 
-  test("a shakeout stamp, a shakeout driver and an objective each disqualify", () => {
-    expect(unscoredReason(run({ shakeout: "shakeout-only (external scaffold)" }))).toContain("shakeout");
-    // Even with no stamp: the CLI's turns are not the fixed loop's turns.
-    expect(unscoredReason(run({ driver: "claude-subscription", shakeout: null }))).toContain(
-      "claude-subscription",
-    );
+  test("a stub stamp, a stub driver and an objective each disqualify; the claude-code harness does not", () => {
+    expect(unscoredReason(run({ shakeout: "unscored (scripted stub)" }))).toContain("stub");
+    // Even with no stamp: the stub is scripted.
     expect(unscoredReason(run({ driver: "stub", shakeout: null }))).toContain("stub");
     expect(unscoredReason(run({ objective: "walk to Ironforge" }))).toContain("objective");
+    // ADR-0035: a claude-code run is a tagged row, not an excluded one.
+    expect(unscoredReason(run({ driver: "claude-code", harness: "claude-code", shakeout: null }))).toBeNull();
+    expect(unscoredReason(run({ driver: "claude-subscription", shakeout: null }))).toBeNull();
   });
 });
 
@@ -188,7 +189,7 @@ describe("evalRunOf", () => {
           harnessVersion: "harness-0.2",
           promptHash: "sha256:abc",
           promptChars: 10,
-          contextEngine: "harness-fixed-window",
+          harness: "wrathbench",
           effort: "high",
           budget: {
             maxTurns: null,
@@ -207,7 +208,7 @@ describe("evalRunOf", () => {
       [{ start: 1000, end: 3000 }],
     );
     expect(e.effort).toBe("high");
-    expect(e.contextEngine).toBe("harness-fixed-window");
+    expect(e.harness).toBe("wrathbench");
     expect(e.promptHash).toBe("sha256:abc");
     expect(e.serverBuild).toBe("harness-0.2-1-gabc");
     expect(e.wikiCoords).toBe(true);

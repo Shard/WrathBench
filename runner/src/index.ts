@@ -42,7 +42,7 @@ export { Scratchpad, SCRATCHPAD_MAX_CHARS } from "./scratchpad";
 export { harnessVersion } from "./version";
 export { EPISODES, EPISODE_IDS, EPISODE_LIST, episodeIdSchema, isEpisodeId, matchesTier, watchdogsFor } from "./episodes";
 export type { EpisodeId, EpisodeTier } from "./episodes";
-export { CONTEXT_ENGINES, comparabilityOf, comparabilitySchema, parseComparability, promptHash, sameComparability } from "./comparability";
+export { LEGACY_CONTEXT_ENGINES, harnessOfRun, comparabilityOf, comparabilitySchema, parseComparability, promptHash, sameComparability } from "./comparability";
 export type { Comparability, EpisodeBudget } from "./comparability";
 export { renderTimeline } from "./timeline";
 export { toJsonSafe, jsonLine, compactJson } from "./jsonsafe";

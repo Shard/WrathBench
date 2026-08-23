@@ -62,9 +62,12 @@ export interface RunMeta {
    */
   comparability?: Comparability;
   /**
-   * Set for non-scoring drivers (`SHAKEOUT_STAMP`). Present in meta.json, in
-   * the `shakeout` column of run.sqlite and in the timeline header, so a run
-   * driven by an external scaffold cannot be mistaken for a harness score.
+   * The unscored stamp (`unscoredStamp` in config.ts): set for a stub run or
+   * an operator-objective run. Present in meta.json, in the `shakeout` column
+   * of run.sqlite and in the timeline header, so such a run cannot be mistaken
+   * for a score. The key keeps its pre-ADR-0035 name because old runs carry
+   * it; the harness (`wrathbench` | `claude-code`) is a separate dimension in
+   * the comparability tuple, never a stamp here.
    */
   shakeout?: string;
 }
@@ -83,7 +86,8 @@ CREATE TABLE IF NOT EXISTS run (
   ended_at INTEGER,
   adapter TEXT,
   -- The driver is its own column, not just a key inside config_json: a
-  -- cross-run SELECT must be able to exclude shakeout runs without parsing.
+  -- cross-run SELECT must be able to exclude stub runs without parsing.
+  -- shakeout is the unscored stamp (legacy column name, see RunMeta).
   driver TEXT,
   shakeout TEXT,
   model TEXT,

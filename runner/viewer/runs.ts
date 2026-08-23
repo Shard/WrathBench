@@ -9,7 +9,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
 import { isArchiveDir } from "./stillborn";
-import { normalizePauseReason, parseComparability } from "../src/index";
+import { harnessOfRun, normalizePauseReason, parseComparability } from "../src/index";
+import { normalizeDriver, readUnscoredStamp } from "../src/config";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -131,6 +132,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     model: null,
     driver: null,
     adapter: null,
+    harness: null,
     shakeout: null,
     objective: null,
     comparability: null,
@@ -250,6 +252,17 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     }
   }
 
+  /*
+   * Read in today's vocabulary (ADR-0035): `claude-subscription` is spelled
+   * `claude-code`, the old scaffold stamp is no longer an unscored reason, and
+   * the harness tag is derived from whatever the run did record. The stored
+   * files are never rewritten.
+   */
+  const storedStamp = row.shakeout;
+  if (row.driver !== null) row.driver = normalizeDriver(row.driver) ?? row.driver;
+  if (row.adapter !== null) row.adapter = normalizeDriver(row.adapter) ?? row.adapter;
+  row.shakeout = readUnscoredStamp(storedStamp);
+  row.harness = harnessOfRun({ comparability: row.comparability, driver: row.driver, shakeout: storedStamp });
   row.platform = platformOf(row.apiBase, row.driver);
   row.live =
     row.terminationReason === null && row.mtime !== null && now - row.mtime < LIVE_WINDOW_MS;

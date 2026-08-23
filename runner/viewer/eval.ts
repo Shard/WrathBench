@@ -16,7 +16,7 @@
  *   playtime comes from is what is integrated here, so the two agree.
  */
 
-import { SHAKEOUT_DRIVERS } from "../src/config";
+import { STUB_STAMP, normalizeDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
 import { isStillborn } from "./stillborn";
@@ -179,17 +179,17 @@ export function episodeOf(run: RunRow): EpisodeOf {
  * Why a run cannot enter a scored comparison, or null when it can.
  *
  * One predicate, so the charts and the ladder cannot disagree about what counts.
- * The two reasons are the ones already recorded: a non-scoring driver stamps
- * `shakeout` (ADR-0004), and an operator objective stamps unscored (ADR-0024).
- * The driver check is deliberately separate from the stamp — a run launched
- * before the stamp existed still ran on the CLI, whose turns are not the fixed
- * loop's turns (one has held 168 tool calls) and must never share a turns axis.
+ * The reasons are the ones recorded: a stub run stamps unscored, and an
+ * operator objective stamps unscored (ADR-0033). The driver check is separate
+ * from the stamp so a stub run launched before the stamp existed still reads
+ * as one. The harness is deliberately *not* a reason (ADR-0035): a
+ * `claude-code` run is a tagged row, and a pre-ADR-0035 scaffold stamp was
+ * already stripped by the reader (`readUnscoredStamp`).
  */
 export function unscoredReason(run: RunRow): string | null {
   if (run.shakeout !== null) return run.shakeout;
-  if (run.driver !== null && (SHAKEOUT_DRIVERS as readonly string[]).includes(run.driver)) {
-    return `shakeout driver (${run.driver})`;
-  }
+  const driver = run.driver === null ? undefined : normalizeDriver(run.driver);
+  if (driver !== undefined && isUnscoredDriver(driver)) return STUB_STAMP;
   if (run.objective !== null) return "unscored (operator objective)";
   /*
    * The tier decides too: `freeplay` is unscored by definition, whether it was
@@ -238,7 +238,7 @@ export function evalRunOf(
     platform: run.platform,
     harnessVersion: run.harnessVersion,
     effort: run.comparability?.effort ?? null,
-    contextEngine: run.comparability?.contextEngine ?? null,
+    harness: run.harness,
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,
     wikiCoords: run.comparability?.wikiCoords ?? null,

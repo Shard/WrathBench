@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  CONTEXT_ENGINES,
+  LEGACY_CONTEXT_ENGINES,
   comparabilityOf,
   fetchServerBuild,
   parseComparability,
@@ -55,7 +55,7 @@ describe("comparabilityOf", () => {
     expect(c.promptChars).toBe(SYSTEM_PROMPT.length);
     expect(c.objective).toBe(false);
     expect(c.wikiCoords).toBe(false); // names-first by default (ADR-0028)
-    expect(c.contextEngine).toBe(CONTEXT_ENGINES.openai);
+    expect(c.harness).toBe("wrathbench");
     expect(c.effort).toBeNull();
   });
 
@@ -83,9 +83,26 @@ describe("comparabilityOf", () => {
     expect(c.promptChars).toBeGreaterThan(SYSTEM_PROMPT.length);
   });
 
-  test("the claude driver is a different context engine", () => {
-    const c = comparabilityOf(loadRunConfig({ driver: "claude-subscription" }), "v");
-    expect(c.contextEngine).toBe(CONTEXT_ENGINES["claude-subscription"]);
+  test("the claude-code driver stamps the claude-code harness (ADR-0035)", () => {
+    const c = comparabilityOf(loadRunConfig({ driver: "claude-code" }), "v");
+    expect(c.harness).toBe("claude-code");
+    expect(comparabilityOf(loadRunConfig({ driver: "claude-subscription" }), "v").harness).toBe("claude-code");
+    expect(comparabilityOf(loadRunConfig({ driver: "stub", stubScript: "x" }), "v").harness).toBe("wrathbench");
+  });
+
+  test("a stored pre-ADR-0035 tuple reads contextEngine as harness, unrewritten", () => {
+    const base = comparabilityOf(loadRunConfig({ driver: "openai", model: "m" }), "v");
+    const { harness: _h, ...rest } = base;
+    for (const [engine, harness] of Object.entries(LEGACY_CONTEXT_ENGINES)) {
+      const stored = { ...rest, contextEngine: engine };
+      const read = parseComparability(stored);
+      expect(read?.harness).toBe(harness);
+      expect((read as Record<string, unknown> | null)?.["contextEngine"]).toBeUndefined();
+      // The raw object is untouched: nothing rewrites a stored tuple.
+      expect((stored as Record<string, unknown>)["harness"]).toBeUndefined();
+    }
+    expect(parseComparability({ ...rest, contextEngine: "something-else" })).toBeNull();
+    expect(parseComparability(rest)).toBeNull();
   });
 
   test("the budget is the effective one, disabled watchdogs included", () => {

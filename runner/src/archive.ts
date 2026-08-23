@@ -134,8 +134,8 @@ export async function planStillborn(runsDir: string, now = Date.now()): Promise<
     const ended = row.terminationReason ?? "no termination recorded";
     // The driver is on the line because the definition is a claim about a
     // driver's records: an operator reading a list of eighty runs should be
-    // able to see at a glance that they are not all one scaffold's.
-    const driver = row.shakeout !== null ? `${row.driver ?? "?"}/shakeout` : (row.driver ?? "?");
+    // able to see at a glance that they are not all one harness's.
+    const driver = row.shakeout !== null ? `${row.driver ?? "?"}/unscored` : (row.driver ?? "?");
     plans.push({
       runId: row.runId,
       held: false,

@@ -4,7 +4,7 @@
  *
  *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [--effort low] [flags]
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
- *   bun runner/src/run.ts --driver claude-subscription --model opus  [SHAKEOUT ONLY]
+ *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
  *   bun runner/src/run.ts --resume <run-id>
  *
  * Two run dimensions are recorded and never model-specific (ADR-0024):
@@ -45,7 +45,7 @@ import {
   newRunId,
   newSessionToken,
   resolveSessionToken,
-  shakeoutStamp,
+  unscoredStamp,
   watchdogOverrideSchema,
   type RunConfig,
   type WatchdogOverride,
@@ -265,11 +265,11 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     adapter = StubAdapter.fromScriptFile(config.stubScript);
-  } else if (config.driver === "claude-subscription") {
+  } else if (config.driver === "claude-code") {
     const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
     if (token === undefined || token.trim().length === 0) {
       console.error(
-        "--driver claude-subscription needs $CLAUDE_CODE_OAUTH_TOKEN.\n" +
+        "--driver claude-code needs $CLAUDE_CODE_OAUTH_TOKEN.\n" +
           "  generate one with:  claude setup-token\n" +
           "  then put it in .env as CLAUDE_CODE_OAUTH_TOKEN=... (.env is gitignored)\n" +
           "  and start the run through infra/run-episode.sh, which exports it for you.",
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const shakeout = shakeoutStamp(config.driver, config.objective);
+  const shakeout = unscoredStamp(config.driver, config.objective);
   const version = harnessVersion();
   // Never blocks launch: an unreachable module (or one that predates the
   // field) reads as `null`, same as "not recorded" everywhere else in the
@@ -392,7 +392,7 @@ async function main(): Promise<void> {
     if (stopping) process.exit(130);
     stopping = true;
     console.error(`\n${sig}: terminating run as \`manual\``);
-    if (config.driver === "claude-subscription") {
+    if (config.driver === "claude-code") {
       abort.abort(sig);
       // Backstop: never hang forever waiting for a wedged child.
       setTimeout(() => process.exit(130), 20_000).unref();
@@ -413,7 +413,7 @@ async function main(): Promise<void> {
     );
   }
   if (shakeout !== undefined) {
-    console.error(`[wrathbench] ${shakeout.toUpperCase()} — this run is NOT a harness result`);
+    console.error(`[wrathbench] ${shakeout.toUpperCase()} — this run is NOT a scored result`);
   }
   console.error(`[wrathbench] trajectory: ${runDir}`);
 
@@ -490,7 +490,7 @@ async function main(): Promise<void> {
         ];
 
   const outcome =
-    config.driver === "claude-subscription"
+    config.driver === "claude-code"
       ? await runClaudeEpisode({
           config,
           runDir,
