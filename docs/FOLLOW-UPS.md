@@ -62,29 +62,6 @@ and status.
       dimension withheld from scored runs (ADR-0028); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
-46. **A same-map teleport is invisible to the agent** (2026-08-23; module work).
-    Evidence: `fleet-nav-probe-sonnet-20260822-c3`, whose model wrote "don't trust
-    state.self.position after a hearthstone" into its scratchpad. A near teleport
-    (Hearthstone, spell 8690, every same-map port) sends the client
-    `MSG_MOVE_TELEPORT_ACK` (0x0C7) carrying the arrival point; the module answers it
-    (`TickTeleportAcks`) but does not tap it, and there is no `SMSG_NEW_WORLD` on a
-    same-map port, so the agent observes strictly less than a client and
-    `state.self.position` stays stale until the next `WB_MOVE_RESULT`. Three parts:
-    (1) tap the opcode in the observed-movement case (packGUID + u32 counter +
-    MovementInfo), one row in `OBSERVED_MOVE_OPCODES`, one row in module/PROTOCOL.md —
-    the SDK's `MSG_MOVE_*` fold already routes an own-guid block to self position.
-    (2) `TickMover` answers `transferred` for near teleports too (`IsBeingTeleported()`
-    is true for both), so a Hearthstone mid-`moveTo` sends the SDK into a
-    `waitForTransfer` for an `SMSG_NEW_WORLD` that never comes — a full-timeout hang
-    ending in a false hint. Needs `sameMap: true` on the result or its own status.
-    (3) `DoMoveTo` finishes a superseded move without `MSG_MOVE_STOP` and a planning
-    failure sends no packet, leaving the server with `MOVEMENTFLAG_FORWARD` as its last
-    word and every later cast failing `SPELL_FAILED_MOVING` (~10 minutes of Hearthstone
-    casts in that run). The SDK sends the stop after any status meaning nothing moved
-    (`MOVE_LEAVES_NO_STOP`, 2026-08-23) — that covers `moveTo` but not `moveToAsync`,
-    which never reads a verdict; the module should send it at the source. Unblocked by
-    a module build and a deploy window.
-
 51. **ADRs and doc drift owed by the 2026-08-23 `moveTo` change** (da93f0a;
     worklogs/2026-08-23). `unknown_target` is an SDK-side move status outside
     ADR-0027's module-owned vocabulary (the `killTarget`-answers-`lost` pattern), and
@@ -385,3 +362,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 47 (duplicate number, wiki leads) — 2026-08-23 — renumbered to 49
 - 8c — 2026-08-23 — merged into 8
 - 48 (a)–(f) — 2026-08-23 — 56bfdef, 634e58c, 277f948 — episode tiers wiring; (g) stays open under 48
+- 46 — 2026-08-23 — a97c3c8, 2b60cb0 — module `harness-0.3-137` built to `:next`, SHIPPED PENDING DEPLOY (harness-0.4 restart) — `MSG_MOVE_TELEPORT_ACK` tapped, `teleported` status, ground-z ladder with `move_to.guid`, stop on supersede/planning failure; ADR-0027 amendment; verify with `death-recovery.ts` + `module-navigation.ts` post-deploy

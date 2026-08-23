@@ -55,3 +55,28 @@ obvious).
   position while the server checks its applied one, and triggers are only
   checked while a move is active — a character carried into a volume while idle
   does not fire it.
+
+## Amendment 2026-08-23: same-map teleports and the z-ladder (FOLLOW-UPS 46)
+
+Three repairs in the same spirit, shipped in module build `harness-0.3-137`
+pending the harness-0.4 deploy:
+
+- `teleported` joins the vocabulary as its own status rather than a `sameMap`
+  flag on `transferred`. Decision 1 says the status is what a snippet branches
+  on; a flag that flips the meaning of `transferred` ("a map change is coming —
+  except when this field says it is not") is the `no_path`-plus-`cause` shape
+  this ADR rejected, and the recovery differs: `transferred` waits for
+  `SMSG_NEW_WORLD`, `teleported` reads the arrival off the server's own
+  `MSG_MOVE_TELEPORT_ACK`, which is now tapped (client parity: the client is
+  told where it landed). Vocabulary change, so runs before and after are not
+  comparable on navigation — the same boundary the original decision drew.
+- The z-ladder sits in front of the cause ladder. `move_to` accepts the guid of
+  the unit a point was read from, as a hint only, and resolves z to the ground
+  height at x,y (terrain and model geometry a client has) before pathing;
+  without a guid the ground z is a fallback after `target_off_mesh`. The cause
+  vocabulary is unchanged: a target the mesh rejects at both heights still says
+  `target_off_mesh`, and `meshZ` stays relative to the z asked for.
+- A superseded move and a planning failure send the `MSG_MOVE_STOP` a
+  redirected client would, so the server's last movement word is never a
+  stale `MOVEMENTFLAG_FORWARD` heartbeat. The SDK's `MOVE_LEAVES_NO_STOP`
+  repair stays as belt to this brace.
