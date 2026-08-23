@@ -90,6 +90,13 @@ export interface RosterSpec {
    * should set it. Stamped into the run's comparability tuple.
    */
   wikiCoords?: boolean;
+  /**
+   * Episode tier id (ADR-0030/0031): `e90`, `e360` or `freeplay`. Passed to the
+   * runner verbatim as `--episode <id>`; the explicit watchdog/maxToolCalls
+   * flags the fleet derives from it travel alongside, so a runner that does
+   * not know the flag yet still runs the right shape.
+   */
+  episode?: string;
 }
 
 export interface Resolved {
@@ -109,6 +116,7 @@ export interface Resolved {
   watchdogs: WatchdogOverride;
   maxToolCalls: number | undefined;
   wikiCoords: boolean;
+  episode: string | undefined;
 }
 
 type Outcome =
@@ -402,6 +410,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       watchdogs,
       maxToolCalls: s.maxToolCalls,
       wikiCoords: s.wikiCoords === true,
+      episode: s.episode,
     });
   }
   return out;
@@ -445,6 +454,10 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.
   if (spec.wikiCoords) argv.push("--wiki-coords", "true");
+  // The tier id rides its own flag (a string, never interpreted here); the
+  // runner's argv parser ignores flags it does not know, so this is safe to
+  // emit before the runner learns it.
+  if (spec.episode !== undefined) argv.push("--episode", spec.episode);
   argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
   // The wall clock keeps its own flag when it is a number (that is what every
   // existing lane emits); a disabled one can only travel in the JSON.

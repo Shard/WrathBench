@@ -61,7 +61,8 @@ Edit `infra/fleet.json`. Nothing to restart.
 
 Two enabled lanes must not share an account, and lane policy (claude models on
 the claude-subscription driver only; shared free pools carry free ids only) is
-enforced on every re-read.
+enforced on every re-read. Under the pool/queue shape (ADR-0031, below) the
+same applies to pinned lanes, and queue jobs are steered the same way.
 
 ### Stop it
 
@@ -247,6 +248,52 @@ shape and keeps its last good config until restarted).
 The gate accounts must be their own: sharing one with an enabled lane is refused
 as a config error (every per-entry account is checked), and none is ever
 `PROBE`, the ad-hoc debugging account.
+
+### Switching to the pool/queue shape (ADR-0031)
+
+`infra/fleet.next.json` is today's fleet under the new schema: lanes no longer
+own accounts; `accounts.pinned` keeps nav-probe on SHAKEOUT, `accounts.pool`
+holds RUNNER–RUNNER6, and the six free/local streams are `queue` jobs that take
+whichever pool account is free. The supervisor that is running today rejects
+that shape (it keeps its last good config and complains), so the switch is done
+at a drain window, in this order:
+
+```
+# 1. drain: park every lane, wait for --status to show no live run
+#    (or `stop fleet`, which cuts a running episode to the 30s graceful path)
+docker compose -f infra/compose.yml stop fleet
+
+# 2. swap the file (keep the old one: the new code loads either shape)
+git mv -f infra/fleet.json infra/fleet.prev.json      # or plain mv if you prefer
+git mv infra/fleet.next.json infra/fleet.json
+
+# 3. check the plan from the new code before anything spawns
+docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts infra/fleet.json --dry-run
+
+# 4. start the supervisor on the new code (this is also what picks up run-fleet.ts)
+docker compose -f infra/compose.yml up -d --no-deps fleet
+./infra/run-fleet.sh --status
+```
+
+Steps 2 and 4 commute: a new-code supervisor started against the old file runs
+it as "every lane pinned, empty queue", and a later rename is picked up on the
+next 60s re-read like any other edit. What must not happen is the reverse —
+the new file under the old code — which is why the file ships as a sibling.
+Roll back by renaming `fleet.prev.json` back; nothing else changes.
+
+Steering under the new shape, all hot-reloaded:
+
+- A job's `enabled: false` drains it at the next episode boundary and frees its
+  pool account; deleting it from the queue does the same. Re-enabling a job
+  that finished (exit 0) is the rearm, as for a lane.
+- Promotion into a tier is `roster.<name>.tiers`; a job whose episode is not in
+  its model's tiers is skipped with the reason in `--status` and the fleet log,
+  never run. Enable the shipped `sonnet-e360` / `qwen-e360` jobs only after
+  adding `"e360"` to those entries.
+- Queue order is priority: with six pool accounts the first six runnable loop
+  jobs are the fleet and the rest wait. `--dry-run` prints what would spawn now.
+- `--status` shows each account (pinned -> lane, or pool -> job / free) and the
+  queue (running, waiting, finished, skipped with reason).
 
 ### Ad-hoc launches still work
 

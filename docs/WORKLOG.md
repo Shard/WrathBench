@@ -6,6 +6,8 @@ index — what was wrong, why, and what shipped. Reverse chronological.
 
 ## 2026-08-23
 
+- Runner pool and job queue (ADR-0031): `fleet.json` gains `accounts.pinned` / `accounts.pool`, a named `roster` with `tiers`, and an ordered `queue` of `{ ref, episode, repeat, lane }` jobs; the supervisor hands each runnable job the next free pool account (roster's own account-busy inference, defer ladder honoured, one stream per model, tiers gate with a logged reason). Old shape still loads. `--episode <id>` is emitted by run-roster with the equivalent explicit flags until the runner owns it (ADR-0030). Shipped as `infra/fleet.next.json` beside the live file; switch-over steps in OPERATIONS.
+
 - Wiki coordinates tier (ADR-0028): `wikiCoords` run dimension, names-first by default, served only on the unscored nav-probe lane; withheld coords are absent from `search_reference` (field dropped, prose pairs redacted), stated in the tool description, stamped into the comparability tuple and grouped on the eval surface. Closes FOLLOW-UPS 38's open decision.
 
 ## 2026-08-22
