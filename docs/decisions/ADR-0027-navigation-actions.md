@@ -51,10 +51,12 @@ obvious).
   crosses one, so a quest log can change without the agent doing anything.
 - A request above a cliff now resolves to the cliff-bottom mesh point and walks
   there, reporting the mesh z, where the old module said `no_path`.
-- Two risks the gate run must retire: the module tests its interpolated
-  position while the server checks its applied one, and triggers are only
-  checked while a move is active — a character carried into a volume while idle
-  does not fire it.
+- One risk the gate run must retire: triggers are only checked while a move is
+  active — a character carried into a volume while idle does not fire it. The
+  other, the module testing its interpolated position while the server checks
+  its applied one, was hit by the first tram ride and is repaired in `:next` by
+  the heartbeat amendment below — retired once that build is deployed and the
+  gate reruns.
 
 ## Amendment 2026-08-23: same-map teleports and the z-ladder (FOLLOW-UPS 46)
 
@@ -154,5 +156,24 @@ re-armed on a 1.5s timer meant to cover heartbeat lag. A client sends
   (exploration already credited, or no world-DB row at all) fires exactly
   once per entry.
 - Travel gate leg1b lingers inside trigger 710 for >= 5s and asserts exactly
-  one `WB_AREATRIGGER` for that id; the interpolated-vs-applied residual
-  stays as it is.
+  one `WB_AREATRIGGER` for that id; the interpolated-vs-applied residual is
+  retired separately, by the amendment below.
+
+## Amendment 2026-08-23: a heartbeat precedes the areatrigger (FOLLOW-UPS 38)
+
+The first end-to-end tram ride retired the interpolated-vs-applied risk by
+hitting it. Riding Ironforge → Stormwind, the tram's exit trigger (areatrigger
+2171) did not transfer: the module sent `CMSG_AREATRIGGER` from its interpolated
+position at the very edge of the sphere (9.98y into a radius of 10) while the
+server's applied position was one heartbeat — ~500ms, ~3.5y at run speed —
+behind, so the core's own distance check rejected the packet. With the 1.5s
+re-send gone (the item-56 amendment) entry fires exactly once, so one rejected
+packet is one missed portal and the ride ends parked in a tram station. The
+module sends the movement heartbeat *at the entry position* and only then
+`CMSG_AREATRIGGER` — the ordering a real client produces, since its heartbeat
+and its trigger packet come from the same position — so the server judges the
+trigger against a position it has just been told about. Built as afd352c and in
+`:next`, not deployed and not yet gate-verified; this ADR's Status waits on the
+same rerun. Client parity again
+decides which layer owns the detail: nothing about the agent's action surface
+changes, and no status is added.
