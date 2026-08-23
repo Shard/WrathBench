@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  accountClassOf,
   DEFAULT_POLICY,
   LADDER_MS,
   countModelResponses,
@@ -449,25 +450,60 @@ describe("paid and free (ADR-0034 amendment)", () => {
     const p1 = st({ name: "p1", model: "v/one" }, []);
     const f1 = st({ name: "f1", model: "v/three:free" }, []);
     // Split on: the paid model takes PAID, the free one the pool, in order.
-    const plan = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, paidAccounts: ["PAID"] });
+    const plan = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, classAccounts: { paid: ["PAID"] } });
     expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
       ["p1", "PAID"],
       ["f1", "R1"],
     ]);
     // Configured but empty: held with the actionable reason, never on a pool account.
-    const none = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, paidAccounts: [] });
+    const none = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, classAccounts: { paid: [] } });
     expect(none.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
     expect(none.held).toEqual([{ name: "p1", episode: "e90", why: "no paid account configured — add one to accounts.paid" }]);
     // The empty-list reason wins over the cap: it is the one the operator can act on.
-    expect(planNextJobs([p1], ["R1"], new Set(), { policy, paidAccounts: [], paidRunning: 1 }).held[0]!.why).toContain("no paid account configured");
+    expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] }, paidRunning: 1 }).held[0]!.why).toContain("no paid account configured");
     // Paid accounts busy, pool free: the paid pick waits rather than borrowing one.
-    const busy = planNextJobs([p1, f1], ["R1"], new Set(), { policy, paidAccounts: ["PAID"], paidRunning: 1 });
+    const busy = planNextJobs([p1, f1], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] }, paidRunning: 1 });
     expect(busy.jobs.map((j) => j.account)).toEqual(["R1"]);
     expect(busy.held[0]).toMatchObject({ name: "p1", why: "paid cap: 1/1 paid model(s) already in flight" });
     // A free pick never takes a paid account, even with the pool exhausted.
-    expect(planNextJobs([f1], [], new Set(), { policy, paidAccounts: ["PAID"] }).jobs).toEqual([]);
+    expect(planNextJobs([f1], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
     // Absent: the pre-split behaviour, paid picks share the pool.
     expect(planNextJobs([p1], ["R1"], new Set(), { policy }).jobs.map((j) => j.account)).toEqual(["R1"]);
+  });
+
+  test("the local account class: a local model lands on the box, never the pool, and is held when the box has no account", () => {
+    const l1 = st({ name: "l1", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" }, []);
+    const f1 = st({ name: "f1", model: "v/three:free" }, []);
+    const p1 = st({ name: "p1", model: "v/one" }, []);
+    // Local is its own class even though `model-cost` prices it free.
+    expect(l1.billing).toBe("free");
+    expect(accountClassOf(l1)).toBe("local");
+    expect(accountClassOf(f1)).toBe("pool");
+    expect(accountClassOf(p1)).toBe("paid");
+    const plan = planNextJobs([l1, f1, p1], ["R1", "R2"], new Set(), { policy, classAccounts: { local: ["BOX"], paid: ["PAID"] } });
+    expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
+      ["l1", "BOX"],
+      ["f1", "R1"],
+      ["p1", "PAID"],
+    ]);
+    // A free pick never borrows the box, even with the pool exhausted...
+    expect(planNextJobs([f1], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs).toEqual([]);
+    // ...and the local pick never borrows a pool account when the box is busy.
+    const busy = planNextJobs([l1, f1], ["R1"], new Set(), { policy, classAccounts: { local: [] } });
+    expect(busy.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
+    expect(busy.held).toEqual([{ name: "l1", episode: "e90", why: "no local account configured — add one to accounts.local" }]);
+    // An extra follows its model's class: the local model's extra takes the box.
+    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1" }, [
+      good("qwen/q", "e90", 1, 5),
+      good("qwen/q", "e90", 2),
+      good("qwen/q", "e90", 3),
+      good("qwen/q", "e360", 4),
+      good("qwen/q", "e360", 5),
+      good("qwen/q", "e360", 6),
+    ]);
+    const extras = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
+    expect(extras.jobs.map((j) => [j.name, j.account, j.extra !== undefined])).toEqual([["l1", "BOX", true]]);
+    expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
   });
 
   test("extras: free models past their targets get lowest-priority runs, cycling characters; e360 extras only when promoted", () => {

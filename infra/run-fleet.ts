@@ -80,10 +80,12 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
-import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
+import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
 import {
+  ACCOUNT_CLASSES,
   LADDER_MS,
   MODELS_SIDECAR,
+  accountClassOf,
   inSeries,
   isStalePause,
   modelStates,
@@ -96,8 +98,10 @@ import {
   policyExclusion as policyExclusionOf,
   policyRefs as policyRefsOf,
   readModelsSidecar,
+  rosterClass,
   schedulability,
   serializeModelsSidecar,
+  type AccountClass,
   type HeldPick,
   type ModelState,
   type NextJob,
@@ -307,6 +311,15 @@ export interface FleetAccounts {
    * into the pool.
    */
   paid: string[];
+  /**
+   * The local class (ADR-0034, "Account classes"): the accounts a model on the
+   * operator's own hardware may use — `isLocalBase` in `runner/src/model-cost.ts`
+   * decides which models those are. The LM Studio box serves one runner at a
+   * time, so its accounts are its own for the same reason the paid ones are:
+   * the resource is the limit, not a counter. Absent or empty with a local
+   * model in the roster means those picks are HELD, never spilled into the pool.
+   */
+  local: string[];
 }
 
 export interface FleetConfig {
@@ -337,6 +350,35 @@ export interface FleetConfig {
  */
 export function paidPoolOf(config: Pick<FleetConfig, "accounts" | "policy">): string[] | undefined {
   return config.accounts.paid.length > 0 || config.policy.paid !== null ? config.accounts.paid : undefined;
+}
+
+/**
+ * The accounts each split-out class may use, for `planNextJobs`. A class absent
+ * from the map is not split and shares the pool.
+ *
+ * The two classes are deliberately asymmetric. **Paid** keeps a pre-split
+ * escape: without `accounts.paid` and without a `policy.paid` block a file
+ * predates the split entirely, and its paid picks share the pool as they always
+ * did. **Local** has no such block to key on and no legacy to preserve — the
+ * split is always on, so a roster with a local model and no `accounts.local` is
+ * a config gap that holds those picks rather than putting the box's model on a
+ * shared account.
+ */
+export function classPoolsOf(config: Pick<FleetConfig, "accounts" | "policy">): Partial<Record<AccountClass, string[]>> {
+  const paid = paidPoolOf(config);
+  return { ...(paid !== undefined ? { paid } : {}), local: config.accounts.local };
+}
+
+/** The accounts of one class, in file order. `pool` is the base class. */
+export function classAccountsOf(config: Pick<FleetConfig, "accounts">, cls: AccountClass): string[] {
+  // `?? []`: a hand-built config (a test, a state file read back) may predate a
+  // class. An absent list is an empty one, never a crash in the scheduler.
+  return (cls === "pool" ? config.accounts.pool : cls === "paid" ? config.accounts.paid : config.accounts.local) ?? [];
+}
+
+/** Every account the scheduler may hand out, whatever its class. */
+export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string[] {
+  return ACCOUNT_CLASSES.flatMap((c) => classAccountsOf(config, c));
 }
 
 /** The jobs pinned to an account, in file order. */
@@ -630,8 +672,10 @@ export function parseFleet(raw: unknown): FleetConfig {
     if (job.enabled && accounts.pool.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
       fail(`accounts.pool: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
     }
-    if (job.enabled && accounts.paid.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-      fail(`accounts.paid: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
+    for (const cls of ["paid", "local"] as const) {
+      if (job.enabled && accounts[cls].some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
+        fail(`accounts.${cls}: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
+      }
     }
     // Derived, enabled first so a disabled stand-in on a running job's
     // account (the burn switch) never hides the live one.
@@ -650,8 +694,10 @@ export function parseFleet(raw: unknown): FleetConfig {
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
         fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
       }
-      if (accounts.paid.some((a) => a.toUpperCase() === account.toUpperCase())) {
-        fail(`preflight account ${account} is also in accounts.paid — the gate needs its own account`);
+      for (const cls of ["paid", "local"] as const) {
+        if (accounts[cls].some((a) => a.toUpperCase() === account.toUpperCase())) {
+          fail(`preflight account ${account} is also in accounts.${cls} — the gate needs its own account`);
+        }
       }
     }
   }
@@ -741,9 +787,9 @@ export function legacyJob(lane: FleetLane): FleetJob {
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
-  if (raw === undefined) return { pinned: {}, pool: [], paid: [] };
+  if (raw === undefined) return { pinned: {}, pool: [], paid: [], local: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
-  const o = raw as { pinned?: unknown; pool?: unknown; paid?: unknown };
+  const o = raw as { pinned?: unknown; pool?: unknown; paid?: unknown; local?: unknown };
   // `pinned` is legacy input (account -> lane/job name): accepted so the
   // pool-era file loads, cross-checked against the jobs, never authored anew.
   const pinned: Record<string, string> = {};
@@ -774,17 +820,27 @@ function parseAccounts(raw: unknown): FleetAccounts {
       pool.push(a);
     }
   }
-  const paid: string[] = [];
-  if (o.paid !== undefined) {
-    if (!Array.isArray(o.paid)) fail("accounts.paid must be an array of account names");
-    for (const a of o.paid as unknown[]) {
-      if (typeof a !== "string" || a.length === 0) fail("accounts.paid: entries are account names");
-      if (paid.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.paid: ${a} listed twice`);
-      if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.paid: ${a} is also in accounts.pool — an account is one class or the other`);
-      paid.push(a);
+  // The split-out classes, parsed alike: an account belongs to exactly one.
+  const classes: Record<"paid" | "local", string[]> = { paid: [], local: [] };
+  for (const cls of ["paid", "local"] as const) {
+    const list = o[cls];
+    if (list === undefined) continue;
+    if (!Array.isArray(list)) fail(`accounts.${cls} must be an array of account names`);
+    for (const a of list as unknown[]) {
+      if (typeof a !== "string" || a.length === 0) fail(`accounts.${cls}: entries are account names`);
+      const seen = [...pool, ...classes.paid, ...classes.local];
+      const dupe = seen.find((p) => p.toUpperCase() === a.toUpperCase());
+      if (dupe !== undefined) {
+        fail(
+          classes[cls].some((p) => p.toUpperCase() === a.toUpperCase())
+            ? `accounts.${cls}: ${a} listed twice`
+            : `accounts.${cls}: ${a} is already in another class — an account belongs to exactly one`,
+        );
+      }
+      classes[cls].push(a);
     }
   }
-  return { pinned, pool, paid };
+  return { pinned, pool, paid: classes.paid, local: classes.local };
 }
 
 function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
@@ -1055,11 +1111,12 @@ export function planPolicy(opts: {
   states: readonly ModelState[];
   pool: string[];
   /**
-   * `accounts.paid`, when the paid class is configured (`paidPoolOf`). Paid
-   * picks draw from here and never from `pool`; absent is the pre-split
-   * behaviour (paid picks share the pool), an empty array holds them.
+   * The accounts each split-out class may use (`classPoolsOf`): `accounts.paid`
+   * when the paid class is configured, `accounts.local` always. Picks of that
+   * class draw from here and never from `pool`; a class absent is the pre-split
+   * behaviour (its picks share the pool), an empty array holds them.
    */
-  paidPool?: string[];
+  classPools?: Partial<Record<AccountClass, string[]>>;
   running: Map<string, string>;
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
@@ -1076,23 +1133,37 @@ export function planPolicy(opts: {
 export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
   if (opts.queuePlan.waiting.length > 0) return { picks: [], held: [] };
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
-  const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  const split = opts.paidPool !== undefined;
-  const freePaid = (opts.paidPool ?? []).filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  // Nothing to place on, and nothing to say. A configured-but-empty paid list
-  // still has held picks to report, so it does not short-circuit here.
-  if (free.length === 0 && freePaid.length === 0 && !(split && opts.paidPool!.length === 0)) return { picks: [], held: [] };
+  const usable = (list: readonly string[]): string[] => list.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
+  const free = usable(opts.pool);
+  // Per split-out class: the accounts of that class still free right now.
+  const splitFree: Partial<Record<AccountClass, string[]>> = {};
+  for (const cls of ACCOUNT_CLASSES) {
+    const declared = opts.classPools?.[cls];
+    if (cls !== "pool" && declared !== undefined) splitFree[cls] = usable(declared);
+  }
+  // Nothing to place on, and nothing to say. A configured-but-empty class still
+  // has held picks to report, so it does not short-circuit here.
+  const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c]?.length === 0);
+  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
   const wrap = (pick: NextJob): PolicyPick => ({ job: policyJob(pick), account: pick.account, why: pick.why });
   const billingOf = new Map(opts.states.map((s) => [s.name, s.billing]));
-  const isPaid = (name: string): boolean => split && billingOf.get(name) === "paid";
-  /** The paid accounts still free once the picks made so far have taken theirs. */
-  const paidLeft = (also: readonly NextJob[]): string[] => freePaid.filter((a) => !also.some((p) => isPaid(p.name) && p.account === a));
+  const classOf = new Map(opts.states.map((s) => [s.name, accountClassOf(s)]));
+  /** The class a pick draws its account from: `pool` unless that class is split out. */
+  const listClass = (name: string): AccountClass => {
+    const cls = classOf.get(name) ?? "pool";
+    return splitFree[cls] !== undefined ? cls : "pool";
+  };
+  /** A class's accounts still free once the picks made so far have taken theirs. */
+  const left = (cls: AccountClass, also: readonly NextJob[]): string[] =>
+    (splitFree[cls] ?? []).filter((a) => !also.some((p) => listClass(p.name) === cls && p.account === a));
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
-      ...(split ? { paidAccounts: paidLeft(also) } : {}),
+      classAccounts: Object.fromEntries(
+        ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, left(c, also)]),
+      ) as Partial<Record<AccountClass, string[]>>,
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
     });
   if (opts.concurrency === undefined) {
@@ -1132,10 +1203,14 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   }
   // Accounts in preference order over the final picks, as an uncapped round
   // would give — each class over its own list, so a paid pick keeps a paid
-  // account and the pool rows stay free-only.
-  let fi = 0;
-  let pi = 0;
-  return { picks: out.map((pick) => wrap({ ...pick, account: (isPaid(pick.name) ? freePaid[pi++] : free[fi++])! })), held };
+  // account, a local one keeps the box, and the pool rows stay free-only.
+  const at: Partial<Record<AccountClass, number>> = {};
+  const take = (cls: AccountClass): string => {
+    const i = at[cls] ?? 0;
+    at[cls] = i + 1;
+    return (cls === "pool" ? free[i] : splitFree[cls]![i])!;
+  };
+  return { picks: out.map((pick) => wrap({ ...pick, account: take(listClass(pick.name)) })), held };
 }
 
 /**
@@ -1278,9 +1353,9 @@ export function planResumes(opts: {
   const takenAccounts = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const takenJobs = new Set(opts.running.keys());
   const policyNames = policyRefs(config);
-  // Either scheduled class may carry a resume: a paid run comes back on its
-  // paid account, exactly as a pool run comes back on its pool account.
-  const poolSet = new Set([...config.accounts.pool, ...config.accounts.paid].map((a) => a.toUpperCase()));
+  // Any scheduled class may carry a resume: a paid or local run comes back on
+  // its own account, exactly as a pool run comes back on its pool account.
+  const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   const paused = opts.runs.filter((f) => f.pause !== null && inSeries(f, config.policy)).sort((a, b) => b.pause!.at - a.pause!.at);
   const seenModel = new Set<string>();
   for (const f of paused) {
@@ -1343,7 +1418,7 @@ export function planResumes(opts: {
       continue;
     }
     if (job.account === undefined && !poolSet.has(account.toUpperCase())) {
-      list(`account ${account} is in neither accounts.pool nor accounts.paid — resume by hand`);
+      list(`account ${account} is in no account class (pool, paid, local) — resume by hand`);
       continue;
     }
     if (takenJobs.has(job.name)) continue; // its roster is running; it handles its own pause
@@ -1890,6 +1965,12 @@ export interface JobRow {
   attempt?: number;
   /** An extra run (ADR-0034), with the character it rolls. */
   extra?: StartingCharacter;
+  /**
+   * The job is running on an account of another class (it was scheduled before
+   * the classes were, or the file moved the account). Noted, never acted on: a
+   * class governs the next pick, not a run already in flight.
+   */
+  offClass?: string;
 }
 
 /** What an account is doing right now, for the accounts table. */
@@ -1897,8 +1978,8 @@ export type AccountRow =
   | { account: string; kind: AccountKind; job: JobRow }
   | { account: string; kind: AccountKind; free: true; note?: string };
 
-/** Which class an account row belongs to: pinned to a job, the free pool, or the paid class. */
-export type AccountKind = "pinned" | "pool" | "paid";
+/** Which class an account row belongs to: pinned to a job, or one of the scheduled classes. */
+export type AccountKind = "pinned" | AccountClass;
 
 const fmtElapsed = (ms: number): string => {
   const m = Math.floor(ms / 60_000);
@@ -1913,7 +1994,8 @@ const fmtElapsed = (ms: number): string => {
  */
 export function formatAccounts(rows: readonly AccountRow[]): string[] {
   const n = (k: AccountKind): number => rows.filter((r) => r.kind === k).length;
-  const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${n("paid") > 0 ? `, ${n("paid")} paid` : ""}`];
+  const extra = ACCOUNT_CLASSES.filter((c) => c !== "pool" && n(c) > 0).map((c) => `, ${n(c)} ${c}`).join("");
+  const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${extra}`];
   const w = Math.max(9, ...rows.map((r) => r.account.length));
   for (const r of rows) {
     const head = `  ${r.account.padEnd(w)} ${r.kind.padEnd(6)} `;
@@ -1929,7 +2011,10 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     }
     const prog = j.level !== undefined ? `L${j.level} ${j.xp ?? 0}xp` : "no state rows yet";
     const run = j.runId !== undefined ? `${j.runId} — ${prog}` : "no run launched yet";
-    out.push(`${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}`);
+    out.push(
+      `${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}` +
+        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}`,
+    );
   }
   return out;
 }
@@ -1983,16 +2068,39 @@ export function formatHeld(held: readonly HeldPick[]): string[] {
 }
 
 /**
- * One line about the paid class when there is something to say: a paid policy
- * with no account to run it on is a config gap the operator has to close, so
- * --status names it rather than leaving the picks silently held.
+ * One line per split-out class when there is something to say: a class with
+ * work to schedule and no account to run it on is a config gap the operator has
+ * to close, so --status names it rather than leaving the picks silently held.
  */
+export function formatAccountClasses(config: Pick<FleetConfig, "accounts" | "policy" | "roster">): string[] {
+  return [...formatPaidClass(config), ...formatLocalClass(config)];
+}
+
+/** The paid class line. Silent on a file that predates the split entirely. */
 export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy">): string[] {
   if (config.policy.paid === null) return config.accounts.paid.length === 0 ? [] : [`paid class: ${config.accounts.paid.join(", ")} (no policy.paid block — no cap, no paid targets)`];
   if (config.accounts.paid.length === 0) {
     return ["paid class: NO PAID ACCOUNT CONFIGURED — paid picks are held, never spilled into the pool; add one to accounts.paid"];
   }
   return [`paid class: ${config.accounts.paid.join(", ")} — paid picks only, at most ${config.policy.paid.maxConcurrent} in flight; the pool stays free-only`];
+}
+
+/**
+ * The local class line. Unlike paid there is no `policy.local` to key on, so it
+ * speaks when there are local accounts or a local model in the roster, and stays
+ * quiet on a file that has neither.
+ */
+export function formatLocalClass(config: Pick<FleetConfig, "accounts" | "roster">): string[] {
+  const models = rosterModels(config.roster).filter((r) => rosterClass(r) === "local");
+  if (config.accounts.local.length === 0) {
+    if (models.length === 0) return [];
+    return [
+      `local class: NO LOCAL ACCOUNT CONFIGURED — ${models.map((m) => m.name).join(", ")} held, never spilled into the pool; add one to accounts.local`,
+    ];
+  }
+  return [
+    `local class: ${config.accounts.local.join(", ")} — local models only (${models.length === 0 ? "none in the roster" : models.map((m) => m.name).join(", ")}); the pool stays off the box`,
+  ];
 }
 
 /** --status / --dry-run: the manual queue, only when there is one. Pure. */
@@ -2119,6 +2227,7 @@ interface FleetState {
     pinned: Record<string, string>;
     pool: Record<string, string | null>;
     paid?: Record<string, string | null>;
+    local?: Record<string, string | null>;
   };
   /** The manual queue's shape, present only when the file has one. */
   queue?: {
@@ -2193,8 +2302,9 @@ let configLoadedAt: number | undefined;
 interface PoolView {
   pinned: Record<string, string>;
   pool: string[];
-  /** `accounts.paid`: the paid class, reported so --status can render it with the fleet up. */
+  /** `accounts.paid` / `accounts.local`: the split-out classes, reported so --status can render them with the fleet up. */
   paid: string[];
+  local: string[];
   /** job name -> the account it is running on (pinned or pool) */
   assigned: Map<string, string>;
   /** job name -> the job, for every job with a live process */
@@ -2234,6 +2344,7 @@ function writeState(
             pinned: pool.pinned,
             pool: Object.fromEntries(pool.pool.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
             paid: Object.fromEntries(pool.paid.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
+            local: Object.fromEntries(pool.local.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
           },
           ...(pool.queue.length > 0
             ? {
@@ -2382,7 +2493,7 @@ function printLiveRuns(configPath: string): number {
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a lane's does.
   const accounts = [
-    ...new Set([...Object.keys(config.accounts.pinned), ...config.accounts.pool, ...config.accounts.paid, ...preflightAccounts(config.preflight), "PROBE"]),
+    ...new Set([...Object.keys(config.accounts.pinned), ...scheduledAccounts(config), ...preflightAccounts(config.preflight), "PROBE"]),
   ];
   let live = 0;
   for (const account of accounts) {
@@ -2529,21 +2640,34 @@ function printStatus(configPath: string): void {
   };
   const byAccount = new Map<string, { name: string; j: ReturnType<typeof liveJobsFromState> extends Map<string, infer V> ? V : never }>();
   for (const [name, j] of live) byAccount.set(j.account.toUpperCase(), { name, j });
-  const poolAccounts = config !== undefined ? config.accounts.pool : Object.keys(state?.accounts?.pool ?? {});
-  const paidAccounts = config !== undefined ? config.accounts.paid : Object.keys(state?.accounts?.paid ?? {});
+  // With the config in hand the classes come from the file; without it (an
+  // older or foreign checkout) from whatever the state file published.
+  const classAccounts = (cls: AccountClass): string[] =>
+    config !== undefined ? classAccountsOf(config, cls) : Object.keys(state?.accounts?.[cls] ?? {});
   // A disabled pinned job may park on a listed account (the coexistence rule),
   // so an account can be both pinned and listed: it belongs to the class that
   // schedules it, and its row carries the parked job as the note.
-  const listed = new Set([...poolAccounts, ...paidAccounts].map((a) => a.toUpperCase()));
+  const listed = new Set(ACCOUNT_CLASSES.flatMap(classAccounts).map((a) => a.toUpperCase()));
   const pinnedAccounts = (config !== undefined ? Object.keys(config.accounts.pinned) : Object.keys(state?.accounts?.pinned ?? {})).filter(
     (a) => !listed.has(a.toUpperCase()),
   );
+  /** The class an account belongs to, for the off-class note on a running job. */
+  const classOfAccount = (account: string): AccountKind =>
+    ACCOUNT_CLASSES.find((c) => classAccounts(c).some((a) => a.toUpperCase() === account.toUpperCase())) ?? "pinned";
   const rows: AccountRow[] = [];
-  for (const [kind, accounts] of [["pinned", pinnedAccounts], ["pool", poolAccounts], ["paid", paidAccounts]] as const) {
+  for (const [kind, accounts] of [["pinned", pinnedAccounts], ...ACCOUNT_CLASSES.map((c) => [c, classAccounts(c)] as const)] as const) {
     for (const account of accounts) {
       const on = byAccount.get(account.toUpperCase());
       if (on !== undefined) {
-        rows.push({ account, kind, job: jobRow(on.name, on.j) });
+        // A class governs the next pick, never a run in flight: a job that
+        // landed before the classes did keeps its account and says so.
+        const entry = config?.roster[on.j.ref];
+        const want = entry === undefined ? undefined : rosterClass(rosterModels({ [on.j.ref]: entry })[0]!);
+        const row = jobRow(on.name, on.j);
+        if (want !== undefined && on.j.source === "policy" && want !== classOfAccount(account)) {
+          row.offClass = `${want} model on a ${classOfAccount(account)} account — left alone; the class applies to the next pick`;
+        }
+        rows.push({ account, kind, job: row });
         continue;
       }
       // Honesty about the account itself: a hand-started run holds it just as
@@ -2561,7 +2685,7 @@ function printStatus(configPath: string): void {
           `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}` +
           `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +
           `${resumePlan.resume.some((r) => r.runId === pausedHere.runId) ? ", resumes on the next tick" : fleetUp ? "" : ", resumes when the fleet starts"}`;
-      } else if ((kind === "pinned" || kind === "paid") && config !== undefined) {
+      } else if (kind !== "pool" && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {
           note = job.enabled
@@ -2573,7 +2697,7 @@ function printStatus(configPath: string): void {
     }
   }
   for (const line of formatAccounts(rows)) console.log(`  ${line}`);
-  if (config !== undefined) for (const line of formatPaidClass(config)) console.log(`  ${line}`);
+  if (config !== undefined) for (const line of formatAccountClasses(config)) console.log(`  ${line}`);
 
   // (c) models: the projection, every roster entry, with why (not) schedulable.
   if (config !== undefined && Object.keys(config.roster).length > 0) {
@@ -2658,11 +2782,10 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
   const driverCount = new Map<string, number>();
   for (const r of runningRefs) driverCount.set(driverOf(config.roster, r), (driverCount.get(driverOf(config.roster, r)) ?? 0) + 1);
-  const paidPool = paidPoolOf(config);
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
-    ...(paidPool !== undefined ? { paidPool } : {}),
+    classPools: classPoolsOf(config),
     running,
     held,
     queuePlan: queue,
@@ -2709,7 +2832,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     kind,
     job: { ...planned(r.job, jobLane(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
   });
-  const listedInDryRun = new Set([...config.accounts.pool, ...config.accounts.paid].map((a) => a.toUpperCase()));
+  const listedInDryRun = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
     const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
     const holder = held(account);
@@ -2721,7 +2844,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       rows.push({ account, kind: "pinned", free: true, note: holder !== undefined ? `held by run ${holder}` : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn` });
     }
   }
-  for (const [kind, accounts] of [["pool", config.accounts.pool], ["paid", config.accounts.paid]] as const) {
+  for (const [kind, accounts] of ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c)] as const)) {
     for (const account of accounts) {
       const q = plan.queue.assign.find((a) => a.account === account);
       const pp = plan.policy.find((a) => a.account === account);
@@ -2735,7 +2858,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   }
   console.log("");
   for (const line of formatAccounts(rows)) console.log(line);
-  for (const line of formatPaidClass(config)) console.log(line);
+  for (const line of formatAccountClasses(config)) console.log(line);
   if (argvs.length > 0) {
     console.log("argv:");
     for (const a of argvs) console.log(a);
@@ -3068,13 +3191,12 @@ async function main(): Promise<void> {
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
-    if (cfg.accounts.pool.length > 0 || cfg.accounts.paid.length > 0) {
+    if (scheduledAccounts(cfg).length > 0) {
       const allowed = policyRefs(cfg);
-      const paidPool = paidPoolOf(cfg);
       const picks = planPolicy({
         states: states.filter((st) => allowed.has(st.name)),
         pool: cfg.accounts.pool,
-        ...(paidPool !== undefined ? { paidPool } : {}),
+        classPools: classPoolsOf(cfg),
         running: runningAndReserved,
         held,
         queuePlan: lastPlan,
@@ -3098,7 +3220,7 @@ async function main(): Promise<void> {
         out.push(jobLane(job, cfg.roster, account, stampToday));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
-      const free = [...cfg.accounts.pool, ...cfg.accounts.paid].filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
+      const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
       const idle =
         free.length === 0
           ? undefined
@@ -3127,6 +3249,7 @@ async function main(): Promise<void> {
     pinned: cfg.accounts.pinned,
     pool: cfg.accounts.pool,
     paid: cfg.accounts.paid,
+    local: cfg.accounts.local,
     assigned,
     jobs: liveJobs,
     queue: poolJobs(cfg),

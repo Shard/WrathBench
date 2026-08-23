@@ -62,9 +62,11 @@ import {
   planPolicyHeld,
   paidPoolOf,
   formatPaidClass,
+  formatLocalClass,
+  formatAccountClasses,
   formatHeld,
 } from "./run-fleet";
-import { DEFAULT_POLICY, modelStates, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -378,10 +380,14 @@ describe("the shipped fleet files", () => {
     const config = parseFleet(raw);
     expect(config.legacyLanes).toEqual([]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe-freeplay", SHAKEOUT2: "sub-opus-e90" });
-    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
+    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
     // The paid class: SHAKEOUT2 is paid-only, and coexists with the DISABLED job pinned to it.
     expect(config.accounts.paid).toEqual(["SHAKEOUT2"]);
     expect(paidPoolOf(config)).toEqual(["SHAKEOUT2"]);
+    // The local class: RUNNER4 is the LM Studio box's account, and qwen3-8-27b
+    // is the only model that may take it.
+    expect(config.accounts.local).toEqual(["RUNNER4"]);
+    expect(rosterModels(config.roster).filter((r) => rosterClass(r) === "local").map((r) => r.name)).toEqual(["qwen3-8-27b"]);
     expect(config.jobs.find((j) => j.account === "SHAKEOUT2")!.enabled).toBe(false);
     expect(config.policy.runsPerEpisode).toEqual({ e90: 3, e360: 3 });
     expect(config.maxConcurrent).toEqual({ "claude-code": 2 });
@@ -418,12 +424,15 @@ describe("the shipped fleet files", () => {
     expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-freeplay"]);
     const claude = plan.policy.filter((p) => config.roster[p.job.ref]!.driver === "claude-code");
     expect(claude).toHaveLength(1);
-    // Six pool accounts plus the paid one: deepseek-flash is the only paid
-    // model, and it lands on SHAKEOUT2, never on a pool account.
+    // Five pool accounts, the paid one, the local one: deepseek-flash is the
+    // only paid model and lands on SHAKEOUT2; qwen3-8-27b is the only local one
+    // and lands on RUNNER4. Neither ever takes a pool account.
     expect(plan.policy.length).toBe(7);
-    const paid = plan.policy.filter((p) => p.job.ref === "deepseek-flash");
-    expect(paid.map((p) => p.account)).toEqual(["SHAKEOUT2"]);
-    expect(plan.policy.filter((p) => config.accounts.pool.includes(p.account)).every((p) => p.job.ref !== "deepseek-flash")).toBe(true);
+    expect(plan.policy.filter((p) => p.job.ref === "deepseek-flash").map((p) => p.account)).toEqual(["SHAKEOUT2"]);
+    expect(plan.policy.filter((p) => p.job.ref === "qwen3-8-27b").map((p) => p.account)).toEqual(["RUNNER4"]);
+    const onPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account)).map((p) => p.job.ref);
+    expect(onPool).not.toContain("deepseek-flash");
+    expect(onPool).not.toContain("qwen3-8-27b");
   });
 
   test("fleet.pool.json (pool shape with a lanes list) still loads: lanes read as pinned jobs", async () => {
@@ -473,7 +482,7 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
 
   test("the pre-pool shape still loads: every lane is a pinned job on its own account, pool and queue are empty", () => {
     const config = parseFleet(fleetJson([lane({ name: "a", account: "RUNNER" }), lane({ name: "b", account: "RUNNER2", enabled: false })]));
-    expect(config.accounts).toEqual({ pinned: { RUNNER: "a", RUNNER2: "b" }, pool: [], paid: [] });
+    expect(config.accounts).toEqual({ pinned: { RUNNER: "a", RUNNER2: "b" }, pool: [], paid: [], local: [] });
     expect(poolJobs(config)).toEqual([]);
     expect(config.roster).toEqual({});
     expect(pinnedJobs(config).map((j) => j.account)).toEqual(["RUNNER", "RUNNER2"]);
@@ -859,7 +868,7 @@ describe("scheduling policy (ADR-0032)", () => {
 
   test("paid and free (ADR-0034 amendment): the paid cap holds a pick and says so; an extra rolls its character into the lane", () => {
     const raw = {
-      accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"], paid: ["PAID"] },
+      accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"], paid: ["PAID"], local: ["LOCALBOX"] },
       roster: {
         big: { model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
         bigger: { model: "vendor/bigger", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
@@ -889,12 +898,13 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
     const plan = planTick(config, states, () => undefined, "20260101");
     // One paid model (roster order) on the PAID account, then extras for the
-    // free ones on the pool; bigger and forced are held by the cap. A paid
-    // pick never takes a pool account, and an extra never takes a paid one.
+    // free ones; bigger and forced are held by the cap. A paid pick never takes
+    // a pool account, an extra never takes a paid one, and the local model's
+    // extra takes the box rather than a pool account.
     expect(plan.policy.map((p) => [p.job.name, p.account, p.job.extra !== undefined])).toEqual([
       ["big-e90", "PAID", false],
       ["glm-e90", "RUNNER", true],
-      ["local-e90", "RUNNER2", true],
+      ["local-e90", "LOCALBOX", true],
     ]);
     expect(plan.heldPicks.map((h) => h.name)).toEqual(["bigger", "forced"]);
     expect(formatHeld(plan.heldPicks)[0]).toMatch(/bigger: HELD — e90 wanted, paid cap: 1\/1/);
@@ -903,13 +913,13 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(plan.policy[1]!.job.extra).toEqual(chars[0]!);
     expect(plan.policy[2]!.job.extra).toEqual(chars[1]!);
     // The extra reaches the lane as race/class plus the stamp, and the argv carries --extra.
-    const lane = jobLane(plan.policy[2]!.job, config.roster, "RUNNER2", "20260101");
+    const lane = jobLane(plan.policy[2]!.job, config.roster, "LOCALBOX", "20260101");
     expect(lane.entries![0]).toMatchObject({ race: chars[1]!.race, class: chars[1]!.class, extra: true, episode: "e90" });
     expect((lane.entries![0] as unknown as Record<string, unknown>)["billing"]).toBeUndefined();
     expect(laneArgv(lane, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-e90");
     // A paid model already in flight fills the cap before any pick.
     const paidStates = states.filter((st) => st.billing === "paid");
-    const none = planPolicyHeld({ states: paidStates, pool: ["RUNNER"], paidPool: ["PAID"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set(), policy: config.policy, paidRunning: 1 });
+    const none = planPolicyHeld({ states: paidStates, pool: ["RUNNER"], classPools: { paid: ["PAID"] }, running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set(), policy: config.policy, paidRunning: 1 });
     expect(none.picks).toEqual([]);
     expect(none.held.map((h) => h.name)).toEqual(["big", "bigger", "forced"]);
     // policy.paid with no accounts.paid: held for the actionable reason, never
@@ -917,7 +927,9 @@ describe("scheduling policy (ADR-0032)", () => {
     const noAccount = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] } });
     expect(paidPoolOf(noAccount)).toEqual([]);
     const heldPlan = planTick(noAccount, states, () => undefined, "20260101");
-    expect(heldPlan.policy.map((p) => p.job.name)).toEqual(["glm-e90", "local-e90"]);
+    // No paid account AND no local account: both classes hold, the free pool
+    // model still runs, and neither held class spills onto a pool account.
+    expect(heldPlan.policy.map((p) => p.job.name)).toEqual(["glm-e90"]);
     expect(heldPlan.heldPicks.map((h) => [h.name, h.why])).toEqual([
       ["big", "no paid account configured — add one to accounts.paid"],
       ["bigger", "no paid account configured — add one to accounts.paid"],
@@ -925,18 +937,34 @@ describe("scheduling policy (ADR-0032)", () => {
     ]);
     expect(formatPaidClass(noAccount)[0]).toMatch(/NO PAID ACCOUNT CONFIGURED/);
     expect(formatPaidClass(config)[0]).toMatch(/paid class: PAID — paid picks only, at most 1 in flight/);
+    expect(formatLocalClass(noAccount)[0]).toMatch(/NO LOCAL ACCOUNT CONFIGURED — local held/);
+    expect(formatLocalClass(config)[0]).toMatch(/local class: LOCALBOX — local models only \(local\)/);
+    // No local model in the roster and no local accounts: the line stays quiet.
+    expect(formatLocalClass(parseFleet({ ...raw, accounts: { pool: ["RUNNER"] }, roster: { glm: { model: "z-ai/glm-5.2:free" } } }))).toEqual([]);
+    expect(formatAccountClasses(config)).toEqual([...formatPaidClass(config), ...formatLocalClass(config)]);
     // The row shape: a paid row reads like a pool row, under the same header.
     const acctLines = formatAccounts([
       { account: "RUNNER", kind: "pool", free: true },
       { account: "PAID", kind: "paid", job: { name: "big-e90", models: ["vendor/big"], episode: "e90" } },
+      { account: "LOCALBOX", kind: "local", job: { name: "local-e90", models: ["qwen/q"], episode: "e90" } },
     ]);
-    expect(acctLines[0]).toBe("accounts: 0 pinned, 1 pool, 1 paid");
+    expect(acctLines[0]).toBe("accounts: 0 pinned, 1 pool, 1 paid, 1 local");
     expect(acctLines[2]).toMatch(/PAID +paid +big-e90: vendor\/big e90/);
-    // An account is one class or the other, and the gate keeps its own.
-    expect(() => parseFleet({ ...raw, accounts: { pool: ["RUNNER"], paid: ["runner"] } })).toThrow(/also in accounts.pool/);
+    expect(acctLines[3]).toMatch(/LOCALBOX +local +local-e90: qwen\/q e90/);
+    // An account belongs to exactly one class, and the gate keeps its own.
+    expect(() => parseFleet({ ...raw, accounts: { pool: ["RUNNER"], paid: ["runner"] } })).toThrow(/already in another class/);
+    expect(() => parseFleet({ ...raw, accounts: { pool: ["RUNNER"], paid: ["P"], local: ["p"] } })).toThrow(/accounts.local: p is already in another class/);
+    expect(() => parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["L", "l"] } })).toThrow(/accounts.local: l listed twice/);
     expect(() =>
       parseFleet({ ...raw, accounts: { pool: ["RUNNER"], paid: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } }),
     ).toThrow(/also in accounts.paid/);
+    expect(() =>
+      parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } }),
+    ).toThrow(/also in accounts.local/);
+    // Coexistence holds for the local class too: only a disabled job may park.
+    expect(() =>
+      parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] }, queue: [{ ref: "local", episode: "e90", account: "LOCALBOX" }] }),
+    ).toThrow(/accounts.local: LOCALBOX is also pinned to job local-e90 — only a disabled job may park/);
     // Coexistence: a DISABLED pinned job may park on a listed account; an enabled one may not.
     const parked = { ...raw, accounts: { pool: ["RUNNER"], paid: ["PAID"] }, queue: [{ ref: "big", episode: "e90", account: "PAID", enabled: false }] };
     expect(parseFleet(parked).accounts.paid).toEqual(["PAID"]);
@@ -947,10 +975,19 @@ describe("scheduling policy (ADR-0032)", () => {
     const plain = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] }, policy: {} });
     const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
     const plainPlan = planTick(plain, plainStates, () => undefined, "20260101");
-    // No policy.paid and no accounts.paid: no split at all, paid models take pool accounts.
+    // No policy.paid and no accounts.paid: no split at all, paid models take
+    // pool accounts (local has met its targets and, with no extras policy, has
+    // nothing to ask for).
     expect(paidPoolOf(plain)).toBeUndefined();
     expect(plainPlan.policy.map((p) => [p.job.name, p.account])).toEqual([["big-e90", "RUNNER"], ["bigger-e90", "RUNNER2"], ["forced-e90", "RUNNER3"]]);
     expect(plainPlan.heldPicks).toEqual([]);
+    // The local class has no such escape — it is always split. A local model
+    // with a target to meet and no accounts.local is HELD, never spilled onto a
+    // pool account, and the reason names the key to add.
+    const noBox = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2"] }, roster: { local: raw.roster.local }, policy: {} });
+    const noBoxPlan = planTick(noBox, modelStatesOf(rosterModels(noBox.roster), [], NOW, noBox.policy), () => undefined, "20260101");
+    expect(noBoxPlan.policy).toEqual([]);
+    expect(noBoxPlan.heldPicks.map((h) => [h.name, h.why])).toEqual([["local", "no local account configured — add one to accounts.local"]]);
     expect(() => parseFleet({ ...raw, policy: { paid: { maxConcurrent: -1 } } })).toThrow(/paid.maxConcurrent/);
     expect(() => parseFleet({ ...raw, policy: { extras: { characters: [{ race: 0, class: 1 }] } } })).toThrow(/characters\[0\]/);
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);

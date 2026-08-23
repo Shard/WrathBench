@@ -160,7 +160,7 @@ Both blocks are **optional and off when absent**: a `fleet.json` without
 them runs exactly as before, and the live supervisor's hot-reload stays
 parseable. `policy.paid: {}` and `policy.extras: {}` take the defaults.
 
-## Amendment 2026-08-23: paid accounts
+## Amendment 2026-08-23: account classes
 
 `policy.paid.maxConcurrent` throttles paid models, but it throttles them *over
 the shared pool*: a paid run lands on whichever `accounts.pool` account happens
@@ -197,6 +197,37 @@ One exception, deliberate: the split governs the **policy**. A manual queue
 job with no account is the operator's explicit override and draws from the
 pool whatever its ref's billing — pin a paid ref to a paid account, or let the
 policy schedule it.
+
+**The same argument makes a third class: `accounts.local`.** A model served
+from the operator's own hardware — an LM Studio box on the LAN, `isLocalBase`
+in `runner/src/model-cost.ts` — is priced free, and under the free/paid split
+alone it would take whatever pool account came up. But that box answers one
+request stream at a time, which is exactly the paid class's argument with money
+swapped for hardware: the resource is the limit, so give it its own accounts.
+A local pick launches only on a free account from `accounts.local`; free and
+paid picks never touch one. Local beats billing where they disagree, since the
+constraint is the box, not the invoice.
+
+Two things differ from paid, both deliberate. There is no `policy.local` block
+— nothing about a local model needs a target or a cap that the box does not
+already enforce — so the class has no on-switch to key on and is **always
+live**: a roster with a local model and no `accounts.local` holds those picks
+with `no local account configured` rather than putting the box's model on a
+shared account. And there is no pre-split escape: `accounts.paid` keeps one so
+that a file written before the split still runs, but nothing was ever written
+against a local class, so there is nothing to preserve.
+
+Everything else is the paid class verbatim, and the code says so once rather
+than three times: the classes are a map (`classPoolsOf`, `classAccountsOf`,
+`accountClassOf`), and validation, `--status` rows, `--dry-run`, the state
+file's `accounts` block and resume-on-your-own-class all iterate it. The
+coexistence rule, the preflight exclusion and the one-class-per-account check
+extend unchanged.
+
+A class governs the **next pick**, never a run already in flight. `qwen3-8-27b`
+was mid-run on a pool account when the class was introduced; it was left alone,
+and `--status` marks such a row `[local model on a pool account — left alone]`
+rather than killing a run to tidy the table.
 
 `accounts.paid` is optional and absent is the old behaviour: with neither block
 the pool is one undifferentiated class again.

@@ -1,12 +1,17 @@
 {
   "_notes": [
     "Fleet config (ADR-0034): one concept, the JOB. Hot-reloaded every 60s; history in docs/worklogs.",
+    "accounts: three classes (ADR-0034, \"Account classes\"). An account belongs to exactly one.",
     "accounts.pool: accounts the pool and the policy may use, in preference order. FREE models only. Never PROBE, never SMOKE*.",
     "accounts.paid: the paid class (ADR-0034 amendment 2026-08-23). A paid pick lands only here, never in the pool;",
     "  with policy.paid present and this list empty, paid picks are HELD (\"no paid account configured\"), not spilled.",
     "  Coexistence: listing an account says who may SCHEDULE it, `enabled` says who HOLDS it — only an enabled job holds.",
     "  So a DISABLED pinned job may park on a listed account (SHAKEOUT2 below); an enabled one may not.",
     "  The split governs the POLICY: a manual queue job with no account draws from the pool whatever its billing.",
+    "accounts.local: the local class. A model whose apiBase is on the LAN or loopback (isLocalBase, runner/src/model-cost.ts)",
+    "  lands only here — the LM Studio box serves one runner at a time, so its account IS the limit. Unlike paid there is no",
+    "  policy block to switch it on: the split is always live, and a local model with no accounts.local is HELD",
+    "  (\"no local account configured\"), never spilled into the pool. Free and paid picks never take a local account.",
     "roster: name -> roster entry (exact run-roster schema; may carry objective/watchdogs/maxToolCalls/wikiCoords).",
     "  Optional: tiers (manual FORCE, normally absent), runsPerEpisode { e90, e360 } (per-entry target).",
     "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <driver>: n } caps streams per driver.",
@@ -43,8 +48,9 @@
     "deployTimeoutMs": 600000
   },
   "accounts": {
-    "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"],
-    "paid": ["SHAKEOUT2"]
+    "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"],
+    "paid": ["SHAKEOUT2"],
+    "local": ["RUNNER4"]
   },
   "roster": {
     "nav-probe": {
