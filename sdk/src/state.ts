@@ -341,9 +341,12 @@ export interface InventoryItem {
 }
 
 /**
- * One occupied backpack slot, addressed the way the item actions want it:
- * `bag`/`slot` feed `equipItem`, `useItem` and `destroyItem` unchanged
- * (`bag` 255 is the backpack, `slot` 23-38).
+ * One occupied carried slot, addressed the way the item actions want it:
+ * `bag`/`slot` feed `equipItem`, `useItem` and `destroyItem` unchanged. For
+ * the backpack `bag` is 255 and `slot` 23-38; for a worn bag `bag` is the
+ * bag's own equipment slot (19-22) and `slot` 0..numSlots-1 — exactly what
+ * `Player::GetItemByPos(bag, slot)` resolves behind `CMSG_USE_ITEM` and
+ * `CMSG_DESTROYITEM`.
  */
 export interface BagSlotItem {
   readonly bag: number;
@@ -352,12 +355,26 @@ export interface BagSlotItem {
   readonly itemId: number | undefined;
   readonly name: string | undefined;
   readonly count: number | undefined;
+  /** Item quality (0 poor .. 5 legendary) from the item query, when answered. */
+  readonly quality?: number | undefined;
 }
 
-/** The backpack as `bag()` reports it. */
+/** One worn bag, by the equipment slot the item actions address it as. */
+export interface WornBag {
+  readonly slot: number;
+  readonly numSlots: number;
+  readonly name: string | undefined;
+}
+
+/** The whole carried inventory — backpack plus worn bags — as `bag()` reports it. */
 export interface BagContents {
   readonly items: readonly BagSlotItem[];
+  /** Empty slots across the backpack and every worn bag whose size is known. */
   readonly freeSlots: number;
+  /** 16 for the backpack plus each worn bag's `numSlots`. */
+  readonly totalSlots: number;
+  /** Worn bags (equipment slots 19-22), in slot order. */
+  readonly bags: readonly WornBag[];
 }
 
 /** What an item query answered about one item entry. */
@@ -1169,33 +1186,67 @@ export class StateCache {
   }
 
   /**
-   * The backpack, shaped for acting on it: `bag`/`slot` are exactly what
-   * `equipItem(bag, slot)`, `useItem` and `destroyItem` take (bag 255, slots
-   * 23-38), and `freeSlots` is how many of the 16 backpack slots hold nothing.
+   * The carried inventory, shaped for acting on it: `bag`/`slot` are exactly
+   * what `equipItem(bag, slot)`, `useItem` and `destroyItem` take — the
+   * backpack is bag 255, slots 23-38; a worn bag is addressed by its own
+   * equipment slot (19-22) with slots 0..numSlots-1 — and `freeSlots` counts
+   * empty slots across all of them, out of `totalSlots`. Equipment (slots
+   * 0-18) is the `inventory` rows with `slot < 19`, not part of this list.
    *
-   * A view over `inventory` — same fields, same three-way join, no new
-   * observation. Earned surface (ADR-0015): morning-opus-1 rebuilt this from
-   * ITEM_PUSH_RESULT listeners, invSlot regexes over raw updates, and a full
-   * relog to force a resend, when everything needed was already in the cache.
+   * A view over `inventory` and the worn bags' own create blocks — same
+   * three-way join, no new observation. Earned surface (ADR-0015):
+   * morning-opus-1 rebuilt the backpack view from ITEM_PUSH_RESULT listeners,
+   * invSlot regexes over raw updates, and a full relog to force a resend; the
+   * worn-bag span came from `inventory_full` turn-ins (quests 33, 183) and a
+   * model hand-rolling destroyItem loops against a 16-slot ceiling while a
+   * worn bag had room (FOLLOW-UPS 50).
    *
-   * Two honest caveats. Empty slots are zero-valued update fields and the wire
+   * One honest caveat. Empty slots are zero-valued update fields and the wire
    * compresses zeros out of create blocks, so "no field observed" reads as
-   * free — before our own create block has arrived this says 16. And the
-   * contents of *equipped* bags (slots 19-22) are container fields no
-   * whitelisted opcode serves, so only the backpack is reported.
+   * free — before our own create block has arrived this says 16 free.
    */
   bag(): BagContents {
-    const items = this.inventory
-      .filter((i) => i.slot >= BACKPACK_FIRST_SLOT)
-      .map((i) => ({
-        bag: BACKPACK_BAG,
-        slot: i.slot,
-        guid: i.guid,
-        itemId: i.itemId,
-        name: i.name,
-        count: i.stackCount,
-      }));
-    return { items, freeSlots: BACKPACK_SIZE - items.length };
+    const items: BagSlotItem[] = [];
+    const bags: WornBag[] = [];
+    const rowOf = (bag: number, slot: number, guid: GuidKey): BagSlotItem => {
+      const item = this.nearby.get(guid);
+      const itemId = item?.entry?.value;
+      const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
+      return {
+        bag,
+        slot,
+        guid,
+        itemId,
+        name: info?.name,
+        count: item?.fields.get("stackCount")?.value,
+        quality: info?.quality,
+      };
+    };
+    let totalSlots = BACKPACK_SIZE;
+    const inventory = this.inventory;
+    // Backpack first, then each worn bag in slot order.
+    for (const i of inventory) {
+      if (i.slot >= BACKPACK_FIRST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
+    }
+    for (const i of inventory) {
+      if (i.slot < BAG_FIRST_SLOT || i.slot > BAG_LAST_SLOT) continue;
+      // A worn bag: its contents are the container's own `bagSlot<n>Lo/Hi`
+      // fields, addressed by the equipment slot the bag sits in.
+      const container = this.nearby.get(i.guid);
+      const numSlots = container?.fields.get("numSlots")?.value ?? 0;
+      bags.push({ slot: i.slot, numSlots, name: i.name });
+      totalSlots += numSlots;
+      if (!container) continue;
+      for (let n = 0; n < numSlots; n++) {
+        const lo = container.fields.get(`bagSlot${n}Lo`);
+        const hi = container.fields.get(`bagSlot${n}Hi`);
+        if (!lo && !hi) continue;
+        const guid = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
+        if (guid === "0") continue;
+        items.push(rowOf(i.slot, n, guid));
+      }
+    }
+    return { items, freeSlots: totalSlots - items.length, totalSlots, bags };
   }
 
   /** The object our own `targetGuid` points at, when it is also in view. */
@@ -2708,6 +2759,9 @@ const BACKPACK_FIRST_SLOT = 23;
 const BACKPACK_SIZE = 16;
 /** `INVENTORY_SLOT_BAG_0` on the wire: the bag id the item actions take for the backpack. */
 const BACKPACK_BAG = 255;
+/** Worn-bag equipment slots (`INVENTORY_SLOT_BAG_START..END`): the bag ids the item actions take for them. */
+const BAG_FIRST_SLOT = 19;
+const BAG_LAST_SLOT = 22;
 
 /**
  * Where an object is, from the freshest thing that said so.

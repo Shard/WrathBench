@@ -59,7 +59,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `questsAvailableFrom` | `questsAvailableFrom(npcGuid: GuidOrUnit, options?): Promise<{ ok, quests }>` | What an NPC is offering right now; an empty list is an answer, not an error. |
 | `trainerList` | `trainerList(npcGuid: GuidOrUnit, options?): Promise<TrainerListResult>` | What a trainer teaches, each row with derived learnable/affordable. |
 | `buySpell` | `buySpell(npcGuid: GuidOrUnit, spellId, options?): Promise<BuySpellResult>` | Learn one spell from a trainer for money; returns learned or buy_failed. |
-| `equipItem` | `equipItem(bag, slot, options?): Promise<EquipItemResult>` | Equip a bag item (bag 255 is the backpack, slots 23-38) and wait for the server's verdict; returns equipped, or not_equipped with the InventoryResult reason (proficiency, level, a two-hander blocking a shield, …). |
+| `equipItem` | `equipItem(bag, slot, options?): Promise<EquipItemResult>` | Equip a carried item (bag/slot as `state.bag()` lists them: 255/23-38 for the backpack, a worn bag's equip slot 19-22 with slots 0..numSlots-1) and wait for the server's verdict; returns equipped, or not_equipped with the InventoryResult reason (proficiency, level, a two-hander blocking a shield, …). |
 | `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
@@ -128,7 +128,7 @@ zero.
 | `closest` | `state.closest(filter?): NearbyObject | undefined` | The nearest object by distance. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, role, questGiver }) or a predicate over the raw object. |
 | `nearbyUnits` | `state.nearbyUnits(): NearbyObject[]` | The raw nearby objects (state.units gives flat plain objects instead). |
 | `creaturesByEntry` | `state.creaturesByEntry(entry): NearbyObject[]` | Nearby creatures with a given template entry id. |
-| `bag` | `state.bag(): BagContents` | The backpack as { items: [{ bag, slot, itemId, name, count }], freeSlots }. |
+| `bag` | `state.bag(): BagContents` | The whole carried inventory — backpack plus worn bags — as { items: [{ bag, slot, guid, itemId, name, count, quality? }], freeSlots, totalSlots, bags: [{ slot, numSlots, name }] }; each item's bag/slot is what the item actions take. |
 | `quest` | `state.quest(questId): QuestLogEntry | undefined` | One quest-log entry by id: questId, title, complete bit, counts, and objectives: [{ kind: "kill"|"interact"|"collect"|"event", entry, text, required, have, done }] (objectives/title are undefined until the quest template answer has arrived, usually within a second of accepting). |
 | `questLog` | `get state.questLog: QuestLogEntry[]` | All quest-log entries. |
 | `lastGossip` | `state.lastGossip(guid): GossipMenu | undefined` | The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against). |
@@ -143,7 +143,7 @@ zero.
 | `xp` | `get state.xp: Observed<number> | undefined` | Current experience (read .value). |
 | `nextLevelXp` | `get state.nextLevelXp: Observed<number> | undefined` | Experience needed for the next level (read .value). |
 | `money` | `get state.money: Observed<number> | undefined` | Money in copper (read .value). |
-| `inventory` | `get state.inventory: InventoryItem[]` | All observed inventory items (bag() is the backpack view). |
+| `inventory` | `get state.inventory: InventoryItem[]` | All observed inventory slots by raw slot id; equipment is `slot < 19` (worn bags 19-22), bag() is the carried view. |
 | `chat` | `get state.chat: readonly ChatEntry[]` | The retained chat tail. |
 | `notifications` | `get state.notifications: readonly NotificationEntry[]` | The retained notification tail. |
 | `gaps` | `get state.gaps: readonly GapRecord[]` | Observed gaps in the event stream. |

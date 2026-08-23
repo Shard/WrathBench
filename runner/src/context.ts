@@ -84,9 +84,11 @@ interface UnitLike {
   roles?: unknown;
 }
 
-/** The backpack as `state.bag()` shapes it, flattened into the rpc JSON. */
+/** The carried inventory as `state.bag()` shapes it, flattened into the rpc JSON. */
 interface BagLike {
   freeSlots?: unknown;
+  /** Backpack (16) plus every worn bag's slots; absent on a pre-item-50 snapshot. */
+  totalSlots?: unknown;
   items?: { slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown }[];
 }
 
@@ -147,8 +149,10 @@ export interface SnapshotLike {
    * never printed — CONTRACTS.md forbids exact mob health.
    */
   units?: UnitLike[];
-  /** `state.bag()` shape: backpack items and free slot count. */
+  /** `state.bag()` shape: carried items across all bags, free and total slot counts. */
   bag?: BagLike;
+  /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
+  inventory?: { slot?: unknown; itemId?: unknown; name?: unknown; stackCount?: unknown }[];
   /** The open-window fold the sandbox computes from the event stream. */
   ui?: UiOpenWindows;
   chat?: { senderGuid?: unknown; message?: unknown }[];
@@ -175,7 +179,7 @@ function fmtGauge(o?: ObservedLike): string {
 /** PLAYER_FLAGS_GHOST on 3.3.5a — set while the character is a corpse-run ghost. */
 const PLAYER_FLAGS_GHOST = 0x10;
 
-/** Backpack size (16 slots), for the "F free / 16" bag line. */
+/** Backpack size (16 slots): the bag line's total when the snapshot carries none. */
 const BACKPACK_SIZE = 16;
 /** How many bag items the HUD names before collapsing the rest to "+K more". */
 const BAG_ITEM_CAP = 8;
@@ -373,7 +377,8 @@ export function formatStateSummary(
   } else {
     const items = snapshot.bag.items ?? [];
     const free = snapshot.bag.freeSlots;
-    const freeStr = typeof free === "number" ? `${free} free / ${BACKPACK_SIZE}` : "unobserved";
+    const total = typeof snapshot.bag.totalSlots === "number" ? snapshot.bag.totalSlots : BACKPACK_SIZE;
+    const freeStr = typeof free === "number" ? `${free} free / ${total}` : "unobserved";
     let itemsStr = items.length === 0 ? "empty" : items.slice(0, BAG_ITEM_CAP).map(bagItemLabel).join(", ");
     if (items.length > BAG_ITEM_CAP) itemsStr += ` +${items.length - BAG_ITEM_CAP} more`;
     lines.push(`bag: ${freeStr}    items: ${itemsStr}`);

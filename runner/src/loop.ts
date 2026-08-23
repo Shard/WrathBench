@@ -20,7 +20,7 @@ import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
-import type { Trajectory } from "./trajectory";
+import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
 export interface LoopOptions {
@@ -207,6 +207,7 @@ export class ContextBuilder {
       ...turn,
       zone: zone?.id,
       area: area?.id,
+      items: itemSample(snap),
     });
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;
@@ -414,4 +415,32 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     }
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   }
+}
+
+/** Equipment slots are 0-18 in the player's `invSlot<n>` numbering; 19-22 are worn bags. */
+const EQUIPMENT_LAST_SLOT = 18;
+
+/**
+ * The `items` column of a state sample: what is worn (inventory slots 0-18)
+ * and what is carried (`bag()` across every bag), names and counts only. A
+ * row whose name has not been answered yet is kept under its item id so the
+ * count stays honest. `undefined` when the snapshot carries no inventory.
+ */
+export function itemSample(snap: SnapshotLike): ItemSample[] | undefined {
+  const inv = snap.inventory;
+  const bag = snap.bag?.items;
+  if (inv === undefined && bag === undefined) return undefined;
+  const out: ItemSample[] = [];
+  const label = (name: unknown, itemId: unknown, fallback: string): string =>
+    typeof name === "string" ? name : itemId != null ? `item ${String(itemId)}` : fallback;
+  for (const i of inv ?? []) {
+    if (typeof i.slot !== "number" || i.slot > EQUIPMENT_LAST_SLOT) continue;
+    const count = typeof i.stackCount === "number" ? i.stackCount : 1;
+    out.push({ name: label(i.name, i.itemId, `slot ${i.slot}`), count, equipped: true });
+  }
+  for (const i of bag ?? []) {
+    const count = typeof i.count === "number" ? i.count : 1;
+    out.push({ name: label(i.name, i.itemId, `slot ${String(i.slot)}`), count, equipped: false });
+  }
+  return out;
 }

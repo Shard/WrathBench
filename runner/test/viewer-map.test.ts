@@ -160,6 +160,8 @@ interface FixtureRun {
   states?: (number | null)[][];
   /** Omit the position columns entirely, as a pre-ADR-0018 run does. */
   noPositionColumns?: boolean;
+  /** Add the `items` column (FOLLOW-UPS 50) and set it on the newest state row. */
+  items?: string | null;
 }
 
 function fixture(runs: FixtureRun[]): string {
@@ -196,6 +198,10 @@ function fixture(runs: FixtureRun[]): string {
     const holes = new Array(width).fill("?").join(", ");
     for (const s of r.states ?? [])
       db.query(`INSERT INTO state VALUES (${holes})`).run(...([r.id, ...s] as never[]));
+    if (r.items !== undefined) {
+      db.exec(`ALTER TABLE state ADD COLUMN items TEXT`);
+      db.query(`UPDATE state SET items = ? WHERE ts = (SELECT MAX(ts) FROM state)`).run(r.items);
+    }
     db.close();
   }
   return runsDir;
@@ -226,8 +232,23 @@ describe("readPositions", () => {
       xp: 900,
       money: 12345,
       questsCompleted: 7,
+      items: null,
       harnessVersion: "harness-0.2",
     });
+  });
+
+  test("the popout carries the newest recorded inventory, null before the column existed", () => {
+    const items = JSON.stringify([
+      { name: "Worn Mace", count: 1, equipped: true },
+      { name: "Tough Jerky", count: 5, equipped: false },
+    ]);
+    const runsDir = fixture([
+      { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
+      { id: "live-bare", states: [[NOW - 4000, 4, 900, 0, -6240, 380, 380, 1, 0]] },
+    ]);
+    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
+    expect(byId.get("live-items")?.items).toEqual(JSON.parse(items));
+    expect(byId.get("live-bare")?.items).toBeNull();
   });
 
   test("a terminated run is not on the map, however fresh its last position", () => {

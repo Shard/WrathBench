@@ -62,6 +62,7 @@ function run(p: Partial<RunRow> = {}): RunRow {
     xp: 10,
     money: null,
     questsCompleted: 3,
+    items: null,
     mtime: null,
     bytes: null,
     live: false,

@@ -25,7 +25,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
-import { fmtAge, fmtMoney, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
   STALE_MS,
   TILE_MIN_PX,
@@ -532,6 +532,8 @@ export default function MapPage() {
               <div class="v mono">{fmtMoney(p().money)}</div>
               <div class="k">quests completed</div>
               <div class="v mono">{num(p().questsCompleted)}</div>
+              <div class="k">carrying</div>
+              <div class="v">{fmtItems(p().items, false)}</div>
               <div class="k">map</div>
               <div class="v mono">{p().map}</div>
               <div class="k">position</div>

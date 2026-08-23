@@ -957,6 +957,17 @@ Served in `SMSG_UPDATE_OBJECT` `fields` alongside the existing set:
   item create blocks.
 - items and containers: `stackCount`, `durability`, `maxDurability`,
   `itemFlags`, `ownerLo`/`ownerHi`, `containedLo`/`containedHi`.
+- containers only (worn bags, FOLLOW-UPS 50): `numSlots`
+  (`CONTAINER_FIELD_NUM_SLOTS`) and the bag's contents as
+  `bagSlot<n>Lo`/`bagSlot<n>Hi` u32 guid halves, n 0-35
+  (`CONTAINER_FIELD_SLOT_1`, 36 guid pairs). PUBLIC fields every client in
+  range receives, served exactly as the player's `invSlot<n>` halves are: a
+  values update may carry one half, zero halves in a create block are
+  compressed out, and the SDK joins halves into guids and addresses the
+  slot as `(bag = the bag's equipment slot 19-22, slot = n)`, which is what
+  `CMSG_USE_ITEM` / `CMSG_DESTROYITEM` / `CMSG_AUTOEQUIP_ITEM` resolve
+  through `Player::GetItemByPos`. Nothing new on the action side: swap and
+  split stay off the allowlist.
 
 ## Audit log
 

@@ -81,14 +81,6 @@ and status.
     or death with a reason (worklogs/2026-08-23), which covers the two observed reasons
     for polling without adding a predicate API. Unblocks on one ADR covering both halves.
 
-50. **Equipped-bag contents are unobservable** (split from item 39, which shipped the
-    spellbook and raw hatch 2026-08-22). `state.bag()` is the backpack only; items in
-    equipped bags are invisible to the agent although the client has them from the same
-    update fields. Blind spot, not yet the obstacle in any trajectory; the ADR-0015 bar
-    is a run that needs it. Evidence pointer when it comes: an `inventory_full` turn-in
-    with free slots in an equipped bag.
-
-
 ## Fleet and gate
 
 
@@ -322,4 +314,5 @@ One line per number so citations resolve; the day file carries the detail.
 - 29 — 2026-08-23 — 314156b — local models past their targets play freeplay (`policy.extras.local`), so the inference-bound caveat is a property of the class, not a standing item
 - 53 — 2026-08-23 — 4b82bf9, 4de6da0, 61d683f, 29b33ba — the evidence was one `reclaimCorpse` call (attempts: 10) from 387y, later reclaimed by walking back; the gap was information: the module now asks `MSG_CORPSE_QUERY` on repop like a client, `state.self.corpse`/`graveyard`/`reclaimDelay`, `not_reclaimed` names one reason (too_far with distance, delay_not_elapsed, wrong_map, no_corpse), the ghost HUD line states both options and the healer's cost; module in `:next`, smoke pending deploy
 - 54 — 2026-08-23 — 61d683f — the prompt's sleep line carries a worked wake-reason example (pre-v1 prompt tuning ships as a patch)
+- 50 — 2026-08-23 — see the day file — worn-bag contents decoded (`numSlots`, `bagSlot<n>Lo/Hi`), `bag()` spans backpack + worn bags with `totalSlots`/`bags`, HUD total across bags, `items` state column on the run and map pages; module in `:next`, `infra/smoke/inventory.ts` pending deploy. Items 57/58 unchanged
 - 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66

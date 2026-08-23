@@ -9,6 +9,13 @@ import {
   auraUpdate,
   auraUpdateAll,
   BACKPACK_SLOT,
+  BAG_SLOT,
+  BAG_GUID,
+  BAG_NUM_SLOTS,
+  BAGGED_GUID,
+  wornBagSlot,
+  wornBagCreate,
+  wornBagQuery,
   chatEcho,
   inventorySlot,
   ITEM_ENTRY,
@@ -736,9 +743,34 @@ describe("state cache: self progress, target and inventory", () => {
         itemId: ITEM_ENTRY,
         name: "Gritstone Charm",
         count: 5,
+        quality: 1,
       },
     ]);
     expect(bag.freeSlots).toBe(15);
+    expect(bag.totalSlots).toBe(16);
+    expect(bag.bags).toEqual([]);
+  });
+
+  test("bag() spans a worn bag: container slots joined, addressed by the bag's equip slot", () => {
+    const cache = withWorld([inventorySlot, itemCreate, itemQuery, wornBagSlot, wornBagCreate, wornBagQuery]);
+    const bag = cache.bag();
+    expect(bag.bags).toEqual([{ slot: BAG_SLOT, numSlots: BAG_NUM_SLOTS, name: "Small Brown Pouch" }]);
+    expect(bag.totalSlots).toBe(16 + BAG_NUM_SLOTS);
+    expect(bag.items.map((i) => [i.bag, i.slot, i.guid, i.name, i.count])).toEqual([
+      [255, BACKPACK_SLOT, ITEM_GUID, "Gritstone Charm", 5],
+      [BAG_SLOT, 2, BAGGED_GUID, "Gritstone Charm", 2],
+    ]);
+    expect(bag.freeSlots).toBe(16 + BAG_NUM_SLOTS - 2);
+    // The bag itself is equipment (slot 19), never a carried item.
+    expect(bag.items.some((i) => i.guid === BAG_GUID)).toBe(false);
+    expect(cache.inventory.find((i) => i.slot === BAG_SLOT)?.name).toBe("Small Brown Pouch");
+  });
+
+  test("a worn bag whose create block has not arrived adds no slots", () => {
+    const bag = withWorld([wornBagSlot]).bag();
+    expect(bag.bags).toEqual([{ slot: BAG_SLOT, numSlots: 0, name: undefined }]);
+    expect(bag.totalSlots).toBe(16);
+    expect(bag.freeSlots).toBe(16);
   });
 
   test("bag() reports an unjoined slot as occupied, and equipment stays out", () => {
@@ -750,7 +782,7 @@ describe("state cache: self progress, target and inventory", () => {
     expect(bag.items[0]?.itemId).toBeUndefined();
     expect(bag.freeSlots).toBe(15);
     // No inventory fields at all: nothing occupied has been observed.
-    expect(withWorld([]).bag()).toEqual({ items: [], freeSlots: 16 });
+    expect(withWorld([]).bag()).toEqual({ items: [], freeSlots: 16, totalSlots: 16, bags: [] });
   });
 
   test("a zeroed slot is empty, not an item with guid 0", () => {

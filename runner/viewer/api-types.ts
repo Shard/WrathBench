@@ -156,10 +156,22 @@ export interface RunRow {
   /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
   money: number | null;
   questsCompleted: number | null;
+  /**
+   * What the character wears and carries, from the newest state sample that
+   * recorded it (FOLLOW-UPS 50). Null on runs that predate the `items` column.
+   */
+  items: ItemSample[] | null;
   mtime: number | null;
   bytes: number | null;
   live: boolean;
   error?: string;
+}
+
+/** One item on a state sample: a client-cache name, its stack count, worn or carried. */
+export interface ItemSample {
+  name: string;
+  count: number;
+  equipped: boolean;
 }
 
 /** One `state` sample. Every field but `ts` may be absent from a given sample. */
@@ -365,6 +377,8 @@ export interface AgentPosition {
   xp: number | null;
   money: number | null;
   questsCompleted: number | null;
+  /** The newest recorded inventory; see `RunRow.items`. */
+  items: ItemSample[] | null;
   harnessVersion: string | null;
 }
 

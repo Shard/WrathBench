@@ -25,7 +25,7 @@ function runRow(over: Partial<RunRow> = {}): RunRow {
     className: "Paladin", characterLabel: "Human Paladin", platform: "p", apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,
     terminationDetail: null, pauseReason: null, level: null, xp: null, money: null,
-    questsCompleted: null, mtime: null, bytes: null, live: false,
+    questsCompleted: null, items: null, mtime: null, bytes: null, live: false,
     ...over,
   };
 }

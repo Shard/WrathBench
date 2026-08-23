@@ -10,7 +10,7 @@ import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } 
 import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import { toJsonSafe } from "../src/jsonsafe";
-import { runLoop } from "../src/loop";
+import { itemSample, runLoop } from "../src/loop";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
@@ -385,5 +385,36 @@ describe("runLoop", () => {
       expect(req.tools.map((t) => t.name)).toContain("run_snippet");
     }
     options.trajectory.close();
+  });
+});
+
+describe("itemSample", () => {
+  test("worn from inventory slots 0-18, carried from bag(), names with counts", () => {
+    const sample = itemSample({
+      inventory: [
+        { slot: 16, name: "Worn Mace", stackCount: 1 },
+        { slot: 19, name: "Small Brown Pouch" }, // a worn bag: neither equipment nor carried
+        { slot: 23, name: "Hearthstone" }, // backpack rows come from bag(), not here
+        { slot: 4, itemId: 6125 }, // no name answered yet
+      ],
+      bag: {
+        freeSlots: 20,
+        totalSlots: 22,
+        items: [
+          { slot: 23, itemId: 6948, name: "Hearthstone", count: 1 },
+          { slot: 0, itemId: 2589, name: "Linen Cloth", count: 3 },
+        ],
+      },
+    });
+    expect(sample).toEqual([
+      { name: "Worn Mace", count: 1, equipped: true },
+      { name: "item 6125", count: 1, equipped: true },
+      { name: "Hearthstone", count: 1, equipped: false },
+      { name: "Linen Cloth", count: 3, equipped: false },
+    ]);
+  });
+
+  test("a snapshot with no inventory at all records nothing", () => {
+    expect(itemSample({})).toBeUndefined();
   });
 });

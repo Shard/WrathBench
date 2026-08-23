@@ -51,6 +51,8 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       xp: p.xp,
       money: p.money,
       questsCompleted: p.questsCompleted,
+      // Track points carry no inventory; the replay popout shows none.
+      items: null,
       harnessVersion: track.harnessVersion,
     },
   ];

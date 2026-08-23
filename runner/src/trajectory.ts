@@ -51,6 +51,20 @@ export interface StateLine {
   zone?: number | undefined;
   /** Area (subzone) id from the state cache (`self.area`). */
   area?: number | undefined;
+  /**
+   * What the character carries and wears (FOLLOW-UPS 50): names and counts
+   * from the state cache's item queries, `equipped` for inventory slots 0-18,
+   * carried rows from `state.bag()` across every bag. Omitted when the
+   * snapshot had no inventory at all.
+   */
+  items?: ItemSample[] | undefined;
+}
+
+/** One item on a state sample. Client-cache names only, as the HUD shows them. */
+export interface ItemSample {
+  name: string;
+  count: number;
+  equipped: boolean;
 }
 
 /**
@@ -189,6 +203,8 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
 const STATE_ADDED_COLUMNS: Record<string, string> = {
   zone: "INTEGER",
   area: "INTEGER",
+  // JSON `ItemSample[]` (FOLLOW-UPS 50); NULL when the sample carried none.
+  items: "TEXT",
 };
 
 export class Trajectory {
@@ -269,8 +285,8 @@ export class Trajectory {
     this.append({ t: "state", ...s });
     this.db
       .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -288,6 +304,7 @@ export class Trajectory {
         s.turn ?? null,
         s.zone ?? null,
         s.area ?? null,
+        s.items === undefined ? null : JSON.stringify(s.items),
       );
   }
 
