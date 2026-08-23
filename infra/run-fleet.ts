@@ -417,6 +417,14 @@ const REPO_ROOT = dirname(import.meta.dir);
 const RUNS_DIR = join(REPO_ROOT, "data", "runs");
 const ROSTER_SH = join(REPO_ROOT, "infra", "run-roster.sh");
 const STATE_PATH = join(RUNS_DIR, "fleet-state.json");
+/**
+ * The deploy window's phase file (infra/deploy-worldserver.sh): what the
+ * viewer's /api/fleet serves as `server`. The script holds an flock on the
+ * `.lock` sibling for its lifetime; a phase found here with the lock FREE was
+ * left by a deploy that did not finish, and this process is what clears it.
+ */
+const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
+const SERVER_STATE_LOCK = join(RUNS_DIR, "server-state.lock");
 
 // ------------------------------------------------------------------ parsing
 
@@ -2111,9 +2119,10 @@ interface FleetState {
   /**
    * Set while a preflight sequence is running against `identity`. The gate
    * record itself is only written when the sequence ends, so this is how an
-   * outside observer (deploy-worldserver.sh) tells "smoking now, wait for the
-   * verdict" from "not gating at all" without racing a second smoke onto the
-   * same account.
+   * outside observer tells "smoking now, wait for the verdict" from "not
+   * gating at all" without racing a second smoke onto the same account. (The
+   * deploy script no longer reads it — it stops the fleet for the window — but
+   * --status does.)
    */
   preflightInFlight?: { identity: string; since: number };
   stamp: string;
@@ -2327,6 +2336,65 @@ function writeState(
   writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n");
 }
 
+// ------------------------------------------------------------ server state
+
+/** The phases the deploy script writes while it holds the lock; `running` is the rest state. */
+export type ServerPhase = "running" | "draining" | "swapping" | "verifying" | "resuming" | "rolled-back" | "failed";
+/** Phases that mean a deploy is in progress RIGHT NOW — meaningless once nothing holds the lock. */
+const WINDOW_PHASES: ReadonlySet<string> = new Set(["draining", "swapping", "verifying", "resuming"]);
+
+interface ServerState {
+  phase: ServerPhase;
+  since: number;
+  build: string;
+  prevBuild?: string;
+  detail: string;
+  pid?: number;
+  updatedAt: number;
+}
+
+/** True when no deploy holds the lock (flock -n succeeds). Unknown is "held": never clear what might be live. */
+function deployLockFree(): boolean {
+  try {
+    return Bun.spawnSync(["flock", "-n", SERVER_STATE_LOCK, "true"]).exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write `running` over a phase the deploy script left behind. On boot any
+ * phase goes (a `rolled-back` or `failed` notice has been on the page until
+ * now; the restart is the operator's acknowledgement); on a tick only a WINDOW
+ * phase goes, because those claim a deploy is in progress and, with the lock
+ * free, none is — while a terminal verdict stays up until the next boot.
+ */
+function reclaimServerState(where: "boot" | "tick"): void {
+  if (!existsSync(SERVER_STATE_PATH)) return;
+  let prev: ServerState;
+  try {
+    prev = JSON.parse(readFileSync(SERVER_STATE_PATH, "utf8")) as ServerState;
+  } catch {
+    return;
+  }
+  if (prev.phase === "running") return;
+  if (where === "tick" && !WINDOW_PHASES.has(prev.phase)) return;
+  if (!deployLockFree()) return;
+  const next: ServerState = {
+    phase: "running",
+    since: Date.now(),
+    build: prev.build ?? "",
+    ...(prev.prevBuild !== undefined ? { prevBuild: prev.prevBuild } : {}),
+    detail:
+      `supervisor ${where === "boot" ? "started" : "ticked"} with the phase "${prev.phase}" on file and no deploy holding the lock` +
+      (WINDOW_PHASES.has(prev.phase) ? " (that deploy did not finish)" : "") +
+      ` — was: ${prev.detail}`,
+    updatedAt: Date.now(),
+  };
+  writeFileSync(SERVER_STATE_PATH, JSON.stringify(next, null, 2) + "\n");
+  say(`server-state: phase ${prev.phase} -> running (${next.detail})`);
+}
+
 // ------------------------------------------------------------------ status
 
 function lastLaunchedRunId(stdoutLog: string): string | undefined {
@@ -2413,10 +2481,11 @@ function jobDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
 }
 
 /**
- * Live episodes across every job account, for scripts that must not run while
- * the world is busy (infra/deploy-worldserver.sh). Same signal --status shows:
- * the roster's own account-busy inference over the trajectory stores. Exit code
- * carries the answer so bash never parses this text.
+ * Live episodes across every job account, for an operator (or a script) that
+ * wants to know whether the world is busy. Same signal --status shows: the
+ * roster's own account-busy inference over the trajectory stores. Exit code
+ * carries the answer so bash never parses this text. The deploy script does
+ * not use it any more: it stops the fleet for its window (runs pause).
  */
 function printLiveRuns(configPath: string): number {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
@@ -2933,6 +3002,7 @@ async function main(): Promise<void> {
   }
 
   fleetLog = join(RUNS_DIR, `fleet-${stampToday}.jsonl`);
+  reclaimServerState("boot");
   const procs = new Map<string, JobProc>();
   const sets: JobSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
@@ -3355,6 +3425,7 @@ async function main(): Promise<void> {
       continue;
     }
 
+    reclaimServerState("tick");
     // Re-read the config: the operator's tuning knob. Unconditionally, every
     // tick — mtime gating would add a second way for an edit to go silently
     // unapplied, which is the failure this whole path exists to make loud.

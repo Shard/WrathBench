@@ -193,7 +193,10 @@ CMD ["authserver"]
 ##############################################
 
 FROM runtime AS worldserver
-LABEL description="WrathBench AzerothCore World Server + mod-wrathbench"
+# The build stamp the module serves on /health, also on the image so
+# infra/deploy-worldserver.sh can name a build before it boots.
+ARG WRATHBENCH_BUILD=""
+LABEL description="WrathBench AzerothCore World Server + mod-wrathbench" wrathbench.build="${WRATHBENCH_BUILD}"
 
 ENV ACORE_COMPONENT=worldserver
 ENV AC_UPDATES_ENABLE_DATABASES=0
