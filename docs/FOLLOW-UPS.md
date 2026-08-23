@@ -128,6 +128,17 @@ and status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
+58. **The gate's fixture characters accumulate what a fixture cannot clear**
+    (2026-08-23, from the kill-credit fixture conversion). `Smokekc` is now
+    persistent and loots a kobold corpse every tick, into a 16-slot backpack that
+    `infra/fixtures/scenarios.ts` deliberately refuses to touch (item 57: item guids
+    are not safe to write from outside). Durability drifts down on the same clock.
+    Neither bites for days — the observed loot is 0–1 items and a copper per run —
+    but a full bag makes `loot_all` stop proving what the smoke says it proves, and
+    the failure will read as a loot bug. Cheapest honest fixes: have the smoke sell
+    or destroy through the module before logout, or rotate the character. Do it when
+    the gate first fails on loot, or before leaving the fleet unattended for a week.
+
 ## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
