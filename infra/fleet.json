@@ -87,7 +87,7 @@
     "extras": { "local": "freeplay" }
   },
   "queue": [
-    { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": "loop", "enabled": true },
+    { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": 1, "enabled": true },
     { "ref": ["sub-opus", "sub-opus-low"], "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
   ]
 }
