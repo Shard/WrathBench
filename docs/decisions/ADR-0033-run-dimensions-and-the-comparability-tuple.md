@@ -85,7 +85,8 @@ presence, `wikiCoords`. Rules that follow from "stamped, never recomputed":
 - The tuple shape is declared twice — zod in the runner, structurally in the
   import-free viewer types (ADR-0022) — and a type-level test fails if they drift.
 - Changing a tier's definition, the prompt, or a dimension's default is a harness
-  boundary. Adopting `e90` meant moving watchdog defaults to 20m/20m; the first
-  stamped run is the first `e90` member.
+  boundary. `--episode e90` pins the 20m/20m watchdogs; the flagless defaults
+  (10m/45m) are unchanged (FOLLOW-UPS 48g). The first stamped run is the first
+  `e90` member.
 - Long-running lanes materialize their roster at spawn, so a changed dimension
   reaches only new episodes.
