@@ -209,6 +209,7 @@ function Detail(props: { row: ModelRowView }) {
             <tr>
               <th>run</th>
               <th>episode</th>
+              <th title="the starting character this run was launched on (ADR-0034's extras cycle)">character</th>
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
@@ -228,6 +229,8 @@ function Detail(props: { row: ModelRowView }) {
                     {r.episode}
                     <Show when={r.episodeOverride}> (overridden)</Show>
                   </td>
+                  {/* Extras cycle through races and classes; the baseline is Human Paladin. */}
+                  <td class="dim">{r.characterLabel ?? "—"}</td>
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>
                   <td class="right mono dim">{fmtDuration(r.durationMs)}</td>

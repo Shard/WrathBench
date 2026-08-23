@@ -268,7 +268,13 @@ function RunRowView(props: { row: RunListRow; now: number }) {
           <span class="warn" title={r().objective ?? ""}>objective</span>
         </Show>
       </td>
-      <td class="dim">{r().character ?? "—"}</td>
+      <td class="dim" title={r().characterLabel ?? "race and class not recorded for this run"}>
+        {r().character ?? "—"}
+        <Show when={r().characterLabel !== null}>
+          {" "}
+          <span class="dim">({r().characterLabel})</span>
+        </Show>
+      </td>
       <td class="right mono">{num(r().level)}</td>
       <td class="right mono">{num(r().xp)}</td>
       <td class="right mono">{fmtMoney(r().money)}</td>

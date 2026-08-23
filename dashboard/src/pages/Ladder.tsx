@@ -17,7 +17,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type EvalResponse, type EvalRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
-import { RUNGS, ladderRows, scored, type LadderCell } from "../lib/eval";
+import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell } from "../lib/eval";
 import { poll } from "../lib/poll";
 
 const POLL_MS = 30_000;
@@ -35,7 +35,16 @@ export default function Ladder() {
   const feed = poll(() => api.ladder(episode(), overrides(), stillborn(), harness()), POLL_MS);
   createEffect(on([episode, overrides, stillborn, harness], () => feed.refresh(), { defer: true }));
   const body = (): EvalResponse | undefined => feed.latest;
-  const runs = (): EvalRun[] => body()?.runs ?? [];
+  const all = (): EvalRun[] => body()?.runs ?? [];
+  /*
+   * The starting character (ADR-0034's extras cycle) narrows the rungs; it is
+   * never a row key. A model's row is its best run whatever it was played on,
+   * because the baseline character is the comparison set.
+   */
+  const character = (): string | null =>
+    typeof params.character === "string" && params.character.length > 0 ? params.character : null;
+  const characters = createMemo(() => characterOptions(all()));
+  const runs = (): EvalRun[] => byCharacter(all(), character());
   const rows = createMemo(() => ladderRows(runs()));
   const best = createMemo(() => rows().reduce((n, r) => Math.max(n, r.highest), 0));
 
@@ -61,6 +70,29 @@ export default function Ladder() {
         onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
       <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
+
+      <Show when={characters().length > 0}>
+        <div class="chips">
+          <button class={character() === null ? "on" : ""} onClick={() => setParams({ character: null }, { replace: true })}>
+            all characters
+          </button>
+          <For each={characters()}>
+            {(c) => (
+              <button
+                class={character() === c ? "on" : ""}
+                onClick={() => setParams({ character: character() === c ? null : c }, { replace: true })}
+              >
+                {c}
+              </button>
+            )}
+          </For>
+        </div>
+        <p class="dim">
+          Race and class filter and label the rows; they are not a group key. The baseline character
+          (Human Paladin) is the comparison set — an extras run on another character (ADR-0034)
+          counts toward its model's row unless one character is picked here.
+        </p>
+      </Show>
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <EpisodeFilterNote
@@ -94,6 +126,7 @@ export default function Ladder() {
               <tr>
                 <th>model</th>
                 <th>harness</th>
+                <th title="starting race and class among this model's scored runs">character</th>
                 <th class="right">runs</th>
                 <th class="right">highest</th>
                 <For each={RUNGS}>
@@ -113,6 +146,13 @@ export default function Ladder() {
                     <td>
                       <For each={row.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
                     </td>
+                    <td class="dim" title={row.characters.join(", ")}>
+                      {row.characters.length === 0
+                        ? "—"
+                        : row.characters.length === 1
+                          ? row.characters[0]
+                          : `${row.characters.length} characters`}
+                    </td>
                     <td class="right mono dim">{row.runs}</td>
                     <td class="right mono">{row.highest === 0 ? "—" : row.highest}</td>
                     <For each={row.cells}>{(cell) => <RungCell cell={cell} />}</For>
@@ -121,7 +161,7 @@ export default function Ladder() {
               </For>
               <Show when={rows().length === 0}>
                 <tr>
-                  <td colSpan={4 + RUNGS.length} class="dim">
+                  <td colSpan={5 + RUNGS.length} class="dim">
                     No scorable runs recorded yet.
                   </td>
                 </tr>

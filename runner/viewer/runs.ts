@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
+import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./stillborn";
 import { harnessOfRun, normalizePauseReason, parseComparability } from "../src/index";
 import { normalizeDriver, readUnscoredStamp } from "../src/config";
@@ -65,6 +66,8 @@ interface MetaShape {
     driver?: string;
     adapter?: string;
     character?: string;
+    race?: number;
+    class?: number;
     apiBase?: string;
     objective?: string;
   };
@@ -139,6 +142,11 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     extra: false,
     comparability: null,
     character: null,
+    race: null,
+    raceName: null,
+    class: null,
+    className: null,
+    characterLabel: null,
     platform: null,
     apiBase: null,
     harnessVersion: null,
@@ -168,6 +176,16 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.driver = str(meta.config?.driver) ?? str(meta.config?.adapter);
     row.adapter = str(meta.config?.adapter);
     row.character = str(meta.config?.character);
+    /*
+     * Race and class are config, not comparability: they are read here beside
+     * the character name and nothing recomputes or back-labels them. A run
+     * written before the fields existed keeps null.
+     */
+    row.race = num(meta.config?.race);
+    row.class = num(meta.config?.class);
+    row.raceName = raceName(row.race);
+    row.className = className(row.class);
+    row.characterLabel = characterLabel(row.race, row.class);
     row.apiBase = str(meta.config?.apiBase);
     /*
      * Validated, not trusted: meta.json is written by whatever build launched
