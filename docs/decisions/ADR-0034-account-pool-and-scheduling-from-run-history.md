@@ -243,3 +243,40 @@ read of any of them — a file that still says so is refused by name, with the
 message naming the 0.4 keys. Per-job files keep their pattern
 (`fleet-<job>-<stamp>.{roster.json,jsonl,log}`); the per-job jsonl record's
 key is `job`. Older worklogs and ADR bodies keep the word as history.
+
+## Amendment 2026-08-23: local extras are freeplay
+
+Extras were one thing: a free model past its targets takes another run of a
+scored tier with the next race/class in the cycle. For the local class that is
+the wrong extra. The LM Studio box is inference-bound — its wall clock is
+mostly the box thinking, not the model deciding — so a fourth and fifth `e90`
+buy nothing a speed comparison could honestly use. What a local model can give
+that nothing else can is *duration*: it costs no money and no shared quota, so
+it can simply keep playing.
+
+So the local class's extra is a **freeplay** episode: one at a time, unbounded
+(the tier caps no wall clock), the roster entry's own starting character, and
+freeplay's watchdogs as they stand today. When the run ends — death spiral,
+idle watchdog, operator — the next tick starts another. It is stamped
+`extra: true` like any other extra, so it is an attempt, is reported apart on
+the Models and Episodes pages under `freeplay`, and is never counted toward an
+`e90`/`e360` target or as a promotion witness. Scheduled runs still come first:
+counting is series-keyed, so a new harness minor re-arms the `e90` (and `e360`
+if promoted) targets, and freeplay only resumes once they are met again.
+
+It is a knob, not a fact about the class: `policy.extras.local` is `"freeplay"`
+(the default) or `"characters"`, the race/class cycle the free models run. One
+concept either way — an extra is still "a run past the target, never counted";
+only what the extra *is* changes. The pick carries no character, and the
+question "is this job an extra" is `isExtraJob` in `infra/run-fleet.ts`: a
+policy job that either rolls a character or is a freeplay pick. Nothing else
+schedules freeplay, so the two spellings cannot collide, and a manual freeplay
+job (the navigation probe) is not an extra because it has no attempt number.
+
+One consequence worth naming: the projection now keeps stats for `freeplay`
+alongside the scored tiers, with a target of zero. It has to — run ids carry a
+date stamp and an attempt number, so two freeplay extras in one day need real
+attempt numbers to stay distinct on disk — and it is also what puts the freeplay
+extras in the Models page's extras column. Eligibility and promotion are
+unchanged: `freeplay` is never in `eligible`, and only a counted `e90` run
+promotes.

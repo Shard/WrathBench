@@ -17,6 +17,9 @@
     "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <driver>: n } caps streams per driver.",
     "  Optional (ADR-0034 amendment 2026-08-23; absent = off): paid { runsPerEpisode {e90 3, e360 1}, maxConcurrent 1 } gives paid models",
     "  hard targets and one-in-flight; extras { characters [{race,class}...] } gives free models extra runs when the pool is idle.",
+    "  extras.local says how the LOCAL class takes its extras: \"freeplay\" (default) is one unbounded freeplay run at a time, restarted",
+    "  when it ends — the box is inference-bound, so speed comparisons are meaningless but a model that keeps playing is long-horizon",
+    "  data; \"characters\" puts it on the same race/class cycle the free models run. Either way an extra never counts toward e90/e360.",
     "  Billing is derived (free slug / LAN / claude-code / allowlist -> free; else paid); roster.<name>.billing overrides.",
     "  Counting keys on the harness SERIES (major.minor) of the running checkout; other series are shown, not counted.",
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
@@ -81,7 +84,7 @@
     "runsPerEpisode": {"e90": 3, "e360": 3},
     "maxConcurrent": {"claude-code": 2},
     "paid": {"runsPerEpisode": {"e90": 3, "e360": 1}, "maxConcurrent": 1},
-    "extras": {}
+    "extras": { "local": "freeplay" }
   },
   "queue": [
     { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": "loop", "enabled": true },

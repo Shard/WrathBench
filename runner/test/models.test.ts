@@ -17,6 +17,7 @@ import {
   planNextJobs,
   DEFAULT_PAID,
   DEFAULT_EXTRA_CHARACTERS,
+  DEFAULT_LOCAL_EXTRAS,
   type SchedulingPolicy,
   parseModelsSidecar,
   projectModel,
@@ -26,6 +27,7 @@ import {
   type RosterModel,
   type RunFact,
 } from "../src/models";
+import type { EpisodeId } from "../src/episodes";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -386,7 +388,7 @@ describe("nextJobs", () => {
 });
 
 describe("paid and free (ADR-0034 amendment)", () => {
-  const good = (model: string, ep: "e90" | "e360", i: number, level = 3, extra = false): RunFact => ({
+  const good = (model: string, ep: EpisodeId, i: number, level = 3, extra = false): RunFact => ({
     runId: `${model}-${ep}-${i}`,
     model,
     effort: null,
@@ -405,7 +407,7 @@ describe("paid and free (ADR-0034 amendment)", () => {
     account: null,
     episodeMs: null,
   });
-  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: { characters: [...DEFAULT_EXTRA_CHARACTERS] } };
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: { characters: [...DEFAULT_EXTRA_CHARACTERS], local: DEFAULT_LOCAL_EXTRAS } };
   const st = (r: RosterModel, runs: RunFact[], p = policy) => projectModel(r, runs, p, { now: NOW });
 
   test("billing is derived once: slug, LAN, subscription, allowlist, override", () => {
@@ -501,9 +503,53 @@ describe("paid and free (ADR-0034 amendment)", () => {
       good("qwen/q", "e360", 5),
       good("qwen/q", "e360", 6),
     ]);
-    const extras = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
+    const chars: SchedulingPolicy = { ...policy, extras: { characters: [...policy.extras!.characters], local: "characters" } };
+    const extras = planNextJobs([met], ["R1"], new Set(), { policy: chars, classAccounts: { local: ["BOX"] } });
     expect(extras.jobs.map((j) => [j.name, j.account, j.extra !== undefined])).toEqual([["l1", "BOX", true]]);
+    expect(planNextJobs([met], ["R1"], new Set(), { policy: chars, classAccounts: { local: [] } }).jobs).toEqual([]);
+  });
+
+  test("local extras are freeplay by default: one unbounded run at a time, on the box, never counted", () => {
+    const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1" };
+    // Targets met on e90 only: unpromoted (no counted run reached L5), so e360 is not open.
+    const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
+    expect(met.eligible).toEqual(["e90"]);
+    const v = schedulability(met, new Set(), policy);
+    expect(v).toMatchObject({ ok: false, extras: true });
+    expect(v.why).toContain("freeplay extras");
+    const plan = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "BOX", undefined]]);
+    expect(plan.jobs[0]!.why).toContain("freeplay");
+    // Never on a pool account, and one at a time: a running model is not picked again.
     expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
+    expect(planNextJobs([met], ["R1"], new Set(["l1"]), { policy, classAccounts: { local: ["BOX"] } }).jobs).toEqual([]);
+    // Freeplay runs are attempts, never counted, and they number the next one.
+    const after = st(local, [
+      good("qwen/q", "e90", 1, 3),
+      good("qwen/q", "e90", 2, 4),
+      good("qwen/q", "e90", 3, 2),
+      good("qwen/q", "freeplay", 4, 5, true),
+    ]);
+    expect(after.perEpisode.freeplay).toMatchObject({ counted: 0, attempts: 1, extras: 1, target: 0 });
+    expect(after.perEpisode.e90!.counted).toBe(3);
+    expect(after.eligible).toEqual(["e90"]);
+    const next = planNextJobs([after], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs[0]!;
+    expect(next).toMatchObject({ episode: "freeplay", attempt: 2, account: "BOX" });
+    expect(next.why).toContain("extra #2");
+    // A new harness series re-arms the scheduled runs first, freeplay after.
+    const series = { ...policy, series: "0.5" };
+    const rearmed = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "freeplay", 2, 5, true)], series);
+    expect(rearmed.perEpisode.e90).toMatchObject({ counted: 0, otherSeries: 1 });
+    expect(planNextJobs([rearmed], [], new Set(), { policy: series, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
+      episode: "e90",
+      account: "BOX",
+    });
+    // The knob puts the box back on the character cycle.
+    const cycle: SchedulingPolicy = { ...policy, extras: { characters: [...policy.extras!.characters], local: "characters" } };
+    expect(planNextJobs([met], [], new Set(), { policy: cycle, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
+      episode: "e90",
+      extra: policy.extras!.characters[0]!,
+    });
   });
 
   test("extras: free models past their targets get lowest-priority runs, cycling characters; e360 extras only when promoted", () => {
@@ -538,7 +584,7 @@ describe("paid and free (ADR-0034 amendment)", () => {
     // No extras policy: nothing.
     expect(planNextJobs([allMet], ["R1"], new Set(), { policy: { ...policy, extras: null } }).jobs).toEqual([]);
     // An extra is a free model's run and only ever lands on a free account.
-    expect(planNextJobs([allMet], [], new Set(), { policy, paidAccounts: ["PAID"] }).jobs).toEqual([]);
-    expect(planNextJobs([allMet], ["R1"], new Set(), { policy, paidAccounts: ["PAID"] }).jobs.map((j) => j.account)).toEqual(["R1"]);
+    expect(planNextJobs([allMet], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
+    expect(planNextJobs([allMet], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs.map((j) => j.account)).toEqual(["R1"]);
   });
 });

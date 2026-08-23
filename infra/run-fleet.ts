@@ -100,6 +100,8 @@ import {
   rosterClass,
   schedulability,
   serializeModelsSidecar,
+  extrasSoFar,
+  STATS_EPISODES,
   type AccountClass,
   type HeldPick,
   type ModelState,
@@ -264,9 +266,11 @@ export interface FleetJob {
    */
   attempt?: number;
   /**
-   * Set on an extra run (ADR-0034): a policy pick past the model's target,
-   * rolling this character. Reaches the runner as `--race/--class` plus
-   * `--extra true`, so the run is stamped and never counted.
+   * Set on an extra run that rolls a character (ADR-0034): a policy pick past
+   * the model's target on a scored tier. Reaches the runner as `--race/--class`
+   * plus `--extra true`, so the run is stamped and never counted. A local
+   * model's extra is a freeplay run and rolls nothing — `isExtraJob` is the
+   * question "is this an extra", this field is only "which character".
    */
   extra?: StartingCharacter;
   /**
@@ -920,6 +924,20 @@ export function policyJob(pick: NextJob): FleetJob {
   };
 }
 
+/**
+ * Whether a job is an extra run — a policy pick past the model's targets, which
+ * the runner stamps `extra: true` so the projection never counts it.
+ *
+ * Two shapes, one question. A scored-tier extra carries the character it rolls;
+ * a local model's extra is a freeplay pick with no character, and a freeplay
+ * pick can only ever come from the extras path because no episode target names
+ * `freeplay`. `attempt` is what makes the job the policy's: a manual freeplay
+ * job (the nav probe) is not an extra.
+ */
+export function isExtraJob(job: Pick<FleetJob, "episode" | "extra" | "attempt">): boolean {
+  return job.attempt !== undefined && (job.extra !== undefined || job.episode === "freeplay");
+}
+
 /** One policy pick, placed. */
 export interface PolicyPick {
   job: FleetJob;
@@ -1063,8 +1081,10 @@ export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>
       ...dims,
       watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
       ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
-      // An extra run rolls the policy's character and is stamped as an extra.
-      ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class, extra: true } : {}),
+      // An extra run is stamped as one; a scored-tier extra also rolls the
+      // policy's character, where a freeplay extra keeps the entry's own.
+      ...(isExtraJob(job) ? { extra: true } : {}),
+      ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class } : {}),
     };
     const runId =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}` +
@@ -1813,7 +1833,7 @@ export interface JobRow {
   planned?: boolean;
   /** The policy's attempt number, for a policy job. */
   attempt?: number;
-  /** An extra run (ADR-0034), with the character it rolls. */
+  /** A scored-tier extra run (ADR-0034), with the character it rolls; a freeplay extra rolls none. */
   extra?: StartingCharacter;
   /**
    * The job is running on an account of another class (it was scheduled before
@@ -1854,7 +1874,9 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
       continue;
     }
     const j = r.job;
-    const what = `${j.name}: ${j.models.join("+")} ${j.episode}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}${j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : ""}`;
+    const what =
+      `${j.name}: ${j.models.join("+")} ${j.episode}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}` +
+      `${isExtraJob(j) ? (j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : " extra") : ""}`;
     if (j.planned === true) {
       out.push(`${head}${what} — would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`);
       continue;
@@ -1887,7 +1909,7 @@ export function formatModels(
   const out: string[] = [
     `models: ${states.length} in roster (policy: ADR-0034; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${policy.paid !== null ? `; paid ${policy.paid.runsPerEpisode.e90}/${policy.paid.runsPerEpisode.e360}, at most ${policy.paid.maxConcurrent} in flight` : "; no paid/free split"}` +
-      `${policy.extras !== null ? `; extras cycle ${policy.extras.characters.length} character(s)` : "; no extras"})`,
+      `${policy.extras !== null ? `; extras cycle ${policy.extras.characters.length} character(s), local: ${policy.extras.local}` : "; no extras"})`,
     `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
@@ -1898,9 +1920,11 @@ export function formatModels(
   };
   for (const s of states) {
     const ex = excluded.get(s.name);
-    const last = (["e90", "e360"] as const).map((ep) => s.perEpisode[ep]!).filter((st) => st.lastEnded !== null).sort((a, b) => b.lastEnded! - a.lastEnded!)[0];
+    // Freeplay is in the walk: a local model past its targets has nothing but
+    // freeplay extras, and "last ... never" would be wrong about it.
+    const last = STATS_EPISODES.map((ep) => s.perEpisode[ep]).filter((st) => st !== undefined && st.lastEnded !== null).sort((a, b) => b!.lastEnded! - a!.lastEnded!)[0];
     const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${v.ok ? "yes" : "no"}: ${v.why}`)(schedulability(s, running, policy));
-    const extras = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
+    const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
       `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
@@ -2436,7 +2460,13 @@ function printStatus(configPath: string): void {
         })
       : { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
-    const row: JobRow = { name, models: j.models.length > 0 ? j.models : [j.ref], episode: j.episode, ...(j.attempt !== undefined ? { attempt: j.attempt } : {}) };
+    const row: JobRow = {
+      name,
+      models: j.models.length > 0 ? j.models : [j.ref],
+      episode: j.episode,
+      ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
+      ...(j.extra !== undefined ? { extra: j.extra } : {}),
+    };
     // A job record without its process half was written by another build of
     // the supervisor: say so rather than render NaN. The restart rewrites it.
     if (typeof j.pid !== "number" || typeof j.spawnedAt !== "number") {
@@ -3048,7 +3078,7 @@ async function main(): Promise<void> {
         const key = `${job.name}:${job.attempt}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
-          const tag = job.extra !== undefined ? " (extra)" : "";
+          const tag = isExtraJob(job) ? " (extra)" : "";
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
