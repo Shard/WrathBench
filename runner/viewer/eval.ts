@@ -19,6 +19,7 @@
 import { SHAKEOUT_DRIVERS } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type { EpisodeIdView, EvalRun, LevelMark, RunRow, StatePoint, TrackPoint } from "./api-types";
+import { isStillborn } from "./stillborn";
 import type { ActiveSegment } from "./tail";
 
 /**
@@ -207,13 +208,27 @@ export function unscoredReason(run: RunRow): string | null {
   return null;
 }
 
+/**
+ * Whether a run never got off the ground.
+ *
+ * One wrapper over `isStillborn` so every reader spells the "could not be
+ * counted" case the same way: a run whose trajectory could not be read is
+ * **not** stillborn. That is deliberate — `data/runs` also holds directories
+ * that were never runs at all (a report folder, say), and a claim that
+ * something never produced a turn has to rest on having looked.
+ */
+export function stillbornOf(run: RunRow, modelResponses: number | null): boolean {
+  if (modelResponses === null) return false;
+  return isStillborn({ modelResponses, live: run.live });
+}
+
 /** Project one run down to what the eval surface reads. */
 export function evalRunOf(
   run: RunRow,
   states: readonly StatePoint[],
   segments: readonly ActiveSegment[],
   /** Counted off the trajectory; omitted when it could not be read. */
-  calls: { toolCalls: number; snippets: number } | null = null,
+  calls: { toolCalls: number; snippets: number; modelResponses: number } | null = null,
 ): EvalRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -229,6 +244,8 @@ export function evalRunOf(
     wikiCoords: run.comparability?.wikiCoords ?? null,
     toolCalls: calls?.toolCalls ?? null,
     snippets: calls?.snippets ?? null,
+    modelResponses: calls?.modelResponses ?? null,
+    stillborn: stillbornOf(run, calls?.modelResponses ?? null),
     episode: ep.episode,
     episodeSource: ep.source,
     episodeOverride: ep.override,

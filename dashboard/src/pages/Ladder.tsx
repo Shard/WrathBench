@@ -26,10 +26,13 @@ export default function Ladder() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const overrides = (): boolean => params.overrides === "1";
+  // Stillborn runs — launches with no model response — are hidden by default;
+  // the choice rides in the URL like the tier does, so a link keeps its meaning.
+  const stillborn = (): boolean => params.stillborn === "1";
   // `/api/ladder` is the same projection as `/api/eval`; the rung rules stay
   // client-side, in `lib/eval.ts`, where their tests are.
-  const feed = poll(() => api.ladder(episode(), overrides()), POLL_MS);
-  createEffect(on([episode, overrides], () => feed.refresh(), { defer: true }));
+  const feed = poll(() => api.ladder(episode(), overrides(), stillborn()), POLL_MS);
+  createEffect(on([episode, overrides, stillborn], () => feed.refresh(), { defer: true }));
   const body = (): EvalResponse | undefined => feed.latest;
   const runs = (): EvalRun[] => body()?.runs ?? [];
   const rows = createMemo(() => ladderRows(runs()));
@@ -52,6 +55,9 @@ export default function Ladder() {
         onChange={(v) => setParams({ episode: v }, { replace: true })}
         includeOverrides={overrides()}
         onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
+        stillborn={body()?.stillbornExcluded ?? 0}
+        includeStillborn={stillborn()}
+        onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
@@ -59,6 +65,8 @@ export default function Ladder() {
           episode={episode()}
           filteredOut={body()?.filteredOut ?? 0}
           overridesExcluded={body()?.overridesExcluded ?? 0}
+          stillborn={body()?.stillbornExcluded ?? 0}
+          includeStillborn={stillborn()}
         />
         <div class="cards">
           <div class="card">

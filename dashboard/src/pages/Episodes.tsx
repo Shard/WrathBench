@@ -101,6 +101,16 @@ export default function Episodes() {
           )}
         </For>
 
+        <Show when={feed.latest!.stillbornExcluded > 0}>
+          <p class="dim">
+            {feed.latest!.stillbornExcluded} stillborn run
+            {feed.latest!.stillbornExcluded === 1 ? "" : "s"} are excluded from every count above.
+            They carry a stamped tuple — it is written before the first request — but never produced
+            a model response, so counting them as membership would claim a group larger than the
+            evidence behind it.
+          </p>
+        </Show>
+
         <h2 class="section">runs that belong to no tier</h2>
         <p class="dim">
           {feed.latest!.untiered} run{feed.latest!.untiered === 1 ? "" : "s"} carry no episode id and

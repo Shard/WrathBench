@@ -44,10 +44,13 @@ export default function Eval() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const overrides = (): boolean => params.overrides === "1";
-  const feed = poll(() => api.eval(episode(), overrides()), POLL_MS);
+  // Stillborn runs — launches with no model response — are hidden by default;
+  // the choice rides in the URL like the tier does, so a link keeps its meaning.
+  const stillborn = (): boolean => params.stillborn === "1";
+  const feed = poll(() => api.eval(episode(), overrides(), stillborn()), POLL_MS);
   // `poll` is a timer, not a reactive computation: a changed filter has to ask
   // for the new data itself.
-  createEffect(on([episode, overrides], () => feed.refresh(), { defer: true }));
+  createEffect(on([episode, overrides, stillborn], () => feed.refresh(), { defer: true }));
   const [level, setLevel] = createSignal<number>(5);
   /*
    * Active time by default. Turns only exist for runs recorded after the turn
@@ -82,6 +85,9 @@ export default function Eval() {
         onChange={(v) => setParams({ episode: v }, { replace: true })}
         includeOverrides={overrides()}
         onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
+        stillborn={body()?.stillbornExcluded ?? 0}
+        includeStillborn={stillborn()}
+        onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
 
       <div class="chips">
@@ -106,6 +112,8 @@ export default function Eval() {
           episode={episode()}
           filteredOut={body()?.filteredOut ?? 0}
           overridesExcluded={body()?.overridesExcluded ?? 0}
+          stillborn={body()?.stillbornExcluded ?? 0}
+          includeStillborn={stillborn()}
         />
         <p class="dim">
           {scored(runs()).length} scorable runs

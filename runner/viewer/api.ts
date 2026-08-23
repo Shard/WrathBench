@@ -29,10 +29,12 @@ import type {
   FleetLaneView,
   FleetResponse,
   RunListRow,
+  RunsResponse,
 } from "./api-types";
-import { evalRunOf, trackFrom } from "./eval";
+import { evalRunOf, stillbornOf, trackFrom } from "./eval";
 import { readPositions } from "./positions";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
+import { isArchiveDir } from "./stillborn";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
 import {
   SEGMENT_MARKS,
@@ -228,7 +230,7 @@ export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { r
   let names: string[];
   try {
     names = readdirSync(runsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && isValidRunId(d.name))
+      .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name))
       .map((d) => d.name);
   } catch {
     return new Map();
@@ -391,7 +393,13 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           row,
           readStates(runsDir, row.runId),
           totals?.segments ?? [],
-          totals === null ? null : { toolCalls: totals.toolCalls, snippets: totals.snippets },
+          totals === null
+            ? null
+            : {
+                toolCalls: totals.toolCalls,
+                snippets: totals.snippets,
+                modelResponses: totals.modelResponses,
+              },
         ),
       );
     }
@@ -416,19 +424,32 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return (EPISODE_IDS as readonly string[]).includes(raw) ? (raw as EpisodeIdView) : null;
   }
 
+  /**
+   * The `?includeStillborn=1` escape hatch, shared by every listing.
+   *
+   * Default off: a run that never produced a model response never got off the
+   * ground (`stillborn.ts`), and showing it as an ordinary row makes a dead
+   * provider look like a fleet at work. It is a filter with a count attached,
+   * never a silent drop — every response carries `stillbornExcluded`.
+   */
+  function includeStillbornFlag(url: URL): boolean {
+    return url.searchParams.get("includeStillborn") === "1";
+  }
+
   async function evalResponse(url: URL): Promise<Response> {
     const episode = episodeFilter(url);
     if (episode === null) {
       return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
     }
     const includeOverrides = url.searchParams.get("includeOverrides") === "1";
+    const includeStillborn = includeStillbornFlag(url);
     const all = await evalRuns();
     /*
      * Filtering to a tier means filtering to its *members* (ADR-0030): stamped
      * with the id and not overridden. A derived label is countable but is not
      * membership, and an overridden run is only shown when asked for by name.
      */
-    const runs =
+    const tiered =
       episode === "all"
         ? all
         : all.filter(
@@ -437,10 +458,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
               r.episodeSource === "stamped" &&
               (includeOverrides || !r.episodeOverride),
           );
+    // Counted before it is applied, so the toggle can name what it would reveal.
+    const stillbornExcluded = tiered.filter((r) => r.stillborn).length;
+    const runs = includeStillborn ? tiered : tiered.filter((r) => !r.stillborn);
     const body: EvalResponse = {
       runs,
       episode,
       includeOverrides,
+      includeStillborn,
+      stillbornExcluded,
       filteredOut: all.length - runs.length,
       overridesExcluded:
         episode === "all" || includeOverrides
@@ -454,7 +480,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   async function episodesResponse(): Promise<Response> {
-    const all = await evalRuns();
+    const everything = await evalRuns();
+    /*
+     * Stillborn runs are excluded from every count here rather than offered
+     * behind a flag. A launch that never produced a turn still carries a
+     * stamped tuple — meta.json is written before the first request — so
+     * counting it as tier membership would say the group is bigger than the
+     * evidence it rests on.
+     */
+    const all = everything.filter((r) => !r.stillborn);
     const body: EpisodesResponse = {
       episodes: EPISODE_LIST.map((tier) => {
         const tagged = all.filter((r) => r.episode === tier.id);
@@ -467,18 +501,21 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         };
       }),
       untiered: all.filter((r) => r.episode === null).length,
+      stillbornExcluded: everything.length - all.length,
       now: Date.now(),
     };
     return json(body);
   }
 
-  async function listWithTotals(): Promise<RunListRow[]> {
+  async function listWithTotals(includeStillborn: boolean): Promise<{ runs: RunListRow[]; stillbornExcluded: number }> {
     const out: RunListRow[] = [];
     for (const row of listRuns(runsDir)) {
       const dir = runDir(runsDir, row.runId);
       const totals = dir === null ? null : await runTotals(row.runId, dir);
       out.push({
         ...row,
+        modelResponses: totals?.modelResponses ?? null,
+        stillborn: stillbornOf(row, totals?.modelResponses ?? null),
         tokens: totals?.tokens ?? null,
         firstTs: totals?.firstTs ?? null,
         lastTs: totals?.lastTs ?? null,
@@ -492,7 +529,11 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
               }),
       });
     }
-    return out;
+    const stillbornExcluded = out.filter((r) => r.stillborn).length;
+    return {
+      runs: includeStillborn ? out : out.filter((r) => !r.stillborn),
+      stillbornExcluded,
+    };
   }
 
   function dashboardIndex(): Response {
@@ -511,7 +552,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       };
       return json(body);
     }
-    if (path === "/api/runs") return json({ runs: await listWithTotals() });
+    if (path === "/api/runs") {
+      const includeStillborn = includeStillbornFlag(url);
+      const { runs, stillbornExcluded } = await listWithTotals(includeStillborn);
+      const body: RunsResponse = { runs, includeStillborn, stillbornExcluded };
+      return json(body);
+    }
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
     if (path === "/api/episodes") return await episodesResponse();
     /*

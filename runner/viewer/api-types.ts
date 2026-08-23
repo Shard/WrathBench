@@ -68,6 +68,12 @@ export interface EpisodesResponse {
   })[];
   /** Runs that belong to no tier at all — neither stamped nor derivable. */
   untiered: number;
+  /**
+   * Stillborn runs excluded from every count above. They carry a stamped tuple
+   * (meta.json is written at launch) and would otherwise inflate tier
+   * membership with launches that never produced a turn.
+   */
+  stillbornExcluded: number;
   now: number;
 }
 
@@ -291,10 +297,28 @@ export interface RunListRow extends RunRow {
    * server-side so the fleet listing and the run page cannot disagree.
    */
   playtimeMs: number | null;
+  /**
+   * `response` records in the trajectory — the model's own turns. Null when the
+   * trajectory could not be read. Not a turn count: one API reply can produce
+   * several records under the claude driver, so it is only ever read as
+   * zero-or-not.
+   */
+  modelResponses: number | null;
+  /**
+   * True when this run never produced a model response and is no longer live
+   * (`runner/viewer/stillborn.ts`). Such a run never got off the ground; the
+   * dashboard hides it unless asked.
+   */
+  stillborn: boolean;
 }
 
 export interface RunsResponse {
   runs: RunListRow[];
+  /** Whether `?includeStillborn=1` kept stillborn runs in `runs`. */
+  includeStillborn: boolean;
+  /** How many stillborn runs there are — shown, not silently dropped. Present
+   * whether or not they were included, so a toggle has its count either way. */
+  stillbornExcluded: number;
 }
 
 export interface PositionsResponse {
@@ -430,6 +454,10 @@ export interface EvalRun {
    */
   toolCalls: number | null;
   snippets: number | null;
+  /** `response` records; see `RunListRow.modelResponses`. */
+  modelResponses: number | null;
+  /** True when the run never produced a model response (`stillborn.ts`). */
+  stillborn: boolean;
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;
@@ -454,6 +482,11 @@ export interface EvalResponse {
   /** Of those, how many were dropped only for being overridden tier runs —
    * the ones `?includeOverrides=1` would bring back. */
   overridesExcluded: number;
+  /** Whether `?includeStillborn=1` kept stillborn runs in `runs`. */
+  includeStillborn: boolean;
+  /** Stillborn runs matching the episode filter. Counted either way, so the
+   * toggle can say how many it would reveal. */
+  stillbornExcluded: number;
   now: number;
 }
 

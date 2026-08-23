@@ -15,6 +15,7 @@
 import type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
+import { MODEL_RESPONSE_RECORD } from "./stillborn";
 
 const NEWLINE = 0x0a;
 
@@ -454,6 +455,12 @@ export interface RunTotals {
   toolCalls: number;
   /** Of those, the ones that were `eval_snippet` (a `snippet` record). */
   snippets: number;
+  /**
+   * `response` records: the model's own turns. Counted because a run with none
+   * is stillborn (`stillborn.ts`) — never read as a turn count, since the
+   * claude driver appends one record per content block of a single reply.
+   */
+  modelResponses: number;
   /** Stretches the run was actually being driven; see `segmentsFrom`. */
   segments: ActiveSegment[];
 }
@@ -476,6 +483,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let entries = 0;
   let toolCalls = 0;
   let snippets = 0;
+  let modelResponses = 0;
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -500,6 +508,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     if (SEGMENT_MARKS.has(t) || marks.length === 0) marks.push({ t, ts });
     if (t === "tool_call") toolCalls++;
     else if (t === "snippet") snippets++;
+    else if (t === MODEL_RESPONSE_RECORD) modelResponses++;
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
@@ -532,6 +541,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     entries,
     toolCalls,
     snippets,
+    modelResponses,
     segments: segmentsFrom(marks),
   };
 }

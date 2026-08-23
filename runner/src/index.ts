@@ -7,6 +7,7 @@
  *   bun runner/src/mcp.ts       MCP stdio server over the same tools
  *   bun runner/src/timeline.ts  terminal timeline for a run
  *   bun runner/src/classify.ts  manual termination classification
+ *   bun runner/src/archive.ts   park stillborn runs under data/runs/archive/
  */
 
 export { episodeOverrideOf, loadRunConfig, newRunId, runConfigSchema, watchdogConfigSchema, TERMINATION_REASONS, PAUSE_REASONS, normalizePauseReason } from "./config";

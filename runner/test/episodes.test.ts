@@ -33,7 +33,7 @@ function evalRun(over: Partial<EvalRun> = {}): EvalRun {
   return {
     runId: "r", model: "m", platform: null, harnessVersion: "v", effort: null,
     contextEngine: null, promptHash: null, serverBuild: null, wikiCoords: null,
-    toolCalls: null, snippets: null,
+    toolCalls: null, snippets: null, modelResponses: null, stillborn: false,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,
     questsCompleted: null, maps: [],
