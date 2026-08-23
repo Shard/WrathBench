@@ -422,8 +422,15 @@ run_smokes_directly() {
     started=$(date +%s)
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # even with errexit off, and only a tested command is exempt from both.
+    # The gate smokes stage their characters through infra/fixtures (item 45),
+    # which needs the db service. The runner service deliberately carries no DB
+    # env (docs/CONTRACTS.md); it is passed per-exec here, exactly as the fleet
+    # service has it for its own gate, and reaches the smoke process only.
     if timeout "${left}" "${COMPOSE[@]}" exec -T \
-        -e "MODULE_ACCOUNT=${account}" runner bun "${smoke}"; then
+        -e "MODULE_ACCOUNT=${account}" \
+        -e "WRATHBENCH_DB_HOST=db" -e "WRATHBENCH_DB_PORT=3306" -e "WRATHBENCH_DB_USER=root" \
+        -e "WRATHBENCH_DB_PASSWORD=${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}" \
+        runner bun "${smoke}"; then
       src=0
     else
       src=$?
