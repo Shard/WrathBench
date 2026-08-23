@@ -9,7 +9,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, RunRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
-import { isArchiveDir } from "./stillborn";
+import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/index";
 import { platformOf as sharedPlatformOf } from "../src/platform";
 

@@ -65,7 +65,14 @@ describe("--resume after a pause", () => {
     const { runsDir, runId } = pausedStubRun(100 * 60_000);
     const stderr = await resume(runsDir, runId);
     expect(stderr).toContain("episode clock resumes at 100m");
-    const dir = join(runsDir, runId);
+    /*
+     * It terminates without ever answering, so the runner archives it on the
+     * way out — the rule is about the whole run, and a resumed segment that
+     * adds no response leaves a run that still produced none. The records are
+     * all there, in the archive.
+     */
+    expect(stderr).toContain("no model response — archived");
+    const dir = join(runsDir, "archive", runId);
     const records = readTrajectory(dir);
     const resumed = records.find((r) => r.t === "resume");
     expect(resumed?.["after"]).toBe("operator-pause");

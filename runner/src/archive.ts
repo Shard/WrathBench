@@ -2,28 +2,31 @@
 /**
  * Park runs the listings should stop counting. Moving, never deleting.
  *
- *   bun runner/src/archive.ts --stillborn [--dry-run]
  *   bun runner/src/archive.ts --pre-series 0.4 [--release-paused] [--dry-run]
  *
  * `--pre-series X.Y` parks every run whose recorded harness version is not a
  * build of the `harness-X.Y` series: an older series,
  * or no `harness-` tag at all. The series is the comparability floor; a run
  * below it is history, not a row. Report directories and anything still live
- * are left alone, the same way as for `--stillborn`.
+ * are left alone.
  *
- * A stillborn run produced zero model responses and is no longer live: the
- * provider was dead on the first request, the key was refused, the adapter
- * threw before a turn existed (`runner/viewer/stillborn.ts` holds the one
- * definition, and the viewer reads the same one). Such a run is not a short
- * run — it is a launch that did not happen — and leaving it in `data/runs`
- * makes every listing count launches instead of runs.
+ * There is no zero-response mode any more. A run that terminates without a
+ * single model response is archived **by the runner itself**, at termination
+ * (`archiveIfNoResponses`, called from `run.ts`): a launch that did not happen
+ * never reaches a listing in the first place, so nothing has to sweep it up
+ * afterwards. The old `--stillborn` sweep could not tell a terminated
+ * zero-response run from a *paused* one — every zero-response directory on
+ * disk when it was removed was a resumable paused run — and that is precisely
+ * the distinction the in-process check has for free.
  *
  * Moving, never deleting. The directory goes to `data/runs/archive/<run-id>/`,
  * which the viewer skips by name, so the evidence survives and the dashboard
- * stops reading it. Nothing inside a run directory is touched.
+ * stops reading it. The scheduler's projection still reads it
+ * (`readRunFacts`, `includeArchived`): the defer ladder is fed by launches
+ * that did not happen, and attempt numbers must stay unique on disk.
  *
- * A run the fleet may still be holding is never moved, and says so. Two
- * signals, either of which is enough to refuse:
+ * A run the fleet may still be holding is never moved by the CLI, and says so.
+ * Two signals, either of which is enough to refuse:
  *
  * - its own files were written inside `HELD_MS` (the one signal that always
  *   exists, and the reason it is the primary test);
@@ -32,15 +35,15 @@
  *
  * Ten minutes rather than the viewer's two: a listing that is wrong for two
  * minutes redraws, where a directory moved out from under a live writer does
- * not come back.
+ * not come back. The runner's own call skips those guards on purpose — it is
+ * the writer, and it has just stopped writing.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { listRuns, runDir } from "../viewer/runs";
-import { stillbornOf } from "../viewer/eval";
-import { ARCHIVE_DIR } from "../viewer/stillborn";
-import { scanRunTotals } from "../viewer/tail";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { countModelResponses } from "./models";
 
 /** How recently a run must have been touched to count as possibly live. */
 export const HELD_MS = 10 * 60_000;
@@ -106,50 +109,6 @@ export interface ArchivePlan {
   reason: string;
   /** True when the run is (or may be) live and must not be moved. */
   held: boolean;
-}
-
-/**
- * Decide what would move. Pure reading — the caller does the moving, so
- * `--dry-run` and the real thing cannot disagree about the plan.
- */
-export async function planStillborn(runsDir: string, now = Date.now()): Promise<ArchivePlan[]> {
-  const plans: ArchivePlan[] = [];
-  const fleetHeld = recentFleetRunIds(runsDir, now);
-  for (const row of listRuns(runsDir, now)) {
-    const dir = runDir(runsDir, row.runId);
-    if (dir === null) continue;
-    const path = join(dir, "trajectory.jsonl");
-    // No trajectory at all is not a claim that a run produced nothing: it is a
-    // directory that was never a run (a report folder, say). Left alone.
-    if (!existsSync(path)) continue;
-    const totals = await scanRunTotals(path);
-    if (!stillbornOf(row, totals.modelResponses)) continue;
-
-    const age = runActivityAge(dir, now);
-    if (age !== null && age < HELD_MS) {
-      plans.push({
-        runId: row.runId,
-        held: true,
-        reason: `files written ${Math.round(age / 1000)}s ago — may still be live`,
-      });
-      continue;
-    }
-    if (fleetHeld.has(row.runId)) {
-      plans.push({ runId: row.runId, held: true, reason: "named by a fleet job log inside the last 10m" });
-      continue;
-    }
-    const ended = row.terminationReason ?? "no termination recorded";
-    // The driver is on the line because the definition is a claim about a
-    // driver's records: an operator reading a list of eighty runs should be
-    // able to see at a glance that they are not all one harness's.
-    const driver = row.shakeout !== null ? `${row.driver ?? "?"}/unscored` : (row.driver ?? "?");
-    plans.push({
-      runId: row.runId,
-      held: false,
-      reason: `0 model responses, ${row.model ?? "unknown model"} via ${driver}, ${ended}`,
-    });
-  }
-  return plans;
 }
 
 /**
@@ -247,15 +206,31 @@ export function archiveRun(runsDir: string, runId: string): string {
   return to;
 }
 
+/**
+ * Archive a run that produced no model response, called by the runner as it
+ * terminates. Returns the new path, or null when the run answered at least
+ * once (or its trajectory could not be read — a claim that nothing happened
+ * has to rest on having looked).
+ *
+ * The caller decides *when*: only after a termination row is written, and
+ * never for a pause. A paused run with no response yet is a launch still in
+ * progress — it is resumed, not buried.
+ */
+export function archiveIfNoResponses(runsDir: string, runId: string): string | null {
+  const n = countModelResponses(join(runsDir, runId, "trajectory.jsonl"));
+  if (n === null || n > 0) return null;
+  return archiveRun(runsDir, runId);
+}
+
 if (import.meta.main) {
   const args = Bun.argv.slice(2);
   const dryRun = args.includes("--dry-run");
   const seriesAt = args.indexOf("--pre-series");
   const series = seriesAt >= 0 ? args[seriesAt + 1] : undefined;
-  const stillborn = args.includes("--stillborn");
-  if (!stillborn && (series === undefined || !/^\d+\.\d+$/.test(series))) {
-    console.error(`usage: bun runner/src/archive.ts (--stillborn | --pre-series X.Y [--release-paused]) [--dry-run]`);
-    console.error(`moves runs with zero model responses, or below a harness series, into <runs>/${ARCHIVE_DIR}/`);
+  if (series === undefined || !/^\d+\.\d+$/.test(series)) {
+    console.error(`usage: bun runner/src/archive.ts --pre-series X.Y [--release-paused] [--dry-run]`);
+    console.error(`moves runs below a harness series into <runs>/${ARCHIVE_DIR}/`);
+    console.error(`(zero-response runs are archived by the runner itself, at termination)`);
     process.exit(2);
   }
   const runsDir = process.env["WRATHBENCH_RUNS_DIR"] ?? "data/runs";
@@ -263,10 +238,8 @@ if (import.meta.main) {
     console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
     process.exit(2);
   }
-  const plans = stillborn
-    ? await planStillborn(runsDir)
-    : planPreSeries(runsDir, series!, Date.now(), args.includes("--release-paused"));
-  const what = stillborn ? "stillborn" : `below harness-${series}`;
+  const plans = planPreSeries(runsDir, series, Date.now(), args.includes("--release-paused"));
+  const what = `below harness-${series}`;
   const movable = plans.filter((p) => !p.held);
   const held = plans.filter((p) => p.held);
 

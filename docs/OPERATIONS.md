@@ -364,7 +364,7 @@ when a paused run sits on it, or the pinned job's enabled/disabled state); the
 **models** table from the projection
 (`runner/src/models.ts`) — the series it counts against in the header, then
 per model its billing, status, counted/target per episode with best level
-(`+2sb` is two stillborn attempts), extras made, and `yes: …`/`no: …` for
+(`+2sb` is two zero-response launches, archived and kept for the ladder), extras made, and `yes: …`/`no: …` for
 schedulability (runs from another series are noted, not counted);
 the concurrency cap when one is set; the `paused runs not resumed` block when
 there are any; one line `finished this session: N (ok M,
@@ -413,12 +413,12 @@ stored except an operator's clear.
 
 What the status words mean: `new` has no counted run yet; `active` is working
 toward its `e90` target; `promoted` may also be scheduled on `e360`; `cooling`
-is on the defer ladder (`1m … 6h`) after consecutive stillborn or
+is on the defer ladder (`1m … 6h`) after consecutive zero-response or
 `adapter-error` attempts; `retired` failed once more at the 6h ceiling and will
 not be scheduled until cleared; `pinned` is outside the policy (a pinned ref or
-a probe). A stillborn run never counts toward a target but does climb the
-ladder, so a dead provider costs at most ten launches over ~10 hours before it
-is retired. A manual pool job (`queue` entry without an account) always
+a probe). A launch that produced no model response never counts toward a target
+but does climb the ladder, so a dead provider costs at most ten launches over
+~10 hours before it is retired. A manual pool job (`queue` entry without an account) always
 outranks the policy; add one to force a specific run (an `e360` for an
 unpromoted model needs `tiers: ["e360"]` on its roster entry as well). Targets:
 `policy.runsPerEpisode` for the fleet, `roster.<name>.runsPerEpisode` per entry.
@@ -441,29 +441,20 @@ One roster, or a whole fleet, from the host:
 Do not run a host supervisor against `infra/fleet.json` while the `fleet`
 service is up: they would both spawn jobs on the same accounts.
 
-### Stillborn runs, and archiving them
+### Archiving runs
 
-A run that never produced a single model response is **stillborn**: the
-provider was dead on the first request, the key was refused, the adapter threw
-before a turn existed. It never got off the ground and it never will, so the
-dashboard hides such runs by default — the runs list, the eval and ladder
-charts, and the episode member counts all exclude them, and each surface says
-how many it is hiding. `show stillborn (N)` reveals them greyed; the API takes
-`?includeStillborn=1` on `/api/runs`, `/api/eval` and `/api/ladder`.
+A run that terminates without a single model response — the provider was dead
+on the first request, the key was refused, the adapter threw before a turn
+existed — is **archived by the runner itself as it exits**, into
+`data/runs/archive/<run-id>/`. It is a launch that did not happen, so no
+listing shows one: there is no filter, no toggle and nothing to sweep up. A
+*pause* is not a termination: a paused run with no response yet is resumed, not
+archived. Nothing is deleted, and the viewer never reads inside `archive/` —
+but `run-fleet --status` and the scheduler do, because the defer ladder is made
+of launches that did not happen and because attempt numbers must stay unique on
+disk.
 
-They still sit in `data/runs`. To park them:
-
-```
-bun runner/src/archive.ts --stillborn --dry-run   # list what would move, and why
-bun runner/src/archive.ts --stillborn             # move them
-```
-
-Directories move to `data/runs/archive/<run-id>/` — nothing is deleted, and the
-viewer never reads inside `archive/`. A run the fleet may still be holding is
-refused with the reason rather than moved: its own files written inside the
-last ten minutes, a `run.ts` process naming it, or a fleet job jsonl naming it
-inside the same window. Run the dry-run first; a live run is the one thing
-this must not touch.
+The CLI parks runs for the other reason, the comparability floor:
 
 ```
 bun runner/src/archive.ts --pre-series 0.4 --dry-run            # everything below the harness-0.4 floor
@@ -472,9 +463,13 @@ bun runner/src/archive.ts --pre-series 0.4 --release-paused     # ...including p
 
 `--pre-series` parks every run whose recorded harness version is not a clean
 build of the series — an older series, a `-dirty` build, or no `harness-` tag
-at all. `--release-paused` lets a run through the activity hold when its meta
-records a pause and no `run.ts` process names it: a supervisor retrying a
-paused run rewrites its files every few minutes, which would hold it forever.
+at all. A run the fleet may still be holding is refused with the reason rather
+than moved: its own files written inside the last ten minutes, a `run.ts`
+process naming it, or a fleet job jsonl naming it inside the same window. Run
+the dry-run first; a live run is the one thing this must not touch.
+`--release-paused` lets a run through the activity hold when its meta records a
+pause and no `run.ts` process names it: a supervisor retrying a paused run
+rewrites its files every few minutes, which would hold it forever.
 
 ### Secrets
 

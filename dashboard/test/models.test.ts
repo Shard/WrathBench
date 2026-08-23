@@ -23,7 +23,6 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
     perEpisode: {
       e90: {
         counted: 2,
-        stillborn: 1,
         attempts: 3,
         extras: 0,
         otherSeries: 0,
@@ -33,7 +32,6 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
         lastEnded: 1000,
         lastReason: "idle",
         runIds: ["a-2", "a-1"],
-        stillbornRunIds: ["a-3"],
       },
     },
     ladder: 0,
@@ -46,7 +44,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
 }
 
 describe("cells", () => {
-  test("counted is shown against its target, never merged with stillborn", () => {
+  test("counted is shown against its target", () => {
     expect(countedOf(row().perEpisode.e90)).toBe("2/3");
     expect(countedOf(undefined)).toBe("—");
   });

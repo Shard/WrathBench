@@ -40,7 +40,6 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     className: "Paladin",
     characterLabel: "Human Paladin",
     modelResponses: 1,
-    stillborn: false,
     harness: "wrathbench",
     promptHash: "sha256:aaaa",
     serverBuild: null,

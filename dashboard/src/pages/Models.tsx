@@ -6,12 +6,10 @@
  * so the page and the supervisor cannot disagree about why a model is not
  * running. Nothing is recomputed here.
  *
- * Two things the table is careful to keep apart, because conflating them is how
- * a dead provider comes to look like a working fleet. **Counted** runs are the
- * ones that produced a model response, and they are what a target counts.
- * **Stillborn** launches never produced one; they are shown beside the count,
- * never inside it, and they still climb the defer ladder — which is what the
- * cooling and retired notes are reporting.
+ * **Counted** runs are the ones that produced a model response, and they are
+ * what a target counts. A launch that produced none is archived by the runner
+ * as it exits, so it never appears here at all — it still climbs the defer
+ * ladder, which is what the cooling and retired notes are reporting.
  *
  * The row key is the roster name, and it is also the anchor: run pages and eval
  * rows link to `/models#<name>`, so a name is an address.
@@ -55,8 +53,8 @@ export default function Models() {
         The fleet roster and what the scheduler makes of it. A model is eligible for{" "}
         <A href="/episodes">e90</A> from the moment it is listed and earns <code>e360</code> by
         reaching level 5 in an un-overridden e90 run (ADR-0030). Counts are <em>counted</em> runs —
-        launches that produced at least one model response; a stillborn launch never counts toward a
-        target, and consecutive ones are what the defer ladder backs off from.
+        launches that produced at least one model response; a launch that produced none is archived
+        as it ends, and consecutive ones are what the defer ladder backs off from.
       </p>
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
@@ -139,12 +137,6 @@ export default function Models() {
                                 <Show when={(st()?.bestLevel ?? null) !== null}>
                                   {" "}
                                   <span class="dim">L{st()!.bestLevel}</span>
-                                </Show>
-                                <Show when={(st()?.stillborn ?? 0) > 0}>
-                                  {" "}
-                                  <span class="warn" title="stillborn launches, never counted">
-                                    +{st()!.stillborn}✗
-                                  </span>
                                 </Show>
                               </Show>
                             </td>
@@ -286,7 +278,7 @@ function Detail(props: { row: ModelRowView }) {
                     {r.terminationReason ?? (r.live ? "—" : "no record")}
                   </td>
                   <td class={r.counted ? "ok" : "warn"}>
-                    {r.counted ? "counted" : r.stillborn ? "stillborn" : r.episodeOverride ? "overridden" : "not counted"}
+                    {r.counted ? "counted" : r.episodeOverride ? "overridden" : "not counted"}
                   </td>
                 </tr>
               )}

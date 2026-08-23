@@ -94,17 +94,15 @@ async function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** The shared `?episode=`/`?includeOverrides=`/`?includeStillborn=`/`?harness=` query. */
+/** The shared `?episode=`/`?includeOverrides=`/`?harness=` query. */
 function evalQuery(
   episode: EpisodeIdView | "all" | undefined,
   includeOverrides: boolean,
-  includeStillborn: boolean,
   harness: HarnessView | "all" = "all",
 ): string {
   const q = new URLSearchParams();
   if (episode !== undefined) q.set("episode", episode);
   if (includeOverrides) q.set("includeOverrides", "1");
-  if (includeStillborn) q.set("includeStillborn", "1");
   // `all` is the server default (ADR-0035: harness is a tag, not a partition).
   if (harness !== "all") q.set("harness", harness);
   const s = q.toString();
@@ -115,12 +113,11 @@ export function createClient(opts: ClientOptions = {}) {
   return {
     info: (): Promise<ApiInfoResponse> => get<ApiInfoResponse>("/api/info", opts),
     /**
-     * The run listing. Stillborn runs — launches that never produced a model
-     * response — are excluded server-side unless asked for, and the count of
-     * them travels with the response either way.
+     * The run listing: every run on disk. A launch that produced no model
+     * response is archived by the runner as it terminates, so there is nothing
+     * to filter here.
      */
-    runs: (includeStillborn = false): Promise<RunsResponse> =>
-      get<RunsResponse>(`/api/runs${includeStillborn ? "?includeStillborn=1" : ""}`, opts),
+    runs: (): Promise<RunsResponse> => get<RunsResponse>("/api/runs", opts),
     positions: (): Promise<PositionsResponse> => get<PositionsResponse>("/api/positions", opts),
     fleet: (): Promise<FleetResponse> => get<FleetResponse>("/api/fleet", opts),
     /**
@@ -142,18 +139,16 @@ export function createClient(opts: ClientOptions = {}) {
     eval: (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
-      includeStillborn = false,
       harness: HarnessView | "all" = "all",
     ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/eval${evalQuery(episode, includeOverrides, includeStillborn, harness)}`, opts),
+      get<EvalResponse>(`/api/eval${evalQuery(episode, includeOverrides, harness)}`, opts),
     /** The same projection the ladder reads; the rung rules stay client-side. */
     ladder: (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
-      includeStillborn = false,
       harness: HarnessView | "all" = "all",
     ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/ladder${evalQuery(episode, includeOverrides, includeStillborn, harness)}`, opts),
+      get<EvalResponse>(`/api/ladder${evalQuery(episode, includeOverrides, harness)}`, opts),
     /** One run's recorded track, for map replay. */
     track: (id: string): Promise<TrackResponse> =>
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`, opts),

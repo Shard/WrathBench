@@ -280,3 +280,37 @@ attempt numbers to stay distinct on disk — and it is also what puts the freepl
 extras in the Models page's extras column. Eligibility and promotion are
 unchanged: `freeplay` is never in `eligible`, and only a counted `e90` run
 promotes.
+
+## Amendment 2026-08-23: a launch that did not happen is archived, not labeled
+
+"Stillborn" was a *state* a run could be in and every surface had to know about
+it: the runs list hid them behind a toggle, the eval and ladder charts filtered
+them with a count attached, the episode member counts excluded them, the models
+page showed `+N✗` beside a target, and a CLI mode swept the directories up
+afterwards. Five places spelling one idea — this run never got off the ground —
+and each of them a place to get it wrong.
+
+The state is gone. A run that terminates with zero `response` records is
+**archived by the runner itself**, at termination, into `data/runs/archive/`
+(`archiveIfNoResponses`, one move shared with the CLI). Nothing downstream has
+to filter, because nothing downstream ever sees one: `/api/runs`, `/api/eval`,
+`/api/episodes`, the Models and Episodes pages and `isCounted` all read a
+directory that no longer holds it. The `?includeStillborn=` parameters, the
+`stillborn` fields on the API and the dashboard's toggles are removed.
+
+A **pause is not a termination**. A paused run with no response yet is a launch
+still in progress — the supervisor resumes it — and archiving it would bury
+resumable work. That distinction is free in the runner, which knows how its own
+episode ended, and was *not* free in the old sweep: on the night this shipped,
+every zero-response directory on disk was a paused run, so the old
+`--stillborn` mode would have destroyed three of them. The mode is removed;
+`--pre-series` (the comparability floor) stays.
+
+Two readers still need what was archived, and both are the scheduler:
+the **defer ladder** is made of launches that did not happen (drop them and a
+dead provider relaunches forever at rung zero, which is what this record's
+retirement rule exists to prevent), and **attempt numbers** must stay unique on
+disk, since a run id is `fleet-<job>-<model>-<datestamp>` plus `-a<attempt>`.
+So `readRunFacts` takes `includeArchived`, the projection asks for it, and the
+viewer does not. `run-fleet --status` keeps its `+Nsb` column for the same
+reason: it is the operator's window onto the ladder, not a listing of runs.

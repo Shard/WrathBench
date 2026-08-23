@@ -16,12 +16,9 @@
  *   roster entries sharing a model string and an effort would legitimately show
  *   the same runs. The rows are not deduped: that is the honest reading, and
  *   hiding it would make one of the two look idle.
- * - **Stillborn is spelled once.** The counted/stillborn split of the run ids
- *   uses `isCounted`/`stillbornOf` from `runner/src/models.ts` — the same two
- *   predicates that produced `EpisodeStats` — so the lists and the counts
- *   cannot differ. (The viewer's own `eval.ts#stillbornOf` answers `false` for
- *   an unreadable trajectory where this one answers `null`; mixing them would
- *   put a run in a count and not in its list.)
+ * - **Counted is spelled once.** The run ids behind a count use `isCounted`
+ *   from `runner/src/models.ts` — the same predicate that produced
+ *   `EpisodeStats` — so the list and the count cannot differ.
  * - **The roster names the models.** ADR-0031's `roster` map is the one
  *   source of a model's name; a fleet config without one is unreadable, not a
  *   config to invent names for.
@@ -38,7 +35,6 @@ import {
   policyExclusion,
   schedulability,
   readRunFact,
-  stillbornOf,
   type ModelState,
   type PolicyJob,
   type RosterModel,
@@ -49,7 +45,7 @@ import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
-import { isArchiveDir } from "./stillborn";
+import { isArchiveDir } from "./archive-dir";
 import { redactSecrets } from "./tail";
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
@@ -387,7 +383,6 @@ function runView(f: RunFact): ModelRunView {
     terminationReason: f.terminationReason,
     live: f.live,
     counted: isCounted(f),
-    stillborn: stillbornOf(f) === true,
   };
 }
 
@@ -407,11 +402,11 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
   for (const [id, stats] of Object.entries(state.perEpisode)) {
     const ep = id as EpisodeIdView;
     const tier = mine.filter((f) => f.episode === ep);
-    perEpisode[ep] = {
-      ...stats,
-      runIds: tier.filter((f) => isCounted(f)).map((f) => f.runId),
-      stillbornRunIds: tier.filter((f) => stillbornOf(f) === true).map((f) => f.runId),
-    };
+    // `stillborn` stays a scheduler-side stat (it feeds the defer ladder and
+    // `--status`); it is not part of the API, because a zero-response run is
+    // archived at exit and the viewer never has one to show.
+    const { stillborn: _archived, ...rest } = stats;
+    perEpisode[ep] = { ...rest, runIds: tier.filter((f) => isCounted(f)).map((f) => f.runId) };
   }
   // The newest run that actually failed, not the newest run: a model whose last
   // episode was fine still owes the operator the text of the three before it.

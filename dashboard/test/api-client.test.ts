@@ -126,11 +126,9 @@ describe("shapes", () => {
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
           pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, mtime: 5,
           bytes: 9, live: true, tokens: null, cost: null, firstTs: 1, lastTs: 2, playtimeMs: 1,
-          modelResponses: 3, stillborn: false,
+          modelResponses: 3,
         },
       ],
-      includeStillborn: false,
-      stillbornExcluded: 2,
     };
     const got = await createClient({ fetch: stub(payload).fetch }).runs();
     expect(got.runs[0]!.level).toBe(4);
