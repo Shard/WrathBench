@@ -32,7 +32,7 @@ pure projection (`runner/src/models.ts`) that the supervisor, `--status`,
 `--dry-run` and `/api/models` all read. There is one answer to "why is this model
 not running", and it is derived, never stored.
 
-- **Target:** three counted runs per (model, episode) by default
+- **Target:** three counted runs per (model, episode) by default. A run counts when the model answered at least once and the run did not end by operator cut (`manual`) or harness failure (`harness-error`); those still number attempts, and the policy reruns them
   (`policy.runsPerEpisode`, overridable per roster entry). A model that has met
   its targets is not scheduled.
 - **What counts:** only runs stamped with an episode id (no back-labeling, per
