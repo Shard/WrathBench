@@ -10,6 +10,11 @@
  * waits on server postconditions (`waitForTransfer`, `WB_RIDE_PROGRESS`,
  * `WB_TRANSPORT_PROGRESS`).
  *
+ * Between leg1 and leg2 (leg1b, load-bearing, FOLLOW-UPS 56): the character
+ * walks into AreaTrigger.dbc 710 at the Kharanos crossroads and keeps moving
+ * inside it for >= 5s; exactly one WB_AREATRIGGER for id 710 must appear.
+ * Fails against a pre-56 module, which re-fires every 1.5s.
+ *
  * Per ride (IF -> SW) the gate asserts, in order:
  *   leg 3  `transferred` to map 369 within 10y of (69.25, 10.26) with at least
  *          one WB_AREATRIGGER on the stream;
@@ -204,6 +209,8 @@ interface HopLog {
 }
 const hopLogs: HopLog[] = [];
 const opcodesSeen = new Map<string, number>();
+/** WB_AREATRIGGER count per trigger id: the linger leg's evidence (FOLLOW-UPS 56). */
+const triggerHits = new Map<number, number>();
 /** Per-car `docked` as last reported, and when it flipped: the leg-4 evidence. */
 const dockedAt = new Map<string, { docked: boolean; y: number; ts: number }>();
 let transportReports = 0;
@@ -212,6 +219,9 @@ const client = await connect({ baseUrl: BASE, token: TOKEN });
 client.events.onAny((e: any) => {
   const op = e?.opcode ?? "?";
   opcodesSeen.set(op, (opcodesSeen.get(op) ?? 0) + 1);
+  if (op === "WB_AREATRIGGER" && typeof e?.data?.triggerId === "number") {
+    triggerHits.set(e.data.triggerId, (triggerHits.get(e.data.triggerId) ?? 0) + 1);
+  }
   if (op === "WB_TRANSPORT_PROGRESS" && e.data && typeof e.data.docked === "boolean") {
     transportReports++;
     const prev = dockedAt.get(e.data.guid);
@@ -281,6 +291,46 @@ async function portal(leg: string, name: string, target: MovePoint, expectMap: n
   const triggers = (opcodesSeen.get("WB_AREATRIGGER") ?? 0) - triggersBefore;
   if (triggers < 1) throw new LegFailure(`${leg}: transferred without a WB_AREATRIGGER on the stream for this portal`);
   log(`  transferred: map ${r.to.map} ${fmt(r.to)}; WB_AREATRIGGER seen ${triggers}x for this portal`);
+}
+
+// AreaTrigger.dbc 710: map 0 (-5601.5, -530.7, 395.5) r35, centred on the
+// Kharanos crossroads. No world-DB row acts on it (not in
+// areatrigger_teleport / _tavern / _involvedrelation / _scripts, verified
+// 2026-08-23), so the server ignores the CMSG_AREATRIGGER and the character
+// stays inside; it is the volume nav-probe c4 re-fired in every 1.5s.
+const LINGER_TRIGGER = { id: 710, x: -5601.5, y: -530.7, z: 395.5, r: 35 };
+const LINGER_MS = 5_000;
+
+/**
+ * Linger leg (FOLLOW-UPS 56): crossing into a DBC volume sends
+ * CMSG_AREATRIGGER exactly once, as a client does; standing and walking
+ * inside it for >= 5s must not re-fire. Walks to the centre, then two short
+ * hops that stay well inside the radius while the clock passes LINGER_MS, and
+ * asserts exactly one WB_AREATRIGGER for this id in that window.
+ */
+async function lingerInTrigger(leg: string): Promise<void> {
+  const t = LINGER_TRIGGER;
+  const before = triggerHits.get(t.id) ?? 0;
+  const t0 = Date.now();
+  await hop(leg, { name: `trigger ${t.id} centre`, x: t.x, y: t.y, z: t.z });
+  const firstHits = (triggerHits.get(t.id) ?? 0) - before;
+  if (firstHits !== 1) throw new LegFailure(`${leg}: entering trigger ${t.id} produced ${firstHits} WB_AREATRIGGER, expected exactly 1`);
+  // Keep moving inside the volume (the module only tests triggers while a
+  // move is in progress) until LINGER_MS has passed since the entry.
+  const inner: Waypoint[] = [
+    { name: `inside ${t.id} (+8y x)`, x: t.x + 8, y: t.y, z: t.z },
+    { name: `inside ${t.id} (+8y y)`, x: t.x, y: t.y + 8, z: t.z },
+  ];
+  let i = 0;
+  while (Date.now() - t0 < LINGER_MS) {
+    await hop(leg, inner[i++ % inner.length]!);
+    const here = selfPos();
+    if (here && dist2d(here, t) > t.r - 5) throw new LegFailure(`${leg}: wandered to ${dist2d(here, t).toFixed(0)}y from the trigger centre (radius ${t.r})`);
+    await Bun.sleep(1_000);
+  }
+  const hits = (triggerHits.get(t.id) ?? 0) - before;
+  if (hits !== 1) throw new LegFailure(`${leg}: ${hits} WB_AREATRIGGER for trigger ${t.id} over ${secs(Date.now() - t0)} inside its volume, expected exactly 1`);
+  log(`  lingered ${secs(Date.now() - t0)} inside trigger ${t.id}: WB_AREATRIGGER seen exactly once`);
 }
 
 /** The tram cars `units()` can see right now, with their reported state. */
@@ -563,6 +613,15 @@ try {
     for (const wp of leg.waypoints) await hop(leg.name, wp);
     legTimes.push([leg.name, Date.now() - legStart]);
     log(`=== ${leg.name}: complete in ${((Date.now() - legStart) / 1000).toFixed(0)}s ===`);
+    if (leg.name.startsWith("leg1:")) {
+      // Kharanos is where leg1 ends and trigger 710 sits: linger there
+      // before leg2 walks on (FOLLOW-UPS 56).
+      const name = "leg1b: linger in areatrigger 710";
+      log(`=== ${name} ===`);
+      const t0 = Date.now();
+      await lingerInTrigger(name);
+      legTimes.push([name, Date.now() - t0]);
+    }
   }
 
   for (let n = 1; n <= RIDES; n++) {

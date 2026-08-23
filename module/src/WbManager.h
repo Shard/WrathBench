@@ -138,13 +138,14 @@ namespace WrathBench
         MoveState move;
         uint64_t moveIdGen{0};
 
-        // Areatrigger edge detection (world thread only): the trigger volume the
-        // mover last reported being inside (0 = none), and when the module last
-        // queued CMSG_AREATRIGGER for it, so a trigger the server did not act on
-        // (heartbeat lag: the server checks its applied position, the module its
-        // interpolated one) is re-sent while the character is still inside.
-        uint32 lastTriggerId{0};
-        int64_t lastTriggerSentMs{0};
+        // Areatrigger edge detection (world thread only): the DBC volumes the
+        // mover is currently inside, and the map they were tested on. A client
+        // sends CMSG_AREATRIGGER once on crossing into a volume and never again
+        // while it lingers (FOLLOW-UPS 56), so an id fires only when it is newly
+        // inside; it is cleared when the mover leaves the volume, changes map,
+        // or is teleported, so a re-entry fires again.
+        std::vector<uint32> insideTriggers;
+        uint32 insideTriggersMap{0xFFFFFFFF};
 
         // WB_RIDE_PROGRESS pacing while aboard a transport (world thread only).
         int64_t lastRideEmitMs{0};
