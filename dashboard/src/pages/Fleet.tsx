@@ -87,10 +87,6 @@ export default function Fleet() {
                 </div>
               </Show>
 
-              <p class="dim">
-                <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
-                <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
-              </p>
               <div class="scroller">
                 <table>
                   <thead>
@@ -103,6 +99,10 @@ export default function Fleet() {
                   </tbody>
                 </table>
               </div>
+              <p class="dim">
+                <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
+                <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
+              </p>
 
               {/* Paused runs the supervisor is not resuming, and why (ADR-0036); the ones it ended instead. */}
               <Show when={f().paused.length > 0}>

@@ -86,21 +86,22 @@ describe("statusRows", () => {
     expect(labels(rows)).toEqual(["heartbeat", "jobs", "exhaust", "uptime", "harness", "accounts"]);
     expect(value(rows, "heartbeat")).toBe("5s ago");
     expect(rows[0]!.title).toBe(new Date(NOW - 5_000).toLocaleString());
-    expect(value(rows, "jobs")).toBe("live 1 / outstanding 11–23");
-    expect(value(rows, "exhaust")).toBe("≈ 4h–9h");
+    expect(value(rows, "jobs")).toBe("1 / 11–23");
+    expect(rows[1]!.labelTitle).toContain("outstanding scheduled runs");
+    expect(value(rows, "exhaust")).toBe("4h–9h");
     expect(value(rows, "uptime")).toBe("1h00m");
     expect(value(rows, "harness")).toBe("harness-0.4-73");
-    expect(value(rows, "accounts")).toBe("pool 2/3 · paid 0/1 · local 0/1");
+    expect(rows.find((r) => r.label === "accounts")!.lines).toEqual(["pool 2/3", "paid 0/1", "local 0/1"]);
   });
 
   test("a stale heartbeat says so in the row; missing facts say unknown rather than vanish", () => {
     const { startedAt: _s, outstanding: _o, ...bare } = fleet({ heartbeatAt: NOW - HEARTBEAT_STALE_MS });
     const rows = statusRows({ fleet: bare, error: undefined }, undefined, NOW);
     expect(value(rows, "heartbeat")).toBe("3m00s ago (stale)");
-    expect(value(rows, "jobs")).toBe("live 1 / outstanding unknown");
+    expect(value(rows, "jobs")).toBe("1 / unknown");
     expect(value(rows, "exhaust")).toBe("unknown");
     expect(value(rows, "uptime")).toBe("unknown");
-    expect(value(statusRows({ fleet: fleet({ outstanding: { lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0, breakdown: [] } }), error: undefined }, undefined, NOW), "jobs")).toBe("live 1 / outstanding exhausted");
+    expect(value(statusRows({ fleet: fleet({ outstanding: { lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0, breakdown: [] } }), error: undefined }, undefined, NOW), "jobs")).toBe("1 / exhausted");
   });
 
   test("the deploy detail appears only while not running; the worldserver's build only when it differs", () => {
@@ -123,8 +124,8 @@ describe("statusRows", () => {
   });
 
   test("accounts busy counts alive jobs per schedulable class; pinned is not a class here", () => {
-    expect(accountsBusy({ accounts: [], jobs: [] })).toBe("none");
-    expect(accountsBusy(fleet())).toBe("pool 2/3 · paid 0/1 · local 0/1");
+    expect(accountsBusy({ accounts: [], jobs: [] })).toEqual(["none"]);
+    expect(accountsBusy(fleet())).toEqual(["pool 2/3", "paid 0/1", "local 0/1"]);
   });
 });
 
