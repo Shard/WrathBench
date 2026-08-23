@@ -247,23 +247,36 @@ export default function RunDetail() {
                 </div>
                 {/*
                   * Cost sits with the token cards because it is the same
-                  * measurement read in another unit — and because the basis has
-                  * to travel with the number: a `reported` figure is the SDK's
-                  * own accounting, a `list-price` one is this repo's table
-                  * applied to the tokens above, and an unpriced model says so
-                  * rather than showing a zero.
+                  * measurement read in another unit — and it is shown twice
+                  * because two different questions hide behind one number.
+                  * ACTUAL is what the provider charged (OpenRouter's per-call
+                  * `usage.cost`, or the Claude SDK's `total_cost_usd`); most
+                  * runs have none and say so rather than borrowing the
+                  * estimate. EXPECTED is this repo's price table applied to the
+                  * tokens above, dated, so a stale rate reads as stale.
                   */}
                 <div class="card">
-                  <div class="k">cost</div>
-                  <div class="v mono" title={detail()?.cost.note ?? ""}>
-                    {fmtCost(detail()?.cost)}
+                  <div class="k">cost — actual</div>
+                  <div class="v mono" title={detail()?.cost.actual.note ?? ""}>
+                    {fmtCost(detail()?.cost.actual, "—")}
                   </div>
-                  <div class="sub" title={detail()?.cost.note ?? ""}>
-                    {detail()?.cost.basis === "none"
-                      ? (detail()?.cost.note ?? "")
-                      : detail()?.cost.basis === "reported"
-                        ? "the driver's own total_cost_usd"
-                        : "from the token totals at list price"}
+                  <div class="sub" title={detail()?.cost.actual.note ?? ""}>
+                    {detail()?.cost.actual.basis === "none"
+                      ? "provider reports no cost for this run"
+                      : detail()?.cost.actual.asIfMetered
+                        ? "the driver's own total_cost_usd, billed to a subscription"
+                        : "the provider's own charge, summed over the run"}
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="k">cost — expected</div>
+                  <div class="v mono" title={detail()?.cost.expected.note ?? ""}>
+                    {fmtCost(detail()?.cost.expected)}
+                  </div>
+                  <div class="sub" title={detail()?.cost.expected.note ?? ""}>
+                    {detail()?.cost.expected.basis === "none"
+                      ? (detail()?.cost.expected.note ?? "")
+                      : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
                   </div>
                 </div>
                 <div class="card">

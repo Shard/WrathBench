@@ -52,11 +52,16 @@ export function fmtUsd(v: number | null | undefined): string {
 /**
  * The one-line reading of a cost, provenance included: a bare number invites
  * the reader to take a reconstruction for an invoice.
+ *
+ * `blank` is what stands in when there is no figure — the two costs blank for
+ * different reasons (a provider that reported nothing, a model with no price)
+ * and the caller knows which one it is asking about.
  */
 export function fmtCost(
   c: { usd: number | null; basis: string; asIfMetered: boolean; asOf: string | null } | null | undefined,
+  blank = "— (unpriced model)",
 ): string {
-  if (c === undefined || c === null || c.basis === "none" || c.usd === null) return "— (unpriced model)";
+  if (c === undefined || c === null || c.basis === "none" || c.usd === null) return blank;
   if (c.basis === "reported") return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered (reported)" : "reported"}`;
   // The date is the server's, off the price row that was actually applied: a
   // rate that lapses must not keep being announced under the old date.
