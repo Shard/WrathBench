@@ -9,6 +9,10 @@ import {
   countModelResponses,
   modelStates,
   nextJobs,
+  planNextJobs,
+  DEFAULT_PAID,
+  DEFAULT_EXTRA_CHARACTERS,
+  type SchedulingPolicy,
   parseModelsSidecar,
   projectModel,
   readRunFacts,
@@ -35,6 +39,8 @@ interface SynthRun {
   /** trajectory mtime; defaults to endedAt or startedAt */
   mtime?: number;
   noMeta?: boolean;
+  harnessVersion?: string;
+  extra?: boolean;
 }
 
 function writeRun(runsDir: string, r: SynthRun): void {
@@ -45,9 +51,9 @@ function writeRun(runsDir: string, r: SynthRun): void {
       join(dir, "meta.json"),
       JSON.stringify({
         runId: r.id,
-        harnessVersion: "harness-0.3-test",
+        harnessVersion: r.harnessVersion ?? "harness-0.3-test",
         startedAt: r.startedAt,
-        config: { model: r.model, ...(r.effort !== undefined ? { effort: r.effort } : {}) },
+        config: { model: r.model, ...(r.effort !== undefined ? { effort: r.effort } : {}), ...(r.extra ? { extra: true } : {}) },
         comparability: {
           effort: r.effort ?? null,
           ...(r.episode !== undefined ? { episode: r.episode } : {}),
@@ -98,6 +104,9 @@ beforeAll(() => {
   writeRun(runsDir, { id: "sonnet-old", model: "sonnet", responses: 50, level: 9, reason: "episode-limit", startedAt: t0 - HOUR, endedAt: t0 });
   // sonnet-low: an answered run that is LIVE (mtime just now, no termination) -> counted, not stillborn.
   writeRun(runsDir, { id: "sonnet-low-1", model: "sonnet", effort: "low", episode: "e90", responses: 3, level: 1, reason: null, startedAt: NOW - 60_000, endedAt: null, mtime: NOW - 10_000 });
+  // local: one run from the previous series and one extra run this series — both visible, neither counted.
+  writeRun(runsDir, { id: "local-old", model: "qwen/q", episode: "e90", responses: 20, level: 7, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR, harnessVersion: "harness-0.2-33-gabc" });
+  writeRun(runsDir, { id: "local-x", model: "qwen/q", episode: "e90", responses: 20, level: 2, reason: "episode-limit", startedAt: t0 + 6 * HOUR, endedAt: t0 + 7 * HOUR, extra: true });
   // a non-run directory and a directory without meta.json
   mkdirSync(join(runsDir, "night-report"), { recursive: true });
   writeRun(runsDir, { id: "nometa", model: "x", responses: 2, startedAt: t0, noMeta: true });
@@ -118,7 +127,9 @@ describe("reading runs", () => {
 
   test("only stamped runs become facts; archive/ and report dirs are skipped; oldest first", () => {
     const facts = readRunFacts(runsDir, NOW);
-    expect(facts.map((f) => f.runId)).toEqual(["glm-1", "ox-1", "sonnet-1", "ox-2", "ox-3", "glm-2", "glm-3", "sonnet-low-1"]);
+    expect(facts.map((f) => f.runId)).toEqual(["glm-1", "local-old", "ox-1", "sonnet-1", "ox-2", "ox-3", "local-x", "glm-2", "glm-3", "sonnet-low-1"]);
+    expect(facts.find((f) => f.runId === "local-old")).toMatchObject({ harnessSeries: "0.2", extra: false });
+    expect(facts.find((f) => f.runId === "local-x")).toMatchObject({ harnessSeries: "0.3", extra: true });
     const ox3 = facts.find((f) => f.runId === "ox-3")!;
     expect(ox3).toMatchObject({ episode: "e90", episodeOverride: true, bestLevel: 6, terminationReason: "episode-limit", modelResponses: 30, live: false });
     const glm2 = facts.find((f) => f.runId === "glm-2")!;
@@ -152,8 +163,26 @@ describe("modelStates", () => {
 
     // A live, answered run counts; the per-entry target override applies.
     expect(by["sonnet-low"]!.perEpisode.e90).toMatchObject({ counted: 1, stillborn: 0, target: 1 });
-    expect(by["local"]).toMatchObject({ status: "new", platform: "local" });
-    expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 0, attempts: 0, target: 3 });
+    // No series on the policy: the 0.2 run is an attempt like any other; the extra is an attempt, never counted.
+    expect(by["local"]).toMatchObject({ status: "promoted", platform: "local", billing: "free" });
+    expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 1, attempts: 2, extras: 1, otherSeries: 0, target: 3, bestLevel: 7 });
+    expect(by["ox"]!.billing).toBe("free"); // allowlisted stealth id
+    expect(by["glm"]!.billing).toBe("free");
+    expect(by["sonnet"]!.billing).toBe("free"); // subscription
+  });
+
+  test("series keying: runs from another series are shown, not counted (ADR-0034)", () => {
+    const policy: SchedulingPolicy = { ...DEFAULT_POLICY, series: "0.3" };
+    const states = modelStates({ runsDir, roster, policy, now: NOW, sidecar: { version: 1, cleared: {} } });
+    const local = states.find((s) => s.name === "local")!;
+    expect(local.status).toBe("new");
+    expect(local.perEpisode.e90).toMatchObject({ counted: 0, attempts: 1, extras: 1, otherSeries: 1, bestLevel: 2 });
+    // Everything else in the fixture is 0.3 and unchanged.
+    expect(states.find((s) => s.name === "ox")!.perEpisode.e90).toMatchObject({ counted: 2, attempts: 3, otherSeries: 0 });
+    // A policy keyed on a series nothing ran under: every model is new.
+    const none = modelStates({ runsDir, roster, policy: { ...policy, series: "0.4" }, now: NOW, sidecar: { version: 1, cleared: {} } });
+    expect(none.every((s) => s.status === "new" && s.perEpisode.e90!.attempts === 0)).toBe(true);
+    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.otherSeries).toBe(3);
   });
 
   test("a forced tier is eligible without a witness; the pre-tier run never promotes", () => {
@@ -172,6 +201,8 @@ describe("the ladder", () => {
     episode: "e90",
     episodeOverride: false,
     harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
     startedAt: endedAt - 60_000,
     endedAt,
     terminationReason: reason,
@@ -248,6 +279,8 @@ describe("nextJobs", () => {
     episode: ep,
     episodeOverride: false,
     harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
     startedAt: NOW - (100 - i) * HOUR,
     endedAt: NOW - (99 - i) * HOUR,
     terminationReason: "episode-limit",
@@ -282,7 +315,7 @@ describe("nextJobs", () => {
     expect(nextJobs([c, b], ["R1", "R2"], new Set(["b"])).map((p) => p.name)).toEqual(["c"]);
     expect(nextJobs([c, b], [])).toEqual([]);
     const met = st("m", [good("m", "e90", 1), good("m", "e90", 2), good("m", "e90", 3)]);
-    expect(schedulability(met)).toEqual({ ok: false, why: "targets met on e90" });
+    expect(schedulability(met)).toEqual({ ok: false, extras: false, why: "targets met on e90" });
     expect(nextJobs([met], ["R1"])).toEqual([]);
     expect(schedulability(b, new Set(["b"])).why).toContain("running");
   });
@@ -295,5 +328,97 @@ describe("nextJobs", () => {
     const s = st("s", runs);
     expect(s.perEpisode.e90).toMatchObject({ counted: 1, stillborn: 1, attempts: 2 });
     expect(nextJobs([s], ["R1"])[0]).toMatchObject({ name: "s", episode: "e90", attempt: 3 });
+  });
+});
+
+describe("paid and free (ADR-0034 amendment)", () => {
+  const good = (model: string, ep: "e90" | "e360", i: number, level = 3, extra = false): RunFact => ({
+    runId: `${model}-${ep}-${i}`,
+    model,
+    effort: null,
+    episode: ep,
+    episodeOverride: false,
+    harnessVersion: "harness-0.3-1-gx",
+    harnessSeries: "0.3",
+    extra,
+    startedAt: NOW - (100 - i) * HOUR,
+    endedAt: NOW - (99 - i) * HOUR,
+    terminationReason: "episode-limit",
+    modelResponses: 10,
+    bestLevel: level,
+    live: false,
+  });
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: { characters: [...DEFAULT_EXTRA_CHARACTERS] } };
+  const st = (r: RosterModel, runs: RunFact[], p = policy) => projectModel(r, runs, p, { now: NOW });
+
+  test("billing is derived once: slug, LAN, subscription, allowlist, override", () => {
+    expect(st({ name: "p", model: "vendor/big" }, []).billing).toBe("paid");
+    expect(st({ name: "f", model: "vendor/big:free" }, []).billing).toBe("free");
+    expect(st({ name: "c", model: "x-contributor-free", apiBase: "https://opencode.ai/zen/v1" }, []).billing).toBe("free");
+    expect(st({ name: "l", model: "vendor/big", apiBase: "http://10.0.0.5:1234/v1" }, []).billing).toBe("free");
+    expect(st({ name: "s", model: "opus", driver: "claude-code" }, []).billing).toBe("free");
+    expect(st({ name: "o", model: "stealth/ox-alpha" }, []).billing).toBe("free");
+    expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
+  });
+
+  test("paid targets are 3/1 by default and hard; per-entry override still wins; no paid policy means 3/3", () => {
+    const p = st({ name: "p", model: "vendor/big" }, [good("vendor/big", "e90", 1, 5)]);
+    expect(p.perEpisode.e90!.target).toBe(3);
+    expect(p.perEpisode.e360!.target).toBe(1);
+    expect(st({ name: "p", model: "vendor/big", runsPerEpisode: { e360: 2 } }, []).perEpisode.e360!.target).toBe(2);
+    expect(st({ name: "p", model: "vendor/big" }, [], DEFAULT_POLICY).perEpisode.e360!.target).toBe(3);
+    const met = st({ name: "p", model: "vendor/big" }, [good("vendor/big", "e90", 1), good("vendor/big", "e90", 2), good("vendor/big", "e90", 3)]);
+    expect(schedulability(met, new Set(), policy)).toMatchObject({ ok: false, extras: false });
+    expect(planNextJobs([met], ["R1"], new Set(), { policy })).toEqual({ jobs: [], held: [] });
+  });
+
+  test("the paid cap: one paid model in flight across the pool, the next candidate takes the account, held says why", () => {
+    const p1 = st({ name: "p1", model: "v/one" }, []);
+    const p2 = st({ name: "p2", model: "v/two" }, []);
+    const f1 = st({ name: "f1", model: "v/three:free" }, []);
+    const plan = planNextJobs([p1, p2, f1], ["R1", "R2", "R3"], new Set(), { policy });
+    expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
+      ["p1", "R1"],
+      ["f1", "R2"],
+    ]);
+    expect(plan.held).toEqual([{ name: "p2", episode: "e90", why: "paid cap: 1/1 paid model(s) already in flight" }]);
+    // A paid model already running elsewhere fills the cap before any pick.
+    expect(planNextJobs([p1, p2, f1], ["R1", "R2"], new Set(), { policy, paidRunning: 1 }).jobs.map((j) => j.name)).toEqual(["f1"]);
+    // Cap of two lets both through; no paid policy is no cap.
+    expect(planNextJobs([p1, p2], ["R1", "R2"], new Set(), { policy: { ...policy, paid: { ...policy.paid!, maxConcurrent: 2 } } }).jobs).toHaveLength(2);
+    expect(planNextJobs([p1, p2], ["R1", "R2"], new Set(), { policy: DEFAULT_POLICY }).jobs).toHaveLength(2);
+  });
+
+  test("extras: free models past their targets get lowest-priority runs, cycling characters; e360 extras only when promoted", () => {
+    const chars = policy.extras!.characters;
+    const metFree = st({ name: "f", model: "v/f:free" }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4), good("v/f:free", "e360", 5), good("v/f:free", "e360", 6)]);
+    expect(schedulability(metFree, new Set(), policy)).toMatchObject({ ok: false, extras: true });
+    expect(schedulability(metFree, new Set(), policy).why).toContain("extras");
+    const unpromoted = st({ name: "u", model: "v/u:free" }, [good("v/u:free", "e90", 1), good("v/u:free", "e90", 2), good("v/u:free", "e90", 3)]);
+    const fresh = st({ name: "n", model: "v/n:free" }, []);
+    const metPaid = st({ name: "p", model: "v/p" }, [good("v/p", "e90", 1), good("v/p", "e90", 2), good("v/p", "e90", 3)]);
+    const plan = planNextJobs([metFree, unpromoted, fresh, metPaid], ["R1", "R2", "R3", "R4"], new Set(), { policy });
+    // The fresh model first (a real target); then extras, e90 before e360, fewest extras first; paid never.
+    expect(plan.jobs.map((j) => [j.name, j.episode, j.extra])).toEqual([
+      ["n", "e90", undefined],
+      ["f", "e90", chars[0]],
+      ["u", "e90", chars[0]],
+    ]);
+    expect(plan.jobs[1]!.attempt).toBe(4);
+    expect(plan.jobs[1]!.why).toContain("extra #1");
+    // The cycle: with two extras already made, the third takes characters[2]; an extra is an attempt, never counted.
+    const twoExtras = st({ name: "f", model: "v/f:free" }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e90", 7, 2, true), good("v/f:free", "e360", 8, 2, true)]);
+    expect(twoExtras.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
+    expect(twoExtras.perEpisode.e360).toMatchObject({ counted: 0, attempts: 1, extras: 1, target: 3 });
+    // e360 target is still open, so that is a real pick, not an extra.
+    const next = planNextJobs([twoExtras], ["R1"], new Set(), { policy }).jobs[0]!;
+    expect(next).toMatchObject({ episode: "e360", attempt: 2 });
+    expect(next.extra).toBeUndefined();
+    // With e360 met too, the next extra is the third in the cycle; accounts nothing else wants are the only ones extras take.
+    const allMet = st({ name: "f", model: "v/f:free" }, [...twoExtras.perEpisode.e90!.counted > 0 ? [] : [], ...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), ...[4, 5, 6].map((i) => good("v/f:free", "e360", i)), good("v/f:free", "e90", 7, 2, true), good("v/f:free", "e360", 8, 2, true)]);
+    expect(planNextJobs([allMet], ["R1"], new Set(), { policy }).jobs[0]!.extra).toEqual(chars[2]!);
+    expect(planNextJobs([allMet, fresh], ["R1"], new Set(), { policy }).jobs.map((j) => j.name)).toEqual(["n"]);
+    // No extras policy: nothing.
+    expect(planNextJobs([allMet], ["R1"], new Set(), { policy: { ...policy, extras: null } }).jobs).toEqual([]);
   });
 });

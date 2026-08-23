@@ -135,6 +135,25 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
   }
 }
 
+/**
+ * The harness *series* of a version stamp: `harness-0.3-114-gda93f0a-dirty`
+ * is series `"0.3"`. Commits within a series are fixes and instrumentation;
+ * a minor bump is a change to what the run measures. The scheduler keys its
+ * targets on the series of the checkout it runs from (ADR-0034: a bump
+ * restarts the evidence, a fix commit does not), and the eval surface groups
+ * by it, labelling rows with the exact versions they hold. Null when the
+ * stamp has no recognisable major.minor (the unversioned fallback included),
+ * so a reader says "no series" rather than inventing one.
+ */
+export function harnessSeries(version: string | null | undefined): string | null {
+  if (version === null || version === undefined) return null;
+  const v = version.trim();
+  // The runner's own fallback stamps (`0.0.0-phase0...`) name no series.
+  if (v.startsWith("0.0.0")) return null;
+  const m = /^(?:harness-)?v?(\d+)\.(\d+)(?:[.-]|$)/.exec(v);
+  return m === null ? null : `${m[1]}.${m[2]}`;
+}
+
 /** `sha256:<16 hex>` of a string. Truncated: this identifies, it does not seal. */
 export function promptHash(text: string): string {
   return `sha256:${new Bun.CryptoHasher("sha256").update(text).digest("hex").slice(0, 16)}`;

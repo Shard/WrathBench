@@ -4,8 +4,10 @@
  *
  * The one rule this module exists to enforce: **a chart never mixes runs that
  * are not comparable.** Scorability comes from the server's own `unscored`
- * predicate, and everything below groups by (model, harness version) because
- * ADR-0004 makes scores comparable only within a harness version.
+ * predicate, and everything below groups by (model, harness series) — ADR-0004
+ * makes scores comparable only within a harness version, and ADR-0034 names
+ * the *series* (major.minor) as that group: a fix commit does not start a new
+ * row, a minor bump does. The exact versions a row holds are listed on it.
  */
 
 import type { EvalRun, LevelMark } from "@viewer/api-types";
@@ -31,11 +33,17 @@ export interface Reach {
   ms: number | null;
 }
 
-/** One row of the charts: a model on a harness version, and what it managed. */
+/** One row of the charts: a model on a harness series, and what it managed. */
 export interface EvalGroup {
   key: string;
   model: string;
+  /**
+   * The series the row is keyed on (`"0.3"`), or the exact version when the
+   * run carried no recognisable series (it then groups alone, never guessed in).
+   */
   harnessVersion: string;
+  /** Every exact version stamp in the row, sorted — the label's detail. */
+  harnessVersions: string[];
   effort: string | null;
   /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
   wikiCoords: boolean | null;
@@ -72,7 +80,7 @@ function median(values: readonly number[]): number | null {
 }
 
 /**
- * Group scored runs by (model, harness version, effort, server build) and
+ * Group scored runs by (model, harness series, effort, server build) and
  * report what each group cost to reach `level`.
  *
  * Effort is part of the key rather than averaged over: ADR-0024 calls it a
@@ -93,7 +101,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
   const calls = new Map<string, number[]>();
   for (const run of scored(runs)) {
     const model = run.model ?? "(unnamed)";
-    const harness = run.harnessVersion ?? "(unversioned)";
+    const harness = run.harnessSeries ?? run.harnessVersion ?? "(unversioned)";
     const coordsKey = run.wikiCoords === null ? "coords?" : run.wikiCoords ? "coords" : "names";
     const key = `${model} ${harness} ${run.effort ?? ""} ${run.serverBuild ?? ""} ${coordsKey}`;
     let g = byKey.get(key);
@@ -102,6 +110,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
         key,
         model,
         harnessVersion: harness,
+        harnessVersions: [],
         effort: run.effort,
         wikiCoords: run.wikiCoords,
         harnesses: [],
@@ -118,6 +127,8 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
       calls.set(key, []);
     }
     g.attempts += 1;
+    const exact = run.harnessVersion ?? "(unversioned)";
+    if (!g.harnessVersions.includes(exact)) g.harnessVersions.push(exact);
     const tag = run.harness ?? "harness?";
     if (!g.harnesses.includes(tag)) g.harnesses.push(tag);
     if (run.toolCalls !== null) calls.get(g.key)!.push(run.toolCalls);
@@ -127,6 +138,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
   const out = [...byKey.values()];
   for (const g of out) {
     g.harnesses.sort();
+    g.harnessVersions.sort();
     g.reached.sort((a, b) => (a.turn ?? Infinity) - (b.turn ?? Infinity));
     const turns = g.reached.map((r) => r.turn).filter((v): v is number => v !== null);
     const times = g.reached.map((r) => r.ms).filter((v): v is number => v !== null);

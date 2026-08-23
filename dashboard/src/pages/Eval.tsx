@@ -189,7 +189,7 @@ export default function Eval() {
             <thead>
               <tr>
                 <th>model</th>
-                <th>version</th>
+                <th title="harness series (major.minor); hover a row for the exact builds it holds">series</th>
                 <th>harness</th>
                 <th>effort</th>
                 <th>wiki</th>
@@ -216,7 +216,12 @@ export default function Eval() {
                         )}
                       </Show>
                     </td>
-                    <td class="dim">{shortHarness(g.harnessVersion)}</td>
+                    <td class="dim" title={g.harnessVersions.map(shortHarness).join(", ")}>
+                      {g.harnessVersion}
+                      <Show when={g.harnessVersions.length > 1}>
+                        <span class="dim"> ({g.harnessVersions.length} builds)</span>
+                      </Show>
+                    </td>
                     <td>
                       <For each={g.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
                     </td>
@@ -305,7 +310,7 @@ function Chart(props: { groups: EvalGroup[]; metric: "turns" | "time"; level: nu
                   opacity="0.75"
                 >
                   <title>
-                    {row.g.model} · {shortHarness(row.g.harnessVersion)} · {label(row.value)} ·{" "}
+                    {row.g.model} · {row.g.harnessVersion} · {label(row.value)} ·{" "}
                     {row.g.reached.length}/{row.g.attempts} runs reached L{props.level}
                   </title>
                 </rect>

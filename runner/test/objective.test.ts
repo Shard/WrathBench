@@ -266,6 +266,12 @@ describe("argv -> run config", () => {
     expect(configFromArgs(["--model", "m"]).wikiCoords).toBe(false);
   });
 
+  test("--extra is a flag like --wiki-coords; absent is a counted run (ADR-0034)", () => {
+    expect(configFromArgs(["--model", "m", "--extra", "true"]).extra).toBe(true);
+    expect(configFromArgs(["--model", "m", "--extra", "--race", "3"]).extra).toBe(true);
+    expect(configFromArgs(["--model", "m"]).extra).toBe(false);
+  });
+
   test("--no-xp-ms 0 is the command-line spelling of disabled", () => {
     expect(configFromArgs(["--model", "m", "--no-xp-ms", "0"]).watchdogs.noXpMs).toBeNull();
   });

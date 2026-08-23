@@ -43,6 +43,7 @@ function run(p: Partial<RunRow> = {}): RunRow {
     harness: "wrathbench",
     shakeout: null,
     objective: null,
+    extra: false,
     character: "Benchy",
     platform: "openrouter",
     apiBase: null,

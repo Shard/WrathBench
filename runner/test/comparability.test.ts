@@ -19,8 +19,7 @@ import {
   parseComparability,
   promptHash,
   sameComparability,
-  type Comparability,
-} from "../src/comparability";
+  type Comparability, harnessSeries } from "../src/comparability";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
 import { SYSTEM_PROMPT } from "../src/prompt";
@@ -238,5 +237,23 @@ describe("parseComparability", () => {
     const a = comparabilityOf(loadRunConfig({ driver: "openai" }), "v");
     const b = comparabilityOf(loadRunConfig({ driver: "openai", maxToolCallsPerEpisode: 9 }), "v");
     expect(sameComparability(a, b)).toBe(false);
+  });
+});
+
+describe("harnessSeries (ADR-0034: the schedule keys on major.minor)", () => {
+  test("git-describe stamps, tagged or not, dirty or not, reduce to the series", () => {
+    expect(harnessSeries("harness-0.3-114-gda93f0a-dirty")).toBe("0.3");
+    expect(harnessSeries("harness-0.3-133-g6e4b5bb")).toBe("0.3");
+    expect(harnessSeries("harness-0.2-33-g9bba93b-dirty")).toBe("0.2");
+    expect(harnessSeries("harness-1.10")).toBe("1.10");
+    expect(harnessSeries("harness-0.3-test")).toBe("0.3");
+  });
+  test("no recognisable series reads as null, never as a guess", () => {
+    expect(harnessSeries("0.0.0-phase0-unversioned")).toBeNull();
+    expect(harnessSeries("0.0.0-phase0+gabc1234")).toBeNull();
+    expect(harnessSeries("gabc1234")).toBeNull();
+    expect(harnessSeries(null)).toBeNull();
+    expect(harnessSeries(undefined)).toBeNull();
+    expect(harnessSeries("")).toBeNull();
   });
 });

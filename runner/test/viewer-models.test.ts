@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
-import { ERROR_MAX_CHARS, lastErrorOf, readFleetRoster } from "../viewer/models";
+import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../viewer/models";
 import type { ModelsResponse } from "../viewer/api-types";
 
 const SENTINEL = "sentinel-bearer-9d31ff";
@@ -25,6 +25,7 @@ const HOUR = 3_600_000;
 const roots: string[] = [];
 
 interface Synth {
+  harnessVersion?: string;
   id: string;
   model: string;
   effort?: string;
@@ -45,7 +46,8 @@ function writeRun(runsDir: string, r: Synth): void {
     join(dir, "meta.json"),
     JSON.stringify({
       runId: r.id,
-      harnessVersion: "harness-test",
+      // This checkout's series, so the route counts the run (ADR-0034 keys on the series).
+      harnessVersion: r.harnessVersion ?? `harness-${currentSeries() ?? "0.0"}-test`,
       startedAt: r.startedAt,
       config,
       comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90" },

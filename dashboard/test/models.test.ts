@@ -17,6 +17,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
     effort: null,
     platform: "openrouter",
     harness: "wrathbench",
+    billing: "free",
     status: "active",
     eligible: ["e90"],
     perEpisode: {
@@ -24,6 +25,8 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
         counted: 2,
         stillborn: 1,
         attempts: 3,
+        extras: 0,
+        otherSeries: 0,
         target: 3,
         bestLevel: 4,
         reachedL5: false,

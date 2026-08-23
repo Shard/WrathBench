@@ -224,6 +224,13 @@ export const runConfigSchema = z.object({
    * Stamped into the comparability tuple so the two never share a chart.
    */
   wikiCoords: z.boolean().default(false),
+  /**
+   * An extra run (ADR-0034): the scheduling policy launched it past the
+   * model's target, for a free model with nothing else to do. It is a normal
+   * scored run of its tier — same prompt, same leash — and it is stamped so
+   * the projection can report it apart and never count it toward a target.
+   */
+  extra: z.boolean().default(false),
 
   /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).
