@@ -399,6 +399,32 @@ export function reportedCostUsd(entries: readonly { t: string; [k: string]: unkn
   return total;
 }
 
+/**
+ * How much of a run the per-response cost actually covers.
+ *
+ * A run whose process was replaced mid-flight — the fleet resumes rather than
+ * recreates — can have responses from before the adapter recorded `usage.cost`
+ * and responses from after. Summing them yields a number that looks like a bill
+ * for the whole run and is a bill for part of it, which is worse than a blank.
+ * The counts let the cost note say so.
+ *
+ * `costed` is 0 for the claude-code driver whatever the run did: its figure
+ * comes off `claude_result`, not off responses, so nothing here is partial.
+ */
+export function responseCostCoverage(
+  entries: readonly { t: string; [k: string]: unknown }[],
+): { costed: number; uncosted: number } {
+  let costed = 0;
+  let uncosted = 0;
+  for (const e of entries) {
+    if (e.t !== MODEL_RESPONSE_RECORD) continue;
+    const usage = e["usage"] as ReportedUsage | undefined;
+    if (typeof usage?.cost === "number" && Number.isFinite(usage.cost)) costed++;
+    else uncosted++;
+  }
+  return { costed, uncosted };
+}
+
 /** One stretch of a run during which the harness was actually driving. */
 export interface ActiveSegment {
   start: number;
@@ -504,6 +530,9 @@ export interface RunTotals {
   /** What the provider charged: `claude_result` totals or summed
    * `response.usage.cost`; see `reportedCostUsd`. */
   reportedCostUsd: number | null;
+  /** How many responses did and did not carry a per-call charge; see
+   * `responseCostCoverage`. */
+  responseCost: { costed: number; uncosted: number };
 }
 
 /**
@@ -526,6 +555,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let snippets = 0;
   let modelResponses = 0;
   let costUsd: number | null = null;
+  let costed = 0;
+  let uncosted = 0;
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -566,6 +597,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       p["outChars"] = messageChars(rec["message"]);
     }
     const usage = reportedUsage(rec);
+    if (t === MODEL_RESPONSE_RECORD) {
+      if (typeof usage?.cost === "number" && Number.isFinite(usage.cost)) costed++;
+      else uncosted++;
+    }
     if (usage !== null) {
       p["usage"] = usage;
       // The other half of `reportedCostUsd`: OpenRouter charges per response,
@@ -600,6 +635,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     modelResponses,
     segments: segmentsFrom(marks),
     reportedCostUsd: costUsd,
+    responseCost: { costed, uncosted },
   };
 }
 

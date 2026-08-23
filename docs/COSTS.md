@@ -190,11 +190,23 @@ one, because they answer different questions:
   actual against $158.97 expected, which is exactly the per-response-usage
   overcount this section measured, now on screen instead of in a footnote.
 
-One caveat on the corpus: `toUsage` in `runner/src/adapter.ts` parsed `cost` out
-of the usage block and then dropped it, so **no run before 2026-08-23 carries an
-actual cost on the OpenRouter lanes** however long it ran — the opt-in was
-paying for a figure nothing recorded. Fixed in `1fe3951`; runs started after it
-record the charge per response.
+Two caveats on the corpus. First, `toUsage` in `runner/src/adapter.ts` parsed
+`cost` out of the usage block and then dropped it, so **no OpenRouter-lane run
+before 2026-08-23 carries an actual cost** however long it ran — the opt-in was
+paying for a figure nothing recorded (fixed in `1fe3951`). Second, and because
+the fleet resumes a run rather than recreating it, a run in flight across that
+fix has responses from both sides of it: `fleet-ox-alpha-e90-ox-alpha-20260823-a4`
+picked up the charge mid-trajectory when its process respawned. A sum over those
+is a bill for part of the run in the shape of a bill for all of it, so the
+viewer's `actual` note names it — "partial: N of M responses reported no cost" —
+rather than letting the number pass as complete. A run started clean after the
+fix has no such line.
+
+A gap worth knowing about: `reportedUsage` never fills `cacheWrite` on the
+OpenAI-compatible shape (no provider in this fleet emits one), so if a model
+that *does* charge a cache-write tier joins the roster, `expected` will price its
+writes at zero. Nothing today is affected — the synced rows in use quote no write
+tier — but that is a wrong number rather than a blank when it lands.
 
 ### Where the prices come from
 

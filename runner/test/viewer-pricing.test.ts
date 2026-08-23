@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
-import { reportedCostUsd, scanRunTotals, summarize } from "../viewer/tail";
+import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
 function tokens(t: Partial<TokenTotals>): TokenTotals {
@@ -171,6 +171,25 @@ describe("runCost", () => {
     expect(c.actual.usd).toBe(0);
   });
 
+  test("a cost covering only part of a run says so — a partial sum is worse than a blank", () => {
+    const run: PriceableRun = { model: "stealth/ox-alpha", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    const c = runCost({
+      run,
+      tokens: tokens({ promptTokens: 1_000 }),
+      reportedUsd: 0.004,
+      coverage: { costed: 4, uncosted: 20 },
+    });
+    expect(c.actual.usd).toBe(0.004);
+    expect(c.actual.note).toContain("partial: 20 of 24");
+    // Full coverage says nothing extra.
+    const full = runCost({ run, tokens: tokens({ promptTokens: 1_000 }), reportedUsd: 0.004, coverage: { costed: 24, uncosted: 0 } });
+    expect(full.actual.note).not.toContain("partial");
+    // The claude figure is one number for a whole session; uncosted responses
+    // are the normal case there and must not read as a partial bill.
+    const claude = runCost({ run: sonnetRun, tokens: tokens({ promptTokens: 1_000 }), reportedUsd: 43.9, coverage: { costed: 0, uncosted: 900 } });
+    expect(claude.actual.note).not.toContain("partial");
+  });
+
   test("a provider that reports no cost says so, rather than borrowing the estimate", () => {
     const c = runCost({ run: sonnetRun, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: null });
     expect(c.actual.basis).toBe("none");
@@ -285,6 +304,17 @@ describe("reportedCostUsd", () => {
     expect(reportedCostUsd(entries)).toBeCloseTo(0.001, 9);
   });
 
+  test("coverage counts the responses that did and did not carry a charge", () => {
+    expect(
+      responseCostCoverage([
+        { t: "response", ts: 1, usage: { prompt: 1, completion: 1, cost: 0.1 } },
+        { t: "response", ts: 2, usage: { prompt: 1, completion: 1 } },
+        { t: "request", ts: 3, usage: { prompt: 1, completion: 0, cost: 9 } },
+        { t: "snippet", ts: 4 },
+      ]),
+    ).toEqual({ costed: 1, uncosted: 1 });
+  });
+
   test("a driver that reports no cost per response leaves the run's actual blank", () => {
     expect(reportedCostUsd([{ t: "response", ts: 1, usage: { prompt: 10, completion: 2 } }])).toBeNull();
   });
@@ -310,6 +340,7 @@ describe("reportedCostUsd", () => {
     writeFileSync(path, lines.join("\n"));
     const totals = await scanRunTotals(path);
     expect(totals.reportedCostUsd).toBeCloseTo(0.00082, 9);
+    expect(totals.responseCost).toEqual({ costed: 2, uncosted: 0 });
     // The run page walks `tail.entries` instead; both paths must land on the
     // same dollars or the two pages quote different bills for one run.
     const viaSummarize = lines
