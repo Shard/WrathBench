@@ -24,9 +24,10 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { api, type EvalResponse, type EvalRun } from "../api/client";
+import { api, type EvalResponse, type EvalRun, type ModelRowView } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, episodeParam } from "../components/EpisodePicker";
 import { CHART_LEVELS, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
+import { modelsHref, rosterNameFor } from "../lib/models";
 import { fmtDuration, shortHarness } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -47,7 +48,18 @@ export default function Eval() {
   // Stillborn runs — launches with no model response — are hidden by default;
   // the choice rides in the URL like the tier does, so a link keeps its meaning.
   const stillborn = (): boolean => params.stillborn === "1";
+  /*
+   * `?model=` is a client-side filter, deliberately: `/api/eval` has no model
+   * parameter and giving it one would widen a route the charts share with the
+   * ladder. The models page links here with it so a row's "2/3" is one click
+   * from the runs behind it.
+   */
+  const model = (): string | null => (typeof params.model === "string" && params.model.length > 0 ? params.model : null);
   const feed = poll(() => api.eval(episode(), overrides(), stillborn()), POLL_MS);
+  // The roster, only so an eval row can name the model it belongs to and link
+  // back to it. A failure here must not take the charts down with it.
+  const roster = poll(() => api.models(), 60_000);
+  const rosterRows = (): ModelRowView[] => roster.latest?.models ?? [];
   // `poll` is a timer, not a reactive computation: a changed filter has to ask
   // for the new data itself.
   createEffect(on([episode, overrides, stillborn], () => feed.refresh(), { defer: true }));
@@ -60,7 +72,11 @@ export default function Eval() {
   const [metric, setMetric] = createSignal<"turns" | "time">("time");
 
   const body = (): EvalResponse | undefined => feed.latest;
-  const runs = (): EvalRun[] => body()?.runs ?? [];
+  const all = (): EvalRun[] => body()?.runs ?? [];
+  const runs = (): EvalRun[] => {
+    const m = model();
+    return m === null ? all() : all().filter((r) => r.model === m);
+  };
   const groups = createMemo(() => groupsForLevel(runs(), level()));
   const excluded = createMemo(() => runs().length - scored(runs()).length);
   const withTurns = createMemo(() =>
@@ -89,6 +105,16 @@ export default function Eval() {
         includeStillborn={stillborn()}
         onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
+
+      <Show when={model() !== null}>
+        <p class="dim">
+          Filtered to <span class="mono">{model()}</span> ({runs().length} of {all().length} runs in
+          this tier){" "}
+          <button class="toggle" onClick={() => setParams({ model: null }, { replace: true })}>
+            clear
+          </button>
+        </p>
+      </Show>
 
       <div class="chips">
         <For each={CHART_LEVELS}>
@@ -163,7 +189,15 @@ export default function Eval() {
               <For each={groups()}>
                 {(g) => (
                   <tr>
-                    <td>{g.model}</td>
+                    <td>
+                      <Show when={rosterNameFor(rosterRows(), g.model, g.effort)} fallback={g.model}>
+                        {(name) => (
+                          <A href={modelsHref(name())} title="the roster row for this model">
+                            {g.model}
+                          </A>
+                        )}
+                      </Show>
+                    </td>
                     <td class="dim">{shortHarness(g.harnessVersion)}</td>
                     <td class="dim">{g.effort ?? "—"}</td>
                     <td class="dim">{g.wikiCoords === null ? "—" : g.wikiCoords ? "coords" : "names"}</td>

@@ -12,6 +12,7 @@ const MapPage = lazy(() => import("./pages/MapPage"));
 const Eval = lazy(() => import("./pages/Eval"));
 const Ladder = lazy(() => import("./pages/Ladder"));
 const Episodes = lazy(() => import("./pages/Episodes"));
+const Models = lazy(() => import("./pages/Models"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const root = document.getElementById("root");
@@ -26,6 +27,7 @@ render(
       <Route path="/eval" component={Eval} />
       <Route path="/ladder" component={Ladder} />
       <Route path="/episodes" component={Episodes} />
+      <Route path="/models" component={Models} />
       <Route path="*" component={NotFound} />
     </Router>
   ),

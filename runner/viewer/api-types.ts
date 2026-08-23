@@ -514,3 +514,104 @@ export interface TrackResponse {
 export interface ApiError {
   error: string;
 }
+
+/* -------------------------------------------------------------- models --- */
+
+/**
+ * The scheduler's verdict on a model, as `/api/models` serves it.
+ *
+ * Every field mirrors `ModelState` in `runner/src/models.ts`, which is where
+ * the projection lives and the only place any of it is decided. The route adds
+ * the run ids behind each count and the last error text; it computes no number
+ * of its own, so the page and `run-fleet --status` cannot disagree about why a
+ * model is not running (ADR-0031, ADR-0030).
+ */
+export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
+
+/** One tier's counts for one model, plus the runs behind them. */
+export interface ModelEpisodeView {
+  /** Stamped, un-overridden runs that produced at least one model response. */
+  counted: number;
+  /** Stamped runs that never produced one — launches that did not happen. */
+  stillborn: number;
+  /** Every stamped run on this tier, counted or not. */
+  attempts: number;
+  /** Runs the policy wants at this tier before it stops scheduling them. */
+  target: number;
+  bestLevel: number | null;
+  /** A counted run reached the promotion level — the e360 witness. */
+  reachedL5: boolean;
+  lastEnded: number | null;
+  lastReason: string | null;
+  /** The counted runs, newest first. The ids behind `counted`, not a sample. */
+  runIds: string[];
+  /** The stillborn ones, kept apart so a dead provider cannot pad a count. */
+  stillbornRunIds: string[];
+}
+
+/** One of a model's runs, as the detail panel lists it. */
+export interface ModelRunView {
+  runId: string;
+  episode: EpisodeIdView;
+  episodeOverride: boolean;
+  harnessVersion: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  /** Wall clock, start to end — not active time; the run page owns that. */
+  durationMs: number | null;
+  bestLevel: number | null;
+  terminationReason: string | null;
+  live: boolean;
+  counted: boolean;
+  stillborn: boolean;
+}
+
+/** The last error a model died of, off the end of that run's trajectory. */
+export interface ModelLastErrorView {
+  runId: string;
+  reason: string;
+  /** Truncated, and with the run's own recorded secrets struck out. */
+  message: string;
+  at: number | null;
+}
+
+export interface ModelRowView {
+  /** The roster name (ADR-0031's `roster` map key) — the row's identity. */
+  name: string;
+  model: string;
+  effort: string | null;
+  platform: string | null;
+  status: ModelStatusView;
+  /** Tiers the model may be scheduled on, in policy order. */
+  eligible: EpisodeIdView[];
+  perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>>;
+  cooling?: { until: number; rung: number; reason: string };
+  retired?: { at: number; reason: string };
+  /** Consecutive no-progress attempts on the defer ladder. */
+  ladder: number;
+  /** This model's stamped runs, newest first. */
+  runs: ModelRunView[];
+  newestRunId: string | null;
+  lastError: ModelLastErrorView | null;
+}
+
+export interface ModelsResponse {
+  models: ModelRowView[];
+  /**
+   * Where the roster came from. `legacy` is a fleet config that predates
+   * ADR-0031's `roster` map: it names no models, and names are not invented
+   * from lane entries because they would stop matching at the rename.
+   */
+  roster: {
+    path: string | null;
+    shape: "roster" | "legacy" | "missing" | "unreadable";
+    count: number;
+  };
+  policy: {
+    runsPerEpisode: { e90: number; e360: number };
+    promoteAtLevel: number;
+  };
+  /** The defer ladder's rungs, so the page can say "rung 3 of 9" honestly. */
+  ladderMs: number[];
+  now: number;
+}
