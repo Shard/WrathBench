@@ -148,6 +148,8 @@ namespace WrathBench
 
         // WB_RIDE_PROGRESS pacing while aboard a transport (world thread only).
         int64_t lastRideEmitMs{0};
+        // TickTransports: last WB_TRANSPORT_PROGRESS batch for this session.
+        int64_t lastTransportEmitMs{0};
 
         // Map transfer in flight: the destination map from SMSG_TRANSFER_PENDING,
         // cleared by SMSG_NEW_WORLD / SMSG_TRANSFER_ABORTED. Set on tap threads,
@@ -174,6 +176,7 @@ namespace WrathBench
         std::unordered_set<uint32_t> queriedCreatures;           // creature entries
         std::unordered_set<uint64_t> queriedNames;               // player guids
         std::unordered_set<uint32_t> queriedItems;               // item entries
+        std::unordered_set<uint32_t> queriedGameObjects;         // gameobject entries
 
         // loot_all: on the next SMSG_LOOT_RESPONSE the tap replays the client's
         // auto-loot sequence (AUTOSTORE per slot, LOOT_MONEY, LOOT_RELEASE).
@@ -280,6 +283,7 @@ namespace WrathBench
         void TickMovers(int64_t nowMs);
         void TickMover(BenchSession& s, int64_t nowMs);
         void TickRiders(int64_t nowMs);
+        void TickTransports(int64_t nowMs);
         void FinishMove(BenchSession& s, char const* status);
 
         // Answer pending teleports the way a real client does (world thread

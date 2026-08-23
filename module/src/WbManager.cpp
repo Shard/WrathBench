@@ -56,6 +56,7 @@
 #include <cstring>
 #include <filesystem>
 #include <initializer_list>
+#include <iterator>
 #include <strings.h>
 
 using boost::asio::ip::tcp;
@@ -227,6 +228,7 @@ namespace WrathBench
         // mid-update here, so reading player state and QueuePacket are both safe.
         TickMovers(nowMs);
         TickRiders(nowMs);
+        TickTransports(nowMs);
 
         // Answer pending teleports; without this every teleport (repop's
         // graveyard port included) freezes movement forever.
@@ -2302,6 +2304,79 @@ namespace WrathBench
         }
     }
 
+    // A client that has received a transport's create block animates the car
+    // itself from TransportAnimation.dbc and the clock the block carried
+    // (pathProgress): it always knows where the car is and whether it is
+    // sitting at a platform. The server keeps the same animation
+    // (StaticTransport::RelocateToProgress from the same DBC), so the module
+    // reports, at most once a second per session, the current position of
+    // every transport the session has been sent (knownObjects: the client's
+    // own object cache) on the character's map, plus `docked` — whether the
+    // animation segment the clock is on has no displacement, i.e. the car
+    // is dwelling at an end. Nothing here is beyond what the client computes
+    // locally; it is the riding counterpart of WB_RIDE_PROGRESS for the car
+    // rather than the passenger. World thread only.
+    void Manager::TickTransports(int64_t nowMs)
+    {
+        std::vector<std::shared_ptr<BenchSession>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(_sessMutex);
+            for (auto& [token, s] : _byToken)
+                if (!s->tearingDown.load() && s->phase.load() == BenchSession::P_INWORLD)
+                    sessions.push_back(s);
+        }
+        for (auto& s : sessions)
+        {
+            if (s->lastTransportEmitMs && nowMs - s->lastTransportEmitMs < 1000)
+                continue;
+            if (!s->ws || sWorldSessionMgr->FindSession(s->accountId) != s->ws)
+                continue;
+            Player* player = s->ws->GetPlayer();
+            Map* map = (player && player->IsInWorld()) ? player->GetMap() : nullptr;
+            if (!map)
+                continue;
+            s->lastTransportEmitMs = nowMs;
+            for (Transport* t : map->GetAllTransports())
+            {
+                if (!t || !t->IsInWorld())
+                    continue;
+                {
+                    std::lock_guard<std::mutex> lock(s->objMutex);
+                    if (s->knownObjects.find((uint64_t)t->GetGUID().GetRawValue()) == s->knownObjects.end())
+                        continue; // never sent to this client: not observable
+                }
+                Json::Writer w;
+                w.AddGuid("guid", (uint64_t)t->GetGUID().GetRawValue()).Add("entry", t->GetEntry());
+                w.Raw("pos", PosJson(t->GetPositionX(), t->GetPositionY(), t->GetPositionZ(), t->GetOrientation()));
+                uint32 progress = t->GetPathProgress();
+                w.Add("progressMs", progress);
+                if (TransportAnimation const* anim = t->GetGOValue()->Transport.AnimationInfo)
+                {
+                    w.Add("periodMs", anim->TotalTime);
+                    // Same lookup as TransportAnimation::GetAnimNode (the
+                    // keyframe at or before the clock and the one after it),
+                    // written out so a clock past the last keyframe answers
+                    // nothing instead of tripping that function's ASSERT.
+                    if (anim->TotalTime && !anim->Path.empty())
+                    {
+                        uint32 time = progress % anim->TotalTime;
+                        auto nextIt = anim->Path.upper_bound(time);
+                        if (nextIt != anim->Path.begin() && nextIt != anim->Path.end())
+                        {
+                            TransportAnimationEntry const* next = nextIt->second;
+                            TransportAnimationEntry const* curr = std::prev(nextIt)->second;
+                            float dx = next->X - curr->X, dy = next->Y - curr->Y, dz = next->Z - curr->Z;
+                            w.Add("docked", dx * dx + dy * dy + dz * dz < 0.01f);
+                        }
+                    }
+                }
+                else if (StaticTransport* st = dynamic_cast<StaticTransport*>(t))
+                    w.Add("periodMs", st->GetPeriod());
+                EmitEvent(*s, "WB_TRANSPORT_PROGRESS", 0xFF06, w.Str());
+            }
+        }
+    }
+
     // A real client answers every teleport once its loading screen is done:
     // MSG_MOVE_TELEPORT_ACK for a same-map teleport, MSG_MOVE_WORLDPORT_ACK for
     // a map transfer. Until that ack arrives the core discards all movement
@@ -2889,7 +2964,9 @@ namespace WrathBench
             uint64 tg = 0; p.readPackGUID(tg);
             o.AddGuid("targetGuid", (uint64_t)tg);
         }
-        if (flags & UPDATEFLAG_TRANSPORT) { uint32 t; p >> t; }
+        // A transport's create block carries its animation clock (ms into the
+        // TransportAnimation.dbc period); the client animates the car from it.
+        if (flags & UPDATEFLAG_TRANSPORT) { uint32 t; p >> t; o.Add("pathProgress", t); }
         if (flags & UPDATEFLAG_VEHICLE)   { uint32 vid; float vo; p >> vid >> vo; }
         if (flags & UPDATEFLAG_ROTATION)  { int64 rot; p >> rot; }
     }
@@ -3033,6 +3110,7 @@ namespace WrathBench
         // Creature/name queries a real client would fire on cache miss; issued
         // after the parse so a decode error doesn't send half-baked queries.
         std::vector<std::pair<uint32, uint64_t>> creatureQueries;
+        std::vector<std::pair<uint32, uint64_t>> gameObjectQueries;
         std::vector<uint64_t> nameQueries;
         std::vector<uint32_t> itemQueries;
 
@@ -3087,6 +3165,8 @@ namespace WrathBench
                             s.knownObjects[guid] = typeId;
                             if (typeId == TYPEID_UNIT && entry && s.queriedCreatures.insert(entry).second)
                                 creatureQueries.emplace_back(entry, guid);
+                            if (typeId == TYPEID_GAMEOBJECT && entry && s.queriedGameObjects.insert(entry).second)
+                                gameObjectQueries.emplace_back(entry, guid);
                             if (typeId == TYPEID_PLAYER && s.queriedNames.insert(guid).second)
                                 nameQueries.push_back(guid);
                             if ((typeId == TYPEID_ITEM || typeId == TYPEID_CONTAINER)
@@ -3135,6 +3215,12 @@ namespace WrathBench
         for (auto const& [entry, guid] : creatureQueries)
         {
             WorldPacket* q = new WorldPacket(CMSG_CREATURE_QUERY, 12);
+            *q << uint32(entry) << uint64(guid);
+            ws->QueuePacket(q);
+        }
+        for (auto const& [entry, guid] : gameObjectQueries)
+        {
+            WorldPacket* q = new WorldPacket(CMSG_GAMEOBJECT_QUERY, 12);
             *q << uint32(entry) << uint64(guid);
             ws->QueuePacket(q);
         }
@@ -4287,6 +4373,27 @@ namespace WrathBench
                             w.Add("requiredLevel", level);
                         }
                     }
+                    break;
+                }
+                case SMSG_GAMEOBJECT_QUERY_RESPONSE:
+                {
+                    // HandleGameObjectQueryOpcode: entry, type, displayId, name,
+                    // 3 empty names, iconName, castBarCaption, unk1, then the
+                    // 24 raw data u32s, size and quest items (template
+                    // internals a client gets but the agent has no use for).
+                    name = "SMSG_GAMEOBJECT_QUERY_RESPONSE";
+                    uint32 entry = 0; p >> entry;
+                    if (entry & 0x80000000)
+                    {
+                        w.Add("entry", entry & 0x7FFFFFFF).Add("found", false);
+                        break;
+                    }
+                    uint32 gtype, display; p >> gtype >> display;
+                    std::string gname; p >> gname;
+                    std::string n2, n3, n4; p >> n2 >> n3 >> n4; // always empty
+                    std::string iconName, castBarCaption; p >> iconName >> castBarCaption;
+                    w.Add("entry", entry).Add("found", true).Add("name", gname)
+                     .Add("type", gtype).Add("displayId", display).Add("castBarCaption", castBarCaption);
                     break;
                 }
                 case SMSG_ITEM_QUERY_SINGLE_RESPONSE:

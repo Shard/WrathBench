@@ -556,6 +556,7 @@ Additional whitelisted opcodes:
 | `SMSG_UPDATE_OBJECT` | 0x0A9 | `{ "blocks": <u32>, "objects": [ ... ] }` (shapes below) |
 | `SMSG_DESTROY_OBJECT` | 0x0AA | `{ "guid": <guid-string>, "onDeath": <bool> }` |
 | `SMSG_CREATURE_QUERY_RESPONSE` | 0x061 | `{ "entry": <u32>, "found": <bool>, "name": <str?>, "subname": <str>, "type": <u32?>, "rank": <u32?> }` — on a found creature `subname` is always present, `""` when the creature has none |
+| `SMSG_GAMEOBJECT_QUERY_RESPONSE` | 0x05F | `{ "entry": <u32>, "found": <bool>, "name": <str?>, "type": <u32?>, "displayId": <u32?>, "castBarCaption": <str?> }` — `type` is the core's `GameobjectTypes` value (11 = transport, 19 = mailbox, 3 = chest, …); the template's raw data, size and quest-item list the packet also carries are not served |
 | `MSG_MOVE_*` (observed) | various | `{ "guid": <guid-string>, "flags": <u32>, "pos": { "x", "y", "z", "o" } }` |
 
 `MSG_MOVE_*` covers movement of *other* nearby units/players relayed by the
@@ -602,6 +603,7 @@ one of:
   "runSpeed": 7.0,              // living objects only
   "pos": { "x": -8949.9, "y": -132.5, "z": 83.5, "o": 5.2 },  // conditional, see below
   "targetGuid": "0",            // present when the block carries a target
+  "pathProgress": 12345,        // transports only: ms into the TransportAnimation.dbc period
   "fields": { ... }             // whitelisted update fields, see below; may be {}
 }
 ```
@@ -641,10 +643,12 @@ delta for an object never seen in a `create` decodes with no named fields
 (the module, like a client, cannot type it); the entry is still emitted, with
 `"fields": {}` present-and-empty rather than absent.
 
-Name resolution: on first sight of a creature (by entry) or player (by guid)
-the module issues the `CMSG_CREATURE_QUERY` / `CMSG_NAME_QUERY` a real client
-would issue on cache miss; the answers arrive as `SMSG_CREATURE_QUERY_RESPONSE`
-/ `SMSG_NAME_QUERY_RESPONSE` events. Joining guid/entry to name is the SDK's job.
+Name resolution: on first sight of a creature or game object (by entry) or
+player (by guid) the module issues the `CMSG_CREATURE_QUERY` /
+`CMSG_GAMEOBJECT_QUERY` / `CMSG_NAME_QUERY` a real client would issue on cache
+miss; the answers arrive as `SMSG_CREATURE_QUERY_RESPONSE` /
+`SMSG_GAMEOBJECT_QUERY_RESPONSE` / `SMSG_NAME_QUERY_RESPONSE` events. Joining
+guid/entry to name is the SDK's job.
 
 #### Module-synthesized events
 
@@ -657,6 +661,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
 | `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` on `path_incomplete` and `drop`; `"dz": <f>, "target": { "x","y","z" }` only on `drop`; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
 | `WB_RIDE_PROGRESS` | 0xFF05 | `{ "transportGuid": <guid-string>, "transportEntry": <u32>, "pos": { "x","y","z","o" } }` — at most 1/s while the character rides a transport and is not walking; the server-side position the transport carried it to |
+| `WB_TRANSPORT_PROGRESS` | 0xFF06 | `{ "guid": <guid-string>, "entry": <u32>, "pos": { "x","y","z","o" }, "progressMs": <u32>, "periodMs": <u32?>, "docked": <bool?> }` — at most 1/s per session, one per transport on the character's map whose create block the session has received: the car's current position on its `TransportAnimation.dbc` path (what a client animates locally from `pathProgress`), the clock and period, and `docked` when the keyframe segment the clock is on has no displacement (the car is dwelling at a platform; absent for transports without an animation path) |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n> }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry. |
 
@@ -731,6 +736,16 @@ that ends aboard reports `onTransport`; while aboard and idle, the server
 moves the character and the module reports where it is as
 `WB_RIDE_PROGRESS`. No "activate transport" action exists: boarding is
 walking onto the car.
+
+The car itself is observable the way a client sees it (2026-08-23): a
+transport's create block serves `goType` 11 and `pathProgress`, the module
+asks `CMSG_GAMEOBJECT_QUERY` for its name like any other game object, and
+`WB_TRANSPORT_PROGRESS` keeps its position and `docked` state current from
+the same `TransportAnimation.dbc` the client animates from (the server's
+`StaticTransport::RelocateToProgress` runs the same keyframes). The agent
+therefore sees "Subway" standing at the platform or absent, and a `move_to`
+onto an empty rail bed still answers `target_off_mesh` — the SDK's hint
+names the docking car when one is known.
 
 Areatriggers (2026-08, FOLLOW-UPS 38 N1). A real client tests its own position
 against the `AreaTrigger.dbc` volumes it ships and sends `CMSG_AREATRIGGER`
