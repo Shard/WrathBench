@@ -30,6 +30,47 @@ export interface EpisodeBudgetView {
   maxSandboxRestarts: number;
 }
 
+/**
+ * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
+ * rather than imported, because this module is import-free by construction.
+ */
+export type EpisodeIdView = "e90" | "e360" | "freeplay";
+
+/** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
+export interface EpisodeTierView {
+  id: EpisodeIdView;
+  minutes: number | null;
+  idleMinutes: number;
+  noXpMinutes: number | null;
+  /** Tool-call ceiling the tier pins, or null when it pins none. */
+  toolCalls: number | null;
+  objectiveAllowed: boolean;
+  scored: boolean;
+  summary: string;
+}
+
+/** `/api/episodes`: the table, plus how many runs are tagged against each tier. */
+export interface EpisodesResponse {
+  episodes: (EpisodeTierView & {
+    /**
+     * Runs that are *members* of this tier's comparability group: stamped with
+     * the id and never overridden. This is the count a chart may use.
+     */
+    members: number;
+    /** Stamped with the id but given a leash the id does not describe. */
+    overrides: number;
+    /**
+     * Labeled with the id by the reader rather than stamped at launch — an
+     * older run that looks like this tier. Countable, never a member (ADR-0030:
+     * past runs are not back-labeled).
+     */
+    derived: number;
+  })[];
+  /** Runs that belong to no tier at all — neither stamped nor derivable. */
+  untiered: number;
+  now: number;
+}
+
 export interface ComparabilityView {
   harnessVersion: string;
   promptHash: string;
@@ -44,6 +85,13 @@ export interface ComparabilityView {
    * runs stamped before the field existed.
    */
   wikiCoords?: boolean;
+  /**
+   * The episode tier the run was launched under, or null for a run assembled
+   * flag-by-flag. Absent on runs stamped before the field existed.
+   */
+  episode?: EpisodeIdView | null;
+  /** True when a tier run's effective watchdogs are not its tier's. */
+  episodeOverride?: boolean;
   /**
    * The worldserver's own build identity off its `/health` at launch (or
    * resume-restamp) time. Null when the module was unreachable, or for a run
@@ -365,6 +413,23 @@ export interface EvalRun {
   serverBuild: string | null;
   /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
   wikiCoords: boolean | null;
+  /**
+   * The run's episode tier: stamped when the run was launched with `--episode`,
+   * otherwise derived by the reader from what the run's tuple recorded, and
+   * null when neither is possible. Nothing rewrites a stored tuple.
+   */
+  episode: EpisodeIdView | null;
+  /** How this run got its tier. `"none"` when it has none. */
+  episodeSource: "stamped" | "derived" | "none";
+  /** True when a stamped tier run's watchdogs were overridden at launch/resume. */
+  episodeOverride: boolean;
+  /**
+   * Tool calls the run made, counted from its `tool_call` records — the unit
+   * the episode ceiling is enforced in. Null when the trajectory could not be
+   * read. `snippets` is the `eval_snippet` subset of the same count.
+   */
+  toolCalls: number | null;
+  snippets: number | null;
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;
@@ -378,6 +443,17 @@ export interface EvalRun {
 
 export interface EvalResponse {
   runs: EvalRun[];
+  /** The tier the response was filtered to, or "all". Echoed so a page can
+   * render what it actually asked for rather than what it meant to ask for. */
+  episode: EpisodeIdView | "all";
+  /** Whether `?includeOverrides=1` widened the filter to overridden tier runs. */
+  includeOverrides: boolean;
+  /** Runs dropped by that filter. A chart that silently drops rows is a lie of
+   * omission, so the count travels with the rows. */
+  filteredOut: number;
+  /** Of those, how many were dropped only for being overridden tier runs —
+   * the ones `?includeOverrides=1` would bring back. */
+  overridesExcluded: number;
   now: number;
 }
 

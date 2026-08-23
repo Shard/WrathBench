@@ -636,15 +636,25 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     produces, and the honest-but-weaker `SPELL_GO` assertion can go back to
     being a cast-path check.
 
-48. **Wire the episode tiers into the harness** (2026-08-23, ADR-0030,
-   `docs/EPISODES.md`). The decision is recorded; nothing enforces it yet.
-   (a) `episode` joins the comparability tuple in `runner/src/comparability.ts`,
-   structurally in `runner/viewer/api-types.ts`, and as a grouping key on
-   `/api/eval` and the Eval table — the three places `wikiCoords` landed.
-   (b) The watchdog defaults in `runner/src/config.ts` are idle 10m / no-XP 45m;
-   `e90` pins 20m/20m, so adopting the id means changing them, and the first
-   `e90` run is the first run after that change (nothing is back-labeled).
-   (c) Decided 2026-08-23: e90 500, e360 2000, freeplay none (EPISODES.md). (d) A run whose recorded leash differs from its id's
-   definition should be visible as *not* a member of that group rather than
-   silently averaged into it. (e) `tiers` becomes a roster field, computed from
-   run history by the promotion rule, and consumed by the runner pool.
+48. **Episode tiers: what is left** (2026-08-23, ADR-0030, `docs/EPISODES.md`).
+   (a)–(d) shipped — see WORKLOG 2026-08-23. `runner/src/episodes.ts` is the
+   table, `--episode <id>` sets the leash, `episode`/`episodeOverride` are in
+   the tuple, `/api/eval` and `/api/ladder` group by `?episode=` (default e90,
+   `?includeOverrides=1` to see overridden tier runs), and /episodes lists the
+   rules. Membership is stamped-only: an older run that looks like a tier is
+   labeled so it can be counted, never enrolled, so the default e90 view is
+   empty until the first stamped run.
+   (e) `tiers` becomes a roster field, computed from run history by the
+   promotion rule (two qualifying e90 episodes in, two consecutive idle-ended
+   e360 episodes out, both reset by a harness version bump), and consumed by
+   the runner pool. Nothing computes eligibility yet.
+   (f) **`docs/EPISODES.md` still states the old ceilings** (e90 500, e360 2000).
+   The operator's decision of 2026-08-23 is a runaway guard of 1000 calls per
+   30 minutes — e90 3000, e360 12000, freeplay unpinned — and that is what
+   `runner/src/episodes.ts` enforces. The page is owned by the ADR-0030 author
+   and has to catch up, or the code and the definition disagree in public.
+   (g) The bare watchdog defaults in `runner/src/config.ts` are still idle 10m /
+   no-XP 45m. `--episode` overrides them, so a lane that passes the flag is
+   correct either way; whether the flagless defaults should move to 20m/20m is
+   left open, because moving them would change the shape of every run that does
+   not pass `--episode` without saying so in a tuple field.

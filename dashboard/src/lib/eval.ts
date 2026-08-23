@@ -47,6 +47,15 @@ export interface EvalGroup {
   bestMs: number | null;
   medianTurn: number | null;
   medianMs: number | null;
+  /**
+   * Median tool calls across the group's runs, whether or not they reached the
+   * level. The episode ceiling is a runaway guard, not a task budget, and this
+   * is the number it has to be sized against — a group whose median approaches
+   * its tier's ceiling is being ended by the guard rather than by the clock.
+   */
+  medianToolCalls: number | null;
+  /** The largest single run's tool calls, which is what a ceiling must clear. */
+  maxToolCalls: number | null;
 }
 
 function median(values: readonly number[]): number | null {
@@ -74,6 +83,8 @@ function median(values: readonly number[]): number | null {
  */
 export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGroup[] {
   const byKey = new Map<string, EvalGroup>();
+  /** Per-group tool-call counts, kept aside so the group stays a plain shape. */
+  const calls = new Map<string, number[]>();
   for (const run of scored(runs)) {
     const model = run.model ?? "(unnamed)";
     const harness = run.harnessVersion ?? "(unversioned)";
@@ -93,10 +104,14 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
         bestMs: null,
         medianTurn: null,
         medianMs: null,
+        medianToolCalls: null,
+        maxToolCalls: null,
       };
       byKey.set(key, g);
+      calls.set(key, []);
     }
     g.attempts += 1;
+    if (run.toolCalls !== null) calls.get(g.key)!.push(run.toolCalls);
     const mark = markAtLeast(run, level);
     if (mark !== null) g.reached.push({ runId: run.runId, turn: mark.turn, ms: mark.playtimeMs });
   }
@@ -109,6 +124,9 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
     g.bestMs = times.length > 0 ? Math.min(...times) : null;
     g.medianTurn = median(turns);
     g.medianMs = median(times);
+    const used = calls.get(g.key) ?? [];
+    g.medianToolCalls = median(used);
+    g.maxToolCalls = used.length > 0 ? Math.max(...used) : null;
   }
   // Groups that got there first lead; groups that never did sort to the bottom
   // in attempt order, so a model with many failed attempts is still visible.

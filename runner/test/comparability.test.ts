@@ -22,12 +22,18 @@ import {
   type Comparability,
 } from "../src/comparability";
 import { loadRunConfig } from "../src/config";
+import type { EpisodeTier } from "../src/episodes";
 import { SYSTEM_PROMPT } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
-import type { ComparabilityView } from "../viewer/api-types";
+import type { ComparabilityView, EpisodeTierView } from "../viewer/api-types";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;
+/* Same rule for the episode table `/api/episodes` serves (ADR-0030). */
+const _tierToView: EpisodeTierView = {} as EpisodeTier;
+const _tierFromView: EpisodeTier = {} as EpisodeTierView;
+void _tierToView;
+void _tierFromView;
 
 /**
  * Bun's `fetch` carries a `preconnect` static alongside the callable, which a

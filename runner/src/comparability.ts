@@ -22,7 +22,8 @@
  */
 
 import { z } from "zod";
-import type { RunConfig } from "./config";
+import { episodeOverrideOf, type RunConfig } from "./config";
+import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
 
 /**
@@ -89,6 +90,19 @@ export const comparabilitySchema = z.object({
    */
   wikiCoords: z.boolean().optional(),
   /**
+   * The episode tier the run was launched under (`episodes.ts`), or null for a
+   * run assembled flag-by-flag. Absent on tuples stamped before the field
+   * existed; a reader may derive a tier for those (viewer/eval.ts) but nothing
+   * rewrites the stored tuple.
+   */
+  episode: episodeIdSchema.nullable().optional(),
+  /**
+   * True when a tier run's effective watchdogs are not its tier's — the run was
+   * launched (or resumed) with an explicit threshold on top of `--episode`. It
+   * still names its tier, but it must not pass as a clean tier run.
+   */
+  episodeOverride: z.boolean().optional(),
+  /**
    * The worldserver's own build identity, off its `/health` at launch (or
    * resume-restamp) time. Null when the module was unreachable — this must
    * never block a launch, so a failed fetch reads the same as "not recorded"
@@ -154,6 +168,8 @@ export function comparabilityOf(
     },
     objective: config.objective !== undefined,
     wikiCoords: config.wikiCoords,
+    episode: config.episode ?? null,
+    episodeOverride: episodeOverrideOf(config),
     serverBuild,
   };
 }

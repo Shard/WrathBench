@@ -11,6 +11,7 @@ const RunDetail = lazy(() => import("./pages/RunDetail"));
 const MapPage = lazy(() => import("./pages/MapPage"));
 const Eval = lazy(() => import("./pages/Eval"));
 const Ladder = lazy(() => import("./pages/Ladder"));
+const Episodes = lazy(() => import("./pages/Episodes"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const root = document.getElementById("root");
@@ -24,6 +25,7 @@ render(
       <Route path="/map" component={MapPage} />
       <Route path="/eval" component={Eval} />
       <Route path="/ladder" component={Ladder} />
+      <Route path="/episodes" component={Episodes} />
       <Route path="*" component={NotFound} />
     </Router>
   ),

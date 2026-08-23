@@ -25,6 +25,9 @@ export function Layout(props: ParentProps) {
           <A href="/ladder" activeClass="on">
             ladder
           </A>
+          <A href="/episodes" activeClass="on">
+            episodes
+          </A>
         </nav>
         <span class="spacer" />
       </header>
