@@ -26,8 +26,10 @@ told which one it is in.
   is not an end — the run is suspended and resumable.
 - **Scoring.** Scored.
 - **Promotion.** Every model starts here and stays eligible for it forever.
-  Two `e90` episodes on the current harness version that reach rung 1 (level 5)
-  and do not end `adapter-error` make the model `e360`-eligible.
+  One counted `e90` episode (un-overridden, at least one model response) that
+  reaches rung 1 (level 5) makes the model `e360`-eligible, automatically
+  (ADR-0032). The scheduler aims for three counted runs per model here; a
+  stillborn run — the model never spoke — is not one of them.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
   thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`.
 
@@ -52,10 +54,9 @@ because that would silently re-scope every score already carrying this label.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
-- **Promotion in.** Two qualifying `e90` episodes, as above. **Out:** two
-  consecutive `e360` episodes ended by the idle watchdog return the model to
-  `e90` only — a model that stalls has stopped using the budget it was given.
-  Both directions reset on a harness version bump.
+- **Promotion in.** One qualifying `e90` episode, as above. **Out:** none;
+  a model that stalls its `e360` runs meets its three-run target and is simply
+  not scheduled here again (ADR-0032 dropped the demotion rule of ADR-0030).
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling once 48(c) fixes it.

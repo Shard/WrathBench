@@ -253,8 +253,9 @@ as a config error (every per-entry account is checked), and none is ever
 
 `infra/fleet.next.json` is today's fleet under the new schema: lanes no longer
 own accounts; `accounts.pinned` keeps nav-probe on SHAKEOUT, `accounts.pool`
-holds RUNNER–RUNNER6, and the six free/local streams are `queue` jobs that take
-whichever pool account is free. The supervisor that is running today rejects
+holds RUNNER–RUNNER6, and the free/local models are a `roster` the scheduling
+policy (ADR-0032) runs on whichever pool account is free; `queue` is for manual
+overrides. The supervisor that is running today rejects
 that shape (it keeps its last good config and complains), so the switch is done
 at a drain window, in this order:
 
@@ -286,10 +287,35 @@ Steering under the new shape, all hot-reloaded:
 - A job's `enabled: false` drains it at the next episode boundary and frees its
   pool account; deleting it from the queue does the same. Re-enabling a job
   that finished (exit 0) is the rearm, as for a lane.
-- Promotion into a tier is `roster.<name>.tiers`; a job whose episode is not in
-  its model's tiers is skipped with the reason in `--status` and the fleet log,
-  never run. Enable the shipped `sonnet-e360` / `qwen-e360` jobs only after
-  adding `"e360"` to those entries.
+- Promotion into `e360` is automatic (ADR-0032): one counted `e90` run that
+  reached level 5. `roster.<name>.tiers` is only a manual force. A manual job
+  whose episode a ref is not eligible for is skipped with the reason in
+  `--status` and the fleet log, never run.
+
+### The scheduling policy (ADR-0032)
+
+With the pool shape the `queue` is normally empty: the supervisor fills free
+pool accounts from the roster by policy — three runs per (model, episode),
+`e90` for everyone, `e360` once earned, newest-to-the-roster first, shorter
+episode first, fewest runs first. Everything it decides is derived from
+`data/runs/` each tick; nothing is stored except an operator's clear.
+
+```
+./infra/run-fleet.sh infra/fleet.json --status      # per-model block: status, counted/target per episode, why (not) schedulable
+./infra/run-fleet.sh infra/fleet.json --dry-run     # the picks the policy would make for the free accounts right now
+./infra/run-fleet.sh --clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
+```
+
+What the status words mean: `new` has no counted run yet; `active` is working
+toward its `e90` target; `promoted` may also be scheduled on `e360`; `cooling`
+is on the defer ladder (`1m … 6h`) after consecutive stillborn or
+`adapter-error` attempts; `retired` failed once more at the 6h ceiling and will
+not be scheduled until cleared. A stillborn run never counts toward a target
+but does climb the ladder, so a dead provider costs at most ten launches over
+~10 hours before it is retired. A manual `queue` entry always outranks the
+policy; add one to force a specific run (an `e360` for an unpromoted model
+needs `tiers: ["e360"]` on its roster entry as well). Targets: `policy.runsPerEpisode`
+for the fleet, `roster.<name>.runsPerEpisode` per entry.
 - Queue order is priority: with six pool accounts the first six runnable loop
   jobs are the fleet and the rest wait. `--dry-run` prints what would spawn now.
 - `--status` shows each account (pinned -> lane, or pool -> job / free) and the
