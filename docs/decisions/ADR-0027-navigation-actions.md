@@ -7,7 +7,7 @@ turns this from a design into a record.
 
 ## Context
 
-The travel probe of 2026-08-22 (FOLLOW-UPS item 18, WORKLOG) made long-range
+The travel probe of 2026-08-22 (FOLLOW-UPS item 18, docs/worklogs/2026-08-22.md) made long-range
 travel the obstacle between the starter zone and a capital. Three findings
 drove this decision:
 

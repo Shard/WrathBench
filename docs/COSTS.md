@@ -76,7 +76,7 @@ reset.
 **openai-adapter driver (OpenRouter/OpenCode/local, fixed-context policy):** prompt tokens climb
 for the first several turns then plateau — confirmed both in this window (`ox-alpha` turns 1→61:
 3,292 → 7,321 → 11,414 → 12,533 → 13,241; `qwen3.8-27b` turns 1→71: 3,466 → 10,185 → 17,955 →
-18,343) and in `docs/WORKLOG.md` 2026-08-21 ("requests plateau at roughly 8–12k tokens regardless
+18,343) and in `docs/worklogs/2026-08-21.md` ("requests plateau at roughly 8–12k tokens regardless
 of episode length"). The runner trims older conversation aggressively (system prompt: "the
 scratchpad is your memory, not the chat history"), so cost per turn is bounded regardless of how
 long the episode runs. `cached_tokens` on these lanes is mostly 0 or sporadic — no `cache_control`
@@ -89,7 +89,7 @@ directly, but it confirms caching is opt-in per adapter, not automatic).
 (e90, episode-limit segment): `prompt_tokens` 4,092 → 66,685 → 126,748 → 160,932 → 206,116 over the
 turn window, ending near 200k right before the 500-tool-call cap. `roster-opus-20260822` similarly
 grows into the six-figure range. This is a genuinely different context policy, not a tuning
-difference — nothing compacts the subscription-driver conversation today (WORKLOG 2026-08-21: the
+difference — nothing compacts the subscription-driver conversation today (docs/worklogs/2026-08-21.md: the
 compaction gate wasn't tripped by the fixed-context lanes, but "the subscription-lane amendment of
 2026-08-22 arguably trips them already").
 
