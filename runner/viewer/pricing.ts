@@ -114,6 +114,18 @@ export const FREE_PRICE: PriceRow = {
   note: "free tier — request-capped, not token-billed (docs/COSTS.md §1)",
 };
 
+/**
+ * `-contributor-free` slugs (OpenCode Zen) are free because the provider keeps
+ * the prompts and completions. The operator accepted that trade on
+ * 2026-08-23 for eval runs; the note says so rather than hiding it behind
+ * "free tier".
+ */
+export const CONTRIBUTOR_PRICE: PriceRow = {
+  ...FREE_PRICE,
+  id: "contributor-free",
+  note: "contributor tier — free; prompts and completions are shared with the provider (accepted 2026-08-23)",
+};
+
 export const LOCAL_PRICE: PriceRow = {
   id: "local",
   ...ZERO,
@@ -161,6 +173,7 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
 export function priceFor(run: PriceableRun, at: number | null = null): PriceRow | null {
   const model = run.model ?? "";
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
+  if (/contributor-free/i.test(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model)) return FREE_PRICE;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;
