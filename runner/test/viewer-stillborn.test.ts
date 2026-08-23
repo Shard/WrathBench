@@ -9,14 +9,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, existsSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { listRuns } from "../viewer/runs";
 import { isStillborn, ARCHIVE_DIR } from "../viewer/stillborn";
 import { scanRunTotals } from "../viewer/tail";
-import { archiveRun, planStillborn, recentFleetRunIds } from "../src/archive";
+import { archiveRun, inSeries, planPreSeries, planStillborn, recentFleetRunIds } from "../src/archive";
 
 const OLD = 1_600_000_000; // seconds; well outside any liveness window
 
@@ -173,11 +173,11 @@ describe("the archive", () => {
     expect(held?.reason).toContain("may still be live");
   });
 
-  test("a run a fleet lane named inside the window is refused", async () => {
+  test("a run a fleet job named inside the window is refused", async () => {
     const runs = fixture();
     const now = Date.now();
     writeFileSync(
-      join(runs, "fleet-lane-a.jsonl"),
+      join(runs, "fleet-job-a.jsonl"),
       JSON.stringify({ ts: now - 60_000, runId: "dead-on-arrival", outcome: "started" }) + "\n",
     );
     expect(recentFleetRunIds(runs, now)).toContain("dead-on-arrival");
@@ -185,10 +185,10 @@ describe("the archive", () => {
     expect(plans.find((p) => p.runId === "dead-on-arrival")?.held).toBe(true);
   });
 
-  test("an old lane record does not hold a run forever", async () => {
+  test("an old job record does not hold a run forever", async () => {
     const runs = fixture();
     const now = Date.now();
-    const log = join(runs, "fleet-lane-a.jsonl");
+    const log = join(runs, "fleet-job-a.jsonl");
     writeFileSync(log, JSON.stringify({ ts: now - 86_400_000, runId: "dead-on-arrival" }) + "\n");
     expect(recentFleetRunIds(runs, now).size).toBe(0);
   });
@@ -202,5 +202,49 @@ describe("the archive", () => {
     expect(listRuns(runs).map((r) => r.runId).sort()).toEqual(["spoke-only", "worked"]);
     run(runs, "dead-on-arrival", [META]);
     expect(() => archiveRun(runs, "dead-on-arrival")).toThrow(/already archived/);
+  });
+});
+
+describe("the series floor", () => {
+  test("only a clean build of the series is in it", () => {
+    expect(inSeries("harness-0.4", "0.4")).toBe(true);
+    expect(inSeries("harness-0.4-25-g1fe3951", "0.4")).toBe(true);
+    expect(inSeries("harness-0.4-25-g1fe3951-dirty", "0.4")).toBe(false);
+    expect(inSeries("harness-0.3-145-gd75e9f4", "0.4")).toBe(false);
+    expect(inSeries("harness-0.40", "0.4")).toBe(false);
+    expect(inSeries("3c4a124-dirty", "0.4")).toBe(false);
+    expect(inSeries("0.0.0-phase0-unversioned", "0.4")).toBe(false);
+    expect(inSeries(null, "0.4")).toBe(false);
+  });
+
+  test("a plan parks what is below the floor, and releases a parked pause only when asked", () => {
+    const runs = fixture();
+    const stamp = (id: string, harnessVersion: string, pause?: object) => {
+      const path = join(runs, id, "meta.json");
+      const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      const { mtimeMs } = statSync(path);
+      writeFileSync(path, JSON.stringify({ ...meta, harnessVersion, ...(pause ? { pause } : {}) }));
+      // Restamping is not activity: keep whatever age the fixture gave it.
+      utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+    };
+    stamp("worked", "harness-0.4-3-gabc");
+    stamp("spoke-only", "harness-0.3-9-gdef");
+    run(runs, "parked", [META], { warm: true });
+    stamp("parked", "harness-0.4-7-gfed-dirty", { reason: "rate-limited", at: 1 });
+
+    const plans = planPreSeries(runs, "0.4");
+    const byId = new Map(plans.map((p) => [p.runId, p]));
+    expect(byId.has("worked")).toBe(false);
+    expect(byId.get("spoke-only")).toMatchObject({ held: false });
+    expect(byId.get("spoke-only")!.reason).toContain("below harness-0.4");
+    expect(byId.get("parked")).toMatchObject({ held: true });
+
+    const released = planPreSeries(runs, "0.4", Date.now(), true);
+    expect(released.find((p) => p.runId === "parked")).toMatchObject({ held: false });
+    // Warm but not paused: still held, the release is for parked runs only.
+    expect(released.find((p) => p.runId === "dead-on-arrival")).toMatchObject({ held: false });
+    run(runs, "warm-live", [META], { warm: true });
+    stamp("warm-live", "harness-0.3");
+    expect(planPreSeries(runs, "0.4", Date.now(), true).find((p) => p.runId === "warm-live")).toMatchObject({ held: true });
   });
 });
