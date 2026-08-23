@@ -36,9 +36,18 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 
 | route | what |
 | --- | --- |
-| `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused runs, and every run |
+| `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
+| `/episodes` | the tiers, and every run recorded against one — the per-run grain |
+| `/results` | what a level costs, per model per harness series |
+| `/ladder` | the rungs each model has reached (ADR-0018) |
+| `/models` | the roster with the scheduler's verdict on each entry |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
+
+One page per grain (ADR-0022 amendment, 2026-08-23): the fleet page is what is
+running *now* and links to a run, never listing them; `/episodes` is the runs;
+`/results` and `/ladder` are aggregates over them, and a results row links to
+the runs behind it.
 
 ## Structure
 
