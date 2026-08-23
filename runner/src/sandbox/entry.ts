@@ -436,6 +436,18 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
       durationMs: Date.now() - started,
     };
     if (value !== undefined) msg.value = Bun.inspect(value, { depth: 4 }).slice(0, VALUE_MAX_CHARS);
+    // A snippet whose completion value is a function defined a wrapper and then
+    // never invoked it, so nothing it wrote actually ran: `north-mini-code`
+    // wrapped all 120 of its snippets in `async () => { … }` and got a cheerful
+    // `ok` plus `[AsyncFunction (anonymous)]` every time, never connecting to
+    // the world at all. The harness will not call it for the model (ADR-0016
+    // rule 1: repair only what has exactly one reading, and "define a callback
+    // for later" is a second one) — it says what it sees.
+    if (typeof value === "function") {
+      msg.hint =
+        "the snippet returned a function it never called — call it (await fn()) or return its " +
+        "result; nothing in that function body has run.";
+    }
     send(msg);
   } catch (err) {
     // An aborted eval's result is discarded host-side, and with it the one

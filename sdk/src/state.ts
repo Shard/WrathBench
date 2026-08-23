@@ -734,6 +734,7 @@ export class StateCache {
     this.seed = { ...options.seed };
     if (this.seed.guid !== undefined) this.self.guid = this.seed.guid;
     if (this.seed.name !== undefined) this.self.name = this.seed.name;
+    guardSelfMisreads(this.self);
   }
 
   /** Rebuild a cache by replaying events from seq 0. */
@@ -1526,6 +1527,10 @@ export class StateCache {
    * Positions come from `pointOf`, the same resolution `closest()` uses, so a
    * creature mid-spline reports where it is heading. `distance` is `undefined`
    * when either side has no known position.
+   *
+   * No match returns `[]`, never `undefined` and never an error: nothing in
+   * view matching is an answer. (`closest()` answers the same question with
+   * `undefined`.)
    */
   units(filter?: UnitFilter): UnitView[] {
     const f = normalizeUnitFilter(filter);
@@ -1588,6 +1593,11 @@ export class StateCache {
    *
    * Distances mix the freshness of two observations (ours and theirs); both
    * carry their own `seq`, so a caller that cares can check.
+   *
+   * Returns `undefined` on no match, and also when our own position has not
+   * been observed yet — so read a field off it only after checking, or the
+   * miss arrives as a bare `TypeError` from your own code rather than as an
+   * answer. (`units()` answers the same question with `[]`.)
    */
   closest(filter?: UnitFilter | ((obj: NearbyObject) => boolean)): NearbyObject | undefined {
     const from = this.self.position?.value;
@@ -2313,4 +2323,40 @@ export function pointOf(obj: NearbyObject): Observed<Point3> | undefined {
   }
   if (!pos) return undefined;
   return { value: { x: pos.value.x, y: pos.value.y, z: pos.value.z }, seq: pos.seq, ts: pos.ts };
+}
+
+
+/**
+ * Wrong reads of the XP bar, made loud.
+ *
+ * XP lives on the state object (`state.xp`, `state.nextLevelXp`), not on
+ * `state.self`, because it is derived from `self.fields` the same way `money`
+ * is. Models do not know that: two model families in the 2026-08-23 window
+ * printed `XP: undefined /900` for a whole run reading `state.self.xp` or
+ * `state.self.experience`, which are simply absent and so answer `undefined`
+ * forever without ever being wrong out loud. ADR-0016 rule 2 forbids exactly
+ * that: an unusable read must say what it should have been.
+ *
+ * The getters are non-enumerable on purpose — `snapshot()` spreads `self`, and
+ * an enumerable throwing getter would blow up every snapshot, every
+ * `JSON.stringify`, and every `Bun.inspect` of the character.
+ */
+function guardSelfMisreads(self: SelfState): void {
+  const wrong: Record<string, string> = {
+    xp: "state.self.xp",
+    experience: "state.self.experience",
+  };
+  for (const [key, spelling] of Object.entries(wrong)) {
+    Object.defineProperty(self, key, {
+      enumerable: false,
+      configurable: true,
+      get(): never {
+        throw new TypeError(
+          `${spelling} does not exist. Current XP is state.xp (wrapped: state.xp.value), and the ` +
+            `bar's target is state.nextLevelXp (state.nextLevelXp.value). Both are undefined until ` +
+            `an event has carried them.`,
+        );
+      },
+    });
+  }
 }

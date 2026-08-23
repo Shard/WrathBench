@@ -56,6 +56,7 @@ import { Scratchpad } from "./scratchpad";
 import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
+import { className, raceName } from "../viewer/characters";
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const out: Record<string, string | boolean> = {};
@@ -531,17 +532,50 @@ async function main(): Promise<void> {
     }
   }
 
+  /*
+   * The resumed run's session note. It carries the same character facts the
+   * fresh-launch note does, and for the same reason: a resumed model has no
+   * conversation history, so anything the note leaves out it has to guess.
+   * `nav-probe-freeplay-sonnet-20260823-c3` guessed — the old note said
+   * `createSession({...})` with no name — and rolled a second, wrong character
+   * next to the one the pause had preserved, which is exactly the loss ADR-0036
+   * exists to prevent.
+   */
+  const resumeNote = (): string => {
+    const spentM = Math.round(elapsedBeforeMs / 60_000);
+    const budgetMs = config.watchdogs.episodeMs;
+    const clock =
+      budgetMs !== null && budgetMs !== undefined
+        ? `${spentM} minutes elapsed of ${Math.round(budgetMs / 60_000)}`
+        : `${spentM} minutes elapsed`;
+    const last = trajectory.lastState(config.runId);
+    const seen =
+      last === null || (last.level === undefined && last.xp === undefined)
+        ? ""
+        : ` It was last observed at level ${last.level ?? "?"}` +
+          (last.xp !== undefined ? ` with ${last.xp} xp` : "") +
+          `, and that progress is still there.`;
+    const race = raceName(config.race);
+    const klass = className(config.class);
+    return (
+      `the runner process was restarted and this run resumed after a pause, ${clock}. ` +
+      `Conversation history was not preserved; your scratchpad was. ` +
+      `Your character for this episode is unchanged and was NOT deleted: name "${config.character}", ` +
+      `race ${config.race}${race !== null ? ` (${race})` : ""}, class ${config.class}` +
+      `${klass !== null ? ` (${klass})` : ""}.${seen} Do not create a different one. ` +
+      `Run \`await connect()\`, then ` +
+      `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
+      `— it reuses the existing character of that name; a \`token_in_use\` error means the session is ` +
+      `still alive and you can simply keep acting through \`sdk\`.`
+    );
+  };
+
   const initialNotices = resumed
       ? [
           {
             ts: Date.now(),
             kind: "session_note",
-            text:
-              "the runner process was restarted and this run resumed. Conversation history was " +
-              "not preserved; your scratchpad was. The game session may still exist under the " +
-              "same token: run `await connect()`, then `await sdk.createSession({...})` — a " +
-              "`token_in_use` error means the session is still alive and you can simply keep " +
-              "acting through `sdk`.",
+            text: resumeNote(),
           } as const,
         ]
       : [

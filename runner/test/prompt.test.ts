@@ -15,6 +15,13 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("the same criteria object state.units() takes, or a predicate");
   });
 
+  test("the no-match shapes of units() and closest() are stated", () => {
+    // Models chained `.distance`/`.guid` off a miss and read the bare V8
+    // TypeError as a harness fault (closing fan-out, 2026-08-23).
+    expect(SYSTEM_PROMPT).toContain("state.units(...) returns an empty array");
+    expect(SYSTEM_PROMPT).toContain("state.closest(...) returns undefined");
+  });
+
   test("self vs units() shapes are spelled out, including the missing maxHealth", () => {
     // qwen read state.self.maxHealth.value, crashed, and ran the rest of the
     // episode blind on its own max HP.

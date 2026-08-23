@@ -310,6 +310,27 @@ export class Trajectory {
     }
   }
 
+  /**
+   * The most recent state sample this run recorded, or null. Read on
+   * `--resume` so the resumed session note can tell the model where its
+   * character was left (ADR-0036: the character survives a pause, so the note
+   * has to name it).
+   */
+  lastState(runId: string): { level?: number; xp?: number } | null {
+    try {
+      const r = this.db
+        .query(`SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1`)
+        .get(runId) as { level?: unknown; xp?: unknown } | null;
+      if (r === null) return null;
+      return {
+        ...(typeof r.level === "number" ? { level: r.level } : {}),
+        ...(typeof r.xp === "number" ? { xp: r.xp } : {}),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   stateRows(runId: string): Record<string, unknown>[] {
     return this.db
       .query(`SELECT * FROM state WHERE run_id = ? ORDER BY ts`)

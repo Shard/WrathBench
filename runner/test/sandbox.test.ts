@@ -37,6 +37,18 @@ describe("sandbox evaluation", () => {
     expect(res.value).toBe("42");
   });
 
+  test("a completion value that is an uncalled function says so", async () => {
+    // north-mini-code wrapped all 120 of its snippets in an async arrow it never
+    // invoked and was told `ok` every time.
+    const host = makeHost();
+    const res = await host.evalSnippet("async () => { return 1; }");
+    expect(res.ok).toBe(true);
+    expect(res.hint).toContain("the snippet returned a function it never called");
+    expect(res.hint).toContain("await fn()");
+    // A plain value carries no hint.
+    expect((await host.evalSnippet("1 + 1")).hint).toBeUndefined();
+  });
+
   test("top-level bindings persist across snippets", async () => {
     const host = makeHost();
     expect((await host.evalSnippet("const base: number = 10; let acc = base * 2;")).ok).toBe(true);
