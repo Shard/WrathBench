@@ -30,6 +30,7 @@
  */
 
 import { join } from "node:path";
+import { archiveIfNoResponses } from "./archive";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle } from "./wiki";
@@ -649,6 +650,22 @@ async function main(): Promise<void> {
     console.error(`[wrathbench] terminated: ${outcome.reason}${outcome.detail !== undefined ? ` (${outcome.detail})` : ""}`);
   }
   trajectory.close();
+  /*
+   * A launch that did not happen does not become a run. A terminated run with
+   * zero `response` records — the provider was dead on the first request, the
+   * key was refused, the adapter threw before a turn existed — is moved into
+   * `data/runs/archive/` right here, after the termination row is written and
+   * the trajectory is closed, so no listing ever counts it. A PAUSE is not a
+   * termination: a paused run with no response yet is resumed, not buried.
+   */
+  if (outcome.kind === "terminated") {
+    try {
+      const moved = archiveIfNoResponses(config.runsDir, config.runId);
+      if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
+    } catch (err) {
+      console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   if (stopping) {
     wiki?.close();
     process.exit(130);

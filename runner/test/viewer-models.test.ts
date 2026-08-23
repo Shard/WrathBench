@@ -4,7 +4,7 @@
  *
  * The projection itself is tested in `models.test.ts`; what is asserted here is
  * that the route serves it rather than recomputing it, that the counted and
- * stillborn id lists agree with the counts they sit beside, and that an error
+ * counted id lists agree with the counts they sit beside, and that an error
  * message carrying a bearer token does not reach a client. The leak assertion
  * is on the token's *value*, like `viewer-api.test.ts`: a message interpolates
  * a secret into prose, where a field-name rule cannot see it.
@@ -201,10 +201,9 @@ describe("/api/models", () => {
     const e90 = alpha.perEpisode.e90!;
     expect(e90.counted).toBe(2);
     expect(e90.runIds).toEqual(["a-2", "a-1"]);
-    expect(e90.stillborn).toBe(1);
-    expect(e90.stillbornRunIds).toEqual(["a-3"]);
     expect(e90.counted).toBe(e90.runIds.length);
-    expect(e90.stillborn).toBe(e90.stillbornRunIds.length);
+    // The API carries no zero-response state: such a run is archived at exit.
+    expect("stillborn" in e90).toBe(false);
     expect(e90.target).toBe(3);
     expect(e90.bestLevel).toBe(3);
     expect(alpha.runs.map((r) => r.runId)).toEqual(["a-3", "a-2", "a-1"]);

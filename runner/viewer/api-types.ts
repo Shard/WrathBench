@@ -68,12 +68,6 @@ export interface EpisodesResponse {
   })[];
   /** Runs that belong to no tier at all — neither stamped nor derivable. */
   untiered: number;
-  /**
-   * Stillborn runs excluded from every count above. They carry a stamped tuple
-   * (meta.json is written at launch) and would otherwise inflate tier
-   * membership with launches that never produced a turn.
-   */
-  stillbornExcluded: number;
   now: number;
 }
 
@@ -394,21 +388,15 @@ export interface RunListRow extends RunRow {
    * zero-or-not.
    */
   modelResponses: number | null;
-  /**
-   * True when this run never produced a model response and is no longer live
-   * (`runner/viewer/stillborn.ts`). Such a run never got off the ground; the
-   * dashboard hides it unless asked.
-   */
-  stillborn: boolean;
 }
 
+/**
+ * Every run on disk. There is no zero-response filter: a run that terminates
+ * without a single model response is archived by the runner as it exits, so it
+ * never reaches a listing at all.
+ */
 export interface RunsResponse {
   runs: RunListRow[];
-  /** Whether `?includeStillborn=1` kept stillborn runs in `runs`. */
-  includeStillborn: boolean;
-  /** How many stillborn runs there are — shown, not silently dropped. Present
-   * whether or not they were included, so a toggle has its count either way. */
-  stillbornExcluded: number;
 }
 
 export interface PositionsResponse {
@@ -654,8 +642,6 @@ export interface EvalRun {
   snippets: number | null;
   /** `response` records; see `RunListRow.modelResponses`. */
   modelResponses: number | null;
-  /** True when the run never produced a model response (`stillborn.ts`). */
-  stillborn: boolean;
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;
@@ -696,11 +682,6 @@ export interface EvalResponse {
   /** Of those, how many were dropped only for being overridden tier runs —
    * the ones `?includeOverrides=1` would bring back. */
   overridesExcluded: number;
-  /** Whether `?includeStillborn=1` kept stillborn runs in `runs`. */
-  includeStillborn: boolean;
-  /** Stillborn runs matching the episode filter. Counted either way, so the
-   * toggle can say how many it would reveal. */
-  stillbornExcluded: number;
   now: number;
 }
 
@@ -746,8 +727,6 @@ export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retir
 export interface ModelEpisodeView {
   /** Stamped, un-overridden runs that produced at least one model response. */
   counted: number;
-  /** Stamped runs that never produced one — launches that did not happen. */
-  stillborn: number;
   /** Every stamped run on this tier, counted or not. */
   attempts: number;
   /** Attempts past the target (`extra: true`), reported apart and never counted. */
@@ -763,8 +742,6 @@ export interface ModelEpisodeView {
   lastReason: string | null;
   /** The counted runs, newest first. The ids behind `counted`, not a sample. */
   runIds: string[];
-  /** The stillborn ones, kept apart so a dead provider cannot pad a count. */
-  stillbornRunIds: string[];
 }
 
 /** One of a model's runs, as the detail panel lists it. */
@@ -795,7 +772,6 @@ export interface ModelRunView {
   terminationReason: string | null;
   live: boolean;
   counted: boolean;
-  stillborn: boolean;
   /**
    * The run's cost, attached by the route from the same memoised trajectory
    * totals the listing uses. Optional because the projection this view is built

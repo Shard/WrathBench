@@ -75,10 +75,6 @@ export function EpisodePicker(props: {
   onChange: (v: EpisodeChoice) => void;
   includeOverrides: boolean;
   onOverridesChange: (v: boolean) => void;
-  /** Stillborn runs the current filter is hiding. Omit where none can be. */
-  stillborn?: number;
-  includeStillborn?: boolean;
-  onStillbornChange?: (v: boolean) => void;
 }) {
   return (
     <div class="chips">
@@ -98,15 +94,6 @@ export function EpisodePicker(props: {
           + overridden
         </button>
       </Show>
-      <Show when={props.onStillbornChange !== undefined && (props.stillborn ?? 0) > 0}>
-        <button
-          class={props.includeStillborn === true ? "on" : ""}
-          title="Runs that never produced a model response — a dead provider on the first request, a refused key. They never got off the ground; shown greyed."
-          onClick={() => props.onStillbornChange?.(props.includeStillborn !== true)}
-        >
-          show stillborn ({props.stillborn})
-        </button>
-      </Show>
       <span style={{ "margin-left": "auto" }} class="dim">
         <A href="/episodes">what these mean</A>
       </span>
@@ -124,19 +111,9 @@ export function EpisodeFilterNote(props: {
   episode: EpisodeChoice;
   filteredOut: number;
   overridesExcluded: number;
-  /** Stillborn runs in this tier, and whether they are currently shown. */
-  stillborn?: number;
-  includeStillborn?: boolean;
 }) {
   return (
     <>
-    <Show when={(props.stillborn ?? 0) > 0}>
-      <p class="dim">
-        {props.stillborn} stillborn run{props.stillborn === 1 ? "" : "s"}{" "}
-        {props.includeStillborn === true ? "shown" : "hidden"}: never produced a model response, so
-        the launch never happened.
-      </p>
-    </Show>
     <Show when={props.filteredOut > 0}>
       <p class="dim">
         {props.filteredOut} run{props.filteredOut === 1 ? "" : "s"} not shown: not a member of{" "}

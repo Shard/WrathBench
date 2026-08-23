@@ -47,9 +47,6 @@ export default function Eval() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const overrides = (): boolean => params.overrides === "1";
-  // Stillborn runs — launches with no model response — are hidden by default;
-  // the choice rides in the URL like the tier does, so a link keeps its meaning.
-  const stillborn = (): boolean => params.stillborn === "1";
   // The harness filter (ADR-0035) defaults to all; it narrows, it never partitions.
   const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   /*
@@ -75,14 +72,14 @@ export default function Eval() {
    */
   const character = (): string | null =>
     typeof params.character === "string" && params.character.length > 0 ? params.character : null;
-  const feed = poll(() => api.eval(episode(), overrides(), stillborn(), harness()), POLL_MS);
+  const feed = poll(() => api.eval(episode(), overrides(), harness()), POLL_MS);
   // The roster, only so an eval row can name the model it belongs to and link
   // back to it. A failure here must not take the charts down with it.
   const roster = poll(() => api.models(), 60_000);
   const rosterRows = (): ModelRowView[] => roster.latest?.models ?? [];
   // `poll` is a timer, not a reactive computation: a changed filter has to ask
   // for the new data itself.
-  createEffect(on([episode, overrides, stillborn, harness], () => feed.refresh(), { defer: true }));
+  createEffect(on([episode, overrides, harness], () => feed.refresh(), { defer: true }));
   const [level, setLevel] = createSignal<number>(5);
   /*
    * Active time by default. Turns only exist for runs recorded after the turn
@@ -125,9 +122,6 @@ export default function Eval() {
         onChange={(v) => setParams({ episode: v }, { replace: true })}
         includeOverrides={overrides()}
         onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
-        stillborn={body()?.stillbornExcluded ?? 0}
-        includeStillborn={stillborn()}
-        onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
       <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
 
@@ -190,8 +184,6 @@ export default function Eval() {
           episode={episode()}
           filteredOut={body()?.filteredOut ?? 0}
           overridesExcluded={body()?.overridesExcluded ?? 0}
-          stillborn={body()?.stillbornExcluded ?? 0}
-          includeStillborn={stillborn()}
         />
         <p class="dim">
           {scored(runs()).length} scorable runs

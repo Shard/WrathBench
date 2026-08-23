@@ -2668,7 +2668,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }
-  const runs = readRunFacts(RUNS_DIR);
+  const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
@@ -2928,7 +2928,7 @@ async function main(): Promise<void> {
     // The run facts once a tick, shared by the projection and the resume
     // planner. Eligibility for the queue's gate and the policy's picks read
     // the same answer (ADR-0034); resumes read the same facts (ADR-0036).
-    const runs = readRunFacts(RUNS_DIR);
+    const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
     const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     const eligible = eligibleFrom(states);
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));

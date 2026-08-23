@@ -15,7 +15,7 @@
 import type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
-import { MODEL_RESPONSE_RECORD } from "./stillborn";
+import { MODEL_RESPONSE_RECORD } from "./archive-dir";
 
 const NEWLINE = 0x0a;
 
@@ -521,8 +521,9 @@ export interface RunTotals {
   snippets: number;
   /**
    * `response` records: the model's own turns. Counted because a run with none
-   * is stillborn (`stillborn.ts`) — never read as a turn count, since the
-   * claude driver appends one record per content block of a single reply.
+   * never got off the ground (the runner archives it as it exits) — never read
+   * as a turn count, since the claude driver appends one record per content
+   * block of a single reply.
    */
   modelResponses: number;
   /** Stretches the run was actually being driven; see `segmentsFrom`. */

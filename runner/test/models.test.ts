@@ -117,8 +117,10 @@ beforeAll(() => {
   // a non-run directory and a directory without meta.json
   mkdirSync(join(runsDir, "night-report"), { recursive: true });
   writeRun(runsDir, { id: "nometa", model: "x", responses: 2, startedAt: t0, noMeta: true });
+  // An archived run: the runner parks a launch that produced no response.
+  // Invisible to a listing, visible to the scheduler (attempt numbers, ladder).
   mkdirSync(join(runsDir, "archive", "ox-archived"), { recursive: true });
-  writeFileSync(join(runsDir, "archive", "ox-archived", "meta.json"), JSON.stringify({ config: { model: "stealth/ox-alpha" }, comparability: { episode: "e90" } }));
+  writeFileSync(join(runsDir, "archive", "ox-archived", "meta.json"), JSON.stringify({ harnessVersion: "harness-0.3-1-gabc", config: { model: "stealth/ox-alpha" }, comparability: { episode: "e90" } }));
 });
 
 afterAll(() => {
@@ -134,6 +136,8 @@ describe("reading runs", () => {
 
   test("only stamped runs become facts; archive/ and report dirs are skipped; oldest first", () => {
     const facts = readRunFacts(runsDir, NOW);
+    // The archive is the scheduler's to read, and only when it asks.
+    expect(readRunFacts(runsDir, NOW, { includeArchived: true }).map((f) => f.runId)).toContain("ox-archived");
     expect(facts.map((f) => f.runId)).toEqual(["glm-1", "local-old", "ox-1", "sonnet-1", "ox-2", "ox-3", "local-x", "glm-2", "glm-3", "sonnet-low-1"]);
     expect(facts.find((f) => f.runId === "local-old")).toMatchObject({ harnessSeries: "0.2", extra: false });
     expect(facts.find((f) => f.runId === "local-x")).toMatchObject({ harnessSeries: "0.3", extra: true });
@@ -153,7 +157,8 @@ describe("modelStates", () => {
     const by = Object.fromEntries(states.map((s) => [s.name, s]));
 
     expect(by["ox"]).toMatchObject({ status: "promoted", eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
-    expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 3, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
+    // attempts 4: the archived ox run is an attempt — it numbers the next run id.
+    expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
     expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 3, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
 
     expect(by["glm"]!.status).toBe("cooling");
@@ -185,13 +190,13 @@ describe("modelStates", () => {
     expect(local.status).toBe("new");
     expect(local.perEpisode.e90).toMatchObject({ counted: 0, attempts: 2, extras: 1, otherSeries: 1, bestLevel: 2 });
     // Everything else in the fixture is 0.3 and unchanged.
-    expect(states.find((s) => s.name === "ox")!.perEpisode.e90).toMatchObject({ counted: 2, attempts: 3, otherSeries: 0 });
+    expect(states.find((s) => s.name === "ox")!.perEpisode.e90).toMatchObject({ counted: 2, attempts: 4, otherSeries: 0 });
     // A policy keyed on a series nothing ran under: every model is new, but
     // attempts still number every run on disk so the next run id is unique.
     const none = modelStates({ runsDir, roster, policy: { ...policy, series: "0.4" }, now: NOW, sidecar: { version: 1, cleared: {} } });
     expect(none.every((s) => s.status === "new" && s.perEpisode.e90!.counted === 0)).toBe(true);
-    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.attempts).toBe(3);
-    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.otherSeries).toBe(3);
+    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.attempts).toBe(4);
+    expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.otherSeries).toBe(4);
   });
 
   test("a forced tier is eligible without a witness; the pre-tier run never promotes", () => {

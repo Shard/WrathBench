@@ -16,12 +16,12 @@
  *   in its meta.json predates the tiers and is never back-labeled (ADR-0030),
  *   so it is invisible here — it neither counts toward a target nor climbs the
  *   ladder. Every fleet run since the tiers landed is stamped.
- * - **A stillborn run is a launch that did not happen** — zero model
- *   `response` records in the trajectory and not live. It does not count
- *   toward the target, but it does count toward the defer ladder: a provider
- *   that refuses every launch is exactly what the ladder backs off from. The
- *   definition is the viewer's (`runner/viewer/stillborn.ts`); this module
- *   spells the record type the same way and reads it off the same file.
+ * - **A zero-response run is a launch that did not happen** — no model
+ *   `response` record in the trajectory, and not live. The runner archives it
+ *   as it terminates, so no listing shows one; it does not count toward the
+ *   target, but it does count toward the defer ladder (a provider that refuses
+ *   every launch is exactly what the ladder backs off from), which is why this
+ *   projection reads the archive and the viewer does not.
  * - **Overrides do not count.** A stamped run whose leash was overridden
  *   (`episodeOverride`) is not a member of its tier's group; it is listed
  *   (`attempts`) but neither counted nor a promotion witness.
@@ -60,6 +60,7 @@ import { harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 // ----------------------------------------------------------------- policy
 
@@ -246,7 +247,7 @@ export const LADDER_MS: readonly number[] = [
   6 * 60 * 60_000,
 ];
 
-/** The trajectory record the loop appends for a model turn (viewer/stillborn.ts). */
+/** The trajectory record the loop appends for a model turn (viewer/archive-dir.ts). */
 export const MODEL_RESPONSE_RECORD = "response";
 /** The trajectory record a pause writes (`Trajectory.setPause`). */
 export const PAUSE_RECORD = "pause";
@@ -630,15 +631,31 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
   return fact;
 }
 
-/** Every stamped run under `runsDir`, oldest first. The `archive/` directory is skipped. */
-export function readRunFacts(runsDir: string, now = Date.now()): RunFact[] {
+/**
+ * Every stamped run under `runsDir`, oldest first.
+ *
+ * `archive/` is skipped by default, which is what a *listing* wants: an
+ * archived run is one nobody should see again. The **scheduler** asks for them
+ * (`includeArchived`), and has to. A run that terminates with no model
+ * response is archived by the runner as it exits, and those runs are exactly
+ * what the defer ladder is made of — drop them and a provider that refuses
+ * every launch relaunches forever at rung zero. They also number attempts:
+ * a run id carries a date stamp plus `-a<attempt>`, so an invisible attempt
+ * would have the next one collide with a directory already on disk.
+ */
+export function readRunFacts(runsDir: string, now = Date.now(), opts: { includeArchived?: boolean } = {}): RunFact[] {
   if (!existsSync(runsDir)) return [];
   const out: RunFact[] = [];
-  for (const d of readdirSync(runsDir, { withFileTypes: true })) {
-    if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === "archive") continue;
-    const f = readRunFact(runsDir, d.name, now);
-    if (f !== null) out.push(f);
-  }
+  const scan = (dir: string): void => {
+    if (!existsSync(dir)) return;
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
+      const f = readRunFact(dir, d.name, now);
+      if (f !== null) out.push(f);
+    }
+  };
+  scan(runsDir);
+  if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR));
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
@@ -663,7 +680,13 @@ export function driverOf(r: { name: string; driver?: string }): Driver {
   return d;
 }
 
-/** Whether a run is stillborn by the viewer's definition; null while undecidable. */
+/**
+ * Whether a run produced no model response at all; null while undecidable.
+ *
+ * Internal to the scheduler now: such a run is archived by the runner as it
+ * terminates and no listing shows one, but the ladder is made of them, so the
+ * projection (which reads the archive) still has to name the state.
+ */
 export function stillbornOf(f: RunFact): boolean | null {
   if (f.modelResponses === null) return null;
   // Paused: undecided. A 0-response rate-limited pause is a launch still in
@@ -868,7 +891,10 @@ export function readModelsSidecar(runsDir: string): ModelsSidecar {
 export function modelStates(input: ModelStatesInput): ModelState[] {
   const now = input.now ?? Date.now();
   const policy = input.policy ?? DEFAULT_POLICY;
-  const runs = input.runs ?? readRunFacts(input.runsDir, now);
+  // The scheduler's own read includes the archive (see `readRunFacts`): the
+  // ladder and the attempt numbers are made of runs no listing shows. A caller
+  // that has already read the facts — the viewer — decides for itself.
+  const runs = input.runs ?? readRunFacts(input.runsDir, now, { includeArchived: true });
   const sidecar = input.sidecar ?? readModelsSidecar(input.runsDir);
   return input.roster.map((r) => projectModel(r, runs, policy, { now, clearedAt: sidecar.cleared[r.name] }));
 }

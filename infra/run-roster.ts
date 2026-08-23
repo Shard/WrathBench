@@ -49,6 +49,7 @@ import { Database } from "bun:sqlite";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
+import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -728,8 +729,19 @@ interface RunRow {
   pause_reason: string | null;
 }
 
+/**
+ * A run's directory. The archive is a fallback, not a second home: the runner
+ * archives a run that terminated without a single model response, and the
+ * roster's own post-episode reads (the termination row, the level, the turn
+ * count) happen after the child has exited — so they have to look where the
+ * run actually is, or a launch that did not happen would read as one that
+ * left no database at all.
+ */
 function runDir(runId: string): string {
-  return join(REPO_ROOT, RUNS_DIR, runId);
+  const live = join(REPO_ROOT, RUNS_DIR, runId);
+  if (existsSync(live)) return live;
+  const archived = join(REPO_ROOT, RUNS_DIR, ARCHIVE_DIR, runId);
+  return existsSync(archived) ? archived : live;
 }
 
 function readRunRow(runId: string): RunRow | undefined {

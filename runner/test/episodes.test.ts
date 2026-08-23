@@ -35,7 +35,7 @@ function evalRun(over: Partial<EvalRun> = {}): EvalRun {
     runId: "r", model: "m", platform: null, harnessVersion: "v", harnessSeries: null, extra: false, effort: null,
     race: 1, raceName: "Human", class: 2, className: "Paladin", characterLabel: "Human Paladin",
     harness: null, promptHash: null, serverBuild: null, wikiCoords: null,
-    toolCalls: null, snippets: null, modelResponses: null, stillborn: false,
+    toolCalls: null, snippets: null, modelResponses: null,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,
     questsCompleted: null, maps: [], xp: null, money: null,

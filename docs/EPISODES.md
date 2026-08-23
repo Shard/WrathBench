@@ -101,6 +101,15 @@ because that would silently re-scope every score already carrying this label.
 separates them — steering is. `e360` is the standing goal with a longer clock;
 `freeplay` is where a human is allowed to point.
 
+## Runs that produced nothing
+
+A run that terminates without a single model response is archived by the runner
+as it exits (`data/runs/archive/`), so it never appears in a listing, a count or
+a chart: it is a launch that did not happen, not a short episode. A *paused* run
+with no response yet is not one — it is resumed. The scheduler still reads the
+archive, because consecutive such launches are what the defer ladder backs off
+from (ADR-0034).
+
 ## Runs launched without an episode
 
 A run launched without `--episode` is not a member of any tier. It reads

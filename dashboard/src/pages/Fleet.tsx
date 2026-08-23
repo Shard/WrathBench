@@ -26,19 +26,9 @@ import { fmtAge, fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHa
 import { poll } from "../lib/poll";
 
 export default function Fleet() {
-  /*
-   * Stillborn runs are hidden by default (`runner/viewer/stillborn.ts`): a
-   * launch that never produced a model response is not a run this table should
-   * count. The toggle brings them back greyed rather than deleting the fact,
-   * and the count comes off the same response either way.
-   */
-  const [showStillborn, setShowStillborn] = createSignal(false);
-  /** How many the API is hiding (or would hide) — it says so either way. */
-  const [stillbornCount, setStillbornCount] = createSignal(0);
-  const runs = poll(() => api.runs(showStillborn()).then((r) => {
-    setStillbornCount(r.stillbornExcluded);
-    return r.runs;
-  }), 10_000);
+  // Every run on disk: a launch that produced no model response is archived by
+  // the runner as it terminates, so this table has nothing to hide.
+  const runs = poll(() => api.runs().then((r) => r.runs), 10_000);
   const fleet = poll(() => api.fleet(), 5_000);
   /*
    * Server identity (FOLLOW-UPS 42). Slow on purpose: a build stamp changes on
@@ -53,10 +43,6 @@ export default function Fleet() {
   onCleanup(() => clearInterval(timer));
 
   const live = createMemo(() => (runs.latest ?? []).filter((r) => r.live));
-  const toggleStillborn = (): void => {
-    setShowStillborn(!showStillborn());
-    runs.refresh();
-  };
 
   return (
     <div class="page">
@@ -188,13 +174,9 @@ export default function Fleet() {
 
       <h2 class="section">runs</h2>
       <p class="dim">
-        <Show when={stillbornCount() > 0} fallback={<>Every recorded run.</>}>
-          <button class={showStillborn() ? "on" : ""} onClick={toggleStillborn}>
-            show stillborn ({stillbornCount()})
-          </button>{" "}
-          Runs that never produced a model response — a dead provider on the first request, a
-          refused key — never got off the ground and are hidden by default.
-        </Show>
+        Every recorded run. A launch that never produced a model response — a dead provider on
+        the first request, a refused key — is archived by the runner as it exits and never
+        appears here.
       </p>
       <Show when={runs.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <div class="scroller">
@@ -314,8 +296,7 @@ function RunRowView(props: { row: RunListRow; now: number }) {
    */
   const playtime = (): number | null => r().playtimeMs ?? null;
   return (
-    // Greyed, not hidden: a revealed stillborn run must still read as one.
-    <tr class={r().stillborn ? "stillborn" : undefined}>
+    <tr>
       <td>
         <Show when={r().live}>
           <span class="dot live" />
@@ -324,10 +305,6 @@ function RunRowView(props: { row: RunListRow; now: number }) {
       </td>
       <td class="dim">
         {r().model ?? "—"}
-        <Show when={r().stillborn}>
-          {" "}
-          <span class="warn" title="never produced a model response">stillborn</span>
-        </Show>
         <Show when={r().shakeout !== null}>
           {" "}
           <span class="warn" title={r().shakeout ?? ""}>unscored</span>
