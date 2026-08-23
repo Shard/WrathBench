@@ -30,6 +30,7 @@ import {
   formatAccounts,
   formatQueue,
   liveJobsFromState,
+  stateJobFacts,
   pinnedJobs,
   poolJobs,
   policyRefs,
@@ -653,6 +654,28 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(q).toMatch(/glm-e360 .*waiting/);
   });
 
+  test("a state row's job facts come from the job, and an unknown job says so rather than guessing freeplay", () => {
+    const job = {
+      refs: ["deepseek-flash"],
+      ref: "deepseek-flash",
+      episode: "e90" as const,
+      repeat: 1,
+      name: "deepseek-flash-e90",
+      enabled: true,
+      source: "policy" as const,
+      attempt: 2,
+    };
+    expect(stateJobFacts("deepseek-flash-e90", job)).toEqual({ ref: "deepseek-flash", episode: "e90", source: "policy", attempt: 2 });
+    // No job behind the row (a build that lost it, a spawn nothing claimed):
+    // the episode is unknown, and unknown is written, never "freeplay" — a
+    // guess here is how an e90 run was read as a freeplay one all morning.
+    expect(stateJobFacts("muse-spark-e90", undefined)).toEqual({ ref: "muse-spark-e90", episode: null, source: "pinned" });
+    // And --status prints the gap as a gap.
+    expect(
+      formatAccounts([{ account: "RUNNER5", kind: "pool", job: { name: "muse-spark-e90", models: ["muse-spark-1.2"], episode: null } }]).join("\n"),
+    ).toMatch(/RUNNER5 +pool +muse-spark-e90: muse-spark-1.2 episode unknown/);
+  });
+
   test("--status reads the state file's jobs as written; a state without them is nobody's", () => {
     const jobs = {
       "glm-e90": { ref: "glm", episode: "e90" as const, account: "RUNNER", source: "queue" as const, models: ["z-ai/glm-5.2:free"], pid: 2, rosterPath: "", jsonl: "", log: "", spawnedAt: 0, exitCode: null, draining: false, alive: true },
@@ -842,7 +865,10 @@ describe("scheduling policy (ADR-0032)", () => {
       ["local-e90", "LOCALBOX", true],
     ]);
     expect(plan.heldPicks.map((h) => h.name)).toEqual(["bigger", "forced"]);
-    expect(formatHeld(plan.heldPicks)[0]).toMatch(/bigger: HELD — e90 wanted, paid cap: 1\/1/);
+    // PAID went to `big` in this same round, so the honest reason for `bigger`
+    // is the account, named with who has it — the cap is what a SECOND paid
+    // account would run into (asserted below).
+    expect(formatHeld(plan.heldPicks)[0]).toMatch(/bigger: HELD — e90 wanted, paid account\(s\) busy: PAID held by big/);
     // glm has made no extras: the first character; local has made one: the second.
     const chars = config.policy.extras!.characters;
     expect(plan.policy[1]!.job.extra).toEqual(chars[0]!);
@@ -857,6 +883,46 @@ describe("scheduling policy (ADR-0032)", () => {
     const none = planPolicyHeld({ states: paidStates, pool: ["RUNNER"], classPools: { paid: ["PAID"] }, running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set(), policy: config.policy, paidRunning: 1 });
     expect(none.picks).toEqual([]);
     expect(none.held.map((h) => h.name)).toEqual(["big", "bigger", "forced"]);
+    // PAID is free here and the cap is what stops them: the cap wording, not
+    // the busy one. The two reasons never blur into each other.
+    expect(none.held[0]!.why).toBe("paid cap: 1/1 paid model(s) already in flight");
+    // The account exists and a live run holds it: "busy", with the holder — the
+    // operator has nothing to add to accounts.paid, so we never say they do.
+    const heldByRun = planPolicyHeld({
+      states: paidStates,
+      pool: ["RUNNER"],
+      classPools: { paid: ["SHAKEOUT2"] },
+      running: new Map(),
+      held: (a) => (a === "SHAKEOUT2" ? "fleet-deepseek-flash-e90-20260823-a2" : undefined),
+      queuePlan: empty,
+      runningRefs: new Set(),
+      policy: config.policy,
+    });
+    expect(heldByRun.picks).toEqual([]);
+    expect(heldByRun.held[0]!.why).toBe("paid account(s) busy: SHAKEOUT2 held by fleet-deepseek-flash-e90-20260823-a2");
+    // A fleet job on it is named by job when no run id is known yet.
+    const heldByJob = planPolicyHeld({
+      states: paidStates,
+      pool: ["RUNNER"],
+      classPools: { paid: ["SHAKEOUT2"] },
+      running: new Map([["deepseek-flash-e90", "SHAKEOUT2"]]),
+      held: () => undefined,
+      queuePlan: empty,
+      runningRefs: new Set(),
+      policy: config.policy,
+    });
+    expect(heldByJob.held[0]!.why).toBe("paid account(s) busy: SHAKEOUT2 held by deepseek-flash-e90");
+    // Same for the local class, one box and two local models: the second is
+    // busy-by-the-first, never "no local account configured".
+    const twoLocal = parseFleet({
+      ...raw,
+      accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
+      roster: { local: raw.roster.local, local2: { ...raw.roster.local, model: "qwen/q2" } },
+      policy: {},
+    });
+    const twoLocalPlan = planTick(twoLocal, modelStatesOf(rosterModels(twoLocal.roster), [], NOW, twoLocal.policy), () => undefined, "20260101");
+    expect(twoLocalPlan.policy.map((p) => [p.job.name, p.account])).toEqual([["local-e90", "LOCALBOX"]]);
+    expect(twoLocalPlan.heldPicks.map((h) => [h.name, h.why])).toEqual([["local2", "local account(s) busy: LOCALBOX held by local"]]);
     // policy.paid with no accounts.paid: held for the actionable reason, never
     // spilled into the free pool, and --status says so.
     const noAccount = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] } });
