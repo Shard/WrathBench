@@ -7,8 +7,10 @@
  * Time is active time, pause stretches removed, which is the same figure the
  * run page calls playtime.
  *
- * Runs that cannot be scored never appear: a shakeout driver's turns are not
- * the fixed loop's turns, and an objective run was steered (ADR-0024). The
+ * Runs that cannot be scored never appear: a scripted stub is not a model, and
+ * an objective run was steered (ADR-0033). The harness (ADR-0035) is a tag on
+ * the row, never an exclusion: claude-code and wrathbench rows share the
+ * chart, and the column says which loop each group's runs came from. The
  * count of what was excluded is shown, because a chart that silently drops
  * three quarters of the runs is a lie of omission.
  *
@@ -25,7 +27,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { api, type EvalResponse, type EvalRun, type ModelRowView } from "../api/client";
-import { EpisodeFilterNote, EpisodePicker, episodeParam } from "../components/EpisodePicker";
+import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
 import { CHART_LEVELS, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { fmtDuration, shortHarness } from "../lib/format";
@@ -48,6 +50,8 @@ export default function Eval() {
   // Stillborn runs — launches with no model response — are hidden by default;
   // the choice rides in the URL like the tier does, so a link keeps its meaning.
   const stillborn = (): boolean => params.stillborn === "1";
+  // The harness filter (ADR-0035) defaults to all; it narrows, it never partitions.
+  const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   /*
    * `?model=` is a client-side filter, deliberately: `/api/eval` has no model
    * parameter and giving it one would widen a route the charts share with the
@@ -62,14 +66,14 @@ export default function Eval() {
    * which is a different row from any effort at all.
    */
   const effort = (): string | null => (typeof params.effort === "string" && params.effort.length > 0 ? params.effort : null);
-  const feed = poll(() => api.eval(episode(), overrides(), stillborn()), POLL_MS);
+  const feed = poll(() => api.eval(episode(), overrides(), stillborn(), harness()), POLL_MS);
   // The roster, only so an eval row can name the model it belongs to and link
   // back to it. A failure here must not take the charts down with it.
   const roster = poll(() => api.models(), 60_000);
   const rosterRows = (): ModelRowView[] => roster.latest?.models ?? [];
   // `poll` is a timer, not a reactive computation: a changed filter has to ask
   // for the new data itself.
-  createEffect(on([episode, overrides, stillborn], () => feed.refresh(), { defer: true }));
+  createEffect(on([episode, overrides, stillborn, harness], () => feed.refresh(), { defer: true }));
   const [level, setLevel] = createSignal<number>(5);
   /*
    * Active time by default. Turns only exist for runs recorded after the turn
@@ -113,6 +117,7 @@ export default function Eval() {
         includeStillborn={stillborn()}
         onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
+      <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
 
       <Show when={model() !== null}>
         <p class="dim">
@@ -157,7 +162,7 @@ export default function Eval() {
           {scored(runs()).length} scorable runs
           <Show when={excluded() > 0}>
             {" "}
-            · {excluded()} excluded (shakeout driver or operator objective)
+            · {excluded()} excluded (scripted stub or operator objective)
           </Show>
         </p>
 
@@ -184,6 +189,7 @@ export default function Eval() {
             <thead>
               <tr>
                 <th>model</th>
+                <th>version</th>
                 <th>harness</th>
                 <th>effort</th>
                 <th>wiki</th>
@@ -211,6 +217,9 @@ export default function Eval() {
                       </Show>
                     </td>
                     <td class="dim">{shortHarness(g.harnessVersion)}</td>
+                    <td>
+                      <For each={g.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
+                    </td>
                     <td class="dim">{g.effort ?? "—"}</td>
                     <td class="dim">{g.wikiCoords === null ? "—" : g.wikiCoords ? "coords" : "names"}</td>
                     <td class="right mono">{g.attempts}</td>

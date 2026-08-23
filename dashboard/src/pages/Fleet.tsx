@@ -260,7 +260,7 @@ function RunRowView(props: { row: RunListRow; now: number }) {
         </Show>
         <Show when={r().shakeout !== null}>
           {" "}
-          <span class="warn">shakeout</span>
+          <span class="warn" title={r().shakeout ?? ""}>unscored</span>
         </Show>
         <Show when={r().objective !== null}>
           {" "}

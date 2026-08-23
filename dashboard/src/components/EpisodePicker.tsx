@@ -10,7 +10,7 @@
 
 import { For, Show } from "solid-js";
 import { A } from "@solidjs/router";
-import type { EpisodeIdView } from "../api/client";
+import type { EpisodeIdView, HarnessView } from "../api/client";
 
 export type EpisodeChoice = EpisodeIdView | "all";
 
@@ -26,6 +26,48 @@ export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "freepl
 export function episodeParam(raw: string | string[] | undefined): EpisodeChoice {
   const v = Array.isArray(raw) ? raw[0] : raw;
   return EPISODE_CHOICES.includes(v as EpisodeChoice) ? (v as EpisodeChoice) : "e90";
+}
+
+export type HarnessChoice = HarnessView | "all";
+
+export const HARNESS_CHOICES: readonly HarnessChoice[] = ["all", "wrathbench", "claude-code"];
+
+/**
+ * The `?harness=` search param (ADR-0035). Defaults to `all`: the harness is
+ * a tag on every row, and the operator chose not to partition on it, so the
+ * filter is an optional narrowing rather than the default view.
+ */
+export function harnessParam(raw: string | string[] | undefined): HarnessChoice {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return HARNESS_CHOICES.includes(v as HarnessChoice) ? (v as HarnessChoice) : "all";
+}
+
+/** A harness tag as every row shows it. Null reads as "not recorded". */
+export function HarnessTag(props: { harness: string | null | undefined }) {
+  return (
+    <span
+      class={`badge harness-${props.harness ?? "unknown"}`}
+      title="which loop owned the run (ADR-0035): wrathbench is the fixed loop, claude-code the Claude Code CLI scaffold. A tag, not a partition."
+    >
+      {props.harness ?? "harness?"}
+    </span>
+  );
+}
+
+/** The optional harness filter, as chips. `all` is the default and the server's. */
+export function HarnessPicker(props: { value: HarnessChoice; onChange: (v: HarnessChoice) => void }) {
+  return (
+    <div class="chips">
+      <span class="dim" style={{ "align-self": "center" }}>harness</span>
+      <For each={HARNESS_CHOICES}>
+        {(id) => (
+          <button class={id === props.value ? "on" : ""} onClick={() => props.onChange(id)}>
+            {id}
+          </button>
+        )}
+      </For>
+    </div>
+  );
 }
 
 export function EpisodePicker(props: {

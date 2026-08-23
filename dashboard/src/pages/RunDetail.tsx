@@ -25,6 +25,7 @@ import {
   type RunDetailResponse,
   type TokenTotals,
 } from "../api/client";
+import { HarnessTag } from "../components/EpisodePicker";
 import { Sparkline } from "../components/Sparkline";
 import { fmtAge, fmtDuration, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
@@ -368,14 +369,16 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
     >
       {(t) => (
         <dl class="tuple">
-          <dt>harness</dt>
+          <dt>harness version</dt>
           <dd class="mono">{t().harnessVersion}</dd>
           <dt>prompt</dt>
           <dd class="mono">
             {t().promptHash} · {t().promptChars} chars
           </dd>
-          <dt>context engine</dt>
-          <dd>{t().contextEngine}</dd>
+          <dt>harness</dt>
+          <dd>
+            <HarnessTag harness={t().harness} />
+          </dd>
           <dt>effort</dt>
           <dd>{t().effort ?? "not sent (provider default)"}</dd>
           <dt>episode budget</dt>

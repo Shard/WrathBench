@@ -32,7 +32,7 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
     effort: null,
     modelResponses: 1,
     stillborn: false,
-    contextEngine: "harness-fixed-window",
+    harness: "wrathbench",
     promptHash: "sha256:aaaa",
     serverBuild: null,
     wikiCoords: false,
@@ -54,7 +54,7 @@ function run(p: Partial<EvalRun> = {}): EvalRun {
 
 describe("scored / markAtLeast", () => {
   test("anything with a reason is out", () => {
-    const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "shakeout driver (stub)" })];
+    const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "unscored (scripted stub)" })];
     expect(scored(rows).map((r) => r.runId)).toEqual(["a"]);
   });
 
@@ -108,6 +108,26 @@ describe("groupsForLevel", () => {
     expect(groups.map((g) => g.wikiCoords)).toEqual([true, null, false]);
   });
 
+  test("the harness is a tag on the group, not part of its key (ADR-0035)", () => {
+    const groups = groupsForLevel(
+      [
+        run({ runId: "w", harness: "wrathbench", levels: [mark(5, 10, 5)] }),
+        run({ runId: "c", harness: "claude-code", levels: [mark(5, 2, 1)] }),
+        run({ runId: "u", harness: null, levels: [mark(5, 7, 2)] }),
+      ],
+      5,
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.attempts).toBe(3);
+    expect(groups[0]!.harnesses).toEqual(["claude-code", "harness?", "wrathbench"]);
+    const rows = ladderRows([
+      run({ runId: "w", harness: "wrathbench", levels: [mark(5, 10, 5)] }),
+      run({ runId: "c", harness: "claude-code", levels: [mark(5, 2, 1)] }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.harnesses).toEqual(["claude-code", "wrathbench"]);
+  });
+
   test("a group that never reached the level is still reported", () => {
     const groups = groupsForLevel([run({ levels: [mark(3, 4, 40)] })], 10);
     expect(groups).toHaveLength(1);
@@ -118,7 +138,7 @@ describe("groupsForLevel", () => {
 
   test("unscorable runs never enter a group", () => {
     const groups = groupsForLevel(
-      [run({ unscored: "shakeout driver (claude-subscription)", levels: [mark(5, 1, 1)] })],
+      [run({ unscored: "unscored (operator objective)", levels: [mark(5, 1, 1)] })],
       5,
     );
     expect(groups).toEqual([]);

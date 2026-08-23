@@ -16,7 +16,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type EvalResponse, type EvalRun } from "../api/client";
-import { EpisodeFilterNote, EpisodePicker, episodeParam } from "../components/EpisodePicker";
+import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
 import { RUNGS, ladderRows, scored, type LadderCell } from "../lib/eval";
 import { poll } from "../lib/poll";
 
@@ -29,10 +29,11 @@ export default function Ladder() {
   // Stillborn runs — launches with no model response — are hidden by default;
   // the choice rides in the URL like the tier does, so a link keeps its meaning.
   const stillborn = (): boolean => params.stillborn === "1";
+  const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   // `/api/ladder` is the same projection as `/api/eval`; the rung rules stay
   // client-side, in `lib/eval.ts`, where their tests are.
-  const feed = poll(() => api.ladder(episode(), overrides(), stillborn()), POLL_MS);
-  createEffect(on([episode, overrides, stillborn], () => feed.refresh(), { defer: true }));
+  const feed = poll(() => api.ladder(episode(), overrides(), stillborn(), harness()), POLL_MS);
+  createEffect(on([episode, overrides, stillborn, harness], () => feed.refresh(), { defer: true }));
   const body = (): EvalResponse | undefined => feed.latest;
   const runs = (): EvalRun[] => body()?.runs ?? [];
   const rows = createMemo(() => ladderRows(runs()));
@@ -59,6 +60,7 @@ export default function Ladder() {
         includeStillborn={stillborn()}
         onStillbornChange={(v) => setParams({ stillborn: v ? "1" : null }, { replace: true })}
       />
+      <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <EpisodeFilterNote
@@ -91,6 +93,7 @@ export default function Ladder() {
             <thead>
               <tr>
                 <th>model</th>
+                <th>harness</th>
                 <th class="right">runs</th>
                 <th class="right">highest</th>
                 <For each={RUNGS}>
@@ -107,6 +110,9 @@ export default function Ladder() {
                 {(row) => (
                   <tr>
                     <td>{row.model}</td>
+                    <td>
+                      <For each={row.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
+                    </td>
                     <td class="right mono dim">{row.runs}</td>
                     <td class="right mono">{row.highest === 0 ? "—" : row.highest}</td>
                     <For each={row.cells}>{(cell) => <RungCell cell={cell} />}</For>
@@ -115,7 +121,7 @@ export default function Ladder() {
               </For>
               <Show when={rows().length === 0}>
                 <tr>
-                  <td colSpan={3 + RUNGS.length} class="dim">
+                  <td colSpan={4 + RUNGS.length} class="dim">
                     No scorable runs recorded yet.
                   </td>
                 </tr>
