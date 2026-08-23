@@ -27,8 +27,8 @@ model. The dimensions:
   construction. The prompt is a function of the objective alone — never of the
   model, driver or effort — and both drivers render it through one function.
   **A run with an objective is unscored**, stamped through the same `shakeout`
-  machinery the external-scaffold drivers use, so a steered row cannot drift into
-  a chart by being forgotten. An objective is operator-authored world knowledge,
+  key the scripted stub uses (the key's name predates ADR-0035; it holds the
+  unscored stamp), so a steered row cannot drift into a chart by being forgotten. An objective is operator-authored world knowledge,
   not a contract breach: CONTRACTS.md governs what the *server* serves.
 - Watchdog overrides — per entry or lane; `null` disables one (not evaluated, not
   threshold zero). Recorded like any config value; a result run uses the id's leash.
@@ -52,8 +52,9 @@ model. The dimensions:
 
 **One tuple, computed in one place, stamped at launch, never recomputed.**
 `runner/src/comparability.ts` names it: harness version, prompt hash and length,
-context engine, effort, episode budget, episode id and override flag, objective
-presence, `wikiCoords`. Rules that follow from "stamped, never recomputed":
+harness (`wrathbench` | `claude-code`, ADR-0035; stamped as `contextEngine` before
+that record and mapped on read), effort, episode budget, episode id and override
+flag, objective presence, `wikiCoords`. Rules that follow from "stamped, never recomputed":
 
 - The prompt hash is of the *rendered* prompt — the bytes the model saw. Every
   scored run shares one hash; a steered run visibly does not.
@@ -66,8 +67,8 @@ presence, `wikiCoords`. Rules that follow from "stamped, never recomputed":
   A resumed run's recorded turn index continues from the run's high-water mark,
   or turns-to-level would flatter exactly the runs that had the most trouble.
 - Turns and tool calls stay separate fields; the fixed loop ignores one bound
-  and the claude driver has no real version of the other, and averaging would
-  hide which binds. A disabled watchdog stays `null` in the tuple.
+  and the claude-code harness has no real version of the other, and averaging
+  would hide which binds. A disabled watchdog stays `null` in the tuple.
 
 ## Alternatives
 - Objective as a first user message or a second prompt file: the text a model
@@ -79,9 +80,11 @@ presence, `wikiCoords`. Rules that follow from "stamped, never recomputed":
   progress stops (the stop condition becomes the measurement).
 
 ## Consequences
-- Comparability is falsifiable: a chart can be asked which tuple its rows share,
-  and `unscoredReason` excludes the claude driver outright (its turns and the
-  fixed loop's are different units).
+- Comparability is falsifiable: a chart can be asked which tuple its rows share.
+  *(Superseded by ADR-0035: `unscoredReason` no longer excludes the claude-code
+  harness; its runs are tagged `harness: claude-code` and shown alongside
+  `wrathbench` rows. Turns remain different units across the two, which is why
+  the harness tag is on every row.)*
 - The tuple shape is declared twice — zod in the runner, structurally in the
   import-free viewer types (ADR-0022) — and a type-level test fails if they drift.
 - Changing a tier's definition, the prompt, or a dimension's default is a harness

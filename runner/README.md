@@ -13,7 +13,7 @@ computes the harness version on the host (the container has no git) and execs
 the runner inside the compose `runner` service:
 
 ```bash
-./infra/run-episode.sh --model <id> [--driver openai|claude-subscription|stub] [flags...]
+./infra/run-episode.sh --model <id> [--driver openai|claude-code|stub] [flags...]
 ./infra/run-episode.sh --resume <run-id>
 ./infra/run-episode.sh --model <id> --local     # run on the host instead
 ```
@@ -30,7 +30,7 @@ bun runner/src/run.ts --driver stub --stub runner/fixtures/stub-live-check.json
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
 # for the whole episode (default 500; the meaningful bound for an external
 # scaffold that owns its own tool loop)
-bun runner/src/run.ts --driver claude-subscription --model opus --max-tool-calls 200
+bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
 
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
 bun runner/src/run.ts --resume <run-id>
@@ -52,31 +52,34 @@ for resume), `scratchpad.md`.
 
 ## Drivers
 
-`--driver` picks what runs the episode. `--adapter` is the old name and still
-works.
+`--driver` picks how the runner reaches the model; the **harness** — what owns
+the loop and the context — follows from it (ADR-0035). `--adapter` is the old
+name for `--driver` and still works; so does `claude-subscription`, the old
+spelling of `claude-code`. Nothing new writes either.
 
-| driver | what runs the loop | scores? |
-| --- | --- | --- |
-| `openai` (default) | the fixed loop in `src/loop.ts` over an OpenAI-compatible endpoint | yes |
-| `stub` | the fixed loop over a scripted response file | no |
-| `claude-subscription` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | **no — shakeout only** |
+| driver | harness | what runs the loop | scores? |
+| --- | --- | --- | --- |
+| `openai` (default) | `wrathbench` | the fixed loop in `src/loop.ts` over an OpenAI-compatible endpoint | yes |
+| `stub` | `wrathbench` | the fixed loop over a scripted response file | no |
+| `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
 
-### Why claude-subscription is firewalled
+The harness is stamped into the comparability tuple and shown on every run,
+eval, ladder and models row. It is a tag, not a partition: claude-code rows sit
+in the same charts as wrathbench rows (the operator's choice for now, ADR-0035),
+and `?harness=` on the API narrows to one when wanted. `harnessVersion` is a
+different word — the `git describe` of this repo, which applies to both
+harnesses, since the SDK, tools, prompt and sandbox Claude Code drives are ours.
 
-It exists so a Claude subscription can shake the harness out end to end without
-an API bill. It is not a harness score and the code makes that hard to forget:
-`meta.json`, the `shakeout` and `driver` columns of `run.sqlite`, the runner's
-startup banner and the timeline header (top and bottom) all carry
-`shakeout-only (external scaffold)`.
+### Why claude-code is its own harness
 
-The reason is not squeamishness. Measured against claude 2.1.238 with a local
-capture proxy (no model calls):
+Measured against claude 2.1.238 with a local capture proxy (no model calls):
 
 - **Claude Code keeps its own conversation history and compacts it itself.**
   Turn 2's request carries turn 1 verbatim plus its own `context_management`
   edits. ADR-0012's 24-message window is therefore not in force, and an
-  unversioned model-side summarizer sits inside the scaffold — precisely what
-  ADR-0004 forbids in a result.
+  unversioned model-side summarizer sits inside the scaffold — which is why it
+  is a different harness and not a `wrathbench` row (see COSTS.md for what
+  that does to the token curve).
 - Two system blocks precede our prompt: a billing header and "You are a Claude
   agent, built on Anthropic's Claude Agent SDK."
 - Each turn's first user message is prefixed with a `<system-reminder>` block.
@@ -171,7 +174,7 @@ via `apiKeyHelper` — and the process runs in a fresh temp cwd so no `CLAUDE.md
 ```bash
 claude setup-token                 # prints a long-lived OAuth token
 echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> .env    # .env is gitignored
-./infra/run-episode.sh --model opus --driver claude-subscription
+./infra/run-episode.sh --model opus --driver claude-code
 ```
 
 The runner refuses to start this driver without the token. Note that the
@@ -214,7 +217,7 @@ does. So is any HTTP 429 that survives the retries (`rate-limited`), whatever
 the response body says.
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
-them once per turn, which is once per tool batch. The claude-subscription
+them once per turn, which is once per tool batch. The claude-code
 driver checks them at every tool dispatch and on a 5s timer, because one of its
 turns can run for tens of minutes (see Drivers above).
 
@@ -222,7 +225,7 @@ turns can run for tens of minutes (see Drivers above).
 
 `bun test runner` — sandbox eval semantics against the real child process, MCP
 dispatch with fixture JSON-RPC, byte-identical context assembly, watchdogs on a
-fake clock, trajectory writer, and the claude-subscription driver against a
+fake clock, trajectory writer, and the claude-code driver against a
 scripted fake `claude` on PATH (`test/fixtures/fake-claude.ts`, which really
 speaks MCP back through the bridge). No live stack, no real CLI, no
 subscription quota. The live check is the stub run above, executed inside the

@@ -146,7 +146,7 @@ and status.
     to recently-modified directories.
 
 43. **Subscription-lane quota pauses should be resumable** (2026-08-22). When the
-    claude-subscription lane hits its quota window the pause ends the run instead of
+    claude-code lane hits its quota window the pause ends the run instead of
     holding it; a long nav-probe episode loses its progress to a window that reopens
     on its own hours later. Want: pause in place, resume when the window reopens.
     Interacts with item 8 (the CLI's accumulated context is lost on resume today) and
@@ -181,7 +181,9 @@ and status.
 
 ## Episodes and eval
 
-8. **Context policy is not applied on the subscription lane.** The claude driver never
+8. **Context policy is not applied on the claude-code harness.** (ADR-0035 names
+   this: the run is tagged `harness: claude-code` and shown alongside wrathbench rows;
+   the policy gap below is recorded, not penalised.) The claude-code harness never
    applies the policy the prompt describes — no trim, one CLI conversation growing
    linearly (~200k tokens by the end of a 90-minute episode in roster-sonnet-20260822,
    COSTS.md), so almost all of that lane's token spend is cache-read replays of a
@@ -203,9 +205,10 @@ and status.
      deliberately parked.** When picked up: (a) stretch the window well beyond 24–48 in
      a future harness version, since ~8–12k steady state against 131k–200k contexts
      makes a much longer stable prefix nearly free under prompt caching; (b) offer
-     threshold-triggered model self-compaction as a versioned **context engine**
-     stamped into run metadata (the ADR-0026 tuple is the place) — comparable within an
-     engine, never silently across. Grow-then-self-compact is what end-user agents run
+     threshold-triggered model self-compaction as a versioned **harness** value
+     stamped into run metadata (the `harness` field of the ADR-0033 tuple, ADR-0035) —
+     a third value beside `wrathbench` and `claude-code`, comparable within a harness
+     if the operator chooses to partition, never silently across. Grow-then-self-compact is what end-user agents run
      under. This supersedes 8a's flat "no model summarization ever": that holds for
      unlabelled changes to the current engine, not for a future labelled one.
    - **8c** — merged into 8 (the multi-hour evidence it asked for now exists).

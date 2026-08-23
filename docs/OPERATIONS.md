@@ -60,7 +60,8 @@ Edit `infra/fleet.json`. Nothing to restart.
   decides what runs. Trust the banner over your own reading of the file.
 
 Two enabled lanes must not share an account, and lane policy (claude models on
-the claude-subscription driver only; shared free pools carry free ids only) is
+the claude-code driver only — the claude-code harness, ADR-0035; shared free
+pools carry free ids only) is
 enforced on every re-read. Under the pool/queue shape (ADR-0034, below) the
 same applies to pinned lanes, and queue jobs are steered the same way.
 
@@ -326,7 +327,7 @@ for the fleet, `roster.<name>.runsPerEpisode` per entry.
 Nothing about the host path changed. One episode:
 
 ```
-./infra/run-episode.sh --model <id> [--driver openai|claude-subscription]
+./infra/run-episode.sh --model <id> [--driver openai|claude-code]
 ```
 
 One roster, or a whole fleet, from the host:
@@ -366,7 +367,7 @@ the dry-run first; a live lane is the one thing this must not touch.
 
 `.env` at the repo root, never argv. Bun loads `/wrathbench/.env` inside the
 container — in the supervisor and again in every child — so keys reach the
-runner without appearing in `ps` or in the compose file. A claude-subscription
+runner without appearing in `ps` or in the compose file. A claude-code
 lane needs `CLAUDE_CODE_OAUTH_TOKEN` there (`claude setup-token`); without it
 the roster refuses the episode with a `launch-failed` row rather than burning a
 session.

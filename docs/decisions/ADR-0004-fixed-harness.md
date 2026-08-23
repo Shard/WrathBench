@@ -10,6 +10,10 @@ The SDK surface, agent loop, prompt, context policy, and reference bundle are fr
 
 ## Alternatives
 - Open scaffold leaderboard: more fun, less citable. Possible later as a clearly separate board.
+  *(ADR-0035, 2026-08-23: the Claude Code scaffold is now recorded as the `claude-code`
+  harness — a tag on the run, shown alongside `wrathbench` rows rather than on a separate
+  board or excluded as "shakeout". The fixed-loop discipline below is unchanged for the
+  `wrathbench` harness.)*
 
 ## Consequences
 - Scores mean "harness vX, model Y, task Z".
