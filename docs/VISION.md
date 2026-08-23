@@ -21,7 +21,7 @@ milestone is independently measurable.
   scores comparable within a harness version (ADR-0004). Episodes come in
   named tiers — `e90` for sampling, `e360` for the travel rungs, each its own
   comparability group — and a model earns the longer tier by a mechanical
-  promotion rule rather than by anyone's judgement (ADR-0030,
+  promotion rule rather than by anyone's judgement (ADR-0033, ADR-0034,
   `docs/EPISODES.md`). Leaderboards live here.
 - **Freeplay track** — ultra-long-horizon runs with no episode cap, in the
   spirit of Claude Plays Pokémon: "go play WoW" and the agent owns its own

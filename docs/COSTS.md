@@ -189,8 +189,8 @@ it did not show up as a capacity signal, it showed up as dead connections.
 
 ## 5. What to try next (cheap+reliable first)
 
-Filter: the e360 promotion gate from `docs/EPISODES.md` — two `e90` episodes on the current
-harness version reaching rung 1 / level 5, ending neither `adapter-error` nor `harness-error`.
+Filter: the e360 promotion gate (ADR-0034; at the time of this report it was the earlier
+two-run rule of ADR-0030 — now one counted `e90` episode reaching rung 1 / level 5).
 
 1. **local-qwen (qwen3.8-27b)** — already reliable (0 pauses, only 2 adapter-errors across 12
    dirs, 7 clean `episode-limit` endings), $0 marginal, no request cap. Push it toward the e90

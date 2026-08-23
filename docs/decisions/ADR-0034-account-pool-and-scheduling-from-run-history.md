@@ -1,0 +1,79 @@
+# ADR-0034: Account pool and a scheduling policy from run history
+
+Status: Accepted. Date: 2026-08-23. Consolidates ADR-0031 and ADR-0032 (both
+superseded by this record). **This is the single statement of the promotion rule**;
+docs/EPISODES.md, docs/OPERATIONS.md and docs/COSTS.md point here.
+
+## Context
+Under ADR-0020 the fleet was lanes, and a lane owned an account: one sequential
+episode stream per account. Episode tiers (ADR-0033) broke that — an `e360` holds
+an account four times as long as an `e90`, so a roster mixing tiers starves, and
+giving a model a longer run meant displacing a looping lane by hand. The first
+replacement was a hand-written ordered job queue with promotion recorded as a
+roster edit, on the reasoning that a tier change is a comparability change and
+wanted a recorded decision rather than a threshold that flips at 03:00. One night
+showed the cost: the queue needed editing for every model added, pruned or
+promoted; looping jobs held accounts with nothing left to prove; a provider that
+refused every launch was relaunched on its lane's ladder with the account idle
+behind it. What the operator wants is a statement of how much evidence per model,
+and a scheduler that gets there by itself.
+
+## Decision
+**Lanes stop owning accounts.** `fleet.json` has `accounts.pinned` (account →
+lane; a pinned lane is exactly the old lane, for work that must stay on a known
+account such as subscription credentials) and `accounts.pool`, in preference
+order. A job handed a pool account becomes a lane to the rest of the supervisor —
+same spawn, drain, preflight gate (ADR-0023), heartbeat and state file — and
+releases the account when its process exits. Free means not assigned and not
+held live, by the roster's existing account-busy inference.
+
+**The default source of pool work is a policy derived from run history**, in one
+pure projection (`runner/src/models.ts`) that the supervisor, `--status`,
+`--dry-run` and `/api/models` all read. There is one answer to "why is this model
+not running", and it is derived, never stored.
+
+- **Target:** three counted runs per (model, episode) by default
+  (`policy.runsPerEpisode`, overridable per roster entry). A model that has met
+  its targets is not scheduled.
+- **What counts:** only runs stamped with an episode id (no back-labeling, per
+  ADR-0033), un-overridden, with at least one model response. A *stillborn* run
+  (no response, not live) counts toward the ladder, not the target.
+- **Promotion:** every roster model is `e90`-eligible on arrival. It becomes
+  `e360`-eligible automatically once **one** counted `e90` run has reached level 5
+  (ladder rung 1). No harness-version filter (that would restart every model's
+  evidence on each bump and keep the fleet on rung zero). No demotion: a model
+  that idles its `e360` runs meets its target and stops being scheduled.
+  `freeplay` is never scheduled by policy. `roster.<name>.tiers` survives only as
+  a manual force.
+- **Ladder and retirement:** consecutive no-progress attempts (stillborn or
+  `adapter-error`) cool the model for `1m/3m/5m/10m/15m/30m/1h/3h/6h`. A failure
+  at the 6h ceiling **retires** the model until `run-fleet.sh --clear-model`,
+  whose record in `data/runs/fleet-models.json` is the only state the policy
+  persists (it works by ignoring attempts that ended before it).
+- **Priority** for a free account: models with zero counted runs on any eligible
+  episode, then the shorter episode, then fewest counted runs, then roster order.
+  One stream per model at a time.
+- **The `queue` is a manual override** that outranks the policy; its tier gate
+  reads the same projection, so an `e360` job for an unpromoted model is skipped
+  with a logged reason unless the entry forces the tier.
+
+The shape change shipped as a sibling file (`fleet.next.json`) rather than over
+the live one: an older supervisor rejects the new shape and keeps its last good
+config, the new code reads both, so the restart and the rename commute.
+
+## Alternatives
+- Promotion by operator judgement, or as a recorded roster edit. What those
+  guarded against was a decision made differently per model; a threshold written
+  once and applied to every model alike is the same guarantee with less latency.
+- Per-job processes instead of per-job rosters: the defer ladder, resume-in-place
+  and cycle numbering all live in run-roster and are what a pool job needs.
+- Persisting the ladder in a supervisor-written sidecar: two sources of truth
+  that a restart or hand-launched run would desynchronise.
+
+## Consequences
+- Capacity is explicit: with six pool accounts, six jobs run and the rest wait.
+- Nothing on disk before `--episode` carries a stamp, so the policy started every
+  model at zero. Correct — those runs ran under the leash of their day.
+- The model is never told its tier; only the wall clock and watchdogs vary, and
+  the tuple records both. The loop stays model-agnostic.
+- A dead provider costs at most ten launches over ~10 hours before retirement.

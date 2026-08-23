@@ -3,8 +3,9 @@
 The rulesets a run can be launched under. Every run is tagged with exactly one
 episode id, and the id is a comparability group: two runs may only be compared
 if they share an id **and** a harness version. The decision and its reasoning
-are in `docs/decisions/ADR-0030-episode-tiers-and-promotion.md`; this page is
-the definition an operator tags against.
+are in `docs/decisions/ADR-0033-run-dimensions-and-the-comparability-tuple.md`;
+this page is the definition an operator tags against. Who gets scheduled on
+which tier, including promotion, is ADR-0034 — it is stated there and only there.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
@@ -17,7 +18,7 @@ told which one it is in.
 - **Start state.** A fresh level-1 character, deleted and recreated per episode
   (ADR-0006). Nothing carries over between episodes.
 - **Objective.** None. The standing goal only — an operator objective is what
-  makes a run unscored (ADR-0024).
+  makes a run unscored (ADR-0033).
 - **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
 - **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
@@ -25,11 +26,8 @@ told which one it is in.
   or `harness-error` (our defect). A `quota-exhausted` or `rate-limited` pause
   is not an end — the run is suspended and resumable.
 - **Scoring.** Scored.
-- **Promotion.** Every model starts here and stays eligible for it forever.
-  One counted `e90` episode (un-overridden, at least one model response) that
-  reaches rung 1 (level 5) makes the model `e360`-eligible, automatically
-  (ADR-0032). The scheduler aims for three counted runs per model here; a
-  stillborn run — the model never spoke — is not one of them.
+- **Promotion.** Every model starts here. Reaching rung 1 in one counted
+  episode earns `e360`; the rule, targets and what counts are in ADR-0034.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
   thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`.
 
@@ -54,9 +52,8 @@ because that would silently re-scope every score already carrying this label.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
-- **Promotion in.** One qualifying `e90` episode, as above. **Out:** none;
-  a model that stalls its `e360` runs meets its three-run target and is simply
-  not scheduled here again (ADR-0032 dropped the demotion rule of ADR-0030).
+- **Promotion in.** Earned on `e90` per ADR-0034. **Out:** none; a model that
+  stalls its `e360` runs meets its target and is simply not scheduled here again.
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling once 48(c) fixes it.
@@ -68,7 +65,7 @@ because that would silently re-scope every score already carrying this label.
   session, not because the id requires it.
 - **Start state.** Whatever the experiment needs.
 - **Objective.** Allowed. This is the only id where the operator may tell the
-  agent where to go (ADR-0024), and `wikiCoords` may be on (ADR-0028).
+  agent where to go (ADR-0033), and `wikiCoords` may be on (ADR-0033).
 - **Watchdogs.** Set per experiment; recorded, like everything else.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
@@ -87,6 +84,6 @@ separates them — steering is. `e360` is the standing goal with a longer clock;
 
 A run launched before episode ids existed reads `episode: null`, and is never
 back-labeled. It ran under the watchdog defaults of its day, which are not what
-`e90` pins, and a tuple field is never recomputed after the fact (ADR-0026):
+`e90` pins, and a tuple field is never recomputed after the fact (ADR-0033):
 saying nothing is more honest than asserting a comparability that was never
 established.
