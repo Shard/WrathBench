@@ -77,14 +77,17 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
 import {
   LADDER_MS,
   MODELS_SIDECAR,
+  inSeries,
+  isStalePause,
   modelStates,
+  readRunFacts,
   parsePolicyBlock,
   parseRunsPerEpisode,
   parseModelsSidecar,
@@ -96,6 +99,7 @@ import {
   type ModelState,
   type NextJob,
   type RosterModel,
+  type RunFact,
   type SchedulingPolicy,
   type StartingCharacter,
 } from "../runner/src/models";
@@ -142,6 +146,13 @@ export interface FleetLane {
   maxToolCalls?: number;
   /** Lane default for the wiki-coordinates tier (ADR-0028); entry wins. */
   wikiCoords?: boolean;
+  /**
+   * Set on a lane spawned to resume a paused run (ADR-0036): its first entry
+   * carries that run id, and the roster is started with --resume-roster so
+   * it reattaches instead of launching fresh (which would wipe the account's
+   * characters).
+   */
+  resumeRunId?: string;
 }
 
 /**
@@ -272,6 +283,12 @@ export interface FleetJob {
    * Only `legacyJob` sets it.
    */
   legacy?: FleetLane;
+  /**
+   * Set by `planResumes` (ADR-0036): this job's spawn resumes the paused run
+   * named here, on the account it was on, before anything fresh is launched.
+   * `model`/`effort` pick the entry that carries the run id.
+   */
+  resume?: { runId: string; model: string; effort?: string | undefined };
 }
 
 export interface FleetAccounts {
@@ -1070,11 +1087,15 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
  * roster file. A legacy job is its lane, verbatim, on the account given.
  */
 export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): FleetLane {
-  if (job.legacy !== undefined) return { ...job.legacy, account, enabled: job.enabled };
+  if (job.legacy !== undefined) {
+    const lane: FleetLane = { ...job.legacy, account, enabled: job.enabled };
+    return job.resume === undefined ? lane : withResume(lane, job.resume);
+  }
   const dims = episodeDimensions(job.episode);
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
-  for (const r of runnableRefs(job, roster, eligible)) {
+  // A resume is its own witness too: the run was launched, so its ref is runnable.
+  for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const { tiers: _tiers, runsPerEpisode: _runs, billing: _billing, ...spec } = roster[r]!;
     const base: RosterSpec = {
       ...spec,
@@ -1092,13 +1113,217 @@ export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>,
     }
   }
   if (entries.length === 0) fail(`job ${job.name}: no ref of ${job.ref} is eligible for ${job.episode}`);
-  return {
+  const lane: FleetLane = {
     name: job.name,
     enabled: job.enabled,
     account,
     loop: job.repeat === "loop",
     entries,
   };
+  return job.resume === undefined ? lane : withResume(lane, job.resume);
+}
+
+/**
+ * The lane, made to resume one paused run first (ADR-0036): the entry for
+ * that model carries the paused run id and moves to the front — the roster
+ * runs entries in order, and a *fresh* launch of a lane-mate wipes the
+ * account's characters, which would cost the paused run its level. The
+ * roster's --resume-roster then reattaches that run id instead of launching.
+ */
+export function withResume(lane: FleetLane, resume: NonNullable<FleetJob["resume"]>): FleetLane {
+  const entries = [...(lane.entries ?? [])];
+  const i = entries.findIndex((e) => e.model === resume.model && (e.effort ?? undefined) === (resume.effort ?? undefined));
+  if (i >= 0) {
+    const [hit] = entries.splice(i, 1);
+    entries.unshift({ ...hit!, runId: resume.runId });
+  } else if (entries.length > 0) {
+    // The paused run's identity comes from its meta.json on --resume; the
+    // entry only has to name the run id and a model the roster accepts.
+    entries.unshift({ ...entries[0]!, model: resume.model, ...(resume.effort !== undefined ? { effort: resume.effort } : {}), runId: resume.runId });
+  }
+  return { ...lane, entries, resumeRunId: resume.runId };
+}
+
+// ------------------------------------------------------------------ resumes
+//
+// ADR-0036: a fleet stop pauses every live run (the runner pauses on SIGTERM,
+// clock stopped, session released) and a fleet start resumes them before the
+// queue or the policy launches anything fresh. The same planner runs every
+// tick, so a run its provider paused (rate-limited, quota-exhausted) is also
+// picked back up once its cooling is over — that is FOLLOW-UPS 43.
+
+export interface ResumePlan {
+  job: FleetJob;
+  account: string;
+  runId: string;
+  /** How many times the run has paused; with the run id, names this resume attempt. */
+  pauseCount: number;
+  why: string;
+}
+
+/** A paused run the supervisor will NOT resume right now, and why. For --status. */
+export interface PausedListing {
+  runId: string;
+  model: string;
+  account: string | null;
+  reason: string;
+  /** When the run paused. */
+  since: number;
+  elapsedMs: number | null;
+  budgetMs: number | null;
+  why: string;
+}
+
+/** "41m of 90m" — what the accounts table and the paused listing say about a paused run. */
+export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): string {
+  const spent = elapsedMs !== null ? fmtElapsed(elapsedMs) : "?";
+  return budgetMs !== null ? `${spent} elapsed of ${fmtElapsed(budgetMs)}` : `${spent} elapsed`;
+}
+
+/**
+ * The resume cadence for a paused run. An operator-pause resumes at once —
+ * the fleet stopped under it and nothing about the provider changed. A
+ * provider pause resumes on the roster's own defer ladder (1m … 6h), indexed
+ * by how many times THIS run has paused, which continues the cadence the
+ * roster process was on before it gave up and exited; past the ladder the
+ * run is listed, not hammered. Null means "now".
+ */
+export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
+  if (pause.reason === "operator-pause") return null;
+  if (isTainted(pause.count)) return "never";
+  return pause.at + backoffMs(pause.count);
+}
+
+/**
+ * Which paused runs to resume this tick, and which to list instead. Pure.
+ *
+ * A run maps back to its job by what the run recorded — model, effort,
+ * episode — against the roster; a pinned or queued job from the file takes
+ * it, else a policy model gets a synthetic policy job (the attempt number is
+ * read off the run id's `-aN`). A run whose model or tier is no longer in the
+ * file stays paused and is listed: the operator resumes it by hand or
+ * archives it. Resumes go to the account the run was on (the character
+ * lives there), so a busy account means waiting, never a different account.
+ */
+export function planResumes(opts: {
+  runs: readonly RunFact[];
+  config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts">;
+  /** job name -> account, every job with a process (pinned ones included). */
+  running: ReadonlyMap<string, string>;
+  held: (account: string) => string | undefined;
+  now: number;
+}): { resume: ResumePlan[]; listed: PausedListing[] } {
+  const { config, now } = opts;
+  const resume: ResumePlan[] = [];
+  const listed: PausedListing[] = [];
+  const takenAccounts = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
+  const takenJobs = new Set(opts.running.keys());
+  const policyNames = policyRefs(config);
+  const poolSet = new Set(config.accounts.pool.map((a) => a.toUpperCase()));
+  const paused = opts.runs.filter((f) => f.pause !== null && inSeries(f, config.policy)).sort((a, b) => b.pause!.at - a.pause!.at);
+  const seenModel = new Set<string>();
+  for (const f of paused) {
+    const pause = f.pause!;
+    const list = (why: string): void => {
+      listed.push({ runId: f.runId, model: f.model, account: f.account, reason: pause.reason, since: pause.at, elapsedMs: pause.episodeElapsedMs, budgetMs: f.episodeMs, why });
+    };
+    const modelKey = `${f.model}@${f.effort ?? ""}`;
+    if (isStalePause(f, now)) {
+      list(`stale: paused ${fmtElapsed(now - pause.at)} ago, past twice its ${f.episodeMs !== null ? fmtElapsed(f.episodeMs) : "6h"} budget — resume by hand (--resume ${f.runId}) or archive`);
+      continue;
+    }
+    if (seenModel.has(modelKey)) {
+      list("another, newer paused run of this model is ahead of it — resume by hand or archive");
+      continue;
+    }
+    seenModel.add(modelKey);
+    const refs = Object.entries(config.roster)
+      .filter(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null))
+      .map(([name]) => name);
+    const legacyMatch = (j: FleetJob): boolean => j.legacy?.entries?.some((e) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null)) === true;
+    const fromFile = config.jobs.find((j) => (j.refs.some((r) => refs.includes(r)) && j.episode === f.episode) || legacyMatch(j));
+    let job: FleetJob | undefined;
+    let account: string | null = f.account;
+    if (fromFile !== undefined) {
+      if (!fromFile.enabled) {
+        list(`job ${fromFile.name} is disabled — enable it to resume, or resume by hand`);
+        continue;
+      }
+      if (fromFile.account !== undefined && f.account !== null && fromFile.account.toUpperCase() !== f.account.toUpperCase()) {
+        list(`pinned job ${fromFile.name} is on ${fromFile.account}, the run was on ${f.account} — resume by hand`);
+        continue;
+      }
+      if (fromFile.legacy !== undefined && fromFile.legacy.entries === undefined) {
+        list(`job ${fromFile.name} reads a rosterFile — resume by hand`);
+        continue;
+      }
+      job = fromFile;
+      account = fromFile.account ?? f.account;
+    } else {
+      const ref = refs.find((r) => policyNames.has(r));
+      if (ref === undefined || (f.episode !== "e90" && f.episode !== "e360")) {
+        list("paused, not in config — resume by hand or archive");
+        continue;
+      }
+      const m = /-a(\d+)(?:-r\d+)?$/.exec(f.runId);
+      job = {
+        refs: [ref],
+        ref,
+        episode: f.episode,
+        repeat: 1,
+        name: `${ref}-${f.episode}`,
+        enabled: true,
+        source: "policy",
+        attempt: m !== null ? Number(m[1]) : 1,
+      };
+    }
+    if (account === null) {
+      list("the run recorded no account — resume by hand");
+      continue;
+    }
+    if (job.account === undefined && !poolSet.has(account.toUpperCase())) {
+      list(`account ${account} is not in the pool — resume by hand`);
+      continue;
+    }
+    if (takenJobs.has(job.name)) continue; // its roster is running; it handles its own pause
+    const notBefore = resumeNotBefore(pause);
+    if (notBefore === "never") {
+      list(`${pause.reason} ${pause.count} times — past the defer ladder; resume by hand when the provider is back`);
+      continue;
+    }
+    if (notBefore !== null && now < notBefore) {
+      list(`${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`);
+      continue;
+    }
+    if (takenAccounts.has(account.toUpperCase())) {
+      list(`waiting: account ${account} is busy (${[...opts.running].find(([, a]) => a.toUpperCase() === account!.toUpperCase())?.[0] ?? "another job"})`);
+      continue;
+    }
+    const holder = opts.held(account);
+    if (holder !== undefined && holder !== f.runId) {
+      list(`waiting: account ${account} is held by run ${holder}`);
+      continue;
+    }
+    takenAccounts.add(account.toUpperCase());
+    takenJobs.add(job.name);
+    resume.push({
+      job: { ...job, resume: { runId: f.runId, model: f.model, ...(f.effort !== null ? { effort: f.effort } : {}) } },
+      account,
+      runId: f.runId,
+      pauseCount: pause.count,
+      why: `${pause.reason}${pause.count > 1 ? ` (pause ${pause.count})` : ""}, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}`,
+    });
+  }
+  return { resume, listed };
+}
+
+/** One line per paused run the supervisor is not resuming, for --status and --dry-run. */
+export function formatPaused(listed: readonly PausedListing[]): string[] {
+  if (listed.length === 0) return [];
+  return [
+    `paused runs not resumed (${listed.length}):`,
+    ...listed.map((l) => `  ${l.runId} — ${l.model}${l.account !== null ? ` on ${l.account}` : ""}: ${l.reason}, ${fmtPaused(l.elapsedMs, l.budgetMs)} — ${l.why}`),
+  ];
 }
 
 /**
@@ -1244,7 +1469,9 @@ export function laneArgv(
   ];
   if (lane.loop) argv.push("--loop");
   if (until !== undefined) argv.push("--until", until);
-  if (opts.resumeRoster === true) argv.push("--resume-roster");
+  // A resume lane always reattaches: the roster must find the paused run's
+  // row and --resume it rather than launch the id fresh.
+  if (opts.resumeRoster === true || lane.resumeRunId !== undefined) argv.push("--resume-roster");
   return argv;
 }
 
@@ -1831,6 +2058,8 @@ interface FleetState {
   };
   /** Counters since the supervisor started. */
   session?: { finished: number; ok: number; retried: number };
+  /** Paused runs the supervisor is not resuming right now, with why (ADR-0036). */
+  paused?: PausedListing[];
   lanes: Record<
     string,
     {
@@ -1894,6 +2123,8 @@ interface PoolView {
   skipped: { name: string; reason: string }[];
   policyIdle?: string;
   session: { finished: number; ok: number; retried: number };
+  /** Paused runs the last plan did not resume, with why (ADR-0036). */
+  paused: PausedListing[];
 }
 
 function writeState(
@@ -1942,12 +2173,14 @@ function writeState(
                 source: j.source,
                 ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
                 ...(j.extra !== undefined ? { extra: j.extra } : {}),
+                ...(procs.get(name)?.lane.resumeRunId !== undefined ? { resuming: procs.get(name)!.lane.resumeRunId! } : {}),
                 models: (procs.get(name)?.lane.entries ?? []).map((e) => e.model),
               },
             ]),
           ),
           policy: { ...(pool.policyIdle !== undefined ? { idle: pool.policyIdle } : {}) },
           session: pool.session,
+          paused: pool.paused,
         }
       : {}),
     lanes: {},
@@ -2170,6 +2403,20 @@ function printStatus(configPath: string): void {
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
   const live = liveJobsFromState(state, config);
+  // Paused runs (ADR-0036): what the supervisor would resume now, and what it
+  // lists instead — computed from disk so it is right with the fleet down.
+  const runFacts = readRunFacts(RUNS_DIR);
+  const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStalePause(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
+  const resumePlan =
+    config !== undefined
+      ? planResumes({
+          runs: runFacts,
+          config,
+          running: new Map([...live].filter(([, j]) => fleetUp).map(([name, j]) => [name, j.account])),
+          held: (a) => accountHeldBy(a, ""),
+          now: Date.now(),
+        })
+      : { resume: [], listed: [] };
   const jobRow = (name: string, j: { ref: string; episode: EpisodeId; source: JobSource; attempt?: number; models: string[] }): JobRow => {
     const ls = state?.lanes[name];
     const alive = ls === undefined ? false : hbAgeMs !== undefined ? fleetUp && ls.alive === true : pidAlive(ls.pid);
@@ -2212,10 +2459,18 @@ function printStatus(configPath: string): void {
       // Honesty about the account itself: a hand-started run holds it just as
       // hard as a fleet one would. Same liveness inference as the roster guard.
       const holder = accountHeldBy(account, "");
+      const pausedHere = pausedRuns.find((f) => f.account?.toUpperCase() === account.toUpperCase());
       let note: string | undefined;
       if (holder !== undefined) {
         const prog = runProgress(holder);
         note = `held by run ${holder}${prog !== undefined ? ` (L${prog.level}, ${prog.xp} xp)` : ""} — not fleet-managed`;
+      } else if (pausedHere !== undefined) {
+        const p = pausedHere.pause!;
+        const prog = runProgress(pausedHere.runId);
+        note =
+          `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}` +
+          `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +
+          `${resumePlan.resume.some((r) => r.runId === pausedHere.runId) ? ", resumes on the next tick" : fleetUp ? "" : ", resumes when the fleet starts"}`;
       } else if (kind === "pinned" && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {
@@ -2246,7 +2501,13 @@ function printStatus(configPath: string): void {
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
   }
 
-  // (d) the session.
+  // (d) paused runs the supervisor is not resuming, and why.
+  for (const line of formatPaused(resumePlan.listed)) console.log(`  ${line}`);
+  if (!fleetUp && resumePlan.resume.length > 0) {
+    console.log(`  resumes on the next fleet start (${resumePlan.resume.length}): ${resumePlan.resume.map((r) => `${r.runId} on ${r.account}`).join(", ")}`);
+  }
+
+  // (e) the session.
   const sess = state?.session;
   console.log(
     sess === undefined
@@ -2254,7 +2515,7 @@ function printStatus(configPath: string): void {
       : `  finished this session: ${sess.finished} (ok ${sess.ok}, retried ${sess.retried})`,
   );
 
-  // (e) the manual queue, only when there is one.
+  // (f) the manual queue, only when there is one.
   if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue)) console.log(`  ${line}`);
 
   // A /proc scan only means anything when the supervisor shares this namespace.
@@ -2277,7 +2538,7 @@ function printStatus(configPath: string): void {
  * pool accounts the queue and then the policy would take. Pure over the
  * projection; used by --dry-run and by the startup fail-fast.
  */
-export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string): {
+export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = []): {
   pinned: { job: FleetJob; lane: FleetLane }[];
   queue: QueuePlan;
   policy: PolicyPick[];
@@ -2285,15 +2546,18 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   heldPicks: HeldPick[];
 } {
   const eligible = eligibleFrom(states);
+  const resumed = new Set(resumes.map((r) => r.job.name));
   const pinned = pinnedJobs(config)
-    .filter((j) => j.enabled && (j.legacy !== undefined || runnableRefs(j, config.roster, eligible).length > 0))
+    .filter((j) => j.enabled && !resumed.has(j.name) && (j.legacy !== undefined || runnableRefs(j, config.roster, eligible).length > 0))
     .map((job) => ({ job, lane: jobLane(job, config.roster, job.account!, stamp, eligible) }));
-  const runningRefs = new Set(pinned.flatMap((p) => p.job.refs));
+  // Resumes hold their accounts and their refs ahead of everything fresh.
+  const running = new Map(resumes.map((r) => [r.job.name, r.account]));
+  const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs)]);
   const queue = planQueue({
     queue: poolJobs(config),
     roster: config.roster,
     pool: config.accounts.pool,
-    running: new Map(),
+    running,
     finished: new Set(),
     held,
     cooling: () => undefined,
@@ -2306,7 +2570,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
-    running: new Map(),
+    running,
     held,
     queuePlan: queue,
     runningRefs,
@@ -2327,9 +2591,11 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }
-  const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy });
+  const runs = readRunFacts(RUNS_DIR);
+  const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
-  const plan = planTick(config, states, held, stampToday);
+  const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
+  const plan = planTick(config, states, held, stampToday, resumes.resume);
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
   const planned = (job: FleetJob, lane: FleetLane): JobRow => {
@@ -2345,10 +2611,17 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       ...(job.extra !== undefined ? { extra: job.extra } : {}),
     };
   };
+  const resumeRow = (r: ResumePlan, kind: "pinned" | "pool"): AccountRow => ({
+    account: r.account,
+    kind,
+    job: { ...planned(r.job, jobLane(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
+  });
   for (const account of Object.keys(config.accounts.pinned)) {
     const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
     const holder = held(account);
-    if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.lane) });
+    const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
+    if (rs !== undefined) rows.push(resumeRow(rs, "pinned"));
+    else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.lane) });
     else {
       const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
       rows.push({ account, kind: "pinned", free: true, note: holder !== undefined ? `held by run ${holder}` : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn` });
@@ -2358,7 +2631,9 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     const q = plan.queue.assign.find((a) => a.account === account);
     const pp = plan.policy.find((a) => a.account === account);
     const holder = held(account);
-    if (q !== undefined) rows.push({ account, kind: "pool", job: planned(q.job, jobLane(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
+    const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
+    if (rs !== undefined) rows.push(resumeRow(rs, "pool"));
+    else if (q !== undefined) rows.push({ account, kind: "pool", job: planned(q.job, jobLane(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
     else if (pp !== undefined) rows.push({ account, kind: "pool", job: { ...planned(pp.job, jobLane(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
     else rows.push({ account, kind: "pool", free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
   }
@@ -2379,13 +2654,14 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   }
   for (const line of formatModels(states, new Set(), Date.now(), excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
+  for (const line of formatPaused(resumes.listed)) console.log(line);
   if (Object.keys(config.maxConcurrent).length > 0) {
     console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
   for (const line of formatQueue(poolJobs(config), undefined)) console.log(line);
   console.log(
-    `\n${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
+    `\n${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
       `\nsupervision: re-read fleet.json every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor (ADR-0020), not rolled at midnight.` +
@@ -2540,6 +2816,8 @@ async function main(): Promise<void> {
   const assigned = new Map<string, string>();
   const liveJobs = new Map<string, FleetJob>();
   let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  /** Paused runs the last plan did not resume, with why; for the state file. */
+  let lastPaused: PausedListing[] = [];
   const complainedSkips = new Map<string, string>();
   /** Jobs handed an account this tick, claimed by spawnLane; a gated tick re-plans next time. */
   const pending = new Map<string, FleetJob>();
@@ -2569,9 +2847,11 @@ async function main(): Promise<void> {
    */
   const effectiveLanes = (cfg: FleetConfig): FleetLane[] => {
     const out: FleetLane[] = [];
-    // The projection, once a tick: eligibility for the queue's gate and the
-    // policy's picks read the same answer (ADR-0034).
-    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy });
+    // The run facts once a tick, shared by the projection and the resume
+    // planner. Eligibility for the queue's gate and the policy's picks read
+    // the same answer (ADR-0034); resumes read the same facts (ADR-0036).
+    const runs = readRunFacts(RUNS_DIR);
+    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     const eligible = eligibleFrom(states);
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
@@ -2637,11 +2917,47 @@ async function main(): Promise<void> {
       for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
     }
     const held = (a: string): string | undefined => accountHeldBy(a, "");
+    // Resumes before anything fresh (ADR-0036): a paused run goes back onto
+    // its own account ahead of the queue and the policy, so nothing can wipe
+    // its character first. A pinned job's lane is replaced by its resume
+    // lane; a pool job's resume reserves its account like an assignment.
+    const runningMap = new Map<string, string>(assigned);
+    for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
+    const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
+    lastPaused = resumes.listed;
+    const reserved = new Map<string, string>();
+    for (const r of resumes.resume) {
+      const name = r.job.name;
+      if (sets.running.has(name)) continue;
+      const lane = jobLane(r.job, cfg.roster, r.account, stampToday);
+      if (r.job.account !== undefined) {
+        const idx = out.findIndex((l) => l.name === name);
+        if (idx >= 0) out[idx] = lane;
+        else out.push(lane);
+      } else {
+        pending.set(name, r.job);
+        sets.finished.delete(name);
+        reserved.set(name, r.account);
+        out.push(lane);
+        for (const ref of r.job.refs) {
+          runningRefs.add(ref);
+          if (billingOf.get(ref) === "paid") paidRunning++;
+        }
+        countDriver(r.job.refs);
+      }
+      const key = `resume:${r.runId}:${r.pauseCount}`;
+      if (!announcedPicks.has(key)) {
+        announcedPicks.add(key);
+        say(`resume ${name}: ${r.runId} on ${r.account} — ${r.why}`);
+        record({ lane: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` });
+      }
+    }
+    const runningAndReserved = new Map([...assigned, ...reserved]);
     lastPlan = planQueue({
       queue: poolJobs(cfg),
       roster: cfg.roster,
       pool: cfg.accounts.pool,
-      running: assigned,
+      running: runningAndReserved,
       finished: sets.finished,
       held,
       cooling: jobCooling,
@@ -2660,7 +2976,7 @@ async function main(): Promise<void> {
       const picks = planPolicy({
         states: states.filter((st) => allowed.has(st.name)),
         pool: cfg.accounts.pool,
-        running: assigned,
+        running: runningAndReserved,
         held,
         queuePlan: lastPlan,
         runningRefs,
@@ -2682,7 +2998,7 @@ async function main(): Promise<void> {
         }
         out.push(jobLane(job, cfg.roster, account, stampToday));
       }
-      const taken = new Set([...assigned.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
+      const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
       const free = cfg.accounts.pool.filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
       const idle =
         free.length === 0
@@ -2719,6 +3035,7 @@ async function main(): Promise<void> {
     skipped: lastPlan.skipped.map((sk) => ({ name: sk.job.name, reason: sk.reason })),
     ...(policyIdle !== undefined ? { policyIdle } : {}),
     session,
+    paused: lastPaused,
   });
 
   const spawnLane = (lane: FleetLane): void => {
@@ -2738,7 +3055,7 @@ async function main(): Promise<void> {
     writeFileSync(rosterPath, JSON.stringify(entries, null, 2) + "\n");
     // A respawn (lane toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
-    const resumeRoster = existsSync(laneJsonlPath(lane.name, stampToday));
+    const resumeRoster = lane.resumeRunId !== undefined || existsSync(laneJsonlPath(lane.name, stampToday));
     const argv = laneArgv(lane, { stamp: stampToday, until: args.until, resumeRoster });
     const stdoutLog = laneStdoutPath(lane.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
@@ -2767,14 +3084,17 @@ async function main(): Promise<void> {
       pending.delete(lane.name);
       if (pj.attempt !== undefined) announcedPicks.delete(`${lane.name}:${pj.attempt}`);
     }
-    say(`lane ${lane.name}: spawned pid ${proc.pid} (account ${lane.account}${resumeRoster ? ", --resume-roster" : ""}) -> ${stdoutLog}`);
-    record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${resumeRoster ? "; resume-roster" : ""}; account ${lane.account}` });
+    const how = lane.resumeRunId !== undefined ? `, resuming ${lane.resumeRunId}` : resumeRoster ? ", --resume-roster" : "";
+    say(`lane ${lane.name}: spawned pid ${proc.pid} (account ${lane.account}${how}) -> ${stdoutLog}`);
+    record({ lane: lane.name, event: "spawned", detail: `pid ${proc.pid}${how}; account ${lane.account}` });
   };
 
+  let wakeTick: (() => void) | undefined;
   const requestStop = (): void => {
     if (stopping) process.exit(130);
     stopping = true;
-    say("stopping: SIGTERM to every lane (run-roster terminates its episode gracefully)");
+    say("stopping: SIGTERM to every lane — each live episode PAUSES as operator-pause (ADR-0036); waiting for the rosters to exit");
+    wakeTick?.();
     for (const [name, p] of procs) {
       if (!p.exited) {
         try {
@@ -2867,7 +3187,17 @@ async function main(): Promise<void> {
   writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
-    await new Promise((res) => setTimeout(res, TICK_MS));
+    // A stop wakes the tick and then polls fast: the container's grace period
+    // is finite, and a roster that paused its episode in 5s must not wait
+    // 60s to be reaped.
+    await new Promise<void>((res) => {
+      const t = setTimeout(res, stopping ? 2_000 : TICK_MS);
+      wakeTick = () => {
+        clearTimeout(t);
+        res();
+      };
+    });
+    wakeTick = undefined;
 
     // Reap exits.
     for (const [name, p] of procs) {
@@ -2891,6 +3221,7 @@ async function main(): Promise<void> {
 
     if (stopping) {
       if (sets.running.size === 0) break;
+      writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
       continue;
     }
 
