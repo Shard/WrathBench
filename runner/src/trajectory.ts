@@ -47,6 +47,24 @@ export interface StateLine {
    * records nothing rather than a misleading 0.
    */
   turn?: number | undefined;
+  /** Zone id from the state cache (`self.zone`, WB_AREA). Ids only: names are client text. */
+  zone?: number | undefined;
+  /** Area (subzone) id from the state cache (`self.area`). */
+  area?: number | undefined;
+}
+
+/**
+ * A world-state transition the loop noticed between two samples (FOLLOW-UPS
+ * 35; ADR-0018). Kinds are additive; derivations (first capital, zone
+ * coverage) come later and read these. `from`/`to` carry ids only — never
+ * names — so the record stays what the server said, and a rendering choice
+ * (which locale, which DBC) never changes a trajectory after the fact.
+ */
+export interface MilestoneLine {
+  kind: "zone" | "area";
+  from: { id: number } | undefined;
+  to: { id: number };
+  turn?: number | undefined;
 }
 
 export interface RunMeta {
@@ -143,7 +161,11 @@ CREATE TABLE IF NOT EXISTS state (
   quests_completed INTEGER,
   -- The driver turn in flight when the sample was taken, so turns-to-level is
   -- derivable without replaying the JSONL. Nullable, like StateLine.turn.
-  turn INTEGER
+  turn INTEGER,
+  -- Zone and area ids (FOLLOW-UPS 38 N2): where the sample was taken, as the
+  -- game's own area ids; names are rendered from the client's DBC, not stored.
+  zone INTEGER,
+  area INTEGER
 );
 `;
 
@@ -157,6 +179,16 @@ CREATE TABLE IF NOT EXISTS state (
 const RUN_ADDED_COLUMNS: Record<string, string> = {
   character: "TEXT",
   platform: "TEXT",
+};
+
+/**
+ * Columns added to `state` inside the 0.4 series (FOLLOW-UPS 38 N2). Same
+ * reason: a resumed run's sqlite predates them, and the insert names them.
+ * No compat reads — a sample written before the column existed has NULL.
+ */
+const STATE_ADDED_COLUMNS: Record<string, string> = {
+  zone: "INTEGER",
+  area: "INTEGER",
 };
 
 export class Trajectory {
@@ -173,17 +205,23 @@ export class Trajectory {
     this.jsonlPath = join(dir, "trajectory.jsonl");
     this.db = new Database(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
-    this.migrateRun();
+    this.migrateTable("run", RUN_ADDED_COLUMNS);
+    this.migrateTable("state", STATE_ADDED_COLUMNS);
   }
 
-  /** Additive, idempotent: add any `run` column this build knows and the file lacks. */
-  private migrateRun(): void {
+  /** Additive, idempotent: add any column this build knows and the file lacks. */
+  private migrateTable(table: "run" | "state", columns: Record<string, string>): void {
     const have = new Set(
-      (this.db.query(`PRAGMA table_info(run)`).all() as { name: string }[]).map((c) => c.name),
+      (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name),
     );
-    for (const [name, type] of Object.entries(RUN_ADDED_COLUMNS)) {
-      if (!have.has(name)) this.db.exec(`ALTER TABLE run ADD COLUMN ${name} ${type}`);
+    for (const [name, type] of Object.entries(columns)) {
+      if (!have.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
+  }
+
+  /** One `milestone` record, the way `quest_complete` is written (item 35). */
+  recordMilestone(m: MilestoneLine): void {
+    this.append({ t: "milestone", ...m });
   }
 
   /** Register a secret to scrub from every persisted string. */
@@ -231,8 +269,8 @@ export class Trajectory {
     this.append({ t: "state", ...s });
     this.db
       .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -248,6 +286,8 @@ export class Trajectory {
         s.money ?? null,
         s.questsCompleted ?? null,
         s.turn ?? null,
+        s.zone ?? null,
+        s.area ?? null,
       );
   }
 

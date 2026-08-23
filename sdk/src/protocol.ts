@@ -415,8 +415,26 @@ export const sessionStateDataSchema = z.looseObject({
   z: z.number(),
   o: z.number(),
   level: z.number(),
+  zoneId: z.number().optional(),
+  zoneName: z.string().optional(),
+  areaId: z.number().optional(),
+  areaName: z.string().optional(),
 });
 export type SessionStateData = z.infer<typeof sessionStateDataSchema>;
+
+/**
+ * Synthetic module event: the zone/subzone the character is in, on login and
+ * on every change. Ids are the pair the server derives from the same terrain
+ * data a client computes its own from; names are the client's AreaTable.dbc.
+ */
+export const areaDataSchema = z.looseObject({
+  mapId: z.number(),
+  zoneId: z.number(),
+  zoneName: z.string(),
+  areaId: z.number(),
+  areaName: z.string(),
+});
+export type AreaData = z.infer<typeof areaDataSchema>;
 
 export const motdDataSchema = z.looseObject({
   lineCount: z.number(),
@@ -1325,6 +1343,7 @@ export const eventDataSchemas = {
   SMSG_GAMEOBJECT_QUERY_RESPONSE: gameObjectQueryResponseDataSchema,
   WB_MOVE_PROGRESS: moveProgressDataSchema,
   WB_SESSION_STATE: sessionStateDataSchema,
+  WB_AREA: areaDataSchema,
   WB_MOVE_RESULT: moveResultDataSchema,
   WB_RIDE_PROGRESS: rideProgressDataSchema,
   WB_TRANSPORT_PROGRESS: transportProgressDataSchema,

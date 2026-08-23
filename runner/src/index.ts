@@ -36,7 +36,7 @@ export { runLoop } from "./loop";
 export type { LoopOptions, LoopOutcome } from "./loop";
 
 export { Trajectory, readTrajectory, readMeta } from "./trajectory";
-export type { RunMeta, StateLine, TrajectoryRecord } from "./trajectory";
+export type { MilestoneLine, RunMeta, StateLine, TrajectoryRecord } from "./trajectory";
 
 export { Scratchpad, SCRATCHPAD_MAX_CHARS } from "./scratchpad";
 export { harnessVersion } from "./version";

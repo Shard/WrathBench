@@ -512,6 +512,7 @@ function stateSnapshot(): unknown {
     level: u.level,
     distance: u.distance,
     dead: u.dead,
+    roles: u.roles,
   }));
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);

@@ -120,6 +120,33 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("zone/area ids reach the state row and a milestone record on change, ids only", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [] }]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      {
+        self: {
+          zone: { value: { id: 12, name: "Elwynn Forest" }, seq: 3, ts: 1 },
+          area: { value: { id: 9, name: "Northshire Valley" }, seq: 3, ts: 1 },
+        },
+      },
+    );
+    await runLoop(options);
+    const rows = options.trajectory.stateRows("run-test");
+    expect(rows[0]!["zone"]).toBe(12);
+    expect(rows[0]!["area"]).toBe(9);
+    // First observation is a milestone from nowhere; later samples with the
+    // same pair add nothing. Names never appear in the record.
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
+    expect(ms.map((r) => [r["kind"], r["from"], r["to"]])).toEqual([
+      ["zone", undefined, { id: 12 }],
+      ["area", undefined, { id: 9 }],
+    ]);
+    expect(JSON.stringify(ms)).not.toContain("Elwynn");
+    options.trajectory.close();
+  });
+
   test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
     // Three samples: the completion list grows [7,9], stays, then SHRINKS to
     // [11] — the sandbox-restart/cache-rebuild case. Without the reset at

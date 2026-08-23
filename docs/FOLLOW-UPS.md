@@ -32,11 +32,18 @@ and status.
       times with typed success on every leg, boarding on attempt 1 each time, rides
       60s; ADR-0027 is accepted. One residual left: triggers are only tested while a
       `move_to` is active.
-    - **N2 — field-level observations**, each small, each earned, each logged: zone
-      and area name on self from position and the client's own DBC (no packet carries
-      it; the client computes it, so the module may), with a `milestone` record (item
-      35) on change; NPC role on nearby units from `UNIT_NPC_FLAGS` (flight master,
-      innkeeper, trainer, vendor — role, not recommendation); innkeeper bind
+    - **N2 — field-level observations**, each small, each earned, each logged.
+      **Shipped 2026-08-23 (ADR-0027 amendment, built to `:next`, awaiting the deploy
+      window):** zone and area name on self (`WB_AREA` from the server's zone/area pair
+      named by the client's `AreaTable.dbc`; `state.self.zone` / `state.self.area`; HUD
+      `position: Elwynn Forest / Northshire Valley — map 0 (x, y, z)`; `milestone`
+      records `kind: zone|area` with ids only, plus `zone`/`area` state columns) and NPC
+      roles on nearby units from `UNIT_NPC_FLAGS` (`UnitView.roles`, `units({ role })`,
+      HUD `Gryth Thurden (flight master, 4.2y)` — role, not recommendation). Gate:
+      `infra/smoke/area-and-roles.ts` (login names, one `WB_AREA` each way across the
+      abbey door, Deputy Willem reports `questGiver`) — runs on the first deploy of the
+      N2 build; if the server's ids disagree with the ones read from the map files, the
+      smoke is corrected to the server's answer. **Remaining:** innkeeper bind
       (`CMSG_BINDER_ACTIVATE`, `SMSG_BINDPOINTUPDATE`) so the hearthstone is a real
       connector. Log the exact model-facing payload for each so the later
       text-vs-other-channel experiment is honest.
@@ -186,7 +193,12 @@ and status.
     and 6 as "not instrumented" for exactly these (zone change, capital entry, taxi
     use, group join), map replay cannot show death sites or zone coverage (item 22),
     and the freeplay firsts ladder is a derivation over these records plus the model
-    label. N2's zone/area observation (item 38) is the first producer.
+    label. **First producer exists (2026-08-23):** the loop writes
+    `{ t: "milestone", kind: "zone" | "area", from: { id } | undefined, to: { id }, turn, ts }`
+    from the state cache's `self.zone` / `self.area` on every change, including the
+    first observation (`from` undefined), alongside `quest_complete`
+    (`runner/src/loop.ts`, `Trajectory.recordMilestone`). Death, level-up, spell,
+    talent and the firsts are still unwritten; the dashboard reads none of them yet.
 
 
 

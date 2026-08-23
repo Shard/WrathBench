@@ -65,9 +65,11 @@ export type {
   WaitForOptions,
 } from "./events";
 
-export { GAME_OBJECT_TYPE_NAMES, gameObjectTypeName, pointOf, questGiverStatusName, StateCache } from "./state";
+export { GAME_OBJECT_TYPE_NAMES, NPC_ROLES, gameObjectTypeName, npcRolesOf, pointOf, questGiverStatusName, StateCache } from "./state";
 export type {
   Anomaly,
+  AreaRef,
+  NpcRole,
   AuraEntry,
   BagContents,
   BagSlotItem,

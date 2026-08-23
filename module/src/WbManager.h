@@ -19,6 +19,7 @@
 #define MOD_WRATHBENCH_WBMANAGER_H
 
 #include "WbHttpServer.h"
+#include "WbJson.h"
 
 #include <array>
 #include <atomic>
@@ -61,6 +62,15 @@ namespace WrathBench
         float x{0}, y{0}, z{0};
         float radius{0};            // > 0: sphere; else oriented box below
         float boxLength{0}, boxWidth{0}, boxHeight{0}, boxYaw{0};
+    };
+
+    // One AreaTable.dbc record (3.3.5a). Client-side knowledge: the client
+    // names the zone and subzone it draws on screen from this table.
+    struct AreaTableRec
+    {
+        uint32 mapId{0};
+        uint32 parentAreaId{0};     // 0 for a zone; the zone id for a subzone
+        std::string name;           // enUS column
     };
 
     // Per-session synthesized-movement state (ADR-0010). Touched only on the
@@ -167,6 +177,12 @@ namespace WrathBench
         // re-sent every tick. Reset when the player is alive again. See
         // TickCorpseQuery.
         bool corpseQueried{false};
+
+        // Zone/area edge detection (world thread only): the ids last announced
+        // as WB_AREA, sentinel until the first in-world tick so login emits one.
+        // See TickAreas (FOLLOW-UPS 38 N2).
+        uint32 lastZoneId{0xFFFFFFFF};
+        uint32 lastAreaId{0xFFFFFFFF};
 
         // Client-side object cache mirror, fed by the update-object tap. Needed
         // because UPDATETYPE_VALUES blocks carry no object type (a real client
@@ -279,6 +295,20 @@ namespace WrathBench
         void CheckAreaTriggers(BenchSession& s, Player* player, float x, float y, float z, int64_t nowMs);
         std::unordered_map<uint32, std::vector<AreaTriggerRec>> _areaTriggers; // by map
         bool _areaTriggersLoaded{false};
+
+        // AreaTable.dbc as the client ships it (FOLLOW-UPS 38 N2): zone and
+        // subzone names. The ids themselves come from Player::GetZoneAndAreaId,
+        // which the server derives from the same terrain data a client reads
+        // locally, so the pair is observation-equivalent (PROTOCOL.md, WB_AREA).
+        bool LoadAreaTableDbc(std::string const& path);
+        std::unordered_map<uint32, AreaTableRec> _areaTable;
+        bool _areaTableLoaded{false};
+        // Per tick, every in-world session: emit WB_AREA on login and whenever
+        // zone or area id changes (walking, teleport, transfer). World thread only.
+        void TickAreas();
+        // Append mapId/zoneId/zoneName/areaId/areaName for the player's current
+        // position to a writer (WB_AREA and WB_SESSION_STATE share it).
+        void AddAreaFields(Json::Writer& w, Player* player);
 
         // Mover (world thread only; see ADR-0010).
         void TickMovers(int64_t nowMs);
