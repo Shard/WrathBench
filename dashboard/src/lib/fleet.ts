@@ -12,7 +12,7 @@
  * rows keep their maths in `format.ts` (see dashboard/README.md).
  */
 
-import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
+import type { FleetJobView, FleetOutstandingView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -90,6 +90,50 @@ export function accountClassSummary(accounts: FleetResponse["accounts"]): string
     .filter((cls) => n(cls) > 0)
     .map((cls) => `${n(cls)} ${cls}`)
     .join(", ");
+}
+
+/**
+ * How much of the schedule is left, in the words `run-fleet --status` uses.
+ *
+ * Both halves are bounds, not estimates: `lower` assumes nothing else
+ * promotes into the long tier, `upper` assumes everything still eligible
+ * does. The ETA divides the runs' own wall clock (90m / 360m, from the
+ * episode table) by how many can be in flight at once. The wire carries the
+ * numbers — `outstandingWork` in `runner/src/models.ts` computes them, and the
+ * viewer, the fleet page and `--status` all print that one answer.
+ */
+export function outstandingLabel(o: FleetOutstandingView): string {
+  if (o.upper === 0) return "outstanding: exhausted";
+  const runs = o.lower === o.upper ? `${o.lower}` : `${o.lower}\u2013${o.upper}`;
+  const lo = etaHours(o.etaLowerMs);
+  const hi = etaHours(o.etaUpperMs);
+  const eta = lo === null || hi === null ? "eta unknown" : lo === hi ? `\u2248 ${lo}` : `\u2248 ${lo}\u2013${hi}`;
+  return `outstanding: ${runs} scheduled runs, ${eta} to exhaust`;
+}
+
+/** Hours from now, coarse on purpose: a planning figure, not a clock. */
+export function etaHours(ms: number | null): string | null {
+  if (ms === null) return null;
+  if (ms === 0) return "0h";
+  if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+}
+
+/** The formula, spelled out for the strip's tooltip. */
+export function outstandingTitle(o: FleetOutstandingView): string {
+  const groups = o.breakdown
+    .map((g) => `${g.group}: ${g.lowerRuns}\u2013${g.upperRuns} runs, ${g.lowerMinutes}\u2013${g.upperMinutes} min at ${g.concurrency} at a time`)
+    .join("\n");
+  return (
+    "Counted (non-extra) runs the policy still owes.\n" +
+    "lower = unmet e90 targets + unmet e360 targets of models already eligible for e360.\n" +
+    "upper = the same, assuming every model still eligible promotes into e360.\n" +
+    "Pinned, objective-carrying and retired models are excluded; extras never count.\n" +
+    "ETA = sum over account classes of (remaining minutes / that class's concurrency),\n" +
+    "with 90m per e90 run and 360m per e360; claude-code models are capped by their driver.\n" +
+    "The classes actually drain in parallel, so this reads as a pessimistic bound.\n" +
+    groups
+  );
 }
 
 /** One paused run as --status lists it: reason, pause count, and when the supervisor tries again. */

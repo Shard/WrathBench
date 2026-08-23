@@ -57,7 +57,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
 import { harnessOf, isDriver, type Driver, type Harness } from "./config";
-import { EPISODE_IDS, isEpisodeId, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, isEpisodeId, type EpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -1188,4 +1188,186 @@ export function nextJobs(
   opts: NextJobsOptions = {},
 ): NextJob[] {
   return planNextJobs(states, freeAccounts, running, opts).jobs;
+}
+
+// ------------------------------------------------------------- outstanding
+
+/**
+ * How many counted runs the policy still owes, and roughly how long they take.
+ *
+ * The fleet page's one forward-looking number: everything else on it says what
+ * is happening now, this says how much of the schedule is left. Two bounds,
+ * because the biggest unknown is promotion (ADR-0030: a model enters e360 by
+ * reaching `promoteAtLevel` on e90, which has not happened yet for most of the
+ * roster):
+ *
+ * - **lower** assumes nobody else promotes: every schedulable model's unmet
+ *   e90 target, plus the unmet e360 target of models *already* eligible for
+ *   e360 (promoted, or force-tiered in the roster — `eligible` is the
+ *   predicate, because a force-tiered model's e360 runs are owed right now).
+ * - **upper** assumes every model still eligible for promotion gets there, so
+ *   it adds the full e360 target of the models the lower bound left out.
+ *
+ * Extras never appear: they are what the pool does when the schedule is empty,
+ * not work the policy owes (ADR-0034). Neither do models outside the policy —
+ * a name a pinned job holds or one carrying an objective, the same exclusion
+ * `/api/models` makes — nor retired ones. A cooling or paused model still owes
+ * its runs; it is late, not excused.
+ *
+ * ## The ETA
+ *
+ * Remaining minutes come from the episode table (`episodes.ts` is the only
+ * place that spells out 90 and 360) and are divided by how many runs of that
+ * kind can be in flight at once:
+ *
+ *     eta = Σ over groups  (group's remaining minutes / group's concurrency)
+ *
+ * The groups are the account classes (ADR-0034) — pool, paid, local — because
+ * a model can only ever land on its own class's accounts, with `policy.paid.
+ * maxConcurrent` capping the paid class below its account count. Claude-code
+ * models are carved out of the pool as their own group, since
+ * `policy.maxConcurrent["claude-code"]` binds them tighter than the pool's
+ * account count does.
+ *
+ * Two simplifications worth stating rather than hiding. The classes actually
+ * drain in *parallel*, so the true exhaustion time is the largest term and
+ * this sum is a pessimistic bound. And the claude-code group shares the pool's
+ * accounts with the rest of the pool group, so their concurrencies overlap.
+ * Both are deliberate: the number is a planning aid ("is tonight enough?"),
+ * and a queueing model would be a worse answer to that question than one an
+ * operator can check in their head. A group with work and no account to run it
+ * on has no ETA at all, and the whole figure goes null rather than pretend.
+ */
+export interface OutstandingGroup {
+  /** An account class, or `claude-code` for the driver-capped carve-out. */
+  group: string;
+  /** Runs of this group that can be in flight at once; 0 means nowhere to run. */
+  concurrency: number;
+  lowerRuns: number;
+  upperRuns: number;
+  lowerMinutes: number;
+  upperMinutes: number;
+}
+
+export interface Outstanding {
+  /** Counted runs still owed assuming no further promotions. */
+  lower: number;
+  /** The same assuming every still-eligible model promotes. */
+  upper: number;
+  /** Wall clock to exhaust `lower`, or null when some of it has no account. */
+  etaLowerMs: number | null;
+  etaUpperMs: number | null;
+  breakdown: OutstandingGroup[];
+}
+
+/** Accounts per class, as `accounts.pool` / `.paid` / `.local` name them. */
+export type ClassAccountCounts = Partial<Record<AccountClass, number>>;
+
+export interface OutstandingInput {
+  /** The projection — `modelStates` output. */
+  states: readonly ModelState[];
+  /** The policy in force; only `paid.maxConcurrent` is read. */
+  policy?: Pick<SchedulingPolicy, "paid">;
+  /** Roster names outside the policy (pinned, or carrying an objective). */
+  excluded?: Iterable<string>;
+  /** How many accounts each class has. */
+  accounts?: ClassAccountCounts;
+  /** `policy.maxConcurrent`: per-driver stream caps; `claude-code` is the one read. */
+  maxConcurrent?: Record<string, number>;
+}
+
+/** The group a model's runs queue in: its account class, claude-code apart. */
+function outstandingGroupOf(s: ModelState): string {
+  return s.harness === "claude-code" ? "claude-code" : accountClassOf(s);
+}
+
+/** The whole metric, pure over the same inputs the projection was built from. */
+export function outstandingWork(input: OutstandingInput): Outstanding {
+  const excluded = new Set(input.excluded ?? []);
+  const accounts = input.accounts ?? {};
+  const paidCap = input.policy?.paid?.maxConcurrent;
+  const ccCap = input.maxConcurrent?.["claude-code"];
+  const concurrencyOf = (group: string): number => {
+    if (group === "claude-code") {
+      const pool = accounts.pool ?? 0;
+      return ccCap === undefined ? pool : Math.min(pool, ccCap);
+    }
+    const n = accounts[group as AccountClass] ?? 0;
+    return group === "paid" && paidCap !== undefined ? Math.min(n, paidCap) : n;
+  };
+
+  const groups = new Map<string, OutstandingGroup>();
+  const groupFor = (name: string): OutstandingGroup => {
+    let g = groups.get(name);
+    if (g === undefined) {
+      g = { group: name, concurrency: concurrencyOf(name), lowerRuns: 0, upperRuns: 0, lowerMinutes: 0, upperMinutes: 0 };
+      groups.set(name, g);
+    }
+    return g;
+  };
+
+  for (const s of input.states) {
+    if (excluded.has(s.name) || s.retired !== undefined) continue;
+    const g = groupFor(outstandingGroupOf(s));
+    for (const ep of POLICY_EPISODES) {
+      const st = s.perEpisode[ep];
+      if (st === undefined) continue;
+      const owed = Math.max(0, st.target - st.counted);
+      if (owed === 0) continue;
+      // e360 is owed now only if the model may already be scheduled on it;
+      // otherwise it is the upper bound's bet that the model promotes.
+      const now = ep === "e360" && !s.eligible.includes("e360") ? 0 : owed;
+      const minutes = EPISODES[ep].minutes ?? 0;
+      g.lowerRuns += now;
+      g.lowerMinutes += now * minutes;
+      g.upperRuns += owed;
+      g.upperMinutes += owed * minutes;
+    }
+  }
+
+  const breakdown = [...groups.values()].sort((a, b) => (a.group < b.group ? -1 : a.group > b.group ? 1 : 0));
+  const eta = (pick: (g: OutstandingGroup) => number): number | null => {
+    let ms = 0;
+    for (const g of breakdown) {
+      const minutes = pick(g);
+      if (minutes === 0) continue;
+      if (g.concurrency === 0) return null;
+      ms += (minutes / g.concurrency) * 60_000;
+    }
+    return ms;
+  };
+  return {
+    lower: breakdown.reduce((n, g) => n + g.lowerRuns, 0),
+    upper: breakdown.reduce((n, g) => n + g.upperRuns, 0),
+    etaLowerMs: eta((g) => g.lowerMinutes),
+    etaUpperMs: eta((g) => g.upperMinutes),
+    breakdown,
+  };
+}
+
+/**
+ * The one-line rendering `--status` prints and the fleet page echoes:
+ * `outstanding: 11–23 scheduled runs, ≈ 4h–9h to exhaust`. Bounds that agree
+ * collapse to one number; nothing owed at all is `exhausted`.
+ */
+export function formatOutstanding(o: Outstanding): string {
+  if (o.upper === 0) return "outstanding: exhausted — the policy owes no scheduled runs";
+  const runs = o.lower === o.upper ? `${o.lower}` : `${o.lower}–${o.upper}`;
+  const lo = formatEtaHours(o.etaLowerMs);
+  const hi = formatEtaHours(o.etaUpperMs);
+  const eta =
+    lo === null || hi === null
+      ? "eta unknown — some of it has no account to run on"
+      : lo === hi
+        ? `≈ ${lo} to exhaust`
+        : `≈ ${lo}–${hi} to exhaust`;
+  return `outstanding: ${runs} scheduled runs, ${eta}`;
+}
+
+/** Hours from now, coarse on purpose: this is a planning figure, not a clock. */
+export function formatEtaHours(ms: number | null): string | null {
+  if (ms === null) return null;
+  if (ms === 0) return "0h";
+  if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
 }

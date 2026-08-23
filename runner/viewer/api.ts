@@ -39,7 +39,7 @@ import type {
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
-import { modelStates } from "../src/models";
+import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { runCost } from "./pricing";
 import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
@@ -677,7 +677,32 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
      * know it is really asking the results endpoint.
      */
     if (path === "/api/results" || path === "/api/ladder") return await resultsResponse(url);
-    if (path === "/api/fleet") return json(readFleet(runsDir));
+    if (path === "/api/fleet") {
+      /*
+       * The supervisor's published state, plus one thing only the roster and
+       * the run history know: how many counted runs the policy still owes
+       * (`outstandingWork` in `runner/src/models.ts`, where the bounds and the
+       * ETA formula are written out). Computed here rather than published by
+       * the supervisor so it is right with the fleet down, and off the same
+       * projection `/api/models` serves — the page cannot disagree with the
+       * models table about who owes what.
+       */
+      const now = Date.now();
+      const body = readFleet(runsDir, now);
+      const roster = readFleetRoster(opts.fleetConfigPath);
+      if (roster.shape === "roster") {
+        const runs = readRunFactsCached(runsDir, factCache, now);
+        const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
+        body.outstanding = outstandingWork({
+          states,
+          policy: roster.policy,
+          excluded: roster.excluded.map((e) => e.name),
+          accounts: roster.accounts,
+          maxConcurrent: roster.maxConcurrent,
+        });
+      }
+      return json(body);
+    }
     /*
      * `/api/models` is the scheduler's own verdict, served rather than
      * recomputed: `modelStates` in `runner/src/models.ts` is what the fleet

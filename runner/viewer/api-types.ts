@@ -530,6 +530,29 @@ export interface FleetConfigRejectedView {
 }
 
 /**
+ * How much of the schedule is still owed, as `runner/src/models.ts` computes
+ * it (`outstandingWork`, where the formula and its two simplifications are
+ * written out). `lower` assumes no further promotions, `upper` assumes every
+ * still-eligible model promotes; the ETAs are wall clock from now, and null
+ * when some of the work has no account to run it on. Shaped here rather than
+ * imported, because this file stays import-free.
+ */
+export interface FleetOutstandingView {
+  lower: number;
+  upper: number;
+  etaLowerMs: number | null;
+  etaUpperMs: number | null;
+  breakdown: {
+    group: string;
+    concurrency: number;
+    lowerRuns: number;
+    upperRuns: number;
+    lowerMinutes: number;
+    upperMinutes: number;
+  }[];
+}
+
+/**
  * The worldserver's deploy-window phase, as `infra/deploy-worldserver.sh`
  * writes it to `data/runs/server-state.json` at each transition. `running`
  * is the rest state (and the answer when the file is absent); the four
@@ -578,6 +601,11 @@ export interface FleetResponse {
   ended: FleetEndedView[];
   /** Runs finished since this supervisor started. */
   session?: FleetSessionView;
+  /**
+   * Counted runs the policy still owes, with an ETA. Absent when the viewer
+   * was given no fleet config to read a roster and its accounts out of.
+   */
+  outstanding?: FleetOutstandingView;
   /** Server clock at read time, so a client can age the heartbeat honestly. */
   now: number;
 }

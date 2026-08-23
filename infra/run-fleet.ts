@@ -88,6 +88,8 @@ import {
   inSeries,
   isStalePause,
   modelStates,
+  outstandingWork,
+  formatOutstanding,
   readRunFacts,
   parsePolicyBlock,
   parseRunsPerEpisode,
@@ -2691,6 +2693,23 @@ function printStatus(configPath: string): void {
       console.log(`  concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
     }
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
+    /*
+     * How much of the schedule is left, bounded by whether anything else
+     * promotes (`outstandingWork` carries the formula). Computed from the
+     * file's accounts rather than the state file's, so the line is the same
+     * with the supervisor down as up.
+     */
+    console.log(
+      `  ${formatOutstanding(
+        outstandingWork({
+          states,
+          policy: config.policy,
+          excluded: excluded.keys(),
+          accounts: Object.fromEntries(ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c).length])),
+          maxConcurrent: config.maxConcurrent,
+        }),
+      )}`,
+    );
   }
 
   // (d) paused runs the supervisor is not resuming, and why; and the ones it ends.

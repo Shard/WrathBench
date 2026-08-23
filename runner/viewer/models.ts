@@ -40,6 +40,7 @@ import {
   type RosterModel,
   type SchedulingPolicy,
   type RunFact,
+  type ClassAccountCounts,
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
@@ -91,11 +92,26 @@ const fleetJobSchema = z
   })
   .loose();
 
+/**
+ * The account classes (ADR-0034), as counts. Read from the file rather than
+ * from `fleet-state.json` so the page's concurrency figures agree with
+ * `--status` even with the supervisor down — `--status` reads
+ * `classAccountsOf(config, …)`, which is this same block.
+ */
+const fleetAccountsSchema = z
+  .object({
+    pool: z.array(z.string()).optional(),
+    paid: z.array(z.string()).optional(),
+    local: z.array(z.string()).optional(),
+  })
+  .loose();
+
 const fleetRosterSchema = z
   .object({
     roster: z.record(z.string(), rosterEntrySchema),
     queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
+    accounts: fleetAccountsSchema.optional(),
   })
   .loose();
 
@@ -122,6 +138,8 @@ export interface RosterRead {
    * than beside a model whose counts they would duplicate (FOLLOW-UPS 52).
    */
   excluded: { name: string; reason: string }[];
+  /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
+  accounts: ClassAccountCounts;
 }
 
 /** The series this viewer runs from — what the projection counts against (ADR-0034). */
@@ -137,7 +155,7 @@ export function currentSeries(): string | null {
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [] };
+  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], accounts: {} };
   if (path === undefined || path.length === 0) {
     return { ...empty, shape: "missing", path: null };
   }
@@ -189,7 +207,12 @@ export function readFleetRoster(path: string | undefined, series: string | null 
     const reason = policyExclusion(jobs, parsed.roster, m.name);
     if (reason !== undefined) excluded.push({ name: m.name, reason });
   }
-  return { models, shape: "roster", path, policy, maxConcurrent, excluded };
+  const accounts: ClassAccountCounts = {
+    pool: parsed.accounts?.pool?.length ?? 0,
+    paid: parsed.accounts?.paid?.length ?? 0,
+    local: parsed.accounts?.local?.length ?? 0,
+  };
+  return { models, shape: "roster", path, policy, maxConcurrent, excluded, accounts };
 }
 
 // ------------------------------------------------------------- run facts
