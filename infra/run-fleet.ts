@@ -218,19 +218,17 @@ export interface FleetConfig {
  * What an episode id means in the flags the runner has today (mirrors
  * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
  * owns the id. e90: 90m, idle 20m, no-xp 20m, 500 calls. e360: 6h, idle 20m,
- * no-xp off — the nav-probe shape — and the tool-call ceiling raised to the
- * nav-probe precedent (2500), since the 500 default would end a 6h run as
- * `tool-call-limit` two hours in; the tier's own ceiling is FOLLOW-UPS 48c.
- * freeplay: no wall clock, unscored, same raised ceiling.
+ * no-xp off — and a 2000-call ceiling (the e90 ratio, four times the clock;
+ * docs/EPISODES.md). freeplay: no wall clock, unscored, ceiling left to the lane (the runner has no "unbounded").
  */
 export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "watchdogs" | "maxToolCalls"> {
   switch (id) {
     case "e90":
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 500 };
     case "e360":
-      return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 2500 };
+      return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 2000 };
     case "freeplay":
-      return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 2500 };
+      return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
   }
 }
 
