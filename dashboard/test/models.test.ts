@@ -16,6 +16,7 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
     model: "vendor/alpha",
     effort: null,
     platform: "openrouter",
+    harness: "wrathbench",
     status: "active",
     eligible: ["e90"],
     perEpisode: {

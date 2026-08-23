@@ -17,6 +17,7 @@ import type {
   EpisodesResponse,
   EvalResponse,
   FleetResponse,
+  HarnessView,
   ModelsResponse,
   PositionsResponse,
   RunDetailResponse,
@@ -28,6 +29,7 @@ export type {
   AgentPosition,
   ApiInfoResponse,
   ComparabilityView,
+  HarnessView,
   EntriesResponse,
   EpisodeIdView,
   EpisodeTierView,
@@ -91,16 +93,19 @@ async function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** The shared `?episode=`/`?includeOverrides=`/`?includeStillborn=` query. */
+/** The shared `?episode=`/`?includeOverrides=`/`?includeStillborn=`/`?harness=` query. */
 function evalQuery(
   episode: EpisodeIdView | "all" | undefined,
   includeOverrides: boolean,
   includeStillborn: boolean,
+  harness: HarnessView | "all" = "all",
 ): string {
   const q = new URLSearchParams();
   if (episode !== undefined) q.set("episode", episode);
   if (includeOverrides) q.set("includeOverrides", "1");
   if (includeStillborn) q.set("includeStillborn", "1");
+  // `all` is the server default (ADR-0035: harness is a tag, not a partition).
+  if (harness !== "all") q.set("harness", harness);
   const s = q.toString();
   return s === "" ? "" : `?${s}`;
 }
@@ -122,7 +127,8 @@ export function createClient(opts: ClientOptions = {}) {
      * The projection is the supervisor's own, so this page and `--status`
      * cannot disagree about why a model is not running.
      */
-    models: (): Promise<ModelsResponse> => get<ModelsResponse>("/api/models", opts),
+    models: (harness: HarnessView | "all" = "all"): Promise<ModelsResponse> =>
+      get<ModelsResponse>(`/api/models${harness === "all" ? "" : `?harness=${harness}`}`, opts),
     /** The episode tiers (ADR-0030) and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes", opts),
     /**
@@ -136,15 +142,17 @@ export function createClient(opts: ClientOptions = {}) {
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
       includeStillborn = false,
+      harness: HarnessView | "all" = "all",
     ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/eval${evalQuery(episode, includeOverrides, includeStillborn)}`, opts),
+      get<EvalResponse>(`/api/eval${evalQuery(episode, includeOverrides, includeStillborn, harness)}`, opts),
     /** The same projection the ladder reads; the rung rules stay client-side. */
     ladder: (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
       includeStillborn = false,
+      harness: HarnessView | "all" = "all",
     ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/ladder${evalQuery(episode, includeOverrides, includeStillborn)}`, opts),
+      get<EvalResponse>(`/api/ladder${evalQuery(episode, includeOverrides, includeStillborn, harness)}`, opts),
     /** One run's recorded track, for map replay. */
     track: (id: string): Promise<TrackResponse> =>
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`, opts),

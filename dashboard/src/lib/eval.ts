@@ -39,6 +39,12 @@ export interface EvalGroup {
   effort: string | null;
   /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
   wikiCoords: boolean | null;
+  /**
+   * The harness tags present in the group (ADR-0035), sorted. Not part of the
+   * key: the operator chose to tag rather than partition, so a group may hold
+   * both loops and the column says so.
+   */
+  harnesses: string[];
   /** Runs in the group that reached the level, fastest first by turns. */
   reached: Reach[];
   /** How many runs of this group were considered at all. */
@@ -98,6 +104,7 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
         harnessVersion: harness,
         effort: run.effort,
         wikiCoords: run.wikiCoords,
+        harnesses: [],
         reached: [],
         attempts: 0,
         bestTurn: null,
@@ -111,12 +118,15 @@ export function groupsForLevel(runs: readonly EvalRun[], level: number): EvalGro
       calls.set(key, []);
     }
     g.attempts += 1;
+    const tag = run.harness ?? "harness?";
+    if (!g.harnesses.includes(tag)) g.harnesses.push(tag);
     if (run.toolCalls !== null) calls.get(g.key)!.push(run.toolCalls);
     const mark = markAtLeast(run, level);
     if (mark !== null) g.reached.push({ runId: run.runId, turn: mark.turn, ms: mark.playtimeMs });
   }
   const out = [...byKey.values()];
   for (const g of out) {
+    g.harnesses.sort();
     g.reached.sort((a, b) => (a.turn ?? Infinity) - (b.turn ?? Infinity));
     const turns = g.reached.map((r) => r.turn).filter((v): v is number => v !== null);
     const times = g.reached.map((r) => r.ms).filter((v): v is number => v !== null);
@@ -234,6 +244,8 @@ export interface LadderRow {
   highest: number;
   cells: LadderCell[];
   runs: number;
+  /** Harness tags among the model's scored runs (ADR-0035), sorted. */
+  harnesses: string[];
 }
 
 /**
@@ -268,6 +280,7 @@ export function ladderRows(runs: readonly EvalRun[]): LadderRow[] {
       highest: reached.length > 0 ? Math.max(...reached) : 0,
       cells,
       runs: list.length,
+      harnesses: [...new Set(list.map((r) => r.harness ?? "harness?"))].sort(),
     });
   }
   rows.sort((a, b) => b.highest - a.highest || b.runs - a.runs || a.model.localeCompare(b.model));

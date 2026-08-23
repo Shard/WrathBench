@@ -20,6 +20,7 @@
 import { A } from "@solidjs/router";
 import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
+import { HarnessTag } from "../components/EpisodePicker";
 import { fmtDuration, fmtWhen } from "../lib/format";
 import { TIER_COLUMNS, countedOf, isPromoted, noteOf, statusClass } from "../lib/models";
 import { poll } from "../lib/poll";
@@ -86,6 +87,7 @@ export default function Models() {
                 <th>status</th>
                 <th>model</th>
                 <th>platform</th>
+                <th>harness</th>
                 <For each={TIER_COLUMNS}>{(t) => <th class="right">{t}</th>}</For>
                 <th>note</th>
                 <th>newest run</th>
@@ -118,6 +120,9 @@ export default function Models() {
                         </div>
                       </td>
                       <td class="dim">{row.platform ?? "—"}</td>
+                      <td>
+                        <HarnessTag harness={row.harness} />
+                      </td>
                       <For each={TIER_COLUMNS}>
                         {(t) => {
                           const st = (): ModelRowView["perEpisode"][typeof t] => row.perEpisode[t];
@@ -155,7 +160,7 @@ export default function Models() {
                     </tr>
                     <Show when={open() === row.name}>
                       <tr>
-                        <td colSpan={4 + TIER_COLUMNS.length}>
+                        <td colSpan={5 + TIER_COLUMNS.length}>
                           <Detail row={row} />
                         </td>
                       </tr>
