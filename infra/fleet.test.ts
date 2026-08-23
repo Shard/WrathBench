@@ -74,7 +74,7 @@ describe("parseFleet", () => {
   test("the shipped shape parses and keeps lane order", () => {
     const config = parseFleet(
       fleetJson([
-        lane({ name: "a", account: "SHAKEOUT", loop: true, untilDefault: "18:00", entries: [{ model: "sonnet", driver: "claude-subscription" }] }),
+        lane({ name: "a", account: "SHAKEOUT", loop: true, untilDefault: "18:00", entries: [{ model: "sonnet", driver: "claude-code" }] }),
         lane({ name: "b", account: "RUNNER" }),
       ]),
     );
@@ -126,10 +126,16 @@ describe("lane-policy", () => {
     );
   });
 
-  test("the claude-subscription driver carries claude models only", () => {
-    expect(() => validateEntries(lane(), [{ model: "z-ai/glm-5.2:free", driver: "claude-subscription" }])).toThrow(
+  test("the claude-code driver carries claude models only", () => {
+    expect(() => validateEntries(lane(), [{ model: "z-ai/glm-5.2:free", driver: "claude-code" }])).toThrow(
       /lane-policy/,
     );
+  });
+
+  test("the pre-ADR-0035 driver spelling is read as claude-code and normalised, never written on", () => {
+    const [e] = validateEntries(lane(), [{ model: "sonnet", driver: "claude-subscription" as never }]);
+    expect(e!.driver).toBe("claude-code");
+    expect(() => validateEntries(lane(), [{ model: "sonnet", driver: "claude-thing" as never }])).toThrow(/unknown driver/);
   });
 
   test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
@@ -226,8 +232,8 @@ describe("fillEntries", () => {
     const specs = fillEntries(
       l,
       [
-        { model: "sonnet", driver: "claude-subscription", effort: "low" },
-        { model: "sonnet", driver: "claude-subscription", runId: "pinned" },
+        { model: "sonnet", driver: "claude-code", effort: "low" },
+        { model: "sonnet", driver: "claude-code", runId: "pinned" },
       ],
       "20260822",
     );
@@ -314,70 +320,53 @@ describe("diffLanes", () => {
 });
 
 describe("the shipped fleet.json", () => {
-  test("parses, honors the lane policy, and encodes the current matrix", async () => {
+  test("parses as the pool/queue shape, pins nav-probe, and honors the lane policy", async () => {
+    // Durable invariants only. `fleet.json` is the LIVE file: the supervisor
+    // hot-reloads it, the operator prunes and adds roster models daily, and
+    // `enabled` is a steering knob — none of that may turn the suite red. What
+    // is durable: the shape, the pinned accounts, the probe's leash, and the
+    // lane policy (claude models only through the claude-code harness,
+    // ADR-0035; shared free pools carry free ids only).
     const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
+    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });
+    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
+    expect(config.policy.runsPerEpisode).toEqual({ e90: 3, e360: 3 });
+    expect(Object.keys(config.roster).length).toBeGreaterThanOrEqual(5);
+    // No forced tiers: every model arrives e90-eligible and earns e360.
+    for (const e of Object.values(config.roster)) expect(e.tiers).toEqual([]);
+    // With an empty run history every roster model is "new" and e90-only.
+    const states = modelStatesOf(rosterModels(config.roster));
+    expect(states.every((st) => st.status === "new" && st.eligible.join() === "e90")).toBe(true);
+
+    // nav-probe: the unscored navigation probe (ADR-0033) — 6h episodes, no-xp
+    // disabled, an operator objective, the only lane serving wiki coords.
     const byName = Object.fromEntries(config.lanes.map((l) => [l.name, l]));
-    // `enabled` is deliberately NOT asserted here. It is the operator's live
-    // steering knob — the supervisor re-reads this file every 60s and, since
-    // ADR-0020, never exits — so a lane parked at 02:00 because a provider's
-    // daily quota reset is pending must not turn the test suite red. What is
-    // durable is the lane-to-account map (one account per lane is the whole
-    // safety property) and the driver/pool policy below.
-    expect(byName["sub-sonnet"]).toMatchObject({ account: "SHAKEOUT", loop: true });
-    expect(byName["sub-opus"]).toMatchObject({ account: "SHAKEOUT2" });
-    // ox-alpha: the Phase-0-passing stealth model, its own account and a solo
-    // lane. Free despite the suffixless id (see FREE_SUFFIXLESS_ALLOWLIST).
-    expect(byName["ox-alpha"]).toMatchObject({ account: "RUNNER" });
-    expect(byName["ox-alpha"].entries).toHaveLength(1);
-    // Post-reset free lanes (accounts RUNNER2-RUNNER6 are in the module
-    // allowlist on the reclaim image); local-qwen is LM Studio on the LAN.
-    expect(byName["free-or-a"]).toMatchObject({ account: "RUNNER3" });
-    expect(byName["free-or-b"]).toMatchObject({ account: "RUNNER4" });
-    expect(byName["free-oc-a"]).toMatchObject({ account: "RUNNER2" });
-    expect(byName["free-oc-b"]).toMatchObject({ account: "RUNNER5" });
-    expect(byName["local-qwen"]).toMatchObject({ account: "RUNNER6" });
-    // nav-probe: the unscored navigation probe (ADR-0024). 6h subscription
-    // episodes, looping since 6443a36 so a terminated cycle does not park the
-    // lane; no-xp disabled, an operator objective on the lane.
-    expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: true });
-    expect(byName["nav-probe"].objective).toContain("Ironforge"); // the objective text changes per probe episode; only the destination is pinned
-    expect(byName["nav-probe"].watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
-    // The coordinates tier (ADR-0028): only the unscored probe serves wiki coords.
-    expect(byName["nav-probe"].wikiCoords).toBe(true);
+    expect(byName["nav-probe"]).toMatchObject({ account: "SHAKEOUT", loop: true, wikiCoords: true, maxToolCalls: 2500 });
+    expect(byName["nav-probe"]!.objective).toContain("Ironforge");
+    expect(byName["nav-probe"]!.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
     for (const l of config.lanes) if (l.name !== "nav-probe") expect(l.wikiCoords).toBeUndefined();
-    // One account, one lane — asserted over the file as written, not just over
-    // the enabled subset parseFleet already guards. The one deliberate
-    // exception is nav-probe, which borrows sub-sonnet's SHAKEOUT (the module
-    // allowlist is fixed at deploy time and has no spare shakeout account):
-    // the two are alternatives, and parseFleet still refuses to have both
-    // enabled at once.
-    const accounts = config.lanes
-      .filter((l) => l.name !== "nav-probe")
-      .map((l) => l.account.toUpperCase());
-    expect(new Set(accounts).size).toBe(accounts.length);
-    for (const l of config.lanes) {
-      for (const e of l.entries ?? []) {
-        // Keyed on the driver, not the lane name: nav-probe is a subscription
-        // lane too and the free-suffix rule below is meaningless for it.
-        if (l.name.startsWith("sub-")) expect(e.driver).toBe("claude-subscription");
-        else if (e.driver === "claude-subscription") expect(isClaudeFamily(e.model)).toBe(true);
-        // The suffix rule applies to shared free-cloud pools, not to a
-        // local/self-hosted apiBase (local-qwen) — key it on the pool, not the
-        // lane name, so a future local lane with any name is judged correctly.
-        // A verified-free stealth id (ox-alpha) is allowlisted despite no suffix.
-        else if (isSharedFreePool(e.apiBase) && !isAllowlistedFree(e.model))
-          expect(e.model).toMatch(/(-free$|:free$)/);
+    expect(byName["sub-opus"]).toMatchObject({ account: "SHAKEOUT2" });
+
+    // Lane policy over every entry the file names, lanes and roster alike.
+    const entries = [
+      ...config.lanes.flatMap((l) => l.entries ?? []),
+      ...Object.values(config.roster),
+    ];
+    for (const e of entries) {
+      const driver = e.driver ?? "openai";
+      // Parse normalises the pre-ADR-0035 spelling, so assert the parsed value.
+      expect(["openai", "claude-code"]).toContain(driver);
+      if (isClaudeFamily(e.model)) expect(driver).toBe("claude-code");
+      if (driver === "claude-code") expect(isClaudeFamily(e.model)).toBe(true);
+      if (driver === "openai" && isSharedFreePool(e.apiBase)) {
+        expect(/(-free$|:free$)/.test(e.model) || isAllowlistedFree(e.model)).toBe(true);
       }
     }
-    // One stream per model config: no model appears in two lanes. The
-    // objective is part of that config — sonnet-with-a-travel-objective is a
-    // different stream from free-play sonnet, and the two lanes are never
-    // enabled together anyway (they share an account).
-    const models = config.lanes.flatMap((l) =>
-      (l.entries ?? []).map((e) => `${e.model}|${e.effort ?? ""}|${e.objective ?? l.objective ?? ""}`),
-    );
-    expect(new Set(models).size).toBe(models.length);
+    // The raw file may still spell `claude-subscription`: a supervisor started
+    // before ADR-0035 rejects `claude-code`, and the file is hot-reloaded by
+    // whichever supervisor is up. The parsed value is what must be right.
+    for (const l of config.lanes) if (l.name.startsWith("sub-")) for (const e of l.entries ?? []) expect(e.driver).toBe("claude-code");
   });
 });
 
@@ -846,7 +835,7 @@ describe("pool and queue (ADR-0031)", () => {
   const nextShape = (over: Record<string, unknown> = {}): unknown => ({
     _notes: ["n"],
     accounts: { pinned: { SHAKEOUT: "nav-probe" }, pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
-    lanes: [lane({ name: "nav-probe", account: undefined as never, loop: true, entries: [{ model: "sonnet", driver: "claude-subscription" }] })],
+    lanes: [lane({ name: "nav-probe", account: undefined as never, loop: true, entries: [{ model: "sonnet", driver: "claude-code" }] })],
     roster: {
       glm: { model: "z-ai/glm-5.2:free" },
       ox: { model: "stealth/ox-alpha", tiers: ["e90", "e360"] },
@@ -1038,36 +1027,6 @@ describe("pool and queue (ADR-0031)", () => {
     expect(lines).toMatch(/pair .*waiting/);
   });
 
-  test("the shipped fleet.next.json: pool roster under the policy, empty manual queue, nav-probe pinned", async () => {
-    const raw = (await Bun.file(new URL("./fleet.next.json", import.meta.url).pathname).json()) as unknown;
-    const config = parseFleet(raw);
-    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe", SHAKEOUT2: "sub-opus" });
-    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]);
-    // The policy replaces the per-lane loop jobs (ADR-0032): nothing manual is queued.
-    expect(config.queue).toEqual([]);
-    expect(config.policy.runsPerEpisode).toEqual({ e90: 3, e360: 3 });
-    // No forced tiers: every model arrives e90-eligible and earns e360.
-    for (const e of Object.values(config.roster)) expect(e.tiers).toEqual([]);
-    expect(Object.keys(config.roster).length).toBeGreaterThanOrEqual(10);
-    // With an empty run history every roster model is "new" and the first six take the pool, in roster order.
-    const states = modelStatesOf(rosterModels(config.roster));
-    expect(states.every((st) => st.status === "new" && st.eligible.join() === "e90")).toBe(true);
-    const picks = planPolicy({ states, pool: config.accounts.pool, running: new Map(), held: () => undefined, queuePlan: { assign: [], waiting: [], skipped: [] }, runningRefs: new Set() });
-    expect(picks.map((p) => [p.job.lane, p.account])).toEqual([
-      ["sonnet-e90", "RUNNER"],
-      ["sonnet-low-e90", "RUNNER2"],
-      ["ox-alpha-e90", "RUNNER3"],
-      ["nemotron-ultra-e90", "RUNNER4"],
-      ["north-mini-code-e90", "RUNNER5"],
-      ["nemotron-super-e90", "RUNNER6"],
-    ]);
-    const ox = jobLane(picks[2]!.job, config.roster, "RUNNER3", "20260823");
-    expect(fillEntries(ox, ox.entries!, "20260823")[0]).toMatchObject({ runId: "fleet-ox-alpha-e90-ox-alpha-20260823", episode: "e90", account: "RUNNER3" });
-    // The nav-probe lane is byte-for-byte the pinned lane of today.
-    const nav = config.lanes.find((l) => l.name === "nav-probe")!;
-    expect(nav).toMatchObject({ account: "SHAKEOUT", loop: true, wikiCoords: true, maxToolCalls: 2500 });
-    expect(nav.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
-  });
 });
 
 // ------------------------------------------------------------ ADR-0032 policy

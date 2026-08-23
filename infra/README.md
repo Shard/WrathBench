@@ -120,9 +120,9 @@ config and everything but `model` has a default, so an old bare
 | key | default | notes |
 | --- | --- | --- |
 | `model` | — | required, passed through verbatim |
-| `driver` | `openai` | or `claude-subscription` (SHAKEOUT lane only) |
+| `driver` | `openai` | or `claude-code` (the claude-code harness, ADR-0035; `claude-subscription` is read as the old spelling) |
 | `account` | runner default (`RUNNER`) | one live session per account |
-| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-subscription` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
+| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
 | `character`, `race`, `class` | derived from the model, Human Paladin | |
 | `episodeMs` | 5400000 (90m) | |
@@ -202,7 +202,7 @@ and supervises them.
 Guards, at startup and on every re-read: two enabled lanes must not share an
 account (one live session per account), and the **lane policy** — claude
 models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
-`claude-subscription` driver, and that driver runs claude models only. The
+`claude-code` driver, and that driver runs claude models only. The
 free lanes exist because OpenRouter's and OpenCode Zen's free tiers are
 pooled per upstream provider: a single sequential stream per pool is both the
 polite and the effective shape — two streams on one pool just trip the same
@@ -223,7 +223,7 @@ apiBase is a distinct category in the lane policy:
   so the model id need not end `-free`/`:free`. The guard treats any apiBase
   that is not an `openrouter.ai`/`opencode.ai` host as local.
 - **Still claude-barred.** No `claude-*` id ever rides an openai lane, local or
-  cloud; claude runs only on the `claude-subscription` driver.
+  cloud; claude runs only on the `claude-code` driver.
 - **`apiKeyEnv` names a dummy key.** LM Studio ignores the bearer value, but the
   pipeline needs the env var to exist, so `.env` carries a non-secret
   `LMSTUDIO_KEY=lm-studio` placeholder. Delivery mirrors the cloud lanes

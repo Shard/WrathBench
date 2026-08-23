@@ -2,7 +2,7 @@
 #
 # Operator entry point for one episode.
 #
-#   ./infra/run-episode.sh --model <id> [--driver openai|claude-subscription|stub]
+#   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|stub]
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
 #
@@ -112,8 +112,9 @@ export WRATHBENCH_HARNESS_VERSION
 
 # ------------------------------------------------------------------ preflight
 
-if [ "${DRIVER}" = "claude-subscription" ]; then
-  echo "run-episode.sh: driver claude-subscription is SHAKEOUT-ONLY (external scaffold); its runs are not harness results." >&2
+# `claude-subscription` is the pre-ADR-0035 spelling of `claude-code`; the runner reads both.
+if [ "${DRIVER}" = "claude-code" ] || [ "${DRIVER}" = "claude-subscription" ]; then
+  echo "run-episode.sh: driver claude-code — the Claude Code CLI is the harness for this run (ADR-0035); it is tagged, not excluded." >&2
   token_help() {
     cat >&2 <<'EOF'
 run-episode.sh: CLAUDE_CODE_OAUTH_TOKEN is not available to the runner.
@@ -139,7 +140,7 @@ run-episode.sh: the runner container has no `claude` CLI (its image is oven/bun)
   either install it into the runner service (npm i -g @anthropic-ai/claude-code),
   or run on the host with --local and point the runner at a reachable module:
       WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --model opus \
-        --driver claude-subscription --local
+        --driver claude-code --local
   (the module port is not published to the host by default)
 EOF
       exit 2

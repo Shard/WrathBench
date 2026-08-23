@@ -36,7 +36,7 @@
  *  - two enabled lanes must not share an account (one live session per
  *    account; the second lane would spend the night in account_in_use).
  *  - lane-policy: claude-family models (opus/sonnet/haiku/claude-*) run only
- *    via the claude-subscription driver, and that driver runs only claude
+ *    via the claude-code driver, and that driver runs only claude
  *    models. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
  *    only; keeping a single stream per provider pool is the whole point of the
  *    lane shape. A local/self-hosted openai apiBase is a distinct category:
@@ -72,7 +72,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
-import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import {
   DEFAULT_POLICY,
   LADDER_MS,
@@ -284,7 +284,7 @@ function fail(msg: string): never {
   throw new Error(msg);
 }
 
-/** True for models that must ride the claude-subscription driver. */
+/** True for models that must ride the claude-code driver (the claude-code harness, ADR-0035). */
 export function isClaudeFamily(model: string): boolean {
   return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
 }
@@ -332,19 +332,21 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
     if (typeof e !== "object" || e === null || typeof e.model !== "string" || e.model.length === 0) {
       fail(`lane ${lane.name}: entry without a model: ${JSON.stringify(e)}`);
     }
-    const driver = e.driver ?? "openai";
-    if (driver !== "openai" && driver !== "claude-subscription") {
-      fail(`lane ${lane.name}: entry ${e.model}: unknown driver ${String(driver)}`);
+    // `claude-subscription` is the pre-ADR-0035 spelling of `claude-code`;
+    // a live fleet.json may still carry it, and it reads as the same driver.
+    const driver = normalizeDriver(e.driver ?? "openai");
+    if (driver !== "openai" && driver !== "claude-code") {
+      fail(`lane ${lane.name}: entry ${e.model}: unknown driver ${String(e.driver)}`);
     }
     if (driver === "openai" && isClaudeFamily(e.model)) {
       fail(
         `lane ${lane.name}: entry ${e.model}: lane-policy — claude models run only via the ` +
-          `claude-subscription driver, never through an openai-driver lane`,
+          `claude-code driver, never through an openai-driver lane`,
       );
     }
-    if (driver === "claude-subscription" && !isClaudeFamily(e.model)) {
+    if (driver === "claude-code" && !isClaudeFamily(e.model)) {
       fail(
-        `lane ${lane.name}: entry ${e.model}: lane-policy — the claude-subscription driver ` +
+        `lane ${lane.name}: entry ${e.model}: lane-policy — the claude-code driver ` +
           `carries claude models only`,
       );
     }
@@ -389,7 +391,9 @@ export function validateEntries(lane: FleetLane, entries: unknown): RosterSpec[]
     ) {
       fail(`lane ${lane.name}: entry ${e.model}: maxToolCalls must be a positive integer`);
     }
-    out.push(e);
+    // Normalised driver spelling from here on: meta.json and the runner argv
+    // only ever see `claude-code`.
+    out.push(e.driver === undefined ? e : { ...e, driver });
   }
   if (out.length === 0) fail(`lane ${lane.name}: no entries`);
   return out;

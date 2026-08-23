@@ -1,7 +1,7 @@
 [
   {
     "model": "opus",
-    "driver": "claude-subscription",
+    "driver": "claude-code",
     "account": "SHAKEOUT",
     "character": "Burnopus",
     "race": 3,
@@ -10,7 +10,7 @@
   },
   {
     "model": "opus",
-    "driver": "claude-subscription",
+    "driver": "claude-code",
     "account": "SHAKEOUT",
     "effort": "low",
     "character": "Burnopuslo",
@@ -20,7 +20,7 @@
   },
   {
     "model": "sonnet",
-    "driver": "claude-subscription",
+    "driver": "claude-code",
     "account": "SHAKEOUT",
     "character": "Burnsonn",
     "race": 3,

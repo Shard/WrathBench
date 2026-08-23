@@ -1,5 +1,6 @@
 {
   "_notes": [
+    "DRIVER SPELLING (2026-08-23, ADR-0035): `claude-subscription` below is the pre-ADR-0035 alias of `claude-code`. The supervisor running since before that commit only knows the old word and REJECTS the file on `claude-code` (seen 02:23:57: keeps last good config). Switch these entries to `claude-code` at the next fleet restart; new code reads both.",
     "sonnet / sonnet-low are NOT in the pool roster (2026-08-23): the subscription lane is one session at a time while nav-probe holds SHAKEOUT; queue them manually (example below) when the probe is parked.",
     "Pruned 2026-08-23 (docs/COSTS.md §1): mimo-v2.5-free 0 snippets in 23 episodes, z-ai/glm-5.2:free 0 in 16 (429 upstream). north-mini-code and deepseek-v4-flash kept one more day on 1–2 samples.",
     "NEXT-SHAPE fleet config (ADR-0031: runner pool and job queue; ADR-0032: scheduling policy from",
@@ -44,7 +45,7 @@
     "  { \"ref\": [\"hy3\", \"deepseek-flash\"], \"episode\": \"e90\", \"repeat\": \"loop\", \"lane\": \"free-oc-a\", \"enabled\": false }",
     "",
     "Lane policy is unchanged and enforced on every entry: claude models only via the",
-    "claude-subscription driver; shared free pools carry free ids only; a local apiBase is",
+    "claude-code driver (the claude-code harness, ADR-0035); shared free pools carry free ids only; a local apiBase is",
     "exempt from the suffix rule. preflight is unchanged (ADR-0023); its accounts may not be",
     "in the pool."
   ],
