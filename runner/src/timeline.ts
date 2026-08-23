@@ -5,7 +5,7 @@
  */
 
 import { join } from "node:path";
-import { normalizePauseReason } from "./config";
+import { normalizePauseReason, readUnscoredStamp } from "./config";
 import { readMeta, readTrajectory, Trajectory, type TrajectoryRecord } from "./trajectory";
 
 function fmtTs(ts: number): string {
@@ -38,11 +38,11 @@ export function renderTimeline(runDir: string, runId: string): string {
   const stateRows = trajectory.stateRows(runId);
   trajectory.close();
 
-  const shakeout = (meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined;
+  const shakeout = readUnscoredStamp((meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined);
   if (typeof shakeout === "string" && shakeout.length > 0) {
     // First and last thing the reader sees: this run is not a score.
     lines.push("!! ".repeat(8).trim());
-    lines.push(`!! ${shakeout.toUpperCase()} — NOT A HARNESS RESULT`);
+    lines.push(`!! ${shakeout.toUpperCase()} — NOT A SCORED RESULT`);
     lines.push("!! ".repeat(8).trim());
     lines.push("");
   }
@@ -126,7 +126,7 @@ export function renderTimeline(runDir: string, runId: string): string {
   }
   if (typeof shakeout === "string" && shakeout.length > 0) {
     lines.push("");
-    lines.push(`!! ${shakeout.toUpperCase()} — NOT A HARNESS RESULT`);
+    lines.push(`!! ${shakeout.toUpperCase()} — NOT A SCORED RESULT`);
   }
   return lines.join("\n");
 }

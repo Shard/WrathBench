@@ -16,8 +16,8 @@ import { claudeArgs } from "../src/adapter-claude";
 import {
   loadRunConfig,
   OBJECTIVE_STAMP,
-  SHAKEOUT_STAMP,
-  shakeoutStamp,
+  STUB_STAMP,
+  unscoredStamp,
   watchdogOverrideSchema,
 } from "../src/config";
 import { runLoop } from "../src/loop";
@@ -43,14 +43,15 @@ describe("objective in the run config", () => {
 
   test("an objective stamps the run unscored, and stacks with the driver's stamp", () => {
     // No objective: exactly the stamps that shipped before ADR-0024.
-    expect(shakeoutStamp("openai")).toBeUndefined();
-    expect(shakeoutStamp("claude-subscription")).toBe(SHAKEOUT_STAMP);
+    expect(unscoredStamp("openai")).toBeUndefined();
+    expect(unscoredStamp("claude-code")).toBeUndefined(); // ADR-0035: a harness, not a penalty
+    expect(unscoredStamp("stub")).toBe(STUB_STAMP);
     // An objective alone is enough to keep a run out of a scored comparison.
-    expect(shakeoutStamp("openai", OBJECTIVE)).toBe(OBJECTIVE_STAMP);
+    expect(unscoredStamp("openai", OBJECTIVE)).toBe(OBJECTIVE_STAMP);
     // Both reasons: the driver stamp stays the prefix, so anything matching on
     // it keeps matching.
-    const both = shakeoutStamp("claude-subscription", OBJECTIVE)!;
-    expect(both.startsWith(SHAKEOUT_STAMP)).toBe(true);
+    const both = unscoredStamp("stub", OBJECTIVE)!;
+    expect(both.startsWith(STUB_STAMP)).toBe(true);
     expect(both).toContain(OBJECTIVE_STAMP);
   });
 });
@@ -127,12 +128,12 @@ describe("meta recording", () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-objective-meta-"));
     const config = loadRunConfig({
       runId: "run-meta",
-      driver: "claude-subscription",
+      driver: "claude-code",
       model: "sonnet",
       objective: OBJECTIVE,
     });
     const trajectory = new Trajectory(dir);
-    const shakeout = shakeoutStamp(config.driver, config.objective)!;
+    const shakeout = unscoredStamp(config.driver, config.objective)!;
     trajectory.writeMeta({
       runId: "run-meta",
       harnessVersion: "t",
@@ -212,7 +213,7 @@ describe("argv -> run config", () => {
     // of it silently failed to land, the 6h probe would die at 45 minutes as
     // `no-xp` and read like a harness fault.
     const config = configFromArgs([
-      "--driver", "claude-subscription",
+      "--driver", "claude-code",
       "--model", "sonnet",
       "--run-id", "fleet-nav-probe-sonnet-20260822",
       "--account", "SHAKEOUT",
@@ -235,14 +236,14 @@ describe("argv -> run config", () => {
       maxSandboxRestarts: 3,
     });
     expect(config).toMatchObject({
-      driver: "claude-subscription",
+      driver: "claude-code",
       model: "sonnet",
       account: "SHAKEOUT",
       character: "Navprobe",
       race: 3,
       class: 2,
     });
-    expect(shakeoutStamp(config.driver, config.objective)).toContain(OBJECTIVE_STAMP);
+    expect(unscoredStamp(config.driver, config.objective)).toContain(OBJECTIVE_STAMP);
   });
 
   test("no dimensions on the command line means the shipped defaults", () => {
@@ -280,7 +281,7 @@ describe("the viewer's run row", () => {
       harnessVersion: "t",
       startedAt: Date.now(),
       config,
-      shakeout: shakeoutStamp("openai", OBJECTIVE)!,
+      shakeout: unscoredStamp("openai", OBJECTIVE)!,
     });
     trajectory.close();
     const row = readRun(runs, "run-view");

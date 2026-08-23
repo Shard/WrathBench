@@ -424,7 +424,7 @@ describe("platformOf", () => {
   });
 
   test("falls back to the driver when there is no api base", () => {
-    expect(platformOf(null, "claude-subscription")).toBe("claude-subscription");
+    expect(platformOf(null, "claude-code")).toBe("claude-code");
     expect(platformOf(null, null)).toBeNull();
   });
 });

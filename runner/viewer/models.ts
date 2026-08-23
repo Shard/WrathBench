@@ -44,7 +44,7 @@ import {
   type RunFact,
 } from "../src/models";
 import { isEpisodeId } from "../src/episodes";
-import type { EpisodeIdView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
+import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { isArchiveDir } from "./stillborn";
 import { redactSecrets } from "./tail";
 
@@ -368,6 +368,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     model: state.model,
     effort: state.effort,
     platform: state.platform,
+    harness: state.harness,
     status: state.status,
     eligible: state.eligible as EpisodeIdView[],
     perEpisode,
@@ -387,15 +388,20 @@ export function modelsResponse(opts: {
   runsDir: string;
   roster: RosterRead;
   now?: number;
+  /** Optional harness filter (ADR-0035); "all" or absent lists every row. */
+  harness?: HarnessView | "all";
 }): ModelsResponse {
+  const harness = opts.harness ?? "all";
+  const states = harness === "all" ? opts.states : opts.states.filter((s) => s.harness === harness);
   return {
-    models: opts.states.map((s) => rowOf(s, opts.runs, opts.runsDir)),
+    models: states.map((s) => rowOf(s, opts.runs, opts.runsDir)),
     roster: { path: opts.roster.path, shape: opts.roster.shape, count: opts.roster.models.length },
     policy: {
       runsPerEpisode: opts.roster.policy.runsPerEpisode,
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
     },
     ladderMs: [...LADDER_MS],
+    harness,
     now: opts.now ?? Date.now(),
   };
 }

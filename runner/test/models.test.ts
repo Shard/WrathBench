@@ -75,7 +75,7 @@ function writeRun(runsDir: string, r: SynthRun): void {
 const roster: RosterModel[] = [
   { name: "ox", model: "stealth/ox-alpha" },
   { name: "glm", model: "z-ai/glm:free", apiBase: "https://openrouter.ai/api/v1" },
-  { name: "sonnet", model: "sonnet", driver: "claude-subscription" },
+  { name: "sonnet", model: "sonnet", driver: "claude-code" },
   { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-subscription", runsPerEpisode: { e90: 1 } },
   { name: "local", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" },
 ];
@@ -144,7 +144,10 @@ describe("modelStates", () => {
     expect(by["glm"]!.cooling!.reason).toContain("glm-3");
     expect(by["glm"]!.perEpisode.e90).toMatchObject({ counted: 0, stillborn: 3, attempts: 3, lastReason: "stillborn" });
 
-    expect(by["sonnet"]).toMatchObject({ status: "active", eligible: ["e90"], platform: "claude-subscription" });
+    expect(by["sonnet"]).toMatchObject({ status: "active", eligible: ["e90"], platform: "claude-code", harness: "claude-code" });
+    // The old driver spelling in a roster reads as the same harness (ADR-0035).
+    expect(by["sonnet-low"]).toMatchObject({ platform: "claude-code", harness: "claude-code" });
+    expect(by["ox"]).toMatchObject({ harness: "wrathbench" });
     expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, reachedL5: false });
 
     // A live, answered run counts; the per-entry target override applies.
@@ -154,7 +157,7 @@ describe("modelStates", () => {
   });
 
   test("a forced tier is eligible without a witness; the pre-tier run never promotes", () => {
-    const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-subscription", tiers: ["e360"] }], now: NOW, sidecar: { version: 1, cleared: {} } });
+    const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tiers: ["e360"] }], now: NOW, sidecar: { version: 1, cleared: {} } });
     expect(s!.eligible).toEqual(["e90", "e360"]);
     expect(s!.status).toBe("promoted");
     expect(s!.perEpisode.e90!.reachedL5).toBe(false);

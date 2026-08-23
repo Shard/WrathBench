@@ -1,5 +1,5 @@
 /**
- * The claude-subscription driver, exercised end to end against a scripted fake
+ * The claude-code driver, exercised end to end against a scripted fake
  * `claude` binary on PATH. No live stack, no real CLI, no subscription quota:
  * the fake speaks the real stream-json protocol and really calls our MCP
  * server through the loopback bridge.
@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode } from "../src/adapter-claude";
-import { SHAKEOUT_STAMP, isShakeoutDriver, loadRunConfig } from "../src/config";
+import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { SYSTEM_PROMPT } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
 import { renderTimeline } from "../src/timeline";
@@ -59,7 +59,7 @@ function setupEpisode(
   const recordPath = join(runDir, "record.json");
   const config = {
     ...loadRunConfig({
-      driver: "claude-subscription",
+      driver: "claude-code",
       model: "opus",
       stepIntervalMs: 0,
       stateIntervalMs: 1,
@@ -74,7 +74,6 @@ function setupEpisode(
     harnessVersion: "t",
     startedAt: Date.now(),
     config,
-    shakeout: SHAKEOUT_STAMP,
   });
   return {
     runDir,
@@ -130,7 +129,7 @@ function readRecord(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-describe("claude-subscription driver", () => {
+describe("claude-code driver", () => {
   test("drives turns, round-trips a tool call through our MCP config, honours maxTurns", async () => {
     const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 2 });
     const outcome = await runClaudeEpisode(options);
@@ -410,31 +409,53 @@ describe("driver selection and stamping", () => {
   test("config defaults to the openai driver and accepts the legacy adapter name", () => {
     expect(loadRunConfig({}).driver).toBe("openai");
     expect(loadRunConfig({ adapter: "stub" }).driver).toBe("stub");
-    expect(loadRunConfig({ driver: "claude-subscription" }).driver).toBe("claude-subscription");
-    expect(isShakeoutDriver("claude-subscription")).toBe(true);
-    expect(isShakeoutDriver("openai")).toBe(false);
+    expect(loadRunConfig({ driver: "claude-code" }).driver).toBe("claude-code");
+    // ADR-0035: the old spelling and the legacy `adapter` field read as aliases.
+    expect(loadRunConfig({ driver: "claude-subscription" }).driver).toBe("claude-code");
+    expect(loadRunConfig({ adapter: "claude-subscription" }).driver).toBe("claude-code");
+    expect(loadRunConfig({ driver: "claude-code" }).adapter).toBe("claude-code");
+    // The claude-code harness scores; only the stub never does.
+    expect(isUnscoredDriver("claude-code")).toBe(false);
+    expect(isUnscoredDriver("openai")).toBe(false);
+    expect(isUnscoredDriver("stub")).toBe(true);
+    expect(unscoredStamp("claude-code")).toBeUndefined();
   });
 
-  test("meta, sqlite and the timeline all carry the shakeout stamp", () => {
+  test("meta, sqlite and the timeline carry the stub stamp; a claude-code run carries none", () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-stamp-"));
-    const config = loadRunConfig({ driver: "claude-subscription", model: "opus" });
+    const config = loadRunConfig({ driver: "stub", stubScript: "x.json" });
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({
       runId: "run-stamp",
       harnessVersion: "t",
       startedAt: Date.now(),
       config,
-      shakeout: SHAKEOUT_STAMP,
+      shakeout: STUB_STAMP,
     });
     const row = trajectory.runRow("run-stamp");
-    expect(row?.["driver"]).toBe("claude-subscription");
-    expect(row?.["shakeout"]).toBe(SHAKEOUT_STAMP);
+    expect(row?.["driver"]).toBe("stub");
+    expect(row?.["shakeout"]).toBe(STUB_STAMP);
     trajectory.close();
 
-    expect(readMeta(dir)?.shakeout).toBe(SHAKEOUT_STAMP);
+    expect(readMeta(dir)?.shakeout).toBe(STUB_STAMP);
     const rendered = renderTimeline(dir, "run-stamp");
-    expect(rendered).toContain("NOT A HARNESS RESULT");
-    expect(rendered).toContain("driver:     claude-subscription");
+    expect(rendered).toContain("NOT A SCORED RESULT");
+    expect(rendered).toContain("driver:     stub");
+
+    // A pre-ADR-0035 claude run's stored scaffold stamp no longer renders as unscored.
+    const old = mkdtempSync(join(tmpdir(), "wrathbench-oldstamp-"));
+    const t2 = new Trajectory(old);
+    t2.writeMeta({
+      runId: "run-old",
+      harnessVersion: "t",
+      startedAt: Date.now(),
+      config: loadRunConfig({ driver: "claude-subscription", model: "opus" }),
+      shakeout: "shakeout-only (external scaffold)",
+    });
+    t2.close();
+    const oldRendered = renderTimeline(old, "run-old");
+    expect(oldRendered).not.toContain("NOT A SCORED RESULT");
+    expect(oldRendered).toContain("driver:     claude-code");
   });
 
   test("an externally delivered SIGTERM finalises the run as manual", async () => {
@@ -445,7 +466,7 @@ describe("driver selection and stamping", () => {
         process.execPath,
         join(import.meta.dir, "..", "src", "run.ts"),
         "--driver",
-        "claude-subscription",
+        "claude-code",
         "--model",
         "x",
         "--runs-dir",
@@ -495,7 +516,7 @@ describe("driver selection and stamping", () => {
         process.execPath,
         join(import.meta.dir, "..", "src", "run.ts"),
         "--driver",
-        "claude-subscription",
+        "claude-code",
         "--model",
         "opus",
         "--runs-dir",

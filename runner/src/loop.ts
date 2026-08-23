@@ -77,7 +77,7 @@ export class ContextBuilder {
    * The driver turn currently in flight, stamped onto every state sample.
    *
    * Set by the driver rather than counted here: the fixed loop and the
-   * claude-subscription driver each own their own turn counter, and a sample
+   * claude-code driver each own their own turn counter, and a sample
    * is taken on the clock (`stateIntervalMs`), not once per turn. Zero means
    * "before the first turn", which is recorded as no turn at all.
    */
@@ -115,7 +115,7 @@ export class ContextBuilder {
   /**
    * Snapshot, and record the periodic state line if `stateIntervalMs` has
    * elapsed. Separate from `build` because a driver whose turns are long (the
-   * claude-subscription driver: one turn can run for tens of minutes) must
+   * claude-code driver: one turn can run for tens of minutes) must
    * sample the world on the clock, not once per turn, or the timeline has no
    * data mid-turn and `no-xp` has nothing to measure.
    */

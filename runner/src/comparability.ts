@@ -4,8 +4,8 @@
  *
  * ADR-0004 says scores are comparable *within a harness version*. In practice
  * the harness version alone is not the whole story — a run also carries an
- * episode budget, a reasoning effort, a context engine and possibly an operator
- * objective (ADR-0024), and each of those changes what the number means. This
+ * episode budget, a reasoning effort, a harness and possibly an operator
+ * objective (ADR-0033), and each of those changes what the number means. This
  * module names that tuple once, stamps it into run metadata at launch, and is
  * the only place that decides what belongs in it.
  *
@@ -22,29 +22,31 @@
  */
 
 import { z } from "zod";
-import { episodeOverrideOf, type RunConfig } from "./config";
+import { HARNESSES, LEGACY_SCAFFOLD_STAMP, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
 
 /**
- * Which machinery decided what the model saw each turn.
+ * Harness as the tuple records it (ADR-0035): which machinery decided what the
+ * model saw each turn. `wrathbench` applies ADR-0012 (event window, hysteretic
+ * message window, regenerated per-turn context); `claude-code` is the Claude
+ * Code CLI, which owns its own history and compaction. Two harnesses are two
+ * comparability groups; neither is a scoring penalty.
  *
- * The fixed loop applies ADR-0012 (event window, hysteretic message window,
- * regenerated per-turn context). The claude-subscription driver does not: the
- * CLI owns its own history and its own compaction, which is the reason those
- * runs are shakeout-only. FOLLOW-UPS 8b's labelled context engine lands here
- * when there is more than one of them.
+ * Tuples stamped before ADR-0035 carry `contextEngine` instead, with the
+ * values below. The reader maps them to a harness and never rewrites the file.
  */
-export const CONTEXT_ENGINES = {
-  openai: "harness-fixed-window",
-  stub: "harness-fixed-window",
-  "claude-subscription": "external-scaffold-claude-cli",
-} as const;
+export const LEGACY_CONTEXT_ENGINES: Readonly<Record<string, Harness>> = {
+  "harness-fixed-window": "wrathbench",
+  "external-scaffold-claude-cli": "claude-code",
+};
+
+export const harnessSchema = z.enum(HARNESSES);
 
 /** How long a run is allowed to be, in every unit the harness can end it by. */
 export const episodeBudgetSchema = z.object({
-  /** Driver turns. Null = unlimited (a result run). The claude driver's turns
-   * are not the fixed loop's: one of its turns has held 168 tool calls. */
+  /** Driver turns. Null = unlimited (a result run). A claude-code turn is not
+   * a fixed-loop turn: one of them has held 168 tool calls. */
   maxTurns: z.number().int().positive().nullable(),
   /** Tool calls for the whole episode; enforced at the MCP boundary. */
   maxToolCalls: z.number().int().positive(),
@@ -72,8 +74,8 @@ export const comparabilitySchema = z.object({
   promptHash: z.string(),
   /** Length of that prompt, so a hash mismatch has a visible magnitude. */
   promptChars: z.number().int().nonnegative(),
-  /** Which context machinery drove the run; see `CONTEXT_ENGINES`. */
-  contextEngine: z.string(),
+  /** Which loop owned the run (ADR-0035). Old tuples' `contextEngine` maps here on read. */
+  harness: harnessSchema,
   /** Reasoning effort, or null for "the field was never sent". */
   effort: z.string().nullable(),
   budget: episodeBudgetSchema,
@@ -156,7 +158,7 @@ export function comparabilityOf(
     harnessVersion,
     promptHash: promptHash(prompt),
     promptChars: prompt.length,
-    contextEngine: CONTEXT_ENGINES[config.driver] ?? config.driver,
+    harness: harnessOf(config.driver),
     effort: config.effort ?? null,
     budget: {
       maxTurns: config.maxTurns ?? null,
@@ -181,8 +183,47 @@ export function comparabilityOf(
  * listing pays for.
  */
 export function parseComparability(raw: unknown): Comparability | null {
-  const parsed = comparabilitySchema.safeParse(raw);
+  const parsed = comparabilitySchema.safeParse(withHarness(raw));
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Map a pre-ADR-0035 tuple's `contextEngine` onto `harness`, in memory only.
+ * A tuple that already names a harness is returned as is; one that names an
+ * unknown engine is left alone and fails validation as "not recorded".
+ */
+function withHarness(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const o = raw as Record<string, unknown>;
+  if (o["harness"] !== undefined) return o;
+  const engine = o["contextEngine"];
+  if (typeof engine !== "string") return o;
+  const harness = LEGACY_CONTEXT_ENGINES[engine];
+  if (harness === undefined) return o;
+  const { contextEngine: _dropped, ...rest } = o;
+  return { ...rest, harness };
+}
+
+/**
+ * The harness a run belongs to, from whatever its metadata recorded: the
+ * tuple first, then a pre-ADR-0035 scaffold stamp, then the driver. Null when
+ * none of those was written. Readers use this so a run launched before the
+ * tuple existed still lands in the right group instead of in neither.
+ */
+export function harnessOfRun(meta: {
+  comparability?: { harness?: string } | null;
+  driver?: string | null;
+  shakeout?: string | null;
+}): Harness | null {
+  const stamped = meta.comparability?.harness;
+  if (stamped !== undefined && (HARNESSES as readonly string[]).includes(stamped)) return stamped as Harness;
+  if (meta.shakeout !== null && meta.shakeout !== undefined && meta.shakeout.startsWith(LEGACY_SCAFFOLD_STAMP)) {
+    return "claude-code";
+  }
+  const d = meta.driver;
+  if (d === "claude-code" || d === "claude-subscription") return "claude-code";
+  if (d === "openai" || d === "stub") return "wrathbench";
+  return null;
 }
 
 /** Whether two tuples describe runs that may share a chart. Order-independent. */

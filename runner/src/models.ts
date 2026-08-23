@@ -38,6 +38,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { harnessOf, normalizeDriver, type Harness } from "./config";
 import { isEpisodeId, type EpisodeId } from "./episodes";
 
 // ----------------------------------------------------------------- policy
@@ -177,6 +178,8 @@ export interface ModelState {
   model: string;
   effort: string | null;
   platform: string | null;
+  /** The harness this entry's runs go through (ADR-0035), from its driver; a tag, not a partition. */
+  harness: Harness;
   status: ModelStatus;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
@@ -352,7 +355,7 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
     if (host.includes("localhost") || host.startsWith("127.") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return "local";
     return host.replace(/^api\./, "");
   }
-  return driver ?? "openrouter";
+  return driver === undefined ? "openrouter" : (normalizeDriver(driver) ?? driver);
 }
 
 /** Whether a run is stillborn by the viewer's definition; null while undecidable. */
@@ -445,6 +448,7 @@ export function projectModel(
     model: r.model,
     effort: r.effort ?? null,
     platform: platformOf(r.apiBase, r.driver),
+    harness: harnessOf(normalizeDriver(r.driver ?? "openai") ?? "openai"),
     status: "active",
     eligible,
     perEpisode,

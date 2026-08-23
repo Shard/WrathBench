@@ -17,6 +17,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
+import { HARNESSES } from "../src/config";
 import type {
   ApiInfoResponse,
   EntrySummary,
@@ -28,6 +29,7 @@ import type {
   FleetLaneRun,
   FleetLaneView,
   FleetResponse,
+  HarnessView,
   ModelsResponse,
   RunListRow,
   RunsResponse,
@@ -445,6 +447,18 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
+   * The optional `?harness=` filter (ADR-0035), shared by `/api/eval`,
+   * `/api/ladder` and `/api/models`. Defaults to `all`: the harness is a tag
+   * on the row, not a partition, so a chart shows both loops unless asked
+   * not to. Unknown values are a 400 for the same reason the episode filter's are.
+   */
+  function harnessFilter(url: URL): HarnessView | "all" | null {
+    const raw = url.searchParams.get("harness");
+    if (raw === null || raw === "all") return "all";
+    return (HARNESSES as readonly string[]).includes(raw) ? (raw as HarnessView) : null;
+  }
+
+  /**
    * The `?includeStillborn=1` escape hatch, shared by every listing.
    *
    * Default off: a run that never produced a model response never got off the
@@ -461,9 +475,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     if (episode === null) {
       return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
     }
+    const harness = harnessFilter(url);
+    if (harness === null) {
+      return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
+    }
     const includeOverrides = url.searchParams.get("includeOverrides") === "1";
     const includeStillborn = includeStillbornFlag(url);
-    const all = await evalRuns();
+    const everything = await evalRuns();
+    const all = harness === "all" ? everything : everything.filter((r) => r.harness === harness);
     /*
      * Filtering to a tier means filtering to its *members* (ADR-0030): stamped
      * with the id and not overridden. A derived label is countable but is not
@@ -484,10 +503,11 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     const body: EvalResponse = {
       runs,
       episode,
+      harness,
       includeOverrides,
       includeStillborn,
       stillbornExcluded,
-      filteredOut: all.length - runs.length,
+      filteredOut: everything.length - runs.length,
       overridesExcluded:
         episode === "all" || includeOverrides
           ? 0
@@ -597,11 +617,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
      * adds only the run ids behind each count and the last error text.
      */
     if (path === "/api/models") {
+      const harness = harnessFilter(url);
+      if (harness === null) {
+        return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
+      }
       const now = Date.now();
       const roster = readFleetRoster(opts.fleetConfigPath);
       const runs = readRunFactsCached(runsDir, factCache, now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
-      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now });
+      const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness });
       return json(body);
     }
 

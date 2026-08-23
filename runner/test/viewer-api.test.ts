@@ -443,7 +443,7 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     harnessVersion: "harness-test",
     promptHash: "sha256:0123456789abcdef",
     promptChars: 4242,
-    contextEngine: "harness-fixed-window",
+    harness: "wrathbench",
     effort: "high",
     budget: {
       maxTurns: null,
@@ -562,6 +562,45 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
     expect(e360.runs.map((r) => r.runId)).toEqual([RUN_ID]);
     const e90 = (await (await api(runs)(new Request("http://x/api/ladder"))).json()) as { runs: unknown[] };
     expect(e90.runs).toHaveLength(0);
+  });
+
+  test("harness is a tag on every eval row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
+    const runs = fixture();
+    // A pre-ADR-0035 tuple: `contextEngine` instead of `harness`, plus the old
+    // scaffold stamp. It reads as a scorable claude-code row, unrewritten.
+    const { harness: _h, ...legacy } = TUPLE;
+    stamped(runs, { ...legacy, contextEngine: "external-scaffold-claude-cli" });
+    const path = join(runs, RUN_ID, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...meta, shakeout: "shakeout-only (external scaffold)" }));
+
+    const all = (await (await api(runs)(new Request("http://x/api/eval?episode=all"))).json()) as {
+      harness: string;
+      runs: { runId: string; harness: string | null; unscored: string | null }[];
+    };
+    expect(all.harness).toBe("all");
+    const row = all.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.harness).toBe("claude-code");
+    expect(row.unscored).toBeNull();
+
+    const only = (await (await api(runs)(new Request("http://x/api/eval?episode=all&harness=claude-code"))).json()) as {
+      harness: string; runs: { runId: string }[]; filteredOut: number;
+    };
+    expect(only.harness).toBe("claude-code");
+    expect(only.runs.map((r) => r.runId)).toContain(RUN_ID);
+
+    const none = (await (await api(runs)(new Request("http://x/api/eval?episode=all&harness=wrathbench"))).json()) as {
+      runs: { runId: string }[]; filteredOut: number;
+    };
+    expect(none.runs.map((r) => r.runId)).not.toContain(RUN_ID);
+    expect(none.filteredOut).toBeGreaterThanOrEqual(1);
+
+    expect((await api(runs)(new Request("http://x/api/eval?harness=bogus"))).status).toBe(400);
+    expect((await api(runs)(new Request("http://x/api/models?harness=bogus"))).status).toBe(400);
+    // The stored file is untouched.
+    const after = JSON.parse(readFileSync(path, "utf8")) as { comparability: Record<string, unknown>; shakeout: string };
+    expect(after.comparability["contextEngine"]).toBe("external-scaffold-claude-cli");
+    expect(after.shakeout).toBe("shakeout-only (external scaffold)");
   });
 
   test("an unknown ?episode= is a 400, never a silent fallback to the default", async () => {

@@ -20,7 +20,7 @@ const M = 60_000;
 
 function runRow(over: Partial<RunRow> = {}): RunRow {
   return {
-    runId: "r", model: "m", driver: "openai", adapter: "openai", shakeout: null,
+    runId: "r", model: "m", driver: "openai", adapter: "openai", harness: "wrathbench", shakeout: null,
     objective: null, character: "c", platform: "p", apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,
     terminationDetail: null, pauseReason: null, level: null, xp: null, money: null,
@@ -32,7 +32,7 @@ function runRow(over: Partial<RunRow> = {}): RunRow {
 function evalRun(over: Partial<EvalRun> = {}): EvalRun {
   return {
     runId: "r", model: "m", platform: null, harnessVersion: "v", effort: null,
-    contextEngine: null, promptHash: null, serverBuild: null, wikiCoords: null,
+    harness: null, promptHash: null, serverBuild: null, wikiCoords: null,
     toolCalls: null, snippets: null, modelResponses: null, stillborn: false,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,

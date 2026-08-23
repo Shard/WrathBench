@@ -106,6 +106,56 @@ export function normalizePauseReason(stored: string): string {
 
 // --------------------------------------------------------------- run config
 
+/** Every driver a run can be started with. `stub` never scores. */
+export const DRIVERS = ["openai", "claude-code", "stub"] as const;
+export type Driver = (typeof DRIVERS)[number];
+
+/**
+ * Driver spellings accepted on read and what they mean today. The old
+ * `claude-subscription` value is an alias: old meta.json files resume, old
+ * runs render, and no new file writes it (ADR-0035).
+ */
+export const DRIVER_ALIASES: Readonly<Record<string, Driver>> = {
+  "claude-subscription": "claude-code",
+};
+
+export function normalizeDriver(raw: string): Driver | undefined {
+  if ((DRIVERS as readonly string[]).includes(raw)) return raw as Driver;
+  return DRIVER_ALIASES[raw];
+}
+
+const driverSchema = z.preprocess(
+  (v) => (typeof v === "string" ? (normalizeDriver(v) ?? v) : v),
+  z.enum(DRIVERS),
+);
+
+/**
+ * The harness: what owns the agent loop and the context management (ADR-0035).
+ *
+ *  - `wrathbench`: our fixed loop, ADR-0012's context policy. The `openai` and
+ *    `stub` drivers run under it.
+ *  - `claude-code`: the Claude Code CLI scaffold, with its own history and
+ *    compaction. There is no separate driver under it — the CLI is the
+ *    transport.
+ *
+ * A comparability dimension, not a scoring penalty: `claude-code` runs score
+ * within their own group and never share a chart with `wrathbench` rows.
+ * Distinct from `harnessVersion`, which is the git describe of *this* repo
+ * and applies to both (the SDK and MCP surface Claude Code drives is ours).
+ */
+export const HARNESSES = ["wrathbench", "claude-code"] as const;
+export type Harness = (typeof HARNESSES)[number];
+
+export const HARNESS_OF_DRIVER: Readonly<Record<Driver, Harness>> = {
+  openai: "wrathbench",
+  stub: "wrathbench",
+  "claude-code": "claude-code",
+};
+
+export function harnessOf(driver: Driver): Harness {
+  return HARNESS_OF_DRIVER[driver];
+}
+
 export const runConfigSchema = z.object({
   /** Generated as `run-<timestamp>` when absent. */
   runId: z.string().min(1).optional(),
@@ -131,24 +181,26 @@ export const runConfigSchema = z.object({
   class: z.number().int().min(1).max(11).default(2),
 
   /**
-   * Which driver runs the episode.
+   * Which driver reaches the model (ADR-0035).
    *
-   *  - `openai`: the fixed loop over an OpenAI-compatible endpoint. The only
-   *    driver a *result* run may use (ADR-0004).
+   *  - `openai`: the fixed loop (the `wrathbench` harness) over an
+   *    OpenAI-compatible endpoint.
    *  - `stub`: the fixed loop over a scripted response file. Harness testing
-   *    without a model, never to help a model.
-   *  - `claude-subscription`: SHAKEOUT ONLY. Drives an episode through the
-   *    `claude` CLI on a Claude subscription. The CLI is an external scaffold
-   *    (its own conversation history, its own compaction, its own preamble), so
-   *    the context policy of ADR-0012 does not hold and the run is stamped
-   *    `shakeout-only (external scaffold)` everywhere it is recorded.
+   *    without a model; never scores.
+   *  - `claude-code`: the Claude Code CLI is both transport and harness — it
+   *    owns its own history, compaction and preamble, so the run belongs to the
+   *    `claude-code` harness group and is scored only against its own kind.
+   *
+   * `claude-subscription` is the pre-ADR-0035 spelling of `claude-code` and is
+   * accepted on read so stored meta.json and roster files keep parsing;
+   * nothing new writes it.
    */
-  driver: z.enum(["openai", "claude-subscription", "stub"]).optional(),
+  driver: driverSchema.optional(),
 
   // Legacy name for the driver, kept so old meta.json files resume. `driver`
   // is authoritative and this is kept equal to it after parsing; nothing new
   // should read `adapter`.
-  adapter: z.enum(["openai", "claude-subscription", "stub"]).default("openai"),
+  adapter: driverSchema.default("openai"),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
   model: z.string().optional(),
   /** e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. */
@@ -161,8 +213,7 @@ export const runConfigSchema = z.object({
    * place in the same fixed prompt for every model and every driver; it never
    * replaces the standing goal, it is added to it. Because a run steered at a
    * named task is not comparable with a free-play run, a run that carries one
-   * is stamped unscored (`OBJECTIVE_STAMP`) exactly the way a shakeout driver's
-   * runs are.
+   * is stamped unscored (`OBJECTIVE_STAMP`) exactly the way a stub run is.
    */
   objective: z.string().min(1).max(4000).optional(),
   /**
@@ -202,7 +253,7 @@ export const runConfigSchema = z.object({
    * OpenAI-compatible `reasoning_effort` (verified honoured by OpenRouter:
    * low/high moved reasoning_tokens 216/310 on the same prompt); a provider
    * that does not know the level is the operator's problem, which is why the
-   * field is opt-in and never sent by default. `claude-subscription` passes it
+   * field is opt-in and never sent by default. `claude-code` passes it
    * as the CLI's `--effort`, which accepts low|medium|high|xhigh|max (verified
    * against the 2.1.238 binary in the runner image). `xhigh`/`max` are
    * claude-only; `minimal` is OpenAI-only.
@@ -217,10 +268,10 @@ export const runConfigSchema = z.object({
    * Hard ceiling on tool calls for the whole episode => `tool-call-limit`.
    *
    * `maxTurns` counts *driver* turns, which is a real bound only when the
-   * driver owns the tool loop. The claude-subscription driver does not: one
+   * driver owns the tool loop. The claude-code harness does not: one
    * driver turn observed 168 tool calls over 40 minutes, and there is no
-   * `--max-turns` in that CLI. So the count that matters for an external
-   * scaffold is this one, enforced at the MCP boundary where the calls
+   * `--max-turns` in that CLI. So the count that matters under that harness
+   * is this one, enforced at the MCP boundary where the calls
    * actually arrive. Generous by default — it is a runaway guard, not a task
    * budget. Ignored by the fixed loop, whose bound is `maxTurns`.
    */
@@ -241,15 +292,31 @@ export const runConfigSchema = z.object({
   watchdogs: watchdogConfigSchema.prefault({}),
 });
 
-/** Every driver a run can be started with. `stub` and `claude-subscription` never score. */
-export const DRIVERS = ["openai", "claude-subscription", "stub"] as const;
-export type Driver = (typeof DRIVERS)[number];
+/**
+ * The stamp carried by meta.json, run.sqlite and the timeline for a scripted
+ * stub run. The storage key is still named `shakeout` (trajectory.ts); the
+ * word now only ever means "this run can never score".
+ */
+export const STUB_STAMP = "unscored (scripted stub)";
 
-/** Drivers whose runs are harness shakeout, never a result. */
-export const SHAKEOUT_DRIVERS: readonly Driver[] = ["claude-subscription", "stub"];
+/**
+ * The stamp pre-ADR-0035 builds wrote on every claude-subscription run. Read
+ * as *no* stamp: those runs are `claude-code` harness runs and score within
+ * that group. Kept only so the reader can recognise it.
+ */
+export const LEGACY_SCAFFOLD_STAMP = "shakeout-only (external scaffold)";
 
-/** The stamp carried by meta.json, run.sqlite and the timeline for a non-scoring driver. */
-export const SHAKEOUT_STAMP = "shakeout-only (external scaffold)";
+/**
+ * A stored stamp read in today's vocabulary: the legacy scaffold prefix is
+ * dropped (that run scores in the `claude-code` group now), and whatever else
+ * the stamp said — an objective — stands. Null when nothing unscoring remains.
+ */
+export function readUnscoredStamp(stored: string | null | undefined): string | null {
+  if (stored === null || stored === undefined || stored.length === 0) return null;
+  if (!stored.startsWith(LEGACY_SCAFFOLD_STAMP)) return stored;
+  const rest = stored.slice(LEGACY_SCAFFOLD_STAMP.length).replace(/^;\s*/, "");
+  return rest.length > 0 ? rest : null;
+}
 
 /**
  * The stamp carried by a run with an operator objective. It is a probe, not a
@@ -365,33 +432,29 @@ export function episodeOverrideOf(config: RunConfig): boolean {
 export function loadRunConfig(raw: unknown): RunConfig {
   const parsed = runConfigSchema.parse(withEpisodeDefaults(raw));
   const explicitDriver = (raw as { driver?: unknown } | null | undefined)?.driver;
-  const driver: Driver =
-    parsed.driver ?? (explicitDriver === undefined && parsed.adapter === "stub" ? "stub" : "openai");
+  // With no `driver`, the legacy `adapter` (itself alias-normalised) decides.
+  const driver: Driver = parsed.driver ?? (explicitDriver === undefined ? parsed.adapter : "openai");
   // The legacy field tracks the driver exactly, so an old
-  // `WHERE adapter = 'openai'` query cannot silently absorb a shakeout run.
+  // `WHERE adapter = 'openai'` query cannot silently absorb a stub run.
   return { ...parsed, driver, adapter: driver };
 }
 
-/** True when this driver's runs must never be read as a harness score. */
-export function isShakeoutDriver(driver: Driver): boolean {
-  return SHAKEOUT_DRIVERS.includes(driver);
+/** True when this driver's runs can never be read as a score (ADR-0035: only `stub`). */
+export function isUnscoredDriver(driver: Driver): boolean {
+  return driver === "stub";
 }
 
 /**
  * The stamp a run gets, or undefined for a run that can score.
  *
  * Two independent reasons a run never scores, and a run can carry both: the
- * driver is an external scaffold, and/or the operator steered the run with an
- * objective (ADR-0024). The driver's stamp stays the *prefix* so anything
- * matching on it keeps matching.
+ * driver is the scripted stub, and/or the operator steered the run with an
+ * objective (ADR-0033). The driver's stamp stays the *prefix* so anything
+ * matching on it keeps matching. The harness is *not* a reason: a
+ * `claude-code` run scores within its own group (ADR-0035).
  */
-export function shakeoutStamp(driver: Driver, objective?: string | undefined): string | undefined {
-  const byDriver =
-    driver === "claude-subscription"
-      ? SHAKEOUT_STAMP
-      : driver === "stub"
-        ? "shakeout-only (scripted stub)"
-        : undefined;
+export function unscoredStamp(driver: Driver, objective?: string | undefined): string | undefined {
+  const byDriver = driver === "stub" ? STUB_STAMP : undefined;
   const byObjective = objective !== undefined && objective.length > 0 ? OBJECTIVE_STAMP : undefined;
   if (byDriver !== undefined && byObjective !== undefined) return `${byDriver}; ${byObjective}`;
   return byDriver ?? byObjective;
