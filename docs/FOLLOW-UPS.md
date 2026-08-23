@@ -11,11 +11,9 @@ and status.
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
    ADR-0027 flips to accepted on that run.
-2. **55** — re-measure the `WB_MOVE_RESULT` timeouts now that item 46 is deployed, and
-   decide whether the loot-window half is the same cause.
-3. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
+2. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
    they exist.
-4. **19** — before anything is public or MCP-exposed: shared secret on the port,
+3. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
 ## Navigation
@@ -272,21 +270,15 @@ and status.
     instance-portal triggers are reliable. Trade, mail, bank, auction house and guilds
     stay behind the earned-by-need rule until a freeplay run asks.
 
-55. **Verdict-opcode timeouts: `WB_MOVE_RESULT` and the loot window** (2026-08-23,
-    closing fan-out). Item 46, its move half, is deployed and verified (resolved ledger;
-    live as `harness-0.4-3-g8f6939d` since 2026-08-23), so the re-measurement it was
-    waiting on can be run. A wait for a verdict the server sometimes
-    never sends hangs until its timeout and costs the model a turn with nothing to read.
-    Recurring, not rare: 17 `WB_MOVE_RESULT` timeouts in `fleet-nav-probe-sonnet-20260823`
-    alone, 5–7 in three other sonnet runs, and 8 `SMSG_LOOT_RESPONSE` timeouts in
-    `fleet-sonnet-e90-sonnet-20260823-a2`. The move half is the known item-46 gap (the
-    module did not distinguish a near from a far teleport, so `waitForTransfer` and the
-    move verdict could both wait forever); that fix is now live, so the first step is
-    re-measuring `WB_MOVE_RESULT` timeouts on runs after the deploy. The loot half
-    looks like the same family and has no fix yet — decide after the deploy whether it
-    is the same cause (a verdict the client is not always sent) or its own item.
-    Evidence: `data/runs/night-report-20260823/closing-fanout-harness.md`, "Cross-cutting:
-    move statuses".
+56. **`areatrigger` re-fires while the character stands inside the volume** (2026-08-23,
+    item-55 diagnosis). In `fleet-nav-probe-freeplay-sonnet-20260823-c4` the module
+    logged `areatrigger 710` every ~1.5s for 13s during one walk — `CheckAreaTriggers`
+    (`module/src/WbManager.cpp`) re-arms on the 1.5s timer rather than on entry, so a
+    character lingering in a DBC volume sends `CMSG_AREATRIGGER` repeatedly. The real
+    client sends it once on crossing the boundary. Harmless for teleport triggers
+    (the transfer moves the character out) but wrong for quest-explore triggers and
+    noisy in the audit log. Fix: track the set of volumes the character is inside and
+    dispatch only on entry. Module change, so it lands in a deploy window.
 
 ## Wiki
 
@@ -371,3 +363,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 51 — 2026-08-23 — ADR-0037 — `unknown_target` as an SDK-side status and `ConnectOptions.deadline` as explain-not-cap; PROTOCOL.md was already in sync, CONTRACTS.md gained the typed map-change outcomes and the teleport-ack observable; the prompt.ts wording moved to item 54
 - 13 — 2026-08-23 — ADR-0018 amendment — the ladder's row ordering is stated and versioned: highest rung, then total XP as the lexicographic `(level, xp)` pair, then gold; both tie-breaks shown on the row with the run each came from, nulls sort last, no aggregate score
 - 32 (1) — 2026-08-23 — 46e2726, 7423453, 62bc30a — run cost card in `runner/viewer/pricing.ts`; (2) and (3) stay open under 32
+- 55 — 2026-08-23 — c89d984 — not a lost verdict: every "timed-out" `WB_MOVE_RESULT` in the post-deploy nav-probe c4 arrived later (27/27, audit log cross-reference); the caller's own short `timeout` sized from straight-line distance was the cause, so the SDK now says how far is covered/left and that the move is still walking, and hints pre-flight when a timeout is under 1.5× the walk. Loot half: zero `SMSG_LOOT_RESPONSE` timeouts across every run on `harness-0.4-3` (3000+ loots); reopen only if a sonnet-lane run with real loot volume shows them again
