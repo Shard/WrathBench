@@ -41,8 +41,44 @@
  * (built to :next 2026-08-23): it cannot pass against a worldserver older than
  * that, and says so at startup if the first transport report never arrives.
  *
- * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/travel.ts [--rides N]
+ * Two starts (FOLLOW-UPS item 45):
+ *
+ *   --from tram-ironforge  the fast one, and the gate's. A persistent fixture
+ *     character (default `Smoketram` on MODULE_ACCOUNT, never deleted) is
+ *     placed by `infra/fixtures/apply.ts` — level 10, 1g, logged out, standing
+ *     on map 0 at the Tinker Town tram portal mouth — and the run starts at
+ *     the leg-3 portal step. Legs 1, 1b and 2 are skipped entirely. One ride
+ *     is then ~60s wall clock, which is the budget this gate is held to — the
+ *     fixture wait is on top of that, and lands hardest on back-to-back runs:
+ *     apply.ts waits for `characters.online=0`, and the core holds a
+ *     logged-out session for up to ~60s (measured 66s, see kill-credit.ts).
+ *   --from coldridge, or no --from  the legacy full walk: a fresh throwaway
+ *     Dwarf from the Coldridge Valley spawn through legs 1, 1b and 2 first,
+ *     deleted at the end. ~2 minutes before the tram legs even begin, and it
+ *     has never yet survived them (the level-1 tunnel walk is where the
+ *     2026-08-23 gate died).
+ *
+ * On the fixture path nothing is deleted: the character is the fixture, and
+ * `apply.ts` rewrites its rows on every run. The session is still closed with
+ * DELETE /session at the end, as on the legacy path.
+ *
+ * Run (this is N1 of ADR-0027 / FOLLOW-UPS 38). The module's HTTP port is not
+ * published to the host, so the smoke runs inside the runner container:
+ *
+ *   docker compose -f infra/compose.yml exec \
+ *     -e MODULE_ACCOUNT=PROBE \
+ *     -e WRATHBENCH_DB_HOST=db -e WRATHBENCH_DB_PORT=3306 \
+ *     -e WRATHBENCH_DB_USER=root -e WRATHBENCH_DB_PASSWORD=wrathbench \
+ *     runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3
+ *
+ * — that is, `MODULE_ACCOUNT=PROBE bun infra/smoke/travel.ts --from
+ * tram-ironforge --rides 3` as seen from inside that container. The four DB
+ * vars are the bootstrap service's convention (compose.yml) and are what the
+ * direct-bun branch below hands to `infra/fixtures/apply.ts`; use whatever
+ * that tool documents if it differs, and note that branch assumes it can
+ * reach MySQL from the runner image. How the fixture is applied is chosen by
+ * the environment; see FIXTURES_CMD below. The legacy walk is the same
+ * command without `--from` (and needs no DB env at all).
  */
 
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
@@ -54,17 +90,63 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
-const CHARACTER = "Tr" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+/** Repo root as this script sees it: the fixtures tool is spawned from there. */
+const REPO_ROOT = `${import.meta.dir}/../..`;
 // The module's per-session audit (WrathBench.AuditDir, `<token>.jsonl`), as
 // the runner container sees the repo mount. Leg 4 reads it for the
 // `move_transport_leg` boarding record.
 const AUDIT_DIR = process.env.WRATHBENCH_AUDIT_DIR ?? "/wrathbench/data/logs/wrathbench";
 
+const flag = (name: string): string | undefined => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+};
+
 const RIDES = (() => {
-  const i = process.argv.indexOf("--rides");
-  const n = i >= 0 ? Number(process.argv[i + 1]) : 1;
-  if (!Number.isInteger(n) || n < 1) throw new Error(`--rides wants a positive integer, got ${process.argv[i + 1]}`);
+  const raw = flag("--rides");
+  const n = raw === undefined ? 1 : Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`--rides wants a positive integer, got ${raw}`);
   return n;
+})();
+
+/**
+ * `--from tram-ironforge` starts from the scenario fixture; `--from coldridge`
+ * (or no flag at all) is the legacy walk from the Coldridge Valley spawn.
+ * Only these two are meaningful today, and an unknown one is a typo, not a
+ * silent fall back to the two-minute walk.
+ */
+const FROM = (() => {
+  const v = flag("--from");
+  if (v === undefined || v === "coldridge") return undefined;
+  if (v !== "tram-ironforge") throw new Error(`--from wants "tram-ironforge" or "coldridge", got ${JSON.stringify(v)}`);
+  return v;
+})();
+
+// Fixture runs use a fixed, persistent name so the placed rows survive between
+// runs; the legacy walk keeps its throwaway name, which it deletes at the end.
+const CHARACTER = FROM
+  ? (flag("--character") ?? "Smoketram")
+  : "Tr" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+
+/**
+ * How `infra/fixtures/apply.ts` is invoked. It talks to the characters DB
+ * directly, and the DB port is not published to the host:
+ *   - WRATHBENCH_FIXTURES_CMD, if set, is the command verbatim (space-split),
+ *     with --account/--character/--scenario appended;
+ *   - else, with WRATHBENCH_DB_HOST set (inside a container on the compose
+ *     network), run it in-process with bun;
+ *   - else, from the host, through compose. The `fixtures` service carries
+ *     the DB env and an `entrypoint` of `bun run infra/fixtures/apply.ts`, so
+ *     only the flags are passed here — apply.ts rejects positional arguments.
+ *     `--no-deps` is load-bearing: without it compose may decide a dependency
+ *     is stale and recreate the worldserver underneath live episodes (see
+ *     infra/README.md and the fleet service comment in compose.yml).
+ */
+const FIXTURES_CMD: string[] = (() => {
+  const explicit = process.env.WRATHBENCH_FIXTURES_CMD;
+  if (explicit) return explicit.split(" ").filter(Boolean);
+  if (process.env.WRATHBENCH_DB_HOST) return ["bun", "infra/fixtures/apply.ts"];
+  return ["docker", "compose", "-f", "infra/compose.yml", "run", "--rm", "--no-deps", "fixtures"];
 })();
 
 const started = Date.now();
@@ -600,27 +682,128 @@ async function createSessionWithBackoff(): Promise<void> {
   }
 }
 
+/**
+ * The character names this account holds right now, via POST /characters.
+ * Its parked utility session contends for the account exactly as a real one
+ * does, so `account_in_use` (another probe holds PROBE) and the module's own
+ * `504 timeout` are waited out on the same 20-minute budget
+ * `createSessionWithBackoff` uses — this is the fixture path's first module
+ * call, and a contended account must cost a wait, not a gate failure.
+ */
+async function characterNames(): Promise<string[]> {
+  const deadline = Date.now() + 20 * 60_000;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${BASE}/characters`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // A fresh token per attempt: a reused one can still be held by the
+      // parked session the previous attempt timed out on.
+      body: JSON.stringify({ token: `${TOKEN}-list${attempt}`, account: ACCOUNT }),
+    });
+    const json = (await res.json().catch(() => undefined)) as
+      | { ok?: boolean; error?: string; enum?: { characters?: { name: string }[] } }
+      | undefined;
+    if (res.ok && json?.ok) return (json.enum?.characters ?? []).map((c) => c.name);
+    const transient = json?.error === "account_in_use" || json?.error === "timeout" || res.status === 504;
+    if (!transient || Date.now() > deadline) {
+      throw new LegFailure(`POST /characters on ${ACCOUNT} failed: ${res.status} ${JSON.stringify(json)}`);
+    }
+    log(`  /characters says ${json?.error ?? res.status}; retrying in 60s`);
+    await Bun.sleep(60_000);
+  }
+}
+
+/**
+ * The fixture tool writes a *logged-out* character's rows and exits non-zero
+ * if the character does not exist — creating one is the module's job, through
+ * the same CMSG_CHAR_CREATE path a client uses. So: enumerate, and only if the
+ * name is absent create it with a session and log straight back out.
+ */
+async function ensureFixtureCharacter(): Promise<void> {
+  const names = await characterNames();
+  log(`  ${ACCOUNT} holds: ${names.join(", ") || "(no characters)"}`);
+  if (names.some((n) => n.toLowerCase() === CHARACTER.toLowerCase())) return;
+  log(`  ${CHARACTER} does not exist yet: creating it through the module (Dwarf Warrior)`);
+  await createSessionWithBackoff();
+  await client.logout();
+  log(`  ${CHARACTER} created and logged out`);
+}
+
+/** Place the fixture character for `scenario`. apply.ts waits for online=0 itself. */
+async function applyScenario(scenario: string): Promise<void> {
+  const argv = [...FIXTURES_CMD, "--account", ACCOUNT, "--character", CHARACTER, "--scenario", scenario];
+  log(`fixture: ${argv.join(" ")}`);
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit", env: process.env });
+  } catch (e) {
+    throw new LegFailure(
+      `could not run the fixtures tool (${argv[0]}): ${String(e instanceof Error ? e.message : e)} — ` +
+        `set WRATHBENCH_FIXTURES_CMD to the exact command for this environment, or WRATHBENCH_DB_HOST=db ` +
+        `to run \`bun infra/fixtures/apply.ts\` directly from inside the compose network`,
+    );
+  }
+  const code = await proc.exited;
+  if (code !== 0) throw new LegFailure(`fixtures apply --scenario ${scenario} exited ${code}; the smoke cannot start from a scenario it could not place`);
+  log(`  scenario ${scenario} applied to ${CHARACTER}`);
+}
+
+/**
+ * The fixture's postcondition, checked in world rather than trusted: level and
+ * position land from the login handshake (SMSG_LOGIN_VERIFY_WORLD, the char
+ * enum), so give them a few seconds to arrive before asserting.
+ */
+async function assertFixtureStart(): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const pos = selfPos();
+    const level = client.state.self.level?.value;
+    if (pos && level !== undefined) {
+      if (level < 10) throw new LegFailure(`fixture start: ${CHARACTER} is level ${level}, expected >= 10 — did apply.ts write this character?`);
+      if (pos.map !== 0) throw new LegFailure(`fixture start: on map ${pos.map} at ${fmt(pos)}, expected map 0 at the Tinker Town portal mouth`);
+      const d = dist2d(pos, IF_ARRIVAL);
+      if (d > 10) throw new LegFailure(`fixture start: ${fmt(pos)} is ${d.toFixed(1)}y from the portal mouth ${fmt(IF_ARRIVAL)}, expected within 10y`);
+      log(`fixture start ok: level ${level} on map 0 at ${fmt(pos)}, ${d.toFixed(1)}y from the portal mouth`);
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new LegFailure(`fixture start: state.self reported no ${pos ? "level" : "position"} within 15s (position ${pos ? fmt(pos) : "?"}, level ${level ?? "?"})`);
+    }
+    await Bun.sleep(250);
+  }
+}
+
 let exitCode = 0;
 const legTimes: [string, number][] = [];
 try {
-  await createSessionWithBackoff();
-  const spawn = selfPos();
-  log(`in world as ${CHARACTER} (Dwarf Warrior) at ${spawn ? fmt(spawn) : "?"} map ${spawn?.map}; ${RIDES} gated ride(s)`);
+  if (FROM) {
+    log(`--from ${FROM}: fixture character ${CHARACTER} on ${ACCOUNT}, legs 1-2 skipped`);
+    await ensureFixtureCharacter();
+    await applyScenario(FROM);
+    await createSessionWithBackoff();
+    const spawn = selfPos();
+    log(`in world as ${CHARACTER} at ${spawn ? fmt(spawn) : "?"} map ${spawn?.map}; ${RIDES} gated ride(s)`);
+    await assertFixtureStart();
+  } else {
+    await createSessionWithBackoff();
+    const spawn = selfPos();
+    log(`in world as ${CHARACTER} (Dwarf Warrior) at ${spawn ? fmt(spawn) : "?"} map ${spawn?.map}; ${RIDES} gated ride(s)`);
 
-  for (const leg of LEGS) {
-    log(`=== ${leg.name} ===`);
-    const legStart = Date.now();
-    for (const wp of leg.waypoints) await hop(leg.name, wp);
-    legTimes.push([leg.name, Date.now() - legStart]);
-    log(`=== ${leg.name}: complete in ${((Date.now() - legStart) / 1000).toFixed(0)}s ===`);
-    if (leg.name.startsWith("leg1:")) {
-      // Kharanos is where leg1 ends and trigger 710 sits: linger there
-      // before leg2 walks on (FOLLOW-UPS 56).
-      const name = "leg1b: linger in areatrigger 710";
-      log(`=== ${name} ===`);
-      const t0 = Date.now();
-      await lingerInTrigger(name);
-      legTimes.push([name, Date.now() - t0]);
+    for (const leg of LEGS) {
+      log(`=== ${leg.name} ===`);
+      const legStart = Date.now();
+      for (const wp of leg.waypoints) await hop(leg.name, wp);
+      legTimes.push([leg.name, Date.now() - legStart]);
+      log(`=== ${leg.name}: complete in ${((Date.now() - legStart) / 1000).toFixed(0)}s ===`);
+      if (leg.name.startsWith("leg1:")) {
+        // Kharanos is where leg1 ends and trigger 710 sits: linger there
+        // before leg2 walks on (FOLLOW-UPS 56).
+        const name = "leg1b: linger in areatrigger 710";
+        log(`=== ${name} ===`);
+        const t0 = Date.now();
+        await lingerInTrigger(name);
+        legTimes.push([name, Date.now() - t0]);
+      }
     }
   }
 
@@ -661,10 +844,16 @@ try {
   log(`opcodes seen: ${[...opcodesSeen].map(([k, v]) => `${k}:${v}`).join(" ")}`);
 
   await client.logout().catch(() => {});
-  const gone = await client
-    .deleteCharacter(CHARACTER, { account: ACCOUNT, initialDelayMs: 3000 })
-    .catch((e: unknown) => String(e));
-  log(`cleanup: ${CHARACTER} ${typeof gone === "string" ? gone : "deleted"}`);
+  if (FROM) {
+    // The fixture character is the fixture: it is never deleted, and the next
+    // run's apply.ts rewrites its rows in place.
+    log(`cleanup: session closed; ${CHARACTER} kept on ${ACCOUNT} (fixture character)`);
+  } else {
+    const gone = await client
+      .deleteCharacter(CHARACTER, { account: ACCOUNT, initialDelayMs: 3000 })
+      .catch((e: unknown) => String(e));
+    log(`cleanup: ${CHARACTER} ${typeof gone === "string" ? gone : "deleted"}`);
+  }
   client.close();
   process.exit(exitCode); // open WebSockets hold the event loop
 }
