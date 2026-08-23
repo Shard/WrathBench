@@ -19,7 +19,7 @@
 #   5. verify. If the `fleet` service is up AND preflight is enabled in
 #      infra/fleet.json, wait for IT to record a gate result for the new server
 #      — the supervisor re-gates on identity change all by itself, and its
-#      record is what unblocks lane spawning. If no gate record appears within
+#      record is what unblocks job spawning. If no gate record appears within
 #      the grace window (an older supervisor that predates the gate, say), or
 #      preflight is disabled, run the configured smokes directly through
 #      `docker compose exec runner` instead.
@@ -211,7 +211,7 @@ fi
 
 if [[ "${ALLOW_LIVE}" -eq 0 ]]; then
   if ! live_runs_ok; then
-    die "episodes are live — drain first (set every lane enabled:false and wait for
+    die "episodes are live — drain first (set every job enabled:false and wait for
        ./infra/run-fleet.sh --status to go quiet), or pass --allow-live to kill them"
   fi
 else
@@ -458,5 +458,5 @@ if [[ -z "${VERIFIED_BY}" ]]; then
   exit 1
 fi
 
-say "DEPLOYED and verified by ${VERIFIED_BY}. Re-enable lanes in infra/fleet.json (the supervisor picks
+say "DEPLOYED and verified by ${VERIFIED_BY}. Re-enable jobs in infra/fleet.json (the supervisor picks
        them up within a tick); it re-gates on its own because the server identity changed."
