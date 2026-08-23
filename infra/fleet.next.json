@@ -25,7 +25,7 @@
     "list of them (a list rotates several models on one account exactly as a multi-entry lane",
     "does today). `episode` is e90 | e360 | freeplay, passed to the runner as --episode <id>",
     "with the equivalent explicit watchdog flags alongside (e360: 360 min wall clock, idle 20m,",
-    "no-xp off, maxToolCalls 2000; freeplay: no wall clock, unscored). `repeat` is a count or",
+    "no-xp off, maxToolCalls 12000; freeplay: no wall clock, unscored). `repeat` is a count or",
     "\"loop\" (run-roster --loop). `lane` names the job's run ids and logs",
     "(fleet-<lane>-<model>-<stamp>); default <first ref>-<episode>. A job whose episode is not in",
     "a ref's tiers runs without that ref; a job with no promoted ref is SKIPPED with a logged",

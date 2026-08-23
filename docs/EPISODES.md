@@ -19,7 +19,7 @@ told which one it is in.
 - **Objective.** None. The standing goal only — an operator objective is what
   makes a run unscored (ADR-0024).
 - **Watchdogs.** Idle 20m, no-XP 20m, plus the standing sandbox-restart guard.
-  Tool-call ceiling 500, the runaway guard sized for this length.
+  Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
 - **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
   stopped, or stopped making progress), `adapter-error` (fatal model API error)
   or `harness-error` (our defect). A `quota-exhausted` or `rate-limited` pause
@@ -45,9 +45,9 @@ because that would silently re-scope every score already carrying this label.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
   continent earns nothing for hours, and that is the behaviour this tier exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
-  would end runs for doing the right thing. Tool-call ceiling **2000**: the same
-  ratio to the clock as `e90`'s 500 (four times the minutes, four times the
-  calls), pinned 2026-08-23 by the operator rather than tuned to any model.
+  would end runs for doing the right thing. Tool-call ceiling **12000** — the
+  runaway guard of 1000 calls per 30 minutes (operator, 2026-08-23), sized so a
+  fast model cannot touch it; it bounds a scaffold's inner loop, not the score.
 - **Ends.** As `e90`, minus `no-xp`.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
