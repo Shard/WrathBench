@@ -18,12 +18,15 @@ milestone is independently measurable.
 ## Two tracks, one harness
 
 - **Eval track** — what exists today: fixed episodes, versioned harness,
-  scores comparable within a harness version (ADR-0004). Leaderboards live
-  here.
+  scores comparable within a harness version (ADR-0004). Episodes come in
+  named tiers — `e90` for sampling, `e360` for the travel rungs, each its own
+  comparability group — and a model earns the longer tier by a mechanical
+  promotion rule rather than by anyone's judgement (ADR-0030,
+  `docs/EPISODES.md`). Leaderboards live here.
 - **Freeplay track** — ultra-long-horizon runs with no episode cap, in the
   spirit of Claude Plays Pokémon: "go play WoW" and the agent owns its own
   goals, coordination, and (eventually) its own context management. Freeplay
-  runs are labeled, never mixed into eval scores. The labeled context-engine
+  runs are labeled `freeplay`, never mixed into eval scores. The labeled context-engine
   idea (FOLLOW-UPS 8b) becomes load-bearing here: ultra-long play forces the
   self-compaction question that fixed episodes let us defer.
 

@@ -620,6 +620,21 @@ research synthesis (operator's notes) and the travel probe (WORKLOG).
     reliable. Trade, mail, bank, auction house and guilds stay behind the
     earned-by-need rule until a freeplay run asks for them.
 
+48. **Wire the episode tiers into the harness** (2026-08-23, ADR-0030,
+   `docs/EPISODES.md`). The decision is recorded; nothing enforces it yet.
+   (a) `episode` joins the comparability tuple in `runner/src/comparability.ts`,
+   structurally in `runner/viewer/api-types.ts`, and as a grouping key on
+   `/api/eval` and the Eval table — the three places `wikiCoords` landed.
+   (b) The watchdog defaults in `runner/src/config.ts` are idle 10m / no-XP 45m;
+   `e90` pins 20m/20m, so adopting the id means changing them, and the first
+   `e90` run is the first run after that change (nothing is back-labeled).
+   (c) An episode id must pin the tool-call ceiling as well as the clock: the
+   500 default is sized for ninety minutes and would end an `e360` run on
+   `tool-call-limit`. (d) A run whose recorded leash differs from its id's
+   definition should be visible as *not* a member of that group rather than
+   silently averaged into it. (e) `tiers` becomes a roster field, computed from
+   run history by the promotion rule, and consumed by the runner pool.
+
 47. **A cooldown the agent can actually watch** (2026-08-23; small, after a
     character exists that has one). `state.cooldowns()` is fed by
     `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT`, and no smoke asserts a
