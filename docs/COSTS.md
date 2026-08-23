@@ -36,7 +36,7 @@ interpolating.
 | roster (pre-fleet e90) | sonnet, subscription | 4 | 400 | 832 | — | 72 | 48,210,462* | 7,646* | 4/4 |
 | roster (pre-fleet e90) | opus, subscription | 3 | 241 | 252 | — | 90 | 13,251,160* | 4,647* | 3/3 |
 
-`*` subscription-driver token columns are **sums of per-turn `prompt_tokens`**, which is the raw
+`*` claude-code-harness token columns are **sums of per-turn `prompt_tokens`**, which is the raw
 replayed-context volume, not net consumption — see §2. Subscription lane has no separate
 "request" counter comparable to the OpenRouter/OpenCode HTTP-request count (its `t:"response"`
 records are per tool-call, not per outbound HTTP call, and it isn't rate-capped the same way), so
@@ -84,12 +84,13 @@ is set for the OpenRouter/OpenAI-compatible path (memory: "Anthropic via OpenRou
 cache_control (0%→89% measured)"; the free models here are not Anthropic so this doesn't apply
 directly, but it confirms caching is opt-in per adapter, not automatic).
 
-**subscription driver (Claude Agent SDK, Sonnet/Opus via Claude Code subscription):** no trimming
+**claude-code harness (Sonnet/Opus via the Claude Code CLI on a subscription; ADR-0035):** no trimming
 — the full conversation replays every turn and grows essentially unbounded. `roster-sonnet-20260822`
 (e90, episode-limit segment): `prompt_tokens` 4,092 → 66,685 → 126,748 → 160,932 → 206,116 over the
 turn window, ending near 200k right before the 500-tool-call cap. `roster-opus-20260822` similarly
 grows into the six-figure range. This is a genuinely different context policy, not a tuning
-difference — nothing compacts the subscription-driver conversation today (docs/worklogs/2026-08-21.md: the
+difference — it is what makes `claude-code` a harness of its own in the run's tag (ADR-0035), and
+it explains these numbers rather than unscoring the rows. Nothing compacts the claude-code conversation today (docs/worklogs/2026-08-21.md: the
 compaction gate wasn't tripped by the fixed-context lanes, but "the subscription-lane amendment of
 2026-08-22 arguably trips them already").
 
@@ -100,7 +101,7 @@ segment, summed to the first `episode-limit`: 68.8M cumulative `prompt_tokens` o
 of which 68.5M (99.6%) were `cached_tokens`; only 291k tokens were fresh input and 291k were cache
 writes. `roster-opus-20260822`: 21.85M cumulative prompt tokens, 21.7M (99.3%) cached, 145k fresh,
 144k cache-write. The context grows every turn, but each turn re-reads yesterday's context off the
-cache instead of re-paying for it — and because this driver bills against a flat Claude Code
+cache instead of re-paying for it — and because this harness bills against a flat Claude Code
 subscription rather than metered API tokens, the operator's marginal cost is $0 regardless of how
 large that cache-read number gets. `usageRaw`/`costUsd` are only emitted by the SDK on a clean
 `claude_result` (natural turn-loop completion); a hard watchdog kill (episode-limit,
@@ -119,8 +120,8 @@ much time has passed.
 
 | model | $/M input | $/M output | cached-read $/M | cached-write $/M (5m) | notes |
 |---|--:|--:|--:|--:|---|
-| Claude Sonnet 5 (API, intro pricing thru 2026-08-31) | 2.00 | 10.00 | ~0.20 | ~2.50 | subscription driver pays $0 marginal; this is the as-metered reference below. Standard pricing after 2026-08-31: $3/$15, ~$0.30/~$3.75 |
-| Claude Opus 5 (API) | 5.00 | 25.00 | ~0.50 | ~6.25 | same driver, no intro pricing listed for Opus |
+| Claude Sonnet 5 (API, intro pricing thru 2026-08-31) | 2.00 | 10.00 | ~0.20 | ~2.50 | claude-code harness pays $0 marginal; this is the as-metered reference below. Standard pricing after 2026-08-31: $3/$15, ~$0.30/~$3.75 |
+| Claude Opus 5 (API) | 5.00 | 25.00 | ~0.50 | ~6.25 | same harness, no intro pricing listed for Opus |
 | Claude Haiku 4.5 (API) | 1.00 | 5.00 | ~0.10 | ~1.25 | not in current fleet, listed for reference |
 | OpenRouter free models (glm-5.2, nemotron-3-ultra/super, north-mini-code, inkling, gemma-4-31b, gpt-oss-20b, laguna-s-2.1, dots-3-note, nemotron-nano-9b) | 0 | 0 | 0 | request-capped, not token-capped (§1) |
 | OpenCode Zen free models (hy3, mimo-v2.5, deepseek-v4-flash, x-preview-f) | 0 | 0 | 0 | same cap shape |

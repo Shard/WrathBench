@@ -47,7 +47,8 @@ because that would silently re-scope every score already carrying this label.
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
   would end runs for doing the right thing. Tool-call ceiling **12000** — the
   runaway guard of 1000 calls per 30 minutes (operator, 2026-08-23), sized so a
-  fast model cannot touch it; it bounds a scaffold's inner loop, not the score.
+  fast model cannot touch it; it bounds the claude-code harness's inner loop
+  (ADR-0035), not the score.
 - **Ends.** As `e90`, minus `no-xp`.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting

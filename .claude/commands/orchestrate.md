@@ -34,8 +34,9 @@ rather than respawning.
   analysis after the run. Poll ~3 min for a 60–90 min episode.
 - One live game session per account (RUNNER / SHAKEOUT / PROBE; per-run
   `--account` exists). Runs launch via `./infra/run-episode.sh`.
-- The claude-subscription driver is SHAKEOUT-ONLY and must never see
-  ANTHROPIC_* env (subscription, not API credits).
+- The claude-code driver (the claude-code harness, ADR-0035: a tag on the run,
+  scored alongside wrathbench rows) must never see ANTHROPIC_* env
+  (subscription, not API credits).
 - Nothing Blizzard-derived enters git; `data/` stays gitignored; ports bind
   127.0.0.1 only.
 - `docs/FOLLOW-UPS.md` is the open-items ledger; graduate items with a strike

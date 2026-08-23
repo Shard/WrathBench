@@ -1,7 +1,10 @@
 # ADR-0012: Runner context policy
 
 Status: Accepted. Date: 2026-08-21. Amended 2026-08-21 (block trimming) and
-2026-08-22 (HUD summary); both amendments are folded in below.
+2026-08-22 (HUD summary); both amendments are folded in below. Scope note
+(ADR-0035, 2026-08-23): this policy is the `wrathbench` harness. The
+`claude-code` harness owns its own history and compaction and does not apply
+it; that is recorded as the run's `harness` tag, not as a reason to exclude it.
 
 ## Context
 PHASE-0 fixes the loop context as "recent events, a state summary, the

@@ -51,7 +51,7 @@ directory never gains a schema it did not have.
 ## The run listing
 
 `/api/runs` lists every directory under `data/runs`, newest first: model,
-shakeout flag, character, harness stamp, latest level, XP, money and completed
+unscored stamp (the legacy `shakeout` key), harness tag, character, harness version, latest level, XP, money and completed
 quests from the `state` table, when it started, playtime, total tokens, and how
 it ended.
 
@@ -92,7 +92,8 @@ carry provider-reported counts automatically; the viewer decides per run by
 whether it finds any usage in the file. A turn's reported prompt size replaces
 the estimate for that turn, so the two never double-count.
 
-The one exception is the claude-sdk lane (driver id `claude-subscription`). Its
+The one exception is the claude-code harness (driver id `claude-code`, formerly
+`claude-subscription`). Its
 driver discarded the CLI's usage objects until 2026-08-22, and a characters ÷ 4
 estimate over a session that reuses an enormous cached prefix is off by orders
 of magnitude — so those runs report no usage rather than a number that would
