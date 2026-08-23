@@ -58,10 +58,8 @@
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free"},
     "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free"},
     "laguna-or": {"model": "poolside/laguna-s-2.1:free"},
-    "dots-3": {"model": "dots-studio/dots-3-note-preview:free"},
     "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
-    "deepseek-flash": {"model": "deepseek-v4-flash-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2}
