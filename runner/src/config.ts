@@ -220,7 +220,7 @@ export const runConfigSchema = z.object({
    * whether an operator objective is allowed — so that "a 90-minute run" is
    * something the harness knows rather than a convention held in fleet.json.
    * Absent means the run was launched flag-by-flag and belongs to no tier; the
-   * reader may still *derive* one for such a run (viewer/eval.ts), but nothing
+   * reader may still *derive* one for such a run (viewer/results.ts), but nothing
    * writes it back (ADR-0026).
    *
    * The tier supplies watchdog *defaults*: a threshold given explicitly still

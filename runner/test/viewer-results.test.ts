@@ -1,5 +1,5 @@
 /**
- * The eval derivations behind the charts and the ladder.
+ * The results derivations behind the charts and the ladder.
  *
  * What is worth pinning is the honesty of the two numbers: a level mark carries
  * the turn and the *active* time of the first sample that showed the level, and
@@ -11,13 +11,13 @@ import { describe, expect, test } from "bun:test";
 import type { RunRow, StatePoint } from "../viewer/api-types";
 import {
   activeMsUntil,
-  evalRunOf,
+  resultRunOf,
   levelMarks,
   mapsOf,
   trackFrom,
   turnsUsable,
   unscoredReason,
-} from "../viewer/eval";
+} from "../viewer/results";
 
 function state(p: Partial<StatePoint> & { ts: number }): StatePoint {
   return {
@@ -185,9 +185,9 @@ describe("unscoredReason", () => {
   });
 });
 
-describe("evalRunOf", () => {
+describe("resultRunOf", () => {
   test("projects identity, comparability fields and the level series", () => {
-    const e = evalRunOf(
+    const e = resultRunOf(
       run({
         comparability: {
           harnessVersion: "harness-0.2",
@@ -223,11 +223,11 @@ describe("evalRunOf", () => {
   });
 
   test("falls back to the run's own level when no sample carried one", () => {
-    expect(evalRunOf(run({ level: 7 }), [], []).maxLevel).toBe(7);
+    expect(resultRunOf(run({ level: 7 }), [], []).maxLevel).toBe(7);
   });
 
   test("xp is the furthest reading at the run's highest level, and money is the last one", () => {
-    const e = evalRunOf(run({ money: 4_242 }), [
+    const e = resultRunOf(run({ money: 4_242 }), [
       state({ ts: 1000, level: 4, xp: 9_000 }),
       state({ ts: 2000, level: 5, xp: 100 }),
       state({ ts: 3000, level: 5, xp: 700 }),
@@ -241,9 +241,9 @@ describe("evalRunOf", () => {
   test("an xp read at another level is never paired with the max level", () => {
     // The newest sample's level is the run's level, so run.xp only applies when
     // the two agree; here no sample carried the max level's xp at all.
-    const e = evalRunOf(run({ level: 3, xp: 55 }), [state({ ts: 1000, level: 3 })], []);
+    const e = resultRunOf(run({ level: 3, xp: 55 }), [state({ ts: 1000, level: 3 })], []);
     expect(e.maxLevel).toBe(3);
     expect(e.xp).toBe(55);
-    expect(evalRunOf(run({ level: 2, xp: 55 }), [state({ ts: 1000, level: 3 })], []).xp).toBeNull();
+    expect(resultRunOf(run({ level: 2, xp: 55 }), [state({ ts: 1000, level: 3 })], []).xp).toBeNull();
   });
 });

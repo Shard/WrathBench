@@ -15,7 +15,7 @@ import type {
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
-  EvalResponse,
+  ResultsResponse,
   FleetResponse,
   HarnessView,
   ModelsResponse,
@@ -36,8 +36,8 @@ export type {
   EpisodeIdView,
   EpisodeTierView,
   EpisodesResponse,
-  EvalResponse,
-  EvalRun,
+  ResultsResponse,
+  ResultRun,
   LevelMark,
   TrackPoint,
   TrackResponse,
@@ -95,7 +95,7 @@ async function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
 }
 
 /** The shared `?episode=`/`?includeOverrides=`/`?harness=` query. */
-function evalQuery(
+function resultsQuery(
   episode: EpisodeIdView | "all" | undefined,
   includeOverrides: boolean,
   harness: HarnessView | "all" = "all",
@@ -130,25 +130,25 @@ export function createClient(opts: ClientOptions = {}) {
     /** The episode tiers (ADR-0030) and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes", opts),
     /**
-     * Every run projected onto the eval surface: level marks and comparability.
+     * Every run projected onto the results surface: level marks and comparability.
      *
      * `episode` defaults to `e90` server-side, and a tier filter means that
      * tier's *members* — stamped, un-overridden runs. `"all"` lifts the filter;
      * `includeOverrides` widens it to tier runs whose leash was overridden.
      */
-    eval: (
+    results: (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
       harness: HarnessView | "all" = "all",
-    ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/eval${evalQuery(episode, includeOverrides, harness)}`, opts),
+    ): Promise<ResultsResponse> =>
+      get<ResultsResponse>(`/api/results${resultsQuery(episode, includeOverrides, harness)}`, opts),
     /** The same projection the ladder reads; the rung rules stay client-side. */
     ladder: (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
       harness: HarnessView | "all" = "all",
-    ): Promise<EvalResponse> =>
-      get<EvalResponse>(`/api/ladder${evalQuery(episode, includeOverrides, harness)}`, opts),
+    ): Promise<ResultsResponse> =>
+      get<ResultsResponse>(`/api/ladder${resultsQuery(episode, includeOverrides, harness)}`, opts),
     /** One run's recorded track, for map replay. */
     track: (id: string): Promise<TrackResponse> =>
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`, opts),

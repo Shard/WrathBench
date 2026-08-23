@@ -80,7 +80,7 @@ export function isPromoted(row: ModelRowView): boolean {
  * The roster name for a run's `(model, effort)` pair, or null.
  *
  * This is the key `matchesRoster` in `runner/src/models.ts` uses, and the only
- * way a run page or an eval row can link to `/models#<name>`: a run records the
+ * way a run page or an results row can link to `/models#<name>`: a run records the
  * model string it was launched with, never the roster name that chose it. Two
  * roster entries can legitimately share the pair, in which case the first is
  * taken — a link has to go somewhere, and both rows show the same runs anyway.

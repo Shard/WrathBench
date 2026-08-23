@@ -1,5 +1,5 @@
 /**
- * The eval charts: what a level costs, per model, per harness version.
+ * The results charts: what a level costs, per model, per harness version.
  *
  * Two axes and both are qualified on the page rather than in a footnote. Turns
  * are *driver* turns at first observation — state is sampled on a 60s clock, so
@@ -26,14 +26,14 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
-import { api, type EvalResponse, type EvalRun, type ModelRowView } from "../api/client";
+import { api, type ResultsResponse, type ResultRun, type ModelRowView } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
-import { CHART_LEVELS, byCharacter, characterOptions, groupsForLevel, scored, type EvalGroup } from "../lib/eval";
+import { CHART_LEVELS, byCharacter, characterOptions, groupsForLevel, scored, type ResultGroup } from "../lib/results";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { fmtDuration, shortHarness } from "../lib/format";
 import { poll } from "../lib/poll";
 
-/** Eval data is historical; it moves when a run ends, not second to second. */
+/** Results data is historical; it moves when a run ends, not second to second. */
 const POLL_MS = 30_000;
 
 const BAR_H = 18;
@@ -41,7 +41,7 @@ const BAR_GAP = 6;
 const LABEL_W = 260;
 const CHART_W = 720;
 
-export default function Eval() {
+export default function Results() {
   // The tier lives in the URL so a link from the episodes page lands on the
   // right group and a shared link keeps meaning what it meant.
   const [params, setParams] = useSearchParams();
@@ -50,7 +50,7 @@ export default function Eval() {
   // The harness filter (ADR-0035) defaults to all; it narrows, it never partitions.
   const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   /*
-   * `?model=` is a client-side filter, deliberately: `/api/eval` has no model
+   * `?model=` is a client-side filter, deliberately: `/api/results` has no model
    * parameter and giving it one would widen a route the charts share with the
    * ladder. The models page links here with it so a row's "2/3" is one click
    * from the runs behind it.
@@ -72,8 +72,8 @@ export default function Eval() {
    */
   const character = (): string | null =>
     typeof params.character === "string" && params.character.length > 0 ? params.character : null;
-  const feed = poll(() => api.eval(episode(), overrides(), harness()), POLL_MS);
-  // The roster, only so an eval row can name the model it belongs to and link
+  const feed = poll(() => api.results(episode(), overrides(), harness()), POLL_MS);
+  // The roster, only so an results row can name the model it belongs to and link
   // back to it. A failure here must not take the charts down with it.
   const roster = poll(() => api.models(), 60_000);
   const rosterRows = (): ModelRowView[] => roster.latest?.models ?? [];
@@ -88,9 +88,9 @@ export default function Eval() {
    */
   const [metric, setMetric] = createSignal<"turns" | "time">("time");
 
-  const body = (): EvalResponse | undefined => feed.latest;
-  const all = (): EvalRun[] => body()?.runs ?? [];
-  const runs = (): EvalRun[] => {
+  const body = (): ResultsResponse | undefined => feed.latest;
+  const all = (): ResultRun[] => body()?.runs ?? [];
+  const runs = (): ResultRun[] => {
     const m = model();
     const mine = m === null ? all() : all().filter((r) => r.model === m && (r.effort ?? null) === effort());
     return byCharacter(mine, character());
@@ -110,7 +110,7 @@ export default function Eval() {
         <div class="banner bad">{String(feed.error)}</div>
       </Show>
 
-      <h2 class="section">eval</h2>
+      <h2 class="section">results</h2>
       <p class="dim">
         Cost of reaching a level, per model per harness version. Scores are comparable within a
         harness version only (ADR-0004); effort is part of the row, not averaged away (ADR-0024), and
@@ -296,14 +296,14 @@ export default function Eval() {
 }
 
 /** One horizontal bar per group. Shorter is better, so the axis starts at zero. */
-function Chart(props: { groups: EvalGroup[]; metric: "turns" | "time"; level: number }) {
+function Chart(props: { groups: ResultGroup[]; metric: "turns" | "time"; level: number }) {
   const rows = createMemo(() =>
     props.groups
       .map((g) => ({
         g,
         value: props.metric === "turns" ? g.bestTurn : g.bestMs,
       }))
-      .filter((r): r is { g: EvalGroup; value: number } => r.value !== null),
+      .filter((r): r is { g: ResultGroup; value: number } => r.value !== null),
   );
   const max = createMemo(() => Math.max(1, ...rows().map((r) => r.value)));
   const height = createMemo(() => Math.max(1, rows().length) * (BAR_H + BAR_GAP) + 10);

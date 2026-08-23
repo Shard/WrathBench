@@ -1,5 +1,5 @@
 /**
- * The eval grouping and the ladder derivation.
+ * The results grouping and the ladder derivation.
  *
  * What matters here is what the release page is allowed to claim: unscorable
  * runs never enter a group, effort splits a model into two rows rather than
@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { EvalRun, LevelMark } from "../../runner/viewer/api-types";
+import type { ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
   RUNGS,
@@ -18,13 +18,13 @@ import {
   ladderRows,
   markAtLeast,
   scored,
-} from "../src/lib/eval";
+} from "../src/lib/results";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
   return { level, ts: level * 1000, turn, playtimeMs: ms };
 }
 
-function run(p: Partial<EvalRun> = {}): EvalRun {
+function run(p: Partial<ResultRun> = {}): ResultRun {
   const levels = p.levels ?? [];
   return {
     runId: "r",

@@ -23,8 +23,8 @@ import type {
   EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
-  EvalResponse,
-  EvalRun,
+  ResultsResponse,
+  ResultRun,
   FleetAccountView,
   FleetJobView,
   FleetPausedView,
@@ -36,7 +36,7 @@ import type {
   RunListRow,
   RunsResponse,
 } from "./api-types";
-import { evalRunOf, trackFrom } from "./eval";
+import { resultRunOf, trackFrom } from "./results";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates } from "../src/models";
 import { readPositions } from "./positions";
@@ -430,20 +430,20 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
-   * Every run projected onto the eval surface.
+   * Every run projected onto the results surface.
    *
    * Built inside this closure on purpose: it reuses the same memoised
    * `runTotals`, so the charts inherit the (size, mtime) cache instead of
    * re-reading every trajectory on every request. The segments it passes are
    * the run page's own, which is what makes time-to-level and playtime agree.
    */
-  async function evalRuns(): Promise<EvalRun[]> {
-    const out: EvalRun[] = [];
+  async function resultRuns(): Promise<ResultRun[]> {
+    const out: ResultRun[] = [];
     for (const row of listRuns(runsDir)) {
       const dir = runDir(runsDir, row.runId);
       const totals = dir === null ? null : await runTotals(row.runId, dir);
       out.push(
-        evalRunOf(
+        resultRunOf(
           row,
           readStates(runsDir, row.runId),
           totals?.segments ?? [],
@@ -461,7 +461,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
-   * The `?episode=` filter, shared by `/api/eval` and `/api/ladder`.
+   * The `?episode=` filter, shared by `/api/results` and `/api/ladder`.
    *
    * Defaults to `e90` — the scored tier — because a chart that quietly mixes a
    * ninety-minute run with a six-hour one is the thing the tiers exist to stop.
@@ -479,7 +479,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
-   * The optional `?harness=` filter (ADR-0035), shared by `/api/eval`,
+   * The optional `?harness=` filter (ADR-0035), shared by `/api/results`,
    * `/api/ladder` and `/api/models`. Defaults to `all`: the harness is a tag
    * on the row, not a partition, so a chart shows both loops unless asked
    * not to. Unknown values are a 400 for the same reason the episode filter's are.
@@ -490,7 +490,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return (HARNESSES as readonly string[]).includes(raw) ? (raw as HarnessView) : null;
   }
 
-  async function evalResponse(url: URL): Promise<Response> {
+  async function resultsResponse(url: URL): Promise<Response> {
     const episode = episodeFilter(url);
     if (episode === null) {
       return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
@@ -500,7 +500,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
     }
     const includeOverrides = url.searchParams.get("includeOverrides") === "1";
-    const everything = await evalRuns();
+    const everything = await resultRuns();
     const all = harness === "all" ? everything : everything.filter((r) => r.harness === harness);
     /*
      * Filtering to a tier means filtering to its *members* (ADR-0030): stamped
@@ -517,7 +517,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
               (includeOverrides || !r.episodeOverride),
           );
     const runs = tiered;
-    const body: EvalResponse = {
+    const body: ResultsResponse = {
       runs,
       episode,
       harness,
@@ -540,7 +540,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
      * response is archived by the runner as it terminates, so the counts below
      * cannot be padded by launches that never got off the ground.
      */
-    const all = await evalRuns();
+    const all = await resultRuns();
     const body: EpisodesResponse = {
       episodes: EPISODE_LIST.map((tier) => {
         const tagged = all.filter((r) => r.episode === tier.id);
@@ -614,13 +614,13 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
     if (path === "/api/episodes") return await episodesResponse();
     /*
-     * `/api/ladder` serves the same projection as `/api/eval`. The ladder's own
-     * derivation stays client-side (`dashboard/src/lib/eval.ts`, where its rung
+     * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
+     * derivation stays client-side (`dashboard/src/lib/results.ts`, where its rung
      * rules and their tests already live); the route exists so the episode
      * filter has one spelling per page rather than the ladder page having to
-     * know it is really asking the eval endpoint.
+     * know it is really asking the results endpoint.
      */
-    if (path === "/api/eval" || path === "/api/ladder") return await evalResponse(url);
+    if (path === "/api/results" || path === "/api/ladder") return await resultsResponse(url);
     if (path === "/api/fleet") return json(readFleet(runsDir));
     /*
      * `/api/models` is the scheduler's own verdict, served rather than

@@ -64,7 +64,7 @@ spelling of `claude-code`. Nothing new writes either.
 | `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
 
 The harness is stamped into the comparability tuple and shown on every run,
-eval, ladder and models row. It is a tag, not a partition: claude-code rows sit
+results, ladder and models row. It is a tag, not a partition: claude-code rows sit
 in the same charts as wrathbench rows (the operator's choice for now, ADR-0035),
 and `?harness=` on the API narrows to one when wanted. `harnessVersion` is a
 different word — the `git describe` of this repo, which applies to both

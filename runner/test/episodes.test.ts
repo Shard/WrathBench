@@ -13,8 +13,8 @@ import { comparabilityOf } from "../src/comparability";
 import { episodeOverrideOf, loadRunConfig } from "../src/config";
 import { EPISODES, EPISODE_IDS, matchesTier, watchdogsFor } from "../src/episodes";
 import { configFromArgs } from "../src/run";
-import type { EvalRun, RunRow } from "../viewer/api-types";
-import { episodeOf, isTierMember, unscoredReason } from "../viewer/eval";
+import type { ResultRun, RunRow } from "../viewer/api-types";
+import { episodeOf, isTierMember, unscoredReason } from "../viewer/results";
 
 const M = 60_000;
 
@@ -30,7 +30,7 @@ function runRow(over: Partial<RunRow> = {}): RunRow {
   };
 }
 
-function evalRun(over: Partial<EvalRun> = {}): EvalRun {
+function resultRun(over: Partial<ResultRun> = {}): ResultRun {
   return {
     runId: "r", model: "m", platform: null, harnessVersion: "v", harnessSeries: null, extra: false, effort: null,
     race: 1, raceName: "Human", class: 2, className: "Paladin", characterLabel: "Human Paladin",
@@ -185,12 +185,12 @@ describe("the reader labels, it does not enroll", () => {
   });
 
   test("only a stamped, un-overridden run is a member of its tier's group", () => {
-    expect(isTierMember(evalRun({ episode: "e90", episodeSource: "stamped" }))).toBe(true);
-    expect(isTierMember(evalRun({ episode: "e90", episodeSource: "derived" }))).toBe(false);
+    expect(isTierMember(resultRun({ episode: "e90", episodeSource: "stamped" }))).toBe(true);
+    expect(isTierMember(resultRun({ episode: "e90", episodeSource: "derived" }))).toBe(false);
     expect(
-      isTierMember(evalRun({ episode: "e90", episodeSource: "stamped", episodeOverride: true })),
+      isTierMember(resultRun({ episode: "e90", episodeSource: "stamped", episodeOverride: true })),
     ).toBe(false);
-    expect(isTierMember(evalRun())).toBe(false);
+    expect(isTierMember(resultRun())).toBe(false);
   });
 });
 

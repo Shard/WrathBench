@@ -11,7 +11,7 @@
  * as it exits, so it never appears here at all — it still climbs the defer
  * ladder, which is what the cooling and retired notes are reporting.
  *
- * The row key is the roster name, and it is also the anchor: run pages and eval
+ * The row key is the roster name, and it is also the anchor: run pages and results
  * rows link to `/models#<name>`, so a name is an address.
  */
 
@@ -130,7 +130,7 @@ export default function Models() {
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
                                 <A
-                                  href={`/eval?model=${encodeURIComponent(row.model)}${row.effort === null ? "" : `&effort=${encodeURIComponent(row.effort)}`}&episode=${t}`}
+                                  href={`/results?model=${encodeURIComponent(row.model)}${row.effort === null ? "" : `&effort=${encodeURIComponent(row.effort)}`}&episode=${t}`}
                                 >
                                   {countedOf(st())}
                                 </A>
@@ -174,7 +174,7 @@ export default function Models() {
           <p class="dim">
             Targets are {body()!.policy.runsPerEpisode.e90} runs on e90 and{" "}
             {body()!.policy.runsPerEpisode.e360} on e360, counted per model. A row's tier cell links
-            to that model's runs on the eval page; the row itself opens its runs below. Cooling is
+            to that model's runs on the results page; the row itself opens its runs below. Cooling is
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
             {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more
             no-progress attempt at the ceiling retires the model until an operator clears it.

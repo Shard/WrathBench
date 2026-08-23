@@ -589,8 +589,8 @@ export interface LevelMark {
   playtimeMs: number | null;
 }
 
-/** One run as the eval charts read it: identity, comparability, level marks. */
-export interface EvalRun {
+/** One run as the results charts read it: identity, comparability, level marks. */
+export interface ResultRun {
   runId: string;
   model: string | null;
   platform: string | null;
@@ -657,7 +657,7 @@ export interface EvalRun {
   xp: number | null;
   /**
    * Copper on the newest sample that carried a reading — the same number the
-   * fleet listing and the run page show, not a peak (no state sample the eval
+   * fleet listing and the run page show, not a peak (no state sample the results
    * surface reads carries money, so a peak is not derivable). Null when never
    * recorded; zero is a real reading.
    */
@@ -667,8 +667,8 @@ export interface EvalRun {
   maps: number[];
 }
 
-export interface EvalResponse {
-  runs: EvalRun[];
+export interface ResultsResponse {
+  runs: ResultRun[];
   /** The tier the response was filtered to, or "all". Echoed so a page can
    * render what it actually asked for rather than what it meant to ask for. */
   episode: EpisodeIdView | "all";

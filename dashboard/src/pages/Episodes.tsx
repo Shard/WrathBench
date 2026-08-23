@@ -67,7 +67,7 @@ export default function Episodes() {
                 {(t) => (
                   <tr>
                     <td>
-                      <A href={`/eval?episode=${t.id}`}>{t.id}</A>
+                      <A href={`/results?episode=${t.id}`}>{t.id}</A>
                     </td>
                     <td class="right mono">{mins(t.minutes)}</td>
                     <td class="right mono">{mins(t.idleMinutes)}</td>
@@ -95,7 +95,7 @@ export default function Episodes() {
                 <Show when={t.overrides > 0}> · {t.overrides} with an overridden leash</Show>
                 <Show when={t.derived > 0}> · {t.derived} older run(s) labeled, never enrolled</Show>
                 {" · "}
-                <A href={`/eval?episode=${t.id}`}>eval</A> · <A href={`/ladder?episode=${t.id}`}>ladder</A>
+                <A href={`/results?episode=${t.id}`}>results</A> · <A href={`/ladder?episode=${t.id}`}>ladder</A>
               </p>
             </>
           )}
@@ -107,7 +107,7 @@ export default function Episodes() {
           cannot be given one. They ran before the ids existed, under the watchdog defaults of their
           day, and a tuple field is never recomputed after the fact (ADR-0026): saying nothing is
           more honest than asserting a comparability that was never established. See them with{" "}
-          <A href="/eval?episode=all">eval across all episodes</A>.
+          <A href="/results?episode=all">results across all episodes</A>.
         </p>
       </Show>
     </div>

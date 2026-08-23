@@ -7,7 +7,7 @@
  * page, not in a footnote.
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
- * derivation over recorded signals, versioned with `lib/eval.ts` (ADR-0018
+ * derivation over recorded signals, versioned with `lib/results.ts` (ADR-0018
  * amendment). The two tie-breaks are printed in their own columns so the order
  * is legible rather than mysterious, and neither is added to anything: there is
  * no aggregate score.
@@ -21,9 +21,9 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
-import { api, type EvalResponse, type EvalRun } from "../api/client";
+import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag, episodeParam, harnessParam } from "../components/EpisodePicker";
-import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/eval";
+import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/results";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -34,12 +34,12 @@ export default function Ladder() {
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const overrides = (): boolean => params.overrides === "1";
   const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
-  // `/api/ladder` is the same projection as `/api/eval`; the rung rules stay
-  // client-side, in `lib/eval.ts`, where their tests are.
+  // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
+  // client-side, in `lib/results.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode(), overrides(), harness()), POLL_MS);
   createEffect(on([episode, overrides, harness], () => feed.refresh(), { defer: true }));
-  const body = (): EvalResponse | undefined => feed.latest;
-  const all = (): EvalRun[] => body()?.runs ?? [];
+  const body = (): ResultsResponse | undefined => feed.latest;
+  const all = (): ResultRun[] => body()?.runs ?? [];
   /*
    * The starting character (ADR-0034's extras cycle) narrows the rungs; it is
    * never a row key. A model's row is its best run whatever it was played on,
@@ -48,7 +48,7 @@ export default function Ladder() {
   const character = (): string | null =>
     typeof params.character === "string" && params.character.length > 0 ? params.character : null;
   const characters = createMemo(() => characterOptions(all()));
-  const runs = (): EvalRun[] => byCharacter(all(), character());
+  const runs = (): ResultRun[] => byCharacter(all(), character());
   const rows = createMemo(() => ladderRows(runs()));
   const best = createMemo(() => rows().reduce((n, r) => Math.max(n, r.highest), 0));
 
