@@ -3,26 +3,34 @@
 Status: Accepted. Date: 2026-08-21.
 
 ## Context
-The module must stand up a WorldSession with no game client attached: inject CMSG_* into its handlers and tap its outbound SMSG_* stream (ADR-0002). On this core, both paths are gated on the session's socket: `WorldSession::SendPacket` returns before the script hook when `m_Socket` is null, and `WorldSession::Update` refuses to drain the receive queue and reaps the session once `m_Socket` is null or closed. `WorldSocket` is `final` and its constructor requires a connected TCP socket (the base `Socket<T>` reads `remote_endpoint()` at construction), so a fake subclass is off the table.
+The module must stand up a WorldSession with no game client attached (ADR-0002).
+On the pinned core both paths it needs are gated on the session's socket:
+`SendPacket` returns before the script hook when `m_Socket` is null, and `Update`
+refuses to drain the receive queue and reaps the session once the socket is null
+or closed. `WorldSocket` is `final` and its constructor requires a connected TCP
+socket, so a fake subclass is impossible.
 
 ## Decision
-Construct the WorldSession directly, the way `WorldSocket::HandleAuthSessionCallback` does, but hand it a *parked* WorldSocket: a real `WorldSocket` wrapped around the server end of a loopback TCP pair the module connects to itself. `Start()` is never called, the socket is never registered with a network thread, and no auth handshake happens — the socket exists only so `IsOpen()` is true and the session's null checks pass. The session is handed to `WorldSessionMgr::AddSession`, the same queue the real auth path uses, so `InitializeSession` and everything after run stock on the world thread.
+Construct the session the way the real auth path does, but hand it a *parked*
+`WorldSocket`: a real socket around the server end of a loopback TCP pair the
+module connects to itself, never started, never registered with a network
+thread, never authenticated. It exists only so `IsOpen()` is true. Inbound actions
+go through `QueuePacket` into the stock opcode table; outbound packets are
+captured by a `CanPacketSend` hook that returns false so nothing accumulates on
+the unflushed socket; teardown is a client logout followed by `CloseSocket()`,
+which is exactly a client disconnect. Mechanics are in docs/ARCHITECTURE.md.
 
-- Inbound: actions become `WorldPacket`s pushed through `WorldSession::QueuePacket` — the same thread-safe queue `WorldSocket::ReadDataHandler` feeds — and are dispatched by the stock opcode table with all status/DOS checks.
-- Outbound: a `ServerScript::CanPacketSend` hook captures every packet for bench sessions and returns false, so nothing is ever queued on the parked socket (which would otherwise grow unbounded, since no network thread flushes it).
-- Keepalive: the socket-idle kick normally reset by `ReadHandler` is reset from a `WorldScript::OnUpdate` hook (`ResetTimeOutTime` is public).
-- Teardown: graceful logout goes through CMSG_LOGOUT_REQUEST; after SMSG_LOGOUT_COMPLETE the module calls `CloseSocket()` on the parked socket, which is exactly a client disconnect at character select — the world thread reaps and deletes the session on its next update.
-
-HTTP and WebSocket use Boost.Beast, which is header-only and ships in the Boost the core already requires (1.83 on the pinned image). JSON is a small hand-rolled builder and flat-object parser (`WbJson.h`) rather than Boost.JSON: the core's `find_package(Boost ...)` requests only `filesystem program_options iostreams regex`, so there is no `Boost::json` target, and the wire shapes are small and flat enough that a hand-rolled serializer costs less than wiring Boost.JSON's link mode into the module build. No new vendored dependency, no new link libraries.
-
-## Alternatives
-- Null/sentinel socket (the mod-playerbots shape): dead end on stock core — `SendPacket` early-returns before `CanPacketSend`, `Update` skips the receive queue, and the session is reaped on the first update. Playerbots works because its fork patches these paths; ADR-0007 forbids a fork.
-- In-process packet client over real loopback TCP to port 8085: highest fidelity (header crypto, auth handshake, framing all exercised) but it is Path A in miniature — SRP session key plumbing, ARC4, client-side framing — for no observable difference in what the handlers see. Kept as the future high-fidelity track (ADR-0002).
-- Fake/loopback `WorldSocket` subclass: impossible, the class is `final` and constructor-coupled to a connected socket.
+Rejected: a null socket (the mod-playerbots shape) is a dead end on stock core —
+playerbots works only because its fork patches these paths, and ADR-0007 forbids
+a fork. An in-process packet client over real TCP would exercise SRP, ARC4 and
+framing for no difference in what the handlers see; it stays the future
+high-fidelity track.
 
 ## Consequences
-- Every handler-side check applies unchanged; the only skipped machinery is transport auth (SRP digest, ARC4, Warden), which validates the wire, not the actions.
-- The parked socket costs one loopback TCP connection per session and satisfies idle/reap logic without touching core code.
-- The tap sees packets on whatever thread calls `SendPacket` (world thread during login, map threads in world); everything downstream of the hook must be lock-protected and must never touch game objects.
-- Suppressing the socket write in `CanPacketSend` means an Eluna-style observer module loaded alongside would also not see these packets; acceptable, nothing else runs in this worldserver.
-- If a future core change moves the send hook or the null-socket semantics, this ADR is where to look; the coupling surface is `WorldSession::SendPacket`, `WorldSession::Update`, and the `WorldSocket` constructor.
+- Every handler-side check applies unchanged; the only skipped machinery is
+  transport auth, which validates the wire, not the actions.
+- The tap runs on whatever thread calls `SendPacket`; everything downstream must
+  be lock-protected and never touch game objects.
+- The coupling surface with the core is `WorldSession::SendPacket`,
+  `WorldSession::Update` and the `WorldSocket` constructor. If a core bump moves
+  the send hook or the null-socket semantics, this is where to look.
