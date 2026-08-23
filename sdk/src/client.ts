@@ -55,6 +55,7 @@ import {
   type LootItemData,
   type LootResponseData,
   type MoveResultData,
+  type MoveUpdateData,
   type MoveStatus,
   type MoveToResponse,
   type NewWorldData,
@@ -231,7 +232,7 @@ function assertMovePoint(point: unknown, method: string): asserts point is MoveP
  * What a move target resolved to: a point to walk to (with a note when the
  * resolution is worth stating), or nothing walkable at all.
  */
-type ResolvedMoveTarget = { point: MovePoint; note?: string } | { unknown: string };
+type ResolvedMoveTarget = { point: MovePoint; guid?: string; note?: string } | { unknown: string };
 
 /** The guid a move target names, or undefined when it is (meant to be) a point. */
 function moveTargetGuid(target: unknown): string | bigint | undefined {
@@ -283,13 +284,19 @@ function resolveMoveTarget(target: unknown, state: StateCache, method: string): 
         `pass a point { x, y, z }, a unit from state.units(...) / state.closest(...), or that unit's .guid`,
     );
   }
+  // The guid rides along as a planning hint: a unit's z is the z its own
+  // movement packets carried, and for a patrolling or sloped NPC that can sit
+  // outside the mesh's poly-search box while the ground under it is walkable.
+  // With `guid` the module resolves z to the ground at x,y first (PROTOCOL.md
+  // move_to); the request still walks to x,y, never to wherever the guid is.
   const obj = state.nearby.get(key);
   const seen = obj === undefined ? undefined : pointOf(obj)?.value;
-  if (seen !== undefined) return { point: { x: seen.x, y: seen.y, z: seen.z } };
+  if (seen !== undefined) return { point: { x: seen.x, y: seen.y, z: seen.z }, guid: key };
   const own = ownPoint(target);
   if (own !== undefined) {
     return {
       point: own,
+      guid: key,
       note:
         `guid ${key} is not in view any more, so this walked to (${fmtXY(own)}) — where the object you ` +
         `passed last saw it, not a live position. Re-read state.units(...) on arrival.`,
@@ -643,6 +650,22 @@ export type MoveResult =
     }
   | {
       /**
+       * A same-map teleport (Hearthstone, graveyard port) took the character
+       * mid-move. No map change: `to` is the arrival point the server's
+       * `MSG_MOVE_TELEPORT_ACK` carried, already on `state.self.position`.
+       */
+      readonly ok: true;
+      readonly status: "teleported";
+      readonly moveId: number;
+      /** Where the character was when the teleport took it. */
+      readonly position: UnitPosition;
+      readonly seq: number;
+      readonly ts: number;
+      readonly to: UnitPosition;
+      readonly hint: string;
+    }
+  | {
+      /**
        * Nothing was dispatched: the unit or guid handed to `moveTo` names no
        * position the state cache can see, so there is no point to walk to and
        * no move to have an outcome. Not a `WB_MOVE_RESULT` status — the module's
@@ -662,7 +685,7 @@ export type MoveResult =
     }
   | {
       readonly ok: false;
-      readonly status: Exclude<KnownMoveStatus, "arrived" | "transferred"> | (string & {});
+      readonly status: Exclude<KnownMoveStatus, "arrived" | "transferred" | "teleported"> | (string & {});
       readonly moveId: number;
       readonly position: UnitPosition;
       readonly seq: number;
@@ -721,7 +744,8 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
  *
  * Not in the set, and why: `arrived` and `interrupted` (the module sent the
  * stop itself), `stopped` (a stop is what ended it), `superseded` (a newer move
- * is walking now), `transferred` (the teleport clears the flags).
+ * is walking now), `transferred` and `teleported` (the teleport's own ack is
+ * the server's next movement word).
  */
 const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
   "too_far",
@@ -1620,11 +1644,22 @@ export class WrathClient {
           `instead of throwing.)`,
       );
     }
-    const point = resolved.point;
+    return this.postMoveTo(resolved.point, resolved.guid);
+  }
+
+  /** The `move_to` POST itself; `guid` is the planning hint `resolveMoveTarget` attaches to unit targets. */
+  private postMoveTo(point: MovePoint, guid?: string): Promise<MoveToResponse> {
     return this.request(
       "POST",
       "/action",
-      { token: this.token, action: "move_to", x: point.x, y: point.y, z: point.z },
+      {
+        token: this.token,
+        action: "move_to",
+        x: point.x,
+        y: point.y,
+        z: point.z,
+        ...(guid !== undefined ? { guid } : {}),
+      },
       moveToResponseSchema,
     );
   }
@@ -2443,7 +2478,7 @@ export class WrathClient {
     // before the WB_MOVE_RESULT that says `transferred`, so the transfer wait
     // has to admit packets from here on, not from the result on.
     const sinceSeq = this.state.lastSeq;
-    const ack = await this.moveToAsync(point);
+    const ack = await this.postMoveTo(point, resolved.guid);
     // The match is the moveId within the current session epoch, and the buffer
     // is searched: a result can land while the POST response is still in
     // flight (an immediate `target_off_mesh` does exactly that). No `sinceSeq` bound —
@@ -2548,6 +2583,37 @@ export class WrathClient {
       }
       return { ok: false, status: "transferred", ...common, hint: withNotes(transfer.hint) };
     }
+    if (status === "teleported") {
+      // A same-map port: no SMSG_NEW_WORLD is coming, so waiting for one
+      // (what `transferred` does) would be a full-timeout hang ending in a
+      // false "still pending" (FOLLOW-UPS 46). The arrival point is the
+      // server's own MSG_MOVE_TELEPORT_ACK, sent before the result — so this
+      // is a buffer lookup from before the move, and the short timeout only
+      // covers a module that did not serve it.
+      const landed = await this.waitOwnTeleportAck(sinceSeq, epoch, 5_000);
+      if (landed !== undefined) {
+        return {
+          ok: true,
+          status: "teleported",
+          ...common,
+          to: landed,
+          hint: withNotes(
+            `a same-map teleport took the character to (${fmtXY(landed)}); state.self.position already ` +
+              `reflects it. The destination (${fmtXY(point)}) was not reached — decide again from here.`,
+          ) as string,
+        };
+      }
+      return {
+        ok: false,
+        status: "teleported",
+        ...common,
+        hint: withNotes(
+          `a same-map teleport took the character mid-move, but no MSG_MOVE_TELEPORT_ACK with its arrival ` +
+            `point was observed. state.self.position may be stale until the next move result; the ` +
+            `destination (${fmtXY(point)}) was not reached.`,
+        ),
+      };
+    }
     if (MOVE_LEAVES_NO_STOP.has(status)) {
       // Nothing moved — and that is exactly when the character can be left
       // *flagged* as moving. `DoMoveTo` finishes an in-flight move with
@@ -2583,6 +2649,31 @@ export class WrathClient {
       ...(reachedPos !== undefined ? { reachedPos } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
+  }
+
+  /**
+   * The arrival point of a same-map teleport: the server's `MSG_MOVE_TELEPORT_ACK`
+   * under our own guid after `sinceSeq`, or undefined when none shows within
+   * `timeout`. The packet precedes the `teleported` move result, so this is
+   * normally a buffer lookup.
+   */
+  private async waitOwnTeleportAck(sinceSeq: number, epoch: number, timeout: number): Promise<UnitPosition | undefined> {
+    try {
+      const event = await this.waitEvent(
+        (e) =>
+          e.seq > sinceSeq &&
+          isEvent(e, "MSG_MOVE_TELEPORT_ACK") &&
+          !isDecodeError(e.data) &&
+          this.state.self.guid !== undefined &&
+          (e.data as MoveUpdateData).guid === this.state.self.guid,
+        { timeout, epoch, description: "MSG_MOVE_TELEPORT_ACK for self (same-map teleport arrival)" },
+      );
+      const d = event.data as MoveUpdateData;
+      return { x: d.pos.x, y: d.pos.y, z: d.pos.z, o: d.pos.o };
+    } catch (err) {
+      if (err instanceof EventTimeoutError) return undefined;
+      throw err;
+    }
   }
 
   /**

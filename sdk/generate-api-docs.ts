@@ -64,7 +64,7 @@ const CLIENT_ENDPOINTS: readonly Row[] = [
 
 /** Helpers: they wait for the game's verdict and return it as a value (ADR-0011). */
 const CLIENT_HELPERS: readonly Row[] = [
-  { name: "moveTo", sig: "moveTo(target, options?): Promise<MoveResult>", purpose: "Walk to a point { x, y, z }, a unit, or a guid (its cached position) and wait for the server's arrive/target_off_mesh/… verdict; a target nothing in view answers to comes back as status \"unknown_target\"." },
+  { name: "moveTo", sig: "moveTo(target, options?): Promise<MoveResult>", purpose: "Walk to a point { x, y, z }, a unit, or a guid (its cached position; the guid rides along so the module resolves z to the ground under the unit) and wait for the server's arrive/target_off_mesh/transferred/teleported/… verdict; a target nothing in view answers to comes back as status \"unknown_target\"." },
   { name: "killTarget", sig: "killTarget(target: GuidOrUnit, options?): Promise<KillResult>", purpose: "Approach and auto-attack until the target or we drop; returns how the fight ended." },
   { name: "lootCorpse", sig: "lootCorpse(target: GuidOrUnit, options?): Promise<LootResult>", purpose: "Empty a corpse and report what actually entered the bags (confirmed pushes, not the window)." },
   { name: "acceptQuestFrom", sig: "acceptQuestFrom(npcGuid: GuidOrUnit, questId, options?): Promise<QuestAcceptResult>", purpose: "Take a quest from an NPC and confirm it landed in the quest log." },
@@ -134,6 +134,8 @@ const CLIENT_RAW: readonly Row[] = [
 const CLIENT_INTERNAL = new Set([
   "action",
   "request",
+  "postMoveTo",
+  "waitOwnTeleportAck",
   "resolveGossipOption",
   "questOffer",
   "faceQuietly",

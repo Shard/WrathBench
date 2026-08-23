@@ -26,6 +26,7 @@ import {
   questComplete,
   questProgress,
   transferAborted,
+  teleportAck,
   transferPending,
   questRewarded,
   questGiverStatus,
@@ -52,6 +53,7 @@ import {
   PLAYER_GUID,
   playerCreate,
   playerName,
+  SELF_GUID,
   selfCreate,
   worldStream,
 } from "./fixtures";
@@ -368,6 +370,21 @@ describe("state cache: self, from the wire", () => {
     // Every other move result still writes self position, transfer or not.
     newWorldFirst.apply(toEvents([moveResult("arrived", 2, 43)])[0]!);
     expect(newWorldFirst.self.position?.value).toEqual({ map: 369, x: -1205, y: 981, z: 42, o: 1.2 });
+  });
+
+  test("an own-guid MSG_MOVE_TELEPORT_ACK moves self, and the `teleported` result after it does not", () => {
+    // FOLLOW-UPS 46: a same-map port sends no SMSG_NEW_WORLD; the server's
+    // teleport ack under our guid is the arrival point. The `teleported` move
+    // result that follows carries the pre-teleport position and must not win.
+    const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, teleportAck(40)]), { seed: SEED });
+    expect(cache.self.position?.value).toEqual({ map: 0, x: -8833.4, y: 625.9, z: 93.9, o: 0.5 });
+    expect(cache.self.position?.seq).toBe(40);
+    expect(cache.nearby.has(SELF_GUID)).toBe(false); // never upserted as a nearby unit
+    cache.apply(toEvents([moveResult("teleported", 1, 41)])[0]!);
+    expect(cache.self.position?.value).toEqual({ map: 0, x: -8833.4, y: 625.9, z: 93.9, o: 0.5 });
+    // Every later own position still folds.
+    cache.apply(toEvents([moveResult("arrived", 2, 42)])[0]!);
+    expect(cache.self.position?.value.x).toBe(-1205);
   });
 
   test("a pending transfer is visible until NEW_WORLD completes or ABORTED cancels it", () => {

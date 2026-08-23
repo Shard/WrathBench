@@ -260,6 +260,21 @@ export function moveResult(status: string, moveId = 1, seq = 19): unknown {
   };
 }
 
+/**
+ * The server's side of a same-map teleport (Player::SendTeleportAckPacket),
+ * tapped under our own guid with the arrival point. Sent before the
+ * `teleported` move result; no SMSG_NEW_WORLD follows.
+ */
+export function teleportAck(seq = 40, pos = { x: -8833.4, y: 625.9, z: 93.9, o: 0.5 }): unknown {
+  return {
+    seq,
+    opcode: "MSG_MOVE_TELEPORT_ACK",
+    opcodeId: 0x0c7,
+    ts: 1_700_000_000_400,
+    data: { guid: SELF_GUID, flags: 0, pos },
+  };
+}
+
 export function transferPending(toMap: number, seq = 40): unknown {
   return { seq, opcode: "SMSG_TRANSFER_PENDING", opcodeId: 0x03f, ts: 1_700_000_000_400, data: { map: toMap } };
 }
