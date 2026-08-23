@@ -6,7 +6,7 @@
  *   bun runner/src/archive.ts --pre-series 0.4 [--release-paused] [--dry-run]
  *
  * `--pre-series X.Y` parks every run whose recorded harness version is not a
- * clean build of the `harness-X.Y` series: an older series, a `-dirty` build,
+ * build of the `harness-X.Y` series: an older series,
  * or no `harness-` tag at all. The series is the comparability floor; a run
  * below it is history, not a row. Report directories and anything still live
  * are left alone, the same way as for `--stillborn`.
@@ -153,14 +153,15 @@ export async function planStillborn(runsDir: string, now = Date.now()): Promise<
 }
 
 /**
- * Whether a recorded harness version is a clean build of the given series.
- * `harness-0.4`, `harness-0.4-25-g1fe3951` pass; `-dirty`, `harness-0.3-…`,
- * a bare commit hash or the phase-0 placeholder do not.
+ * Whether a recorded harness version belongs to the given series. The series
+ * is what groups results (ADR-0033), so a `-dirty` build of it still counts:
+ * `harness-0.4`, `harness-0.4-25-g1fe3951`, `harness-0.4-25-g1fe3951-dirty`
+ * pass; `harness-0.3-…`, a bare commit hash or the phase-0 placeholder do not.
  */
 export function inSeries(version: string | null, series: string): boolean {
   if (version === null) return false;
   const esc = series.replace(/\./g, "\\.");
-  return new RegExp(`^harness-${esc}(?:$|-(?!.*-dirty$))`).test(version);
+  return new RegExp(`^harness-${esc}(?:$|-)`).test(version);
 }
 
 /**

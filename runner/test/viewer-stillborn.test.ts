@@ -209,7 +209,7 @@ describe("the series floor", () => {
   test("only a clean build of the series is in it", () => {
     expect(inSeries("harness-0.4", "0.4")).toBe(true);
     expect(inSeries("harness-0.4-25-g1fe3951", "0.4")).toBe(true);
-    expect(inSeries("harness-0.4-25-g1fe3951-dirty", "0.4")).toBe(false);
+    expect(inSeries("harness-0.4-25-g1fe3951-dirty", "0.4")).toBe(true);
     expect(inSeries("harness-0.3-145-gd75e9f4", "0.4")).toBe(false);
     expect(inSeries("harness-0.40", "0.4")).toBe(false);
     expect(inSeries("3c4a124-dirty", "0.4")).toBe(false);
@@ -230,7 +230,7 @@ describe("the series floor", () => {
     stamp("worked", "harness-0.4-3-gabc");
     stamp("spoke-only", "harness-0.3-9-gdef");
     run(runs, "parked", [META], { warm: true });
-    stamp("parked", "harness-0.4-7-gfed-dirty", { reason: "rate-limited", at: 1 });
+    stamp("parked", "harness-0.3-7-gfed-dirty", { reason: "rate-limited", at: 1 });
 
     const plans = planPreSeries(runs, "0.4");
     const byId = new Map(plans.map((p) => [p.runId, p]));
