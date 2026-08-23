@@ -2457,15 +2457,27 @@ export class WrathClient {
     if (resolved.note !== undefined) extras.push(resolved.note);
     const from = this.state.self.position?.value;
     const budgetMs = this.remainingBudgetMs();
-    if (from !== undefined && budgetMs !== undefined) {
+    if (from !== undefined) {
       const yards = distance2d(from, point);
       const walkMs = (yards / RUN_SPEED_YPS) * 1000;
-      if (walkMs > budgetMs) {
+      if (budgetMs !== undefined && walkMs > budgetMs) {
         extras.push(
           `this move is ~${Math.round(yards)}y in a straight line — about ${Math.round(walkMs / 1000)}s at a ` +
             `base run speed of ${RUN_SPEED_YPS}yd/s, and the caller had ~${Math.round(budgetMs / 1000)}s of ` +
             `its budget left when it was issued. Awaiting a move this long does not fit one snippet: dispatch ` +
             `it with sdk.moveToAsync(target) or from a background routine, then poll state.self.position.`,
+        );
+      }
+      // A caller-set timeout below the straight-line walk plus mesh slack will
+      // expire on a move that is still going: the path the server walks is
+      // typically 1.5–2× the straight line (fleet-nav-probe-freeplay-sonnet
+      // -20260823-c4: 27/27 timeouts had their verdict arrive afterwards).
+      if (options.timeout !== undefined && options.timeout < walkMs * 1.5) {
+        extras.push(
+          `this move was ~${Math.round(yards)}y in a straight line — about ${Math.round(walkMs / 1000)}s at ` +
+            `${RUN_SPEED_YPS}yd/s — against the ${Math.round(options.timeout / 1000)}s timeout it was given, ` +
+            `and mesh paths are typically 1.5–2× the straight line. A move this long often outlasts a timeout ` +
+            `that short: use the default timeout, or sdk.moveToAsync(target) and poll state.self.position.`,
         );
       }
     }
@@ -2508,6 +2520,25 @@ export class WrathClient {
         },
       );
     } catch (err) {
+      // How far this walk got, shared by both branches below: an abort and a
+      // timeout are both the absence of a verdict, and the caller needs the
+      // same two facts either way.
+      const at = this.state.self.position?.value;
+      const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
+      const remaining = at !== undefined ? distance2d(at, point) : undefined;
+      const progress =
+        covered !== undefined && remaining !== undefined
+          ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
+          : `no position was observed for it (target (${fmtXY(point)}))`;
+      if (err instanceof EventTimeoutError) {
+        // The timeout is not "the move failed": the character is still walking
+        // and the verdict is still coming. Saying so stops the model from
+        // issuing a fresh moveTo that supersedes a move about to succeed.
+        err.message =
+          `${err.message} — ${progress}; the character is still walking and this move's verdict will arrive ` +
+          `later. Mesh paths are typically 1.5–2× the straight line; use the default timeout, or ` +
+          `sdk.moveToAsync(target) and poll state.self.position.`;
+      }
       // An abort mid-walk (the runner abandoning the snippet that issued this
       // move) must not leave the character walking on its own: issue the
       // existing `stop` — no game semantics beyond "stop walking" — and let
@@ -2520,13 +2551,6 @@ export class WrathClient {
         // walk got, and the call that would have survived (ADR-0016 rule 2).
         // `moveAbandon` carries the same sentence structurally, for the sandbox
         // to splice into its abandon notice.
-        const at = this.state.self.position?.value;
-        const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
-        const remaining = at !== undefined ? distance2d(at, point) : undefined;
-        const progress =
-          covered !== undefined && remaining !== undefined
-            ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
-            : `no position was observed for it (target (${fmtXY(point)}))`;
         const note =
           `a moveTo was still walking when this was abandoned: ${progress}. A move that long does not fit one ` +
           `snippet — issue it with sdk.moveToAsync(target), or from a background routine, and poll ` +
