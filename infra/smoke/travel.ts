@@ -21,9 +21,9 @@
  *   leg 4  a car in view flips to `docked` (WB_TRANSPORT_PROGRESS) *before*
  *          boarding succeeds; `arrived` with onTransport.entry in 176080..176085
  *          within 75s of the leg start; the module's audit for this session
- *          holds a `move_transport_leg` with boarding:true; every attempt made
- *          while no car was there answered target_off_mesh / drop, never
- *          `arrived`. Attempts alternate moveTo(point) and moveTo(car.guid).
+ *          holds a `move_transport_leg` with boarding:true; only cars docked
+ *          on the boarding lane are tried (the other track is 60y away across
+ *          the pit). Attempts alternate moveTo(point) and moveTo(car.guid).
  *   leg 5  WB_RIDE_PROGRESS y rises monotonically to > 2400 and the ride
  *          (departure to standstill) takes 50..70s — the upper bound so a car
  *          that rode back is not a pass;
@@ -208,7 +208,9 @@ const LEGS: { name: string; waypoints: Waypoint[] }[] = [
 //   2173  map 0   (-8346.46, 514.03, 96.60)    r10  -> map 369 (68.30, 2490.91, -4.30)  SW -> tram
 //   2166  map 369 (76.03, 10.50, -4.30) box 9.4x19x20.6 -> map 0 (-4838.95, -1318.46, 501.87) tram -> IF
 const TRAM_MAP = 369;
-const IF_PORTAL = { x: -4840.3, y: -1330.5, z: 502.0 };
+// Areatrigger 2175 is centred at (-4840.26, -1330.46, 508.17) r10, six yards above the
+// floor; the mesh ends at (-4842.7, -1329.3), inside the radius. Target the mesh end.
+const IF_PORTAL = { x: -4842.7, y: -1329.3, z: 502.0 };
 const TRAM_IF_PLATFORM = { map: TRAM_MAP, x: 69.25, y: 10.26, z: -4.3 };
 const SW_PORTAL = { x: 78.5, y: 2490.9, z: -4.3 };
 const SW_ARRIVAL = { map: 0, x: -8364.57, y: 535.98, z: 91.8 };
@@ -422,14 +424,19 @@ function carsInView(): UnitView[] {
 
 /** Wait for the next WB_TRANSPORT_PROGRESS that says a car is docked at this end. */
 async function waitForDockedCar(dir: Direction, deadline: number): Promise<UnitView | undefined> {
-  const already = carsInView().find((c) => c.docked === true && c.y !== undefined && dir.atThisEnd(c.y));
+  // Only the boarding lane: the other track's car is "at this end" too, 60y
+  // away across the pit, and every attempt at it is an honest drop /
+  // path_incomplete (12 wasted attempts on 2026-08-23).
+  const lane = dir.boardingPoints[0]!;
+  const onLane = (c: { x?: number; y?: number }) => c.x !== undefined && c.y !== undefined && dir.atThisEnd(c.y) && Math.abs(c.x - lane.x) <= 15;
+  const already = carsInView().find((c) => c.docked === true && onLane(c));
   if (already) return already;
   try {
     const ev = await client.events.waitFor(
       (e) => {
         if (e.opcode !== "WB_TRANSPORT_PROGRESS") return false;
-        const d = e.data as { entry: number; docked?: boolean; pos: { y: number } };
-        return TRAM_CARS.has(d.entry) && d.docked === true && dir.atThisEnd(d.pos.y);
+        const d = e.data as { entry: number; docked?: boolean; pos: { x: number; y: number } };
+        return TRAM_CARS.has(d.entry) && d.docked === true && onLane(d.pos);
       },
       { timeout: Math.max(1, deadline - Date.now()), includeBuffered: false, description: "a tram car docked at this end" },
     );
@@ -446,16 +453,12 @@ interface Boarded {
   at: MovePoint;
   attempts: number;
   waitedMs: number;
-  noCarAttempts: number;
   dockedBeforeBoarding: boolean;
   variant: "point" | "guid";
 }
 
 /**
- * Board a tram car. A first attempt at a boarding point while no car is
- * docked here is the no-car probe: it must answer target_off_mesh / drop,
- * never `arrived` (the rail bed is not walkable, and the drop guard refuses
- * a step onto it). Then every attempt waits for a car's WB_TRANSPORT_PROGRESS
+ * Board a tram car. Every attempt waits for a car's WB_TRANSPORT_PROGRESS
  * to say docked at this end — never a sleep — and alternates
  * moveTo(car position) with moveTo(car.guid). Bounded by BOARDING_BOUND_MS.
  */
@@ -463,7 +466,6 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
   const t0 = Date.now();
   const deadline = t0 + BOARDING_BOUND_MS;
   let attempts = 0;
-  let noCarAttempts = 0;
 
   const check = (r: MoveResult, car: UnitView | undefined, variant: "point" | "guid"): Boarded | undefined => {
     if (r.ok && r.status === "arrived" && r.onTransport) {
@@ -475,33 +477,21 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
         at: r.position,
         attempts,
         waitedMs: Date.now() - t0,
-        noCarAttempts,
         dockedBeforeBoarding: seen?.docked === true,
         variant,
       };
     }
     if (r.ok && r.status === "arrived") {
-      throw new LegFailure(`${leg}: \`arrived\` at ${fmt(r.position)} with no transport under the character (rail bed)${car ? ` while ${car.name ?? car.guid} was docked` : ""}`);
+      if (car) throw new LegFailure(`${leg}: \`arrived\` at ${fmt(r.position)} with no transport under the character while ${car.name ?? car.guid} was docked`);
+      return undefined;
     }
     if (r.ok && r.status === "transferred") throw new LegFailure(`${leg}: boarding attempt was transferred to map ${r.to.map}`);
-    if (!car) {
-      noCarAttempts++;
-      if (!(r.status === "target_off_mesh" || r.status === "drop")) {
-        throw new LegFailure(`${leg}: a no-car attempt answered ${r.status}; only target_off_mesh / drop are honest there`);
-      }
-    }
     return undefined;
   };
 
-  // The no-car probe, only when nothing is docked here right now.
-  if (!carsInView().some((c) => c.docked === true && c.y !== undefined && dir.atThisEnd(c.y))) {
-    attempts++;
-    const point = dir.boardingPoints[0]!;
-    log(`board attempt ${attempts} (no car docked here): ${fmt(point)}`);
-    const done = check(await tryMove(leg, `board attempt ${attempts} (no car)`, point, 30_000), undefined, "point");
-    if (done) return done; // a car turned up under the probe: fine, still aboard
-  }
-
+  // No no-car probe: the mesh has a gradual route down onto the rail bed
+  // (a player can take it too), so "refuses the rail bed" is not a claim the
+  // world supports, and the walk costs 45s of the bound (2026-08-23).
   while (Date.now() < deadline) {
     const car = await waitForDockedCar(dir, deadline);
     if (!car || car.x === undefined || car.y === undefined || car.z === undefined) break;
@@ -518,7 +508,7 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
       includeBuffered: false,
     }).catch(() => {});
   }
-  throw new LegFailure(`${leg}: not aboard within ${secs(BOARDING_BOUND_MS)} (${attempts} attempts, ${noCarAttempts} with no car)`);
+  throw new LegFailure(`${leg}: not aboard within ${secs(BOARDING_BOUND_MS)} (${attempts} attempts)`);
 }
 
 /** The module's audit rows for this session with the given op. */
@@ -626,7 +616,7 @@ async function crossing(rideNo: number, dir: Direction, gated: boolean): Promise
     log(`  cars in view: ${cars.map((c) => `${c.name ?? "?"}#${c.entry} ${c.goType ?? "?"} docked=${c.docked} y=${c.y?.toFixed(0)}`).join("; ") || "none"}`);
     boarded = await board(leg, dir, rideNo % 2 === 0 ? "guid" : "point");
     report.boarding = boarded;
-    log(`  aboard ${boarded.entry} (guid ${boarded.guid}) at ${fmt(boarded.at)} via ${boarded.variant}: ${boarded.attempts} attempts, ${boarded.noCarAttempts} with no car, waited ${secs(boarded.waitedMs)}, docked observed before boarding: ${boarded.dockedBeforeBoarding}`);
+    log(`  aboard ${boarded.entry} (guid ${boarded.guid}) at ${fmt(boarded.at)} via ${boarded.variant}: ${boarded.attempts} attempts, waited ${secs(boarded.waitedMs)}, docked observed before boarding: ${boarded.dockedBeforeBoarding}`);
     if (gated) {
       if (boarded.waitedMs > BOARDING_BOUND_MS) throw new LegFailure(`${leg}: boarding took ${secs(boarded.waitedMs)}, bound is ${secs(BOARDING_BOUND_MS)}`);
       if (!boarded.dockedBeforeBoarding) throw new LegFailure(`${leg}: the car was not observed docked (WB_TRANSPORT_PROGRESS) before boarding succeeded`);
@@ -833,7 +823,7 @@ try {
     const b = r.boarding;
     log(
       `ride ${r.ride} ${r.direction}: ${legs || "(no leg completed)"}` +
-        (b ? `; boarding: ${b.attempts} attempts (${b.noCarAttempts} no-car), waited ${secs(b.waitedMs)}, via ${b.variant}, entry ${b.entry}, docked-before ${b.dockedBeforeBoarding}` : "; boarding: not reached") +
+        (b ? `; boarding: ${b.attempts} attempts, waited ${secs(b.waitedMs)}, via ${b.variant}, entry ${b.entry}, docked-before ${b.dockedBeforeBoarding}` : "; boarding: not reached") +
         (r.rideMs !== undefined ? `; ride ${secs(r.rideMs)}` : "; ride: not completed"),
     );
   }
