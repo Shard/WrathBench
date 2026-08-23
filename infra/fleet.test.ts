@@ -982,7 +982,7 @@ describe("pool and queue (ADR-0031)", () => {
       "fleet-ox-long-ox-alpha-20260101-r2",
       "fleet-ox-long-ox-alpha-20260101-r3",
     ]);
-    expect(filled[0]).toMatchObject({ episode: "e360", account: "RUNNER2", maxToolCalls: 2500, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null } });
+    expect(filled[0]).toMatchObject({ episode: "e360", account: "RUNNER2", maxToolCalls: 2000, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null } });
     expect((filled[0] as Record<string, unknown>)["tiers"]).toBeUndefined();
     expect(laneArgv(jobLane(job({ ref: "ox" }), roster, "RUNNER", "20260101"), { stamp: "20260101", until: undefined })).toContain("--loop");
     expect(laneArgv(l, { stamp: "20260101", until: undefined })).not.toContain("--loop");
