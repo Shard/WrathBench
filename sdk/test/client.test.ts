@@ -7,6 +7,7 @@ import {
   attackStopped,
   BACKPACK_SLOT,
   chatEcho,
+  corpseQuery,
   corpseReclaimDelay,
   deathReleaseCleared,
   CREATURE_ENTRY,
@@ -49,6 +50,7 @@ import {
   questRewarded,
   requestItems,
   SELF_GUID,
+  selfArrived,
   selfCreate,
   selfHealth,
   selfProgress,
@@ -2389,7 +2391,7 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     await stub.stop();
   });
 
-  test("a silent refusal is re-sent, and reported as not_reclaimed with the three reasons", async () => {
+  test("a silent refusal with nothing else observed is re-sent, and reported once as still_ghost", async () => {
     const stub = startStub({ onConnect: () => deadWorld(1) });
     const client = await inWorld(stub);
     const result = await client.reclaimCorpse(undefined, { timeout: 700, attemptTimeout: 150 });
@@ -2400,6 +2402,70 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     expect(result.attempts).toBeGreaterThan(1);
     expect(result.hint).toContain("39y");
     expect(result.hint).toContain("spiritHealerActivate");
+    expect(result.hint).not.toMatch(/\d+ reclaims went out/);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a ghost far from its corpse is told too_far with the distance, the radius and the healer's price", async () => {
+    // Died at the create-block position, released 387y away; the corpse query
+    // confirms the corpse at the death spot. Level 3: no sickness at that level.
+    const stub = startStub({
+      onConnect: () =>
+        deadWorld(1, [
+          corpseQuery(91, { map: 0, x: -1234.5, y: 987.25, z: 42.125 }),
+          selfArrived(92, { x: -1234.5 + 387, y: 987.25, z: 42.125 }),
+        ]),
+    });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse(undefined, { timeout: 500, attemptTimeout: 120 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("too_far");
+    expect(result.distance).toBe(387);
+    expect(result.radius).toBe(39);
+    expect(result.corpse?.source).toBe("corpse_query");
+    expect(result.hint).toContain("387y");
+    expect(result.hint).toContain("moveTo(state.self.corpse.value)");
+    expect(result.hint).toContain("25% durability");
+    expect(result.hint).toContain("no resurrection sickness at your level");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a corpse on another map is wrong_map, and no corpse at all is no_corpse", async () => {
+    const other = startStub({
+      onConnect: () => deadWorld(1, [corpseQuery(91, { map: 1, x: 10, y: 10, z: 10 })]),
+    });
+    const c1 = await inWorld(other);
+    const r1 = await c1.reclaimCorpse(undefined, { timeout: 400, attemptTimeout: 120 });
+    if (r1.ok) throw new Error("unreachable");
+    expect(r1.reason).toBe("wrong_map");
+    expect(r1.hint).toContain("map 1");
+    c1.close();
+    await other.stop();
+
+    const none = startStub({ onConnect: () => deadWorld(1, [corpseQuery(91)]) });
+    const c2 = await inWorld(none);
+    const r2 = await c2.reclaimCorpse(undefined, { timeout: 400, attemptTimeout: 120 });
+    if (r2.ok) throw new Error("unreachable");
+    expect(r2.reason).toBe("no_corpse");
+    expect(r2.hint).toContain("spiritHealerActivate");
+    c2.close();
+    await none.stop();
+  });
+
+  test("a delay still running after the dispatches is delay_not_elapsed with the seconds left", async () => {
+    // Delay announced 29s ago of 30s: the first pass waits ~1s, but the budget
+    // is shorter, so one attempt goes out at most and the delay is still the cause.
+    const stub = startStub({
+      onConnect: () => deadWorld(1, [corpseReclaimDelay(30_000, 91, Date.now() - 29_700)]),
+    });
+    const client = await inWorld(stub);
+    const result = await client.reclaimCorpse(undefined, { timeout: 200, attemptTimeout: 50 });
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toBe("delay_not_elapsed");
+    expect(result.secondsLeft).toBe(1);
     client.close();
     await stub.stop();
   });

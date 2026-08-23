@@ -42,6 +42,7 @@ import {
   type ActionResponse,
   type CharacterDeleteResponse,
   type CorpseReclaimDelayData,
+  type CorpseQueryData,
   type CreateSessionRequest,
   type DeathReleaseLocData,
   type DeleteSessionResponse,
@@ -86,6 +87,7 @@ import {
   questGiverStatusName,
   StateCache,
   type ChatEntry,
+  type CorpseLocation,
   type NearbyObject,
   type Point3,
   type QuestLogEntry,
@@ -1381,10 +1383,54 @@ export type ReclaimCorpseResult =
       readonly waitedMs: number;
       readonly delayMs: number | undefined;
       readonly attempts: number;
-      /** Machine-readable: `not_dead`, `not_released`, `still_ghost`, `no_observation`. */
-      readonly reason: string;
+      /**
+       * Exactly one cause, the most specific the observations support:
+       * `not_dead`, `not_released` (pre-flight); `too_far` (with `distance`
+       * and `radius`), `delay_not_elapsed` (with `secondsLeft`), `wrong_map`,
+       * `no_corpse` (the server said there is none), else `still_ghost`; and
+       * `no_observation` for `unconfirmed`.
+       */
+      readonly reason: ReclaimCorpseReason;
+      /** Straight-line yards from the ghost to the corpse, for `too_far`. */
+      readonly distance?: number;
+      /** The reclaim radius the core enforces (`CORPSE_RECLAIM_RADIUS`), for `too_far`. */
+      readonly radius?: number;
+      /** Whole seconds of the reclaim delay still to run, for `delay_not_elapsed`. */
+      readonly secondsLeft?: number;
+      /** Where the corpse is, when known (`state.self.corpse`). */
+      readonly corpse?: CorpseLocation;
       readonly hint: string;
     };
+
+export type ReclaimCorpseReason =
+  | "not_dead"
+  | "not_released"
+  | "too_far"
+  | "delay_not_elapsed"
+  | "wrong_map"
+  | "no_corpse"
+  | "still_ghost"
+  | "no_observation";
+
+/** `CORPSE_RECLAIM_RADIUS` in the core: a reclaim further than this is dropped silently. */
+export const CORPSE_RECLAIM_RADIUS = 39;
+
+/**
+ * The Spirit Healer's price, as a rule rather than a table: every equipped
+ * item loses 25% durability, and from level 11 the character gets resurrection
+ * sickness — one minute per level above 10, capped at ten minutes from level
+ * 20 (a level-10-or-lower character gets none). Paraphrased game rule; no
+ * client text.
+ */
+export function spiritHealerCost(level: number | undefined): string {
+  const sickness =
+    level === undefined
+      ? "resurrection sickness from level 11 (1 min per level above 10, 10 min from level 20)"
+      : level <= 10
+        ? "no resurrection sickness at your level"
+        : `${Math.min(10, level - 10)} min of resurrection sickness`;
+  return `25% durability off every equipped item and ${sickness}`;
+}
 
 export interface RawActionResponse extends ActionResponse {
   /** The opcode name as sent. */
@@ -2096,16 +2142,7 @@ export class WrathClient {
 
     /** Own health as the cache last saw it: 0 = dead, 1 = a released ghost, >1 = alive. */
     const health = (): number | undefined => this.state.self.health?.value.current;
-    const delayEvent = (): { delayMs: number; ts: number } | undefined => {
-      const events = this.events.recent();
-      for (let i = events.length - 1; i >= 0; i--) {
-        const e = events[i] as StreamEvent;
-        if (isEvent(e, "SMSG_CORPSE_RECLAIM_DELAY") && !isDecodeError(e.data)) {
-          return { delayMs: (e.data as CorpseReclaimDelayData).delayMs, ts: e.ts };
-        }
-      }
-      return undefined;
-    };
+    const delayEvent = (): { delayMs: number; ts: number } | undefined => this.latestReclaimDelay();
     const announced = delayEvent();
     const delayMs = announced?.delayMs;
 
@@ -2125,7 +2162,7 @@ export class WrathClient {
         reason: "not_released",
         hint:
           "your spirit has not been released, so there is no corpse to run back to — call sdk.repop() " +
-          "first, walk the ghost to where you died, then reclaim",
+          "first, then moveTo(state.self.corpse.value) as a ghost and reclaim",
       };
     }
     if (before !== undefined && before > 1) {
@@ -2185,24 +2222,8 @@ export class WrathClient {
     }
 
     if (alive()) return { ok: true, status: "reclaimed", ...facts(attempts) };
-    if (attempts === 0) {
-      // The whole budget went on a delay that had not finished, so nothing was
-      // ever sent. Say how much of it is left rather than blaming the corpse.
-      const latest = delayEvent();
-      const left = latest === undefined ? undefined : Math.max(0, latest.ts + latest.delayMs - Date.now());
-      return {
-        ok: false,
-        status: "not_reclaimed",
-        ...facts(0),
-        reason: "delay_not_elapsed",
-        hint:
-          `the server's corpse reclaim delay outlasted this call's ${Math.round((options.timeout ?? 25_000) / 1000)}s budget` +
-          `${left === undefined ? "" : ` (~${Math.ceil(left / 1000)}s still to run)`} — nothing was sent; ` +
-          "call it again, or pass a larger { timeout } from a background routine",
-      };
-    }
     const after = health();
-    if (after === undefined) {
+    if (attempts > 0 && after === undefined) {
       return {
         ok: false,
         status: "unconfirmed",
@@ -2213,17 +2234,111 @@ export class WrathClient {
           "your own health has not been seen at all, so re-read state.self.health before trying again",
       };
     }
+    return { ok: false, status: "not_reclaimed", ...facts(attempts), ...this.reclaimRefusal(attempts, options) };
+  }
+
+  /**
+   * Why a reclaim was refused, as one reason. The core drops the packet
+   * silently in every case, so the cause is read from what a client also has:
+   * its own corpse query answer (`state.self.corpse`), the release loc, and
+   * the announced reclaim delay. Checked most-specific first so the verdict
+   * names the thing to fix rather than the number of packets sent.
+   */
+  private reclaimRefusal(
+    attempts: number,
+    options: ReclaimCorpseOptions,
+  ): {
+    reason: ReclaimCorpseReason;
+    distance?: number;
+    radius?: number;
+    secondsLeft?: number;
+    corpse?: CorpseLocation;
+    hint: string;
+  } {
+    const corpse = this.state.self.corpse?.value;
+    const pos = this.state.self.position?.value;
+    const level = this.state.self.level?.value;
+    const healerOption =
+      "or spiritHealerActivate(guid) at the graveyard's Spirit Healer (state.units({ name: \"Spirit Healer\" }) once in view; " +
+      `state.self.graveyard.value is where it stands), which costs ${spiritHealerCost(level)}`;
+
+    // The server's own "no corpse": the most recent corpse query answered found: false.
+    let queryAnsweredNone = false;
+    const events = this.events.recent();
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i] as StreamEvent;
+      if (!isEvent(e, "MSG_CORPSE_QUERY") || isDecodeError(e.data)) continue;
+      queryAnsweredNone = (e.data as CorpseQueryData).found === false;
+      break;
+    }
+    if (corpse === undefined && queryAnsweredNone) {
+      return {
+        reason: "no_corpse",
+        hint:
+          "the server says you have no corpse to reclaim (it expired, or a Spirit Healer already took it) — " +
+          "the only way back is spiritHealerActivate(guid) at the graveyard's Spirit Healer, which costs " +
+          spiritHealerCost(level),
+      };
+    }
+    if (corpse !== undefined && pos !== undefined && corpse.map !== pos.map) {
+      return {
+        reason: "wrong_map",
+        corpse,
+        hint:
+          `your corpse is on map ${corpse.map} and you are on map ${pos.map}; a reclaim only works on the corpse's map — ` +
+          `travel there (moveTo(state.self.corpse.value) once on that map) and reclaim, ${healerOption}`,
+      };
+    }
+    if (corpse !== undefined && pos !== undefined) {
+      const distance = Math.round(distance2d(pos, corpse));
+      if (distance > CORPSE_RECLAIM_RADIUS) {
+        return {
+          reason: "too_far",
+          distance,
+          radius: CORPSE_RECLAIM_RADIUS,
+          corpse,
+          hint:
+            `you are ${distance}y from your corpse at (${fmtXY(corpse)}) and a reclaim only works within ${CORPSE_RECLAIM_RADIUS}y — ` +
+            `await sdk.moveTo(state.self.corpse.value) as a ghost, then reclaim again (no durability loss, no sickness), ${healerOption}`,
+        };
+      }
+    }
+    const latest = this.latestReclaimDelay();
+    const left = latest === undefined ? 0 : Math.max(0, latest.ts + latest.delayMs - Date.now());
+    if (left > 0) {
+      const secondsLeft = Math.ceil(left / 1000);
+      return {
+        reason: "delay_not_elapsed",
+        secondsLeft,
+        corpse,
+        hint:
+          attempts === 0
+            ? `the server's corpse reclaim delay outlasted this call's ${Math.round((options.timeout ?? 25_000) / 1000)}s budget ` +
+              `(~${secondsLeft}s still to run) — nothing was sent; call it again, or pass a larger { timeout } from a background routine`
+            : `the reclaim delay has ~${secondsLeft}s still to run, so the core dropped the reclaim — call it again after that`,
+      };
+    }
     return {
-      ok: false,
-      status: "not_reclaimed",
-      ...facts(attempts),
       reason: "still_ghost",
+      corpse,
       hint:
-        `${attempts} reclaim${attempts === 1 ? "" : "s"} went out and you are still a ghost. The core drops ` +
-        "the packet without answering when you are further than ~39y from your corpse, when the reclaim " +
-        "delay has not elapsed, or when the corpse is on another map — walk to where you died and call it " +
-        "again, or use spiritHealerActivate(guid) at a Spirit Healer if the corpse is unreachable",
+        "you are still a ghost and nothing observed explains the refusal" +
+        (corpse === undefined ? " (no corpse position has been observed yet — check state.self.corpse)" : "") +
+        ` — the core drops a reclaim further than ${CORPSE_RECLAIM_RADIUS}y from the corpse, before the delay elapses, ` +
+        `or on another map; stand on the corpse and call it again, ${healerOption}`,
     };
+  }
+
+  /** The most recent `SMSG_CORPSE_RECLAIM_DELAY` in the buffer: the server's word on when a reclaim becomes legal. */
+  private latestReclaimDelay(): { delayMs: number; ts: number } | undefined {
+    const events = this.events.recent();
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i] as StreamEvent;
+      if (isEvent(e, "SMSG_CORPSE_RECLAIM_DELAY") && !isDecodeError(e.data)) {
+        return { delayMs: (e.data as CorpseReclaimDelayData).delayMs, ts: e.ts };
+      }
+    }
+    return undefined;
   }
 
   /** `sleep`, bounded by the ambient signal: rejects with `EventAbortedError` when the snippet is abandoned. */

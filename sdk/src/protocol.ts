@@ -1225,6 +1225,23 @@ export type DeathReleaseLocData = z.infer<typeof deathReleaseLocDataSchema>;
 export const corpseReclaimDelayDataSchema = z.looseObject({ delayMs: z.number() });
 export type CorpseReclaimDelayData = z.infer<typeof corpseReclaimDelayDataSchema>;
 
+/**
+ * The server's answer to the ghost's `MSG_CORPSE_QUERY` (the module asks once
+ * per death on the client's behalf; PROTOCOL.md "Death"). Position fields only
+ * when `found`; `map`/x/y/z is where a client draws the corpse marker and
+ * `corpseMap` the map the corpse is on — they differ only for a corpse inside
+ * a dungeon, where the marker sits on the entrance.
+ */
+export const corpseQueryDataSchema = z.looseObject({
+  found: z.boolean(),
+  map: z.number().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  z: z.number().optional(),
+  corpseMap: z.number().optional(),
+});
+export type CorpseQueryData = z.infer<typeof corpseQueryDataSchema>;
+
 export const charDeleteDataSchema = z.looseObject({ result: z.number() });
 export type CharDeleteData = z.infer<typeof charDeleteDataSchema>;
 
@@ -1334,6 +1351,7 @@ export const eventDataSchemas = {
   SMSG_DEATH_RELEASE_LOC: deathReleaseLocDataSchema,
   SMSG_CORPSE_RECLAIM_DELAY: corpseReclaimDelayDataSchema,
   SMSG_DURABILITY_DAMAGE_DEATH: emptyDataSchema,
+  MSG_CORPSE_QUERY: corpseQueryDataSchema,
   // session
   SMSG_CHAR_DELETE: charDeleteDataSchema,
   // creature movement
