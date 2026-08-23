@@ -1,7 +1,12 @@
 {
   "_notes": [
     "Fleet config (ADR-0034): one concept, the JOB. Hot-reloaded every 60s; history in docs/worklogs.",
-    "accounts.pool: accounts the pool and the policy may use, in preference order. Never PROBE, never SMOKE*.",
+    "accounts.pool: accounts the pool and the policy may use, in preference order. FREE models only. Never PROBE, never SMOKE*.",
+    "accounts.paid: the paid class (ADR-0034 amendment 2026-08-23). A paid pick lands only here, never in the pool;",
+    "  with policy.paid present and this list empty, paid picks are HELD (\"no paid account configured\"), not spilled.",
+    "  Coexistence: listing an account says who may SCHEDULE it, `enabled` says who HOLDS it — only an enabled job holds.",
+    "  So a DISABLED pinned job may park on a listed account (SHAKEOUT2 below); an enabled one may not.",
+    "  The split governs the POLICY: a manual queue job with no account draws from the pool whatever its billing.",
     "roster: name -> roster entry (exact run-roster schema; may carry objective/watchdogs/maxToolCalls/wikiCoords).",
     "  Optional: tiers (manual FORCE, normally absent), runsPerEpisode { e90, e360 } (per-entry target).",
     "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <driver>: n } caps streams per driver.",
@@ -38,7 +43,8 @@
     "deployTimeoutMs": 600000
   },
   "accounts": {
-    "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"]
+    "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER4", "RUNNER5", "RUNNER6"],
+    "paid": ["SHAKEOUT2"]
   },
   "roster": {
     "nav-probe": {

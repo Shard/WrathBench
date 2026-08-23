@@ -297,8 +297,16 @@ export interface FleetJob {
 export interface FleetAccounts {
   /** account -> the pinned job on it. Derived from the jobs, never authored. */
   pinned: Record<string, string>;
-  /** free-for-the-pool accounts, in preference order */
+  /** free-for-the-pool accounts, in preference order. Free models only. */
   pool: string[];
+  /**
+   * The paid class (ADR-0034 amendment 2026-08-23): accounts a PAID policy
+   * pick may use, in preference order. A paid pick lands here and nowhere
+   * else; the pool stays free-only. Empty with `policy.paid` present means
+   * paid picks are held ("no paid account configured") rather than spilling
+   * into the pool.
+   */
+  paid: string[];
 }
 
 export interface FleetConfig {
@@ -319,6 +327,16 @@ export interface FleetConfig {
   maxConcurrent: Record<string, number>;
   /** Lane names read from a legacy `lanes` list this load, for the one-line notice. */
   legacyLanes: string[];
+}
+
+/**
+ * The accounts a paid pick may use, or undefined when this file has no paid
+ * class at all (pre-split behaviour: paid picks share the pool). A `policy.paid`
+ * block with no `accounts.paid` is the configured-but-empty case: the split is
+ * on and every paid pick is held, rather than spilling into the free pool.
+ */
+export function paidPoolOf(config: Pick<FleetConfig, "accounts" | "policy">): string[] | undefined {
+  return config.accounts.paid.length > 0 || config.policy.paid !== null ? config.accounts.paid : undefined;
 }
 
 /** The jobs pinned to an account, in file order. */
@@ -605,8 +623,15 @@ export function parseFleet(raw: unknown): FleetConfig {
   }
   for (const job of jobs) {
     if (job.account === undefined) continue;
-    if (accounts.pool.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-      fail(`accounts.pool: ${job.account} is also pinned to job ${job.name}`);
+    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS
+    // it, and only an enabled job holds. So a disabled pinned job may park on
+    // a listed account (the burn switch on the paid account); an enabled one
+    // may not, or the pin and the scheduler would fight over the session.
+    if (job.enabled && accounts.pool.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
+      fail(`accounts.pool: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
+    }
+    if (job.enabled && accounts.paid.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
+      fail(`accounts.paid: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
     }
     // Derived, enabled first so a disabled stand-in on a running job's
     // account (the burn switch) never hides the live one.
@@ -624,6 +649,9 @@ export function parseFleet(raw: unknown): FleetConfig {
       if (clash !== undefined) fail(`preflight account ${account} is also job ${clash}'s — the gate needs its own account`);
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
         fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
+      }
+      if (accounts.paid.some((a) => a.toUpperCase() === account.toUpperCase())) {
+        fail(`preflight account ${account} is also in accounts.paid — the gate needs its own account`);
       }
     }
   }
@@ -713,9 +741,9 @@ export function legacyJob(lane: FleetLane): FleetJob {
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
-  if (raw === undefined) return { pinned: {}, pool: [] };
+  if (raw === undefined) return { pinned: {}, pool: [], paid: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: accounts must be a JSON object");
-  const o = raw as { pinned?: unknown; pool?: unknown };
+  const o = raw as { pinned?: unknown; pool?: unknown; paid?: unknown };
   // `pinned` is legacy input (account -> lane/job name): accepted so the
   // pool-era file loads, cross-checked against the jobs, never authored anew.
   const pinned: Record<string, string> = {};
@@ -746,7 +774,17 @@ function parseAccounts(raw: unknown): FleetAccounts {
       pool.push(a);
     }
   }
-  return { pinned, pool };
+  const paid: string[] = [];
+  if (o.paid !== undefined) {
+    if (!Array.isArray(o.paid)) fail("accounts.paid must be an array of account names");
+    for (const a of o.paid as unknown[]) {
+      if (typeof a !== "string" || a.length === 0) fail("accounts.paid: entries are account names");
+      if (paid.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.paid: ${a} listed twice`);
+      if (pool.some((p) => p.toUpperCase() === a.toUpperCase())) fail(`accounts.paid: ${a} is also in accounts.pool — an account is one class or the other`);
+      paid.push(a);
+    }
+  }
+  return { pinned, pool, paid };
 }
 
 function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
@@ -1016,6 +1054,12 @@ export interface PolicyPick {
 export function planPolicy(opts: {
   states: readonly ModelState[];
   pool: string[];
+  /**
+   * `accounts.paid`, when the paid class is configured (`paidPoolOf`). Paid
+   * picks draw from here and never from `pool`; absent is the pre-split
+   * behaviour (paid picks share the pool), an empty array holds them.
+   */
+  paidPool?: string[];
   running: Map<string, string>;
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
@@ -1033,14 +1077,22 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   if (opts.queuePlan.waiting.length > 0) return { picks: [], held: [] };
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
   const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  if (free.length === 0) return { picks: [], held: [] };
+  const split = opts.paidPool !== undefined;
+  const freePaid = (opts.paidPool ?? []).filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
+  // Nothing to place on, and nothing to say. A configured-but-empty paid list
+  // still has held picks to report, so it does not short-circuit here.
+  if (free.length === 0 && freePaid.length === 0 && !(split && opts.paidPool!.length === 0)) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
   const wrap = (pick: NextJob): PolicyPick => ({ job: policyJob(pick), account: pick.account, why: pick.why });
   const billingOf = new Map(opts.states.map((s) => [s.name, s.billing]));
+  const isPaid = (name: string): boolean => split && billingOf.get(name) === "paid";
+  /** The paid accounts still free once the picks made so far have taken theirs. */
+  const paidLeft = (also: readonly NextJob[]): string[] => freePaid.filter((a) => !also.some((p) => isPaid(p.name) && p.account === a));
   const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
     planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
+      ...(split ? { paidAccounts: paidLeft(also) } : {}),
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
     });
   if (opts.concurrency === undefined) {
@@ -1078,8 +1130,12 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     states = states.filter((s) => !passed.has(s.name));
     accounts = free.filter((a) => !out.some((p) => p.account === a));
   }
-  // Accounts in preference order over the final picks, as an uncapped round would give.
-  return { picks: out.map((pick, i) => wrap({ ...pick, account: free[i]! })), held };
+  // Accounts in preference order over the final picks, as an uncapped round
+  // would give — each class over its own list, so a paid pick keeps a paid
+  // account and the pool rows stay free-only.
+  let fi = 0;
+  let pi = 0;
+  return { picks: out.map((pick) => wrap({ ...pick, account: (isPaid(pick.name) ? freePaid[pi++] : free[fi++])! })), held };
 }
 
 /**
@@ -1222,7 +1278,9 @@ export function planResumes(opts: {
   const takenAccounts = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const takenJobs = new Set(opts.running.keys());
   const policyNames = policyRefs(config);
-  const poolSet = new Set(config.accounts.pool.map((a) => a.toUpperCase()));
+  // Either scheduled class may carry a resume: a paid run comes back on its
+  // paid account, exactly as a pool run comes back on its pool account.
+  const poolSet = new Set([...config.accounts.pool, ...config.accounts.paid].map((a) => a.toUpperCase()));
   const paused = opts.runs.filter((f) => f.pause !== null && inSeries(f, config.policy)).sort((a, b) => b.pause!.at - a.pause!.at);
   const seenModel = new Set<string>();
   for (const f of paused) {
@@ -1285,7 +1343,7 @@ export function planResumes(opts: {
       continue;
     }
     if (job.account === undefined && !poolSet.has(account.toUpperCase())) {
-      list(`account ${account} is not in the pool — resume by hand`);
+      list(`account ${account} is in neither accounts.pool nor accounts.paid — resume by hand`);
       continue;
     }
     if (takenJobs.has(job.name)) continue; // its roster is running; it handles its own pause
@@ -1836,8 +1894,11 @@ export interface JobRow {
 
 /** What an account is doing right now, for the accounts table. */
 export type AccountRow =
-  | { account: string; kind: "pinned" | "pool"; job: JobRow }
-  | { account: string; kind: "pinned" | "pool"; free: true; note?: string };
+  | { account: string; kind: AccountKind; job: JobRow }
+  | { account: string; kind: AccountKind; free: true; note?: string };
+
+/** Which class an account row belongs to: pinned to a job, the free pool, or the paid class. */
+export type AccountKind = "pinned" | "pool" | "paid";
 
 const fmtElapsed = (ms: number): string => {
   const m = Math.floor(ms / 60_000);
@@ -1846,11 +1907,13 @@ const fmtElapsed = (ms: number): string => {
 
 /**
  * --status / --dry-run: one row per account — pinned first, then the pool in
- * preference order — with the job on it (model, episode, run id, level/xp,
- * elapsed) or free/cooling. Pure over rows the caller assembled.
+ * preference order, then the paid class — with the job on it (model, episode,
+ * run id, level/xp, elapsed) or free/cooling. Pure over rows the caller
+ * assembled; a paid row has the same shape as a pool one.
  */
 export function formatAccounts(rows: readonly AccountRow[]): string[] {
-  const out: string[] = [`accounts: ${rows.filter((r) => r.kind === "pinned").length} pinned, ${rows.filter((r) => r.kind === "pool").length} pool`];
+  const n = (k: AccountKind): number => rows.filter((r) => r.kind === k).length;
+  const out: string[] = [`accounts: ${n("pinned")} pinned, ${n("pool")} pool${n("paid") > 0 ? `, ${n("paid")} paid` : ""}`];
   const w = Math.max(9, ...rows.map((r) => r.account.length));
   for (const r of rows) {
     const head = `  ${r.account.padEnd(w)} ${r.kind.padEnd(6)} `;
@@ -1917,6 +1980,19 @@ export function formatModels(
 /** `--dry-run`: the picks the policy held back and why. Pure. */
 export function formatHeld(held: readonly HeldPick[]): string[] {
   return held.map((h) => `  ${h.name}: HELD — ${h.episode} wanted, ${h.why}`);
+}
+
+/**
+ * One line about the paid class when there is something to say: a paid policy
+ * with no account to run it on is a config gap the operator has to close, so
+ * --status names it rather than leaving the picks silently held.
+ */
+export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy">): string[] {
+  if (config.policy.paid === null) return config.accounts.paid.length === 0 ? [] : [`paid class: ${config.accounts.paid.join(", ")} (no policy.paid block — no cap, no paid targets)`];
+  if (config.accounts.paid.length === 0) {
+    return ["paid class: NO PAID ACCOUNT CONFIGURED — paid picks are held, never spilled into the pool; add one to accounts.paid"];
+  }
+  return [`paid class: ${config.accounts.paid.join(", ")} — paid picks only, at most ${config.policy.paid.maxConcurrent} in flight; the pool stays free-only`];
 }
 
 /** --status / --dry-run: the manual queue, only when there is one. Pure. */
@@ -2042,6 +2118,7 @@ interface FleetState {
   accounts?: {
     pinned: Record<string, string>;
     pool: Record<string, string | null>;
+    paid?: Record<string, string | null>;
   };
   /** The manual queue's shape, present only when the file has one. */
   queue?: {
@@ -2116,6 +2193,8 @@ let configLoadedAt: number | undefined;
 interface PoolView {
   pinned: Record<string, string>;
   pool: string[];
+  /** `accounts.paid`: the paid class, reported so --status can render it with the fleet up. */
+  paid: string[];
   /** job name -> the account it is running on (pinned or pool) */
   assigned: Map<string, string>;
   /** job name -> the job, for every job with a live process */
@@ -2154,6 +2233,7 @@ function writeState(
           accounts: {
             pinned: pool.pinned,
             pool: Object.fromEntries(pool.pool.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
+            paid: Object.fromEntries(pool.paid.map((a) => [a, [...pool.assigned].find(([, acct]) => acct === a)?.[0] ?? null])),
           },
           ...(pool.queue.length > 0
             ? {
@@ -2302,7 +2382,7 @@ function printLiveRuns(configPath: string): number {
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a lane's does.
   const accounts = [
-    ...new Set([...Object.keys(config.accounts.pinned), ...config.accounts.pool, ...preflightAccounts(config.preflight), "PROBE"]),
+    ...new Set([...Object.keys(config.accounts.pinned), ...config.accounts.pool, ...config.accounts.paid, ...preflightAccounts(config.preflight), "PROBE"]),
   ];
   let live = 0;
   for (const account of accounts) {
@@ -2449,10 +2529,17 @@ function printStatus(configPath: string): void {
   };
   const byAccount = new Map<string, { name: string; j: ReturnType<typeof liveJobsFromState> extends Map<string, infer V> ? V : never }>();
   for (const [name, j] of live) byAccount.set(j.account.toUpperCase(), { name, j });
-  const pinnedAccounts = config !== undefined ? Object.keys(config.accounts.pinned) : Object.keys(state?.accounts?.pinned ?? {});
   const poolAccounts = config !== undefined ? config.accounts.pool : Object.keys(state?.accounts?.pool ?? {});
+  const paidAccounts = config !== undefined ? config.accounts.paid : Object.keys(state?.accounts?.paid ?? {});
+  // A disabled pinned job may park on a listed account (the coexistence rule),
+  // so an account can be both pinned and listed: it belongs to the class that
+  // schedules it, and its row carries the parked job as the note.
+  const listed = new Set([...poolAccounts, ...paidAccounts].map((a) => a.toUpperCase()));
+  const pinnedAccounts = (config !== undefined ? Object.keys(config.accounts.pinned) : Object.keys(state?.accounts?.pinned ?? {})).filter(
+    (a) => !listed.has(a.toUpperCase()),
+  );
   const rows: AccountRow[] = [];
-  for (const [kind, accounts] of [["pinned", pinnedAccounts], ["pool", poolAccounts]] as const) {
+  for (const [kind, accounts] of [["pinned", pinnedAccounts], ["pool", poolAccounts], ["paid", paidAccounts]] as const) {
     for (const account of accounts) {
       const on = byAccount.get(account.toUpperCase());
       if (on !== undefined) {
@@ -2474,7 +2561,7 @@ function printStatus(configPath: string): void {
           `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}` +
           `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +
           `${resumePlan.resume.some((r) => r.runId === pausedHere.runId) ? ", resumes on the next tick" : fleetUp ? "" : ", resumes when the fleet starts"}`;
-      } else if (kind === "pinned" && config !== undefined) {
+      } else if ((kind === "pinned" || kind === "paid") && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {
           note = job.enabled
@@ -2486,6 +2573,7 @@ function printStatus(configPath: string): void {
     }
   }
   for (const line of formatAccounts(rows)) console.log(`  ${line}`);
+  if (config !== undefined) for (const line of formatPaidClass(config)) console.log(`  ${line}`);
 
   // (c) models: the projection, every roster entry, with why (not) schedulable.
   if (config !== undefined && Object.keys(config.roster).length > 0) {
@@ -2570,9 +2658,11 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
   const driverCount = new Map<string, number>();
   for (const r of runningRefs) driverCount.set(driverOf(config.roster, r), (driverCount.get(driverOf(config.roster, r)) ?? 0) + 1);
+  const paidPool = paidPoolOf(config);
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
+    ...(paidPool !== undefined ? { paidPool } : {}),
     running,
     held,
     queuePlan: queue,
@@ -2614,12 +2704,13 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       ...(job.extra !== undefined ? { extra: job.extra } : {}),
     };
   };
-  const resumeRow = (r: ResumePlan, kind: "pinned" | "pool"): AccountRow => ({
+  const resumeRow = (r: ResumePlan, kind: AccountKind): AccountRow => ({
     account: r.account,
     kind,
     job: { ...planned(r.job, jobLane(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
   });
-  for (const account of Object.keys(config.accounts.pinned)) {
+  const listedInDryRun = new Set([...config.accounts.pool, ...config.accounts.paid].map((a) => a.toUpperCase()));
+  for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
     const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
     const holder = held(account);
     const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
@@ -2630,18 +2721,21 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       rows.push({ account, kind: "pinned", free: true, note: holder !== undefined ? `held by run ${holder}` : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn` });
     }
   }
-  for (const account of config.accounts.pool) {
-    const q = plan.queue.assign.find((a) => a.account === account);
-    const pp = plan.policy.find((a) => a.account === account);
-    const holder = held(account);
-    const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
-    if (rs !== undefined) rows.push(resumeRow(rs, "pool"));
-    else if (q !== undefined) rows.push({ account, kind: "pool", job: planned(q.job, jobLane(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
-    else if (pp !== undefined) rows.push({ account, kind: "pool", job: { ...planned(pp.job, jobLane(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
-    else rows.push({ account, kind: "pool", free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
+  for (const [kind, accounts] of [["pool", config.accounts.pool], ["paid", config.accounts.paid]] as const) {
+    for (const account of accounts) {
+      const q = plan.queue.assign.find((a) => a.account === account);
+      const pp = plan.policy.find((a) => a.account === account);
+      const holder = held(account);
+      const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
+      if (rs !== undefined) rows.push(resumeRow(rs, kind));
+      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobLane(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
+      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobLane(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
+      else rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
+    }
   }
   console.log("");
   for (const line of formatAccounts(rows)) console.log(line);
+  for (const line of formatPaidClass(config)) console.log(line);
   if (argvs.length > 0) {
     console.log("argv:");
     for (const a of argvs) console.log(a);
@@ -2974,11 +3068,13 @@ async function main(): Promise<void> {
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
-    if (cfg.accounts.pool.length > 0) {
+    if (cfg.accounts.pool.length > 0 || cfg.accounts.paid.length > 0) {
       const allowed = policyRefs(cfg);
+      const paidPool = paidPoolOf(cfg);
       const picks = planPolicy({
         states: states.filter((st) => allowed.has(st.name)),
         pool: cfg.accounts.pool,
+        ...(paidPool !== undefined ? { paidPool } : {}),
         running: runningAndReserved,
         held,
         queuePlan: lastPlan,
@@ -3002,7 +3098,7 @@ async function main(): Promise<void> {
         out.push(jobLane(job, cfg.roster, account, stampToday));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
-      const free = cfg.accounts.pool.filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
+      const free = [...cfg.accounts.pool, ...cfg.accounts.paid].filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
       const idle =
         free.length === 0
           ? undefined
@@ -3030,6 +3126,7 @@ async function main(): Promise<void> {
   const poolView = (cfg: FleetConfig): PoolView => ({
     pinned: cfg.accounts.pinned,
     pool: cfg.accounts.pool,
+    paid: cfg.accounts.paid,
     assigned,
     jobs: liveJobs,
     queue: poolJobs(cfg),

@@ -187,7 +187,11 @@ services:
       # exist in auth first: `docker compose -f infra/compose.yml run --rm
       # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2
       # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap` (done for all four).
-      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
+      # RUNNER7 is the intended PAID account (fleet.json accounts.paid, ADR-0034
+      # amendment 2026-08-23) once the next worldserver deploy window lands: env
+      # only, the running worldserver does not pick it up, so until that recreate
+      # the paid class stays on SHAKEOUT2. Bootstrap it in auth before the swap.
+      AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
       - ../data/etc:/azerothcore/env/dist/etc

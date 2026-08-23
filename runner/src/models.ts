@@ -875,6 +875,15 @@ export interface NextJobsOptions {
   /** Paid models already in flight (pinned jobs excluded), for the paid cap. */
   paidRunning?: number;
   policy?: Pick<SchedulingPolicy, "paid" | "extras">;
+  /**
+   * The accounts a PAID pick may use (`accounts.paid`; ADR-0034 amendment
+   * 2026-08-23). Absent means no account split: paid picks share
+   * `freeAccounts`, which is what every caller did before the split. Present
+   * means the split is on — a paid pick takes one of these and never an
+   * account from `freeAccounts`; an empty array is therefore "paid work is
+   * configured but has nowhere to run", and every paid pick is held saying so.
+   */
+  paidAccounts?: readonly string[];
 }
 
 /**
@@ -885,7 +894,10 @@ export interface NextJobsOptions {
  *
  * Two additions under ADR-0034's paid/free split. A paid pick is held when
  * `policy.paid.maxConcurrent` paid models are already in flight, and the
- * next candidate takes its account; `held` says so. When every account still
+ * next candidate takes its account; `held` says so. Paid picks draw from
+ * `opts.paidAccounts` when that split is configured — never from
+ * `freeAccounts` — so a paid model can only ever land on a paid account.
+ * When every account still
  * free has nothing schedulable left, free models with an extras policy get an
  * **extra** run: fewest extras first, the shorter tier first (`e360` only for
  * a promoted model), roster order — and the pick carries the next character
@@ -933,28 +945,45 @@ export function planNextJobs(
   const held: HeldPick[] = [];
   const taken = new Set<string>();
   const accounts = [...freeAccounts];
+  // The paid accounts, when the split is on. Absent: paid picks share `accounts`.
+  const split = opts.paidAccounts !== undefined;
+  const paidAccounts = [...(opts.paidAccounts ?? [])];
   let paid = opts.paidRunning ?? 0;
   const cap = policy.paid?.maxConcurrent;
   for (const c of cands) {
-    if (accounts.length === 0) break;
+    if (accounts.length === 0 && (!split || paidAccounts.length === 0)) break;
     if (taken.has(c.s.name)) continue;
-    if (c.s.billing === "paid" && cap !== undefined && paid >= cap) {
+    const isPaid = c.s.billing === "paid";
+    const from = isPaid && split ? paidAccounts : accounts;
+    if (isPaid && split && (opts.paidAccounts ?? []).length === 0) {
+      // The actionable reason wins over the cap: there is no account to run on.
+      taken.add(c.s.name);
+      held.push({ name: c.s.name, episode: c.ep, why: "no paid account configured — add one to accounts.paid" });
+      continue;
+    }
+    if (isPaid && cap !== undefined && paid >= cap) {
       taken.add(c.s.name);
       held.push({ name: c.s.name, episode: c.ep, why: `paid cap: ${paid}/${cap} paid model(s) already in flight` });
       continue;
     }
+    if (from.length === 0) {
+      if (isPaid) held.push({ name: c.s.name, episode: c.ep, why: "waiting for a free paid account" });
+      taken.add(c.s.name);
+      continue;
+    }
     taken.add(c.s.name);
-    if (c.s.billing === "paid") paid++;
+    if (isPaid) paid++;
     const st = c.s.perEpisode[c.ep]!;
     jobs.push({
       name: c.s.name,
       episode: c.ep,
-      account: accounts.shift()!,
+      account: from.shift()!,
       attempt: st.attempts + 1,
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
   }
-  // Extras: lowest priority, only for accounts nothing else wanted.
+  // Extras: lowest priority, only for FREE accounts nothing else wanted — an
+  // extra is a free model's run by construction, so it never sees a paid one.
   const chars = policy.extras?.characters ?? [];
   for (const c of extraCands) {
     if (accounts.length === 0 || chars.length === 0) break;

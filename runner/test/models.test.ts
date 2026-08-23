@@ -445,6 +445,31 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(planNextJobs([p1, p2], ["R1", "R2"], new Set(), { policy: DEFAULT_POLICY }).jobs).toHaveLength(2);
   });
 
+  test("the paid account class: a paid pick takes a paid account and never a pool one; no paid account is held, not spilled", () => {
+    const p1 = st({ name: "p1", model: "v/one" }, []);
+    const f1 = st({ name: "f1", model: "v/three:free" }, []);
+    // Split on: the paid model takes PAID, the free one the pool, in order.
+    const plan = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, paidAccounts: ["PAID"] });
+    expect(plan.jobs.map((j) => [j.name, j.account])).toEqual([
+      ["p1", "PAID"],
+      ["f1", "R1"],
+    ]);
+    // Configured but empty: held with the actionable reason, never on a pool account.
+    const none = planNextJobs([p1, f1], ["R1", "R2"], new Set(), { policy, paidAccounts: [] });
+    expect(none.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
+    expect(none.held).toEqual([{ name: "p1", episode: "e90", why: "no paid account configured — add one to accounts.paid" }]);
+    // The empty-list reason wins over the cap: it is the one the operator can act on.
+    expect(planNextJobs([p1], ["R1"], new Set(), { policy, paidAccounts: [], paidRunning: 1 }).held[0]!.why).toContain("no paid account configured");
+    // Paid accounts busy, pool free: the paid pick waits rather than borrowing one.
+    const busy = planNextJobs([p1, f1], ["R1"], new Set(), { policy, paidAccounts: ["PAID"], paidRunning: 1 });
+    expect(busy.jobs.map((j) => j.account)).toEqual(["R1"]);
+    expect(busy.held[0]).toMatchObject({ name: "p1", why: "paid cap: 1/1 paid model(s) already in flight" });
+    // A free pick never takes a paid account, even with the pool exhausted.
+    expect(planNextJobs([f1], [], new Set(), { policy, paidAccounts: ["PAID"] }).jobs).toEqual([]);
+    // Absent: the pre-split behaviour, paid picks share the pool.
+    expect(planNextJobs([p1], ["R1"], new Set(), { policy }).jobs.map((j) => j.account)).toEqual(["R1"]);
+  });
+
   test("extras: free models past their targets get lowest-priority runs, cycling characters; e360 extras only when promoted", () => {
     const chars = policy.extras!.characters;
     const metFree = st({ name: "f", model: "v/f:free" }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4), good("v/f:free", "e360", 5), good("v/f:free", "e360", 6)]);
@@ -476,5 +501,8 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(planNextJobs([allMet, fresh], ["R1"], new Set(), { policy }).jobs.map((j) => j.name)).toEqual(["n"]);
     // No extras policy: nothing.
     expect(planNextJobs([allMet], ["R1"], new Set(), { policy: { ...policy, extras: null } }).jobs).toEqual([]);
+    // An extra is a free model's run and only ever lands on a free account.
+    expect(planNextJobs([allMet], [], new Set(), { policy, paidAccounts: ["PAID"] }).jobs).toEqual([]);
+    expect(planNextJobs([allMet], ["R1"], new Set(), { policy, paidAccounts: ["PAID"] }).jobs.map((j) => j.account)).toEqual(["R1"]);
   });
 });
