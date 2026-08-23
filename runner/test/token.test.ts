@@ -67,7 +67,7 @@ describe("token persistence through meta.json", () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-token-"));
     const traj = new Trajectory(dir);
     const token = newSessionToken();
-    const config = loadRunConfig({ runId: "run-t", token, adapter: "stub" });
+    const config = loadRunConfig({ runId: "run-t", token, driver: "stub" });
     traj.writeMeta({ runId: "run-t", harnessVersion: "0.0.0-test", startedAt: 1, config });
     const meta = readMeta(dir);
     expect(meta?.config.token).toBe(token);
@@ -82,7 +82,7 @@ describe("token persistence through meta.json", () => {
     // id: resolve, then re-write the loaded meta with only `config` replaced.
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-token-"));
     const traj = new Trajectory(dir);
-    const old = loadRunConfig({ runId: "run-old", token: "run-old", adapter: "stub" });
+    const old = loadRunConfig({ runId: "run-old", token: "run-old", driver: "stub" });
     traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 7, config: old });
 
     const stored = readMeta(dir)!;

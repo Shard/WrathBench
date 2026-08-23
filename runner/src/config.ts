@@ -54,7 +54,7 @@ export const watchdogConfigSchema = z.object({
 export type WatchdogConfig = z.infer<typeof watchdogConfigSchema>;
 
 /**
- * A partial watchdog override, as a roster entry or fleet lane may carry it
+ * A partial watchdog override, as a roster entry or fleet job may carry it
  * (ADR-0024). Same vocabulary as the full config, every key optional, unknown
  * keys refused so a typo in fleet.json is a config error rather than a
  * silently-ignored knob.
@@ -95,39 +95,29 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
-/**
- * Pause reasons persisted before the rename read in the current vocabulary.
- * Runs are long-lived rows in the trajectory store; nothing validates a stored
- * pause reason, so this exists purely so old rows display under one name.
- */
-export function normalizePauseReason(stored: string): string {
-  return stored === "window-exhausted" ? "quota-exhausted" : stored;
-}
-
 // --------------------------------------------------------------- run config
 
 /** Every driver a run can be started with. `stub` never scores. */
 export const DRIVERS = ["openai", "claude-code", "stub"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
-/**
- * Driver spellings accepted on read and what they mean today. The old
- * `claude-subscription` value is an alias: old meta.json files resume, old
- * runs render, and no new file writes it (ADR-0035).
- */
-export const DRIVER_ALIASES: Readonly<Record<string, Driver>> = {
-  "claude-subscription": "claude-code",
-};
-
-export function normalizeDriver(raw: string): Driver | undefined {
-  if ((DRIVERS as readonly string[]).includes(raw)) return raw as Driver;
-  return DRIVER_ALIASES[raw];
+export function isDriver(raw: string): raw is Driver {
+  return (DRIVERS as readonly string[]).includes(raw);
 }
 
-const driverSchema = z.preprocess(
-  (v) => (typeof v === "string" ? (normalizeDriver(v) ?? v) : v),
-  z.enum(DRIVERS),
-);
+/**
+ * The driver vocabulary is closed and has one spelling per driver. A value
+ * outside it is refused by name, so an old file (`claude-subscription`, the
+ * pre-0.4 spelling) fails loudly rather than parsing as something else.
+ */
+const driverSchema = z.string().superRefine((v, ctx) => {
+  if (!isDriver(v)) {
+    ctx.addIssue({
+      code: "custom",
+      message: `driver "${v}" is not one of ${DRIVERS.join("|")} — the 0.4 shape writes driver: "claude-code" for the Claude Code CLI`,
+    });
+  }
+}).transform((v) => v as Driver);
 
 /**
  * The harness: what owns the agent loop and the context management (ADR-0035).
@@ -190,17 +180,8 @@ export const runConfigSchema = z.object({
    *  - `claude-code`: the Claude Code CLI is both transport and harness — it
    *    owns its own history, compaction and preamble, so the run belongs to the
    *    `claude-code` harness group and is scored only against its own kind.
-   *
-   * `claude-subscription` is the pre-ADR-0035 spelling of `claude-code` and is
-   * accepted on read so stored meta.json and roster files keep parsing;
-   * nothing new writes it.
    */
-  driver: driverSchema.optional(),
-
-  // Legacy name for the driver, kept so old meta.json files resume. `driver`
-  // is authoritative and this is kept equal to it after parsing; nothing new
-  // should read `adapter`.
-  adapter: driverSchema.default("openai"),
+  driver: driverSchema.default("openai"),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
   model: z.string().optional(),
   /** e.g. https://openrouter.ai/api/v1 — or OPENAI_BASE_URL from env. */
@@ -218,9 +199,9 @@ export const runConfigSchema = z.object({
   objective: z.string().min(1).max(4000).optional(),
   /**
    * Whether `search_reference` serves wiki-recorded coordinates (ADR-0028).
-   * Default false — names-first: the scored lanes measure whether a model can
+   * Default false — names-first: the scored tiers measure whether a model can
    * find things, and exact yards would make every model converge on
-   * "search, read a number, moveTo". Freeplay/unscored lanes may turn it on.
+   * "search, read a number, moveTo". Freeplay/unscored jobs may turn it on.
    * Stamped into the comparability tuple so the two never share a chart.
    */
   wikiCoords: z.boolean().default(false),
@@ -266,7 +247,7 @@ export const runConfigSchema = z.object({
    * claude-only; `minimal` is OpenAI-only.
    */
   effort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
-  /** Path to a JSON file of scripted stub turns (adapter: "stub"). */
+  /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 
   /** Stop after this many model steps. Unlimited when absent (result runs). */
@@ -307,32 +288,13 @@ export const runConfigSchema = z.object({
 export const STUB_STAMP = "unscored (scripted stub)";
 
 /**
- * The stamp pre-ADR-0035 builds wrote on every claude-subscription run. Read
- * as *no* stamp: those runs are `claude-code` harness runs and score within
- * that group. Kept only so the reader can recognise it.
- */
-export const LEGACY_SCAFFOLD_STAMP = "shakeout-only (external scaffold)";
-
-/**
- * A stored stamp read in today's vocabulary: the legacy scaffold prefix is
- * dropped (that run scores in the `claude-code` group now), and whatever else
- * the stamp said — an objective — stands. Null when nothing unscoring remains.
- */
-export function readUnscoredStamp(stored: string | null | undefined): string | null {
-  if (stored === null || stored === undefined || stored.length === 0) return null;
-  if (!stored.startsWith(LEGACY_SCAFFOLD_STAMP)) return stored;
-  const rest = stored.slice(LEGACY_SCAFFOLD_STAMP.length).replace(/^;\s*/, "");
-  return rest.length > 0 ? rest : null;
-}
-
-/**
  * The stamp carried by a run with an operator objective. It is a probe, not a
  * result: the run was steered at a named task, so it can never enter a scored
  * comparison against free-play runs (ADR-0024).
  */
 export const OBJECTIVE_STAMP = "unscored (operator objective)";
 
-export type RunConfig = z.infer<typeof runConfigSchema> & { driver: Driver };
+export type RunConfig = z.infer<typeof runConfigSchema>;
 
 export function newRunId(now: Date = new Date()): string {
   const stamp = now
@@ -398,7 +360,7 @@ function withEpisodeDefaults(raw: unknown): unknown {
   return {
     ...o,
     // A tier that pins a tool-call ceiling supplies it too; `null` there means
-    // the tier does not name one (e360, freeplay) and the lane's value stands.
+    // the tier does not name one (e360, freeplay) and the job's value stands.
     ...(tier.toolCalls !== null && o["maxToolCallsPerEpisode"] === undefined
       ? { maxToolCallsPerEpisode: tier.toolCalls }
       : {}),
@@ -433,17 +395,20 @@ export function episodeOverrideOf(config: RunConfig): boolean {
 
 /**
  * Parse and default a run config object (e.g. from CLI flags or meta.json).
- * `driver` and the legacy `adapter` are reconciled here so exactly one of them
- * has to be supplied and both are recorded.
+ *
+ * `driver` is the one field that names the driver. A config that carries the
+ * pre-0.4 `adapter` key *instead* is refused by name; one that carries both
+ * (every 0.4 build through 0.4-30 wrote the duplicate) reads `driver` and the
+ * duplicate is dropped like any other unknown key.
  */
 export function loadRunConfig(raw: unknown): RunConfig {
-  const parsed = runConfigSchema.parse(withEpisodeDefaults(raw));
-  const explicitDriver = (raw as { driver?: unknown } | null | undefined)?.driver;
-  // With no `driver`, the legacy `adapter` (itself alias-normalised) decides.
-  const driver: Driver = parsed.driver ?? (explicitDriver === undefined ? parsed.adapter : "openai");
-  // The legacy field tracks the driver exactly, so an old
-  // `WHERE adapter = 'openai'` query cannot silently absorb a stub run.
-  return { ...parsed, driver, adapter: driver };
+  const o = (raw ?? {}) as Record<string, unknown>;
+  if (o["driver"] === undefined && o["adapter"] !== undefined) {
+    throw new Error(
+      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the 0.4 shape is driver: "openai" | "claude-code" | "stub"`,
+    );
+  }
+  return runConfigSchema.parse(withEpisodeDefaults(raw));
 }
 
 /** True when this driver's runs can never be read as a score (ADR-0035: only `stub`). */

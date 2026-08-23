@@ -87,7 +87,7 @@ const roster: RosterModel[] = [
   { name: "ox", model: "stealth/ox-alpha" },
   { name: "glm", model: "z-ai/glm:free", apiBase: "https://openrouter.ai/api/v1" },
   { name: "sonnet", model: "sonnet", driver: "claude-code" },
-  { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-subscription", runsPerEpisode: { e90: 1 } },
+  { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-code", runsPerEpisode: { e90: 1 } },
   { name: "local", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" },
 ];
 

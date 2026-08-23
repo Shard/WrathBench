@@ -183,7 +183,7 @@ function fixture(runs: FixtureRun[]): string {
       : `run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
          x REAL, y REAL, z REAL, money INTEGER, quests_completed INTEGER`;
     db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
-      ended_at INTEGER, adapter TEXT, driver TEXT, shakeout TEXT, model TEXT,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT,
       termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT);
       CREATE TABLE state (${cols});`);
     db.query(`INSERT INTO run (run_id, model, termination_reason, config_json) VALUES (?, ?, ?, ?)`).run(

@@ -63,7 +63,7 @@ export default function Models() {
         <Show when={body()!.roster.shape !== "roster"}>
           <div class="banner warn">
             <Show
-              when={body()!.roster.shape === "legacy"}
+              when={body()!.roster.shape === "unreadable"}
               fallback={
                 <>
                   No fleet config was found
@@ -72,10 +72,8 @@ export default function Models() {
                 </>
               }
             >
-              The fleet config at {body()!.roster.path} predates the roster map (ADR-0031), so it
-              names no models. Rename <code>infra/fleet.next.json</code> over{" "}
-              <code>infra/fleet.json</code> and the rows appear — names are not invented from lane
-              entries, because invented names would stop matching at that rename.
+              The fleet config at {body()!.roster.path} could not be read as a roster (ADR-0031: a{" "}
+              <code>roster</code> map names the models). Fix the file and the rows appear.
             </Show>
           </div>
         </Show>

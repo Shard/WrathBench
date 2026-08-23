@@ -108,7 +108,6 @@ CREATE TABLE IF NOT EXISTS run (
   harness_version TEXT NOT NULL,
   started_at INTEGER NOT NULL,
   ended_at INTEGER,
-  adapter TEXT,
   -- The driver is its own column, not just a key inside config_json: a
   -- cross-run SELECT must be able to exclude stub runs without parsing.
   -- shakeout is the unscored stamp (legacy column name, see RunMeta).
@@ -149,19 +148,13 @@ CREATE TABLE IF NOT EXISTS state (
 `;
 
 /**
- * Columns added to `state` after the first runs were written. `CREATE TABLE IF
- * NOT EXISTS` is a no-op on an existing run.sqlite, so a resumed run would
- * otherwise write into a table that lacks them.
+ * Columns added to `run` inside the 0.4 series (FOLLOW-UPS 36, at 0.4-6).
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing run.sqlite, so a
+ * resumed 0.4-1..0.4-5 run would otherwise write into a table that lacks
+ * them. The only migration the runner carries: every run below the 0.4
+ * floor is archived, and every 0.4 `state` table already has every column.
  */
-const STATE_ADDED_COLUMNS: Record<string, string> = {
-  money: "INTEGER",
-  quests_completed: "INTEGER",
-  turn: "INTEGER",
-};
-
-/** The same, for `run`: a resumed pre-ADR-0024 run.sqlite has no `objective`. */
 const RUN_ADDED_COLUMNS: Record<string, string> = {
-  objective: "TEXT",
   character: "TEXT",
   platform: "TEXT",
 };
@@ -180,18 +173,7 @@ export class Trajectory {
     this.jsonlPath = join(dir, "trajectory.jsonl");
     this.db = new Database(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
-    this.migrateState();
     this.migrateRun();
-  }
-
-  /** Additive, idempotent: add any `state` column this build knows and the file lacks. */
-  private migrateState(): void {
-    const have = new Set(
-      (this.db.query(`PRAGMA table_info(state)`).all() as { name: string }[]).map((c) => c.name),
-    );
-    for (const [name, type] of Object.entries(STATE_ADDED_COLUMNS)) {
-      if (!have.has(name)) this.db.exec(`ALTER TABLE state ADD COLUMN ${name} ${type}`);
-    }
   }
 
   /** Additive, idempotent: add any `run` column this build knows and the file lacks. */
@@ -226,15 +208,14 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, adapter, driver, shakeout, model, objective, character, platform, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
         meta.runId,
         meta.harnessVersion,
         meta.startedAt,
-        meta.config.adapter,
         meta.config.driver,
         meta.shakeout ?? null,
         meta.config.model ?? null,

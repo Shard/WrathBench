@@ -39,7 +39,6 @@ function run(p: Partial<RunRow> = {}): RunRow {
     runId: "r",
     model: "m",
     driver: "openai",
-    adapter: "openai",
     harness: "wrathbench",
     shakeout: null,
     objective: null,
@@ -183,7 +182,6 @@ describe("unscoredReason", () => {
     expect(unscoredReason(run({ objective: "walk to Ironforge" }))).toContain("objective");
     // ADR-0035: a claude-code run is a tagged row, not an excluded one.
     expect(unscoredReason(run({ driver: "claude-code", harness: "claude-code", shakeout: null }))).toBeNull();
-    expect(unscoredReason(run({ driver: "claude-subscription", shakeout: null }))).toBeNull();
   });
 });
 

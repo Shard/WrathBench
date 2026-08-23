@@ -38,7 +38,7 @@ function setup(
 ) {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
   const config = {
-    ...loadRunConfig({ adapter: "stub", stepIntervalMs: 0, stateIntervalMs: 1, ...extraConfig }),
+    ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, ...extraConfig }),
     runId: "run-test",
     token: "run-test",
   };

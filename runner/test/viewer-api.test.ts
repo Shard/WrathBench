@@ -49,12 +49,12 @@ function fixture(): string {
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
-    `CREATE TABLE run (run_id TEXT, model TEXT, driver TEXT, adapter TEXT, shakeout TEXT,
+    `CREATE TABLE run (run_id TEXT, model TEXT, driver TEXT, shakeout TEXT,
        harness_version TEXT, started_at INTEGER, ended_at INTEGER, termination_reason TEXT,
        termination_detail TEXT, pause_reason TEXT, config_json TEXT)`,
   );
-  db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [
-    RUN_ID, "test/model", "openai", "openai", null, "harness-test", 1000, null, null, null, null,
+  db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+    RUN_ID, "test/model", "openai", null, "harness-test", 1000, null, null, null, null,
     JSON.stringify(config),
   ]);
   db.run(
@@ -592,13 +592,7 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
 
   test("harness is a tag on every eval row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
     const runs = fixture();
-    // A pre-ADR-0035 tuple: `contextEngine` instead of `harness`, plus the old
-    // scaffold stamp. It reads as a scorable claude-code row, unrewritten.
-    const { harness: _h, ...legacy } = TUPLE;
-    stamped(runs, { ...legacy, contextEngine: "external-scaffold-claude-cli" });
-    const path = join(runs, RUN_ID, "meta.json");
-    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    writeFileSync(path, JSON.stringify({ ...meta, shakeout: "shakeout-only (external scaffold)" }));
+    stamped(runs, { ...TUPLE, harness: "claude-code" });
 
     const all = (await (await api(runs)(new Request("http://x/api/eval?episode=all"))).json()) as {
       harness: string;
@@ -623,10 +617,6 @@ describe("comparability, /api/eval and /api/run/<id>/track", () => {
 
     expect((await api(runs)(new Request("http://x/api/eval?harness=bogus"))).status).toBe(400);
     expect((await api(runs)(new Request("http://x/api/models?harness=bogus"))).status).toBe(400);
-    // The stored file is untouched.
-    const after = JSON.parse(readFileSync(path, "utf8")) as { comparability: Record<string, unknown>; shakeout: string };
-    expect(after.comparability["contextEngine"]).toBe("external-scaffold-claude-cli");
-    expect(after.shakeout).toBe("shakeout-only (external scaffold)");
   });
 
   test("an unknown ?episode= is a 400, never a silent fallback to the default", async () => {

@@ -63,10 +63,8 @@ describe("episodeArgv", () => {
     expect(argv[argv.indexOf("--account") + 1]).toBe("SHAKEOUT");
   });
 
-  test("a roster written with the old driver spelling resumes as claude-code (ADR-0035)", () => {
-    const [s] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
-    expect(s!.driver).toBe("claude-code");
-    expect(episodeArgv(s!, false)[episodeArgv(s!, false).indexOf("--driver") + 1]).toBe("claude-code");
+  test("a driver outside the vocabulary is refused by name", () => {
+    expect(() => resolve([{ model: "opus", driver: "claude-subscription" as never }], "20260101")).toThrow(/unknown driver claude-subscription/);
   });
 
   test("effort is passed only when the entry declares one", () => {

@@ -22,11 +22,9 @@
  *   cannot differ. (The viewer's own `eval.ts#stillbornOf` answers `false` for
  *   an unreadable trajectory where this one answers `null`; mixing them would
  *   put a run in a count and not in its list.)
- * - **Only the new fleet shape carries a roster.** ADR-0031's `roster` map is
- *   what names a model; a config that predates it has lane entries and no
- *   names, and inventing names from the model strings would mint keys that stop
- *   matching the day the operator renames `fleet.next.json` over `fleet.json`.
- *   A legacy config is therefore an empty, labelled state, not a guess.
+ * - **The roster names the models.** ADR-0031's `roster` map is the one
+ *   source of a model's name; a fleet config without one is unreadable, not a
+ *   config to invent names for.
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
@@ -98,14 +96,14 @@ const fleetJobSchema = z
 
 const fleetRosterSchema = z
   .object({
-    roster: z.record(z.string(), rosterEntrySchema).optional(),
+    roster: z.record(z.string(), rosterEntrySchema),
     queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
   })
   .loose();
 
 /** How a fleet config answered when asked for a roster. */
-export type RosterShape = "roster" | "legacy" | "missing" | "unreadable";
+export type RosterShape = "roster" | "missing" | "unreadable";
 
 export interface RosterRead {
   models: RosterModel[];
@@ -135,12 +133,10 @@ export function currentSeries(): string | null {
 }
 
 /**
- * Read the roster out of a fleet config.
- *
- * `legacy` is the pre-ADR-0031 shape: lanes with inline entries and no `roster`
- * map. It reads as an empty roster with a label the page renders, which is the
- * same posture `readFleet` takes to a missing `fleet-state.json` — say the file
- * is not there, do not synthesise what it would have said.
+ * Read the roster out of a fleet config. A file without a `roster` map is
+ * `unreadable` — the same posture `readFleet` takes to a missing
+ * `fleet-state.json`: say the file is not usable, do not synthesise what it
+ * would have said.
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
@@ -164,7 +160,6 @@ export function readFleetRoster(path: string | undefined, series: string | null 
   } catch {
     /* a malformed policy block is the supervisor's to refuse; the page shows the defaults */
   }
-  if (parsed.roster === undefined) return { ...empty, shape: "legacy", path, policy, maxConcurrent };
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
     const tiers = (e.tiers ?? []).filter(isEpisodeId);
@@ -183,11 +178,7 @@ export function readFleetRoster(path: string | undefined, series: string | null 
       ...(Object.keys(per).length > 0 ? { runsPerEpisode: per } : {}),
     });
   }
-  /*
-   * The exclusion, from the supervisor's own predicate. A legacy `lanes` list
-   * beside a roster names lane names, not roster refs — its entries are inline
-   * — so there is nothing there to exclude and only `queue` is read.
-   */
+  /* The exclusion, from the supervisor's own predicate, over the queue. */
   const jobs: PolicyJob[] = (parsed.queue ?? []).map((j) => {
     const refs = typeof j.ref === "string" ? [j.ref] : j.ref;
     return {

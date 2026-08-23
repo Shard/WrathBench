@@ -5,7 +5,6 @@
  */
 
 import { join } from "node:path";
-import { normalizePauseReason, readUnscoredStamp } from "./config";
 import { readMeta, readTrajectory, Trajectory, type TrajectoryRecord } from "./trajectory";
 
 function fmtTs(ts: number): string {
@@ -38,7 +37,7 @@ export function renderTimeline(runDir: string, runId: string): string {
   const stateRows = trajectory.stateRows(runId);
   trajectory.close();
 
-  const shakeout = readUnscoredStamp((meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined);
+  const shakeout = (meta?.shakeout ?? row?.["shakeout"]) as string | null | undefined;
   if (typeof shakeout === "string" && shakeout.length > 0) {
     // First and last thing the reader sees: this run is not a score.
     lines.push("!! ".repeat(8).trim());
@@ -49,9 +48,7 @@ export function renderTimeline(runDir: string, runId: string): string {
   lines.push(`run:        ${runId}`);
   if (meta !== null) {
     lines.push(`harness:    ${meta.harnessVersion}`);
-    // `adapter` is the pre-driver name for the same thing; old runs only have it.
-    const driver = meta.config.driver ?? meta.config.adapter;
-    lines.push(`driver:     ${driver}${meta.config.model !== undefined ? ` (${meta.config.model})` : ""}`);
+    lines.push(`driver:     ${meta.config.driver}${meta.config.model !== undefined ? ` (${meta.config.model})` : ""}`);
     lines.push(`character:  ${meta.config.character} (race ${meta.config.race}, class ${meta.config.class})`);
     lines.push(`started:    ${fmtTs(meta.startedAt)}`);
   }
@@ -65,7 +62,7 @@ export function renderTimeline(runDir: string, runId: string): string {
     const detail = row?.["termination_detail"];
     lines.push(`ended as:   ${reason}${typeof detail === "string" ? ` — ${detail}` : ""}`);
   } else if (typeof pause === "string") {
-    lines.push(`paused as:  ${normalizePauseReason(pause)} (resumable)`);
+    lines.push(`paused as:  ${pause} (resumable)`);
   } else {
     lines.push("ended as:   (still running or never finalised)");
   }

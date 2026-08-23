@@ -22,7 +22,7 @@
  */
 
 import { z } from "zod";
-import { HARNESSES, LEGACY_SCAFFOLD_STAMP, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
+import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
 
@@ -32,15 +32,7 @@ import { buildSystemPrompt } from "./prompt";
  * message window, regenerated per-turn context); `claude-code` is the Claude
  * Code CLI, which owns its own history and compaction. Two harnesses are two
  * comparability groups; neither is a scoring penalty.
- *
- * Tuples stamped before ADR-0035 carry `contextEngine` instead, with the
- * values below. The reader maps them to a harness and never rewrites the file.
  */
-export const LEGACY_CONTEXT_ENGINES: Readonly<Record<string, Harness>> = {
-  "harness-fixed-window": "wrathbench",
-  "external-scaffold-claude-cli": "claude-code",
-};
-
 export const harnessSchema = z.enum(HARNESSES);
 
 /** How long a run is allowed to be, in every unit the harness can end it by. */
@@ -74,7 +66,7 @@ export const comparabilitySchema = z.object({
   promptHash: z.string(),
   /** Length of that prompt, so a hash mismatch has a visible magnitude. */
   promptChars: z.number().int().nonnegative(),
-  /** Which loop owned the run (ADR-0035). Old tuples' `contextEngine` maps here on read. */
+  /** Which loop owned the run (ADR-0035). */
   harness: harnessSchema,
   /** Reasoning effort, or null for "the field was never sent". */
   effort: z.string().nullable(),
@@ -206,45 +198,22 @@ export function comparabilityOf(
  * listing pays for.
  */
 export function parseComparability(raw: unknown): Comparability | null {
-  const parsed = comparabilitySchema.safeParse(withHarness(raw));
+  const parsed = comparabilitySchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 
 /**
- * Map a pre-ADR-0035 tuple's `contextEngine` onto `harness`, in memory only.
- * A tuple that already names a harness is returned as is; one that names an
- * unknown engine is left alone and fails validation as "not recorded".
- */
-function withHarness(raw: unknown): unknown {
-  if (typeof raw !== "object" || raw === null) return raw;
-  const o = raw as Record<string, unknown>;
-  if (o["harness"] !== undefined) return o;
-  const engine = o["contextEngine"];
-  if (typeof engine !== "string") return o;
-  const harness = LEGACY_CONTEXT_ENGINES[engine];
-  if (harness === undefined) return o;
-  const { contextEngine: _dropped, ...rest } = o;
-  return { ...rest, harness };
-}
-
-/**
  * The harness a run belongs to, from whatever its metadata recorded: the
- * tuple first, then a pre-ADR-0035 scaffold stamp, then the driver. Null when
- * none of those was written. Readers use this so a run launched before the
- * tuple existed still lands in the right group instead of in neither.
+ * tuple first, then the driver. Null when neither was written.
  */
 export function harnessOfRun(meta: {
   comparability?: { harness?: string } | null;
   driver?: string | null;
-  shakeout?: string | null;
 }): Harness | null {
   const stamped = meta.comparability?.harness;
   if (stamped !== undefined && (HARNESSES as readonly string[]).includes(stamped)) return stamped as Harness;
-  if (meta.shakeout !== null && meta.shakeout !== undefined && meta.shakeout.startsWith(LEGACY_SCAFFOLD_STAMP)) {
-    return "claude-code";
-  }
   const d = meta.driver;
-  if (d === "claude-code" || d === "claude-subscription") return "claude-code";
+  if (d === "claude-code") return "claude-code";
   if (d === "openai" || d === "stub") return "wrathbench";
   return null;
 }

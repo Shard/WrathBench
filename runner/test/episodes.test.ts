@@ -20,7 +20,7 @@ const M = 60_000;
 
 function runRow(over: Partial<RunRow> = {}): RunRow {
   return {
-    runId: "r", model: "m", driver: "openai", adapter: "openai", harness: "wrathbench", shakeout: null,
+    runId: "r", model: "m", driver: "openai", harness: "wrathbench", shakeout: null,
     objective: null, extra: false, character: "c", race: 1, raceName: "Human", class: 2,
     className: "Paladin", characterLabel: "Human Paladin", platform: "p", apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,

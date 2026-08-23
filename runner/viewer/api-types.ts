@@ -89,7 +89,7 @@ export interface ComparabilityView {
   harnessVersion: string;
   promptHash: string;
   promptChars: number;
-  /** Which loop owned the run. A pre-ADR-0035 `contextEngine` is mapped here on read. */
+  /** Which loop owned the run (ADR-0035). */
   harness: HarnessView;
   effort: string | null;
   budget: EpisodeBudgetView;
@@ -120,13 +120,9 @@ export interface RunRow {
   runId: string;
   model: string | null;
   driver: string | null;
-  adapter: string | null;
-  /**
-   * The harness tag (ADR-0035): from the tuple, else the legacy stamp, else
-   * the driver. Null only when none of those was recorded.
-   */
+  /** The harness tag (ADR-0035): from the tuple, else the driver. Null when neither was recorded. */
   harness: HarnessView | null;
-  /** The unscored stamp, in today's vocabulary (legacy key name). Null when the run can score. */
+  /** The unscored stamp (the key keeps the old column name). Null when the run can score. */
   shakeout: string | null;
   /** The operator objective this run was steered with (ADR-0024), or null. */
   objective: string | null;
@@ -843,14 +839,10 @@ export interface ModelRowView {
 
 export interface ModelsResponse {
   models: ModelRowView[];
-  /**
-   * Where the roster came from. `legacy` is a fleet config that predates
-   * ADR-0031's `roster` map: it names no models, and names are not invented
-   * from lane entries because they would stop matching at the rename.
-   */
+  /** Where the roster came from. A fleet config without a `roster` map is `unreadable`. */
   roster: {
     path: string | null;
-    shape: "roster" | "legacy" | "missing" | "unreadable";
+    shape: "roster" | "missing" | "unreadable";
     /** Every entry the roster names, excluded ones included. */
     count: number;
     /**

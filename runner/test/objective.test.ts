@@ -93,7 +93,7 @@ describe("prompt rendering", () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-objective-"));
     const config = {
       ...loadRunConfig({
-        adapter: "stub",
+        driver: "stub",
         model: "some/other-model:free",
         effort: "low",
         objective: OBJECTIVE,
