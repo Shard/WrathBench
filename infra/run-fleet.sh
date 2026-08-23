@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Fleet orchestrator: one run-roster process per enabled lane in fleet.json.
+# Fleet orchestrator: one run-roster process per enabled job in fleet.json.
 #
 #   ./infra/run-fleet.sh infra/fleet.json --until 18:00
 #   ./infra/run-fleet.sh infra/fleet.json --dry-run
