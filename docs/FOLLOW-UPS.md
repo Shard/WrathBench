@@ -312,7 +312,9 @@ and status.
     stay behind the earned-by-need rule until a freeplay run asks.
 
 55. **Verdict-opcode timeouts: `WB_MOVE_RESULT` and the loot window** (2026-08-23,
-    closing fan-out; folds into item 46). A wait for a verdict the server sometimes
+    closing fan-out; folds into item 46, which is in the resolved ledger as
+    shipped-pending-deploy — 2026-08-23, a97c3c8/2b60cb0 — and still listed under Next
+    up until that deploy is verified). A wait for a verdict the server sometimes
     never sends hangs until its timeout and costs the model a turn with nothing to read.
     Recurring, not rare: 17 `WB_MOVE_RESULT` timeouts in `fleet-nav-probe-sonnet-20260823`
     alone, 5–7 in three other sonnet runs, and 8 `SMSG_LOOT_RESPONSE` timeouts in
