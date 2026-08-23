@@ -7,7 +7,8 @@
  *   ./infra/run-roster.sh infra/roster-example.json --dry-run
  *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
  *
- * Every entry is config: `model`, `driver` (openai | claude-subscription),
+ * Every entry is config: `model`, `driver` (openai | claude-code; the old
+ * `claude-subscription` spelling is read as an alias, ADR-0035),
  * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
  * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
@@ -49,18 +50,22 @@ import { Database } from "bun:sqlite";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
-import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // ------------------------------------------------------------------ types
 
-type Driver = "openai" | "claude-subscription";
+type Driver = "openai" | "claude-code";
 
 export interface RosterSpec {
   model: string;
-  /** Defaults to "openai". `claude-subscription` runs are SHAKEOUT-ONLY. */
-  driver?: Driver;
+  /**
+   * Defaults to "openai". `claude-code` runs go through the Claude Code CLI,
+   * which is their harness (ADR-0035). `claude-subscription` is accepted as
+   * the pre-ADR-0035 spelling of the same thing; nothing new writes it.
+   */
+  driver?: Driver | "claude-subscription";
   /** Game account for the entry's session. Omitted -> the runner's default. */
   account?: string;
   /** Reasoning effort. Omitted -> the provider's own default, not a level. */
@@ -367,9 +372,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (typeof s.model !== "string" || s.model.length === 0) {
       throw new Error(`roster entry without a model: ${JSON.stringify(s)}`);
     }
-    const driver = s.driver ?? "openai";
-    if (driver !== "openai" && driver !== "claude-subscription") {
-      throw new Error(`roster entry ${s.model}: unknown driver ${String(driver)}`);
+    const driver = normalizeDriver(s.driver ?? "openai");
+    if (driver !== "openai" && driver !== "claude-code") {
+      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)}`);
     }
     const parsedWatchdogs = watchdogOverrideSchema.safeParse(s.watchdogs ?? {});
     if (!parsedWatchdogs.success) {
@@ -417,7 +422,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
 }
 
 /**
- * The api-base/api-key-env pair is meaningless to the claude-subscription
+ * The api-base/api-key-env pair is meaningless to the claude-code
  * driver (it authenticates through the `claude` CLI's own OAuth token), so a
  * claude entry gets neither flag. Everything else is driver-independent.
  */
@@ -950,7 +955,7 @@ const wakeups: (() => void)[] = [];
  * reach the process it started in the container — the exec'd command survives
  * and would be orphaned. So the signal has to be delivered on the other side.
  * Scoped to the run id (which appears in the runner's argv as `--run-id` or
- * `--resume`) so a parallel shakeout run in the same container is never hit.
+ * `--resume`) so a parallel claude-code run in the same container is never hit.
  *
  * A no-op when the roster is itself inside the container: there the episode is
  * our direct child, so `child.kill()` reaches it and there is no docker CLI to
@@ -1146,7 +1151,7 @@ async function attemptSpec(
   // run-episode.sh's driver preflight does not run on the in-container path, and
   // its one load-bearing check is this: without the token every claude episode
   // burns a session setup to fail at the first turn.
-  if (CONTAINER && spec.driver === "claude-subscription" && !opts.dryRun) {
+  if (CONTAINER && spec.driver === "claude-code" && !opts.dryRun) {
     const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
     if (token === undefined || token.trim().length === 0) {
       const detail =
@@ -1222,14 +1227,14 @@ async function attemptSpec(
     // tool-call limit, and a pause that does happen will not be cleared by
     // running a different model first. So a claude entry never defers: it is
     // recorded and the roster advances.
-    if (spec.driver === "claude-subscription") {
-      say(`paused ${spec.runId}: ${verdict.reason} (claude-subscription — no defer queue), advancing`);
+    if (spec.driver === "claude-code") {
+      say(`paused ${spec.runId}: ${verdict.reason} (claude-code — no defer queue), advancing`);
       record({
         runId: spec.runId,
         model: spec.model,
         outcome: "paused-operator",
         ...(level !== undefined ? { level } : {}),
-        detail: `${verdict.reason}; claude-subscription entries are not deferred; turns ${turns}`,
+        detail: `${verdict.reason}; claude-code entries are not deferred; turns ${turns}`,
       });
       await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
       return "done";
@@ -1432,7 +1437,7 @@ async function main(): Promise<void> {
     );
     console.log(
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
-        `\n        claude-subscription entries never defer (no per-provider pools to wait on)` +
+        `\n        claude-code entries never defer (no per-provider pools to wait on)` +
         `\n        mid-episode pause -> --resume with backoff ${RESUME_LADDER}, then defer` +
         `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +
         `\n        then RESUMED in place on its own run id (never relaunched fresh at L1); TAINTED` +

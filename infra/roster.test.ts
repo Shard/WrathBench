@@ -5,7 +5,7 @@ import { episodeArgv, forCycle, inContainer, resolve, type RosterSpec } from "./
  * The roster is config, and the config's whole job is to become an argv for
  * run-episode.sh. These pin the two things that would silently break a night:
  * the old bare-model roster shape still producing the argv it always did, and
- * a claude-subscription entry not carrying OpenAI-only flags.
+ * a claude-code entry not carrying OpenAI-only flags.
  */
 
 const OPENAI_ONLY = ["--api-base", "--api-key-env"];
@@ -29,7 +29,7 @@ describe("resolve", () => {
   test("every field is overridable per entry", () => {
     const spec: RosterSpec = {
       model: "sonnet",
-      driver: "claude-subscription",
+      driver: "claude-code",
       account: "SHAKEOUT2",
       character: "Burnsonn",
       race: 3,
@@ -37,7 +37,7 @@ describe("resolve", () => {
       episodeMs: 60_000,
     };
     const [s] = resolve([spec], "20260101");
-    expect(s).toMatchObject({ driver: "claude-subscription", account: "SHAKEOUT2", character: "Burnsonn", race: 3 });
+    expect(s).toMatchObject({ driver: "claude-code", account: "SHAKEOUT2", character: "Burnsonn", race: 3 });
   });
 
   test("an unknown driver is refused rather than passed through", () => {
@@ -56,18 +56,24 @@ describe("episodeArgv", () => {
   });
 
   test("claude entries carry no api flags and do carry their account", () => {
-    const [s] = resolve([{ model: "opus", driver: "claude-subscription", account: "SHAKEOUT" }], "20260101");
+    const [s] = resolve([{ model: "opus", driver: "claude-code", account: "SHAKEOUT" }], "20260101");
     const argv = episodeArgv(s!, false);
     for (const flag of OPENAI_ONLY) expect(argv).not.toContain(flag);
-    expect(argv[argv.indexOf("--driver") + 1]).toBe("claude-subscription");
+    expect(argv[argv.indexOf("--driver") + 1]).toBe("claude-code");
     expect(argv[argv.indexOf("--account") + 1]).toBe("SHAKEOUT");
   });
 
+  test("a roster written with the old driver spelling resumes as claude-code (ADR-0035)", () => {
+    const [s] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
+    expect(s!.driver).toBe("claude-code");
+    expect(episodeArgv(s!, false)[episodeArgv(s!, false).indexOf("--driver") + 1]).toBe("claude-code");
+  });
+
   test("effort is passed only when the entry declares one", () => {
-    const [plain] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
+    const [plain] = resolve([{ model: "opus", driver: "claude-code" }], "20260101");
     expect(episodeArgv(plain!, false)).not.toContain("--effort");
 
-    const [low] = resolve([{ model: "opus", driver: "claude-subscription", effort: "low" }], "20260101");
+    const [low] = resolve([{ model: "opus", driver: "claude-code", effort: "low" }], "20260101");
     const argv = episodeArgv(low!, false);
     expect(argv[argv.indexOf("--effort") + 1]).toBe("low");
   });
@@ -75,8 +81,8 @@ describe("episodeArgv", () => {
   test("effort is part of the derived run id, so opus@low is its own run", () => {
     const specs = resolve(
       [
-        { model: "opus", driver: "claude-subscription" },
-        { model: "opus", driver: "claude-subscription", effort: "low" },
+        { model: "opus", driver: "claude-code" },
+        { model: "opus", driver: "claude-code", effort: "low" },
       ],
       "20260101",
     );
@@ -103,7 +109,7 @@ describe("episodeArgv", () => {
   });
 
   test("a resume passes only the run id — identity comes from meta.json", () => {
-    const [s] = resolve([{ model: "opus", driver: "claude-subscription" }], "20260101");
+    const [s] = resolve([{ model: "opus", driver: "claude-code" }], "20260101");
     expect(episodeArgv(s!, true).slice(1)).toEqual(["--resume", "roster-opus-20260101"]);
   });
 });
