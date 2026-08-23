@@ -78,22 +78,40 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, deferSidecarPath, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { harnessSeries } from "../runner/src/comparability";
 import { normalizeDriver, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
 import {
-  DEFAULT_POLICY,
   LADDER_MS,
   MODELS_SIDECAR,
   modelStates,
-  nextJobs,
+  parsePolicyBlock,
+  parseRunsPerEpisode,
   parseModelsSidecar,
+  planNextJobs,
   readModelsSidecar,
   schedulability,
   serializeModelsSidecar,
+  type HeldPick,
   type ModelState,
   type NextJob,
   type RosterModel,
   type SchedulingPolicy,
+  type StartingCharacter,
 } from "../runner/src/models";
+import { harnessVersion } from "../runner/src/version";
+import { DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT } from "../runner/src/models";
+
+export { isAllowlistedFree };
+
+/**
+ * The harness series this supervisor runs from (ADR-0034): the projection
+ * counts only runs stamped with it. Null outside a versioned checkout, which
+ * counts every run and is said so in `--status`.
+ */
+export function currentSeries(): string | null {
+  return harnessSeries(harnessVersion());
+}
 
 // ------------------------------------------------------------------ types
 
@@ -208,6 +226,8 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
 export interface FleetRosterEntry extends RosterSpec {
   tiers: EpisodeId[];
   runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
+  /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
+  billing?: Billing;
 }
 
 export type JobSource = "pinned" | "queue" | "policy" | "legacy";
@@ -240,6 +260,12 @@ export interface FleetJob {
    * from the second attempt on so every attempt has its own id.
    */
   attempt?: number;
+  /**
+   * Set on an extra run (ADR-0034): a policy pick past the model's target,
+   * rolling this character. Reaches the runner as `--race/--class` plus
+   * `--extra true`, so the run is stamped and never counted.
+   */
+  extra?: StartingCharacter;
   /**
    * A pre-job lane, carried verbatim so an older file runs exactly as it did:
    * its own entries (or rosterFile), lane-level dimensions, untilDefault.
@@ -353,22 +379,8 @@ export function isSharedFreePool(apiBase: string | undefined): boolean {
   return /(^|\/\/|\.)(openrouter\.ai|opencode\.ai)(\/|:|$)/i.test(apiBase);
 }
 
-/**
- * Shared-free-pool model ids that are genuinely free but do NOT carry the
- * `-free`/`:free` suffix the pool convention uses. Stealth/preview models are
- * the case: OpenRouter lists `stealth/ox-alpha` at pricing 0/0 (verified
- * 2026-08-22 against /api/v1/models) but the id has no suffix, so the plain
- * suffix guard would wrongly reject it. Membership here is an explicit operator
- * assertion that the id was checked free — it is NOT a way to sneak a paid model
- * onto a free lane; re-verify pricing before adding one, and drop it if the
- * stealth window closes and it starts billing.
- */
-const FREE_SUFFIXLESS_ALLOWLIST = new Set<string>(["stealth/ox-alpha"]);
-
-/** True when a shared-free-pool id is free despite lacking the suffix. */
-export function isAllowlistedFree(model: string): boolean {
-  return FREE_SUFFIXLESS_ALLOWLIST.has(model.toLowerCase());
-}
+// `isAllowlistedFree` (suffixless ids verified free, e.g. `stealth/ox-alpha`)
+// lives in runner/src/model-cost.ts, next to the billing verdict it feeds.
 
 /**
  * Lane-policy and shape checks for one lane's entries. Used for inline
@@ -717,7 +729,8 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tiers: rawTiers, runsPerEpisode: rawRuns, ...rest } = e as { tiers?: unknown; runsPerEpisode?: unknown } & Record<string, unknown>;
+    const { tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as { tiers?: unknown; runsPerEpisode?: unknown; billing?: unknown } & Record<string, unknown>;
+    if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // Absent means "no force": eligibility comes from run history (ADR-0034).
     const tiers = rawTiers === undefined ? [] : rawTiers;
     if (!Array.isArray(tiers) || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
@@ -728,45 +741,25 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // Lane-policy checks are per entry; the pseudo-lane is only there for the
     // error message and the account-agreement check (vacuous here).
     const [validated] = validateEntries({ name: `roster:${name}`, enabled: true, account: "-", loop: false }, [rest]);
-    out[name] = { ...validated!, tiers: tiers as EpisodeId[], ...(runsPerEpisode !== undefined ? { runsPerEpisode } : {}) };
-  }
-  return out;
-}
-
-function parseRunsPerEpisode(raw: unknown, where: string): Partial<Record<"e90" | "e360", number>> | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail(`${where} must be an object like { "e90": 3, "e360": 3 }`);
-  const out: Partial<Record<"e90" | "e360", number>> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (k !== "e90" && k !== "e360") fail(`${where}: unknown episode ${k} (e90 or e360; freeplay is never scheduled by policy)`);
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) fail(`${where}.${k} must be a non-negative integer`);
-    out[k] = v;
+    out[name] = {
+      ...validated!,
+      tiers: tiers as EpisodeId[],
+      ...(runsPerEpisode !== undefined ? { runsPerEpisode } : {}),
+      ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
+    };
   }
   return out;
 }
 
 /**
- * The file's `policy` block: the targets and the per-driver concurrency cap
- * are configurable; the ladder and the promotion level are code.
+ * The file's `policy` block: targets, the per-driver concurrency cap, the
+ * paid policy and the extras policy are configurable (`parsePolicyBlock` in
+ * runner/src/models.ts is the one parser; the viewer reads the same); the
+ * ladder and the promotion level are code. The series is this checkout's.
  */
 function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: Record<string, number> } {
-  if (raw === undefined) return { policy: DEFAULT_POLICY, maxConcurrent: {} };
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown };
-  const r = parseRunsPerEpisode(o.runsPerEpisode, "policy.runsPerEpisode");
-  const maxConcurrent: Record<string, number> = {};
-  if (o.maxConcurrent !== undefined) {
-    if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
-      fail('policy.maxConcurrent must be an object like { "claude-code": 2 }');
-    }
-    for (const [k, v] of Object.entries(o.maxConcurrent as Record<string, unknown>)) {
-      const driver = normalizeDriver(k);
-      if (driver === undefined) fail(`policy.maxConcurrent: unknown driver ${k}`);
-      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) fail(`policy.maxConcurrent.${k} must be a positive integer`);
-      maxConcurrent[driver] = v;
-    }
-  }
-  return { policy: { ...DEFAULT_POLICY, runsPerEpisode: { ...DEFAULT_POLICY.runsPerEpisode, ...r } }, maxConcurrent };
+  const { maxConcurrent, ...policy } = parsePolicyBlock(raw, currentSeries());
+  return { policy, maxConcurrent };
 }
 
 /** The roster as the projection reads it: ordered, named, with the two overrides. */
@@ -779,6 +772,7 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
     ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
     ...(e.tiers.length > 0 ? { tiers: e.tiers } : {}),
     ...(e.runsPerEpisode !== undefined ? { runsPerEpisode: e.runsPerEpisode } : {}),
+    ...(e.billing !== undefined ? { billing: e.billing } : {}),
   }));
 }
 
@@ -968,7 +962,24 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
  * defer sidecar accumulate across attempts; the run id is not (`attempt`).
  */
 export function policyJob(pick: NextJob): FleetJob {
-  return { refs: [pick.name], ref: pick.name, episode: pick.episode, repeat: 1, name: `${pick.name}-${pick.episode}`, enabled: true, source: "policy", attempt: pick.attempt };
+  return {
+    refs: [pick.name],
+    ref: pick.name,
+    episode: pick.episode,
+    repeat: 1,
+    name: `${pick.name}-${pick.episode}`,
+    enabled: true,
+    source: "policy",
+    attempt: pick.attempt,
+    ...(pick.extra !== undefined ? { extra: pick.extra } : {}),
+  };
+}
+
+/** One policy pick, placed. */
+export interface PolicyPick {
+  job: FleetJob;
+  account: string;
+  why: string;
 }
 
 /**
@@ -978,7 +989,9 @@ export function policyJob(pick: NextJob): FleetJob {
  * model. `concurrency` is the per-driver cap: `running` counts every stream
  * in flight on that driver, pinned jobs included, so a subscription that
  * tolerates two sessions is a number in the file rather than a model removed
- * from the roster.
+ * from the roster. `paid` is the paid cap (`policy.paid.maxConcurrent`):
+ * `running` counts paid policy models in flight (pinned jobs excluded), and a
+ * paid pick over the cap is held, with the reason in `held` for `--dry-run`.
  */
 export function planPolicy(opts: {
   states: readonly ModelState[];
@@ -988,15 +1001,32 @@ export function planPolicy(opts: {
   queuePlan: QueuePlan;
   runningRefs: ReadonlySet<string>;
   concurrency?: { driverOf: (name: string) => string; max: Record<string, number>; running: ReadonlyMap<string, number> };
-}): { job: FleetJob; account: string; why: string }[] {
-  if (opts.queuePlan.waiting.length > 0) return [];
+  policy?: SchedulingPolicy;
+  /** Paid policy models already in flight (pinned jobs excluded). */
+  paidRunning?: number;
+}): PolicyPick[] {
+  return planPolicyHeld(opts).picks;
+}
+
+/** `planPolicy` plus what it held back and why. */
+export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
+  if (opts.queuePlan.waiting.length > 0) return { picks: [], held: [] };
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
   const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  if (free.length === 0) return [];
+  if (free.length === 0) return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
-  const wrap = (pick: NextJob): { job: FleetJob; account: string; why: string } => ({ job: policyJob(pick), account: pick.account, why: pick.why });
-  if (opts.concurrency === undefined) return nextJobs(opts.states, free, running).map(wrap);
+  const wrap = (pick: NextJob): PolicyPick => ({ job: policyJob(pick), account: pick.account, why: pick.why });
+  const billingOf = new Map(opts.states.map((s) => [s.name, s.billing]));
+  const next = (states: readonly ModelState[], accounts: readonly string[], also: readonly NextJob[]): ReturnType<typeof planNextJobs> =>
+    planNextJobs(states, accounts, new Set([...running, ...also.map((p) => p.name)]), {
+      ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
+      paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
+    });
+  if (opts.concurrency === undefined) {
+    const plan = next(opts.states, free, []);
+    return { picks: plan.jobs.map(wrap), held: plan.held };
+  }
   // The cap, over the projection's own priority order: a pick whose driver is
   // full is passed over and the next candidate is asked for its account, until
   // a round yields nothing to pass over.
@@ -1004,17 +1034,20 @@ export function planPolicy(opts: {
   const count = new Map(opts.concurrency.running);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) count.set(driverOf(r), (count.get(driverOf(r)) ?? 0) + 1);
   const out: NextJob[] = [];
+  const held: HeldPick[] = [];
   const passed = new Set<string>();
   let states = opts.states;
   let accounts = free;
   for (;;) {
-    const picks = nextJobs(states, accounts, new Set([...running, ...out.map((p) => p.name)]));
+    const plan = next(states, accounts, out);
+    for (const h of plan.held) if (!held.some((x) => x.name === h.name)) held.push(h);
     let rejected = false;
-    for (const pick of picks) {
+    for (const pick of plan.jobs) {
       const d = driverOf(pick.name);
       const cap = max[d];
       if (cap !== undefined && (count.get(d) ?? 0) >= cap) {
         passed.add(pick.name);
+        held.push({ name: pick.name, episode: pick.episode, why: `driver cap: ${d} <= ${cap}, ${count.get(d) ?? 0} in flight` });
         rejected = true;
         continue;
       }
@@ -1026,7 +1059,7 @@ export function planPolicy(opts: {
     accounts = free.filter((a) => !out.some((p) => p.account === a));
   }
   // Accounts in preference order over the final picks, as an uncapped round would give.
-  return out.map((pick, i) => wrap({ ...pick, account: free[i]! }));
+  return { picks: out.map((pick, i) => wrap({ ...pick, account: free[i]! })), held };
 }
 
 /**
@@ -1042,12 +1075,14 @@ export function jobLane(job: FleetJob, roster: Record<string, FleetRosterEntry>,
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
   for (const r of runnableRefs(job, roster, eligible)) {
-    const { tiers: _tiers, runsPerEpisode: _runs, ...spec } = roster[r]!;
+    const { tiers: _tiers, runsPerEpisode: _runs, billing: _billing, ...spec } = roster[r]!;
     const base: RosterSpec = {
       ...spec,
       ...dims,
       watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
       ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
+      // An extra run rolls the policy's character and is stamped as an extra.
+      ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class, extra: true } : {}),
     };
     const runId =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}` +
@@ -1565,6 +1600,8 @@ export interface JobRow {
   planned?: boolean;
   /** The policy's attempt number, for a policy job. */
   attempt?: number;
+  /** An extra run (ADR-0034), with the character it rolls. */
+  extra?: StartingCharacter;
 }
 
 /** What an account is doing right now, for the accounts table. */
@@ -1592,7 +1629,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
       continue;
     }
     const j = r.job;
-    const what = `${j.name}: ${j.models.join("+")} ${j.episode}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}`;
+    const what = `${j.name}: ${j.models.join("+")} ${j.episode}${j.attempt !== undefined && j.attempt > 1 ? ` attempt ${j.attempt}` : ""}${j.extra !== undefined ? ` extra (race ${j.extra.race} class ${j.extra.class})` : ""}`;
     if (j.planned === true) {
       out.push(`${head}${what} — would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`);
       continue;
@@ -1615,11 +1652,15 @@ export function formatModels(
   running: ReadonlySet<string>,
   now = Date.now(),
   excluded: ReadonlyMap<string, string> = new Map(),
+  policy: SchedulingPolicy = { ...DEFAULT_POLICY_FOR_FORMAT },
 ): string[] {
   const w = Math.max(12, ...states.map((s) => s.name.length));
+  const series = policy.series ?? "any";
   const out: string[] = [
-    `models: ${states.length} in roster (policy: ADR-0034; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h)`,
-    `  ${"model".padEnd(w)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} schedulable`,
+    `models: ${states.length} in roster (policy: ADR-0034; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
+      `${policy.paid !== null ? `; paid ${policy.paid.runsPerEpisode.e90}/${policy.paid.runsPerEpisode.e360}, at most ${policy.paid.maxConcurrent} in flight` : "; no paid/free split"}` +
+      `${policy.extras !== null ? `; extras cycle ${policy.extras.characters.length} character(s)` : "; no extras"})`,
+    `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
   const cell = (s: ModelState, ep: "e90" | "e360"): string => {
@@ -1630,14 +1671,22 @@ export function formatModels(
   for (const s of states) {
     const ex = excluded.get(s.name);
     const last = (["e90", "e360"] as const).map((ep) => s.perEpisode[ep]!).filter((st) => st.lastEnded !== null).sort((a, b) => b.lastEnded! - a.lastEnded!)[0];
-    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${v.ok ? "yes" : "no"}: ${v.why}`)(schedulability(s, running));
+    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${v.ok ? "yes" : "no"}: ${v.why}`)(schedulability(s, running, policy));
+    const extras = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
+    const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
-      `  ${s.name.padEnd(w)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${sched}` +
+      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
         (last !== undefined && ex === undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
-        (s.ladder > 0 ? ` — ladder ${s.ladder}` : ""),
+        (s.ladder > 0 ? ` — ladder ${s.ladder}` : "") +
+        (other > 0 ? ` — ${other} run(s) from other series not counted` : ""),
     );
   }
   return out;
+}
+
+/** `--dry-run`: the picks the policy held back and why. Pure. */
+export function formatHeld(held: readonly HeldPick[]): string[] {
+  return held.map((h) => `  ${h.name}: HELD — ${h.episode} wanted, ${h.why}`);
 }
 
 /** --status / --dry-run: the manual queue, only when there is one. Pure. */
@@ -1773,7 +1822,7 @@ interface FleetState {
     skipped: { name: string; reason: string }[];
   };
   /** Every job with a live process: the one concept (ADR-0034). */
-  jobs?: Record<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; models: string[] }>;
+  jobs?: Record<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }>;
   /** Why the last tick spawned nothing from the policy, when it did not. */
   policy?: {
     idle?: string;
@@ -1892,6 +1941,7 @@ function writeState(
                 account: pool.assigned.get(name) ?? j.account ?? "-",
                 source: j.source,
                 ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
+                ...(j.extra !== undefined ? { extra: j.extra } : {}),
                 models: (procs.get(name)?.lane.entries ?? []).map((e) => e.model),
               },
             ]),
@@ -2038,8 +2088,8 @@ function printLiveRuns(configPath: string): number {
 export function liveJobsFromState(
   state: Pick<FleetState, "jobs" | "lanes" | "policy" | "queue" | "accounts"> | undefined,
   config: Pick<FleetConfig, "jobs" | "roster"> | undefined,
-): Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; models: string[] }> {
-  const out = new Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; models: string[] }>();
+): Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }> {
+  const out = new Map<string, { ref: string; episode: EpisodeId; account: string; source: JobSource; attempt?: number; extra?: StartingCharacter; models: string[] }>();
   if (state === undefined) return out;
   if (state.jobs !== undefined) {
     for (const [name, j] of Object.entries(state.jobs)) out.set(name, j);
@@ -2189,7 +2239,7 @@ function printStatus(configPath: string): void {
       const why = policyExclusion(config, name);
       if (why !== undefined) excluded.set(name, why);
     }
-    for (const line of formatModels(states, running, Date.now(), excluded)) console.log(`  ${line}`);
+    for (const line of formatModels(states, running, Date.now(), excluded, config.policy)) console.log(`  ${line}`);
     if (Object.keys(config.maxConcurrent).length > 0) {
       console.log(`  concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
     }
@@ -2230,7 +2280,9 @@ function printStatus(configPath: string): void {
 export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string): {
   pinned: { job: FleetJob; lane: FleetLane }[];
   queue: QueuePlan;
-  policy: { job: FleetJob; account: string; why: string }[];
+  policy: PolicyPick[];
+  /** Picks the policy wanted but held back (paid cap, driver cap), with why. */
+  heldPicks: HeldPick[];
 } {
   const eligible = eligibleFrom(states);
   const pinned = pinnedJobs(config)
@@ -2251,7 +2303,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
   const driverCount = new Map<string, number>();
   for (const r of runningRefs) driverCount.set(driverOf(config.roster, r), (driverCount.get(driverOf(config.roster, r)) ?? 0) + 1);
-  const policy = planPolicy({
+  const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
     running: new Map(),
@@ -2259,8 +2311,10 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     queuePlan: queue,
     runningRefs,
     concurrency: { driverOf: (n) => driverOf(config.roster, n), max: config.maxConcurrent, running: driverCount },
+    policy: config.policy,
+    paidRunning: 0,
   });
-  return { pinned, queue, policy };
+  return { pinned, queue, policy, heldPicks };
 }
 
 function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
@@ -2281,7 +2335,15 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const planned = (job: FleetJob, lane: FleetLane): JobRow => {
     const entries = fillEntries(lane, loadLaneEntries(lane), stampToday);
     argvs.push(`  ${job.name}: ${laneArgv(lane, { stamp: stampToday, until: cliUntil }).join(" ")}`);
-    return { name: job.name, models: [...new Set(entries.map((e) => e.model))], episode: job.episode, runId: entries.map((e) => e.runId).join(", "), planned: true, ...(job.attempt !== undefined ? { attempt: job.attempt } : {}) };
+    return {
+      name: job.name,
+      models: [...new Set(entries.map((e) => e.model))],
+      episode: job.episode,
+      runId: entries.map((e) => e.runId).join(", "),
+      planned: true,
+      ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
+      ...(job.extra !== undefined ? { extra: job.extra } : {}),
+    };
   };
   for (const account of Object.keys(config.accounts.pinned)) {
     const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
@@ -2315,7 +2377,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     const why = policyExclusion(config, name);
     if (why !== undefined) excluded.set(name, why);
   }
-  for (const line of formatModels(states, new Set(), Date.now(), excluded)) console.log(line);
+  for (const line of formatModels(states, new Set(), Date.now(), excluded, config.policy)) console.log(line);
+  for (const line of formatHeld(plan.heldPicks)) console.log(line);
   if (Object.keys(config.maxConcurrent).length > 0) {
     console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every job on the driver counts)`);
   }
@@ -2513,6 +2576,9 @@ async function main(): Promise<void> {
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
     const driverCount = new Map<string, number>();
+    // Paid policy models in flight, for the paid cap (pinned jobs excluded).
+    const billingOf = new Map(states.map((st) => [st.name, st.billing]));
+    let paidRunning = 0;
     const pinnedSkips: QueueSkip[] = [];
     const countDriver = (refs: readonly string[]): void => {
       for (const r of refs) driverCount.set(driverOf(cfg.roster, r), (driverCount.get(driverOf(cfg.roster, r)) ?? 0) + 1);
@@ -2553,6 +2619,7 @@ async function main(): Promise<void> {
           out.push(jobLane(running, cfg.roster, account, stampToday));
           runningRefs.add(running.ref);
           countDriver(running.refs);
+          if (billingOf.get(running.ref) === "paid") paidRunning++;
         }
         continue;
       }
@@ -2565,6 +2632,9 @@ async function main(): Promise<void> {
       out.push(jobLane(fromFile, cfg.roster, account, stampToday, eligible));
       for (const r of fromFile.refs) runningRefs.add(r);
       countDriver(fromFile.refs);
+      // A manual pool job on a paid model holds a paid slot too: the cap is
+      // about what is billing at once, not about who asked for it.
+      for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
     }
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     lastPlan = planQueue({
@@ -2595,6 +2665,8 @@ async function main(): Promise<void> {
         queuePlan: lastPlan,
         runningRefs,
         concurrency: { driverOf: (n) => driverOf(cfg.roster, n), max: cfg.maxConcurrent, running: driverCount },
+        policy: cfg.policy,
+        paidRunning,
       });
       for (const { job, account, why } of picks) {
         pending.set(job.name, job);
@@ -2604,8 +2676,9 @@ async function main(): Promise<void> {
         const key = `${job.name}:${job.attempt}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
-          say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt} on ${account} — ${why}`);
-          record({ lane: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt} on ${account}: ${why}` });
+          const tag = job.extra !== undefined ? " (extra)" : "";
+          say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
+          record({ lane: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
         out.push(jobLane(job, cfg.roster, account, stampToday));
       }

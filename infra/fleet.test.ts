@@ -54,8 +54,11 @@ import {
   type PreflightRecord,
   type PreflightSmoke,
   type ConfigRejection,
+  currentSeries,
+  planPolicyHeld,
+  formatHeld,
 } from "./run-fleet";
-import { modelStates, type ModelState, type RosterModel, type RunFact } from "../runner/src/models";
+import { modelStates, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -461,7 +464,9 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3"]);
     // No tiers in the file means no force; e90 eligibility is the policy's, not the field's.
     expect(config.roster["glm"]!.tiers).toEqual([]);
-    expect(config.policy).toEqual({ runsPerEpisode: { e90: 3, e360: 3 }, promoteAtLevel: 5 });
+    expect(config.policy).toMatchObject({ runsPerEpisode: { e90: 3, e360: 3 }, promoteAtLevel: 5, paid: null, extras: null });
+    // The series is the checkout's, never the file's.
+    expect(config.policy.series).toBe(currentSeries());
     expect(config.maxConcurrent).toEqual({});
     // Names are derived, never authored: `lane` is read and dropped.
     expect(poolJobs(config).map((j) => j.name)).toEqual(["glm-e90", "ox-e360", "qwen-e360", "glm-e360"]);
@@ -627,7 +632,7 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
       "fleet-ox-long-ox-alpha-20260101-r3",
     ]);
     expect(filled[0]).toMatchObject({ episode: "e360", account: "RUNNER2", maxToolCalls: 12000, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null } });
-    expect((filled[0] as Record<string, unknown>)["tiers"]).toBeUndefined();
+    expect((filled[0] as unknown as Record<string, unknown>)["tiers"]).toBeUndefined();
     expect(laneArgv(jobLane(job({ ref: "ox" }), roster, "RUNNER", "20260101"), { stamp: "20260101", until: undefined })).toContain("--loop");
     expect(laneArgv(l, { stamp: "20260101", until: undefined })).not.toContain("--loop");
     // An entry's own watchdog tightening wins key by key over the tier's.
@@ -724,8 +729,8 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
 // ------------------------------------------------------------ ADR-0032 policy
 
 /** The projection over an in-memory history, so no run directory is needed. */
-function modelStatesOf(roster: RosterModel[], runs: RunFact[] = [], now = 1_800_000_000_000): ModelState[] {
-  return modelStates({ runsDir: "/nonexistent", roster, runs, sidecar: { version: 1, cleared: {} }, now });
+function modelStatesOf(roster: RosterModel[], runs: RunFact[] = [], now = 1_800_000_000_000, policy?: SchedulingPolicy): ModelState[] {
+  return modelStates({ runsDir: "/nonexistent", roster, runs, sidecar: { version: 1, cleared: {} }, now, ...(policy !== undefined ? { policy } : {}) });
 }
 
 describe("scheduling policy (ADR-0032)", () => {
@@ -737,6 +742,8 @@ describe("scheduling policy (ADR-0032)", () => {
     episode,
     episodeOverride: false,
     harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
     startedAt: NOW - (50 - i) * 3_600_000,
     endedAt: NOW - (49 - i) * 3_600_000,
     terminationReason: "episode-limit",
@@ -815,10 +822,75 @@ describe("scheduling policy (ADR-0032)", () => {
     const picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set() });
     expect(picks.map((p) => [p.job.name, p.account])).toEqual([["mimo-e90", "RUNNER"], ["ox-e360", "RUNNER2"]]);
     const text = formatModels(states, new Set(), NOW).join("\n");
-    expect(text).toMatch(/ox +promoted +3\/3 L5 +0\/3 +yes: schedulable on e360/);
-    expect(text).toMatch(/glm +cooling +0\/3\+1sb L3 +- +no: cooling rung 1\/9/);
-    expect(text).toMatch(/mimo +new +0\/3 +- +yes/);
+    expect(text).toMatch(/ox +free +promoted +3\/3 L5 +0\/3 +0 +yes: schedulable on e360/);
+    expect(text).toMatch(/glm +free +cooling +0\/3\+1sb L3 +- +0 +no: cooling rung 1\/9/);
+    expect(text).toMatch(/mimo +free +new +0\/3 +- +0 +yes/);
+    expect(text).toContain("billing status");
+    expect(text).toContain("extras schedulable");
     // A pinned or probe entry is outside the policy and says so instead of a verdict.
-    expect(formatModels(states, new Set(), NOW, new Map([["ox", "pinned to X by job ox-freeplay"]])).join("\n")).toMatch(/ox +pinned .*no: pinned to X by job ox-freeplay/);
+    expect(formatModels(states, new Set(), NOW, new Map([["ox", "pinned to X by job ox-freeplay"]])).join("\n")).toMatch(/ox +free +pinned .*no: pinned to X by job ox-freeplay/);
+  });
+
+  test("paid and free (ADR-0034 amendment): the paid cap holds a pick and says so; an extra rolls its character into the lane", () => {
+    const raw = {
+      accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
+      roster: {
+        big: { model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        bigger: { model: "vendor/bigger", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        glm: { model: "z-ai/glm-5.2:free" },
+        local: { model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        forced: { model: "z-ai/other:free", billing: "paid" },
+      },
+      policy: { paid: {}, extras: {} },
+    };
+    const config = parseFleet(raw);
+    expect(config.policy.paid).toEqual({ runsPerEpisode: { e90: 3, e360: 1 }, maxConcurrent: 1 });
+    expect(config.policy.extras!.characters.length).toBeGreaterThan(3);
+    expect(rosterModels(config.roster).find((m) => m.name === "forced")!.billing).toBe("paid");
+    // glm and local have met every target; local is promoted. big/bigger/forced are paid and new.
+    // Stamped with this checkout's series: the policy counts only those (a null series counts everything).
+    const runs = [
+      ...[1, 2, 3].map((i) => run("z-ai/glm-5.2:free", "e90", i)),
+      ...[1, 2, 3].map((i) => run("qwen/q", "e90", i, { bestLevel: 6 })),
+      ...[4, 5, 6].map((i) => run("qwen/q", "e360", i)),
+      run("qwen/q", "e90", 7, { extra: true, modelResponses: 5 }),
+    ].map((r) => ({ ...r, harnessSeries: config.policy.series }));
+    const states = modelStatesOf(rosterModels(config.roster), runs, NOW, config.policy);
+    const by = Object.fromEntries(states.map((st) => [st.name, st]));
+    expect(by["big"]).toMatchObject({ billing: "paid", status: "new" });
+    expect(by["big"]!.perEpisode.e360!.target).toBe(1);
+    expect(by["glm"]!.billing).toBe("free");
+    expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
+    const plan = planTick(config, states, () => undefined, "20260101");
+    // One paid model (roster order), then extras for the free ones; bigger and forced are held by the cap.
+    expect(plan.policy.map((p) => [p.job.name, p.account, p.job.extra !== undefined])).toEqual([
+      ["big-e90", "RUNNER", false],
+      ["glm-e90", "RUNNER2", true],
+      ["local-e90", "RUNNER3", true],
+    ]);
+    expect(plan.heldPicks.map((h) => h.name)).toEqual(["bigger", "forced"]);
+    expect(formatHeld(plan.heldPicks)[0]).toMatch(/bigger: HELD — e90 wanted, paid cap: 1\/1/);
+    // glm has made no extras: the first character; local has made one: the second.
+    const chars = config.policy.extras!.characters;
+    expect(plan.policy[1]!.job.extra).toEqual(chars[0]!);
+    expect(plan.policy[2]!.job.extra).toEqual(chars[1]!);
+    // The extra reaches the lane as race/class plus the stamp, and the argv carries --extra.
+    const lane = jobLane(plan.policy[2]!.job, config.roster, "RUNNER3", "20260101");
+    expect(lane.entries![0]).toMatchObject({ race: chars[1]!.race, class: chars[1]!.class, extra: true, episode: "e90" });
+    expect((lane.entries![0] as unknown as Record<string, unknown>)["billing"]).toBeUndefined();
+    expect(laneArgv(lane, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-e90");
+    // A paid model already in flight fills the cap before any pick.
+    const none = planPolicyHeld({ states: states.filter((st) => st.billing === "paid"), pool: ["RUNNER"], running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set(), policy: config.policy, paidRunning: 1 });
+    expect(none.picks).toEqual([]);
+    expect(none.held.map((h) => h.name)).toEqual(["big", "bigger", "forced"]);
+    // Without the blocks, today's behaviour: no cap, 3/3 for everyone, no extras.
+    const plain = parseFleet({ ...raw, policy: {} });
+    const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
+    const plainPlan = planTick(plain, plainStates, () => undefined, "20260101");
+    expect(plainPlan.policy.map((p) => p.job.name)).toEqual(["big-e90", "bigger-e90", "forced-e90"]);
+    expect(plainPlan.heldPicks).toEqual([]);
+    expect(() => parseFleet({ ...raw, policy: { paid: { maxConcurrent: -1 } } })).toThrow(/paid.maxConcurrent/);
+    expect(() => parseFleet({ ...raw, policy: { extras: { characters: [{ race: 0, class: 1 }] } } })).toThrow(/characters\[0\]/);
+    expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
   });
 });
