@@ -12,6 +12,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
+import { niceTicks, scaleLinear } from "./chart";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
@@ -267,8 +268,9 @@ function richestOf(runs: readonly ResultRun[]): { runId: string; money: number }
 /*
  * The scatter above the ladder table: one point per (model, effort), x the
  * average cost of a run, y the average XP earned, over that entry's counted
- * runs on the selected tier. Everything below is pure so the aggregation,
- * the scale, the ticks and the label placement are testable without a DOM.
+ * runs on the selected tier. Everything below is pure so the aggregation and
+ * the label placement are testable without a DOM; the scale and tick maths
+ * they build on is the shared `lib/chart.ts`.
  */
 
 /** What one run cost, and on what basis; null when nothing prices it. */
@@ -397,24 +399,6 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
   return { points, omitted };
 }
 
-/**
- * Linear ticks from zero: a 1/2/5 × 10^k step, chosen so there are about
- * `want` of them, with the axis top being the first tick at or past `max`.
- * A max of zero (every model free) still gets an axis, so the points have
- * somewhere to sit rather than dividing by nothing.
- */
-export function niceTicks(max: number, want = 5): number[] {
-  const top = Math.max(max, 0);
-  if (top === 0) return [0, 1];
-  const rough = top / want;
-  const pow = 10 ** Math.floor(Math.log10(rough));
-  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => top / s <= want) ?? 10 * pow;
-  const ticks: number[] = [];
-  for (let v = 0; v < top + step / 2; v += step) ticks.push(Number((v).toPrecision(12)));
-  if (ticks[ticks.length - 1]! < top) ticks.push(Number((ticks[ticks.length - 1]! + step).toPrecision(12)));
-  return ticks;
-}
-
 export interface ChartBox {
   /** The plot rectangle in viewBox units: x0 < x1 left to right, y0 > y1 bottom to top. */
   x0: number;
@@ -439,6 +423,9 @@ export interface LadderChartLayout {
   xMax: number;
   yMax: number;
   placed: PlacedPoint[];
+  /** The same value→pixel maps the points were placed with, for the chart's own tick gridlines. */
+  px: (x: number) => number;
+  py: (y: number) => number;
 }
 
 /** Label width estimate at the chart's 11px font: enough to avoid collisions, not a text measure. */
@@ -460,8 +447,8 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
   const yTicks = niceTicks(Math.max(0, ...points.map((p) => p.y)));
   const xMax = xTicks[xTicks.length - 1]!;
   const yMax = yTicks[yTicks.length - 1]!;
-  const px = (x: number): number => box.x0 + (x / xMax) * (box.x1 - box.x0);
-  const py = (y: number): number => box.y0 - (y / yMax) * (box.y0 - box.y1);
+  const px = scaleLinear([0, xMax], [box.x0, box.x1]);
+  const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
   type Rect = { l: number; t: number; r: number; b: number };
   const taken: Rect[] = [];
@@ -500,5 +487,5 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
     taken.push(rectOf(pick));
     placed.push({ point: p, cx, cy, ...pick });
   }
-  return { xTicks, yTicks, xMax, yMax, placed };
+  return { xTicks, yTicks, xMax, yMax, placed, px, py };
 }

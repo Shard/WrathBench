@@ -16,7 +16,6 @@ import {
   ladderChartLayout,
   ladderPoints,
   ladderRows,
-  niceTicks,
   runCostReading,
   scored,
   xpEarnedOf,
@@ -265,21 +264,6 @@ describe("ladderPoints", () => {
       { key: "nocost", why: "no cost reading" },
       { key: "noxp", why: "no xp reading" },
     ]);
-  });
-});
-
-describe("niceTicks", () => {
-  test("1/2/5 steps from zero, the top tick at or past the max, and an axis even for all-free", () => {
-    expect(niceTicks(0)).toEqual([0, 1]);
-    expect(niceTicks(6.5)).toEqual([0, 2, 4, 6, 8]);
-    expect(niceTicks(1.27)).toEqual([0, 0.5, 1, 1.5]);
-    expect(niceTicks(2052)).toEqual([0, 500, 1000, 1500, 2000, 2500]);
-    for (const m of [0.003, 0.9, 42, 99_999]) {
-      const t = niceTicks(m);
-      expect(t[0]).toBe(0);
-      expect(t[t.length - 1]!).toBeGreaterThanOrEqual(m);
-      expect(t.length).toBeLessThanOrEqual(7);
-    }
   });
 });
 

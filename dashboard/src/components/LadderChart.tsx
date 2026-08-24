@@ -4,8 +4,9 @@
  *
  * Hand-drawn inline SVG, like `XpChart` — a roster is a few dozen points at
  * most, and a chart library is a dependency this dashboard has not earned.
- * The maths (aggregation, ticks, label placement) is `lib/ladder.ts`, where
- * its tests are; this file only draws what that returns. Colours come from
+ * The aggregation and label placement are `lib/ladder.ts`, where its tests
+ * are; the scale and tick maths are the shared `lib/chart.ts`. This file only
+ * draws what those return. Colours come from
  * the palette tokens so both themes work; the only data-driven colour is the
  * harness tag, which follows the same semantics as the table's `HarnessTag`.
  */
@@ -79,10 +80,10 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         >
           <title>average cost per {props.episode} run (USD) against average xp earned, one point per model</title>
 
-          {/* Gridlines and ticks. */}
+          {/* Gridlines and ticks: the same px/py the points were placed with. */}
           <For each={layout().yTicks}>
             {(t) => {
-              const y = BOX.y0 - (t / layout().yMax) * (BOX.y0 - BOX.y1);
+              const y = layout().py(t);
               return (
                 <>
                   <line x1={BOX.x0} y1={y} x2={BOX.x1} y2={y} stroke="var(--gridline)" stroke-dasharray="3 3" />
@@ -95,7 +96,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           </For>
           <For each={layout().xTicks}>
             {(t) => {
-              const x = BOX.x0 + (t / layout().xMax) * (BOX.x1 - BOX.x0);
+              const x = layout().px(t);
               return (
                 <>
                   <line x1={x} y1={BOX.y0} x2={x} y2={BOX.y0 + 4} stroke="var(--line)" />
