@@ -14,8 +14,15 @@ and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
-the tools and the loop are identical across all three ids, and no model is ever
+the tools and the loop are identical across all four ids, and no model is ever
 told which one it is in.
+
+Two of the four ids are **scored** (`e90`, `e360`) and two are **steered**
+(`probing`, `freeplay`). That split is the one that matters: a scored id fixes
+its own leash and forbids an objective, so its runs form a comparability group;
+a steered id lets an operator point the agent somewhere, which is exactly why it
+can never score. `runner/src/episodes.ts` carries the `scored` flag per id and
+everything else is derived from it — no list of names decides what counts.
 
 ## `e90` — the default episode
 
@@ -74,14 +81,50 @@ because that would silently re-scope every score already carrying this label.
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling.
 
+## `probing` — the probe-campaign episode
+
+- **Duration.** Ninety minutes by default, and the default is the point: the
+  number lives in the table so a campaign that names no clock inherits
+  something sane, but a campaign may set its own and the id enforces nothing.
+  This is the opposite of `e90`, where ninety minutes is a pin.
+- **Start state.** Whatever the campaign's cell says.
+- **Objective.** Allowed, and in practice always present — a campaign *is* an
+  objective plus the set of cells it is swept over.
+- **Watchdogs.** Idle 20m. **The no-XP watchdog is off**, for the same reason it
+  is off on `e360` and more so: a probe may spend its whole budget walking
+  somewhere in order to find out what happens there, and ending it for earning
+  nothing would destroy the observation it was commissioned to make.
+- **Tool-call ceiling.** None pinned; the campaign's own stands.
+- **Ends.** Anything, including `manual`.
+- **Scoring.** **Unscored, always** — the `scored: false` flag is what excludes
+  it from Results, the Ladder and every chart, through the same predicate that
+  excludes `freeplay`. Nothing about a probe is a second mechanism.
+- **Promotion.** None in either direction, and no target: no tier can buy a
+  `probing` run, which is enforced by the type of a tier's run counts rather
+  than by a check someone has to remember (`ScoredEpisodeId`).
+- **Re-arming.** **A new harness series does not re-arm a campaign.** This is
+  the property that separates a probe from an eval, and it falls out rather than
+  being built: re-arming is only consequential through a target, and a
+  permanently-zero target has nothing to un-meet.
+- **Pins in the tuple.** `episode: "probing"` and the unscored reason. The clock
+  and the watchdogs are recorded, like everything else, but carry no
+  comparability claim — which is why a probe run is never reported as
+  "overridden": there is no group for it to have fallen out of.
+
+`probing` and `freeplay` are both steered and both unscored. What separates them
+is the relationship to the schedule: a probe campaign is **commissioned**, runs
+a defined sweep to completion and is then disabled, while freeplay is the
+standing sandbox that never finishes. Duration separates neither pair.
+
 ## `freeplay` — labeled and unscored
 
 - **Duration.** Uncapped by the id. A `freeplay` run may set any wall clock or
   none; the navigation probe runs six hours because that is a convenient
   session, not because the id requires it.
 - **Start state.** Whatever the experiment needs.
-- **Objective.** Allowed. This is the only id where the operator may tell the
-  agent where to go (ADR-0033), and `wikiCoords` may be on (ADR-0033).
+- **Objective.** Allowed. One of the two steered ids where the operator may tell
+  the agent where to go, and where `wikiCoords` may be on (ADR-0033, as amended
+  by ADR-0041 — when ADR-0033 was written `freeplay` was the only one).
 - **Watchdogs.** Set per experiment; recorded, like everything else.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
