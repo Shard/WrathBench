@@ -30,6 +30,7 @@ import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
+import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 
 const WINDOW = 200;
@@ -44,18 +45,10 @@ const FOLLOW_THRESHOLD = 32;
  */
 const FOLLOW_KEY = "wrathbench.runview.follow";
 function readFollowPref(): boolean {
-  try {
-    return localStorage.getItem(FOLLOW_KEY) !== "0";
-  } catch {
-    return true;
-  }
+  return readBoolPref(FOLLOW_KEY, true);
 }
 function writeFollowPref(keep: boolean): void {
-  try {
-    localStorage.setItem(FOLLOW_KEY, keep ? "1" : "0");
-  } catch {
-    /* private mode, blocked storage: the toggle still works, it just won't persist */
-  }
+  writeBoolPref(FOLLOW_KEY, keep);
 }
 
 /** Past this much silence a live run is more likely stopped than thinking. */

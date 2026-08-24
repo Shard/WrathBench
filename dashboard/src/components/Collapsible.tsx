@@ -20,6 +20,7 @@
  */
 
 import { Show, createSignal, createUniqueId, type JSX } from "solid-js";
+import { readBoolPref, writeBoolPref } from "../lib/prefs";
 
 export interface CollapsibleProps {
   /** The heading, left of the summary. A string or any markup. */
@@ -33,39 +34,17 @@ export interface CollapsibleProps {
   children: JSX.Element;
 }
 
-/**
- * The remembered state, if the browser has one and will part with it. Blocked
- * storage (private mode, a browser configured to refuse) is not an error here:
- * the pane still opens and closes, it just starts from `fallback` every time.
- */
-function readOpen(key: string, fallback: boolean): boolean {
-  try {
-    const v = localStorage.getItem(key);
-    return v === null ? fallback : v === "1";
-  } catch {
-    return fallback;
-  }
-}
-
-function writeOpen(key: string, open: boolean): void {
-  try {
-    localStorage.setItem(key, open ? "1" : "0");
-  } catch {
-    /* see readOpen: not persisting is the only consequence */
-  }
-}
-
 export function Collapsible(props: CollapsibleProps): JSX.Element {
   const fallback = props.defaultOpen === true;
   const [open, setOpen] = createSignal(
-    props.storageKey === undefined ? fallback : readOpen(props.storageKey, fallback),
+    props.storageKey === undefined ? fallback : readBoolPref(props.storageKey, fallback),
   );
   const id = createUniqueId();
 
   const toggle = (): void => {
     const next = !open();
     setOpen(next);
-    if (props.storageKey !== undefined) writeOpen(props.storageKey, next);
+    if (props.storageKey !== undefined) writeBoolPref(props.storageKey, next);
   };
 
   return (
