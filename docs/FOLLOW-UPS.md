@@ -91,6 +91,20 @@ status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
+79. **Deploy the achievement/taxi taps and gate them** (2026-08-25, ADR-0048, issue #8).
+    `wrathbench/worldserver:next` carries `SMSG_ACHIEVEMENT_EARNED`,
+    `SMSG_ALL_ACHIEVEMENT_DATA`, `SMSG_ACTIVATETAXIREPLY` and `taxiFlight` on
+    self; nothing has run against it yet. Next action, in a deploy window (runs
+    idle): `./infra/deploy-worldserver.sh`, then
+    `docker compose -f infra/compose.yml exec -e MODULE_ACCOUNT=PROBE
+    -e WRATHBENCH_DB_HOST=db -e WRATHBENCH_DB_PORT=3306 -e WRATHBENCH_DB_USER=root
+    -e WRATHBENCH_DB_PASSWORD=wrathbench runner bun infra/smoke/achievements-taxi.ts`
+    must PASS (login list decoded and named, reply 0, `taxiFlight` flips). Then
+    the second track: SDK schemas, runner milestone records for `self: true`
+    achievements and the taxi flip, and the dashboard's rung 4 and points
+    derivation. Until the smoke passes, the ADR's decode of the login packet
+    and the taximask fixture are unverified against a live core.
+
 ## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,

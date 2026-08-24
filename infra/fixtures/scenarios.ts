@@ -64,6 +64,13 @@ export type Scenario = {
   };
   /** Wipe the quest log and the rewarded list first. Makes the scenario a reset. */
   clearQuests?: boolean;
+  /**
+   * TaxiNodes.dbc ids to mark as visited (replaces `characters.taximask`,
+   * 14 space-separated u32 words in 3.3.5). A flight can only be activated
+   * between nodes the character has visited, so a scenario that ends at a
+   * flight master names both ends here.
+   */
+  taxiNodes?: number[];
 };
 
 /**
@@ -83,6 +90,17 @@ export function facing(from: { x: number; y: number }, to: { x: number; y: numbe
 // (-4840.26, -1330.46, 508.17) and teleports to map 369; the target row is in
 // acore_world.areatrigger_teleport, the trigger's own coordinates are DBC.
 const TRAM_MOUTH = { x: -4838.95, y: -1318.46, z: 501.87 };
+
+// Gryth Thurden, entry 1573, the Ironforge flight master on the Great Forge
+// ring. Spawn read from acore_world.creature; the start point is a few yards
+// off his spot so the character is inside interaction range without standing
+// in him.
+const GRYTH = { x: -4821.13, y: -1152.4, z: 502.3 };
+const GRYTH_FRONT = { x: -4825.5, y: -1158.5, z: 502.3 };
+// TaxiNodes.dbc: 6 = Ironforge, 7 = Thelsamar (Loch Modan), the shortest
+// hop out of the city (TaxiPath.dbc 6 -> 7 costs 330 copper at base price).
+export const TAXI_IRONFORGE = 6;
+export const TAXI_THELSAMAR = 7;
 const TRAM_TRIGGER = { x: -4840.26, y: -1330.46, z: 508.17 };
 
 // Brother Sammuel, entry 925, Paladin trainer in Northshire Abbey. Spawn read
@@ -126,6 +144,19 @@ export const SCENARIOS = {
     // Ironforge homebind, so a hearth or a corpse run lands in the city rather
     // than back in Elwynn. Position from acore_world.game_tele "Ironforge".
     homebind: { map: 0, zone: 1537, x: -4918.88, y: -940.406, z: 501.564 },
+  },
+  "taxi-ironforge": {
+    description: "level 10, 1g, in front of Gryth Thurden (Ironforge flight master) with Ironforge and Thelsamar visited",
+    level: 10,
+    money: 10000,
+    position: {
+      map: 0,
+      zone: 1537,
+      ...GRYTH_FRONT,
+      o: facing(GRYTH_FRONT, GRYTH),
+    },
+    homebind: { map: 0, zone: 1537, x: -4918.88, y: -940.406, z: 501.564 },
+    taxiNodes: [TAXI_IRONFORGE, TAXI_THELSAMAR],
   },
   "trainer-northshire": {
     description: "level 4, 50s, standing in front of Brother Sammuel in Northshire Abbey",
@@ -232,4 +263,20 @@ export function validateScenario(scenario: Scenario): void {
     scenario.quests?.rewarded === undefined || isIdList(scenario.quests.rewarded),
     "quests.rewarded must be positive integer ids",
   );
+  assert(
+    scenario.taxiNodes === undefined || (isIdList(scenario.taxiNodes) && scenario.taxiNodes.every((n) => n <= TAXI_MASK_WORDS * 32)),
+    `taxiNodes must be TaxiNodes.dbc ids in 1..${TAXI_MASK_WORDS * 32}`,
+  );
+}
+
+/** `characters.taximask` is 14 u32 words in 3.3.5 (TaxiMaskSize); node n sets bit n-1. */
+export const TAXI_MASK_WORDS = 14;
+
+export function taxiMask(nodes: number[]): string {
+  const words = new Array<number>(TAXI_MASK_WORDS).fill(0);
+  for (const n of nodes) {
+    const bit = n - 1;
+    words[Math.floor(bit / 32)] = (words[Math.floor(bit / 32)]! | (1 << bit % 32)) >>> 0;
+  }
+  return words.join(" ");
 }
