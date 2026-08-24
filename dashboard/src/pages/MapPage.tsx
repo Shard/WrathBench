@@ -33,6 +33,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { cursorMemory } from "../lib/cursormemory";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
   clearReplayState,
@@ -75,6 +76,8 @@ export default function MapPage() {
    * `/map?run=<id>` is that run's replay. Everything else the page holds —
    * cursor, playback, the pinned map, the selection, pan and zoom — is
    * per-frame state that would make the URL churn, so none of it goes here.
+   * The cursor is remembered per run beside the route instead, so coming back
+   * to a replay does not restart it: `lib/cursormemory.ts` (item 61).
    */
   const [params] = useSearchParams();
   const replayId = (): string | undefined => runParam(params.run);
@@ -411,7 +414,10 @@ export default function MapPage() {
       .then((t) => {
         if (mine !== trackToken) return;
         setTrack(t);
-        setCursor(trackSpan(t.points)?.from ?? 0);
+        // Where this run was last left off, if it was — see cursormemory.ts.
+        // The route effect above has just cleared the cursor, so this is the
+        // one place a loaded track's cursor is chosen.
+        setCursor(cursorMemory.resume(t));
         pendingFit = true;
         needsDraw = true;
       })
@@ -499,7 +505,10 @@ export default function MapPage() {
     const timer = setInterval(() => {
       const next = nextSampleAfter(t.points, cursor());
       if (next === undefined) setPlaying(false);
-      else setCursor(next.ts);
+      else {
+        setCursor(next.ts);
+        cursorMemory.remember(t.runId, next.ts);
+      }
     }, PLAY_MS);
     onCleanup(() => clearInterval(timer));
   });
@@ -590,7 +599,12 @@ export default function MapPage() {
                   value={cursor()}
                   onInput={(e) => {
                     setPlaying(false);
-                    setCursor(Number(e.currentTarget.value));
+                    const ts = Number(e.currentTarget.value);
+                    setCursor(ts);
+                    // Remembered at the two places the cursor is deliberately
+                    // moved, never from a signal effect: the route swap sets it
+                    // to 0 on the way out, and an effect would record that.
+                    cursorMemory.remember(t().runId, ts);
                   }}
                 />
                 <span class="dim mono">{stamp(cursor())}</span>
