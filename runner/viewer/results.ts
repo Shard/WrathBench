@@ -20,6 +20,7 @@ import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type {
+  AreaFacts,
   CostFigure,
   EpisodeIdView,
   LevelMark,
@@ -291,6 +292,13 @@ export function resultRunOf(
     /** `CostView.expected`; see `ResultRun.expectedCost`. Absent from older callers. */
     expectedCost?: CostFigure | null;
   } | null = null,
+  /**
+   * Where the run went, from `scanRunTotals`' pass over the zone/area
+   * milestones. Its own parameter rather than a field of `listing` or `calls`:
+   * it is neither a cost nor a call count, and `null` here means the run wrote
+   * no milestone at all, which the ladder must be able to tell from `false`.
+   */
+  areas: AreaFacts | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -346,6 +354,7 @@ export function resultRunOf(
     tokens: listing?.tokens ?? null,
     actualCost: listing?.actualCost ?? null,
     expectedCost: listing?.expectedCost ?? null,
+    areas,
     pauseReason: run.pauseReason,
   };
 }

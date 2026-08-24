@@ -69,11 +69,17 @@ export const EXPANSION_MAPS = [530, 571];
  * The eight rungs of docs/VISION.md, with the derivation each one gets from the
  * data that actually exists.
  *
- * Rungs 2, 4 and 6 are not derivable: zone and area changes, flight paths and
- * group joins are none of them recorded (FOLLOW-UPS 35 is the milestone-record
- * work that would make 2 and 4 answerable). They read "not instrumented" rather
- * than being approximated by a level threshold that would quietly invent a
- * result.
+ * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to
+ * the zone/area milestone records the loop has written since 2026-08-23
+ * (FOLLOW-UPS 35): `run.areas` carries the first area observed, whether the run
+ * ever left it, and the first capital zone it entered. Both are *partial* in
+ * the way rung 3 is — the flight-master half of rung 4 is still unrecorded —
+ * and both say so in their rule text. A run that predates the producer carries
+ * no `areas` at all and reads as not-reached, the same way a run with no level
+ * reading does; nothing invents a result from a level threshold.
+ *
+ * Rung 6 stays not instrumented: grouping and instance records do not exist,
+ * and the harness runs one character per session anyway.
  */
 export const RUNGS: Rung[] = [
   {
@@ -85,8 +91,8 @@ export const RUNGS: Rung[] = [
   {
     n: 2,
     title: "Leave the starting subzone on its own initiative",
-    rule: "needs zone/area change records (FOLLOW-UPS 35); map id alone cannot tell subzones apart",
-    test: null,
+    rule: "left the first-observed area (milestone records); runs before 2026-08-23 have none",
+    test: (r) => r.areas?.leftStartArea === true,
   },
   {
     n: 3,
@@ -97,8 +103,8 @@ export const RUNGS: Rung[] = [
   {
     n: 4,
     title: "Reach a capital city; use a flight master",
-    rule: "needs zone entry and taxi records (FOLLOW-UPS 35)",
-    test: null,
+    rule: "entered a capital zone (milestone records) — the flight-master half is not recorded",
+    test: (r) => (r.areas?.capitalZone ?? null) !== null,
   },
   {
     n: 5,
@@ -165,9 +171,13 @@ export interface LadderRow {
 /**
  * Highest rung reached per model, over scored runs only.
  *
- * "Highest derivable": rungs 2, 4 and 6 can never be reached here, so a model
- * sitting at rung 3 is not claimed to have passed rung 2 — the page shows the
- * whole row and lets the gaps speak.
+ * "Highest derivable": rung 6 can never be reached here, so a model sitting at
+ * rung 7 is not claimed to have passed it — the page shows the whole row and
+ * lets the gaps speak. Since rungs 2 and 4 became derivable a gap at either is
+ * an observation rather than a blank: a model at rung 3 whose runs never left
+ * their starting area now shows "not reached" at 2, which is a finding about
+ * the model and not about the instrumentation. `highest` stays the maximum
+ * reached rung, so it is unaffected by the holes below it.
  *
  * The row order is a stated derivation, versioned with this file (ADR-0018
  * amendment, 2026-08-23): **highest rung reached, then total XP, then gold.**

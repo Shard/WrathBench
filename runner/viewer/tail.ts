@@ -12,7 +12,7 @@
  * as long as the bytes after the last newline are carried over untouched.
  */
 
-import type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+import type { AreaFacts, EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
@@ -28,7 +28,7 @@ const MAX_ARRAY = 8;
  * The summary, usage and totals shapes live in `api-types.ts` — the type-only
  * contract the dashboard imports too — and are re-exported here unchanged.
  */
-export type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+export type { AreaFacts, EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -517,6 +517,73 @@ export function playtimeMs(
   return total;
 }
 
+/* ------------------------------------------------------- zone/area milestones */
+
+/**
+ * One `milestone` record of kind `zone` or `area`, projected down to the ids.
+ *
+ * The producer (`runner/src/loop.ts`, FOLLOW-UPS 35, 2026-08-23) writes one on
+ * every change of `self.zone` / `self.area`, `from` absent on the first
+ * observation of a process. Kinds beyond these two are ignored here.
+ */
+export interface AreaMark {
+  kind: "zone" | "area";
+  to: number;
+  from: number | null;
+}
+
+/**
+ * Zone and area ids for 3.3.5a capitals — the two factions' five each, plus the
+ * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers rung 4.
+ */
+export const CAPITAL_ZONES = new Set([
+  1519, // Stormwind
+  1537, // Ironforge
+  1657, // Darnassus
+  3557, // The Exodar
+  1637, // Orgrimmar
+  1638, // Thunder Bluff
+  1497, // Undercity
+  3487, // Silvermoon City
+  3703, // Shattrath City
+  4395, // Dalaran
+]);
+
+/**
+ * Derive the facts from a run's zone/area marks, or null when it has none.
+ *
+ * `startArea` is the **first** area mark's destination, not "the mark with no
+ * `from`": a resumed run opens a second process whose `lastAreaId` starts
+ * unset, so several marks can carry no `from` and only the first of them is the
+ * run's start. Everything else follows from that one id.
+ */
+export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
+  if (marks.length === 0) return null;
+  const areas = marks.filter((m) => m.kind === "area");
+  const zones = marks.filter((m) => m.kind === "zone");
+  const startArea = areas.length > 0 ? areas[0]!.to : null;
+  const distinct = new Set(areas.map((m) => m.to));
+  const capital = zones.find((m) => CAPITAL_ZONES.has(m.to));
+  return {
+    startArea,
+    distinctAreas: distinct.size,
+    leftStartArea: startArea === null ? null : areas.some((m) => m.to !== startArea),
+    capitalZone: capital?.to ?? null,
+    zoneMarks: zones.length,
+    areaMarks: areas.length,
+  };
+}
+
+/** Read one trajectory record as an `AreaMark`, or null when it is not one. */
+export function areaMarkOf(rec: Record<string, unknown>): AreaMark | null {
+  const kind = rec["kind"];
+  if (kind !== "zone" && kind !== "area") return null;
+  const to = (rec["to"] as { id?: unknown } | undefined)?.id;
+  if (typeof to !== "number") return null;
+  const from = (rec["from"] as { id?: unknown } | undefined)?.id;
+  return { kind, to, from: typeof from === "number" ? from : null };
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -547,6 +614,12 @@ export interface RunTotals {
   /** How many responses did and did not carry a per-call charge; see
    * `responseCostCoverage`. */
   responseCost: { costed: number; uncosted: number };
+  /**
+   * Where the run went, from its zone/area milestone records; null when it
+   * wrote none — a run from before the producer shipped (2026-08-23), which
+   * must read as "not recorded" and never as "never left". See `AreaFacts`.
+   */
+  areas: AreaFacts | null;
 }
 
 /**
@@ -571,6 +644,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let costUsd: number | null = null;
   let costed = 0;
   let uncosted = 0;
+  const areaMarks: AreaMark[] = [];
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -601,6 +675,13 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     if (t === "claude_result") {
       const v = rec["costUsd"];
       if (typeof v === "number" && Number.isFinite(v)) costUsd = (costUsd ?? 0) + v;
+    }
+    // Same reason, one record kind further: a `milestone` is neither a request
+    // nor a response, so it has to be read before the early return below. Only
+    // the ids are kept — tens of marks per run, not one per line.
+    if (t === "milestone") {
+      const mark = areaMarkOf(rec);
+      if (mark !== null) areaMarks.push(mark);
     }
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
@@ -650,6 +731,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     segments: segmentsFrom(marks),
     reportedCostUsd: costUsd,
     responseCost: { costed, uncosted },
+    areas: areaFactsFrom(areaMarks),
   };
 }
 
