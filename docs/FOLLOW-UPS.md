@@ -288,10 +288,26 @@ and status.
       titles found 5 Cataclysm-or-later pages carrying a 3.3.5 id: an entry a
       later boss inherited from the one it replaced (Daakara on Zul'jin's
       23863), and an infobox id copied from another page and never corrected
-      (three unrelated battle-pet and guild pages all state `itemid=44822`). So
-      the door is ~0.7 precision on a 0.18% coverage gain. Levers if it ever
-      matters, neither built: require the stated id to agree with the page's own
-      name, and treat an id claimed by several unrelated pages as no evidence.
+      (three unrelated battle-pet and guild pages all state `itemid=44822`).
+      **An exhaustive review of all 151 rows** (two independent reviewers, every
+      title judged) then put the id-only door at 94 true / 57 false — precision
+      **0.62**, worse than the sample — and found the discriminator: nearly every
+      false admit's id belongs to something the DB calls by a different name.
+      **The name lever is built** (ADR-0042 addendum): the export carries
+      id→name, and the door needs the DB's name for the id to agree with the
+      page's subject. The rebuild admits 95 pages (98 rows) and refuses 53 on
+      the name (`pages_id_name_mismatch`); Aeonaxx, Daakara, the battle pets and
+      the guild heralds are all gone.
+    - **The ~15 late pages the name rule cannot see** (measured 2026-08-24, the
+      accepted residue of the rule above). Their stub id *and* its name both
+      exist in the 3.3.5 DB, so nothing in the wikitext or the export separates
+      them from a real one: Custer Clubnik, Foreman Fisk, Greela "The Grunt"
+      Crankchain, Horzak Zignibble, Fern Feeder Moth, Malynea Skyreaver, Labor
+      Captain Grabbit, Overseer Sylandra, Rebel Watchman, Royal Guard,
+      `Quest:Jaina's Locket`, `Quest:Sylvanas' Vengeance` and a few like them.
+      Per-title exclusions are not a rule and are deliberately not built; this is
+      recorded so the number is known rather than discovered again. Watch
+      `pages_id_name_mismatch` if the rule is ever retuned.
 
 ## Docs and release
 

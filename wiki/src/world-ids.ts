@@ -1,19 +1,25 @@
 /**
- * The 3.3.5a world DB's entity id sets, as a file the build reads.
+ * The 3.3.5a world DB's entity ids and names, as a file the build reads.
  *
  * The wiki tooling reads nothing from the server at run time and never will
  * (CONTRACTS.md). This is a **build-time** input and the one deliberate crack
  * in that rule, approved by the operator on 2026-08-24 (ADR-0042): of the
  * 20,407 pages with no pre-cutoff revision, ~18,700 say nothing about their era
- * either way, and most of them are quests, NPCs and items that are real in this
- * world and were simply documented late. The only evidence that separates them
- * is whether the id the page states about itself exists on this server.
+ * either way, and the only evidence that separates the ones that are in this
+ * world is what they say about themselves — an id, and the name that id has.
  *
- * The server is used as an **existence oracle**, once, offline:
- * `infra/export-world-ids.sh` writes the id sets to `data/wiki/world-ids.json`
- * and the build reads that file. So the build stays a pure function of files —
- * dump plus export — and reproducible from them, and nothing the agent sees
- * changes: it still reads wiki text and only wiki text.
+ * The **name** is not a refinement, it is what makes the rule worth having. An
+ * id on its own admitted 151 rows at 0.62 precision, because a Cataclysm page
+ * inherits the entry of the thing it replaced (the new Zul'Aman boss states
+ * Zul'jin's) and a battle-pet page copy-pastes another page's tooltip (seven
+ * unrelated pages all state `itemid=44822`). The world DB's name for the id is
+ * what tells those apart from a page that is honestly about entry 1366.
+ *
+ * The server is used as an **existence-and-name oracle**, once, offline:
+ * `infra/export-world-ids.sh` writes the four id→name maps to
+ * `data/wiki/world-ids.json` and the build reads that file. So the build stays
+ * a pure function of files — dump plus export — and reproducible from them, and
+ * nothing the agent sees changes: it still reads wiki text and only wiki text.
  *
  * The export is server-derived and lives under `data/`, gitignored. It never
  * enters git.
@@ -29,39 +35,49 @@ const KIND_TABLE: Partial<Record<IdKind, "quest" | "creature" | "item" | "gameob
   object: "gameobject",
 };
 
-/** The shape `infra/export-world-ids.sh` writes. */
+/** The shape `infra/export-world-ids.sh` writes: id (as a JSON key) -> name. */
 interface WorldIdsFile {
   source?: string;
   exported_at?: string;
   counts?: Record<string, number>;
-  quest: number[];
-  creature: number[];
-  item: number[];
-  gameobject: number[];
+  quest: Record<string, string>;
+  creature: Record<string, string>;
+  item: Record<string, string>;
+  gameobject: Record<string, string>;
 }
 
 /**
- * Loaded id sets, plus the identity of the export they came from.
+ * Loaded id→name maps, plus the identity of the export they came from.
  *
- * `has` is the whole interface the admission rule needs, and it is deliberately
+ * `name` is the whole interface the admission rule needs, and it is deliberately
  * the only thing passed into `admitPage`: the rule reads an oracle, not a file
  * and not a database.
  */
 export interface WorldIdIndex {
-  has(kind: IdKind, id: number): boolean;
+  /** The world DB's name for this id, or undefined when it has none. */
+  name(kind: IdKind, id: number): string | undefined;
   /** ISO instant the export was taken, or "" when the file did not state one. */
   exportedAt: string;
   /** Rows per kind, for the bundle's `meta`: a rebuild against another export is visible. */
   counts: Record<string, number>;
 }
 
-function toSet(values: unknown, kind: string, path: string): Set<number> {
-  if (!Array.isArray(values)) {
-    throw new Error(`${path}: missing or malformed "${kind}" id array`);
+function toMap(values: unknown, kind: string, path: string): Map<number, string> {
+  if (Array.isArray(values)) {
+    throw new Error(
+      `${path}: "${kind}" is a bare id array — that is the id-only export, which admits a ` +
+        "page whose id belongs to something else. Re-run infra/export-world-ids.sh.",
+    );
   }
-  const out = new Set<number>();
-  for (const v of values) {
-    if (typeof v === "number" && Number.isInteger(v) && v > 0) out.add(v);
+  if (values === null || typeof values !== "object") {
+    throw new Error(`${path}: missing or malformed "${kind}" id→name map`);
+  }
+  const out = new Map<number, string>();
+  for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+    const id = Number.parseInt(key, 10);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    if (typeof value !== "string") continue;
+    out.set(id, value);
   }
   if (out.size === 0) throw new Error(`${path}: "${kind}" is empty`);
   return out;
@@ -70,29 +86,28 @@ function toSet(values: unknown, kind: string, path: string): Set<number> {
 /**
  * Read an export written by `infra/export-world-ids.sh`.
  *
- * Fails loudly rather than degrading: a malformed or empty export would silently
- * shrink the bundle back to what it was, which is exactly the failure this rule
- * exists to fix, and a build that quietly ignores its own flag is worse than one
- * that stops.
+ * Fails loudly rather than degrading: a malformed, empty or id-only export would
+ * silently change which pages the bundle holds, and a build that quietly ignores
+ * its own flag is worse than one that stops.
  */
 export async function loadWorldIds(path: string): Promise<WorldIdIndex> {
   const raw = (await Bun.file(path).json()) as WorldIdsFile;
-  const sets: Record<string, Set<number>> = {
-    quest: toSet(raw.quest, "quest", path),
-    creature: toSet(raw.creature, "creature", path),
-    item: toSet(raw.item, "item", path),
-    gameobject: toSet(raw.gameobject, "gameobject", path),
+  const maps: Record<string, Map<number, string>> = {
+    quest: toMap(raw.quest, "quest", path),
+    creature: toMap(raw.creature, "creature", path),
+    item: toMap(raw.item, "item", path),
+    gameobject: toMap(raw.gameobject, "gameobject", path),
   };
   return {
-    has(kind, id) {
+    name(kind, id) {
       const table = KIND_TABLE[kind];
-      // `spell` and `unknown` never match: spells live in the client's DBC
+      // `spell` and `unknown` never resolve: spells live in the client's DBC
       // files, not the world DB, so an absent spell id is no evidence at all,
       // and an `unknown` id is a number whose kind the page did not state.
-      if (table === undefined) return false;
-      return sets[table]!.has(id);
+      if (table === undefined) return undefined;
+      return maps[table]!.get(id);
     },
     exportedAt: typeof raw.exported_at === "string" ? raw.exported_at : "",
-    counts: Object.fromEntries(Object.entries(sets).map(([k, s]) => [k, s.size])),
+    counts: Object.fromEntries(Object.entries(maps).map(([k, m]) => [k, m.size])),
   };
 }
