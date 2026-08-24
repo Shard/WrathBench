@@ -24,6 +24,8 @@ import {
   projectModel,
   readRunFacts,
   schedulability,
+  schedulableView,
+  wantsIdle,
   serializeModelsSidecar,
   type RosterModel,
   type RunFact,
@@ -285,7 +287,7 @@ describe("the ladder", () => {
     expect(s.ladder).toBe(2);
     expect(s.paused).toMatchObject({ runId: "f-9", reason: "operator-pause", episodeElapsedMs: 41 * 60_000, episodeMs: 90 * 60_000 });
     const v = schedulability(s);
-    expect(v.ok).toBe(false);
+    expect(v.verdict).toBe("blocked");
     expect(v.why).toContain("paused run f-9 (operator-pause, 41m of 90m elapsed)");
     expect(nextJobs([s], ["A"])).toEqual([]);
     expect(isCounted(paused)).toBe(false);
@@ -306,7 +308,7 @@ describe("the ladder", () => {
     expect(isStalePause({ ...stale, episodeMs: null }, NOW)).toBe(false);
     const s = projectModel(m, [stale], DEFAULT_POLICY, { now: NOW });
     expect(s.paused).toBeUndefined();
-    expect(schedulability(s).ok).toBe(true);
+    expect(schedulability(s).verdict).toBe("eval");
     // Still not counted: it has not ended.
     expect(s.perEpisode.e90).toMatchObject({ attempts: 1, counted: 0 });
   });
@@ -397,7 +399,10 @@ describe("nextJobs", () => {
     expect(nextJobs([c, b], ["R1", "R2"], new Set(["b"])).map((p) => p.name)).toEqual(["c"]);
     expect(nextJobs([c, b], [])).toEqual([]);
     const met = st("m", [good("m", "e90", 1), good("m", "e90", 2), good("m", "e90", 3)]);
-    expect(schedulability(met)).toEqual({ ok: false, extras: false, why: "targets met on e90" });
+    expect(schedulability(met)).toEqual({ verdict: "free", why: "targets met on e90" });
+    // The wire shape the dashboard reads is a projection of the verdict, and
+    // `ok` still means exactly "owes a counted run".
+    expect(schedulableView(schedulability(met), met)).toEqual({ ok: false, extras: false, why: "targets met on e90" });
     expect(nextJobs([met], ["R1"])).toEqual([]);
     expect(schedulability(b, new Set(["b"])).why).toContain("running");
   });
@@ -473,7 +478,9 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(moved.tier).toBe("t2");
     expect(moved.status).toBe("promoted");
     const met = st({ name: "p", model: "vendor/big", tier: "t0" }, [good("vendor/big", "e90", 1)]);
-    expect(schedulability(met, new Set(), policy)).toMatchObject({ ok: false, extras: false });
+    // Free, not blocked: it owes nothing and its idle axis buys nothing either.
+    expect(schedulability(met, new Set(), policy).verdict).toBe("free");
+    expect(wantsIdle(schedulability(met, new Set(), policy), met)).toBe(false);
     expect(planNextJobs([met], ["R1"], new Set(), { policy })).toEqual({ jobs: [], held: [] });
   });
 
@@ -605,7 +612,8 @@ describe("paid and free (ADR-0034 amendment)", () => {
     const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
     expect(met.eligible).toEqual(["e90"]);
     const v = schedulability(met, new Set(), policy);
-    expect(v).toMatchObject({ ok: false, extras: true });
+    expect(v.verdict).toBe("free");
+    expect(wantsIdle(v, met)).toBe(true);
     expect(v.why).toContain("unlimited sessions");
     const plan = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
     expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "BOX", undefined]]);
@@ -651,7 +659,8 @@ describe("paid and free (ADR-0034 amendment)", () => {
     // t1 climbs to t2 on the level-5 run, so e360 x1 is part of this budget.
     const metFree = st({ name: "f", model: "v/f:free", ...idle }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4)]);
     expect(metFree.tier).toBe("t2");
-    expect(schedulability(metFree, new Set(), policy)).toMatchObject({ ok: false, extras: true });
+    expect(schedulability(metFree, new Set(), policy).verdict).toBe("free");
+    expect(wantsIdle(schedulability(metFree, new Set(), policy), metFree)).toBe(true);
     expect(schedulability(metFree, new Set(), policy).why).toContain("extra characters");
     const unpromoted = st({ name: "u", model: "v/u:free", ...idle }, [good("v/u:free", "e90", 1), good("v/u:free", "e90", 2), good("v/u:free", "e90", 3)]);
     const fresh = st({ name: "n", model: "v/n:free", ...idle }, []);
@@ -812,5 +821,163 @@ describe("concurrency lanes (ADR-0034: cap keys on the rate-limit key)", () => {
     expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
     expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, stub, openrouter, opencode/);
     expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
+  });
+});
+
+describe("probe campaigns in the schedule (ADR-0041)", () => {
+  const NOW2 = 1_800_000_000_000;
+  const H = 3_600_000;
+  const done = (model: string, ep: EpisodeId, i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `${model}-${ep}-${i}`,
+    model,
+    effort: null,
+    episode: ep,
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW2 - (100 - i) * H,
+    endedAt: NOW2 - (99 - i) * H,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 3,
+    live: false,
+    pause: null,
+    account: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    ...over,
+  });
+  /** A model on t0 whose single e90 is done: owes nothing, so it is `free`. */
+  const spent = (name: string): ModelState =>
+    projectModel({ name, model: name, tier: "t0" }, [done(name, "e90", 1)], DEFAULT_POLICY, { now: NOW2 });
+  /** A model on t1 with nothing run: still owes evidence. */
+  const owing = (name: string): ModelState =>
+    projectModel({ name, model: name, tier: "t1" }, [], DEFAULT_POLICY, { now: NOW2 });
+
+  const campaign = {
+    name: "class-probe",
+    enabled: true,
+    objective: "play this class",
+    models: "all" as const,
+    excludeUnhealthy: true,
+    runsPerCell: 1,
+    cells: [{ id: "human-warrior" }, { id: "dwarf-rogue" }],
+  };
+
+  test("a model that owes evidence is never given probe work", () => {
+    // The whole priority rule, in one assertion: evals outrank probes, and the
+    // rule is enforced by the verdict rather than by ordering the loops.
+    const plan = planNextJobs([owing("a")], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.length).toBe(1);
+    expect(plan.jobs[0]!.episode).toBe("e90");
+    expect(plan.jobs[0]!.probe).toBeUndefined();
+  });
+
+  test("a model that owes nothing takes a probe, stamped with its campaign and cell", () => {
+    const plan = planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.length).toBe(1);
+    expect(plan.jobs[0]).toMatchObject({
+      name: "a",
+      episode: "probing",
+      account: "R1",
+      probe: { campaign: "class-probe", cell: "human-warrior" },
+    });
+    expect(plan.jobs[0]!.why).toContain("campaign class-probe cell human-warrior (0/1)");
+  });
+
+  test("an eval outranks a probe for the same free account", () => {
+    // One account, one model owing and one spent: the owed run wins, and the
+    // probe simply does not happen this tick.
+    const plan = planNextJobs([spent("a"), owing("b")], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.map((j) => [j.name, j.episode])).toEqual([["b", "e90"]]);
+  });
+
+  test("with two accounts the eval and the probe both go, eval first", () => {
+    const plan = planNextJobs([spent("a"), owing("b")], ["R1", "R2"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.map((j) => j.name)).toEqual(["b", "a"]);
+    expect(plan.jobs[0]!.episode).toBe("e90");
+    expect(plan.jobs[1]!.episode).toBe("probing");
+  });
+
+  test("a probe outranks idle work for the same account", () => {
+    // `spent` with an idle axis wants both a probe and an extra; the probe wins,
+    // because commissioned work is worth more than filling a spare account.
+    const idle = projectModel(
+      { name: "a", model: "a", tier: "t0", idle: "unlimited" },
+      [done("a", "e90", 1)],
+      DEFAULT_POLICY,
+      { now: NOW2 },
+    );
+    const plan = planNextJobs([idle], ["R1"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.length).toBe(1);
+    expect(plan.jobs[0]!.episode).toBe("probing");
+  });
+
+  test("idle work still happens when the campaign has nothing left", () => {
+    const idle = projectModel(
+      { name: "a", model: "a", tier: "t0", idle: "unlimited" },
+      [done("a", "e90", 1)],
+      DEFAULT_POLICY,
+      { now: NOW2 },
+    );
+    const plan = planNextJobs([idle], ["R1"], new Set(), {
+      campaigns: [{ ...campaign, enabled: false }],
+    });
+    expect(plan.jobs[0]!.episode).toBe("freeplay");
+  });
+
+  test("a completed cell is not re-run, and the next cell is taken instead", () => {
+    const probeRuns = [{ campaign: "class-probe", cell: "human-warrior", ref: "a" }];
+    const plan = planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns });
+    expect(plan.jobs[0]!.probe).toEqual({ campaign: "class-probe", cell: "dwarf-rogue" });
+  });
+
+  test("a campaign with every cell done schedules nothing at all", () => {
+    const probeRuns = [
+      { campaign: "class-probe", cell: "human-warrior", ref: "a" },
+      { campaign: "class-probe", cell: "dwarf-rogue", ref: "a" },
+    ];
+    expect(planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns }).jobs).toEqual([]);
+  });
+
+  test("a blocked model is skipped even though the campaign wants it", () => {
+    // Cooling is cooling: a campaign is exploration and burning a cell against a
+    // backing-off endpoint produces no observation.
+    const cooling = projectModel(
+      { name: "a", model: "a", tier: "t0" },
+      [done("a", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW2 - 1000 })],
+      DEFAULT_POLICY,
+      { now: NOW2 },
+    );
+    expect(schedulability(cooling).verdict).toBe("blocked");
+    expect(planNextJobs([cooling], ["R1"], new Set(), { campaigns: [campaign] }).jobs).toEqual([]);
+  });
+
+  test("excludeUnhealthy: false widens the work list, never the schedule", () => {
+    // The one configuration where the loop's own verdict check is load-bearing:
+    // with the fan-out told not to filter, a cooling model reaches the loop and
+    // must still be refused there. `enabled: false` on a campaign says "stop
+    // scheduling"; `excludeUnhealthy: false` says "do not skip a model for being
+    // unhealthy" — neither is licence to launch onto a backing-off endpoint.
+    const cooling = projectModel(
+      { name: "a", model: "a", tier: "t0" },
+      [done("a", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW2 - 1000 })],
+      DEFAULT_POLICY,
+      { now: NOW2 },
+    );
+    expect(schedulability(cooling).verdict).toBe("blocked");
+    const wide = { ...campaign, excludeUnhealthy: false };
+    expect(planNextJobs([cooling], ["R1"], new Set(), { campaigns: [wide] }).jobs).toEqual([]);
+  });
+
+  test("one job per model: a model cannot take two cells in one tick", () => {
+    const plan = planNextJobs([spent("a")], ["R1", "R2"], new Set(), { campaigns: [campaign] });
+    expect(plan.jobs.length).toBe(1);
+  });
+
+  test("no campaigns configured is the old behaviour exactly", () => {
+    expect(planNextJobs([spent("a")], ["R1"], new Set(), {}).jobs).toEqual([]);
   });
 });

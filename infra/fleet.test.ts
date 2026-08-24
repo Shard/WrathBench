@@ -1250,7 +1250,7 @@ describe("scheduling policy (ADR-0032)", () => {
     const afterStates = modelStatesOf(rosterModels(config.roster), after, NOW, config.policy);
     const line = formatModels(afterStates, new Set(), NOW, new Map(), config.policy).find((l) => l.trimStart().startsWith("local"))!;
     // counted/target on e90, no e360, then the extras column: the freeplay run.
-    expect(line).toMatch(/local\s+free\s+t1\s+active\s+3\/3 L3\s+-\s+1\s+no: targets met on e90 — unlimited sessions/);
+    expect(line).toMatch(/local\s+free\s+t1\s+active\s+3\/3 L3\s+-\s+1\s+free: targets met on e90 — unlimited sessions/);
     expect(formatModels(afterStates, new Set(), NOW, new Map(), config.policy)[0]).toContain("unlimited 6h");
     // The next freeplay run is attempt 2, so its run id cannot collide with the first.
     const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;

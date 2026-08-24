@@ -2067,7 +2067,12 @@ export function formatModels(
     // Freeplay is in the walk: a local model past its targets has nothing but
     // freeplay extras, and "last ... never" would be wrong about it.
     const last = STATS_EPISODES.map((ep) => s.perEpisode[ep]).filter((st) => st !== undefined && st.lastEnded !== null).sort((a, b) => b!.lastEnded! - a!.lastEnded!)[0];
-    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${v.ok ? "yes" : "no"}: ${v.why}`)(schedulability(s, running, policy));
+    // Three words, not two. "no" used to mean both "cannot run" and "has
+    // nothing owed but would take a spare account", and telling those apart is
+    // the whole reason the verdict stopped being a pair of booleans: `free` is
+    // where probe campaigns and idle work draw from.
+    const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
+    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${verdictWord[v.verdict]}: ${v.why}`)(schedulability(s, running, policy));
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
