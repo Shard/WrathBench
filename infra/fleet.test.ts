@@ -397,6 +397,18 @@ describe("roster policy", () => {
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-thing" as never }])).toThrow(/unknown driver/);
   });
 
+  test("a character the runner would refuse is a config error at load, not a respawn loop", () => {
+    // `Fleetsonnetlo` (13 chars) passed the fleet, failed the runner's Zod
+    // boundary every launch, and the roster exited 0 — so the policy retried
+    // it every tick for two hours (2026-08-24). The name dies here now.
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleetsonnetlo" }])).toThrow(
+      /character must be 2-12 letters/,
+    );
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "X" }])).toThrow(/character/);
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Benchy1" }])).toThrow(/character/);
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleetsonnlo" }])).not.toThrow();
+  });
+
   test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
     // A paid-looking id with no free suffix on OpenRouter is a roster-policy error.
     expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2" }])).toThrow(/roster policy/);
