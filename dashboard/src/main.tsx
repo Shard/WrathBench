@@ -13,6 +13,7 @@ const Results = lazy(() => import("./pages/Results"));
 const Ladder = lazy(() => import("./pages/Ladder"));
 const Episodes = lazy(() => import("./pages/Episodes"));
 const Models = lazy(() => import("./pages/Models"));
+const Campaigns = lazy(() => import("./pages/Campaigns"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const root = document.getElementById("root");
@@ -28,6 +29,7 @@ render(
       <Route path="/ladder" component={Ladder} />
       <Route path="/episodes" component={Episodes} />
       <Route path="/models" component={Models} />
+      <Route path="/campaigns" component={Campaigns} />
       <Route path="*" component={NotFound} />
     </Router>
   ),
