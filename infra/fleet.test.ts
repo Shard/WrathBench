@@ -62,6 +62,7 @@ import {
   type PreflightSmoke,
   type ConfigRejection,
   currentSeries,
+  classPoolsOf,
   planPolicyHeld,
   paidPoolOf,
   formatPaidClass,
@@ -853,6 +854,46 @@ describe("scheduling policy (ADR-0032)", () => {
     // Accounts the queue just assigned this tick, or held live by anything, are not free.
     picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2", "RUNNER3"], running: new Map(), held: (a) => (a === "RUNNER3" ? "hand-run" : undefined), queuePlan: { ...empty, assign: [{ job: job({ ref: "glm" }), account: "RUNNER" }] }, runningRefs: new Set() });
     expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER2"]]);
+  });
+
+  test("a waiting manual job reserves the pool only — the paid and local classes still pick, and the reservation is named", () => {
+    const raw = {
+      accounts: { pool: ["RUNNER"], paid: ["PAID"], local: ["LOCALBOX"] },
+      roster: {
+        glm: { model: "z-ai/glm-5.2:free" },
+        big: { model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        local: { model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+      },
+      policy: { paid: {} },
+    };
+    const config = parseFleet(raw);
+    const states = modelStatesOf(rosterModels(config.roster), [], NOW, config.policy);
+    const args = {
+      states,
+      pool: config.accounts.pool,
+      classPools: classPoolsOf(config),
+      running: new Map<string, string>(),
+      held: () => undefined,
+      runningRefs: new Set<string>(),
+      policy: config.policy,
+    };
+    // Nothing waiting: every class picks, the pool included.
+    const open = planPolicyHeld({ ...args, queuePlan: empty });
+    expect(open.picks.map((p) => [p.job.ref, p.account]).sort()).toEqual([
+      ["big", "PAID"],
+      ["glm", "RUNNER"],
+      ["local", "LOCALBOX"],
+    ]);
+    // A manual job waiting for a pool account must not stop the paid pick or
+    // the local box: it could never have run on either. Only `glm` is displaced.
+    const held = planPolicyHeld({ ...args, queuePlan: { ...empty, waiting: [job({ ref: "mimo" })] } });
+    expect(held.picks.map((p) => [p.job.ref, p.account]).sort()).toEqual([
+      ["big", "PAID"],
+      ["local", "LOCALBOX"],
+    ]);
+    // And it says so, rather than dropping the pool pick in silence.
+    expect(held.held.map((h) => h.name)).toEqual(["glm"]);
+    expect(held.held[0]!.why).toBe("pool reserved for waiting manual job(s): mimo-e90");
   });
 
   test("a policy job is a one-run job named <ref>-<episode>; attempts after the first suffix the run id", () => {

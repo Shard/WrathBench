@@ -1063,6 +1063,14 @@ export interface NextJobsOptions {
    * to add an account they already had (FOLLOW-UPS: the SHAKEOUT2 report).
    */
   classBusy?: Partial<Record<AccountClass, readonly BusyAccount[]>>;
+  /**
+   * Why the POOL has no accounts this tick when something outside the policy
+   * has reserved them — today, a manual queue job waiting for one. A pool pick
+   * with nowhere to go is otherwise dropped in silence (a split class has
+   * `noRoom` to say it, the pool never had an equivalent), which is how a
+   * reserved pool read as "the models are just not schedulable today".
+   */
+  poolHeld?: string;
 }
 
 /**
@@ -1173,6 +1181,9 @@ export function planNextJobs(
     }
     if (from.length === 0) {
       taken.add(c.s.name);
+      // The pool's counterpart to `noRoom`: only said when the caller knows
+      // why the pool is empty. An ordinarily busy pool stays silent, as before.
+      if (split[cls] === undefined && opts.poolHeld !== undefined) held.push({ name: c.s.name, episode: c.ep, why: opts.poolHeld });
       continue;
     }
     taken.add(c.s.name);
