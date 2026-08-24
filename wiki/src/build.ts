@@ -24,10 +24,10 @@ import {
   setMeta,
 } from "./bundle";
 import { extractCoords } from "./coords";
-import { extractIds } from "./ids";
+import { extractIds, type WikiId } from "./ids";
 import { extractQuest } from "./quests";
 import { admitPage, titleIsPostWrathCoinage, type AdmitReason } from "./post-wrath";
-import { assertCanaries } from "./canary";
+import { assertCanaries, MAX_REDIRECT_HOPS } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
 import { loadWorldIds } from "./world-ids";
@@ -81,8 +81,15 @@ export function eraSource(
   };
 }
 
-/** A source title with the `(original)`/`(old)` suffix a page move leaves behind. */
-const SIBLING_SUFFIX = /^(.*\S)\s+\((original|old)\)$/i;
+/**
+ * The parenthetical suffixes a page move leaves on the title that keeps this
+ * world's article. In precedence order: a page with both `(original)` and
+ * `(old)` siblings is answered by the first.
+ */
+const SIBLING_TITLE_SUFFIXES: readonly string[] = ["original", "old"];
+
+/** A source title carrying one of them: `Deadmines (original)`. */
+const SIBLING_SUFFIX = new RegExp(`^(.*\\S)\\s+\\((${SIBLING_TITLE_SUFFIXES.join("|")})\\)$`, "i");
 
 /**
  * Names a page move left dangling: a bare title with no page and no redirect,
@@ -118,7 +125,7 @@ export function siblingRedirects(
     const source = m[1]!;
     const key = source.toLowerCase();
     if (resolvable.has(key)) continue;
-    const rank = m[2]!.toLowerCase() === "original" ? 0 : 1;
+    const rank = SIBLING_TITLE_SUFFIXES.indexOf(m[2]!.toLowerCase());
     const prev = best.get(key);
     if (prev !== undefined && prev.rank <= rank) continue;
     best.set(key, { source, target: survivor.title, ns: survivor.ns, rank });
@@ -318,8 +325,7 @@ async function main(): Promise<void> {
   let idNameMismatch = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
-  /** Out-of-world sections cut inside a surviving page, and what they were. */
-  let sectionsTrimmed = 0;
+  /** Out-of-world sections cut inside a surviving page, by heading. */
   const sectionsTrimmedBy: Record<string, number> = {};
   let redirectsDangling = 0;
   /**
@@ -426,20 +432,25 @@ async function main(): Promise<void> {
     page: WikiPage,
     source: string,
     reason: AdmitReason,
-    protectedPage = false,
-    sourceTimestamp: string = page.timestamp,
-  ): void => {
+    opts: {
+      protectedPage?: boolean;
+      sourceTimestamp?: string;
+      /** The ids the admission already extracted from this same wikitext. */
+      ids?: WikiId[];
+    } = {},
+  ): boolean => {
+    const protectedPage = opts.protectedPage ?? false;
+    const sourceTimestamp = opts.sourceTimestamp ?? page.timestamp;
     // Coords and ids come off the RAW wikitext before the strip destroys the
     // templates that carry them.
     const coords = extractCoords(page.wikitext);
-    const ids = extractIds(page.wikitext);
+    const ids = opts.ids ?? extractIds(page.wikitext);
     const quest = extractQuest(page.wikitext);
     // Post-Wrath sections and paragraphs go before the strip, which would
     // otherwise remove the templates and headings that identify them.
     const cut = dropPostWrath(source);
     sectionsDropped += cut.sectionsDropped;
     paragraphsDropped += cut.paragraphsDropped;
-    sectionsTrimmed += cut.sectionsTrimmed;
     for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
@@ -456,10 +467,8 @@ async function main(): Promise<void> {
       // are still the right answer to a query. So it stays, as an empty row,
       // beside the page that never had prose at all.
       const trimmedOnly = stripWikitext(dropOutOfWorldOnly(source));
-      if (trimmedOnly.length > 0) {
-        reasons.dropped_post_wrath++;
-        return;
-      }
+      // Dropped, and the caller counts it: the reasons are its ledger.
+      if (trimmedOnly.length > 0) return false;
       const hadProse = stripWikitext(source).length > 0;
       emptied = true;
       empties++;
@@ -485,6 +494,7 @@ async function main(): Promise<void> {
     idRows += ids.length;
     if (quest !== null) questRows++;
     perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
+    return true;
   };
 
   console.log(`building ${args.out} from ${args.dump}`);
@@ -512,55 +522,46 @@ async function main(): Promise<void> {
             ...(newest !== null && newest !== target ? { fallback: newest } : {}),
           });
         }
-      } else if (!page.hasEraRevision) {
-        // No revision before the cutoff. It may still be a page about this
-        // world, written late; `admitPage` decides on the newest revision.
-        // This is the one call site the world-id oracle is handed to: the page
-        // has no pre-cutoff revision at all, which is the case the id door
-        // exists for.
-        const decision = admitPage({
-          title: page.title,
-          ns: page.ns,
-          eraWikitext: null,
-          newestWikitext: page.wikitext,
-          firstRevisionAt: page.firstRevisionAt,
-          ...(worldIds !== undefined ? { worldIds } : {}),
-        });
-        if (!decision.admit) {
-          reasons[decision.reason]++;
-          if (decision.idNameMismatch === true) idNameMismatch++;
-          keepAsName(page, decision.reason);
-        } else {
-          keep(page, page.wikitext, decision.reason);
-        }
       } else {
-        // Deliberately without the oracle: this page *has* a pre-cutoff
-        // revision, and if all of them failed the parser's hygiene rules it has
-        // no prose to index, which an id cannot supply.
+        // One door, one call. `eraWikitext` is null unless a pre-cutoff
+        // revision survived the parser's hygiene rules, and `hasEraRevision`
+        // says whether there was one at all — the two together are how
+        // `admitPage` tells "this world's wiki has no such page" from "this
+        // page has no prose to index".
+        //
+        // The oracle is handed over only for a page with no pre-cutoff revision
+        // at all, which is the case the id door exists for: an id cannot supply
+        // prose a page never had.
         const decision = admitPage({
           title: page.title,
           ns: page.ns,
           eraWikitext: page.eraWikitext,
+          hasEraRevision: page.hasEraRevision,
           newestWikitext: page.wikitext,
           firstRevisionAt: page.firstRevisionAt,
+          ...(!page.hasEraRevision && worldIds !== undefined ? { worldIds } : {}),
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
-          keepAsName(page, decision.reason);
-        } else {
-          // A page with pre-cutoff revisions that all failed hygiene has no
-          // prose to index; it is not a Wrath page for our purposes. `admitPage`
-          // has already counted this case as `dropped_post_cutoff`-shaped, but
-          // the reason it returns is about the newest revision, so the counter
-          // is set here.
-          if (page.eraWikitext === null) reasons.dropped_post_cutoff++;
-          else {
-            const protectedPage = decision.preAnnouncementProtected === true;
-            const src = eraSource(page, protectedPage);
-            if (src.steppedBack) steppedBack++;
-            if (src.refused) stepBackRefused++;
-            keep(page, src.text, decision.reason, protectedPage, src.timestamp);
-          }
+          if (decision.idNameMismatch === true) idNameMismatch++;
+          // A page dropped for having no usable pre-cutoff prose is not a name
+          // a page move left behind, which is what the recovery below is for.
+          if (decision.eraRevisionsRejected !== true) keepAsName(page, decision.reason);
+        } else if (decision.reason === "pre_cutoff") {
+          // The only admitting reason with two revisions to choose between.
+          const protectedPage = decision.preAnnouncementProtected === true;
+          const src = eraSource(page, protectedPage);
+          if (src.steppedBack) steppedBack++;
+          if (src.refused) stepBackRefused++;
+          const kept = keep(page, src.text, decision.reason, {
+            protectedPage,
+            sourceTimestamp: src.timestamp,
+          });
+          if (!kept) reasons.dropped_post_wrath++;
+        } else if (!keep(page, page.wikitext, decision.reason, { ids: decision.ids })) {
+          // Admitted late, on an explicit Wrath signal or on an id: the newest
+          // revision is the only one there is.
+          reasons.dropped_post_wrath++;
         }
       }
       logProgress();
@@ -592,7 +593,7 @@ async function main(): Promise<void> {
     for (const r of pendingRedirects) targets.set(r.source.toLowerCase(), r.target);
     const walk = (from: string): boolean => {
       let current = from.toLowerCase();
-      for (let hop = 0; hop < 6; hop++) {
+      for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
         if (keptTitles.has(current)) return true;
         const next = targets.get(current);
         if (next === undefined) return false;
@@ -642,10 +643,10 @@ async function main(): Promise<void> {
     // `answered` is a kept page or a redirect that actually landed, never one
     // that dangled.
     const survivors: { title: string; ns: number }[] = db
-      .query<{ title: string; ns: number }, []>(
-        "SELECT title, ns FROM pages WHERE title LIKE '% (original)' OR title LIKE '% (old)'",
+      .query<{ title: string; ns: number }, string[]>(
+        `SELECT title, ns FROM pages WHERE ${SIBLING_TITLE_SUFFIXES.map(() => "title LIKE ?").join(" OR ")}`,
       )
-      .all();
+      .all(...SIBLING_TITLE_SUFFIXES.map((suffix) => `% (${suffix})`));
     // A sibling that is itself only a redirect counts: `Stormwind Stockade
     // (original)` is one, and the chain through it is what reaches the page.
     // Only the ones that landed, so a sibling never points into a dead row.
@@ -702,6 +703,8 @@ async function main(): Promise<void> {
   db.run("INSERT INTO pages_fts(pages_fts) VALUES('optimize')");
 
   const elapsedMs = Date.now() - started;
+  /** The trim total is the breakdown's sum; nothing counts it a second time. */
+  const sectionsTrimmed = Object.values(sectionsTrimmedBy).reduce((a, b) => a + b, 0);
   setMeta(db, {
     source: basename(args.dump),
     built_at: new Date().toISOString(),

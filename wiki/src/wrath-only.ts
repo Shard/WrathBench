@@ -80,12 +80,12 @@ export interface WrathOnlyResult {
   sectionsDropped: number;
   /** How many paragraphs were dropped by the phrase rules. */
   paragraphsDropped: number;
-  /** How many sections were trimmed as out-of-world, including empty ones. */
-  sectionsTrimmed: number;
   /**
-   * The trim, by normalised heading, so a rebuild says exactly what went.
-   * Sections dropped because nothing survived in them are counted under
-   * `EMPTY_SECTION_KEY` rather than under a real heading name.
+   * Out-of-world sections trimmed, by normalised heading, so a rebuild says
+   * exactly what went. Sections dropped because nothing survived in them are
+   * counted under `EMPTY_SECTION_KEY` rather than under a real heading name.
+   * The total is the sum of this map; it is not carried separately, because a
+   * scalar beside a breakdown is one more thing that can disagree with it.
    */
   sectionsTrimmedBy: Record<string, number>;
 }
@@ -376,7 +376,6 @@ export function dropPostWrath(wikitext: string): WrathOnlyResult {
       text: wikitext,
       sectionsDropped: 0,
       paragraphsDropped: 0,
-      sectionsTrimmed: 0,
       sectionsTrimmedBy: {},
     };
   }
@@ -394,7 +393,6 @@ export function dropPostWrath(wikitext: string): WrathOnlyResult {
     text: empties.text,
     sectionsDropped: sections.sectionsDropped,
     paragraphsDropped: paragraphs.paragraphsDropped,
-    sectionsTrimmed: sections.sectionsTrimmed + empties.sectionsTrimmed,
     sectionsTrimmedBy,
   };
 }
@@ -418,7 +416,6 @@ export function dropPostWrathSections(
 ): {
   text: string;
   sectionsDropped: number;
-  sectionsTrimmed: number;
   sectionsTrimmedBy: Record<string, number>;
 } {
   const eraCuts = opts.eraCuts ?? true;
@@ -488,13 +485,13 @@ export function dropPostWrathSections(
   }
 
   if (sectionsDropped === 0 && sectionsTrimmed === 0) {
-    return { text: wikitext, sectionsDropped: 0, sectionsTrimmed: 0, sectionsTrimmedBy };
+    return { text: wikitext, sectionsDropped: 0, sectionsTrimmedBy };
   }
   const kept: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (!drop[i]) kept.push(lines[i]!);
   }
-  return { text: kept.join("\n"), sectionsDropped, sectionsTrimmed, sectionsTrimmedBy };
+  return { text: kept.join("\n"), sectionsDropped, sectionsTrimmedBy };
 }
 
 /**

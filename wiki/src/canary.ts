@@ -113,8 +113,14 @@ export const MUST_EXIST: readonly string[] = [
   "Icecrown",
 ];
 
-/** How many redirect hops a canary follows; the build's own bound. */
-const MAX_HOPS = 6;
+/**
+ * How many redirect hops a chain walk follows before giving up. One bound for
+ * the three walkers over the same rows — this one, the build's own (which
+ * decides whether a redirect row is written at all) and `resolveTitle`'s at
+ * query time — because a chain that lands at build time and not at query time
+ * is a row that answers nothing.
+ */
+export const MAX_REDIRECT_HOPS = 6;
 
 /**
  * Does `title` resolve to a ns-0 page, following redirects? Returns the page
@@ -133,7 +139,7 @@ export function resolveCanary(db: Database, title: string): string | null {
     "SELECT target FROM redirects WHERE ns = 0 AND source = ? LIMIT 1",
   );
   let current = title;
-  for (let hop = 0; hop < MAX_HOPS; hop++) {
+  for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
     const hit = page.get(current);
     if (hit !== null) return hit.title;
     const next = redirect.get(current);

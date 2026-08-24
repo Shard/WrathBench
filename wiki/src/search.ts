@@ -29,6 +29,7 @@
 
 import { Database } from "bun:sqlite";
 import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds, bundleHasQuest } from "./bundle";
+import { MAX_REDIRECT_HOPS } from "./canary";
 import type { IdKind } from "./ids";
 import type { WikiQuest } from "./quests";
 
@@ -283,7 +284,7 @@ function resolveTitle(db: Database, title: string): { page: PageRow; via: string
   for (const candidate of candidates) {
     let current = candidate;
     let via: string | null = null;
-    for (let hop = 0; hop < 6; hop++) {
+    for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
       const page = pageStmt.get(current);
       if (page !== null) return { page, via };
       const redirect = redirectStmt.get(current);

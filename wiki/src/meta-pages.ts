@@ -113,17 +113,16 @@ function prefixMatches(title: string, prefix: string): boolean {
 /**
  * Classify a page title as out-of-game, or return null.
  *
- * `wikitext` is accepted for symmetry with the other extractors and so a future
- * structural rule (an `{{addon}}`/`{{patchnote}}` template, say) has somewhere
- * to live; nothing reads it today, and the classifier stays a pure function of
- * the title so it can run at query time with no schema change.
+ * A pure function of the title, which is what lets it run at query time with no
+ * schema change. It took a `wikitext` argument for symmetry with the other
+ * extractors and never read it; a future structural rule (an
+ * `{{addon}}`/`{{patchnote}}` template, say) would earn the argument back.
  *
  * Case matters for the namespace-style prefixes: the wiki namespaces its API,
  * UI, XML and macro documentation by title prefix (`API GetSpellInfo`,
  * `MACRO cast`), and lowercasing them would start matching prose titles.
  */
-export function classifyMetaPage(title: string, wikitext?: string): MetaReason | null {
-  void wikitext;
+export function classifyMetaPage(title: string): MetaReason | null {
   const t = title.replace(/_/g, " ").trim();
   if (t === "") return null;
 

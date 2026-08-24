@@ -7,6 +7,15 @@ import {
 } from "../src/wrath-only";
 import { stripWikitext } from "../src/strip";
 
+/**
+ * How many out-of-world sections a cut removed: the sum of its breakdown, which
+ * is where the count lives now (a scalar beside the map was one more thing that
+ * could disagree with it).
+ */
+function trimmed(cut: { sectionsTrimmedBy: Record<string, number> }): number {
+  return Object.values(cut.sectionsTrimmedBy).reduce((a, b) => a + b, 0);
+}
+
 // Every fixture here is invented. No wiki or game text appears in this repo.
 
 const PAGE = [
@@ -73,7 +82,6 @@ describe("sections", () => {
     expect(dropPostWrathSections(page)).toEqual({
       text: page,
       sectionsDropped: 0,
-      sectionsTrimmed: 0,
       sectionsTrimmedBy: {},
     });
     const plain = "Example Valley is a starting area.";
@@ -81,7 +89,6 @@ describe("sections", () => {
       text: plain,
       sectionsDropped: 0,
       paragraphsDropped: 0,
-      sectionsTrimmed: 0,
       sectionsTrimmedBy: {},
     });
   });
@@ -225,7 +232,7 @@ describe("out-of-world sections", () => {
       expect(text).not.toContain("Removable lorem");
       expect(text).not.toContain(heading);
       expect(text).toContain("Example Person Gamma");
-      expect(cut.sectionsTrimmed).toBe(1);
+      expect(trimmed(cut)).toBe(1);
       expect(cut.sectionsTrimmedBy[heading.toLowerCase()]).toBe(1);
       expect(cut.sectionsDropped).toBe(0);
     });
@@ -254,7 +261,7 @@ describe("out-of-world sections", () => {
     for (const heading of kept) {
       const page = `Lead lorem.\n\n== ${heading} ==\nKeepable lorem ipsum dolor.`;
       const cut = dropPostWrath(page);
-      expect(cut.sectionsTrimmed).toBe(0);
+      expect(trimmed(cut)).toBe(0);
       expect(stripWikitext(cut.text)).toContain("Keepable lorem");
       expect(stripWikitext(cut.text)).toContain(heading);
     }
@@ -278,7 +285,7 @@ describe("out-of-world sections", () => {
     expect(cut.text).not.toContain("Body lorem.");
     expect(cut.text).not.toContain("Detail lorem.");
     expect(cut.text).not.toContain("Deeper lorem.");
-    expect(cut.sectionsTrimmed).toBe(1);
+    expect(trimmed(cut)).toBe(1);
   });
 
   test("a kept section between two trimmed ones survives", () => {
@@ -292,7 +299,7 @@ describe("out-of-world sections", () => {
     ].join("\n");
     const cut = dropPostWrath(page);
     expect(stripWikitext(cut.text)).toBe("Objectives\nKeepable lorem.");
-    expect(cut.sectionsTrimmed).toBe(2);
+    expect(trimmed(cut)).toBe(2);
     expect(cut.sectionsTrimmedBy).toEqual({ trivia: 1, "external links": 1 });
   });
 
@@ -306,7 +313,7 @@ describe("out-of-world sections", () => {
     ];
     for (const heading of variants) {
       const cut = dropPostWrath(`Lead lorem.\n${heading}\nRemovable lorem.`);
-      expect(cut.sectionsTrimmed).toBe(1);
+      expect(trimmed(cut)).toBe(1);
       expect(cut.sectionsTrimmedBy["external links"]).toBe(1);
       expect(stripWikitext(cut.text)).toBe("Lead lorem.");
     }
@@ -327,7 +334,7 @@ describe("out-of-world sections", () => {
     expect(text).toContain("Objective lorem.");
     expect(text).not.toContain("Removable lorem.");
     expect(text).toContain("Objectives");
-    expect(cut.sectionsTrimmed).toBe(1);
+    expect(trimmed(cut)).toBe(1);
   });
 
   test("a section whose body strips to nothing leaves no orphan heading", () => {
@@ -342,7 +349,7 @@ describe("out-of-world sections", () => {
     ].join("\n");
     const cut = dropPostWrath(page);
     expect(stripWikitext(cut.text)).toBe("Lead lorem.\nInhabitants\nKeeper lorem.");
-    expect(cut.sectionsTrimmed).toBe(1);
+    expect(trimmed(cut)).toBe(1);
     expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
   });
 
@@ -350,7 +357,7 @@ describe("out-of-world sections", () => {
     const page = ["== Abilities ==", "=== Example Strike ===", "Ability lorem."].join("\n");
     const cut = dropPostWrath(page);
     expect(stripWikitext(cut.text)).toBe("Abilities\nExample Strike\nAbility lorem.");
-    expect(cut.sectionsTrimmed).toBe(0);
+    expect(trimmed(cut)).toBe(0);
   });
 
   test("an empty subsection of an occupied section still goes", () => {
@@ -364,7 +371,7 @@ describe("out-of-world sections", () => {
     ].join("\n");
     const cut = dropPostWrath(page);
     expect(stripWikitext(cut.text)).toBe("Abilities\nAbility lorem.");
-    expect(cut.sectionsTrimmed).toBe(2);
+    expect(trimmed(cut)).toBe(2);
     expect(cut.sectionsTrimmedBy).toEqual({ gallery: 1, "(empty)": 1 });
   });
 
@@ -378,14 +385,14 @@ describe("out-of-world sections", () => {
     ].join("\n");
     const cut = dropPostWrath(page);
     expect(cut.paragraphsDropped).toBe(1);
-    expect(cut.sectionsTrimmed).toBe(1);
+    expect(trimmed(cut)).toBe(1);
     expect(stripWikitext(cut.text)).toBe("Lead lorem.");
   });
 
   test("the lead is never trimmed by the heading rule", () => {
     const page = "External links are mentioned in this lead about history and trivia.";
     const cut = dropPostWrath(page);
-    expect(cut.sectionsTrimmed).toBe(0);
+    expect(trimmed(cut)).toBe(0);
     expect(stripWikitext(cut.text)).toBe(page);
   });
 });
@@ -605,7 +612,7 @@ describe("class-preview sections", () => {
       // Counted as an era cut. The out-of-world trim is a different question
       // and a different counter.
       expect(cut.sectionsDropped).toBe(1);
-      expect(cut.sectionsTrimmed).toBe(0);
+      expect(trimmed(cut)).toBe(0);
     });
   }
 
