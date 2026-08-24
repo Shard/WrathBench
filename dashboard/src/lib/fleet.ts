@@ -181,7 +181,11 @@ export interface FleetRow {
  * 08cd691), so it measures active time just as playtime does. They are computed
  * differently — playtime sums trajectory segments, the watchdog sums process
  * uptime from the persisted `episodeElapsedMs` — so they agree to within a
- * segment boundary, not to the millisecond. That is the accuracy claimed here.
+ * segment boundary, not to the millisecond, and only where the pause persisted
+ * its clock: a run resumed from a pause mark that predates the field restarts
+ * the watchdog at zero (run.ts) while playtime keeps its earlier segments, and
+ * the percentage then over-reads by whatever those segments held. That is the
+ * accuracy claimed here.
  *
  * **Freeplay.** No percentage and no ETA, whatever a `freeplay` run recorded.
  * The id is uncapped (docs/EPISODES.md): nav-probe's six hours is that one
