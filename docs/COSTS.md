@@ -292,13 +292,23 @@ two-run rule of ADR-0030 — now one counted `e90` episode reaching rung 1 / lev
 5. **The paid track (updated 2026-08-24)** — `deepseek-flash` met its 3/3 e90 target
    with a best run of **level 3**, short of the rung-1 gate, so it earned no e360.
    `openai/gpt-5.6-luna` and `google/gemini-3.7-flash` joined beside it. The
-   Both carry a per-entry `runsPerEpisode {e90: 1, e360: 0}` **trial cap** rather
-   than the paid default of 3/1, because measuring luna in flight moved the
-   estimate by 3.5x. Two constraints, and money turned out to be the tighter one:
+   Both sit on **`tier: "t0"`** — the trial rung: one e90, and the ladder is held
+   so a good run cannot promote them into an e360 nobody approved (ADR-0040; this
+   started as a per-entry `runsPerEpisode {e90: 1, e360: 0}` cap, which said the
+   same thing in a way the board then contradicted with `promoted 1/1 0/0`).
+   Measuring luna in flight had moved the estimate by 3.5x. Two constraints, and
+   money turned out to be the tighter one:
    `accounts.paid` is one account at `maxConcurrent: 1` (a full e90 is ~90–114 min,
    so runs are strictly serial), and a *full* paid quota on luna — 3 e90 plus one
    e360 — prices at roughly **$10**, which is the whole daily budget for one model.
-   One scored e90 each first; raise to the policy default for a model that earns it.
+   One scored e90 each first; move a model that earns it to `t1`, and the rung it
+   already earned on trial promotes it to `t2` at once, with nothing re-run.
+
+   Note the deliberate boundary (ADR-0040): a tier is denominated in **runs**, not
+   dollars. The reasoning above is in dollars and run counts are the proxy; hard
+   cost control is external to the fleet by decision (2026-08-24), and a money
+   budget, if one is ever wanted in-fleet, belongs beside `policy.paid.maxConcurrent`
+   rather than as a new tier.
 
    **Do not size a run by token count alone — size it by the model's speed.** The
    `1.8M prompt / 54k completion` shape of a deepseek e90 is not a harness
