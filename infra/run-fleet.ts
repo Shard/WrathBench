@@ -74,7 +74,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
@@ -93,7 +93,14 @@ import {
   formatOutstanding,
   readRunFacts,
   parsePolicyBlock,
-  parseRunsPerEpisode,
+  parseTier,
+  parseIdle,
+  TIERS,
+  TIER_TABLE,
+  IDLE_CHARACTERS,
+  UNLIMITED_SESSION_MS,
+  type Tier,
+  type IdleMode,
   parseModelsSidecar,
   planNextJobs,
   pinnedRefs as pinnedRefsOf,
@@ -223,18 +230,19 @@ export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
- * A roster entry as named in the `roster` map: the exact per-entry schema
- * plus two optional scheduling fields. `tiers` is a manual FORCE — tiers
- * listed here are eligible regardless of history (ADR-0034: every model is
- * e90-eligible on arrival and e360 is earned from run history, so the field
- * is normally absent). `runsPerEpisode` overrides the policy's per-episode
- * target for this entry. An entry may carry the run dimensions (`objective`,
- * `watchdogs`, `maxToolCalls`, `wikiCoords`): a probe with an objective is
- * a roster entry like any other, referenced by a pinned job.
+ * A roster entry as named in the `roster` map: the exact per-entry schema plus
+ * its scheduling axes (ADR-0040). `tier` is the whole answer to how much this
+ * model runs, and it is required — except on a steered entry (one carrying an
+ * `objective`), which is outside the policy and has no budget to state, where
+ * it is refused instead. `idle` says what the model does with an account once
+ * its tier is spent; absent is `none`. An entry may carry the run dimensions
+ * (`objective`, `watchdogs`, `maxToolCalls`, `wikiCoords`): a probe with an
+ * objective is a roster entry like any other, referenced by a pinned job.
  */
 export interface FleetRosterEntry extends RosterSpec {
-  tiers: EpisodeId[];
-  runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
+  /** Absent only on a steered entry, which the policy never schedules. */
+  tier?: Tier;
+  idle: IdleMode;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: Billing;
 }
@@ -703,20 +711,41 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as { tiers?: unknown; runsPerEpisode?: unknown; billing?: unknown } & Record<string, unknown>;
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as {
+      tier?: unknown;
+      idle?: unknown;
+      tiers?: unknown;
+      runsPerEpisode?: unknown;
+      billing?: unknown;
+    } & Record<string, unknown>;
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
-    // Absent means "no force": eligibility comes from run history (ADR-0034).
-    const tiers = rawTiers === undefined ? [] : rawTiers;
-    if (!Array.isArray(tiers) || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
-      fail(`roster ${name}: tiers must be an array of ${EPISODE_IDS.join("|")}`);
-    }
-    const runsPerEpisode = parseRunsPerEpisode(rawRuns, `roster ${name}: runsPerEpisode`);
+    // The retired 0.4 spellings, refused by name. Both said how much a model
+    // runs, which is its tier now; dropping them silently would re-scope a
+    // budget an operator wrote on purpose.
+    if (rawTiers !== undefined) fail(`roster ${name}: tiers is not a 0.5 key — force a longer episode by setting tier: "t2"`);
+    if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
+    // An entry carrying an objective is outside the policy entirely
+    // (`policyRefs`), so a tier on it would be a budget nothing reads. Required
+    // where it means something, refused where it does not.
+    const steered = typeof rest["objective"] === "string" && rest["objective"].length > 0;
+    if (steered && rawTier !== undefined) {
+      fail(`roster ${name}: an entry with an objective is outside the policy (unscored, ADR-0033) — it must not carry a tier`);
+    }
+    if (!steered && rawTier === undefined) fail(`roster ${name}: every policy-scheduled entry states its tier (${TIERS.join(", ")})`);
+    let tier: Tier | undefined;
+    let idle: IdleMode = "none";
+    try {
+      if (!steered) tier = parseTier(rawTier, `roster ${name}`);
+      idle = parseIdle(rawIdle, `roster ${name}`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
     const [validated] = validateEntries(`roster:${name}`, [rawBilling === undefined ? rest : { ...rest, billing: rawBilling }]);
     out[name] = {
       ...validated!,
-      tiers: tiers as EpisodeId[],
-      ...(runsPerEpisode !== undefined ? { runsPerEpisode } : {}),
+      ...(tier !== undefined ? { tier } : {}),
+      idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
     };
   }
@@ -724,28 +753,39 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
 }
 
 /**
- * The file's `policy` block: targets, the per-driver concurrency cap, the
- * paid policy and the extras policy are configurable (`parsePolicyBlock` in
- * runner/src/models.ts is the one parser; the viewer reads the same); the
- * ladder and the promotion level are code. The series is this checkout's.
+ * The file's `policy` block: what is left in it is the per-key concurrency cap
+ * and the paid throttle — where runs may execute and how many at once
+ * (`parsePolicyBlock` in runner/src/models.ts is the one parser; the viewer
+ * reads the same). The tier table, the idle character cycle, the defer ladder
+ * and the promotion level are code. The series is this checkout's.
  */
 function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: Record<string, number> } {
   const { maxConcurrent, ...policy } = parsePolicyBlock(raw, currentSeries());
   return { policy, maxConcurrent };
 }
 
-/** The roster as the projection reads it: ordered, named, with the two overrides. */
+/**
+ * The roster as the projection reads it: ordered, named, with its tier and
+ * idle axis. Steered entries (an objective, hence outside the policy) carry no
+ * tier and are dropped here rather than given a fictional one.
+ */
 export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterModel[] {
-  return Object.entries(roster).map(([name, e]) => ({
-    name,
-    model: e.model,
-    ...(e.effort !== undefined ? { effort: e.effort } : {}),
-    ...(e.driver !== undefined ? { driver: e.driver } : {}),
-    ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
-    ...(e.tiers.length > 0 ? { tiers: e.tiers } : {}),
-    ...(e.runsPerEpisode !== undefined ? { runsPerEpisode: e.runsPerEpisode } : {}),
-    ...(e.billing !== undefined ? { billing: e.billing } : {}),
-  }));
+  return Object.entries(roster).flatMap(([name, e]) =>
+    e.tier === undefined
+      ? []
+      : [
+          {
+            name,
+            model: e.model,
+            ...(e.effort !== undefined ? { effort: e.effort } : {}),
+            ...(e.driver !== undefined ? { driver: e.driver } : {}),
+            ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+            tier: e.tier,
+            idle: e.idle,
+            ...(e.billing !== undefined ? { billing: e.billing } : {}),
+          },
+        ],
+  );
 }
 
 /** The roster names the policy may schedule (`policyRefsOf`, models.ts). */
@@ -865,7 +905,7 @@ export function planQueue(opts: {
   held: (account: string) => string | undefined;
   cooling: (job: FleetJob) => string | undefined;
   /**
-   * Who may run what. Default: the roster's `tiers` (a manual force). The
+   * Who may run what. Default: only what needs no promotion. The
    * supervisor passes `eligibleFrom(modelStates(...))`, which adds what run
    * history has earned (ADR-0034).
    */
@@ -889,7 +929,7 @@ export function planQueue(opts: {
         reason:
           gated.length === 0
             ? `ref ${job.ref} is not in roster`
-            : `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)`,
+            : `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)`,
       });
       continue;
     }
@@ -926,8 +966,13 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     if (e === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
-    // e90 is every model's on arrival (ADR-0034); freeplay is unscored and needs no promotion.
-    if (job.episode === "freeplay" || job.episode === "e90" || e.tiers.includes(job.episode)) return true;
+    // freeplay is unscored and needs no promotion. Otherwise the entry's own
+    // DECLARED tier is the static floor — every tier buys e90, and a `t2`
+    // entry buys an e360 without any run history, which is what the retired
+    // `tiers` force used to spell. The projection is asked only for what a
+    // model has EARNED on top of that, so a climb opens e360 for a `t1` entry.
+    if (job.episode === "freeplay") return true;
+    if (e.tier !== undefined && TIER_TABLE[e.tier].runsPerEpisode[job.episode] > 0) return true;
     return eligible !== undefined && eligible(r, job.episode);
   });
 }
@@ -1132,8 +1177,8 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
  * A job materialised for the spawner: the roster entries with the episode's
  * dimensions folded in, `repeat: n` as n copies with their own run ids
  * (`-r2`, `-r3`, ...) so one roster process runs them in sequence,
- * `repeat: "loop"` as run-roster's own --loop. `tiers` never reaches the
- * roster file.
+ * `repeat: "loop"` as run-roster's own --loop. `tier` and `idle` never reach
+ * the roster file: they are the fleet's bookkeeping, not a run dimension.
  */
 export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): JobSpawn {
   const dims = episodeDimensions(job.episode);
@@ -1141,11 +1186,17 @@ export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
-    const { tiers: _tiers, runsPerEpisode: _runs, billing: _billing, ...spec } = roster[r]!;
+    const { tier: _tier, idle: _idle, billing: _billing, ...spec } = roster[r]!;
+    // An `idle: "unlimited"` session is the one freeplay run the policy makes,
+    // and it carries a wall clock the tier does not pin: a class governs the
+    // next pick and never a run in flight, so a session ended only by the idle
+    // watchdog would hold its account for as long as the model kept playing.
+    // The entry's own watchdogs still win — this is a default, not a ceiling.
+    const unlimited = isExtraJob(job) && job.episode === "freeplay" ? { episodeMs: UNLIMITED_SESSION_MS } : {};
     const base: RosterSpec = {
       ...spec,
       ...dims,
-      watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
+      watchdogs: { ...dims.watchdogs, ...unlimited, ...spec.watchdogs },
       ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's character, where a freeplay extra keeps the entry's own.
@@ -1974,12 +2025,21 @@ export function formatModels(
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
   const out: string[] = [
-    `models: ${states.length} in roster (policy: ADR-0034; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
-      `${policy.paid !== null ? `; paid ${policy.paid.runsPerEpisode.e90}/${policy.paid.runsPerEpisode.e360}, at most ${policy.paid.maxConcurrent} in flight` : "; no paid/free split"}` +
-      `${policy.extras !== null ? `; extras cycle ${policy.extras.characters.length} character(s), local: ${policy.extras.local}` : "; no extras"})`,
-    `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
+    `models: ${states.length} in roster (policy: ADR-0040; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
+      `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
+      `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
+      `; idle cycle ${IDLE_CHARACTERS.length} character(s), unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
+    `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
+  /**
+   * The tier column. A climb is shown as the move it was (`t1>t2`); a held
+   * witness is shown as a held witness (`t0*`), because a trial model that has
+   * earned rung 1 is exactly the row an operator is looking for when deciding
+   * what to promote — and the old table could only say `promoted, 0/0`.
+   */
+  const tierCell = (s: ModelState): string =>
+    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : s.earnedRung1 ? `${s.tier}*` : s.tier;
   const cell = (s: ModelState, ep: "e90" | "e360"): string => {
     const st = s.perEpisode[ep]!;
     if (!s.eligible.includes(ep)) return "-";
@@ -1994,12 +2054,19 @@ export function formatModels(
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
-      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
+      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
         (last !== undefined && ex === undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
         (s.ladder > 0 ? ` — ladder ${s.ladder}` : "") +
         (other > 0 ? ` — ${other} run(s) from other series not counted` : ""),
     );
   }
+  // A steered entry carries no tier and so has no row: it is not evidence, and
+  // the table is the evidence table. It is still named here, because vanishing
+  // from `--status` entirely is how an operator loses track of a probe that is
+  // very much running (the accounts block above shows it on its account).
+  const rowed = new Set(states.map((s) => s.name));
+  const offBook = [...excluded].filter(([name]) => !rowed.has(name));
+  for (const [name, why] of offBook) out.push(`  ${name.padEnd(w)} ${"—".padEnd(7)} ${"steered".padEnd(9)} ${"—".padEnd(8)} ${"—".padEnd(12)} ${"—".padEnd(12)} ${"—".padEnd(6)} no: ${why}`);
   return out;
 }
 
@@ -2991,7 +3058,25 @@ function parseArgs(argv: string[]): {
         config = isAbsolute(a) ? a : join(process.cwd(), a);
     }
   }
-  return { config, dryRun, status, liveRuns, until, clearModel };
+  return { config: preferNextConfig(config), dryRun, status, liveRuns, until, clearModel };
+}
+
+/**
+ * The 0.5 shape ships as a SIBLING file, the way 0.4's two shape changes did
+ * (ADR-0034): whoever asks for `fleet.json` gets `fleet.next.json` when one is
+ * beside it, so the running supervisor keeps its old config until it restarts,
+ * this build reads the new one wherever it is pointed — compose still passes
+ * the old path — and the restart and the eventual rename commute.
+ *
+ * Without it the deploy meets a config it cannot parse, keeps its last good
+ * one, and flies the REJECTED banner with nothing wrong except the order the
+ * two halves landed in. Delete this once `fleet.next.json` is renamed over
+ * `fleet.json` and no supervisor from before 0.5 can come back.
+ */
+export function preferNextConfig(path: string): string {
+  if (basename(path) !== "fleet.json") return path;
+  const next = join(dirname(path), "fleet.next.json");
+  return existsSync(next) ? next : path;
 }
 
 /**
@@ -3120,7 +3205,7 @@ async function main(): Promise<void> {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
-        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)` });
+        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)` });
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }

@@ -814,6 +814,12 @@ export interface ApiError {
  */
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
+/** A rung of the evidence ladder (ADR-0040); mirrors `TIERS` in `runner/src/models.ts`. */
+export type TierView = "t0" | "t1" | "t2";
+
+/** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
+export type IdleModeView = "none" | "characters" | "unlimited";
+
 /** One tier's counts for one model, plus the runs behind them. */
 export interface ModelEpisodeView {
   /** Stamped, un-overridden runs that produced at least one model response. */
@@ -888,8 +894,24 @@ export interface ModelRowView {
   platform: string | null;
   /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
   harness: HarnessView;
-  /** Free or paid (`runner/src/model-cost.ts`): what the policy's targets, cap and extras key on. */
+  /**
+   * Free or paid (`runner/src/model-cost.ts`). Since ADR-0040 this says only
+   * where a run may physically execute — the account class and the rate-limit
+   * key. It buys no runs and costs none: that is the tier.
+   */
   billing: "free" | "paid";
+  /** The tier the config admitted this model to (ADR-0040). */
+  declaredTier: TierView;
+  /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
+  tier: TierView;
+  /**
+   * A counted e90 in this series reached the promotion level. What the model
+   * EARNED, kept apart from where it was ADMITTED: a `t0` model can hold this
+   * without spending it, and a hand-promoted model never shows it falsely.
+   */
+  earnedRung1: boolean;
+  /** What it does with an account once its tier is spent. */
+  idle: IdleModeView;
   status: ModelStatusView;
   /** Tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeIdView[];
@@ -927,14 +949,15 @@ export interface ModelsResponse {
     excluded: { name: string; reason: string }[];
   };
   policy: {
-    runsPerEpisode: { e90: number; e360: number };
     promoteAtLevel: number;
     /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
     series: string | null;
-    /** The paid policy when the file turns it on (ADR-0034); null is no split. */
-    paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
-    /** The extras policy when on: how many characters the cycle holds. */
-    extras: { characters: number } | null;
+    /** The paid throttle when the file turns it on; null is no split. Only a cap — never a budget. */
+    paid: { maxConcurrent: number } | null;
+    /** The ladder itself (ADR-0040), so a page can name a tier's budget without hardcoding it. */
+    tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
+    /** How many combos the `idle: "characters"` cycle holds. */
+    idleCharacters: number;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per
      * key (`concurrencyKeyOf`), counting every run on that key. An absent
