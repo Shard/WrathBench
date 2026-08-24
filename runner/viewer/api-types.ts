@@ -695,6 +695,20 @@ export interface ApiInfoResponse {
   /** True when a built dashboard is being served from disk. */
   dashboard: boolean;
   /**
+   * An id for the dashboard build currently on disk, or null when none is.
+   *
+   * An open tab keeps running whatever JavaScript it loaded, possibly hours and
+   * several commits old, while a rebuild has already replaced the files behind
+   * it — so a bug report can describe code that no longer exists (item 64). The
+   * SPA remembers the first value it sees, which IS its own build (index.html
+   * is served `no-store`, so a loaded tab was served the build that was current
+   * at the time), and says so when a later poll disagrees.
+   *
+   * It is Vite's own fingerprinted entry filename rather than a new stamp:
+   * it already changes exactly when the bundle does, and costs no build step.
+   */
+  dashboardBuild: string | null;
+  /**
    * The worldserver as its module's /health reports it: the build stamp the
    * image was compiled with and its process start. `null` when the module is
    * unreachable from the viewer or predates the field (cached briefly).
