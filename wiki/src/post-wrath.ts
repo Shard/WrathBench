@@ -16,8 +16,7 @@
  *
  * `admitPage` is the one page-level decision, a pure function of the title, the
  * namespace, the two revisions the parser holds, the page's creation date and —
- * when the build was given one — an existence oracle over this server's world
- * ids. It is deliberately the only door: a new admission rule is added here,
+ * when the build was given one — a name oracle over this server's world ids. It is deliberately the only door: a new admission rule is added here,
  * not in the parser or the build loop.
  *
  * Every rule is deterministic over raw wikitext and the title, with the one
@@ -51,10 +50,11 @@ export type AdmitReason =
   | "post_cutoff_wrath_signal"
   /**
    * No pre-cutoff revision and no explicit era signal either way, but an id the
-   * page states about itself exists in this server's 3.3.5a world DB: the page
-   * documents something that is in this world, written late. Only reachable
-   * when the build was given a world-id export (`--world-ids`), and never over a
-   * post-Wrath signal or a Classic-2019 one. See ADR-0042.
+   * page states about itself exists in this server's 3.3.5a world DB **and the
+   * DB's name for it is what the page is about**: the page documents something
+   * that is in this world, written late. Only reachable when the build was
+   * given a world-id export (`--world-ids`), and never over a post-Wrath signal
+   * or a Classic-2019 one. See ADR-0042.
    */
   | "post_cutoff_id_match"
   /**
@@ -95,37 +95,109 @@ export interface AdmitInput {
    */
   firstRevisionAt: string;
   /**
-   * Existence oracle for the 3.3.5a world DB, or undefined when the build was
-   * not given one (`--world-ids`). Passed as data — a predicate over (kind, id)
-   * — rather than a path or a connection, so `admitPage` stays pure and the
-   * tests need no file and no server.
+   * Name oracle for the 3.3.5a world DB, or undefined when the build was not
+   * given one (`--world-ids`). Passed as data — a lookup from (kind, id) to the
+   * name this server has for it — rather than a path or a connection, so
+   * `admitPage` stays pure and the tests need no file and no server.
    */
   worldIds?: WorldIdOracle;
 }
 
 /**
- * Does this server have an entity with this id? The only question the build
- * asks the world DB, and it is asked of an exported file rather than a live
- * server (`wiki/src/world-ids.ts`, `infra/export-world-ids.sh`).
+ * What does this server call the entity with this id, if it has one? The only
+ * question the build asks the world DB, and it is asked of an exported file
+ * rather than a live server (`wiki/src/world-ids.ts`,
+ * `infra/export-world-ids.sh`).
  */
 export interface WorldIdOracle {
-  has(kind: IdKind, id: number): boolean;
+  name(kind: IdKind, id: number): string | undefined;
+}
+
+/** Namespace prefixes the dump writes into the title itself. */
+const NS_PREFIX = /^(quest|category|portal)\s*:\s*/i;
+
+/**
+ * What the page is *about*, as a name to compare against the world DB's.
+ *
+ * The title minus the namespace prefix the dump carries in it, minus the
+ * disambiguating parentheticals the wiki appends — `(old)`, `(original)`,
+ * `(mob)`, `(tactics)`, `(Alliance)`, `(4)`. They are wiki bookkeeping about
+ * which article this is, never part of the entity's name, and leaving them on
+ * would fail a page that is right about itself. Stripped repeatedly, because
+ * `Foo (mob) (old)` happens.
+ */
+export function pageSubject(title: string): string {
+  let subject = title.replace(NS_PREFIX, "").trim();
+  for (;;) {
+    const next = subject.replace(/\s*\([^()]*\)\s*$/, "").trim();
+    if (next === subject) return subject;
+    subject = next;
+  }
+}
+
+/** Case, punctuation and spacing folded away; what is left are the words. */
+function nameTokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .replace(/['’‘]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 0);
 }
 
 /**
- * Does the page state an id that exists in this world?
+ * Do the page's subject and the world DB's name for the id it states refer to
+ * the same thing?
+ *
+ * Equality after folding case and punctuation, or one name's words being all of
+ * the other's: the wiki and the DB disagree on ornament far more often than on
+ * substance — `Darkmoon Carnie` against `Darkmoon Faire Carnie`,
+ * `Rexxar/PI` against `Rexxar`, `Turgid the Vile` against `Turgid`. Word
+ * containment and not substring containment, because a substring rule matches
+ * inside a word: `car` in `carnie`, `adam` in `adamant`.
+ *
+ * This is the whole discriminator. An id alone admitted the Cataclysm Zul'Aman
+ * boss on Zul'jin's entry and seven unrelated pages on one battle pet's item
+ * id; the DB's name for those ids is `Zul'jin` and `Albino Snake`, and neither
+ * is what the page is about.
+ */
+export function namesAgree(subject: string, worldName: string): boolean {
+  const a = nameTokens(subject);
+  const b = nameTokens(worldName);
+  if (a.length === 0 || b.length === 0) return false;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const words = new Set(long);
+  return short.every((token) => words.has(token));
+}
+
+/**
+ * Does the page state an id that exists in this world *and* names what the page
+ * is about?
  *
  * Read on the newest revision — for a late page the only one there is — and off
  * the raw wikitext, because `extractIds` reads the infobox templates a strip
- * would have thrown away. `spell` and `unknown` ids never match: spells are
+ * would have thrown away. `spell` and `unknown` ids never resolve: spells are
  * client DBC data the world DB knows nothing about, and an `unknown` id is a
  * number whose kind the page did not state; neither absence is evidence.
+ *
+ * The third outcome matters as much as the other two: `"mismatch"` is a page
+ * that states an id this server has under another name. It is not admitted, and
+ * it is counted (`pages_id_name_mismatch`), because that population is where
+ * the rule earns its precision and a regression in it would be silent.
  */
-export function statesWorldId(wikitext: string, worldIds: WorldIdOracle): boolean {
+export function worldIdVerdict(
+  title: string,
+  wikitext: string,
+  worldIds: WorldIdOracle,
+): "match" | "mismatch" | "no id" {
+  const subject = pageSubject(title);
+  let existed = false;
   for (const { kind, id } of extractIds(wikitext)) {
-    if (worldIds.has(kind, id)) return true;
+    const worldName = worldIds.name(kind, id);
+    if (worldName === undefined) continue;
+    existed = true;
+    if (namesAgree(subject, worldName)) return "match";
   }
-  return false;
+  return existed ? "mismatch" : "no id";
 }
 
 export interface AdmitDecision {
@@ -138,6 +210,16 @@ export interface AdmitDecision {
    * accounting identity.
    */
   preAnnouncementProtected?: boolean;
+  /**
+   * True when the page stated an id this server has, under a name that is not
+   * what the page is about — the Cataclysm boss on the entry of the one it
+   * replaced, the battle-pet page carrying someone else's tooltip. A tag on a
+   * subset of `dropped_post_cutoff`, counted separately
+   * (`pages_id_name_mismatch`) and outside the accounting identity, because
+   * this is the population the name rule exists for and a regression in it
+   * would otherwise be invisible.
+   */
+  idNameMismatch?: boolean;
 }
 
 /**
@@ -567,12 +649,17 @@ export function admitPage(page: AdmitInput): AdmitDecision {
         return { admit: true, reason: "post_cutoff_wrath_signal" };
       }
       // Then, and only then, the world DB. The page says nothing about its era,
-      // and the id it states about itself is the only evidence left. Below the
-      // explicit signal, so a page that says what it is is counted for saying
-      // it, and below both vetoes, so a page that names a later expansion can
-      // never be admitted by an id that expansion reused (ADR-0042).
-      if (page.worldIds !== undefined && statesWorldId(page.newestWikitext, page.worldIds)) {
-        return { admit: true, reason: "post_cutoff_id_match" };
+      // and what it states about itself is the only evidence left: an id this
+      // server has, under the name the page is about. Below the explicit
+      // signal, so a page that says what it is is counted for saying it, and
+      // below both vetoes, so a page that names a later expansion can never be
+      // admitted by an id that expansion reused (ADR-0042).
+      if (page.worldIds !== undefined) {
+        const verdict = worldIdVerdict(page.title, page.newestWikitext, page.worldIds);
+        if (verdict === "match") return { admit: true, reason: "post_cutoff_id_match" };
+        if (verdict === "mismatch") {
+          return { admit: false, reason: "dropped_post_cutoff", idNameMismatch: true };
+        }
       }
     }
     return { admit: false, reason: "dropped_post_cutoff" };

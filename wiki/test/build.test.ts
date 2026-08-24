@@ -1031,10 +1031,10 @@ test("the world-id door admits late pages, and only with the flag", async () => 
     idsPath,
     JSON.stringify({
       exported_at: "2026-08-24T12:00:00Z",
-      quest: [4242],
-      creature: [7001],
-      item: [9100],
-      gameobject: [3300],
+      quest: { 4242: "Example Late Quest", 4243: "Example Unrelated Quest" },
+      creature: { 7001: "Example Guard" },
+      item: { 9100: "Example Trinket" },
+      gameobject: { 3300: "Example Node" },
     }),
   );
   await Bun.write(
@@ -1050,6 +1050,20 @@ test("the world-id door admits late pages, and only with the flag", async () => 
             id: 1,
             timestamp: "2016-01-01T00:00:00Z",
             text: "{{questbox|id=4242}}Example Late Quest sends you to the lorem hills.",
+          },
+        ],
+      },
+      {
+        // States an id this server has, under a different name: the shape of
+        // every false admit the id-only rule made. Dropped, and counted.
+        title: "Example Inheriting Quest",
+        ns: 118,
+        id: 4,
+        revisions: [
+          {
+            id: 4,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "{{questbox|id=4243}}Example Inheriting Quest took an older quest's number.",
           },
         ],
       },
@@ -1121,7 +1135,10 @@ test("the world-id door admits late pages, and only with the flag", async () => 
   const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
   const metaNumber = (key: string): number => Number.parseInt(meta.get(key)!.value, 10);
   expect(metaNumber("pages_post_cutoff_id_match")).toBe(1);
-  expect(metaNumber("pages_dropped_post_cutoff")).toBe(2);
+  expect(metaNumber("pages_dropped_post_cutoff")).toBe(3);
+  // The name rule's own population: the page that stated a real id belonging to
+  // something else. A subset of the drop above, never a bucket.
+  expect(metaNumber("pages_id_name_mismatch")).toBe(1);
   // The export's identity is on the bundle, so a rebuild against a different
   // one is visible rather than inferred.
   const worldIds = JSON.parse(meta.get("world_ids")!.value) as {
@@ -1129,7 +1146,7 @@ test("the world-id door admits late pages, and only with the flag", async () => 
     counts: Record<string, number>;
   };
   expect(worldIds.exported_at).toBe("2026-08-24T12:00:00Z");
-  expect(worldIds.counts).toEqual({ quest: 1, creature: 1, item: 1, gameobject: 1 });
+  expect(worldIds.counts).toEqual({ quest: 2, creature: 1, item: 1, gameobject: 1 });
   // The identity still holds with the sixth reason in it.
   const accounted =
     metaNumber("pages_pre_cutoff") +

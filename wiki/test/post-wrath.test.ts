@@ -13,7 +13,9 @@ import {
   hasPostWrathSignal,
   hasWrathSignal,
   isPreAnnouncementPage,
-  statesWorldId,
+  namesAgree,
+  pageSubject,
+  worldIdVerdict,
   titleIsPostWrathCoinage,
 } from "../src/post-wrath";
 import type { IdKind } from "../src/ids";
@@ -494,30 +496,27 @@ describe("a main-namespace title that is a Cataclysm coinage", () => {
 /**
  * The world-id door (ADR-0042): a page written after the cutoff that says
  * nothing about its era is admitted when an id it states about itself exists in
- * this server's 3.3.5a world DB.
+ * this server's 3.3.5a world DB **and the DB's name for that id is what the
+ * page is about**.
  *
  * The oracle is passed in as data, so these tests need no export file and no
- * server. Every id below is invented.
+ * server. Every id and name below is invented.
  */
 describe("post_cutoff_id_match", () => {
-  /** An oracle over four invented id sets, one per world-DB table. */
+  /** An oracle over four invented id→name maps, one per world-DB table. */
   const oracle = {
-    has(kind: IdKind, id: number): boolean {
-      const sets: Partial<Record<IdKind, number[]>> = {
-        quest: [4242],
-        npc: [7001],
-        item: [9100],
-        object: [3300],
+    name(kind: IdKind, id: number): string | undefined {
+      const maps: Partial<Record<IdKind, Record<number, string>>> = {
+        quest: { 4242: "Example Quest Alpha" },
+        npc: { 7001: "Example Guard", 7002: "Example Other Guard" },
+        item: { 9100: "Example Trinket", 9101: "Example Faire Carnie" },
+        object: { 3300: "Example Node" },
       };
-      return (sets[kind] ?? []).includes(id);
+      return (maps[kind] ?? {})[id];
     },
   };
 
-  const late = (
-    title: string,
-    newestWikitext: string,
-    worldIds: { has(kind: IdKind, id: number): boolean } = oracle,
-  ) =>
+  const late = (title: string, newestWikitext: string, worldIds = oracle) =>
     admitPage({
       ns: 0,
       title,
@@ -527,7 +526,7 @@ describe("post_cutoff_id_match", () => {
       worldIds,
     });
 
-  test("a quest page whose stated id is on this server is admitted", () => {
+  test("a page whose stated id is on this server, under its own name, is admitted", () => {
     expect(late("Example Quest Alpha", `{{questbox|id=4242}}\n${PROSE}`)).toEqual({
       admit: true,
       reason: "post_cutoff_id_match",
@@ -535,8 +534,10 @@ describe("post_cutoff_id_match", () => {
   });
 
   test("every kind the world DB has a table for maps through", () => {
-    expect(late("Example NPC", `{{npcbox|id=7001}}\n${PROSE}`).reason).toBe("post_cutoff_id_match");
-    expect(late("Example Item", `{{itembox|itemid=9100}}\n${PROSE}`).reason).toBe(
+    expect(late("Example Guard", `{{npcbox|id=7001}}\n${PROSE}`).reason).toBe(
+      "post_cutoff_id_match",
+    );
+    expect(late("Example Trinket", `{{itembox|itemid=9100}}\n${PROSE}`).reason).toBe(
       "post_cutoff_id_match",
     );
     expect(late("Example Node", `{{objectbox|id=3300}}\n${PROSE}`).reason).toBe(
@@ -551,21 +552,46 @@ describe("post_cutoff_id_match", () => {
     });
   });
 
-  test("spell and unknown ids never match: neither is in the world DB", () => {
+  test("an id this server has under another name does not admit, and is counted", () => {
+    // The shape of every false admit the id-only rule made: a later page states
+    // the entry of the thing it replaced, or copy-pastes another page's infobox.
+    expect(late("Example Later Boss", `{{npcbox|id=7001}}\n${PROSE}`)).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+      idNameMismatch: true,
+    });
+  });
+
+  test("a page that states no id at all is not a mismatch", () => {
+    // `pages_id_name_mismatch` is about ids that resolved, so it stays readable
+    // as "pages the name rule refused" rather than "late pages".
+    expect(late("Example Lore Page", PROSE)).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+    });
+  });
+
+  test("one agreeing id is enough, whatever else the page states", () => {
+    expect(
+      late("Example Guard", `{{npcbox|id=7002}}{{npcbox|npcid=7001}}\n${PROSE}`).reason,
+    ).toBe("post_cutoff_id_match");
+  });
+
+  test("spell and unknown ids never resolve: neither is in the world DB", () => {
     // The same number, stated as a spell and as a bare id in a template that
     // implies no kind. Spells live in the client's DBC files, so the world DB's
     // silence about one says nothing, and an unknown kind is a number the page
     // did not classify. `world-ids.ts` is where that guarantee lives; here the
     // oracle would answer for any other kind, and the page is still dropped.
     const anyKindButThose = {
-      has(kind: IdKind, id: number): boolean {
-        return id === 4242 && kind !== "spell" && kind !== "unknown";
+      name(kind: IdKind, id: number): string | undefined {
+        return id === 4242 && kind !== "spell" && kind !== "unknown" ? "Example Ability" : undefined;
       },
     };
     expect(late("Example Ability", `{{spellbox|id=4242}}\n${PROSE}`, anyKindButThose).reason).toBe(
       "dropped_post_cutoff",
     );
-    expect(late("Example Thing", `{{infobox|id=4242}}\n${PROSE}`, anyKindButThose).reason).toBe(
+    expect(late("Example Ability", `{{infobox|id=4242}}\n${PROSE}`, anyKindButThose).reason).toBe(
       "dropped_post_cutoff",
     );
   });
@@ -573,7 +599,7 @@ describe("post_cutoff_id_match", () => {
   test("a post-Wrath signal outranks the id: a reused id admits nothing", () => {
     expect(
       late(
-        "Example Cataclysm Quest",
+        "Example Quest Alpha",
         `{{questbox|id=4242}}\n[[Category:Cataclysm quests]]\n${PROSE}`,
       ),
     ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
@@ -596,9 +622,9 @@ describe("post_cutoff_id_match", () => {
   test("an explicit Wrath signal still wins the reason", () => {
     // Both doors would admit; the page says what it is, so it is counted for
     // saying it rather than for the id.
-    expect(late("Example Item Zeta", `{{itembox|patch=3.0.2|itemid=9100}}\n${PROSE}`).reason).toBe(
-      "post_cutoff_wrath_signal",
-    );
+    expect(
+      late("Example Trinket", `{{itembox|patch=3.0.2|itemid=9100}}\n${PROSE}`).reason,
+    ).toBe("post_cutoff_wrath_signal");
   });
 
   test("without an oracle the door does not exist", () => {
@@ -625,15 +651,95 @@ describe("post_cutoff_id_match", () => {
       }),
     ).toEqual({ admit: true, reason: "pre_cutoff" });
   });
+
+  test("a quest page compares against the log title, prefix stripped", () => {
+    expect(
+      admitPage({
+        ns: 118,
+        title: "Quest:Example Quest Alpha",
+        eraWikitext: null,
+        newestWikitext: `{{questbox|id=4242}}\n${PROSE}`,
+        firstRevisionAt: "2016-06-06T00:00:00Z",
+        worldIds: oracle,
+      }).reason,
+    ).toBe("post_cutoff_id_match");
+  });
 });
 
-describe("statesWorldId", () => {
-  const everything = { has: (): boolean => true };
-  const nothing = { has: (): boolean => false };
+describe("pageSubject", () => {
+  test("the namespace prefix the dump writes into the title comes off", () => {
+    expect(pageSubject("Quest:Example Quest Alpha")).toBe("Example Quest Alpha");
+    expect(pageSubject("Category:Example Zone Beta")).toBe("Example Zone Beta");
+    expect(pageSubject("Portal:Example Zone Beta")).toBe("Example Zone Beta");
+  });
 
-  test("it reads the ids the page states, and nothing else", () => {
-    expect(statesWorldId(`{{questbox|id=4242}}\n${PROSE}`, everything)).toBe(true);
-    expect(statesWorldId(PROSE, everything)).toBe(false);
-    expect(statesWorldId(`{{questbox|id=4242}}\n${PROSE}`, nothing)).toBe(false);
+  test("disambiguating parentheticals come off, however many", () => {
+    // Wiki bookkeeping about which article this is, never part of the name.
+    expect(pageSubject("Example Guard (mob)")).toBe("Example Guard");
+    expect(pageSubject("Example Guard (tactics)")).toBe("Example Guard");
+    expect(pageSubject("Example Guard (Alliance)")).toBe("Example Guard");
+    expect(pageSubject("Example Guard (4)")).toBe("Example Guard");
+    expect(pageSubject("Example Guard (mob) (old)")).toBe("Example Guard");
+  });
+
+  test("a parenthetical that is not a suffix stays: it is part of the name", () => {
+    expect(pageSubject("Example (Big) Guard")).toBe("Example (Big) Guard");
+  });
+});
+
+describe("namesAgree", () => {
+  test("case, punctuation and spacing are ornament", () => {
+    expect(namesAgree("Example Guard", "example guard")).toBe(true);
+    expect(namesAgree("Zim'Torga's Keeper", "Zim'Torgas Keeper")).toBe(true);
+    expect(namesAgree("Example  Guard", "Example Guard")).toBe(true);
+  });
+
+  test("one name's words being all of the other's is agreement", () => {
+    // The wiki and the DB disagree on ornament far more often than on substance.
+    expect(namesAgree("Example Carnie", "Example Faire Carnie")).toBe(true);
+    expect(namesAgree("Example Guard/PI", "Example Guard")).toBe(true);
+    expect(namesAgree("Turgid the Vile", "Turgid")).toBe(true);
+  });
+
+  test("different names do not agree", () => {
+    expect(namesAgree("Example Boss", "Example Guard")).toBe(false);
+    expect(namesAgree("Example Quest Alpha", "Example Quest Beta")).toBe(false);
+  });
+
+  test("the loose side of the rule, stated: an inserted word still agrees", () => {
+    // `Example Guard` and `Example Other Guard` agree, because one name's words
+    // are all of the other's. That is the same clause that makes
+    // `Darkmoon Carnie` agree with `Darkmoon Faire Carnie`, which is the case
+    // the rule is for; the residue it accepts is a page whose subject is a
+    // strict word-subset of a different entity's name. Measured over the real
+    // dump it costs ~15 pages, and every alternative measured cost more real
+    // ones than it saved (ADR-0042 addendum).
+    expect(namesAgree("Example Guard", "Example Other Guard")).toBe(true);
+  });
+
+  test("words, not substrings: a rule on substrings matches inside a word", () => {
+    expect(namesAgree("Carn", "Example Carnie")).toBe(false);
+    expect(namesAgree("Adam", "Adamant Guard")).toBe(false);
+  });
+
+  test("an empty side never agrees", () => {
+    expect(namesAgree("", "Example Guard")).toBe(false);
+    expect(namesAgree("Example Guard", "")).toBe(false);
+    expect(namesAgree("!!!", "Example Guard")).toBe(false);
+  });
+});
+
+describe("worldIdVerdict", () => {
+  const oracle = {
+    name(kind: IdKind, id: number): string | undefined {
+      return kind === "npc" && id === 7001 ? "Example Guard" : undefined;
+    },
+  };
+
+  test("the three outcomes are match, mismatch and no id", () => {
+    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7001}}", oracle)).toBe("match");
+    expect(worldIdVerdict("Example Boss", "{{npcbox|id=7001}}", oracle)).toBe("mismatch");
+    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7009}}", oracle)).toBe("no id");
+    expect(worldIdVerdict("Example Guard", PROSE, oracle)).toBe("no id");
   });
 });

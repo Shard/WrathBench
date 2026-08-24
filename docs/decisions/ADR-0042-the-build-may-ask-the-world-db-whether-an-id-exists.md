@@ -94,3 +94,48 @@ section and paragraph cuts and the out-of-world trim run over it unchanged.
   to agree with the page's name — not a wider one.
 - `schema_version` stays 5. No table changes; the same `pages.text` column holds
   more rows.
+
+## Addendum, 2026-08-24: the name has to agree
+
+An exhaustive adversarial review of all 151 rows the id-only door admitted — two
+independent reviewers, every title judged, the DB's own names joined in — came
+back **94 true, 57 false: precision 0.62**, worse than the 0.7 the sample above
+estimated. The false admits are Cataclysm, Mists and Warlords pages sitting on a
+3.3.5 id, and they arrive by three routes: a later boss inherits the entry of the
+one it replaced (the Cataclysm Zul'Aman boss states Zul'jin's 23863), a page
+copy-pastes another page's tooltip block (seven unrelated battle-pet, guild and
+companion pages all state `itemid=44822`), and a stub carries a placeholder id
+nobody corrected (a Deepholm rare on entry 3868, which is a Blood Seeker here).
+
+The review also found the discriminator, and it was already written down as an
+unbuilt lever: **nearly every false admit's id belongs to something with a
+different name, and nearly every true one's does not.** So the export now carries
+id→name (`quest_template.LogTitle`, `creature_template.name`,
+`item_template.name`, `gameobject_template.name`, ~3 MB) and the door requires
+the name to agree with the page's subject — the title with its namespace prefix
+and trailing parentheticals removed. Agreement is one name's words being all of
+the other's, case and punctuation folded: `Darkmoon Carnie` is `Darkmoon Faire
+Carnie`, `Rexxar/PI` is `Rexxar`, and word containment rather than substring
+containment because `car` is inside `carnie`. Measured against exact-match-only
+and substring rules over the same 151, this rule was the one that kept the true
+pages the other two lost.
+
+What it costs and what it leaves:
+
+- **It cuts the false admits roughly in half and takes some true pages with
+  them.** A page that is honestly about this world but states the wrong id —
+  a Deadmines drop on another item's entry, a Wrath glyph on another glyph's —
+  now fails, correctly by the rule and wrongly about the world. That is the
+  trade: the id door only ever knew what the page claimed, and a page that
+  claims someone else's id cannot be told from a page that inherited it.
+- **~15 false admits survive by design.** Their stub id *and* name both exist in
+  the 3.3.5 DB — Custer Clubnik, Foreman Fisk, Fern Feeder Moth, Malynea
+  Skyreaver, Labor Captain Grabbit, Sergeant Curtis, Overseer Sylandra, Rebel
+  Watchman, Singed Shambler, Royal Guard, Twilight Father, Horzak Zignibble,
+  Greela "The Grunt" Crankchain, `Quest:Jaina's Locket`, `Quest:Sylvanas'
+  Vengeance`. No rule reading wikitext and a name can see them, and per-title
+  exclusions are not a rule; they are recorded here and in FOLLOW-UPS 62 as the
+  measured residue.
+- `pages_id_name_mismatch` counts the pages the name rule refused. It is a
+  subset of `pages_dropped_post_cutoff`, outside the accounting identity, and it
+  is the number to read first if the rule is ever loosened or tightened.

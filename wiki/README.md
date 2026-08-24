@@ -26,15 +26,19 @@ before the stream starts rather than quietly dropping every page.
 
 `--world-ids` is the one input that does not come out of the dump. It takes a
 world-id export written by `infra/export-world-ids.sh` — four SELECTs against
-`acore_world` for the quest, creature, item and gameobject id sets, landing in
-`data/wiki/world-ids.json` — and admits a page written after the cutoff when an
-id the page states about itself exists on this server (`post_cutoff_id_match`
-below, ADR-0042). The export is server-derived and stays under `data/`,
-gitignored like the dump and the bundle. Without the flag the build behaves
-exactly as it did before the door existed and `meta.world_ids` reads `none`;
-with it, `meta.world_ids` records the export's `exported_at` and per-kind counts,
-so a bundle built against a different export is visible rather than inferred.
-A malformed or empty export fails the build rather than quietly shrinking it.
+`acore_world` for the quest, creature, item and gameobject **id→name** maps,
+landing in `data/wiki/world-ids.json` — and admits a page written after the
+cutoff when an id the page states about itself exists on this server *and the
+name that id has here is what the page is about* (`post_cutoff_id_match` below,
+ADR-0042). The name is the discriminator, not a refinement: on the id alone the
+door was 0.62 precise, because a later page inherits the entry of what it
+replaced and a battle-pet page copy-pastes another page's tooltip. The export is
+server-derived and stays under `data/`, gitignored like the dump and the bundle.
+Without the flag the build behaves exactly as it did before the door existed and
+`meta.world_ids` reads `none`; with it, `meta.world_ids` records the export's
+`exported_at` and per-kind counts, so a bundle built against a different export
+is visible rather than inferred. A malformed, empty or id-only export fails the
+build rather than quietly changing which pages it keeps.
 
 The build writes to a hidden temp file beside the destination and renames it into
 place at the end, so it is idempotent: a rebuild either replaces the bundle wholly
@@ -235,7 +239,16 @@ still a dropped page, and recovering its name does not put the page back.
   it is the only one there is.
 - `pages_post_cutoff_id_match` — no pre-cutoff revision, nothing said about the
   era either way, and an id the page states about itself exists in this server's
-  3.3.5a world DB: a quest, NPC, item or object that is here, documented late.
+  3.3.5a world DB **under a name that agrees with the page's subject**: a quest,
+  NPC, item or object that is here, documented late. The subject is the title
+  with its namespace prefix and its trailing parentheticals off (`(mob)`,
+  `(tactics)`, `(Alliance)`, `(old)`), and agreement is one name's words being
+  all of the other's after case and punctuation are folded away — `Darkmoon
+  Carnie` and `Darkmoon Faire Carnie` are the same carnie. Words, not
+  substrings, because a substring rule matches inside a word. A page that states
+  an id this server has under some other name is dropped and counted as
+  `pages_id_name_mismatch` — that is the population the name rule exists for,
+  and the number to watch if it is ever retuned.
   Only reachable with `--world-ids`, and last in the order — a page carrying a
   post-Wrath or Classic-2019 signal is never admitted by an id a later expansion
   reused, and a page that says outright it is Wrath content is counted for

@@ -308,6 +308,14 @@ async function main(): Promise<void> {
    */
   let steppedBack = 0;
   let stepBackRefused = 0;
+  /**
+   * Late pages that stated an id this server has, under a name that is not what
+   * the page is about, and were dropped for it. A tag on a subset of
+   * `dropped_post_cutoff` and outside the accounting identity: it is the
+   * population the name rule exists for, and it is the number to watch if the
+   * rule is ever loosened or tightened.
+   */
+  let idNameMismatch = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
   /** Out-of-world sections cut inside a surviving page, and what they were. */
@@ -520,6 +528,7 @@ async function main(): Promise<void> {
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
+          if (decision.idNameMismatch === true) idNameMismatch++;
           keepAsName(page, decision.reason);
         } else {
           keep(page, page.wikitext, decision.reason);
@@ -742,6 +751,10 @@ async function main(): Promise<void> {
     pages_pre_cutoff: String(reasons.pre_cutoff),
     pages_post_cutoff_wrath_signal: String(reasons.post_cutoff_wrath_signal),
     pages_post_cutoff_id_match: String(reasons.post_cutoff_id_match),
+    // Late pages that stated an id this server has under another name, and were
+    // dropped for it. A subset of `pages_dropped_post_cutoff`, not a bucket of
+    // its own: do not add it to the sum.
+    pages_id_name_mismatch: String(idNameMismatch),
     pages_dropped_post_cutoff: String(reasons.dropped_post_cutoff),
     pages_dropped_post_wrath: String(reasons.dropped_post_wrath),
     pages_dropped_meta: String(reasons.dropped_meta),
@@ -814,7 +827,8 @@ async function main(): Promise<void> {
   );
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
   console.log(
-    `  late+id:   ${reasons.post_cutoff_id_match} (no pre-cutoff revision, states an id this server has)`,
+    `  late+id:   ${reasons.post_cutoff_id_match} (no pre-cutoff revision, states an id this ` +
+      `server has under this name; ${idNameMismatch} dropped, the id is something else here)`,
   );
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
   console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);
