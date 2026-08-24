@@ -1008,10 +1008,21 @@ export function planPolicy(opts: {
 
 /** `planPolicy` plus what it held back and why. */
 export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
-  if (opts.queuePlan.waiting.length > 0) return { picks: [], held: [] };
+  // A waiting manual job reserves the POOL, and nothing else. Such a job has no
+  // account, and a job with no account can only ever take a pool one (ADR-0034:
+  // the class split governs the policy; a manual queue job draws from the
+  // pool), so vetoing every class starved paid and local picks on accounts the
+  // queue could never have used — a queue job stuck behind a busy RUNNER would
+  // hold the local box idle. Returning no `held` with it also broke this file's
+  // own rule that a held pick is always named. Reserve the pool, let the other
+  // classes pick, and say what the reservation was for.
+  const reserved =
+    opts.queuePlan.waiting.length > 0
+      ? `pool reserved for waiting manual job(s): ${opts.queuePlan.waiting.map((j) => j.name).join(", ")}`
+      : undefined;
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
   const usable = (list: readonly string[]): string[] => list.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  const free = usable(opts.pool);
+  const free = reserved === undefined ? usable(opts.pool) : [];
   // Per split-out class: the accounts of that class still free right now.
   const splitFree: Partial<Record<AccountClass, string[]>> = {};
   for (const cls of ACCOUNT_CLASSES) {
@@ -1022,7 +1033,10 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   // still has held picks to report — whether it is unconfigured or merely all
   // busy — so it does not short-circuit here.
   const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c] !== undefined && splitFree[c]!.length === 0);
-  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap) return { picks: [], held: [] };
+  // A reserved pool still has something to report, so it does not short-circuit
+  // either: the held rows are the whole point of naming the reservation.
+  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap && reserved === undefined)
+    return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
   const wrap = (pick: NextJob): PolicyPick => ({ job: policyJob(pick), account: pick.account, why: pick.why });
@@ -1065,6 +1079,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
         ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, busy(c, also)]),
       ) as Partial<Record<AccountClass, BusyAccount[]>>,
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
+      ...(reserved !== undefined ? { poolHeld: reserved } : {}),
     });
   if (opts.concurrency === undefined) {
     const plan = next(opts.states, free, []);
