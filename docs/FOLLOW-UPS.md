@@ -221,25 +221,109 @@ and status.
 
 ## Wiki
 
-49. **Unlabelled post-3.3.5 prose in wiki page leads** (2026-08-23, from ADR-0029;
-    previously carried under a duplicate number 47). ADR-0029 marks the era sections
-    the wiki labels itself, but a 2020 page's lead is written present-tense about the
-    post-Cataclysm world with no marker at all — the Coldridge Valley lead still says
-    the pass linked the valley to Dun Morogh "prior to its collapse", which is false
-    here, and no build-time rule separates that from Wrath-era prose. The
-    `search_reference` description carries the standing warning. A real fix needs
-    either a pre-Cataclysm revision of each page (the dump is full history, so the
-    revision from before 2010-12 is in it — a second bundle channel, expensive) or
-    per-sentence classification (not deterministic). **Triggered 2026-08-24** by
-    `fleet-nav-probe-freeplay-sonnet-20260823-c4-c2`: `search_reference` returned the
-    "prior to its collapse" / "after Coldridge Pass collapses before adventurers can
-    make it through to Kharanos" prose, and the model's scratchpad planned a
-    gyrocopter detour around the pass it believed unreliable (it walked the intact
-    pass in the end, so strategy was shaped, not blocked). Cheaper fix than a second
-    bundle channel: tag the known post-Cataclysm geography changes (collapses,
-    rebuilds) at bundle-build time for at least the starter-zone pages, where new
-    characters are most exposed. Not urgent — the era warning held enough that the run
-    still crossed.
+62. **What the Wrath bundle still cannot decide** (2026-08-24, from item 49;
+    rewritten when the bundle stopped labelling and started dropping, ADR-0040).
+    One residue left, precision rather than correctness. The other two are
+    resolved below: the recovered-name leak on 2026-08-24 (d0f3ec8), and the
+    18,717 undecidable late pages by the world-id door the operator approved the
+    same day (ADR-0042).
+    - **The paragraph rule's floor.** The phrase rules (`in Cataclysm`, `with
+      Cataclysm`, `after the Shattering`, `upcoming`/`beta` beside Cataclysm or
+      Deathwing, `will` within 60 characters of `Cataclysm`) reach the prose that
+      names the expansion. What they cannot reach is 2009–10 prose written
+      present-tense about a zone or NPC that had been *announced* but not
+      shipped, without naming it — the pre-cutoff revision is the one saying it,
+      so no revision line helps. Precision on a hand-checked 33-paragraph sample
+      is about 0.8: `with Cataclysm` also catches "removed with Cataclysm",
+      which is a statement about content that *is* here. Direction when a run
+      shows it costing something: the wiki's own `{{cata-inline}}`-style
+      templates, which mark the clause rather than the section.
+      **Narrowed 2026-08-24** by an adversarial read of the built bundle rather
+      than a count of it: rated battlegrounds, the Speedbarge, an inline
+      `(Expansion: …)` tag, `playable` beside worgen or goblin, Archaeology the
+      profession and Mastery the stat are rules now, and a category page whose
+      own title names a post-Wrath zone is a page-level signal in ns 14 (33
+      stubs). That is a dent in this residue, not a fix: prose describing the
+      later world in words no rule names is still there, and the only general
+      answer is still the clause-marking templates above. The new rules have
+      their own measured floor: the Archaeology window is 20 characters, so a
+      paragraph that names a dig site in the same sentence but further off than
+      that still goes ("The dig site west of the camp is where the archaeology
+      notes were lost" was the case that showed it). Per spec, and the cost of a
+      wider window is the profession paragraphs the rule is for.
+    - **A recovered name the bundle would rather not answer to.** The redirect
+      rules added on 2026-08-24 (ADR-0040) recover a
+      title from the newest revision or from an `(original)` sibling, which is
+      how `Deadmines` and `Gnomeregan` come back. Out-of-game titles are
+      excluded, and a title with a post-Wrath parenthetical or subpage suffix
+      never had a page to recover. What is not excluded is a bare ns-0 title
+      that is a later world's coinage whose newest revision redirects to a
+      Wrath lore page that survives — `Ruins of Gilneas` → `Gilneas` is the
+      shape. `verify.ts` resolves its forbidden titles through the redirect
+      table, so this fails the pre-swap gate rather than leaking quietly; check
+      it on the next real build and add a source-side veto if it fires.
+      **Resolved 2026-08-24** (d0f3ec8): `titleIsPostWrathCoinage` is that veto
+      — an exact-title ns-0 list of names Cataclysm coined, applied to the page,
+      to redirect recovery from the newest revision, and to the sibling rule,
+      so the name never resolves from any side. `Ruins of Gilneas` and ten
+      others are in `verify.ts`'s forbidden titles; the phrase pairs gate what
+      the surviving lore pages (Deepholm, Uldum, Kezan, Gilneas) may say.
+    - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
+      pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
+      Wrath signal (`post_cutoff_wrath_signal` admits those). The rest said
+      nothing either way and were dropped, and most of them were right about
+      3.3.5 — items, NPCs and quests documented late.
+      **Resolved 2026-08-24** (ADR-0042, approved by the operator): the build may
+      ask the world DB whether an id exists. `infra/export-world-ids.sh` writes
+      the four id sets to `data/wiki/world-ids.json`, `--world-ids` feeds them to
+      the build, and a late page that states an id this server has is admitted as
+      `post_cutoff_id_match`. The export is server-derived, stays under `data/`
+      and never enters git; CONTRACTS.md is untouched, because this is a
+      build-time input and the agent still reads nothing but wiki text.
+      **The premise was wrong about the size of the prize**, and the first full
+      build says so: 145 pages, not thousands. 16,010 of the 22,727 late pages
+      state no id at all, and of the 6,717 that do, nearly all state an id in
+      the 40,000–130,000 range this server has never had — the undecidable
+      population was mostly genuinely later content. A hand-check of 18 admitted
+      titles found 5 Cataclysm-or-later pages carrying a 3.3.5 id: an entry a
+      later boss inherited from the one it replaced (Daakara on Zul'jin's
+      23863), and an infobox id copied from another page and never corrected
+      (three unrelated battle-pet and guild pages all state `itemid=44822`).
+      **An exhaustive review of all 151 rows** (two independent reviewers, every
+      title judged) then put the id-only door at 94 true / 57 false — precision
+      **0.62**, worse than the sample — and found the discriminator: nearly every
+      false admit's id belongs to something the DB calls by a different name.
+      **The name lever is built** (ADR-0042 addendum): the export carries
+      id→name, and the door needs the DB's name for the id to agree with the
+      page's subject. The rebuild admits 95 pages (98 rows) and refuses 53 on
+      the name (`pages_id_name_mismatch`); Aeonaxx, Daakara, the battle pets and
+      the guild heralds are all gone.
+    - **The ~15 late pages the name rule cannot see** (measured 2026-08-24, the
+      accepted residue of the rule above). Their stub id *and* its name both
+      exist in the 3.3.5 DB, so nothing in the wikitext or the export separates
+      them from a real one: Custer Clubnik, Foreman Fisk, Greela "The Grunt"
+      Crankchain, Horzak Zignibble, Fern Feeder Moth, Malynea Skyreaver, Labor
+      Captain Grabbit, Overseer Sylandra, Rebel Watchman, Royal Guard,
+      `Quest:Jaina's Locket`, `Quest:Sylvanas' Vengeance` and a few like them.
+      Per-title exclusions are not a rule and are deliberately not built; this is
+      recorded so the number is known rather than discovered again. Watch
+      `pages_id_name_mismatch` if the rule is ever retuned.
+
+65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
+    the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
+    states every one of its ~28 metrics three times: a `let`/`Record` in the
+    build loop, a `meta` key in the `setMeta` call, and a line in the console
+    summary. Nothing ties the three together, so a new counter is added in three
+    places and is silently absent from the bundle or the summary if one is
+    missed, and the ones that are deliberately *not* part of the accounting
+    identity (`pages_pre_announcement_protected`, `pages_id_name_mismatch`,
+    `empty_pages`) say so only in a comment beside each of the three. What it
+    costs today is small — the comments are good and the meta diff of a rebuild
+    catches a drift — which is why this is a follow-up and not a fix: it is worth
+    doing when the next counter goes in, as one metric table (name, help text,
+    whether it is in the identity, how it prints) that the loop increments, the
+    meta write reads and the summary renders. Watch for it the next time a
+    counter is added to `build.ts`.
 
 ## Docs and release
 
@@ -281,6 +365,9 @@ and status.
 
 One line per number so citations resolve; the day file carries the detail.
 
+- 64 — 2026-08-24 — 7a1cc07 — the protection line is the Cataclysm **announcement** (2009-08-21, `CATACLYSM_ANNOUNCED`), not the beta. 119 of the 588 protected pages were created on or after BlizzCon 2009 and were mostly announced-Cataclysm content (Blackwing Descent, Halls of Origination, Gilneas City, a run of beta ability pages); a page created before the announcement could not have been written about Cataclysm at all. Renamed through the code, the meta key (`pages_pre_announcement_protected`), the tests, `wiki/README.md` and ADR-0040 together. Keeps roughly 500 of the 588
+- 63 — 2026-08-24 — 7a1cc07 — the stripper emptied whole articles. Root cause was not the brace scanner: `CONTAINER_TAGS` read a repeated `<ref name="x" />` as an *opening* tag and ate everything to the next `</ref>` — on Orgrimmar's 2010 revision 1,486 characters including the `}}` that closed the infobox, after which `removeBraced` never returned to depth 0 and discarded the page. The scanner is hardened too: brace runs are counted a run at a time (`{{{param|default}}}` no longer opens a phantom `{|` on its third brace, and the mirror case no longer leaks infobox fields out as prose) and closers match their opener's kind. Unbalanced input now costs its own paragraph, not the page — the strip resumes at the first blank line after the unclosed opener. Measured over the dump on the Wrath snapshot: pages that strip to nothing with ≥200 characters of non-template prose 47 → 11 — 22 recovered by the ref fix alone, 28 with the hardened scanner and the fallback stubbed out, 37 with it — so the net catches 9 and the root-cause fixes carry the rest. Orgrimmar, Scarlet Crusade, Crystalsong Forest and Gnoll are among them, and Orgrimmar's era revision now strips to its 10,696 characters of prose; whether the item-49 canary passes needs the operator's rebuild. One page in a 2,457-page sample flips the other way — a bare `<onlyinclude>` achievement box whose text the old over-closing bug leaked out of its template — which is the leakage fix, roughly 35 to 40 pages dump-wide. The residue is table-only pages
+- 49 — 2026-08-24 — 40b3054, 9194abb, ac50f51, 551dba1 — the wiki bundle reads the era, not 2020. Prerequisite first: a `<page>` block is 50 revisions, not a page, so the parser merges a title's blocks and the build asserts one row per (title, ns) — 9,693 stale duplicate rows were competing in `pages_fts`. Then prose comes from the newest revision saved before 2010-10-12 (patch 4.0.1) while coordinates, ids and the quest infobox stay on the newest revision, where the corrections are (ADR-0040); the 20,428 pages with no pre-cutoff revision keep their newest text under a fixed page-level label rather than being dropped. Out-of-game reference pages (patch notes, the Lua API, the client UI, addons, boxed products) are classified from the title and sunk below every body hit with a label, never deleted, exact titles never demoted. The runner stamps the bundle's identity (`schema_version`, `built_at`, `source`, `era_cutoff`) into the run's comparability tuple, so a rebuild is visible instead of indistinguishable. Verified on a rebuilt bundle: unlabelled Cataclysm-mentioning pages 2,025 → 650, Deathwing/Shattering/Pandaria mentions 2,032 → 306, the Coldridge Valley "collapse" prose 3 → 0, coordinates −2.6% and ids −1% (the stale duplicate rows going away). **Deploy pending:** the rebuilt bundle sits at `data/wiki/bundle.next.sqlite` and is not swapped in; the swap is a harness minor bump (ADR-0033 addendum) and waits for a deploy window after review. That staged file predates the out-of-world section trim (2026-08-24, ADR-0040), the pre-announcement protection, the stripper fix in item 63 and the empty-row fix in 9f06265, and has to be rebuilt before the swap — it was built with the behaviour that dropped 5,011 pages of this world. **Amended 2026-08-24:** the era rules were dropping 588 pages of this world — a page that existed before the Cataclysm beta had picked up `|patch=4.0.1` or a Cataclysm category in a 2010 revision, and was read as a beta stub; Stormwind City, Durotar, the Barrens, Thousand Needles, Auberdine, Southshore and Camp Taurajo among them. A page whose first revision predates the Cataclysm announcement is now a Wrath page and a post-Wrath signal never drops it (`pages_pre_announcement_protected`; the line moved from 2010-06-01 to 2009-08-21 under item 64), while the section and paragraph cuts still strip what the 2010 editors wrote about the next world; a page with no pre-cutoff prose is counted `dropped_post_cutoff` whatever else it says, which moves 1,429 pages between counters and admits nothing new. Every counter in that build added up, which is why the build now ends with a **canary**: the ten capitals, the eight racial starting zones and the reshaped classic zones must resolve in the finished bundle or the build fails before the rename (`wiki/src/canary.ts`, `--no-canary` for smoke builds), with `wiki/src/verify.ts` as the operator-run pre-swap gate over the same list plus forbidden titles and phrase pairs. Residue is item 62; 63 and 64 are resolved below
 - 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`

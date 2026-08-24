@@ -71,6 +71,39 @@ describe("comparabilityOf", () => {
     expect(parseComparability(legacy)?.wikiCoords).toBeUndefined();
   });
 
+  test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple (ADR-0033)", () => {
+    const config = loadRunConfig({ driver: "openai", model: "m" });
+    // No bundle at all: null, never an absent field on a fresh stamp.
+    expect(comparabilityOf(config, "v").wikiBundle).toBeNull();
+
+    const wrath = {
+      schemaVersion: "5",
+      builtAt: "2026-08-24T09:00:00.000Z",
+      source: "dump.7z",
+      eraCutoff: "2010-10-12",
+    };
+    const c = comparabilityOf(config, "v", null, wrath);
+    expect(c.wikiBundle).toEqual(wrath);
+    // Same dump, rebuilt: `built_at` moves, so the tuples are not identical and
+    // a resume restamps. `sameComparability` is stricter than series grouping.
+    const rebuilt = comparabilityOf(config, "v", null, { ...wrath, builtAt: "2026-08-24T18:00:00.000Z" });
+    expect(sameComparability(c, rebuilt)).toBe(false);
+    // A bundle that predates the era channel keeps working: eraCutoff is null,
+    // never back-labelled as "no cutoff applied".
+    const old = comparabilityOf(config, "v", null, { ...wrath, eraCutoff: null });
+    expect(parseComparability(JSON.parse(JSON.stringify(old)))?.wikiBundle?.eraCutoff).toBeNull();
+    // A tuple stamped before the field existed still parses whole.
+    const { wikiBundle: _dropped, ...legacy } = c;
+    void _dropped;
+    const back = parseComparability(legacy);
+    expect(back?.wikiBundle).toBeUndefined();
+    expect(back?.promptHash).toBe(c.promptHash);
+    // A malformed annotation must not erase the rest of the tuple... it does
+    // (parseComparability is all-or-nothing), so the schema stays permissive:
+    // every field nullable, nothing parsed into a number.
+    expect(parseComparability({ ...c, wikiBundle: { ...wrath, schemaVersion: 5 } })).toBeNull();
+  });
+
   test("an objective changes the prompt hash and raises the flag", () => {
     const c = comparabilityOf(
       loadRunConfig({ driver: "openai", model: "m", objective: "walk to Ironforge" }),
