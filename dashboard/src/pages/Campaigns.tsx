@@ -44,7 +44,9 @@ function coverage(row: CampaignRowView): string {
 
 function stateOf(row: CampaignRowView): { label: string; cls: string } {
   if (row.config === null) return { label: "retired", cls: "dim" };
-  if (row.config.complete) return { label: "complete", cls: "ok" };
+  // A finished sweep reads quieter than a running one: same green, faded, so
+  // the vivid one on the page always means "something is happening here".
+  if (row.config.complete) return { label: "complete", cls: "ok-muted" };
   if (!row.config.enabled) return { label: "off", cls: "warn" };
   return { label: "sweeping", cls: "ok" };
 }
