@@ -86,13 +86,16 @@ export const MUST_EXIST: readonly string[] = [
   "Ashenvale",
   // A Wetlands location in this world, an instance only in the next one.
   "Grim Batol",
-  // The low-level dungeons. Every one of these is a page Cataclysm moved: the
-  // expansion rebuilt the instance, took the bare title for the new version and
-  // left this world's article under `… (original)` or under another name
-  // entirely, so the name a character searches for survives only through a
-  // redirect. That is the whole reason the redirect rules in `build.ts` fall
-  // back to the newest revision and to the `(original)` sibling, and this is
-  // what stops that from silently regressing.
+  // The low-level dungeons. Several of these are pages Cataclysm moved: it
+  // rebuilt the instance, took the bare title for the new version and left this
+  // world's article under `… (original)` or under another name entirely, so the
+  // name a character searches for survives only through a redirect. That was
+  // measured for Deadmines, Ragefire Chasm, Scarlet Monastery, Gnomeregan and
+  // Stormwind Stockade; the rest are here because they are the same shape of
+  // page and the same rules reach them, not because a move was measured on
+  // each. Most resolve as a plain page. That is the whole reason the redirect
+  // rules in `build.ts` fall back to the newest revision and to the
+  // `(original)` sibling, and this is what stops that from silently regressing.
   "Deadmines",
   "Ragefire Chasm",
   "Gnomeregan",
