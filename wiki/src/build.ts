@@ -166,7 +166,7 @@ async function main(): Promise<void> {
    * they predate the Cataclysm beta. A tag on a subset of `pre_cutoff`, never a
    * sixth bucket: it is deliberately outside the accounting identity.
    */
-  let preBetaProtected = 0;
+  let preAnnouncementProtected = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
   /** Out-of-world sections cut inside a surviving page, and what they were. */
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
     reasons[reason]++;
     // Counted here rather than at decision time: a protected page can still be
     // dropped by the cuts above, and the counter is about what is in the bundle.
-    if (protectedPage) preBetaProtected++;
+    if (protectedPage) preAnnouncementProtected++;
     keptTitles.add(page.title.toLowerCase());
     pagesKept++;
     charsKept += text.length;
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
           // is set here.
           const source = page.eraWikitext;
           if (source === null) reasons.dropped_post_cutoff++;
-          else keep(page, source, decision.reason, decision.preBetaProtected === true);
+          else keep(page, source, decision.reason, decision.preAnnouncementProtected === true);
         }
       }
       logProgress();
@@ -380,9 +380,9 @@ async function main(): Promise<void> {
     // fields did.
     pages_era_swapped: String(eraSwapped),
     // Kept pages that carried a post-Wrath signal and were kept because they
-    // predate the Cataclysm beta (`CATACLYSM_BETA_START`). A subset of
+    // predate the Cataclysm beta (`CATACLYSM_ANNOUNCED`). A subset of
     // `pages_pre_cutoff`, not a bucket of its own: do not add it to the sum.
-    pages_pre_beta_protected: String(preBetaProtected),
+    pages_pre_announcement_protected: String(preAnnouncementProtected),
     // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
     // These five plus `empty_pages` account for every non-redirect page seen.
     pages_pre_cutoff: String(reasons.pre_cutoff),
@@ -439,7 +439,9 @@ async function main(): Promise<void> {
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
   console.log(`era cutoff:  ${args.eraCutoff}`);
   console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
-  console.log(`  pre-beta:  ${preBetaProtected} (post-Wrath signal, kept: the page predates the beta)`);
+  console.log(
+    `  protected: ${preAnnouncementProtected} (post-Wrath signal, kept: the page predates the announcement)`,
+  );
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
   console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);

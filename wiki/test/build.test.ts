@@ -129,7 +129,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
       {
         // The 588-page pocket: a page of this world that acquired a later
         // expansion's patch field and category in 2010, before the cutoff. It
-        // predates the beta, so it is kept and the annotated paragraph is cut.
+        // predates the announcement, so it is kept and the annotated paragraph is cut.
         title: "Example Capital City",
         ns: 0,
         id: 14,
@@ -266,8 +266,8 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(metaValue("pages_era_swapped")).toBe("3"); // alpha, beta and the capital
   expect(metaValue("pages_pre_cutoff")).toBe("3");
   // A subset of `pages_pre_cutoff`, deliberately outside the identity below:
-  // the capital carried a post-Wrath signal and predates the Cataclysm beta.
-  expect(metaValue("pages_pre_beta_protected")).toBe("1");
+  // the capital carried a post-Wrath signal and predates the Cataclysm announcement.
+  expect(metaValue("pages_pre_announcement_protected")).toBe("1");
   expect(metaValue("pages_post_cutoff_wrath_signal")).toBe("1"); // the trinket
   // The late page that says nothing, and the late page that names Cataclysm:
   // neither has prose from before the cutoff, which is the reason for both.

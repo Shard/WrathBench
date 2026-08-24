@@ -293,3 +293,27 @@ invisible to counters and obvious to a list of names.**
   been absent from every bundle built since the era work, counted quietly under
   `empty_pages`. That is a `strip.ts` defect, not an era one (FOLLOW-UPS 63); the
   canary is what made it visible.
+
+## The line is the announcement, not the beta
+
+Addendum, 2026-08-24. The protection above was drawn at 2010-06-01 because that
+is where the 588-page pocket was measured, and its own consequences recorded
+that 119 of those 588 were created in 2009 or later — clustered on 2009-08-21/22
+and in 2010-04 — and were mostly Cataclysm content: Blackwing Descent, Blackrock
+Caverns, Halls of Origination, Lost City of the Tol'vir, Gilneas City, the Lost
+Isles, a run of beta ability pages. That is the whole argument for moving the
+line. Cataclysm was announced at BlizzCon on 2009-08-21 and the wiki began
+stubbing it the same week, so from that day on a Cataclysm signal on a page
+created after it is a statement of subject, not an annotation on a Wrath page
+that already existed; before it, no editor could have been writing about
+Cataclysm at all. The constant is now `CATACLYSM_ANNOUNCED = 2009-08-21`,
+`isPreAnnouncementPage` is the predicate, and the counter is
+`pages_pre_announcement_protected` — a rename carried through code, the meta
+key, the tests and this document together rather than left half done. It keeps
+roughly 500 of the 588, drops the announced-Cataclysm residue, and changes
+nothing else: the section and paragraph rules still strip what they strip, and a
+page created before the announcement is still a Wrath page whatever it later
+acquired. FOLLOW-UPS 64. The canary's Orgrimmar failure recorded above is also
+closed, and was a stripper defect exactly as suspected: a repeated
+`<ref name="x" />` was read as an opening tag and ate the `}}` that closed the
+infobox, after which the brace scanner never returned to depth 0 (FOLLOW-UPS 63).

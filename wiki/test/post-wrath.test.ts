@@ -7,19 +7,21 @@
 import { describe, expect, test } from "bun:test";
 import {
   admitPage,
-  CATACLYSM_BETA_START,
+  CATACLYSM_ANNOUNCED,
   hasClassic2019Signal,
   hasPostWrathSignal,
   hasWrathSignal,
-  isPreBetaPage,
+  isPreAnnouncementPage,
 } from "../src/post-wrath";
 
 const PROSE = "Example Zone Beta is a starting region full of lorem ipsum.";
 
 /** A page created years before the Cataclysm beta: a page of this world. */
 const EARLY = "2006-04-02T11:00:00Z";
-/** A page created during the beta ramp: a page about the world that is coming. */
+/** A page created after the announcement: a page about the world that is coming. */
 const LATE = "2010-08-15T11:00:00Z";
+/** The BlizzCon week Cataclysm was announced, when the wiki started its stubs. */
+const ANNOUNCEMENT_WEEK = "2009-08-22T00:00:00Z";
 
 describe("post-Wrath page signals fire", () => {
   const fires: [string, string, string][] = [
@@ -186,7 +188,7 @@ describe("admitPage reasons", () => {
   });
 });
 
-describe("a page that predates the Cataclysm beta is a Wrath page", () => {
+describe("a page that predates the Cataclysm announcement is a Wrath page", () => {
   // The 588-page pocket of FOLLOW-UPS 49: a capital or a starting zone whose
   // 2010 editors annotated what was coming, dropped by its own annotation.
   const SIGNALLED = `{{zonebox|patch=4.0.1}}\n${PROSE}\n[[Category:Cataclysm]]`;
@@ -199,10 +201,10 @@ describe("a page that predates the Cataclysm beta is a Wrath page", () => {
         newestWikitext: SIGNALLED,
         firstRevisionAt: EARLY,
       }),
-    ).toEqual({ admit: true, reason: "pre_cutoff", preBetaProtected: true });
+    ).toEqual({ admit: true, reason: "pre_cutoff", preAnnouncementProtected: true });
   });
 
-  test("the same signal on a page created during the beta still drops it", () => {
+  test("the same signal on a page created after the announcement still drops it", () => {
     expect(
       admitPage({
         title: "Example Capital City",
@@ -211,6 +213,20 @@ describe("a page that predates the Cataclysm beta is a Wrath page", () => {
         firstRevisionAt: LATE,
       }),
     ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+  });
+
+  test("the announcement week is already too late to protect (FOLLOW-UPS 64)", () => {
+    // The wiki started stubs for the announced expansion the same week, and a
+    // page created then is a page about it, not a page that acquired it.
+    expect(
+      admitPage({
+        title: "Example Raid Epsilon",
+        eraWikitext: SIGNALLED,
+        newestWikitext: SIGNALLED,
+        firstRevisionAt: ANNOUNCEMENT_WEEK,
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+    expect(isPreAnnouncementPage(ANNOUNCEMENT_WEEK)).toBe(false);
   });
 
   test("protection is not a flag on a page with no signal", () => {
@@ -236,10 +252,10 @@ describe("a page that predates the Cataclysm beta is a Wrath page", () => {
   });
 
   test("a dump that states no creation date protects nothing", () => {
-    expect(isPreBetaPage("")).toBe(false);
-    expect(isPreBetaPage(EARLY)).toBe(true);
-    expect(isPreBetaPage(CATACLYSM_BETA_START)).toBe(false);
-    expect(isPreBetaPage(LATE)).toBe(false);
+    expect(isPreAnnouncementPage("")).toBe(false);
+    expect(isPreAnnouncementPage(EARLY)).toBe(true);
+    expect(isPreAnnouncementPage(CATACLYSM_ANNOUNCED)).toBe(false);
+    expect(isPreAnnouncementPage(LATE)).toBe(false);
     expect(
       admitPage({
         title: "Example Zone Theta",
@@ -278,7 +294,7 @@ describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
     ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
   });
 
-  test("a pre-beta creation date does not admit a page with no pre-cutoff prose", () => {
+  test("a pre-announcement creation date does not admit a page with no pre-cutoff prose", () => {
     // Protection is about a page's own prose surviving; there is none here.
     expect(
       admitPage({
