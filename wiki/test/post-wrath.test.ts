@@ -331,6 +331,83 @@ describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
   });
 });
 
+/**
+ * The page whose pre-cutoff revisions all failed the parser's hygiene rules —
+ * every one of them a redirect or a reverted edit. It has pre-cutoff history and
+ * no pre-cutoff prose, and the rule that drops it used to live in the build loop.
+ */
+describe("pre-cutoff revisions that left no prose", () => {
+  const WRATH = `{{itembox|patch=3.0.2}}\n${PROSE}`;
+
+  test("an explicit Wrath signal on the newest revision does not admit it", () => {
+    // The same input without the pre-cutoff history is admitted; what the newest
+    // revision says cannot supply prose the page does not have.
+    expect(
+      admitPage({
+        ns: 0,
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        hasEraRevision: false,
+        newestWikitext: WRATH,
+        firstRevisionAt: "2012-01-01T00:00:00Z",
+      }),
+    ).toEqual({ admit: true, reason: "post_cutoff_wrath_signal" });
+    expect(
+      admitPage({
+        ns: 0,
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        hasEraRevision: true,
+        newestWikitext: WRATH,
+        firstRevisionAt: "2012-01-01T00:00:00Z",
+      }),
+    ).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+      eraRevisionsRejected: true,
+    });
+  });
+
+  test("an id this server has does not admit it either", () => {
+    const worldIds = {
+      name(kind: IdKind, id: number): string | undefined {
+        return kind === "quest" && id === 4242 ? "Example Quest Alpha" : undefined;
+      },
+    };
+    expect(
+      admitPage({
+        ns: 118,
+        title: "Quest:Example Quest Alpha",
+        eraWikitext: null,
+        hasEraRevision: true,
+        newestWikitext: `{{questbox|id=4242}}\n${PROSE}`,
+        firstRevisionAt: "2016-06-06T00:00:00Z",
+        worldIds,
+      }),
+    ).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+      eraRevisionsRejected: true,
+    });
+  });
+
+  test("a page the newest revision drops on its own is not flagged", () => {
+    // The flag says "dropped for having no prose", which is what stops the
+    // build recovering the title as a name. A page that would have been dropped
+    // anyway is an ordinary drop and keeps that recovery.
+    expect(
+      admitPage({
+        ns: 0,
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        hasEraRevision: true,
+        newestWikitext: `{{stub/Cataclysm}}\n${PROSE}`,
+        firstRevisionAt: "2012-01-01T00:00:00Z",
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+});
+
 describe("a category page's own title", () => {
   const CATEGORY_PROSE = "Pages about the example subject.";
 
@@ -527,9 +604,12 @@ describe("post_cutoff_id_match", () => {
     });
 
   test("a page whose stated id is on this server, under its own name, is admitted", () => {
+    // The ids come back with the decision: the door already extracted them from
+    // this wikitext, and `build.ts` writes exactly these rather than re-reading it.
     expect(late("Example Quest Alpha", `{{questbox|id=4242}}\n${PROSE}`)).toEqual({
       admit: true,
       reason: "post_cutoff_id_match",
+      ids: [{ kind: "quest", id: 4242 }],
     });
   });
 
@@ -737,9 +817,17 @@ describe("worldIdVerdict", () => {
   };
 
   test("the three outcomes are match, mismatch and no id", () => {
-    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7001}}", oracle)).toBe("match");
-    expect(worldIdVerdict("Example Boss", "{{npcbox|id=7001}}", oracle)).toBe("mismatch");
-    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7009}}", oracle)).toBe("no id");
-    expect(worldIdVerdict("Example Guard", PROSE, oracle)).toBe("no id");
+    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7001}}", oracle).verdict).toBe("match");
+    expect(worldIdVerdict("Example Boss", "{{npcbox|id=7001}}", oracle).verdict).toBe("mismatch");
+    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7009}}", oracle).verdict).toBe("no id");
+    expect(worldIdVerdict("Example Guard", PROSE, oracle).verdict).toBe("no id");
+  });
+
+  test("the ids it read come back with the verdict, so the caller reads them once", () => {
+    // `build.ts` writes these to the bundle; extracting them again would be a
+    // second scan of the same wikitext.
+    expect(worldIdVerdict("Example Guard", "{{npcbox|id=7001}}", oracle).ids).toEqual([
+      { kind: "npc", id: 7001 },
+    ]);
   });
 });

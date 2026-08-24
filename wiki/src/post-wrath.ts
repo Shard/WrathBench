@@ -26,7 +26,7 @@
  * anything else outside the dump and that export (CONTRACTS.md).
  */
 
-import { extractIds, type IdKind } from "./ids";
+import { extractIds, type IdKind, type WikiId } from "./ids";
 import { classifyMetaPage } from "./meta-pages";
 
 /**
@@ -86,6 +86,13 @@ export interface AdmitInput {
    * hygiene rules, or null when the page has none.
    */
   eraWikitext: string | null;
+  /**
+   * True when the page has any revision before the cutoff at all, whether or
+   * not one survived the parser's hygiene rules. With `eraWikitext` null it is
+   * the page whose whole pre-cutoff history was redirects or reverted edits:
+   * it has no prose to index and nothing else may admit it (see `admitPage`).
+   */
+  hasEraRevision?: boolean;
   /** The newest revision, which is what the structured extractors read. */
   newestWikitext: string;
   /**
@@ -115,6 +122,18 @@ export interface WorldIdOracle {
 
 /** Namespace prefixes the dump writes into the title itself. */
 const NS_PREFIX = /^(quest|category|portal)\s*:\s*/i;
+
+/**
+ * A wiki name as the rules in this module compare it: underscores are the
+ * wiki's own spelling of a space, and case is not part of a name. Every title,
+ * category and template name here is folded through this one function, so two
+ * spellings of one name cannot be read differently by two rules. (`search.ts`
+ * folds titles its own way, keeping the leading capital MediaWiki enforces,
+ * which is why that one is not this one.)
+ */
+function foldTitle(name: string): string {
+  return name.replace(/_/g, " ").trim().toLowerCase();
+}
 
 /**
  * What the page is *about*, as a name to compare against the world DB's.
@@ -188,16 +207,20 @@ export function worldIdVerdict(
   title: string,
   wikitext: string,
   worldIds: WorldIdOracle,
-): "match" | "mismatch" | "no id" {
+): { verdict: "match" | "mismatch" | "no id"; ids: WikiId[] } {
   const subject = pageSubject(title);
+  // Handed back with the verdict: an admitted page's ids are written to the
+  // bundle from this same wikitext, and extracting them twice is a second scan
+  // of every late page for nothing.
+  const ids = extractIds(wikitext);
   let existed = false;
-  for (const { kind, id } of extractIds(wikitext)) {
+  for (const { kind, id } of ids) {
     const worldName = worldIds.name(kind, id);
     if (worldName === undefined) continue;
     existed = true;
-    if (namesAgree(subject, worldName)) return "match";
+    if (namesAgree(subject, worldName)) return { verdict: "match", ids };
   }
-  return existed ? "mismatch" : "no id";
+  return { verdict: existed ? "mismatch" : "no id", ids };
 }
 
 export interface AdmitDecision {
@@ -220,6 +243,20 @@ export interface AdmitDecision {
    * would otherwise be invisible.
    */
   idNameMismatch?: boolean;
+  /**
+   * True when the page had pre-cutoff revisions but none of them survived the
+   * parser's hygiene rules, so it is dropped for having no prose to index
+   * rather than for anything its newest revision says. `build.ts` reads it to
+   * leave such a page's name alone: the name-recovery rule there is about a
+   * page this wiki moved away, not about one whose own history was reverts.
+   */
+  eraRevisionsRejected?: boolean;
+  /**
+   * The ids `worldIdVerdict` extracted from the newest revision, present on an
+   * `post_cutoff_id_match` admission. The caller writes exactly these to the
+   * bundle rather than scanning the same wikitext again.
+   */
+  ids?: WikiId[];
 }
 
 /**
@@ -325,11 +362,7 @@ const POST_WRATH_TITLE_SUBJECT = new RegExp(
  */
 export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
   if (ns !== 14) return false;
-  const name = title
-    .replace(/^\s*category\s*:\s*/i, "")
-    .replace(/_/g, " ")
-    .trim()
-    .toLowerCase();
+  const name = foldTitle(title.replace(/^\s*category\s*:\s*/i, ""));
   if (name.length === 0) return false;
   if (POST_WRATH_TITLE_SUBJECT.test(name)) return true;
   return legionCategoryIsExpansion(name);
@@ -383,7 +416,7 @@ const POST_WRATH_TITLES: ReadonlySet<string> = new Set([
  */
 export function titleIsPostWrathCoinage(ns: number, title: string): boolean {
   if (ns !== 0) return false;
-  return POST_WRATH_TITLES.has(title.replace(/_/g, " ").trim().toLowerCase());
+  return POST_WRATH_TITLES.has(foldTitle(title));
 }
 
 /**
@@ -427,7 +460,7 @@ function categoryNames(wikitext: string): string[] {
   const out: string[] = [];
   const re = /\[\[\s*category\s*:\s*([^\]|#]+)/gi;
   for (let m = re.exec(wikitext); m !== null; m = re.exec(wikitext)) {
-    const name = (m[1] ?? "").replace(/_/g, " ").trim().toLowerCase();
+    const name = foldTitle(m[1] ?? "");
     if (name.length > 0) out.push(name);
   }
   return out;
@@ -443,21 +476,60 @@ function templateNames(wikitext: string): string[] {
   const out: string[] = [];
   const re = /\{\{\s*([^|{}\n]{1,60}?)\s*(?:\||\}\})/g;
   for (let m = re.exec(wikitext); m !== null; m = re.exec(wikitext)) {
-    const name = (m[1] ?? "").replace(/_/g, " ").trim().toLowerCase();
+    const name = foldTitle(m[1] ?? "");
     if (name.length > 0) out.push(name);
   }
   return out;
 }
 
-/** Infobox `|field = value` pairs, lower-cased field names. */
-function infoboxFields(wikitext: string, field: string): string[] {
+/**
+ * The two infobox fields the rules below read. Compiled once rather than per
+ * call: the build asks for these two and only these two, once per page and
+ * often twice, and a regex built from a field name was a fresh compile every
+ * time.
+ */
+const PATCH_FIELD = /\|\s*patch\s*=\s*([^|}\n]{1,60})/gi;
+const EXPANSION_FIELD = /\|\s*expansion\s*=\s*([^|}\n]{1,60})/gi;
+
+/** Infobox `|field = value` values for one of the fields above, lower-cased. */
+function infoboxFields(wikitext: string, re: RegExp): string[] {
   const out: string[] = [];
-  const re = new RegExp(`\\|\\s*${field}\\s*=\\s*([^|}\\n]{1,60})`, "gi");
+  re.lastIndex = 0;
   for (let m = re.exec(wikitext); m !== null; m = re.exec(wikitext)) {
     const value = (m[1] ?? "").trim().toLowerCase();
     if (value.length > 0) out.push(value);
   }
   return out;
+}
+
+/**
+ * The parts of one revision's wikitext the era rules read, scanned at most once
+ * each and only if a rule asks for them.
+ *
+ * Three rules run over the same body in `admitPage`'s late-page branch, and
+ * between them they used to scan it up to seven times. Lazy rather than eager
+ * because the other caller is `parse.ts`, which asks `hasPostWrathSignal` about
+ * every candidate revision and relies on the rule stopping at the first signal:
+ * a body whose categories already answer must still cost one scan there.
+ */
+interface PageParts {
+  categories(): string[];
+  templates(): string[];
+  patch(): string[];
+  expansion(): string[];
+}
+
+function pageParts(wikitext: string): PageParts {
+  let categories: string[] | undefined;
+  let templates: string[] | undefined;
+  let patch: string[] | undefined;
+  let expansion: string[] | undefined;
+  return {
+    categories: () => (categories ??= categoryNames(wikitext)),
+    templates: () => (templates ??= templateNames(wikitext)),
+    patch: () => (patch ??= infoboxFields(wikitext, PATCH_FIELD)),
+    expansion: () => (expansion ??= infoboxFields(wikitext, EXPANSION_FIELD)),
+  };
 }
 
 /** The `major.minor` of a patch string, or null when it does not state one. */
@@ -510,21 +582,26 @@ const WRATH_OR_EARLIER_CATEGORIES = new Set([
  * added in 2011, and dropping the page for that would delete a zone that is
  * standing in this world.
  */
-export function hasPostWrathSignal(title: string, wikitext: string, ns = 0): boolean {
+export function hasPostWrathSignal(
+  title: string,
+  wikitext: string,
+  ns = 0,
+  parts: PageParts = pageParts(wikitext),
+): boolean {
   if (TITLE_PARENTHETICAL.test(title)) return true;
   if (TITLE_SUBPAGE.test(title)) return true;
   if (categoryTitleIsPostWrath(ns, title)) return true;
-  for (const name of categoryNames(wikitext)) {
+  for (const name of parts.categories()) {
     if (categoryIsPostWrath(name)) return true;
   }
-  for (const name of templateNames(wikitext)) {
+  for (const name of parts.templates()) {
     if (POST_WRATH_TEMPLATES.has(name)) return true;
   }
-  for (const value of infoboxFields(wikitext, "patch")) {
+  for (const value of parts.patch()) {
     const n = patchNumber(value);
     if (n !== null && n >= FIRST_POST_WRATH_PATCH) return true;
   }
-  for (const value of infoboxFields(wikitext, "expansion")) {
+  for (const value of parts.expansion()) {
     if (POST_WRATH_EXPANSION_VALUES.some((v) => value === v || value.startsWith(`${v} `))) return true;
   }
   return false;
@@ -539,15 +616,15 @@ export function hasPostWrathSignal(title: string, wikitext: string, ns = 0): boo
  * the wikitext alone the 18,717 pages the census could classify neither way.
  * What decides those is the id oracle below, not this rule.
  */
-export function hasWrathSignal(wikitext: string): boolean {
-  for (const value of infoboxFields(wikitext, "patch")) {
+export function hasWrathSignal(wikitext: string, parts: PageParts = pageParts(wikitext)): boolean {
+  for (const value of parts.patch()) {
     const n = patchNumber(value);
     if (n !== null && n < FIRST_POST_WRATH_PATCH) return true;
   }
-  for (const value of infoboxFields(wikitext, "expansion")) {
+  for (const value of parts.expansion()) {
     if (WRATH_OR_EARLIER_EXPANSION_VALUES.some((v) => value === v)) return true;
   }
-  for (const name of categoryNames(wikitext)) {
+  for (const name of parts.categories()) {
     if (WRATH_OR_EARLIER_CATEGORIES.has(name)) return true;
   }
   return false;
@@ -560,9 +637,13 @@ export function hasWrathSignal(wikitext: string): boolean {
  * pages (`Patch 1.13.0`, `Classic realms`, `Category:World of Warcraft: Classic
  * patches`), which is why this veto exists.
  */
-export function hasClassic2019Signal(title: string, wikitext: string): boolean {
+export function hasClassic2019Signal(
+  title: string,
+  wikitext: string,
+  parts: PageParts = pageParts(wikitext),
+): boolean {
   if (/\bclassic\b/i.test(title) || /\bpatch 1\.1[34]\b/i.test(title)) return true;
-  for (const name of categoryNames(wikitext)) {
+  for (const name of parts.categories()) {
     if (name.includes("classic") || /patch 1\.1[34]/.test(name)) return true;
   }
   return false;
@@ -625,8 +706,42 @@ export function isPreAnnouncementPage(firstRevisionAt: string): boolean {
  * A page with no pre-cutoff prose is `dropped_post_cutoff` whether or not it
  * carries a post-Wrath signal: the signal is why it is *also* not admitted by
  * the Wrath-signal or the id rule, but the reason it is not in the bundle is
- * that this world's wiki does not have the page.
+ * that this world's wiki does not have the page. That holds for the page whose
+ * pre-cutoff revisions all failed the parser's hygiene rules too
+ * (`hasEraRevision` with no `eraWikitext`) — it used to be decided in the build
+ * loop, which made that loop a second admission rule.
  */
+/**
+ * The decision for a page with no pre-cutoff prose, read off the one revision
+ * there is. The only door is an explicit Wrath-or-earlier statement, with the
+ * Classic-2019 veto and the post-Wrath veto both still standing.
+ */
+function admitWithoutEraProse(page: AdmitInput): AdmitDecision {
+  const parts = pageParts(page.newestWikitext);
+  if (
+    !hasClassic2019Signal(page.title, page.newestWikitext, parts) &&
+    !hasPostWrathSignal(page.title, page.newestWikitext, page.ns, parts)
+  ) {
+    if (hasWrathSignal(page.newestWikitext, parts)) {
+      return { admit: true, reason: "post_cutoff_wrath_signal" };
+    }
+    // Then, and only then, the world DB. The page says nothing about its era,
+    // and what it states about itself is the only evidence left: an id this
+    // server has, under the name the page is about. Below the explicit
+    // signal, so a page that says what it is is counted for saying it, and
+    // below both vetoes, so a page that names a later expansion can never be
+    // admitted by an id that expansion reused (ADR-0042).
+    if (page.worldIds !== undefined) {
+      const { verdict, ids } = worldIdVerdict(page.title, page.newestWikitext, page.worldIds);
+      if (verdict === "match") return { admit: true, reason: "post_cutoff_id_match", ids };
+      if (verdict === "mismatch") {
+        return { admit: false, reason: "dropped_post_cutoff", idNameMismatch: true };
+      }
+    }
+  }
+  return { admit: false, reason: "dropped_post_cutoff" };
+}
+
 export function admitPage(page: AdmitInput): AdmitDecision {
   if (classifyMetaPage(page.title) !== null) return { admit: false, reason: "dropped_meta" };
 
@@ -638,31 +753,16 @@ export function admitPage(page: AdmitInput): AdmitDecision {
   }
 
   if (page.eraWikitext === null) {
-    // No prose from before the cutoff. The only door is an explicit
-    // Wrath-or-earlier statement on the one revision there is, with the
-    // Classic-2019 veto and the post-Wrath veto both still standing.
-    if (
-      !hasClassic2019Signal(page.title, page.newestWikitext) &&
-      !hasPostWrathSignal(page.title, page.newestWikitext, page.ns)
-    ) {
-      if (hasWrathSignal(page.newestWikitext)) {
-        return { admit: true, reason: "post_cutoff_wrath_signal" };
-      }
-      // Then, and only then, the world DB. The page says nothing about its era,
-      // and what it states about itself is the only evidence left: an id this
-      // server has, under the name the page is about. Below the explicit
-      // signal, so a page that says what it is is counted for saying it, and
-      // below both vetoes, so a page that names a later expansion can never be
-      // admitted by an id that expansion reused (ADR-0042).
-      if (page.worldIds !== undefined) {
-        const verdict = worldIdVerdict(page.title, page.newestWikitext, page.worldIds);
-        if (verdict === "match") return { admit: true, reason: "post_cutoff_id_match" };
-        if (verdict === "mismatch") {
-          return { admit: false, reason: "dropped_post_cutoff", idNameMismatch: true };
-        }
-      }
+    const decision = admitWithoutEraProse(page);
+    // A page that *has* pre-cutoff revisions and still no pre-cutoff prose is a
+    // page whose whole pre-cutoff history was redirects or reverted edits. It
+    // has nothing to index, so nothing the newest revision says can admit it —
+    // not an explicit Wrath signal and not an id, which cannot supply prose.
+    // The reason is about the page, not about that revision.
+    if (decision.admit && page.hasEraRevision === true) {
+      return { admit: false, reason: "dropped_post_cutoff", eraRevisionsRejected: true };
     }
-    return { admit: false, reason: "dropped_post_cutoff" };
+    return decision;
   }
 
   if (hasPostWrathSignal(page.title, page.eraWikitext, page.ns)) {

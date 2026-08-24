@@ -110,8 +110,10 @@ describe("classifyMetaPage — negatives", () => {
 });
 
 describe("classifyMetaPage — purity", () => {
-  test("wikitext is accepted but does not change the answer", () => {
-    expect(classifyMetaPage("Example Zone Beta", "{{addon}} lorem ipsum")).toBeNull();
-    expect(classifyMetaPage("Hotfixes/2015 Archive", "")).toBe("hotfixes");
+  test("the title decides, and nothing else is read", () => {
+    // A body that names an addon does not make the page one: the rules read the
+    // title, which is what lets the classifier run at query time too.
+    expect(classifyMetaPage("Example Zone Beta")).toBeNull();
+    expect(classifyMetaPage("Hotfixes/2015 Archive")).toBe("hotfixes");
   });
 });

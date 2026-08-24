@@ -328,6 +328,15 @@ export async function* parsePages(
   let revTs = "";
   let revSha1 = "";
   let revIdSeen = false;
+  /**
+   * Whether this revision can still take the era slot, and the signal-free one.
+   * Decided when `<text>` opens — which is also where the decision to buffer
+   * the body at all is made, off the same two facts — and read again when the
+   * body arrives. Nothing between the two touches either window: `eraOffer` is
+   * the only thing that does, and it runs below, for this same revision.
+   */
+  let winEra = false;
+  let winFree = false;
 
   const startCapture = (field: string, keep: boolean, back: State): State => {
     cap.field = field;
@@ -468,10 +477,7 @@ export async function* parsePages(
                 // Era slot: pre-cutoff, and not a revision where the page was a
                 // redirect. The revert test needs revisions that have not
                 // arrived yet, so it waits until the page is finished.
-                const wantsEra = eraWants(block.eraCands, revTs, revId);
-                const wantsFree =
-                  !block.titleSignal && eraWants(block.eraFreeCands, revTs, revId);
-                if (revTs !== "" && revTs < eraCutoff && (wantsEra || wantsFree)) {
+                if (winEra || winFree) {
                   // Decoded, so this reads the same string the build's own
                   // redirect decision reads.
                   const target = redirectTarget(decodeEntities(value));
@@ -483,11 +489,11 @@ export async function* parsePages(
                   }
                   if (target === null) {
                     const cand = { ts: revTs, id: revId, text: value };
-                    if (wantsEra) eraOffer(block.eraCands, cand);
+                    if (winEra) eraOffer(block.eraCands, cand);
                     // The signal test runs only on a body that could still take
                     // the signal-free slot, so a page whose newest pre-cutoff
                     // revision is already clean costs exactly one test.
-                    if (wantsFree && !bodyHasSignal(block, value)) {
+                    if (winFree && !bodyHasSignal(block, value)) {
                       eraOffer(block.eraFreeCands, cand);
                     }
                   }
@@ -534,6 +540,8 @@ export async function* parsePages(
               revTs = "";
               revSha1 = "";
               revIdSeen = false;
+              winEra = false;
+              winFree = false;
               state = State.InRevision;
             } else if (closing && name === "page") {
               // Not finished: the next block may continue this page.
@@ -561,16 +569,19 @@ export async function* parsePages(
             if (tag.endsWith("/>")) {
               // Deleted or empty text: nothing to capture.
             } else {
-              // Keep the body if it can still win either slot. Redirect-ness is
-              // only knowable once the body is here, so an era candidate is
-              // captured first and filtered after.
+              // Keep the body if it can still win a slot. Redirect-ness is only
+              // knowable once the body is here, so an era candidate is captured
+              // first and filtered after — which is why the two era answers are
+              // kept rather than recomputed there.
+              const preCutoff = revTs !== "" && revTs < eraCutoff;
+              if (page !== null && preCutoff) {
+                winEra = eraWants(page.eraCands, revTs, revId);
+                winFree = !page.titleSignal && eraWants(page.eraFreeCands, revTs, revId);
+              }
               const win =
-                page !== null &&
-                (beats(revTs, revId, page.bestTimestamp, page.bestRevId) ||
-                  (revTs !== "" &&
-                    revTs < eraCutoff &&
-                    (eraWants(page.eraCands, revTs, revId) ||
-                      (!page.titleSignal && eraWants(page.eraFreeCands, revTs, revId)))));
+                (page !== null && beats(revTs, revId, page.bestTimestamp, page.bestRevId)) ||
+                winEra ||
+                winFree;
               state = startCapture("text", win, State.InRevision);
             }
           } else if (closing && name === "revision") {
