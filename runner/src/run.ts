@@ -198,7 +198,7 @@ async function main(): Promise<void> {
     !EPISODES[args["episode"]].objectiveAllowed
   ) {
     console.error(
-      `--episode ${args["episode"]} does not allow --objective; use --episode freeplay for a steered run`,
+      `--episode ${args["episode"]} does not allow --objective; a steered run is --episode probing (a campaign) or --episode freeplay`,
     );
     process.exit(2);
   }
