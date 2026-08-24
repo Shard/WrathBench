@@ -29,6 +29,35 @@
  * Deterministic, never throws, no network.
  */
 
+/**
+ * The revision cutoff the bundle's prose is taken at: patch 4.0.1, the client
+ * patch that shipped the Cataclysm world change. A revision saved before this
+ * instant describes a world at most one patch away from 3.3.5a; the first
+ * revision after it may describe a continent that was rearranged.
+ *
+ * 4.0.1 rather than 3.3.5's own release: a page edited between them is still
+ * describing the Wrath world, and holding the line at 3.3.5 costs 6.2% more
+ * pages that have no pre-cutoff revision at all for no gain in accuracy.
+ * 4.0.1 rather than the Shattering (2010-11-23) or Cataclysm's release
+ * (2010-12-07): those two buy 0.2-0.3% fewer fallbacks and let in a month of
+ * beta-informed rewrites. See ADR-0040.
+ */
+export const DEFAULT_ERA_CUTOFF = "2010-10-12T00:00:00Z";
+
+/**
+ * What a page carries when the dump holds no revision older than the cutoff:
+ * every word of it was written about a later world. Page-level, prefixed to the
+ * wikitext before the strip so it reaches the snippet the same way the
+ * per-paragraph section notes do.
+ */
+export const POST_ERA_PAGE_NOTE =
+  "[this page was written after patch 3.3.5; its content may not exist in this world]";
+
+/** Prefix the page-level note. Used when no pre-cutoff revision exists. */
+export function markPostEraPage(wikitext: string): string {
+  return `${POST_ERA_PAGE_NOTE}\n\n${wikitext}`;
+}
+
 /** Expansions after Wrath of the Lich King: their content is not in this world. */
 const POST_WRATH: { pattern: RegExp; label: string }[] = [
   { pattern: /^(cata|cataclysm)$/, label: "Cataclysm" },

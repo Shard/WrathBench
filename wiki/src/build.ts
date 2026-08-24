@@ -3,6 +3,7 @@
  * Build the searchable wiki bundle from a local dump.
  *
  *   bun wiki/src/build.ts <dump.7z|dump.xml> [--out data/wiki/bundle.sqlite]
+ *                                             [--era-cutoff 2010-10-12T00:00:00Z]
  *
  * The archive is streamed through `7z x -so`; the 24 GB XML is never written to
  * disk. The bundle is written to a temp file beside the destination and renamed
@@ -25,7 +26,7 @@ import {
 import { extractCoords } from "./coords";
 import { extractIds } from "./ids";
 import { extractQuest } from "./quests";
-import { markEraSections } from "./era";
+import { DEFAULT_ERA_CUTOFF, markEraSections, markPostEraPage } from "./era";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats } from "./parse";
 import { redirectTarget, stripWikitext } from "./strip";
 
@@ -40,23 +41,42 @@ interface Args {
   dump: string;
   out: string;
   maxPages: number;
+  eraCutoff: string;
 }
 
-function parseArgs(argv: string[]): Args {
+/**
+ * The cutoff is compared against the dump's `<timestamp>` as a string, so a
+ * value that is not a full ISO-8601 Z instant would compare wrongly and quietly
+ * send every page down the fallback path — a bundle that looks built. Reject it
+ * here, before the stream starts.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+export function parseArgs(argv: string[]): Args {
   let dump = "";
   let out = DEFAULT_BUNDLE_PATH;
   let maxPages = Infinity;
+  let eraCutoff = DEFAULT_ERA_CUTOFF;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--out") out = argv[++i] ?? out;
     else if (arg === "--max-pages") maxPages = Number.parseInt(argv[++i] ?? "0", 10);
+    else if (arg === "--era-cutoff") eraCutoff = argv[++i] ?? eraCutoff;
     else if (arg.startsWith("--")) throw new Error(`unknown flag ${arg}`);
     else dump = arg;
   }
   if (dump === "") {
-    throw new Error("usage: bun wiki/src/build.ts <dump.7z|dump.xml> [--out path] [--max-pages n]");
+    throw new Error(
+      "usage: bun wiki/src/build.ts <dump.7z|dump.xml> [--out path] [--max-pages n] " +
+        "[--era-cutoff YYYY-MM-DDTHH:MM:SSZ]",
+    );
   }
-  return { dump, out, maxPages };
+  if (!ISO_INSTANT.test(eraCutoff)) {
+    throw new Error(
+      `--era-cutoff must be a full ISO-8601 UTC instant like ${DEFAULT_ERA_CUTOFF}, got ${eraCutoff}`,
+    );
+  }
+  return { dump, out, maxPages, eraCutoff };
 }
 
 /** Byte stream of the dump XML, decompressing on the fly when needed. */
@@ -129,6 +149,8 @@ async function main(): Promise<void> {
   let coordRows = 0;
   let idRows = 0;
   let questRows = 0;
+  let eraFallback = 0;
+  let eraSwapped = 0;
   let stoppedEarly = false;
   let distinctKeys = 0;
   const parseStats: ParseStats = { pagesSkipped: 0, blocksSeen: 0 };
@@ -156,7 +178,7 @@ async function main(): Promise<void> {
 
   console.log(`building ${args.out} from ${args.dump}`);
   try {
-    for await (const page of parsePages(chunks, DEFAULT_NAMESPACES, parseStats)) {
+    for await (const page of parsePages(chunks, DEFAULT_NAMESPACES, parseStats, args.eraCutoff)) {
       pagesSeen++;
       const target = page.redirectAttr ?? redirectTarget(page.wikitext);
       if (target !== null) {
@@ -168,9 +190,16 @@ async function main(): Promise<void> {
         const coords = extractCoords(page.wikitext);
         const ids = extractIds(page.wikitext);
         const quest = extractQuest(page.wikitext);
+        // The prose comes from the newest revision written before the era
+        // cutoff, so the index describes this world rather than the 2020 one
+        // (ADR-0040). A page with no such revision keeps its newest text and
+        // says so, in the same place a reader of the snippet will see it.
+        const fallback = page.eraWikitext === null;
+        const source = page.eraWikitext ?? markPostEraPage(page.wikitext);
         // Era sections are marked in the wikitext, before the strip removes the
-        // templates and headings that identify them (era.ts).
-        const text = stripWikitext(markEraSections(page.wikitext));
+        // templates and headings that identify them (era.ts). A pre-cutoff
+        // revision can still carry them: the wiki wrote about the future.
+        const text = stripWikitext(markEraSections(source));
         if (text.length === 0) {
           empties++;
         } else {
@@ -180,6 +209,8 @@ async function main(): Promise<void> {
           coordRows += coords.length;
           idRows += ids.length;
           if (quest !== null) questRows++;
+          if (fallback) eraFallback++;
+          else if (page.eraTimestamp !== page.timestamp) eraSwapped++;
           perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
         }
       }
@@ -226,9 +257,14 @@ async function main(): Promise<void> {
     coord_rows: String(coordRows),
     id_rows: String(idRows),
     quest_rows: String(questRows),
+    era_cutoff: args.eraCutoff,
+    // Kept pages whose prose came from an older revision than the structured
+    // fields did, and kept pages that had no pre-cutoff revision at all.
+    pages_era_swapped: String(eraSwapped),
+    pages_era_fallback: String(eraFallback),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
-    schema_version: "4",
+    schema_version: "5",
   });
   db.run("PRAGMA optimize");
   db.close();
@@ -243,6 +279,9 @@ async function main(): Promise<void> {
   console.log(`  dropped:   ${parseStats.pagesSkipped} (namespace)`);
   console.log(`pages seen:  ${pagesSeen} (blocks merged by title)`);
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
+  console.log(`era cutoff:  ${args.eraCutoff}`);
+  console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
+  console.log(`  fallback:  ${eraFallback} (no pre-cutoff revision, labelled)`);
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);
   console.log(`redirects:   ${redirects}`);

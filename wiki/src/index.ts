@@ -32,7 +32,14 @@ export { extractIds } from "./ids";
 export type { WikiId, IdKind } from "./ids";
 export { extractQuest, cleanQuestValue } from "./quests";
 export type { WikiQuest } from "./quests";
-export { markEraSections, eraNote, REMOVED_LATER_NOTE } from "./era";
+export {
+  markEraSections,
+  markPostEraPage,
+  eraNote,
+  DEFAULT_ERA_CUTOFF,
+  POST_ERA_PAGE_NOTE,
+  REMOVED_LATER_NOTE,
+} from "./era";
 export { parsePages, decodeUtf8, chunked, DEFAULT_NAMESPACES } from "./parse";
 export type { WikiPage, ParseStats } from "./parse";
 export { stripWikitext, redirectTarget } from "./strip";

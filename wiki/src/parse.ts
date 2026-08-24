@@ -2,17 +2,37 @@
  * Streaming MediaWiki XML export parser.
  *
  * The dump is 24 GB of export-0.10 full history, so this never materialises a
- * document, a page's history, or even two revision bodies at once:
+ * document or a page's history, and holds only the few revision bodies that can
+ * still win a slot:
  *
  * - Pages outside the wanted namespaces are skipped with a single indexOf to
  *   `</page>`; nothing in them is decoded. That is most of a history dump.
- * - Within a page, `<id>` and `<timestamp>` precede `<text>`, so the newest
- *   revision seen so far is known before its body arrives. A revision that
- *   cannot win is skipped without being buffered or decoded. Peak memory is
- *   therefore one revision body, whatever the history depth.
+ * - Within a page, `<id>` and `<timestamp>` precede `<text>`, so whether a
+ *   revision can win either slot is known before its body arrives. A revision
+ *   that cannot win is skipped without being buffered or decoded. Peak memory
+ *   is the newest body plus at most two era candidates (below), whatever the
+ *   history depth.
+ * - Two slots per page. `wikitext` is the newest revision, which is what the
+ *   structured extractors (coords, ids, quest infobox) read. `eraWikitext` is
+ *   the newest revision saved before the era cutoff, which is what the prose
+ *   index reads: the dump is from 2020 and this world is patch 3.3.5a
+ *   (ADR-0040). A page with no pre-cutoff revision has `eraWikitext` null and
+ *   the build labels it.
  * - Selection is by (timestamp, revision id), so it does not depend on the
  *   dump's revision ordering. This dump happens to be newest-first; others are
  *   oldest-first.
+ * - Era-slot hygiene. A candidate whose text is a `#REDIRECT` is never a
+ *   winner: the page is an article now, and a revision where it was a redirect
+ *   is not prose. A candidate that was immediately reverted is skipped too —
+ *   the revision right after it restored a sha1 the page already had, so its
+ *   edit was undone. That test needs both a newer and an older revision, and
+ *   `<sha1>` is emitted *after* `<text>`, so no single-pass detector can decide
+ *   it at capture time in either arrival order. It is therefore decided at page
+ *   finish, over a per-page ledger of (timestamp, id, sha1) — metadata, not
+ *   bodies — and the two newest pre-cutoff non-redirect bodies are held so the
+ *   runner-up is available when the newest one is rejected. Two consecutive
+ *   reverted revisions is past what the window sees; the page then keeps the
+ *   older of the two rather than losing its prose.
  * - A page with more than 50 revisions is exported as several consecutive
  *   `<page>` blocks carrying the same title and ns, 50 revisions each. A block
  *   is therefore not a page: the accumulator is held pending and finished only
@@ -29,6 +49,8 @@
  */
 
 import { decodeEntities } from "./entities";
+import { DEFAULT_ERA_CUTOFF } from "./era";
+import { redirectTarget } from "./strip";
 
 export interface WikiPage {
   title: string;
@@ -37,6 +59,14 @@ export interface WikiPage {
   wikitext: string;
   /** Revision timestamp of the newest revision, ISO 8601, or "" if absent. */
   timestamp: string;
+  /**
+   * Raw wikitext of the newest revision saved before the era cutoff that passed
+   * the hygiene rules, or null when the page has none. The prose index reads
+   * this; the structured extractors read `wikitext`.
+   */
+  eraWikitext: string | null;
+  /** Timestamp of that revision, or "" when there is none. */
+  eraTimestamp: string;
   /** Target of a `<redirect title="..."/>` element, when the dump emits one. */
   redirectAttr: string | null;
 }
@@ -69,6 +99,20 @@ const enum State {
   SkippingPage,
 }
 
+/** One revision's identity, kept for the whole page. No body, no title. */
+interface RevMeta {
+  ts: string;
+  id: number;
+  sha1: string;
+}
+
+/** A pre-cutoff revision still in the running for the era slot, with its body. */
+interface EraCandidate {
+  ts: string;
+  id: number;
+  text: string;
+}
+
 interface PageAccum {
   title: string;
   ns: number;
@@ -76,6 +120,10 @@ interface PageAccum {
   bestTimestamp: string;
   bestRevId: number;
   bestText: string | null;
+  /** The two newest pre-cutoff non-redirect revisions, newest first. */
+  eraCands: EraCandidate[];
+  /** Every revision seen, for the revert test at page finish. */
+  revs: RevMeta[];
 }
 
 function tagNameOf(tag: string): string {
@@ -107,6 +155,52 @@ function beats(ts: string, id: number, bestTs: string, bestId: number): boolean 
   return id > bestId;
 }
 
+/** How many pre-cutoff bodies are held at once (see the header). */
+const ERA_WINDOW = 2;
+
+/** True if (ts, id) would enter the era candidate window as it stands. */
+function eraWants(cands: readonly EraCandidate[], ts: string, id: number): boolean {
+  if (cands.length < ERA_WINDOW) return true;
+  const last = cands[cands.length - 1]!;
+  return beats(ts, id, last.ts, last.id);
+}
+
+/** Insert newest-first and drop anything past the window. */
+function eraOffer(cands: EraCandidate[], cand: EraCandidate): void {
+  let i = 0;
+  while (i < cands.length && !beats(cand.ts, cand.id, cands[i]!.ts, cands[i]!.id)) i++;
+  cands.splice(i, 0, cand);
+  if (cands.length > ERA_WINDOW) cands.length = ERA_WINDOW;
+}
+
+/**
+ * True when the revision right after `cand` restored a sha1 the page already
+ * had before `cand`: `cand`'s edit was undone, so it is not what the page said.
+ * Cheap because it walks metadata only, and runs at most twice per page.
+ */
+function wasReverted(revs: readonly RevMeta[], cand: EraCandidate): boolean {
+  let next: RevMeta | undefined;
+  for (const r of revs) {
+    if (!beats(r.ts, r.id, cand.ts, cand.id)) continue; // not newer than cand
+    if (next === undefined || beats(next.ts, next.id, r.ts, r.id)) next = r;
+  }
+  if (next === undefined || next.sha1 === "") return false;
+  for (const r of revs) {
+    if (r.id === cand.id && r.ts === cand.ts) continue;
+    if (beats(r.ts, r.id, cand.ts, cand.id)) continue; // not older than cand
+    if (r.sha1 !== "" && r.sha1 === next.sha1) return true;
+  }
+  return false;
+}
+
+/** The newest candidate in the window that survives the hygiene rules. */
+function eraWinner(p: PageAccum): EraCandidate | null {
+  for (const cand of p.eraCands) {
+    if (!wasReverted(p.revs, cand)) return cand;
+  }
+  return null;
+}
+
 /**
  * Parse a stream of decoded XML text into pages, newest revision per page.
  *
@@ -118,6 +212,7 @@ export async function* parsePages(
   chunks: AsyncIterable<string>,
   namespaces: ReadonlySet<number> = DEFAULT_NAMESPACES,
   stats?: ParseStats,
+  eraCutoff: string = DEFAULT_ERA_CUTOFF,
 ): AsyncGenerator<WikiPage, void, undefined> {
   let buf = "";
   let pos = 0;
@@ -143,6 +238,7 @@ export async function* parsePages(
   const held: { pending: PageAccum | null } = { pending: null };
   let revId = -1;
   let revTs = "";
+  let revSha1 = "";
   let revIdSeen = false;
 
   const startCapture = (field: string, keep: boolean, back: State): State => {
@@ -157,11 +253,14 @@ export async function* parsePages(
   const toWikiPage = (p: PageAccum | null): WikiPage | null => {
     if (p === null || p.bestText === null) return null;
     if (!namespaces.has(p.ns)) return null;
+    const era = eraWinner(p);
     return {
       title: p.title,
       ns: p.ns,
       wikitext: decodeEntities(p.bestText),
       timestamp: p.bestTimestamp,
+      eraWikitext: era === null ? null : decodeEntities(era.text),
+      eraTimestamp: era === null ? "" : era.ts,
       redirectAttr: p.redirectAttr,
     };
   };
@@ -187,6 +286,8 @@ export async function* parsePages(
             bestTimestamp: "",
             bestRevId: -1,
             bestText: null,
+            eraCands: [],
+            revs: [],
           };
           state = State.InPage;
           continue;
@@ -254,12 +355,31 @@ export async function* parsePages(
               case "timestamp":
                 revTs = value.trim();
                 break;
-              case "text":
-                if (cap.keep) {
-                  page.bestText = value;
-                  page.bestTimestamp = revTs;
-                  page.bestRevId = revId;
+              case "text": {
+                if (!cap.keep) break;
+                const block = page;
+                if (beats(revTs, revId, block.bestTimestamp, block.bestRevId)) {
+                  block.bestText = value;
+                  block.bestTimestamp = revTs;
+                  block.bestRevId = revId;
                 }
+                // Era slot: pre-cutoff, and not a revision where the page was a
+                // redirect. The revert test needs revisions that have not
+                // arrived yet, so it waits until the page is finished.
+                if (
+                  revTs !== "" &&
+                  revTs < eraCutoff &&
+                  eraWants(block.eraCands, revTs, revId) &&
+                  // Decoded, so this reads the same string the build's own
+                  // redirect decision reads.
+                  redirectTarget(decodeEntities(value)) === null
+                ) {
+                  eraOffer(block.eraCands, { ts: revTs, id: revId, text: value });
+                }
+                break;
+              }
+              case "sha1":
+                revSha1 = value.trim();
                 break;
             }
           }
@@ -296,6 +416,7 @@ export async function* parsePages(
             } else if (!closing && name === "revision") {
               revId = -1;
               revTs = "";
+              revSha1 = "";
               revIdSeen = false;
               state = State.InRevision;
             } else if (closing && name === "page") {
@@ -313,6 +434,8 @@ export async function* parsePages(
           if (!closing && name === "id" && !revIdSeen) {
             revIdSeen = true;
             state = startCapture("id", true, State.InRevision);
+          } else if (!closing && name === "sha1" && !tag.endsWith("/>")) {
+            state = startCapture("sha1", true, State.InRevision);
           } else if (!closing && name === "timestamp") {
             state = startCapture("timestamp", true, State.InRevision);
           } else if (!closing && name === "contributor") {
@@ -322,11 +445,20 @@ export async function* parsePages(
             if (tag.endsWith("/>")) {
               // Deleted or empty text: nothing to capture.
             } else {
+              // Keep the body if it can still win either slot. Redirect-ness is
+              // only knowable once the body is here, so an era candidate is
+              // captured first and filtered after.
               const win =
-                page !== null && beats(revTs, revId, page.bestTimestamp, page.bestRevId);
+                page !== null &&
+                (beats(revTs, revId, page.bestTimestamp, page.bestRevId) ||
+                  (revTs !== "" &&
+                    revTs < eraCutoff &&
+                    eraWants(page.eraCands, revTs, revId)));
               state = startCapture("text", win, State.InRevision);
             }
           } else if (closing && name === "revision") {
+            // One ledger entry per revision, whether or not it had a <sha1>.
+            if (page !== null) page.revs.push({ ts: revTs, id: revId, sha1: revSha1 });
             state = State.InPage;
           } else if (closing && name === "page") {
             if (page !== null) {
