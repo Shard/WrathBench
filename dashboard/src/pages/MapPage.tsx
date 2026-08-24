@@ -59,8 +59,8 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
-import { useFeeds } from "../lib/feeds";
-import { filterBySeries, pageSeries } from "../lib/harness";
+import { useSeriesFilter } from "../components/SeriesSelect";
+import { useClock } from "../lib/clock";
 import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
@@ -92,7 +92,8 @@ export default function MapPage() {
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [ageTick, setAgeTick] = createSignal(Date.now());
+  // The sidebar's "last update" ages between polls, so it needs its own tick.
+  const ageTick = useClock();
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
   // owns the map — one feed reaches the renderer, never two.
@@ -107,11 +108,10 @@ export default function MapPage() {
    * a replay is one named run the reader asked for by id, and hiding it because
    * of a header control would look like a broken link.
    */
-  const feeds = useFeeds();
-  const liveSeries = (): string | null =>
-    replayId() === undefined ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), feedList()) : null;
-  const shownList = (): readonly AgentPosition[] => filterBySeries(feedList(), liveSeries());
-  const seriesHidden = (): number => feedList().length - shownList().length;
+  const seriesFilter = useSeriesFilter(feedList, () => replayId() === undefined);
+  const liveSeries = seriesFilter.series;
+  const shownList = seriesFilter.kept;
+  const seriesHidden = seriesFilter.filteredOut;
 
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
     feed: shownList,
@@ -377,13 +377,10 @@ export default function MapPage() {
     };
     raf = requestAnimationFrame(frame);
 
-    const ageTimer = setInterval(() => setAgeTick(Date.now()), 1000);
-
     onCleanup(() => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
-      clearInterval(ageTimer);
     });
   });
 
