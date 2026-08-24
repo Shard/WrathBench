@@ -3,8 +3,12 @@
  *
  * Rungs are read from one episode tier at a time — e90 by default (ADR-0030) —
  * because a rung reached in six hours is not the same claim as the same rung
- * reached in ninety minutes. The count of what the filter removed is on the
- * page, not in a footnote.
+ * reached in ninety minutes. There is no "all" and no overridden view: neither
+ * is a comparability group, so neither can be a ladder. The runs page lists
+ * every run regardless.
+ *
+ * Above the table, one scatter for the tier: average cost per run against
+ * average XP earned, one point per roster entry (`components/LadderChart`).
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
  * derivation over recorded signals, versioned with `lib/ladder.ts` (ADR-0018
@@ -22,9 +26,10 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
-import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { HarnessTag } from "../components/EpisodePicker";
+import { LadderChart } from "../components/LadderChart";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
-import { episodeParam, harnessParam } from "../lib/episodes";
+import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/ladder";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -34,12 +39,10 @@ const POLL_MS = 30_000;
 export default function Ladder() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
-  const overrides = (): boolean => params.overrides === "1";
-  const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
   // client-side, in `lib/ladder.ts`, where their tests are.
-  const feed = poll(() => api.ladder(episode(), overrides(), harness()), POLL_MS);
-  createEffect(on([episode, overrides, harness], () => feed.refresh(), { defer: true }));
+  const feed = poll(() => api.ladder(episode()), POLL_MS);
+  createEffect(on(episode, () => feed.refresh(), { defer: true }));
   const body = (): ResultsResponse | undefined => feed.latest;
   // The shell's harness series (ADR-0046), applied before anything else reads
   // the rows: a rung reached on 0.4 is not evidence about 0.5.
@@ -71,13 +74,18 @@ export default function Ladder() {
         release trigger. Derived from scored runs of one episode tier only.
       </p>
 
-      <EpisodePicker
-        value={episode()}
-        onChange={(v) => setParams({ episode: v }, { replace: true })}
-        includeOverrides={overrides()}
-        onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
-      />
-      <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
+      <div class="chips">
+        <For each={EPISODE_CHOICES}>
+          {(id) => (
+            <button class={id === episode() ? "on" : ""} onClick={() => setParams({ episode: id }, { replace: true })}>
+              {id}
+            </button>
+          )}
+        </For>
+        <span style={{ "margin-left": "auto" }} class="dim">
+          <A href="/episodes">what these mean</A>
+        </span>
+      </div>
       <SeriesFilterNote series={series()} filteredOut={seriesFilter.filteredOut()} />
 
       <Show when={characters().length > 0}>
@@ -104,11 +112,8 @@ export default function Ladder() {
       </Show>
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
-        <EpisodeFilterNote
-          episode={episode()}
-          filteredOut={body()?.filteredOut ?? 0}
-          overridesExcluded={body()?.overridesExcluded ?? 0}
-        />
+        <LadderChart runs={runs()} episode={episode()} />
+
         <div class="cards">
           <div class="card">
             <div class="k">highest rung reached</div>

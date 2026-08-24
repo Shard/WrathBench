@@ -261,3 +261,244 @@ function richestOf(runs: readonly ResultRun[]): { runId: string; money: number }
   }
   return best;
 }
+
+/* ----------------------------------------------------------------- scatter */
+
+/*
+ * The scatter above the ladder table: one point per (model, effort), x the
+ * average cost of a run, y the average XP earned, over that entry's counted
+ * runs on the selected tier. Everything below is pure so the aggregation,
+ * the scale, the ticks and the label placement are testable without a DOM.
+ */
+
+/** What one run cost, and on what basis; null when nothing prices it. */
+export interface RunCostReading {
+  usd: number;
+  basis: "reported" | "list-price";
+  /** A figure nobody paid: a free tier, local hardware, a subscription. */
+  asIfMetered: boolean;
+}
+
+/**
+ * The cost of one run for the chart: what the provider charged when it said,
+ * else the price table applied to the run's own tokens.
+ *
+ * The runs table shows only the provider's figure, because a listing of what
+ * runs cost may not show a guess. The chart's x-axis is an average, and a
+ * free or local model has no provider figure ever — its honest cost is the
+ * $0 the price table says. So the fallback is taken here, and the point
+ * carries its basis so the caption can say which runs were priced how.
+ */
+export function runCostReading(r: Pick<ResultRun, "actualCost" | "expectedCost">): RunCostReading | null {
+  const a = r.actualCost;
+  if (a !== null && a.basis !== "none" && a.usd !== null) return { usd: a.usd, basis: "reported", asIfMetered: a.asIfMetered };
+  const e = r.expectedCost;
+  if (e !== null && e !== undefined && e.basis !== "none" && e.usd !== null) {
+    return { usd: e.usd, basis: "list-price", asIfMetered: e.asIfMetered };
+  }
+  return null;
+}
+
+/**
+ * XP earned over a run, for the chart's y-axis.
+ *
+ * `xpEarned` is the viewer's lower-bound reconstruction. Against a viewer that
+ * predates the field, a run still on its starting level has earned exactly
+ * its within-level xp, and any other run has earned an amount nothing on the
+ * wire states — null, never a guess.
+ */
+export function xpEarnedOf(r: Pick<ResultRun, "xpEarned" | "maxLevel" | "xp">): number | null {
+  if (r.xpEarned !== undefined) return r.xpEarned;
+  return r.maxLevel === 1 ? r.xp : null;
+}
+
+/** One entry of the roster on the chart: a model, at one effort if it has one. */
+export interface LadderPoint {
+  /** The label: `sonnet`, or `sonnet (low)` when effort is a roster dimension. */
+  key: string;
+  model: string;
+  effort: string | null;
+  /** Mean cost per counted run, USD. */
+  x: number;
+  /** Mean XP earned per counted run. */
+  y: number;
+  /** Counted runs of this entry on the tier, and how many of them fed each mean. */
+  runs: number;
+  costRuns: number;
+  xpRuns: number;
+  /** Whether every priced run was provider-reported, every one list-priced, or both. */
+  basis: "reported" | "list-price" | "mixed";
+  /** Any list-priced run was a figure nobody paid. */
+  asIfMetered: boolean;
+  /** The harness tags among the runs (ADR-0035), sorted — what colours the point. */
+  harnesses: string[];
+}
+
+/** An entry that could not be plotted, and the reason printed under the chart. */
+export interface LadderOmission {
+  key: string;
+  why: "no cost reading" | "no xp reading";
+}
+
+export function pointKey(model: string, effort: string | null): string {
+  return effort === null ? model : `${model} (${effort})`;
+}
+
+/**
+ * One point per (model, effort) over the scored runs given — the same rows
+ * the ladder table draws, so the chart never shows an entry the table lacks.
+ *
+ * Both coordinates are means over the entry's counted runs, each over the
+ * runs that carry the reading: a run with no cost figure is left out of the
+ * x mean and still counts toward y, and the point records how many fed each
+ * so the hover can say so. An entry with no reading on either axis is
+ * omitted and named, never plotted at zero — a $0 free model is a reading,
+ * a missing one is not.
+ */
+export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[]; omitted: LadderOmission[] } {
+  const groups = new Map<string, { model: string; effort: string | null; runs: ResultRun[] }>();
+  for (const r of scored(runs)) {
+    const model = r.model ?? "(unnamed)";
+    const key = pointKey(model, r.effort);
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, { model, effort: r.effort, runs: [r] });
+    else g.runs.push(r);
+  }
+  const points: LadderPoint[] = [];
+  const omitted: LadderOmission[] = [];
+  for (const [key, g] of groups) {
+    const costs = g.runs.map(runCostReading).filter((c): c is RunCostReading => c !== null);
+    const xps = g.runs.map(xpEarnedOf).filter((v): v is number => v !== null);
+    if (costs.length === 0) {
+      omitted.push({ key, why: "no cost reading" });
+      continue;
+    }
+    if (xps.length === 0) {
+      omitted.push({ key, why: "no xp reading" });
+      continue;
+    }
+    const bases = new Set(costs.map((c) => c.basis));
+    points.push({
+      key,
+      model: g.model,
+      effort: g.effort,
+      x: costs.reduce((s, c) => s + c.usd, 0) / costs.length,
+      y: xps.reduce((s, v) => s + v, 0) / xps.length,
+      runs: g.runs.length,
+      costRuns: costs.length,
+      xpRuns: xps.length,
+      basis: bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
+      asIfMetered: costs.some((c) => c.asIfMetered),
+      harnesses: [...new Set(g.runs.map((r) => r.harness ?? "harness?"))].sort(),
+    });
+  }
+  points.sort((a, b) => a.key.localeCompare(b.key));
+  omitted.sort((a, b) => a.key.localeCompare(b.key));
+  return { points, omitted };
+}
+
+/**
+ * Linear ticks from zero: a 1/2/5 × 10^k step, chosen so there are about
+ * `want` of them, with the axis top being the first tick at or past `max`.
+ * A max of zero (every model free) still gets an axis, so the points have
+ * somewhere to sit rather than dividing by nothing.
+ */
+export function niceTicks(max: number, want = 5): number[] {
+  const top = Math.max(max, 0);
+  if (top === 0) return [0, 1];
+  const rough = top / want;
+  const pow = 10 ** Math.floor(Math.log10(rough));
+  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => top / s <= want) ?? 10 * pow;
+  const ticks: number[] = [];
+  for (let v = 0; v < top + step / 2; v += step) ticks.push(Number((v).toPrecision(12)));
+  if (ticks[ticks.length - 1]! < top) ticks.push(Number((ticks[ticks.length - 1]! + step).toPrecision(12)));
+  return ticks;
+}
+
+export interface ChartBox {
+  /** The plot rectangle in viewBox units: x0 < x1 left to right, y0 > y1 bottom to top. */
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+export interface PlacedPoint {
+  point: LadderPoint;
+  cx: number;
+  cy: number;
+  /** The label's anchor and start corner, in viewBox units. */
+  labelX: number;
+  labelY: number;
+  anchor: "start" | "end";
+}
+
+export interface LadderChartLayout {
+  xTicks: number[];
+  yTicks: number[];
+  xMax: number;
+  yMax: number;
+  placed: PlacedPoint[];
+}
+
+/** Label width estimate at the chart's 11px font: enough to avoid collisions, not a text measure. */
+const CHAR_W = 6.3;
+const LABEL_H = 12;
+const LABEL_GAP = 7;
+
+/**
+ * Where everything goes. Points map linearly onto the plot; labels are placed
+ * greedily, each trying right-above, right-below, left-above, left-below of
+ * its point (then the same four a row further out) and taking the first slot that overlaps no label already placed
+ * and stays inside the plot. Points are visited highest-y first so the
+ * crowded bottom-left corner yields to the entries the reader is looking for.
+ * Two labels that cannot both fit overlap rather than vanish: a hidden
+ * label is worse than an ugly one.
+ */
+export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox): LadderChartLayout {
+  const xTicks = niceTicks(Math.max(0, ...points.map((p) => p.x)));
+  const yTicks = niceTicks(Math.max(0, ...points.map((p) => p.y)));
+  const xMax = xTicks[xTicks.length - 1]!;
+  const yMax = yTicks[yTicks.length - 1]!;
+  const px = (x: number): number => box.x0 + (x / xMax) * (box.x1 - box.x0);
+  const py = (y: number): number => box.y0 - (y / yMax) * (box.y0 - box.y1);
+
+  type Rect = { l: number; t: number; r: number; b: number };
+  const taken: Rect[] = [];
+  const overlaps = (a: Rect): boolean => taken.some((b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t);
+  const inside = (a: Rect): boolean => a.l >= box.x0 - 2 && a.r <= box.x1 + 2 && a.t >= box.y1 - LABEL_H && a.b <= box.y0;
+
+  const ordered = [...points].sort((a, b) => b.y - a.y || a.x - b.x);
+  const placed: PlacedPoint[] = [];
+  for (const p of ordered) {
+    const cx = px(p.x);
+    const cy = py(p.y);
+    const w = p.key.length * CHAR_W;
+    const above = cy - LABEL_GAP;
+    const below = cy + LABEL_GAP + LABEL_H * 0.75;
+    // Four slots around the point, then the same four one label-row further out.
+    const slots: { anchor: "start" | "end"; labelX: number; labelY: number }[] = [
+      { anchor: "start", labelX: cx + LABEL_GAP, labelY: above },
+      { anchor: "start", labelX: cx + LABEL_GAP, labelY: below },
+      { anchor: "end", labelX: cx - LABEL_GAP, labelY: above },
+      { anchor: "end", labelX: cx - LABEL_GAP, labelY: below },
+      { anchor: "start", labelX: cx + LABEL_GAP, labelY: above - LABEL_H },
+      { anchor: "start", labelX: cx + LABEL_GAP, labelY: below + LABEL_H },
+      { anchor: "end", labelX: cx - LABEL_GAP, labelY: above - LABEL_H },
+      { anchor: "end", labelX: cx - LABEL_GAP, labelY: below + LABEL_H },
+    ];
+    const rectOf = (s: (typeof slots)[number]): Rect => ({
+      l: s.anchor === "start" ? s.labelX : s.labelX - w,
+      r: s.anchor === "start" ? s.labelX + w : s.labelX,
+      t: s.labelY - LABEL_H,
+      b: s.labelY,
+    });
+    const pick = slots.find((s) => {
+      const r = rectOf(s);
+      return inside(r) && !overlaps(r);
+    }) ?? slots.find((s) => inside(rectOf(s))) ?? slots[0]!;
+    taken.push(rectOf(pick));
+    placed.push({ point: p, cx, cy, ...pick });
+  }
+  return { xTicks, yTicks, xMax, yMax, placed };
+}

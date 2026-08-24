@@ -844,6 +844,17 @@ export interface ResultRun {
    */
   xp: number | null;
   /**
+   * XP earned over the whole run, as a **lower bound**: the last observed
+   * within-level xp of every level below `maxLevel`, plus the xp within it —
+   * the same reconstruction the run page's cumulative chart draws
+   * (`dashboard/src/lib/runview.ts`), computed here so the ladder's scatter
+   * and that chart cannot disagree. Under-counts by whatever was earned
+   * between a level's last sample and the ding, never over-counts. Null when
+   * no sample carried both a level and an xp reading. Optional: a dashboard
+   * built against a viewer that predates the field must still work.
+   */
+  xpEarned?: number | null;
+  /**
    * Copper on the newest sample that carried a reading — the same number the
    * fleet listing and the run page show, not a peak (no state sample the results
    * surface reads carries money, so a peak is not derivable). Null when never
@@ -872,6 +883,14 @@ export interface ResultRun {
    * `basis: "none"` (with `note` saying which nothing) is the blank.
    */
   actualCost: CostFigure | null;
+  /**
+   * `CostView.expected` — the price table applied to the run's own tokens,
+   * `$0` with `asIfMetered` for a free tier or local hardware. The runs table
+   * never shows it (a listing of what runs cost may not show a guess); the
+   * ladder's scatter reads it only where no provider figure exists, and says
+   * so. Optional for the reason `xpEarned` is.
+   */
+  expectedCost?: CostFigure | null;
   /** Why a run is suspended, when it ended for no other reason (ADR-0036). */
   pauseReason: string | null;
 }

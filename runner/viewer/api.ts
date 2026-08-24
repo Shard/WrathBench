@@ -23,6 +23,7 @@ import type {
   ApiInfoResponse,
   CampaignRowView,
   CampaignsResponse,
+  CostFigure,
   EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
@@ -38,7 +39,9 @@ import type {
   ModelsResponse,
   RunDetailResponse,
   RunListRow,
+  RunRow,
   RunsResponse,
+  TokenTotals,
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
 import { campaignComplete, campaignModels } from "../src/campaigns";
@@ -537,6 +540,37 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
+   * The listing facts a `ResultRun` carries: playtime, tokens, and the cost.
+   *
+   * `runCost` is the listing's own, over the same memoised totals, so no page
+   * can quote different dollars for one run. Both figures ride on the row but
+   * under their own names: `actualCost` is what the provider charged — the
+   * only figure the runs table shows, because an estimate standing in for a
+   * bill is the one thing a listing must not do — and `expectedCost` is the
+   * price table applied to the tokens, which the ladder's scatter reads only
+   * where no provider figure exists (a free tier, local hardware, a
+   * subscription) and labels as such.
+   */
+  function listingFacts(
+    row: RunRow,
+    totals: RunTotals,
+    now: number,
+  ): { playtimeMs: number | null; tokens: TokenTotals | null; actualCost: CostFigure; expectedCost: CostFigure } {
+    const cost = runCost({
+      run: row,
+      tokens: totals.tokens,
+      reportedUsd: totals.reportedCostUsd,
+      coverage: totals.responseCost,
+    });
+    return {
+      playtimeMs: playtimeMs(totals.segments, { lastTs: totals.lastTs, live: row.live, now }),
+      tokens: totals.tokens,
+      actualCost: cost.actual,
+      expectedCost: cost.expected,
+    };
+  }
+
+  /**
    * Every run projected onto the results surface.
    *
    * Built inside this closure on purpose: it reuses the same memoised
@@ -566,27 +600,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
               },
           totals === null
             ? null
-            : {
-                playtimeMs: playtimeMs(totals.segments, {
-                  lastTs: totals.lastTs,
-                  live: row.live,
-                  now,
-                }),
-                tokens: totals.tokens,
-                /*
-                 * The actual figure only: what the provider says it charged.
-                 * The episodes listing is a record of what runs cost, and an
-                 * estimate standing in for a bill is the one thing it must not
-                 * show. `runCost` is the listing's own, over the same memoised
-                 * totals, so the two pages cannot quote different dollars.
-                 */
-                actualCost: runCost({
-                  run: row,
-                  tokens: totals.tokens,
-                  reportedUsd: totals.reportedCostUsd,
-                  coverage: totals.responseCost,
-                }).actual,
-              },
+            : listingFacts(row, totals, now),
         ),
       );
     }

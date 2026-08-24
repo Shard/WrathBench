@@ -60,14 +60,14 @@ describe("paths", () => {
     await c.results();
     await c.results("e360");
     await c.results("all");
-    await c.ladder("e90", true);
+    await c.ladder("e360");
     expect(s.calls.map((x) => x.url)).toEqual([
       "/api/episodes",
       // No param at all: the server's own default (e90) is the one default.
       "/api/results",
       "/api/results?episode=e360",
       "/api/results?episode=all",
-      "/api/ladder?episode=e90&includeOverrides=1",
+      "/api/ladder?episode=e360",
     ]);
     expect(s.calls.every((x) => x.method === "GET")).toBe(true);
   });
