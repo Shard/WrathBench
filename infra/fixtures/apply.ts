@@ -29,6 +29,7 @@ import {
   SCENARIOS,
   SCENARIO_NAMES,
   isScenarioName,
+  taxiMask,
   validateScenario,
   type Scenario,
   type ScenarioName,
@@ -203,6 +204,13 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     statements.push({
       sql: `INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (?, ?, ?)`,
       params: [guid, spell, SPELL_SPEC_MASK],
+    });
+  }
+
+  if (scenario.taxiNodes) {
+    statements.push({
+      sql: `UPDATE characters SET taximask = ? WHERE guid = ?`,
+      params: [taxiMask(scenario.taxiNodes), guid],
     });
   }
 

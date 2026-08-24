@@ -179,6 +179,9 @@ namespace WrathBench
         std::string areaPath = sWorld->GetDataPath() + "dbc/AreaTable.dbc";
         if (!LoadAreaTableDbc(areaPath))
             LOG_ERROR("module", "wrathbench: AreaTable.dbc not loaded from '{}'; WB_AREA will carry ids without names", areaPath);
+        std::string achPath = sWorld->GetDataPath() + "dbc/Achievement.dbc";
+        if (!LoadAchievementDbc(achPath))
+            LOG_ERROR("module", "wrathbench: Achievement.dbc not loaded from '{}'; achievement events will carry ids without names or points", achPath);
 
         _http = std::make_unique<HttpServer>(_bindAddress, _port, this, _threads);
         try
@@ -2066,6 +2069,78 @@ namespace WrathBench
         return _areaTableLoaded;
     }
 
+    // WDBC reader for Achievement.dbc (3.3.5a: 62 fields of 4 bytes, record
+    // size 248 — verified against the shipped file: id, faction, map,
+    // previous, name[16 locales + flags] from field 4 with enUS first,
+    // description[17] from 21, category at 38, points at 39, uiOrder, flags,
+    // icon, reward[17], minCriteria, sharesCriteria). Only id, enUS name,
+    // points and category are kept. Same header as AreaTrigger.dbc above.
+    bool Manager::LoadAchievementDbc(std::string const& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+            return false;
+        char magic[4];
+        uint32 recordCount = 0, fieldCount = 0, recordSize = 0, stringSize = 0;
+        in.read(magic, 4);
+        in.read(reinterpret_cast<char*>(&recordCount), 4);
+        in.read(reinterpret_cast<char*>(&fieldCount), 4);
+        in.read(reinterpret_cast<char*>(&recordSize), 4);
+        in.read(reinterpret_cast<char*>(&stringSize), 4);
+        if (!in || std::memcmp(magic, "WDBC", 4) != 0 || fieldCount != 62 || recordSize != 248)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' is not a 3.3.5a Achievement.dbc (fields {}, record size {})", path, fieldCount, recordSize);
+            return false;
+        }
+        std::vector<char> recs(size_t(recordCount) * recordSize);
+        in.read(recs.data(), recs.size());
+        std::vector<char> strings(stringSize);
+        in.read(strings.data(), stringSize);
+        if (!in)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' truncated ({} records, {} string bytes expected)", path, recordCount, stringSize);
+            return false;
+        }
+        size_t loaded = 0;
+        for (uint32 i = 0; i < recordCount; ++i)
+        {
+            char const* rec = recs.data() + size_t(i) * recordSize;
+            uint32 id, nameOff, category, points;
+            std::memcpy(&id, rec, 4);
+            std::memcpy(&nameOff, rec + 4 * 4, 4);
+            std::memcpy(&category, rec + 38 * 4, 4);
+            std::memcpy(&points, rec + 39 * 4, 4);
+            AchievementRec r;
+            r.points = points;
+            r.categoryId = category;
+            if (nameOff < stringSize)
+                r.name = std::string(strings.data() + nameOff, strnlen(strings.data() + nameOff, stringSize - nameOff));
+            _achievements[id] = std::move(r);
+            ++loaded;
+        }
+        _achievementsLoaded = loaded > 0;
+        LOG_INFO("module", "wrathbench: loaded {} achievements from '{}'", loaded, path);
+        return _achievementsLoaded;
+    }
+
+    // The wire carries dates as the client's packed bitfield
+    // (ByteBuffer::AppendPackedTime: (year-2000)<<24 | month<<20 | (day-1)<<14
+    // | weekday<<11 | hour<<6 | minute). Both the raw field and a readable
+    // "YYYY-MM-DD HH:MM" are served; the reading is a client-local decode.
+    std::string Manager::AchievementJson(uint32 id, uint32 packedDate) const
+    {
+        char when[24];
+        std::snprintf(when, sizeof(when), "%04u-%02u-%02u %02u:%02u",
+            2000u + ((packedDate >> 24) & 0x1F), ((packedDate >> 20) & 0xF) + 1, ((packedDate >> 14) & 0x3F) + 1,
+            (packedDate >> 6) & 0x1F, packedDate & 0x3F);
+        Json::Writer w;
+        w.Add("achievementId", id).Add("date", packedDate).Add("time", when);
+        auto it = _achievements.find(id);
+        if (it != _achievements.end())
+            w.Add("name", it->second.name).Add("points", it->second.points).Add("categoryId", it->second.categoryId);
+        return w.Str();
+    }
+
     void Manager::AddAreaFields(Json::Writer& w, Player* player)
     {
         uint32 zoneId = 0, areaId = 0;
@@ -3139,7 +3214,11 @@ namespace WrathBench
                 case UNIT_FIELD_MAXHEALTH:       f.Add("maxHealth", v); return true;
                 case UNIT_FIELD_LEVEL:           f.Add("level", v); return true;
                 case UNIT_FIELD_FACTIONTEMPLATE: f.Add("faction", v); return true;
-                case UNIT_FIELD_FLAGS:           f.Add("unitFlags", v); return true;
+                case UNIT_FIELD_FLAGS:
+                    // taxiFlight names UNIT_FLAG_TAXI_FLIGHT (0x00100000) off
+                    // the same field: the client's own "on a flight path"
+                    // reading, nothing the server adds (issue #8, ADR-0048).
+                    f.Add("unitFlags", v).Add("taxiFlight", (v & UNIT_FLAG_TAXI_FLIGHT) != 0); return true;
                 case UNIT_FIELD_DISPLAYID:       f.Add("displayId", v); return true;
                 case UNIT_DYNAMIC_FLAGS:         f.Add("dynamicFlags", v); return true;
                 case UNIT_NPC_FLAGS:             f.Add("npcFlags", v); return true;
@@ -3997,6 +4076,58 @@ namespace WrathBench
                     specs += "]";
                     w.Add("pet", false).Add("unspentPoints", unspent).Add("specCount", (uint32)specCount)
                      .Add("activeSpec", (uint32)activeSpec).Raw("specs", specs);
+                    break;
+                }
+                // ----------------------------------- achievements and taxi
+                case SMSG_ACHIEVEMENT_EARNED:
+                {
+                    // AchievementMgr::SendAchievementEarned: packGUID earner,
+                    // u32 id, u32 packed date, u32 0. Broadcast to everyone
+                    // in say range, so `guid` may be another player; the
+                    // client shows those as chat-frame lines too.
+                    name = "SMSG_ACHIEVEMENT_EARNED";
+                    uint64 guid = 0; p.readPackGUID(guid);
+                    uint32 id = 0, date = 0; p >> id >> date;
+                    w.AddGuid("guid", (uint64_t)guid).Add("self", ws && ws->GetPlayer() && ws->GetPlayer()->GetGUID().GetRawValue() == guid)
+                     .Raw("achievement", AchievementJson(id, date));
+                    break;
+                }
+                case SMSG_ALL_ACHIEVEMENT_DATA:
+                {
+                    // AchievementMgr::BuildAllDataPacket, sent to self at
+                    // login: (u32 id, u32 packed date)* then 0xFFFFFFFF, then
+                    // the criteria-progress block to a second 0xFFFFFFFF.
+                    // Only the completed block is served; criteria progress is
+                    // not decoded (ADR-0048).
+                    name = "SMSG_ALL_ACHIEVEMENT_DATA";
+                    std::string list = "[";
+                    bool first = true;
+                    uint32 count = 0;
+                    while (p.rpos() + 4 <= p.size())
+                    {
+                        uint32 id; p >> id;
+                        if (id == 0xFFFFFFFF) break;
+                        uint32 date; p >> date;
+                        if (!first) list += ',';
+                        first = false;
+                        list += AchievementJson(id, date);
+                        ++count;
+                    }
+                    list += "]";
+                    w.Add("count", count).Raw("achievements", list);
+                    break;
+                }
+                case SMSG_ACTIVATETAXIREPLY:
+                {
+                    // WorldSession::SendActivateTaxiReply: u32 ActivateTaxiReply
+                    // (0 ok; 1 server error, 2 no such path, 3 not enough
+                    // money, 4 too far away, 5 no vendor nearby, 6 not
+                    // visited, 7 busy, 8 mounted, 9 shapeshifted, 10 moving,
+                    // 11 same node, 12 not standing). 0 means the flight is
+                    // starting; the ride itself shows as `taxiFlight` on self.
+                    name = "SMSG_ACTIVATETAXIREPLY";
+                    uint32 reply = 0; p >> reply;
+                    w.Add("reply", reply).Add("ok", reply == 0);
                     break;
                 }
                 // -------------------------------------------------- progress
