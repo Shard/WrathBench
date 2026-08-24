@@ -185,6 +185,9 @@ Results come back in bands, and only inside a band does `bm25` decide:
    another kind.
 3. **title tokens** — every word of the query appears in the page title.
 4. **body** — the words appear somewhere in the text.
+5. **out-of-game** — the page is patch notes, addon or UI/API documentation, a boxed
+   product, or a real-world topic. Sunk below every body hit and labelled, but never
+   deleted.
 
 `parseIdQuery` decides what counts as an id. A numeric token is an id lookup when
 it is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`,
@@ -193,6 +196,21 @@ it is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`
 "quest" in the text query matches every quest page. `level 5 quests` is left alone.
 An id token is **never** handed to the full-text index, so body prose can no longer
 answer an id question.
+
+The wiki documents more than the world: the patch history, the Lua addon API, the
+client UI, the boxed products and the company that makes them. Trajectory mining
+found a `Hotfixes` archive served fifteen times and a pop-culture-reference list
+thirty-eight, to a character standing in a zone. `classifyMetaPage`
+(`wiki/src/meta-pages.ts`) recognises those from the title alone — the wiki
+namespaces them by prefix (`API GetSpellInfo`, `MACRO cast`, `Hotfixes/2015
+Archive`) or disambiguates them with `(AddOn)` — and `searchReference` moves such a
+hit below every body hit and prefixes its snippet with `META_PAGE_LABEL`. Nothing is
+removed, and an exact-title hit is never demoted: asking for the page by name is a
+deliberate request. The rules are deliberately conservative, since a missed hotfix
+archive costs one slot and a demoted quest page costs the run: `Widget*` was dropped
+because an NPC shares the name, `Patch *` because items do, and `* (old)` because
+those are mostly superseded spell versions — an era matter, not an out-of-game one.
+2,570 of the bundle's 104,808 titles classify, 2.45%.
 
 The full-text candidate set is fetched far wider than `limit` before the bands are
 applied, because the title band is decided in TypeScript: a title match sitting

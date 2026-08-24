@@ -112,7 +112,7 @@ describe("classifyMetaPage — negatives", () => {
 describe("META_PAGE_LABEL", () => {
   test("is a fixed, single-line literal", () => {
     expect(META_PAGE_LABEL).toBe(
-      "[out-of-game reference page: patch notes, addon or real-world topic]",
+      "[out-of-game reference page: patch notes, UI/API docs, addon or real-world topic]",
     );
     expect(META_PAGE_LABEL).not.toInclude("\n");
   });

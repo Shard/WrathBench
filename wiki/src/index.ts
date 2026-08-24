@@ -44,3 +44,5 @@ export { parsePages, decodeUtf8, chunked, DEFAULT_NAMESPACES } from "./parse";
 export type { WikiPage, ParseStats } from "./parse";
 export { stripWikitext, redirectTarget } from "./strip";
 export { decodeEntities } from "./entities";
+export { classifyMetaPage, META_PAGE_LABEL } from "./meta-pages";
+export type { MetaReason } from "./meta-pages";
