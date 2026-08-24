@@ -2740,7 +2740,10 @@ function printStatus(configPath: string): void {
         // A class governs the next pick, never a run in flight: a job that
         // landed before the classes did keeps its account and says so.
         const entry = config?.roster[on.j.ref];
-        const want = entry === undefined ? undefined : rosterClass(rosterModels({ [on.j.ref]: entry })[0]!);
+        // A steered entry carries no tier and so projects to no model: it is a
+        // probe on a pinned account, and it has no class to be off.
+        const projected = entry === undefined ? [] : rosterModels({ [on.j.ref]: entry });
+        const want = projected[0] === undefined ? undefined : rosterClass(projected[0]);
         const row = jobRow(on.name, on.j);
         if (want !== undefined && on.j.source === "policy" && want !== classOfAccount(account)) {
           row.offClass = `${want} model on a ${classOfAccount(account)} account — left alone; the class applies to the next pick`;
