@@ -212,7 +212,7 @@ and status.
     worth not losing; today's tracks are minutes.
 
 
-63. **Freeplay rows show no episode progress even when their run recorded a real
+74. **Freeplay rows show no episode progress even when their run recorded a real
     watchdog** (2026-08-24, deliberate; re-scoped 2026-08-24 by ADR-0041).
     `rowProgress` in `dashboard/src/lib/fleet.ts` returns null for
     `episode === "freeplay"` because the id is uncapped (docs/EPISODES.md) and a
@@ -227,7 +227,7 @@ and status.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the
-    "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0040
+    "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0043
     conversation). `idle: "unlimited"` now gives a model repeated six-hour
     freeplay sessions, but every episode still deletes and recreates a fresh
     level-1 character (ADR-0006), so session N+1 starts where session 1 did and
@@ -235,7 +235,7 @@ and status.
     scored episodes forbid, so this is not a knob — it needs its own record:
     what identity a resumable freeplay character has, how its run ids and
     trajectory relate across sessions, and how the viewer shows a character
-    rather than a run. Out of scope for ADR-0040 deliberately; the six-hour cap
+    rather than a run. Out of scope for ADR-0043 deliberately; the six-hour cap
     there is what makes the sessions restartable in the first place.
 
 
@@ -282,25 +282,109 @@ and status.
 
 ## Wiki
 
-49. **Unlabelled post-3.3.5 prose in wiki page leads** (2026-08-23, from ADR-0029;
-    previously carried under a duplicate number 47). ADR-0029 marks the era sections
-    the wiki labels itself, but a 2020 page's lead is written present-tense about the
-    post-Cataclysm world with no marker at all — the Coldridge Valley lead still says
-    the pass linked the valley to Dun Morogh "prior to its collapse", which is false
-    here, and no build-time rule separates that from Wrath-era prose. The
-    `search_reference` description carries the standing warning. A real fix needs
-    either a pre-Cataclysm revision of each page (the dump is full history, so the
-    revision from before 2010-12 is in it — a second bundle channel, expensive) or
-    per-sentence classification (not deterministic). **Triggered 2026-08-24** by
-    `fleet-nav-probe-freeplay-sonnet-20260823-c4-c2`: `search_reference` returned the
-    "prior to its collapse" / "after Coldridge Pass collapses before adventurers can
-    make it through to Kharanos" prose, and the model's scratchpad planned a
-    gyrocopter detour around the pass it believed unreliable (it walked the intact
-    pass in the end, so strategy was shaped, not blocked). Cheaper fix than a second
-    bundle channel: tag the known post-Cataclysm geography changes (collapses,
-    rebuilds) at bundle-build time for at least the starter-zone pages, where new
-    characters are most exposed. Not urgent — the era warning held enough that the run
-    still crossed.
+62. **What the Wrath bundle still cannot decide** (2026-08-24, from item 49;
+    rewritten when the bundle stopped labelling and started dropping, ADR-0040).
+    One residue left, precision rather than correctness. The other two are
+    resolved below: the recovered-name leak on 2026-08-24 (d0f3ec8), and the
+    18,717 undecidable late pages by the world-id door the operator approved the
+    same day (ADR-0042).
+    - **The paragraph rule's floor.** The phrase rules (`in Cataclysm`, `with
+      Cataclysm`, `after the Shattering`, `upcoming`/`beta` beside Cataclysm or
+      Deathwing, `will` within 60 characters of `Cataclysm`) reach the prose that
+      names the expansion. What they cannot reach is 2009–10 prose written
+      present-tense about a zone or NPC that had been *announced* but not
+      shipped, without naming it — the pre-cutoff revision is the one saying it,
+      so no revision line helps. Precision on a hand-checked 33-paragraph sample
+      is about 0.8: `with Cataclysm` also catches "removed with Cataclysm",
+      which is a statement about content that *is* here. Direction when a run
+      shows it costing something: the wiki's own `{{cata-inline}}`-style
+      templates, which mark the clause rather than the section.
+      **Narrowed 2026-08-24** by an adversarial read of the built bundle rather
+      than a count of it: rated battlegrounds, the Speedbarge, an inline
+      `(Expansion: …)` tag, `playable` beside worgen or goblin, Archaeology the
+      profession and Mastery the stat are rules now, and a category page whose
+      own title names a post-Wrath zone is a page-level signal in ns 14 (33
+      stubs). That is a dent in this residue, not a fix: prose describing the
+      later world in words no rule names is still there, and the only general
+      answer is still the clause-marking templates above. The new rules have
+      their own measured floor: the Archaeology window is 20 characters, so a
+      paragraph that names a dig site in the same sentence but further off than
+      that still goes ("The dig site west of the camp is where the archaeology
+      notes were lost" was the case that showed it). Per spec, and the cost of a
+      wider window is the profession paragraphs the rule is for.
+    - **A recovered name the bundle would rather not answer to.** The redirect
+      rules added on 2026-08-24 (ADR-0040) recover a
+      title from the newest revision or from an `(original)` sibling, which is
+      how `Deadmines` and `Gnomeregan` come back. Out-of-game titles are
+      excluded, and a title with a post-Wrath parenthetical or subpage suffix
+      never had a page to recover. What is not excluded is a bare ns-0 title
+      that is a later world's coinage whose newest revision redirects to a
+      Wrath lore page that survives — `Ruins of Gilneas` → `Gilneas` is the
+      shape. `verify.ts` resolves its forbidden titles through the redirect
+      table, so this fails the pre-swap gate rather than leaking quietly; check
+      it on the next real build and add a source-side veto if it fires.
+      **Resolved 2026-08-24** (d0f3ec8): `titleIsPostWrathCoinage` is that veto
+      — an exact-title ns-0 list of names Cataclysm coined, applied to the page,
+      to redirect recovery from the newest revision, and to the sibling rule,
+      so the name never resolves from any side. `Ruins of Gilneas` and ten
+      others are in `verify.ts`'s forbidden titles; the phrase pairs gate what
+      the surviving lore pages (Deepholm, Uldum, Kezan, Gilneas) may say.
+    - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
+      pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
+      Wrath signal (`post_cutoff_wrath_signal` admits those). The rest said
+      nothing either way and were dropped, and most of them were right about
+      3.3.5 — items, NPCs and quests documented late.
+      **Resolved 2026-08-24** (ADR-0042, approved by the operator): the build may
+      ask the world DB whether an id exists. `infra/export-world-ids.sh` writes
+      the four id sets to `data/wiki/world-ids.json`, `--world-ids` feeds them to
+      the build, and a late page that states an id this server has is admitted as
+      `post_cutoff_id_match`. The export is server-derived, stays under `data/`
+      and never enters git; CONTRACTS.md is untouched, because this is a
+      build-time input and the agent still reads nothing but wiki text.
+      **The premise was wrong about the size of the prize**, and the first full
+      build says so: 145 pages, not thousands. 16,010 of the 22,727 late pages
+      state no id at all, and of the 6,717 that do, nearly all state an id in
+      the 40,000–130,000 range this server has never had — the undecidable
+      population was mostly genuinely later content. A hand-check of 18 admitted
+      titles found 5 Cataclysm-or-later pages carrying a 3.3.5 id: an entry a
+      later boss inherited from the one it replaced (Daakara on Zul'jin's
+      23863), and an infobox id copied from another page and never corrected
+      (three unrelated battle-pet and guild pages all state `itemid=44822`).
+      **An exhaustive review of all 151 rows** (two independent reviewers, every
+      title judged) then put the id-only door at 94 true / 57 false — precision
+      **0.62**, worse than the sample — and found the discriminator: nearly every
+      false admit's id belongs to something the DB calls by a different name.
+      **The name lever is built** (ADR-0042 addendum): the export carries
+      id→name, and the door needs the DB's name for the id to agree with the
+      page's subject. The rebuild admits 95 pages (98 rows) and refuses 53 on
+      the name (`pages_id_name_mismatch`); Aeonaxx, Daakara, the battle pets and
+      the guild heralds are all gone.
+    - **The ~15 late pages the name rule cannot see** (measured 2026-08-24, the
+      accepted residue of the rule above). Their stub id *and* its name both
+      exist in the 3.3.5 DB, so nothing in the wikitext or the export separates
+      them from a real one: Custer Clubnik, Foreman Fisk, Greela "The Grunt"
+      Crankchain, Horzak Zignibble, Fern Feeder Moth, Malynea Skyreaver, Labor
+      Captain Grabbit, Overseer Sylandra, Rebel Watchman, Royal Guard,
+      `Quest:Jaina's Locket`, `Quest:Sylvanas' Vengeance` and a few like them.
+      Per-title exclusions are not a rule and are deliberately not built; this is
+      recorded so the number is known rather than discovered again. Watch
+      `pages_id_name_mismatch` if the rule is ever retuned.
+
+65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
+    the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
+    states every one of its ~28 metrics three times: a `let`/`Record` in the
+    build loop, a `meta` key in the `setMeta` call, and a line in the console
+    summary. Nothing ties the three together, so a new counter is added in three
+    places and is silently absent from the bundle or the summary if one is
+    missed, and the ones that are deliberately *not* part of the accounting
+    identity (`pages_pre_announcement_protected`, `pages_id_name_mismatch`,
+    `empty_pages`) say so only in a comment beside each of the three. What it
+    costs today is small — the comments are good and the meta diff of a rebuild
+    catches a drift — which is why this is a follow-up and not a fix: it is worth
+    doing when the next counter goes in, as one metric table (name, help text,
+    whether it is in the identity, how it prints) that the loop increments, the
+    meta write reads and the summary renders. Watch for it the next time a
+    counter is added to `build.ts`.
 
 ## Docs and release
 
@@ -343,6 +427,9 @@ and status.
 One line per number so citations resolve; the day file carries the detail.
 
 - 59 — 2026-08-24 — 1257fe2 — cache-write tokens flattened from `prompt_tokens_details` in `toUsage`
+- 64 — 2026-08-24 — 7a1cc07 — the protection line is the Cataclysm **announcement** (2009-08-21, `CATACLYSM_ANNOUNCED`), not the beta. 119 of the 588 protected pages were created on or after BlizzCon 2009 and were mostly announced-Cataclysm content (Blackwing Descent, Halls of Origination, Gilneas City, a run of beta ability pages); a page created before the announcement could not have been written about Cataclysm at all. Renamed through the code, the meta key (`pages_pre_announcement_protected`), the tests, `wiki/README.md` and ADR-0040 together. Keeps roughly 500 of the 588
+- 63 — 2026-08-24 — 7a1cc07 — the stripper emptied whole articles. Root cause was not the brace scanner: `CONTAINER_TAGS` read a repeated `<ref name="x" />` as an *opening* tag and ate everything to the next `</ref>` — on Orgrimmar's 2010 revision 1,486 characters including the `}}` that closed the infobox, after which `removeBraced` never returned to depth 0 and discarded the page. The scanner is hardened too: brace runs are counted a run at a time (`{{{param|default}}}` no longer opens a phantom `{|` on its third brace, and the mirror case no longer leaks infobox fields out as prose) and closers match their opener's kind. Unbalanced input now costs its own paragraph, not the page — the strip resumes at the first blank line after the unclosed opener. Measured over the dump on the Wrath snapshot: pages that strip to nothing with ≥200 characters of non-template prose 47 → 11 — 22 recovered by the ref fix alone, 28 with the hardened scanner and the fallback stubbed out, 37 with it — so the net catches 9 and the root-cause fixes carry the rest. Orgrimmar, Scarlet Crusade, Crystalsong Forest and Gnoll are among them, and Orgrimmar's era revision now strips to its 10,696 characters of prose; whether the item-49 canary passes needs the operator's rebuild. One page in a 2,457-page sample flips the other way — a bare `<onlyinclude>` achievement box whose text the old over-closing bug leaked out of its template — which is the leakage fix, roughly 35 to 40 pages dump-wide. The residue is table-only pages
+- 49 — 2026-08-24 — 40b3054, 9194abb, ac50f51, 551dba1 — the wiki bundle reads the era, not 2020. Prerequisite first: a `<page>` block is 50 revisions, not a page, so the parser merges a title's blocks and the build asserts one row per (title, ns) — 9,693 stale duplicate rows were competing in `pages_fts`. Then prose comes from the newest revision saved before 2010-10-12 (patch 4.0.1) while coordinates, ids and the quest infobox stay on the newest revision, where the corrections are (ADR-0040); the 20,428 pages with no pre-cutoff revision keep their newest text under a fixed page-level label rather than being dropped. Out-of-game reference pages (patch notes, the Lua API, the client UI, addons, boxed products) are classified from the title and sunk below every body hit with a label, never deleted, exact titles never demoted. The runner stamps the bundle's identity (`schema_version`, `built_at`, `source`, `era_cutoff`) into the run's comparability tuple, so a rebuild is visible instead of indistinguishable. Verified on a rebuilt bundle: unlabelled Cataclysm-mentioning pages 2,025 → 650, Deathwing/Shattering/Pandaria mentions 2,032 → 306, the Coldridge Valley "collapse" prose 3 → 0, coordinates −2.6% and ids −1% (the stale duplicate rows going away). **Deploy pending:** the rebuilt bundle sits at `data/wiki/bundle.next.sqlite` and is not swapped in; the swap is a harness minor bump (ADR-0033 addendum) and waits for a deploy window after review. That staged file predates the out-of-world section trim (2026-08-24, ADR-0040), the pre-announcement protection, the stripper fix in item 63 and the empty-row fix in 9f06265, and has to be rebuilt before the swap — it was built with the behaviour that dropped 5,011 pages of this world. **Amended 2026-08-24:** the era rules were dropping 588 pages of this world — a page that existed before the Cataclysm beta had picked up `|patch=4.0.1` or a Cataclysm category in a 2010 revision, and was read as a beta stub; Stormwind City, Durotar, the Barrens, Thousand Needles, Auberdine, Southshore and Camp Taurajo among them. A page whose first revision predates the Cataclysm announcement is now a Wrath page and a post-Wrath signal never drops it (`pages_pre_announcement_protected`; the line moved from 2010-06-01 to 2009-08-21 under item 64), while the section and paragraph cuts still strip what the 2010 editors wrote about the next world; a page with no pre-cutoff prose is counted `dropped_post_cutoff` whatever else it says, which moves 1,429 pages between counters and admits nothing new. Every counter in that build added up, which is why the build now ends with a **canary**: the ten capitals, the eight racial starting zones and the reshaped classic zones must resolve in the finished bundle or the build fails before the rename (`wiki/src/canary.ts`, `--no-canary` for smoke builds), with `wiki/src/verify.ts` as the operator-run pre-swap gate over the same list plus forbidden titles and phrase pairs. Residue is item 62; 63 and 64 are resolved below
 - 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`
@@ -387,13 +474,13 @@ One line per number so citations resolve; the day file carries the detail.
 - 50 — 2026-08-23 — see the day file — worn-bag contents decoded (`numSlots`, `bagSlot<n>Lo/Hi`), `bag()` spans backpack + worn bags with `totalSlots`/`bags`, HUD total across bags, `items` state column on the run and map pages; module in `:next`, `infra/smoke/inventory.ts` pending deploy. Items 57/58 unchanged
 - 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66
 - 68 — 2026-08-24 — found and fixed the same hour — the `--status` accounts table named a finished job where `--live-runs` named the running one. `state.jobs` is keyed by job NAME, stable across attempts, so it is a cumulative record; `printStatus` keyed a map by account and let the last write win, which reads the object's INSERTION order (first-spawn order), so a job that exited at noon masked the run holding the account. Display only — every scheduling path leases by `accountHeldBy` — but it made the board unreadable at exactly the moment a deploy needed reading. Now `jobsByAccount` in `infra/run-fleet.ts` ranks live-before-dead then newest-first, shares one liveness verdict with the row's own note, and reports two live jobs on one account as a `!!` clash instead of picking silently. The comment claiming `--live-runs` was "the same signal --status shows" is corrected: they are two sources, and that claim is how this hid
-- 69 — 2026-08-24 — `infra/` had no tsconfig, so nothing ever typechecked the 3.6k-line supervisor: `bun test` strips types without checking them, and four `fleet.test.ts` fixtures were silently missing the `idle` and `local` fields that ADR-0040 made required. `infra/tsconfig.json` added, the 17 errors it found fixed (4 fixtures, 12 index/group assertions in `infra/smoke/`, 1 import extension), and `bun run typecheck` now covers all six projects — cited in CLAUDE.md next to `bun test` so the next agent runs both
-- 65 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
+- 69 — 2026-08-24 — `infra/` had no tsconfig, so nothing ever typechecked the 3.6k-line supervisor: `bun test` strips types without checking them, and four `fleet.test.ts` fixtures were silently missing the `idle` and `local` fields that ADR-0043 made required. `infra/tsconfig.json` added, the 17 errors it found fixed (4 fixtures, 12 index/group assertions in `infra/smoke/`, 1 import extension), and `bun run typecheck` now covers all six projects — cited in CLAUDE.md next to `bun test` so the next agent runs both
+- 76 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
 - 66 — 2026-08-24 — 4eb455d, 64319d9 — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. 64319d9 fixed a regression in the first commit: a refused pin is disabled, and `diffJobs` drains a running job whose spawn is disabled, so a refusal would have SIGTERMed a live campaign probe where the whole-file rejection left it alone — a refusal now suppresses scheduling only, and the tick spares (and records) any live run under a refused pin. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
-- 62 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
+- 73 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
 - 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 was withdrawn the same day — see its own ledger line
 - 58 — 2026-08-24 — 9848d70 — the loot half, with the durability half quantified and left open. `kill-credit.ts` empties `Smokekc`'s backpack at the START of the run, not before logout: start-of-run is idempotent, it runs after a previous run failed and skipped its own cleanup (exactly when the bag is fullest), and it makes the loot line readable as "N free, then loot arrived". `destroy_item` goes through the module like a client's delete, so no fixture and no item-57 guid problem. The keep rule fails toward keeping — only a slot positively identified as non-keep is destroyed, unidentified slots are kept and named, and 6948 is protected, because a fixture cannot restore a Hearthstone it destroys. Best-effort and reported, never asserted: it uses `req()` not `action()`, so a refusal is a log line and the run carries on to its real claims — a cleanup failure must not be indistinguishable from the loot bug this prevents. An empty read is reported as "contents unknown", not as a reassuring zero. Found in passing: the real accumulation is ~2-3 items per run, not the 0-1 the item assumed, and five runs' backlog was already sitting there. Durability is NOT fixed and is not close to biting: both durability-bearing items were 25/25 before and after three fights, and the steady-state drift is ~0.5% x 2/19 slots per damage event — order of one point per ~100 runs, thousands of gate ticks from zero. `DurabilityLoss.OnDeath` is the only fast path and this smoke treats a death as a failure by construction. A repair needs a vendor, a walk and money; open when something makes it worth that
 - 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
 - 70 — 2026-08-24 — withdrawn, not fixed: the item described intentional behaviour on a premise the code contradicts. The ladder is per roster entry (`matchesRoster` is model + effort), so no model's failure can cool another. It is climbed ONLY by a stillborn launch or `adapter-error` (`NO_PROGRESS_REASONS`), both endpoint properties — a probe that runs its full episode and achieves nothing ends `episode-limit` or `idle` and does not climb it at all. So the item's own revisit trigger, "a campaign with a harder task starts retiring models that were fine on e90", cannot occur: task difficulty is invisible to the ladder. Sharing it across lanes is correct and needs no lane key
-- 64 — 2026-08-24 — 6287b0a — `/api/info` carries `dashboardBuild` (Vite's fingerprinted entry name, parsed from index.html, cached on mtime); the SPA keeps the first id it sees — its own, since index.html is `no-store` — and shows a `new build — reload` button beside the status badge when a later poll disagrees. The item's other half was ALREADY true: `staticFile` has served index.html `no-store` all along, verified against the live viewer
+- 75 — 2026-08-24 — 6287b0a — `/api/info` carries `dashboardBuild` (Vite's fingerprinted entry name, parsed from index.html, cached on mtime); the SPA keeps the first id it sees — its own, since index.html is `no-store` — and shows a `new build — reload` button beside the status badge when a later poll disagrees. The item's other half was ALREADY true: `staticFile` has served index.html `no-store` all along, verified against the live viewer
 - 60 — 2026-08-24 — dec01d2 — both halves. The fallback lattice batches into one stroked path of at most 130 segments (below `TILE_MIN_PX` nothing is drawn into a cell, so nothing can be covered; the per-cell arm above the threshold is untouched because there a drawn tile must suppress its own outline). The replay route is decimated to screen resolution in world units, with the tolerance taken from the scale alone so a pan reuses the cache and only a zoom or a new prefix rebuilds it. Geometry lives in `mapview.ts` as pure functions with 13 tests; the decimation measures against the last KEPT point, which three of them catch

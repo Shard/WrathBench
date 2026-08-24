@@ -74,6 +74,48 @@ Lorem after.`;
     expect(typeof once).toBe("string");
   });
 
+  test("a repeated named ref is self-closing, not an opening tag (FOLLOW-UPS 63)", () => {
+    // `<ref name="x" />` cites a footnote a second time. Reading it as an
+    // opening tag ate everything to the next `</ref>` — including the `}}`
+    // that closed the infobox, which then swallowed the whole page.
+    const wt = `{{infobox place
+| name = Example Hold Alpha
+| people = {{Race|Widgetkin}} (1,200)<ref name="Src">''[[Example Source Beta]]'', pg 12</ref>
+| ruler = Example Person Gamma<ref name="Src" />
+| language = [[Widgetish]]
+}}
+Lorem ipsum dolor sit amet.`;
+    expect(stripWikitext(wt)).toBe("Lorem ipsum dolor sit amet.");
+  });
+
+  test("a brace run is a run, not two-character pairs (FOLLOW-UPS 63)", () => {
+    // `{{{name|default}}}` is a template parameter. Read two characters at a
+    // time, its third brace opens a `{|` table that nothing ever closes.
+    expect(stripWikitext("{{box|a={{{1|Alpha}}}|b=y}}Lorem ipsum.")).toBe("Lorem ipsum.");
+    expect(stripWikitext("{{box|a={{{mode|}}}|b=y}}Lorem ipsum.")).toBe("Lorem ipsum.");
+    expect(stripWikitext("{{{{Example Template Delta}}}}Lorem ipsum.")).toBe("Lorem ipsum.");
+    // The mirror case: over-closing used to leak the template's own fields out
+    // as if they were prose.
+    expect(stripWikitext("{{box\n|criteria=\n* Collect 5 [[Example Item Delta]]\n|mode={{{m|}}}\n}}")).toBe("");
+  });
+
+  test("a closer matches its own kind (FOLLOW-UPS 63)", () => {
+    // A `{|` written inside a template argument must not eat the template's
+    // `}}`, and `|}}` is a last argument's pipe, not a table closer.
+    expect(stripWikitext("{{box|a=x{|y\n}}Lorem ipsum.")).toBe("Lorem ipsum.");
+    expect(stripWikitext("{{box|a=x|}}Lorem ipsum.")).toBe("Lorem ipsum.");
+    expect(stripWikitext("{|\n| {{tpl|x}}\n|}\nLorem ipsum.")).toBe("Lorem ipsum.");
+  });
+
+  test("an unclosed opener costs its paragraph, not the page (FOLLOW-UPS 63)", () => {
+    const wt = "{{infobox place\n| name = Example Hold Alpha\n\nLorem ipsum dolor sit amet.";
+    expect(stripWikitext(wt)).toBe("Lorem ipsum dolor sit amet.");
+    // Prose before the unclosed opener is kept, as it always was.
+    expect(stripWikitext("Before.\n\n{{unclosed\n\nAfter.")).toBe("Before.\nAfter.");
+    // No blank line after it: the tail goes with the opener.
+    expect(stripWikitext("Before.\n\n{{unclosed lorem")).toBe("Before.");
+  });
+
   test("a realistic synthetic article reduces to prose", () => {
     const wt = `{{questbox
  | name = Example Quest Alpha

@@ -607,7 +607,7 @@ describe("the shipped fleet files", () => {
     const config = parseFleet(raw);
 
     /*
-     * THE invariant this test exists for (ADR-0040). It is not a snapshot of
+     * THE invariant this test exists for (ADR-0043). It is not a snapshot of
      * the shipped file — the operator retiers models nightly and that must not
      * break CI. It is the one property the refactor bought: how much a model
      * runs is the word `tier` on its entry, full stop. No per-entry override,
@@ -1509,7 +1509,7 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { tier: "t1", model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
   });
 
-  test("idle: unlimited — the box past its tier gets one 6h freeplay session at a time (ADR-0040)", () => {
+  test("idle: unlimited — the box past its tier gets one 6h freeplay session at a time (ADR-0043)", () => {
     const raw = {
       accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
       roster: {

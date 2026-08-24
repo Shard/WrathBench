@@ -2,8 +2,8 @@
 
 Status: Accepted. Date: 2026-08-24. Amends ADR-0033 (`freeplay` is no longer the
 only steered episode) and the probe half of ADR-0034 (a probe is no longer a
-roster entry carrying an objective). Retires `idle: "characters"` from ADR-0040;
-the rest of ADR-0040 — tiers, promotion, account classes, the paid throttle —
+roster entry carrying an objective). Retires `idle: "characters"` from ADR-0043;
+the rest of ADR-0043 — tiers, promotion, account classes, the paid throttle —
 stands unchanged.
 
 ## Context

@@ -1,0 +1,659 @@
+import { describe, expect, test } from "bun:test";
+import {
+  dropOutOfWorldOnly,
+  dropPostWrath,
+  dropPostWrathParagraphs,
+  dropPostWrathSections,
+} from "../src/wrath-only";
+import { stripWikitext } from "../src/strip";
+
+/**
+ * How many out-of-world sections a cut removed: the sum of its breakdown, which
+ * is where the count lives now (a scalar beside the map was one more thing that
+ * could disagree with it).
+ */
+function trimmed(cut: { sectionsTrimmedBy: Record<string, number> }): number {
+  return Object.values(cut.sectionsTrimmedBy).reduce((a, b) => a + b, 0);
+}
+
+// Every fixture here is invented. No wiki or game text appears in this repo.
+
+const PAGE = [
+  "'''Example Pass''' links Example Valley to the rest of Example Region.",
+  "",
+  "== Cataclysm ==",
+  "{{cata-section}}",
+  "The pass was buried under stone and the only way out became an aircraft.",
+  "",
+  "Travellers now take the flight instead.",
+  "",
+  "== Inhabitants ==",
+  "Example Person Gamma stands at the tunnel mouth.",
+].join("\n");
+
+describe("sections", () => {
+  test("a post-Wrath section is dropped, heading and all", () => {
+    const cut = dropPostWrath(PAGE);
+    const text = stripWikitext(cut.text);
+    expect(text).not.toContain("buried under stone");
+    expect(text).not.toContain("take the flight");
+    expect(text).not.toContain("Cataclysm");
+    expect(cut.sectionsDropped).toBe(1);
+  });
+
+  test("the lead and later sections survive", () => {
+    const text = stripWikitext(dropPostWrath(PAGE).text);
+    expect(text).toContain("links Example Valley");
+    expect(text).toContain("Example Person Gamma");
+    expect(text).toContain("Inhabitants");
+  });
+
+  test("a section template alone drops its section, heading text alone does too", () => {
+    const templateOnly = dropPostWrathSections("== Later ==\n{{legion-section}}\nLorem ipsum dolor.");
+    expect(templateOnly.text).not.toContain("Lorem ipsum");
+    expect(templateOnly.text).not.toContain("Later");
+    expect(templateOnly.sectionsDropped).toBe(1);
+
+    const headingOnly = dropPostWrathSections("== In Mists of Pandaria ==\nLorem ipsum dolor.");
+    expect(headingOnly.text.trim()).toBe("");
+    expect(headingOnly.sectionsDropped).toBe(1);
+  });
+
+  test("a subsection of a dropped section goes with it, a sibling does not", () => {
+    const page = [
+      "Lead lorem.",
+      "== Cataclysm ==",
+      "Body lorem.",
+      "=== Detail ===",
+      "Detail lorem.",
+      "== Inhabitants ==",
+      "Keeper lorem.",
+    ].join("\n");
+    const cut = dropPostWrathSections(page);
+    expect(cut.text).toContain("Lead lorem.");
+    expect(cut.text).toContain("Keeper lorem.");
+    expect(cut.text).not.toContain("Body lorem.");
+    expect(cut.text).not.toContain("Detail lorem.");
+    expect(cut.sectionsDropped).toBe(1);
+  });
+
+  test("pre-Wrath eras are untouched", () => {
+    const page = "== The Burning Crusade ==\n{{bc-section}}\nLorem ipsum dolor.";
+    expect(dropPostWrathSections(page)).toEqual({
+      text: page,
+      sectionsDropped: 0,
+      sectionsTrimmedBy: {},
+    });
+    const plain = "Example Valley is a starting area.";
+    expect(dropPostWrath(plain)).toEqual({
+      text: plain,
+      sectionsDropped: 0,
+      paragraphsDropped: 0,
+      sectionsTrimmedBy: {},
+    });
+  });
+
+  test("content removed in a later expansion is kept, with no note in its place", () => {
+    const cut = dropPostWrath("{{Removedwithcataclysm}}\n{{questbox|id=7}}\nLorem ipsum dolor.");
+    const text = stripWikitext(cut.text);
+    expect(text).toBe("Lorem ipsum dolor.");
+    expect(cut.sectionsDropped).toBe(0);
+    expect(cut.paragraphsDropped).toBe(0);
+  });
+});
+
+describe("paragraphs", () => {
+  const drops = [
+    "In Cataclysm the bridge is gone and the road runs south instead.",
+    "The camp was rebuilt with Cataclysm and the tents moved uphill.",
+    "World of Warcraft: Cataclysm adds a second quartermaster here.",
+    "After the Shattering the lake drained and the pier stands dry.",
+    "This is an upcoming zone; Deathwing is said to nest below it.",
+    "The beta build places a Cataclysm flight master on the ridge.",
+    "Cataclysm will move the quest giver to the far bank.",
+    "The quest giver will be moved to the far bank in the Cataclysm expansion.",
+  ];
+  for (const paragraph of drops) {
+    test(`drops: ${paragraph.slice(0, 34)}…`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(1);
+      expect(cut.text).toBe("Lead lorem.\n\nTail lorem.");
+    });
+  }
+
+  const keeps = [
+    "Deathwing is spoken of in the tavern, though nobody has seen him.",
+    "The Burning Legion burned this grove in the War of the Ancients.",
+    "Garrosh keeps a war camp on the ridge above the road.",
+    "Draenor is what the orcs called their world before it broke.",
+    "A caravan will arrive from the south once the road is cleared.",
+    "The 7th Legion recruiter stands beside the inn door.",
+  ];
+  for (const paragraph of keeps) {
+    test(`keeps: ${paragraph.slice(0, 34)}…`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(0);
+      expect(cut.text).toContain(paragraph);
+    });
+  }
+
+  test("`will` counts only near Cataclysm, not anywhere on the page", () => {
+    const far =
+      "Cataclysm is named in the first sentence of this paragraph, which then runs on " +
+      "for a good while about the road, the bridge, the ferry and the tolls collected " +
+      "at the crossing, before finally saying that a caravan will arrive at dusk.";
+    expect(dropPostWrathParagraphs(`Lead lorem.\n\n${far}`).paragraphsDropped).toBe(0);
+  });
+
+  test("an infobox field never decides a paragraph", () => {
+    const block = "{{npcbox|note=In Cataclysm this NPC moves}}\nExample Person Gamma tends the fire.";
+    const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${block}`);
+    expect(cut.paragraphsDropped).toBe(0);
+  });
+
+  test("a page can lose every paragraph, and the caller sees an empty strip", () => {
+    const cut = dropPostWrath("In Cataclysm this whole page describes another world.");
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(stripWikitext(cut.text)).toBe("");
+  });
+
+  test("sections are cut before paragraphs, so nothing is counted twice", () => {
+    const page = [
+      "Lead lorem.",
+      "",
+      "== In Cataclysm ==",
+      "In Cataclysm the bridge is gone.",
+      "",
+      "In Cataclysm the road runs south.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.sectionsDropped).toBe(1);
+    expect(cut.paragraphsDropped).toBe(0);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.");
+  });
+});
+
+describe("out-of-world sections", () => {
+  const DROPPED = [
+    "External links",
+    "Patch changes",
+    "Patches and hotfixes",
+    "Patch history",
+    "Patch notes",
+    "References",
+    "See also",
+    "Gallery",
+    "Videos",
+    "Video",
+    "Images",
+    "Media",
+    "Trivia",
+    "Notes and trivia",
+    "Speculation",
+    "Quotes",
+    "Quote",
+    "Dialogue",
+    "History",
+    "Background",
+    "Lore",
+    "In the RPG",
+    "RPG",
+    "In the Warcraft RPG",
+    "In the TCG",
+    "TCG",
+    "In the manga",
+    "In the comics",
+    "In the novels",
+    "In Hearthstone",
+    "In Warcraft III",
+    "In Warcraft II",
+    "In Warcraft I",
+    "Criticism",
+    "Reception",
+    "Development",
+    "Addons",
+    "Macros",
+    "Changes",
+  ];
+
+  for (const heading of DROPPED) {
+    test(`drops: ${heading}`, () => {
+      const page = [
+        "Example Valley is a starting area.",
+        "",
+        `== ${heading} ==`,
+        "Removable lorem ipsum dolor sit amet.",
+        "",
+        "== Inhabitants ==",
+        "Example Person Gamma tends the fire.",
+      ].join("\n");
+      const cut = dropPostWrath(page);
+      const text = stripWikitext(cut.text);
+      expect(text).not.toContain("Removable lorem");
+      expect(text).not.toContain(heading);
+      expect(text).toContain("Example Person Gamma");
+      expect(trimmed(cut)).toBe(1);
+      expect(cut.sectionsTrimmedBy[heading.toLowerCase()]).toBe(1);
+      expect(cut.sectionsDropped).toBe(0);
+    });
+  }
+
+  test("headings that are deliberately kept survive", () => {
+    const kept = [
+      "Notes",
+      "Tips",
+      "Tactics",
+      "Strategy",
+      "Abilities",
+      "Drops",
+      "Source",
+      "Objectives",
+      "Description",
+      "Progress",
+      "Completion",
+      "Rewards",
+      "Gains",
+      "Quests",
+      "Location",
+      "Past changes",
+      "Tips and tactics",
+    ];
+    for (const heading of kept) {
+      const page = `Lead lorem.\n\n== ${heading} ==\nKeepable lorem ipsum dolor.`;
+      const cut = dropPostWrath(page);
+      expect(trimmed(cut)).toBe(0);
+      expect(stripWikitext(cut.text)).toContain("Keepable lorem");
+      expect(stripWikitext(cut.text)).toContain(heading);
+    }
+  });
+
+  test("a subsection of a trimmed section goes with it", () => {
+    const page = [
+      "Lead lorem.",
+      "== History ==",
+      "Body lorem.",
+      "=== Later ===",
+      "Detail lorem.",
+      "==== Deeper ====",
+      "Deeper lorem.",
+      "== Inhabitants ==",
+      "Keeper lorem.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.text).toContain("Lead lorem.");
+    expect(cut.text).toContain("Keeper lorem.");
+    expect(cut.text).not.toContain("Body lorem.");
+    expect(cut.text).not.toContain("Detail lorem.");
+    expect(cut.text).not.toContain("Deeper lorem.");
+    expect(trimmed(cut)).toBe(1);
+  });
+
+  test("a kept section between two trimmed ones survives", () => {
+    const page = [
+      "== Trivia ==",
+      "First removable lorem.",
+      "== Objectives ==",
+      "Keepable lorem.",
+      "== External links ==",
+      "Second removable lorem.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Objectives\nKeepable lorem.");
+    expect(trimmed(cut)).toBe(2);
+    expect(cut.sectionsTrimmedBy).toEqual({ trivia: 1, "external links": 1 });
+  });
+
+  test("headings are normalised: case, trailing colon, odd spacing, markup", () => {
+    const variants = [
+      "==EXTERNAL LINKS==",
+      "==   External links:   ==",
+      "== external  links ==",
+      "== ''External links'' ==",
+      "== [[External links]] ==",
+    ];
+    for (const heading of variants) {
+      const cut = dropPostWrath(`Lead lorem.\n${heading}\nRemovable lorem.`);
+      expect(trimmed(cut)).toBe(1);
+      expect(cut.sectionsTrimmedBy["external links"]).toBe(1);
+      expect(stripWikitext(cut.text)).toBe("Lead lorem.");
+    }
+  });
+
+  test("a trimmed subsection does not swallow the section after it", () => {
+    const page = [
+      "== Inhabitants ==",
+      "Keeper lorem.",
+      "=== Trivia ===",
+      "Removable lorem.",
+      "== Objectives ==",
+      "Objective lorem.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    const text = stripWikitext(cut.text);
+    expect(text).toContain("Keeper lorem.");
+    expect(text).toContain("Objective lorem.");
+    expect(text).not.toContain("Removable lorem.");
+    expect(text).toContain("Objectives");
+    expect(trimmed(cut)).toBe(1);
+  });
+
+  test("a section whose body strips to nothing leaves no orphan heading", () => {
+    const page = [
+      "Lead lorem.",
+      "== Drops ==",
+      '{| class="example"',
+      "! Column",
+      "|}",
+      "== Inhabitants ==",
+      "Keeper lorem.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.\nInhabitants\nKeeper lorem.");
+    expect(trimmed(cut)).toBe(1);
+    expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
+  });
+
+  test("a heading with no body of its own but an occupied subsection survives", () => {
+    const page = ["== Abilities ==", "=== Example Strike ===", "Ability lorem."].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Abilities\nExample Strike\nAbility lorem.");
+    expect(trimmed(cut)).toBe(0);
+  });
+
+  test("an empty subsection of an occupied section still goes", () => {
+    const page = [
+      "== Abilities ==",
+      "Ability lorem.",
+      "=== Gallery ===",
+      "Removable lorem.",
+      "=== Example Strike ===",
+      "<!-- nothing here yet -->",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Abilities\nAbility lorem.");
+    expect(trimmed(cut)).toBe(2);
+    expect(cut.sectionsTrimmedBy).toEqual({ gallery: 1, "(empty)": 1 });
+  });
+
+  test("a section the paragraph rule empties leaves no orphan heading", () => {
+    const page = [
+      "Lead lorem.",
+      "",
+      "== Inhabitants ==",
+      "",
+      "In Cataclysm the camp is gone.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(trimmed(cut)).toBe(1);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.");
+  });
+
+  test("the lead is never trimmed by the heading rule", () => {
+    const page = "External links are mentioned in this lead about history and trivia.";
+    const cut = dropPostWrath(page);
+    expect(trimmed(cut)).toBe(0);
+    expect(stripWikitext(cut.text)).toBe(page);
+  });
+});
+
+describe("which cut emptied the page", () => {
+  // `dropOutOfWorldOnly` answers one question, asked only of a page that ended
+  // up with no prose at all: would anything have survived if only the
+  // out-of-world trim had run? Yes means the era cuts took the page's prose and
+  // the page is about a later world; no means it was a link farm or an infobox,
+  // and its title and ids are still this world's. `build.ts` drops the first and
+  // keeps the second as an empty row.
+
+  test("an infobox and a link list leave nothing, and no era cut was involved", () => {
+    const page = [
+      "{{itembox|patch=3.0.2|itemid=7311}}",
+      "",
+      "== External links ==",
+      "* [http://example.invalid/kappa Example Kappa entry]",
+    ].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toBe("");
+  });
+
+  test("a page the era section emptied still has prose without the era cuts", () => {
+    const page = ["== In Cataclysm ==", "The whole page is about the next world."].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toContain("next world");
+  });
+
+  test("an era page with a link section is still an era page", () => {
+    // The case a trim-only text has to get right: both cuts fire, and only one
+    // of them is evidence about the page's world.
+    const page = [
+      "== Cataclysm ==",
+      "{{cata-section}}",
+      "A zone that does not exist in this world.",
+      "",
+      "== External links ==",
+      "* [http://example.invalid/theta Example Theta entry]",
+    ].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toContain("does not exist");
+  });
+
+  test("a paragraph rule that empties a page counts as an era cut", () => {
+    const page = "In Cataclysm the camp is gone and nothing else is said here.";
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toBe(page);
+  });
+
+  test("the trim-only walk leaves era sections exactly where they were", () => {
+    const page = ["Lead lorem.", "", "== In Cataclysm ==", "Later lorem."].join("\n");
+    expect(dropOutOfWorldOnly(page)).toBe(page);
+    expect(dropPostWrathSections(page, { eraCuts: false }).sectionsDropped).toBe(0);
+  });
+});
+
+/**
+ * The rules an adversarial read of a built bundle added: paragraphs that
+ * describe the later world without naming the expansion. Every fixture is
+ * invented, as everywhere else in this file.
+ */
+describe("paragraphs that never name the expansion", () => {
+  const drops: [string, string][] = [
+    [
+      "rated battlegrounds",
+      "Honour is also earned in rated battlegrounds, which use a separate rating.",
+    ],
+    [
+      "rated battleground, singular",
+      "A rated battleground team of ten holds its rating across the week.",
+    ],
+    [
+      "an inline expansion tag",
+      "Example Person Gamma sells the tabard here (Expansion: Cataclysm) for a token.",
+    ],
+    [
+      "a playable worgen",
+      "The worgen became a playable race and start their run in the ruined city.",
+    ],
+    [
+      "a playable goblin",
+      "Goblins are playable from the island, and the trial run ends at the harbour.",
+    ],
+    [
+      "Mastery as a planned stat",
+      "We plan to give every specialisation a Mastery, so the third talent tree bonus goes.",
+    ],
+    [
+      "Mastery as a new stat",
+      "Mastery is a new stat found on armour, replacing the older combat ratings.",
+    ],
+    [
+      "Mastery, planned in the other voice",
+      "Mastery will be a new passive bonus, and we're planning to tune it before release.",
+    ],
+    [
+      "archaeology the profession",
+      "Archaeology is trained in the capital and raises to 525 like any secondary skill.",
+    ],
+  ];
+  for (const [name, paragraph] of drops) {
+    test(`drops: ${name}`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(1);
+      expect(cut.text).toBe("Lead lorem.\n\nTail lorem.");
+    });
+  }
+
+  const keeps: [string, string][] = [
+    [
+      "an archaeology team is quest flavour",
+      "The archaeology team at the camp wants the tablets brought back before dusk.",
+    ],
+    [
+      "an archaeology expedition is quest flavour",
+      "An expedition of archaeology students is digging beside the road.",
+    ],
+    [
+      "a dig site is a place a character walks to",
+      "The archaeology dig site west of the camp was abandoned before the war.",
+    ],
+    ["Stance Mastery is a talent in this world", "Stance Mastery lets the warrior keep rage on a swap."],
+    [
+      "Tactical Mastery is a talent in this world",
+      "Tactical Mastery is three points deep in the arms tree and keeps rage on a stance change.",
+    ],
+    [
+      "battlegrounds without the rating",
+      "Battlegrounds are entered from the master beside the flightpath, or by the queue.",
+    ],
+    ["a worgen that is not playable", "A pack of worgen prowls the wood after dark and will not parley."],
+    [
+      "a goblin that is not playable",
+      "The goblin banker keeps a stall at the docks and charges for the privilege.",
+    ],
+    ["an expansion mentioned in prose", "The expansion of the mine reached the second seam last spring."],
+  ];
+  for (const [name, paragraph] of keeps) {
+    test(`keeps: ${name}`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(0);
+      expect(cut.text).toContain(paragraph);
+    });
+  }
+
+  test("a Speedbarge line goes and the rest of the list stays", () => {
+    // The block is a list of subzones, not a paragraph: dropping it whole would
+    // take every other subzone with it.
+    const page = [
+      "Lead lorem.",
+      "",
+      "* Example Camp, on the eastern rim",
+      "* The Speedbarge, moored in the water below",
+      "* Example Post, at the southern gate",
+    ].join("\n");
+    const cut = dropPostWrathParagraphs(page);
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.text).toContain("Example Camp");
+    expect(cut.text).toContain("Example Post");
+    expect(cut.text).not.toContain("Speedbarge");
+  });
+
+  test("a block that is nothing but the dropped line is not emitted", () => {
+    const cut = dropPostWrathParagraphs("Lead lorem.\n\n* The Speedbarge is moored below.");
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.text).toBe("Lead lorem.");
+  });
+
+  test("the prefilter does not gate the rules on the word Cataclysm", () => {
+    // The rules above exist because a page can describe the later world without
+    // ever naming it. A prefilter that still asked for `cataclysm` would make
+    // every one of them pass its unit test and never fire on a real page.
+    for (const page of [
+      "Lead lorem.\n\n* The Speedbarge is moored below.",
+      "Lead lorem.\n\nHonour is also earned in rated battlegrounds each week.",
+      "Lead lorem.\n\nArchaeology is trained in the capital like any secondary skill.",
+      "Lead lorem.\n\nMastery is a new stat found on armour from this point on.",
+      "Lead lorem.\n\nThe worgen became a playable race after the wall fell.",
+    ]) {
+      expect(page).not.toMatch(/cataclysm|shattering|deathwing/i);
+      expect(dropPostWrathParagraphs(page).paragraphsDropped).toBe(1);
+    }
+  });
+});
+
+/**
+ * The April 2010 Cataclysm class previews, which the wiki pasted into every
+ * class page under standardised headings. Real headings, invented prose.
+ */
+describe("class-preview sections", () => {
+  const LEAD = "'''Example Class''' is one of the example callings.";
+  const PREVIEW = "An ability that no trainer of this world teaches, lorem ipsum.";
+  const TALENT = "Example Talent Alpha reduces the cost of the example strike.";
+
+  const headings = [
+    "New Rogue Abilities",
+    "New Mage Abilities",
+    "Changes to Abilities and Mechanics",
+    "New Talents and Talent Changes",
+    "Mastery",
+    "Mastery Passive Talent Tree Bonuses",
+    "Cataclysm Class Preview: Rogue",
+    "Cataclysm Changes",
+    "Cataclysm Preview",
+  ];
+  for (const heading of headings) {
+    test(`== ${heading} == is an era cut, not an out-of-world trim`, () => {
+      const page = [LEAD, "", `== ${heading} ==`, PREVIEW, "", "== Talents ==", TALENT].join("\n");
+      const cut = dropPostWrath(page);
+      const text = stripWikitext(cut.text);
+      expect(text).not.toContain("no trainer of this world");
+      expect(text).not.toContain(heading);
+      // The Wrath talent section beside it is untouched.
+      expect(text).toContain("Example Talent Alpha");
+      expect(text).toContain("Talents");
+      // Counted as an era cut. The out-of-world trim is a different question
+      // and a different counter.
+      expect(cut.sectionsDropped).toBe(1);
+      expect(trimmed(cut)).toBe(0);
+    });
+  }
+
+  test("a heading written with a colon or bold markup still matches", () => {
+    const page = [LEAD, "", "== '''New Rogue Abilities''': ==", PREVIEW].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).not.toContain("no trainer of this world");
+  });
+
+  test("headings a 3.3.5 class page really has are left alone", () => {
+    for (const heading of [
+      "Talents",
+      "Abilities",
+      "Rogue abilities",
+      "Talent trees",
+      "Stance Mastery",
+      "Tactical Mastery",
+      "Mastery of the elements",
+      "Mastery bonus of the example tree",
+    ]) {
+      const cut = dropPostWrath([LEAD, "", `== ${heading} ==`, TALENT].join("\n"));
+      expect(`${heading}: ${cut.sectionsDropped}`).toBe(`${heading}: 0`);
+      expect(stripWikitext(cut.text)).toContain("Example Talent Alpha");
+    }
+  });
+
+  test("the preview's own framing sentence goes even without its heading", () => {
+    const page = [
+      TALENT,
+      "",
+      "As development on Cataclysm continues, the example strike is being reworked.",
+      "",
+      "The Cataclysm class preview said the example strike would be a talent.",
+      "",
+      "Example Talent Beta shortens the example recovery.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(2);
+    const text = stripWikitext(cut.text);
+    expect(text).toContain("Example Talent Alpha");
+    expect(text).toContain("Example Talent Beta");
+    expect(text).not.toContain("being reworked");
+    expect(text).not.toContain("would be a talent");
+  });
+});

@@ -78,7 +78,7 @@ const rosterEntrySchema = z
     billing: z.enum(["free", "paid"]).optional(),
     /** An objective puts the entry outside the policy (`policyExclusion`). */
     objective: z.string().min(1).optional(),
-    // The evidence budget and the idle axis (ADR-0040). Validated against the
+    // The evidence budget and the idle axis (ADR-0043). Validated against the
     // projection's own exported key sets, so the two parsers cannot drift on
     // what a tier IS even while they stay deliberate twins on everything else.
     // Optional HERE and required in the supervisor's own parser, deliberately:

@@ -143,9 +143,37 @@ export function bundleHasQuest(db: Database): boolean {
   return (row?.n ?? 0) > 0;
 }
 
+/**
+ * One row per (title, ns), the bundle's central invariant.
+ *
+ * The dump splits a long page history into several `<page>` blocks; a parser
+ * that took a block for a page silently wrote thousands of stale duplicate rows
+ * competing with current text in the FTS index. Returns the
+ * distinct key count so the build can record it, and throws otherwise, so that
+ * class of bug fails the build instead of shipping.
+ */
+export function assertUniquePages(db: Database): number {
+  const row = db
+    .query<{ rows: number; keys: number }, []>(
+      "SELECT count(*) AS rows, count(DISTINCT title || char(31) || ns) AS keys FROM pages",
+    )
+    .get();
+  const rows = row?.rows ?? 0;
+  const keys = row?.keys ?? 0;
+  if (rows !== keys) {
+    throw new Error(
+      `pages holds ${rows} rows for ${keys} distinct (title, ns): a page was written more ` +
+        "than once, so search would rank its stale text against its current text",
+    );
+  }
+  return keys;
+}
+
 /** Indexes that only pay off once the table is full. */
 export function createIndexes(db: Database): void {
-  db.run("CREATE INDEX pages_title ON pages(title)");
+  // UNIQUE is the standing guard behind `assertUniquePages`, which runs first
+  // and says what went wrong in words.
+  db.run("CREATE UNIQUE INDEX pages_title_ns ON pages(title, ns)");
   db.run("CREATE INDEX pages_ns ON pages(ns)");
   db.run("CREATE INDEX page_coords_page_id ON page_coords(page_id)");
   db.run("CREATE INDEX page_ids_page_id ON page_ids(page_id)");
@@ -217,7 +245,12 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
       begin();
       const id = nextId++;
       insertPage.run(id, title, ns, text, text.length);
-      insertFts.run(id, title, text);
+      // A page with no prose is a row but not an FTS document. It is in the
+      // bundle to be found by its exact title, its ids and its infobox fields;
+      // indexing its title alone would let bm25 rank it above a page that has
+      // something to say, because a document with no body is the shortest
+      // document there is.
+      if (text.length > 0) insertFts.run(id, title, text);
       if (coords !== undefined) {
         for (const c of coords) {
           insertCoord.run(id, c.zone ?? null, c.x, c.y, c.raw);

@@ -149,6 +149,18 @@ export interface ComparabilityView {
    */
   wikiCoords?: boolean;
   /**
+   * Which reference bundle the run read, off the bundle's own `meta` table
+   * (ADR-0033). An annotation: a text-changing rebuild is paired with a harness
+   * minor bump, which is what actually groups. Null when the run had no bundle;
+   * absent on runs stamped before the field existed.
+   */
+  wikiBundle?: {
+    schemaVersion: string | null;
+    builtAt: string | null;
+    source: string | null;
+    eraCutoff: string | null;
+  } | null;
+  /**
    * The episode tier the run was launched under, or null for a run assembled
    * flag-by-flag. Absent on runs stamped before the field existed.
    */
@@ -897,7 +909,7 @@ export interface ApiError {
  */
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
-/** A rung of the evidence ladder (ADR-0040); mirrors `TIERS` in `runner/src/models.ts`. */
+/** A rung of the evidence ladder (ADR-0043); mirrors `TIERS` in `runner/src/models.ts`. */
 export type TierView = "t0" | "t1" | "t2";
 
 /** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
@@ -978,12 +990,12 @@ export interface ModelRowView {
   /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
   harness: HarnessView;
   /**
-   * Free or paid (`runner/src/model-cost.ts`). Since ADR-0040 this says only
+   * Free or paid (`runner/src/model-cost.ts`). Since ADR-0043 this says only
    * where a run may physically execute — the account class and the rate-limit
    * key. It buys no runs and costs none: that is the tier.
    */
   billing: "free" | "paid";
-  /** The tier the config admitted this model to (ADR-0040). */
+  /** The tier the config admitted this model to (ADR-0043). */
   declaredTier: TierView;
   /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
   tier: TierView;
@@ -1037,7 +1049,7 @@ export interface ModelsResponse {
     series: string | null;
     /** The paid throttle when the file turns it on; null is no split. Only a cap — never a budget. */
     paid: { maxConcurrent: number } | null;
-    /** The ladder itself (ADR-0040), so a page can name a tier's budget without hardcoding it. */
+    /** The ladder itself (ADR-0043), so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per

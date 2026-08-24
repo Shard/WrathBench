@@ -33,7 +33,7 @@ import { join } from "node:path";
 import { archiveIfNoResponses } from "./archive";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
-import { openWikiBundle } from "./wiki";
+import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
 import {
@@ -259,6 +259,9 @@ async function main(): Promise<void> {
   if (wiki === undefined) {
     console.error(`warning: wiki bundle not found at ${config.wikiBundle}; search_reference will report unavailable`);
   }
+  // What was *in* that file, for the tuple: the config records only the path,
+  // and the path holds a different reference surface after every rebuild.
+  const wikiBundle = wikiBundleMeta(wiki);
 
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
@@ -309,7 +312,7 @@ async function main(): Promise<void> {
   // tuple. Fetched fresh on every launch and every resume-restamp, so a
   // resumed run's tuple names the build it is actually resuming against.
   const serverBuild = await fetchServerBuild(config.moduleUrl);
-  const comparability = comparabilityOf(config, version, serverBuild);
+  const comparability = comparabilityOf(config, version, serverBuild, wikiBundle);
   if (!resumed) {
     trajectory.writeMeta({
       runId: config.runId,

@@ -453,7 +453,7 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
   });
 
-  test("a target is the tier and only the tier — billing buys no runs and costs none (ADR-0040)", () => {
+  test("a target is the tier and only the tier — billing buys no runs and costs none (ADR-0043)", () => {
     // The same tier means the same budget whoever is paying. This is the whole
     // point of the split: billing says where a run may execute, never how many.
     for (const model of ["vendor/big", "vendor/big:free"]) {

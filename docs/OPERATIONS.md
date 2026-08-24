@@ -84,7 +84,7 @@ accounts    { pool: [...], paid: [...], local: [...] } — the account classes (
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            Never an account. Two scheduling axes (ADR-0040):
+            Never an account. Two scheduling axes (ADR-0043):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
               one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
@@ -108,7 +108,7 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
             same sentence a free model's budget is written in.
             Billing is derived per model (free slug / LAN apiBase / claude-code / allowlist ->
-            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Since ADR-0040
+            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Since ADR-0043
             billing says only WHERE a run may execute — the account class and the rate-limit key.
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
@@ -544,7 +544,7 @@ but does climb the ladder, so a dead provider costs at most ten launches over
 ~10 hours before it is retired. A manual pool job (`queue` entry without an account) always
 outranks the policy for a POOL account; add one to force a specific run (an
 `e360` for a model that has not climbed needs `tier: "t2"` on its roster entry
-as well). How many runs a model gets is its `tier` and nothing else (ADR-0040).
+as well). How many runs a model gets is its `tier` and nothing else (ADR-0043).
 
 ### Ad-hoc launches still work
 
