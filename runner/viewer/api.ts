@@ -688,6 +688,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 enabled: c.enabled,
                 runsPerCell: c.runsPerCell,
                 cells: c.cells.map((x) => x.id),
+                // No `eligible` predicate, deliberately: the scheduler passes
+                // one (`verdict !== "blocked"`) so it does not launch a cell
+                // against a dead endpoint, but `blocked` also covers `running`
+                // and `paused`, which are properties of this second, not of the
+                // sweep. Wired here, a model's count and the complete flag
+                // below would flicker with the live board on every poll. This
+                // page answers what the config asked for, so it counts every
+                // named model — health is the fleet strip's question.
                 models: campaignModels(c, catalog).length,
                 // Ended runs only, which is deliberately NOT the question the
                 // scheduler asks. The scheduler counts a live probe as done so
