@@ -193,19 +193,6 @@ and status.
     talent and the firsts are still unwritten; the dashboard reads none of them yet.
 
 
-60. **The map canvas still has two costs that scale with the thing being drawn**
-    (2026-08-24, found while fixing the replay recursion). Both are bounded and
-    neither is felt today, so they are recorded rather than fixed. (1) Zoomed out
-    below the tile threshold, `drawGrid` strokes every visible cell of the 64x64
-    world — up to 4096 `strokeRect` calls per redraw, which a pan turns into 4096
-    per frame. A single stroked path, or simply not drawing the lattice below a
-    scale, is the fix. (2) The replay route is one `lineTo` per recorded sample:
-    the prefix is now cached and rebuilt only when the cursor or map moves
-    (`MapPage.tsx`), but a six-hour track still emits thousands of segments per
-    frame while the operator drags. Decimating to screen resolution — drop points
-    closer than a pixel apart under the current view — is the same picture for a
-    fraction of the path. Unblocked by a run long enough to feel it; the tracks we
-    have are minutes, not hours.
 
 61. **Browser back into a replay restarts it from the beginning** (2026-08-24, a
     consequence of making `/map` and `/map?run=<id>` the only two URL states).
@@ -389,3 +376,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
 - 70 — 2026-08-24 — withdrawn, not fixed: the item described intentional behaviour on a premise the code contradicts. The ladder is per roster entry (`matchesRoster` is model + effort), so no model's failure can cool another. It is climbed ONLY by a stillborn launch or `adapter-error` (`NO_PROGRESS_REASONS`), both endpoint properties — a probe that runs its full episode and achieves nothing ends `episode-limit` or `idle` and does not climb it at all. So the item's own revisit trigger, "a campaign with a harder task starts retiring models that were fine on e90", cannot occur: task difficulty is invisible to the ladder. Sharing it across lanes is correct and needs no lane key
 - 64 — 2026-08-24 — 6287b0a — `/api/info` carries `dashboardBuild` (Vite's fingerprinted entry name, parsed from index.html, cached on mtime); the SPA keeps the first id it sees — its own, since index.html is `no-store` — and shows a `new build — reload` button beside the status badge when a later poll disagrees. The item's other half was ALREADY true: `staticFile` has served index.html `no-store` all along, verified against the live viewer
+- 60 — 2026-08-24 — dec01d2 — both halves. The fallback lattice batches into one stroked path of at most 130 segments (below `TILE_MIN_PX` nothing is drawn into a cell, so nothing can be covered; the per-cell arm above the threshold is untouched because there a drawn tile must suppress its own outline). The replay route is decimated to screen resolution in world units, with the tolerance taken from the scale alone so a pan reuses the cache and only a zoom or a new prefix rebuilds it. Geometry lives in `mapview.ts` as pure functions with 13 tests; the decimation measures against the last KEPT point, which three of them catch
