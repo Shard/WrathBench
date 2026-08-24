@@ -41,6 +41,7 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 | `/results` | what a level costs, per model per harness series |
 | `/ladder` | the rungs each model has reached (ADR-0018) |
 | `/models` | the roster with the scheduler's verdict on each entry |
+| `/campaigns` | probe campaign coverage: cells swept, by how many models (ADR-0041) |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 

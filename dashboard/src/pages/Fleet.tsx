@@ -63,7 +63,7 @@ export default function Fleet() {
       <Show when={fleet.latest !== undefined && serverBanner(fleet.latest.server)}>
         {(b) => (
           <Show when={b().tone !== "dim"}>
-            <div class={b().tone === "bad" ? "banner bad" : "banner warn"}>{b().text}</div>
+            <div class={`banner ${b().tone}`}>{b().text}</div>
           </Show>
         )}
       </Show>
