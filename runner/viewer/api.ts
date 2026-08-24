@@ -186,6 +186,33 @@ function staticFile(root: string, rel: string): Response | null {
 }
 
 /**
+ * The dashboard build on disk, as Vite's fingerprinted entry filename.
+ *
+ * Vite hashes chunk names and empties `dist/` on every build, so that name
+ * changes exactly when the bundle does — which makes it a build id nobody has
+ * to remember to stamp. Parsed out of `index.html` rather than by listing
+ * `assets/` (which holds lazy chunks too, in no defined order).
+ *
+ * Cached on the file's mtime: `/api/info` is polled by every open tab, and a
+ * build id that reads the page off disk each time would be the cheapest route
+ * to a thundering herd on a rebuild.
+ */
+function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: string | null }): string | null {
+  if (dir === undefined) return null;
+  const file = join(dir, "index.html");
+  if (!existsSync(file)) return null;
+  const mtime = statSync(file).mtimeMs;
+  if (mtime === cache.mtime) return cache.id;
+  const html = readFileSync(file, "utf8");
+  // The entry script; `null` if the page has none, which is a build we cannot
+  // identify rather than an error — the field is nullable for exactly that.
+  const id = /src="\/assets\/([^"]+\.js)"/.exec(html)?.[1] ?? null;
+  cache.mtime = mtime;
+  cache.id = id;
+  return id;
+}
+
+/**
  * How stale a run's files may be and still be read as holding its account.
  *
  * This is `run-roster.ts`'s `LIVE_TRAJECTORY_MS`, not `runs.ts`'s
@@ -403,6 +430,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
   const dashboardDir = opts.dashboardDir;
+  /** Per-handle, so a test's temp dir never inherits another's build id. */
+  const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
@@ -751,6 +780,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         service: "wrathbench-viewer",
         publicMode,
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
+        dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
         now: Date.now(),
       };
