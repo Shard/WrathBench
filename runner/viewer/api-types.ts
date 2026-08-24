@@ -120,6 +120,14 @@ export interface RunRow {
   shakeout: string | null;
   /** The operator objective this run was steered with (ADR-0024), or null. */
   objective: string | null;
+  /**
+   * The probe campaign that commissioned this run and which of its cells it is
+   * (ADR-0041), or null on anything else. Read off the run's own config, which
+   * is what lets a campaign's results outlive the deletion of its config entry:
+   * this page is built from the run directory, not from the roster.
+   */
+  campaign: string | null;
+  cell: string | null;
   /** An extra run (ADR-0034): past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
