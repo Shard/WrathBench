@@ -74,6 +74,9 @@ import {
   unpinnedCampaigns,
   pinnedCampaignJobs,
   probeRunsOf,
+  tripsBreaker,
+  BREAKER_WINDOW_MS,
+  BREAKER_TRIPS,
 } from "./run-fleet";
 import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
@@ -397,6 +400,18 @@ describe("roster policy", () => {
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-thing" as never }])).toThrow(/unknown driver/);
   });
 
+  test("the respawn breaker trips on repeated short-lived exits inside the window, and only then", () => {
+    const NOW = 10_000_000;
+    // Two short-lived exits: not a loop yet — a flaky provider gets its retry.
+    expect(tripsBreaker([NOW - 120_000, NOW - 60_000], NOW)).toBe(false);
+    // Three inside the window: the sonnet-low shape — every 60s tick, forever.
+    expect(tripsBreaker([NOW - 180_000, NOW - 120_000, NOW - 60_000], NOW)).toBe(true);
+    // Three, but history: exits older than the window never trip it.
+    expect(tripsBreaker([NOW - BREAKER_WINDOW_MS - 3, NOW - BREAKER_WINDOW_MS - 2, NOW - BREAKER_WINDOW_MS - 1], NOW)).toBe(false);
+    // Exactly at the threshold count, exactly at the window edge: still in.
+    expect(tripsBreaker(Array.from({ length: BREAKER_TRIPS }, (_, i) => NOW - BREAKER_WINDOW_MS + i), NOW)).toBe(true);
+  });
+
   test("a character the runner would refuse is a config error at load, not a respawn loop", () => {
     // `Fleetsonnetlo` (13 chars) passed the fleet, failed the runner's Zod
     // boundary every launch, and the roster exited 0 — so the policy retried
@@ -406,6 +421,9 @@ describe("roster policy", () => {
     );
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "X" }])).toThrow(/character/);
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Benchy1" }])).toThrow(/character/);
+    // The other rule the server enforces: CHAR_NAME_THREE_CONSECUTIVE (create
+    // result 98) — the same triple that rolled back the 0.5 worldserver deploy.
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleettt" }])).toThrow(/three identical/);
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleetsonnlo" }])).not.toThrow();
   });
 

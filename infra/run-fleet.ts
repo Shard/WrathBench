@@ -78,7 +78,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
-import { watchdogOverrideSchema } from "../runner/src/config";
+import { CHARACTER_NAME_RULE, isValidCharacterName, watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
 import { campaignWork, parseCampaigns, workDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
@@ -697,13 +697,13 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
           `a local/self-hosted apiBase is exempt`,
       );
     }
-    // The runner's boundary (runner/src/config.ts) and the game's own naming
-    // rules, enforced here so a bad name is a config refusal at load, not a
-    // ZodError the roster retries every tick: `Fleetsonnetlo` (13 chars)
-    // respawn-looped for two hours on 2026-08-24 because nothing between the
-    // file and the runner ever looked at the name.
-    if (e.character !== undefined && (typeof e.character !== "string" || !/^[A-Za-z]{2,12}$/.test(e.character))) {
-      fail(`${where}: entry ${e.model}: character must be 2-12 letters (got ${JSON.stringify(e.character)})`);
+    // The game's naming rules, enforced where the name is written so a bad
+    // one is a config refusal at load, not a ZodError the roster retries
+    // every tick: `Fleetsonnetlo` (13 chars) respawn-looped for two hours on
+    // 2026-08-24 because nothing between the file and the runner ever looked
+    // at the name. One predicate for every boundary (runner/src/config.ts).
+    if (e.character !== undefined && (typeof e.character !== "string" || !isValidCharacterName(e.character))) {
+      fail(`${where}: entry ${e.model}: ${CHARACTER_NAME_RULE} (got ${JSON.stringify(e.character)})`);
     }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
@@ -1851,6 +1851,26 @@ export function jobJsonlPath(job: string, stamp: string): string {
 }
 export function jobLogPath(job: string, stamp: string): string {
   return join(RUNS_DIR, `fleet-${job}-${stamp}.log`);
+}
+
+/**
+ * Respawn circuit breaker (2026-08-24). A job whose process keeps dying
+ * within seconds of spawning leaves no run artifact, so nothing else cools
+ * it: the defer ladder reads runs from disk, and a launch that failed before
+ * `run.sqlite` existed is invisible to it. `sonnet-low` respawned every 60s
+ * tick for two hours on a character name the runner refuses — the name is
+ * validated at config load now, but the MECHANISM outlives any one cause
+ * (a bad flag, a broken driver binary, the next config gap). Three
+ * short-lived exits inside the window hold the job for one window, named in
+ * the log with a pointer at the job log that says why it is dying. In-memory
+ * only, deliberately: a supervisor restart forgets everything, and a real
+ * crash loop re-trips the breaker within three ticks.
+ */
+export const BREAKER_SHORT_LIVED_MS = 90_000;
+export const BREAKER_WINDOW_MS = 10 * 60_000;
+export const BREAKER_TRIPS = 3;
+export function tripsBreaker(shortLivedExits: readonly number[], now: number): boolean {
+  return shortLivedExits.filter((t) => now - t <= BREAKER_WINDOW_MS).length >= BREAKER_TRIPS;
 }
 
 /**
@@ -3530,6 +3550,10 @@ async function main(): Promise<void> {
   let policyIdle: string | undefined;
   const session = { finished: 0, ok: 0, retried: 0 };
   const spawnedNames = new Set<string>();
+  /** Exit timestamps of short-lived job processes, per name (the breaker's memory). */
+  const shortLivedExits = new Map<string, number[]>();
+  /** name -> hold-until, so a held job logs once per hold, not once per tick. */
+  const breakerHolds = new Map<string, number>();
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
@@ -3768,6 +3792,26 @@ async function main(): Promise<void> {
   });
 
   const spawnJob = (spawn: JobSpawn): void => {
+    {
+      // The breaker, before anything is written or spawned. Handing the
+      // account back via `pending` is what makes a hold a hold: the planner
+      // re-picks next tick, lands here again, and stays quiet until the
+      // window lapses.
+      const now = Date.now();
+      const exits = (shortLivedExits.get(spawn.name) ?? []).filter((t) => now - t <= BREAKER_WINDOW_MS);
+      shortLivedExits.set(spawn.name, exits);
+      if (tripsBreaker(exits, now)) {
+        const until = breakerHolds.get(spawn.name);
+        if (until === undefined || now >= until) {
+          breakerHolds.set(spawn.name, now + BREAKER_WINDOW_MS);
+          const detail = `${exits.length} spawns died within ${Math.round(BREAKER_SHORT_LIVED_MS / 1000)}s of launch in the last ${Math.round(BREAKER_WINDOW_MS / 60_000)}m`;
+          say(`job ${spawn.name}: crash loop — ${detail}; holding ${Math.round(BREAKER_WINDOW_MS / 60_000)}m (${jobLogPath(spawn.name, stampToday)} says why)`);
+          record({ job: spawn.name, event: "breaker-hold", detail });
+        }
+        pending.delete(spawn.name);
+        return;
+      }
+    }
     const entries = fillEntries(spawn, stampToday);
     const rosterPath = jobRosterPath(spawn.name, stampToday);
     mkdirSync(RUNS_DIR, { recursive: true });
@@ -3800,6 +3844,12 @@ async function main(): Promise<void> {
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
+      // The breaker's input: a process that died this fast launched nothing.
+      if (Date.now() - lp.spawnedAt < BREAKER_SHORT_LIVED_MS) {
+        const arr = shortLivedExits.get(spawn.name) ?? [];
+        arr.push(Date.now());
+        shortLivedExits.set(spawn.name, arr);
+      }
     });
     procs.set(spawn.name, lp);
     sets.running.add(spawn.name);
