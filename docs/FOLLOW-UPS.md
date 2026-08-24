@@ -159,6 +159,26 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
+77. **The openai-compatible adapter samples state only between turns** (2026-08-24,
+    log sweep of the first 0.5 runs). A 485s LM Studio call left the qwen3 run an
+    8.1-minute observability blackout: no state row, no XP signal, ~9% of the
+    episode invisible. `adapter-claude.ts:737` grew an independent `setInterval`
+    ticker for exactly this ("claude-code turns can run long"); the openai path
+    still calls `sampleState()` once per turn from `loop.ts`, serialized behind
+    the in-flight HTTP request. Next action: port the ticker pattern to the
+    openai-compatible path (or hoist it into the loop so both drivers share it).
+    Matters most for the local box, whose turns are inference-bound and slow.
+
+78. **deepseek's prompt-cache hits thrash on the paid lane** (2026-08-24, same
+    sweep). `usage.cached_tokens` alternates 0 <-> 5-13k across near-identical
+    ~13-17k-token prompts, and `prompt_tokens` drops mid-run consistent with a
+    context trim resetting the prefix — a ~2x per-call cost swing. Absolute cost
+    is small today (~$0.05/35min, on the ~$0.07 episode estimate), which is why
+    this is a follow-up: measure whether the trim boundary can preserve the
+    prefix before the next paid tier expansion. The cache-review note assumed
+    "OpenAI lane prefix stable"; this run says otherwise for deepseek via
+    OpenRouter (provider routing may also explain it — distinguish first).
+
 ## Wiki
 
 65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
