@@ -3869,6 +3869,21 @@ namespace WrathBench
                         spells += SpellJson(spellId);
                     }
                     spells += "]";
+                    // Upstream quirk (AzerothCore Player::_LoadSpells,
+                    // Player.cpp:2852 at our pinned commit): the cooldown
+                    // count is written as m_spellCooldowns.size() BEFORE the
+                    // loop skips !needSendToClient rows, and unlike the spell
+                    // count above it is never fixed up with a data.put. A
+                    // character holding a category cooldown therefore gets a
+                    // packet declaring more entries than it carries (observed
+                    // live: Hearthstone -> declared 2, carried 1). The loop
+                    // below is correct anyway because it trusts the buffer,
+                    // not the declared count: the `p.rpos() + 16 <= p.size()`
+                    // guard (16 = one full tuple) stops at the actual end of
+                    // the packet, and cooldowns are its final field, so an
+                    // over-declared count yields exactly the rows present —
+                    // no overrun, no partial tuple, no decodeError. Keep that
+                    // guard if this decode is ever tightened.
                     uint16 cdCount = 0;
                     if (p.rpos() + 2 <= p.size()) p >> cdCount;
                     std::string cds = "[";
