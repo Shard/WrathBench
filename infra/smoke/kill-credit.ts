@@ -160,7 +160,7 @@ function trackEvent(e: any) {
         if (o.fields.maxHealth !== undefined) self.maxHealth = o.fields.maxHealth;
         for (const [k, v] of Object.entries(o.fields)) {
           const m = /^quest(\d+)Id$/.exec(k);
-          if (m) questLog.set(+m[1], v as number);
+          if (m) questLog.set(+m[1]!, v as number);
         }
       }
     }

@@ -23,7 +23,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-quest-${crypto.randomUUID()}`;
 // Fresh name per run: the arc starts at level 1 with an empty quest log, and
 // the realm caps characters per account at ten.
-const CHARACTER = "Sq" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]).slice(-8);
+const CHARACTER = "Sq" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)
 const QUEST_KILL = 7; //   Kobold Camp Cleanup (kill 8, entry 6)

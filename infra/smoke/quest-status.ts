@@ -37,7 +37,7 @@ const WS = `ws://${HOST}:${PORT}`;
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `probe-qstatus-${crypto.randomUUID()}`;
-const CHARACTER = "Bs" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]).slice(-8);
+const CHARACTER = "Bs" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)
@@ -96,7 +96,7 @@ function trackEvent(e: any) {
     if ((o.update === "create" || o.update === "values") && o.guid === selfGuid && o.fields) {
       for (const [k, v] of Object.entries(o.fields)) {
         const m = /^quest(\d+)Id$/.exec(k);
-        if (m) questLog.set(+m[1], v as number);
+        if (m) questLog.set(+m[1]!, v as number);
       }
     }
   }
