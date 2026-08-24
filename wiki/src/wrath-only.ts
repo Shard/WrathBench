@@ -312,13 +312,21 @@ export function dropPostWrath(wikitext: string): WrathOnlyResult {
  * One walker, two reasons, two counters. The era check runs first, so a heading
  * that is both never increments both; a heading inside an already-dropped
  * section is not counted at all, since its section is what went.
+ *
+ * `opts.eraCuts: false` runs the same walker with the era half switched off, so
+ * a caller can ask what the out-of-world trim alone would leave. That is the
+ * question `dropOutOfWorldOnly` exists to answer; nothing else should need it.
  */
-export function dropPostWrathSections(wikitext: string): {
+export function dropPostWrathSections(
+  wikitext: string,
+  opts: { eraCuts?: boolean } = {},
+): {
   text: string;
   sectionsDropped: number;
   sectionsTrimmed: number;
   sectionsTrimmedBy: Record<string, number>;
 } {
+  const eraCuts = opts.eraCuts ?? true;
   const lines = wikitext.split("\n");
   const drop = new Array<boolean>(lines.length).fill(false);
   let current: { level: number } | undefined;
@@ -335,7 +343,7 @@ export function dropPostWrathSections(wikitext: string): {
       const text = heading[2] ?? "";
       if (current !== undefined && level <= current.level) current = undefined;
       pending = undefined;
-      if (headingIsPostWrath(text.replace(/\[\[|\]\]/g, "").trim())) {
+      if (eraCuts && headingIsPostWrath(text.replace(/\[\[|\]\]/g, "").trim())) {
         current = { level };
         sectionsDropped++;
         drop[i] = true;
@@ -359,7 +367,7 @@ export function dropPostWrathSections(wikitext: string): {
     }
     // `{{cata-section}}` sitting just under a heading marks that heading's
     // section — and the heading itself, which is already behind us.
-    if (pending !== undefined && lines[i]!.includes("{{")) {
+    if (eraCuts && pending !== undefined && lines[i]!.includes("{{")) {
       let scanned = 0;
       for (let j = pending.index + 1; j <= i && scanned < MARKER_WINDOW; j++) scanned += lines[j]!.length;
       if (scanned < MARKER_WINDOW) {
@@ -404,6 +412,26 @@ export function dropPostWrathSections(wikitext: string): {
  * look occupied. The lead — everything before the first heading — is never
  * touched by this rule.
  */
+/**
+ * The page with **only** the out-of-world cuts applied: the heading drop set and
+ * the empty-section sweep, the era rules switched off.
+ *
+ * This is the answer to "which cut emptied this page?", and it is asked only of
+ * a page that ended up with no prose at all. If this text still has prose, the
+ * era cuts are what took it and the page is about a later world; if it does not,
+ * the page was a link farm, a patch log or an infobox and its title, ids and
+ * coordinates are still this world's. `build.ts` drops the first and keeps the
+ * second as an empty row.
+ *
+ * The paragraph rules are era rules and are off here too. Computed on demand
+ * rather than returned by `dropPostWrath`: almost no page needs it, and the
+ * empty-section sweep strips every section body to decide.
+ */
+export function dropOutOfWorldOnly(wikitext: string): string {
+  if (typeof wikitext !== "string" || wikitext.length === 0) return wikitext;
+  return dropEmptySections(dropPostWrathSections(wikitext, { eraCuts: false }).text).text;
+}
+
 export function dropEmptySections(wikitext: string): { text: string; sectionsTrimmed: number } {
   const lines = wikitext.split("\n");
   const levels = lines.map((line) => {

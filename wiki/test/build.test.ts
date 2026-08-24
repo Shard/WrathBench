@@ -172,6 +172,26 @@ test("build.ts turns a dump into a searchable bundle", async () => {
         revisions: [{ id: 11, timestamp: "2009-01-01T00:00:00Z", text: "{{zonebox|level=5}}" }],
       },
       {
+        // An infobox and a link list: the out-of-world trim takes the only prose
+        // it has. The page is this world's all the same, and its id is the whole
+        // reason it must stay findable.
+        title: "Example Item Kappa",
+        ns: 0,
+        id: 11,
+        revisions: [
+          {
+            id: 13,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: [
+              "{{itembox|patch=3.0.2|itemid=7311}}",
+              "",
+              "== External links ==",
+              "* [http://example.invalid/kappa Example Kappa entry]",
+            ].join("\n"),
+          },
+        ],
+      },
+      {
         title: "Talk:Example Quest Alpha",
         ns: 1,
         id: 10,
@@ -192,16 +212,17 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const db = new Database(outPath, { readonly: true });
 
   const pages = db.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!;
-  // Alpha, Beta, Zeta and the capital. The talk page is out of namespace; the
-  // late pages, the Cataclysm stub and the hotfix archive are dropped; the
-  // infobox-only page is empty; the two redirects are not pages.
-  expect(pages.n).toBe(4);
+  // Alpha, Beta, Zeta and the capital, plus two rows with no prose: the
+  // infobox-only page and the one the out-of-world trim emptied. The talk page
+  // is out of namespace; the late pages, the Cataclysm stub and the hotfix
+  // archive are dropped; the two redirects are not pages.
+  expect(pages.n).toBe(6);
   const redirects = db.query<{ n: number }, []>("SELECT count(*) AS n FROM redirects").get()!;
   expect(redirects.n).toBe(1); // the dangling one went with its target
   const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
   const metaValue = (key: string): string => meta.get(key)!.value;
   const metaNumber = (key: string): number => Number.parseInt(metaValue(key), 10);
-  expect(metaValue("pages_kept")).toBe("4");
+  expect(metaValue("pages_kept")).toBe("6");
 
   // The prose came from the pre-cutoff revision and the templates are gone from
   // the indexed text; the id below still comes off the newest revision.
@@ -240,10 +261,11 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(beta.snippet).not.toContain("Example Beta entry");
   expect(beta.snippet).not.toContain("External links");
   expect(beta.snippet).not.toContain("Removable background");
-  expect(metaValue("sections_trimmed")).toBe("2");
+  // Two on Beta, one on the item page the trim empties.
+  expect(metaValue("sections_trimmed")).toBe("3");
   // Sorted, not in the order the dump happened to state them: the breakdown is
   // part of what makes a rebuild reproducible.
-  expect(metaValue("sections_trimmed_json")).toBe('{"background":1,"external links":1}');
+  expect(metaValue("sections_trimmed_json")).toBe('{"background":1,"external links":2}');
   // Coords were lifted off the raw wikitext before the strip and persisted.
   expect(beta.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
@@ -253,9 +275,11 @@ test("build.ts turns a dump into a searchable bundle", async () => {
 
   // Ids were lifted off the raw wikitext too, and an id query finds the page
   // through the id table rather than through body prose.
+  // Two: the quest page's own id, and the id on the page the trim emptied —
+  // which is only here because that page kept its row.
   const idRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_ids").get()!;
-  expect(idRows.n).toBe(1);
-  expect(metaValue("id_rows")).toBe("1");
+  expect(idRows.n).toBe(2);
+  expect(metaValue("id_rows")).toBe("2");
   const byId = searchReference(db, "quest 4242")[0]!;
   expect(byId.title).toBe("Example Quest Alpha");
   expect(byId.matchedId).toEqual({ kind: "quest", id: 4242 });
@@ -274,7 +298,10 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(metaValue("pages_dropped_post_cutoff")).toBe("2");
   expect(metaValue("pages_dropped_post_wrath")).toBe("1");
   expect(metaValue("pages_dropped_meta")).toBe("1");
-  expect(metaValue("empty_pages")).toBe("1");
+  // Two rows with no prose: the infobox-only page, which never had any, and the
+  // item page the out-of-world trim emptied, which is the subset counter.
+  expect(metaValue("empty_pages")).toBe("2");
+  expect(metaValue("pages_emptied_by_trim")).toBe("1");
   expect(metaValue("redirects_dropped_dangling")).toBe("1");
 
   // Every non-redirect page the parser yielded is accounted for exactly once.
@@ -289,6 +316,37 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(accounted).toBe(
     metaNumber("pages_in_namespaces") - metaNumber("redirects") - metaNumber("redirects_dropped_dangling"),
   );
+  // A subset counter, never a bucket: adding it to the sum would double-count.
+  expect(metaNumber("pages_emptied_by_trim")).toBeLessThanOrEqual(metaNumber("empty_pages"));
+  // Every row in the bundle is an admitted page or an empty one, and nothing else.
+  expect(metaNumber("pages_kept")).toBe(
+    metaNumber("pages_pre_cutoff") +
+      metaNumber("pages_post_cutoff_wrath_signal") +
+      metaNumber("empty_pages"),
+  );
+
+  // A page the trim emptied keeps its row: the prose is gone, the title and the
+  // id are not, and both still answer a query. This is the whole point of not
+  // dropping it — an item page whose body was an infobox and a link list is
+  // still this world's item.
+  const kappa = searchReference(db, "Example Item Kappa")[0]!;
+  expect(kappa.title).toBe("Example Item Kappa");
+  expect(kappa.exactTitle).toBe(true);
+  expect(kappa.snippet).toBe("");
+  expect(kappa.snippet).not.toContain("Example Kappa entry");
+  const byItemId = searchReference(db, "item 7311")[0]!;
+  expect(byItemId.title).toBe("Example Item Kappa");
+  expect(byItemId.matchedId).toEqual({ kind: "item", id: 7311 });
+  // It is a row, not an FTS document: a page with nothing to say must not be
+  // ranked, on the shortness of its own body, against pages that have
+  // something. Its title is not in the index either — exact-title resolution
+  // and the id table are what find it.
+  const ftsHits = db
+    .query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM pages_fts WHERE pages_fts MATCH ?",
+    );
+  expect(ftsHits.get("kappa")!.n).toBe(0);
+  expect(ftsHits.get("consectetur")!.n).toBe(1);
 
   // The dropped namespace is really absent, and so are the dropped pages: a
   // dropped title is not a page, not an exact-title hit, and not in the index.
@@ -299,6 +357,8 @@ test("build.ts turns a dump into a searchable bundle", async () => {
     .map((r) => r.title);
   expect(titles).toEqual([
     "Example Capital City",
+    "Example Empty Page",
+    "Example Item Kappa",
     "Example Item Zeta",
     "Example Quest Alpha",
     "Example Zone Beta",
@@ -324,7 +384,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   );
   expect(await again.exited).toBe(0);
   const db2 = new Database(outPath, { readonly: true });
-  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(4);
+  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(6);
   db2.close();
 }, 30_000);
 
