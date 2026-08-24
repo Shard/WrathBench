@@ -48,6 +48,7 @@ import {
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
+import { parseCampaigns, type Campaign } from "../src/campaigns";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { isArchiveDir } from "./archive-dir";
@@ -124,6 +125,7 @@ const fleetRosterSchema = z
     queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
     accounts: fleetAccountsSchema.optional(),
+    campaigns: z.unknown().optional(),
   })
   .loose();
 
@@ -159,6 +161,13 @@ export interface RosterRead {
   count: number;
   /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
   accounts: ClassAccountCounts;
+  /**
+   * The `campaigns` block (ADR-0041), or empty when the file names none or names
+   * them unreadably. The viewer reports what a file says and never adjudicates
+   * it — a campaigns block the supervisor would refuse simply reads as absent
+   * here rather than taking the whole roster down with it.
+   */
+  campaigns: Campaign[];
 }
 
 /** The series this viewer runs from — what the projection counts against (ADR-0034). */
@@ -174,7 +183,7 @@ export function currentSeries(): string | null {
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {} };
+  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [] };
   if (path === undefined || path.length === 0) {
     return { ...empty, shape: "missing", path: null };
   }
@@ -230,7 +239,13 @@ export function readFleetRoster(path: string | undefined, series: string | null 
     paid: parsed.accounts?.paid?.length ?? 0,
     local: parsed.accounts?.local?.length ?? 0,
   };
-  return { models, shape: "roster", path, policy, maxConcurrent, excluded, count: Object.keys(parsed.roster).length, accounts };
+  let campaigns: Campaign[] = [];
+  try {
+    campaigns = parseCampaigns(parsed.campaigns);
+  } catch {
+    // See `campaigns` on RosterRead: unreadable reads as absent.
+  }
+  return { models, shape: "roster", path, policy, maxConcurrent, excluded, count: Object.keys(parsed.roster).length, accounts, campaigns };
 }
 
 // ------------------------------------------------------------- run facts
