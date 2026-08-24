@@ -99,7 +99,7 @@ export interface RosterSpec {
   /** An extra run past the policy target (ADR-0034): stamped `extra: true`, never counted. */
   extra?: boolean;
   /**
-   * Episode tier id (ADR-0030/0031): `e90`, `e360` or `freeplay`. Passed to the
+   * Episode tier id (ADR-0030/0031): `e90`, `e360`, `probing` or `freeplay`. Passed to the
    * runner verbatim as `--episode <id>`; the explicit watchdog/maxToolCalls
    * flags the fleet derives from it travel alongside, so a runner that does
    * not know the flag yet still runs the right shape.

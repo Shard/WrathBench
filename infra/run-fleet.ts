@@ -827,7 +827,12 @@ export type Eligible = (ref: string, episode: EpisodeId) => boolean;
 
 export function eligibleFrom(states: readonly ModelState[]): Eligible {
   const by = new Map(states.map((s) => [s.name, s]));
-  return (ref, ep) => ep === "freeplay" || (by.get(ref)?.eligible.includes(ep) ?? false);
+  // Asked of scored-ness, not of a name: `eligible` is the tier's own budget, so
+  // an episode no tier can buy is not something a model is admitted TO. It was
+  // the freeplay name check here, which is the same landmine 8cfabb1 closed in
+  // `targetFor` and `runnableRefs` — dead for probing only because every caller
+  // happens to short-circuit first, which is not a property worth relying on.
+  return (ref, ep) => !isScoredEpisode(ep) || (by.get(ref)?.eligible.includes(ep) ?? false);
 }
 
 function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): FleetJob[] {

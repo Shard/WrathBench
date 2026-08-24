@@ -16,7 +16,7 @@
  * the default is names-first, and the choice is stamped into the
  * comparability tuple so the two never share a chart.
  *
- * `--episode <e90|e360|freeplay>` names an episode tier (`episodes.ts`): the
+ * `--episode <e90|e360|probing|freeplay>` names an episode tier (`episodes.ts`): the
  * wall clock and both watchdogs come from that one flag, and the id is stamped
  * into the comparability tuple. An explicit `--idle-ms`/`--no-xp-ms`/
  * `--episode-ms`/`--watchdogs-json` on top of it still wins, and the run is
