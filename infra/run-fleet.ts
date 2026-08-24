@@ -697,6 +697,14 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
           `a local/self-hosted apiBase is exempt`,
       );
     }
+    // The runner's boundary (runner/src/config.ts) and the game's own naming
+    // rules, enforced here so a bad name is a config refusal at load, not a
+    // ZodError the roster retries every tick: `Fleetsonnetlo` (13 chars)
+    // respawn-looped for two hours on 2026-08-24 because nothing between the
+    // file and the runner ever looked at the name.
+    if (e.character !== undefined && (typeof e.character !== "string" || !/^[A-Za-z]{2,12}$/.test(e.character))) {
+      fail(`${where}: entry ${e.model}: character must be 2-12 letters (got ${JSON.stringify(e.character)})`);
+    }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
       if (!parsed.success) {
