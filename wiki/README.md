@@ -62,6 +62,30 @@ ADR-0040.
   target go in `redirects`, so a search for an old or alternate name still lands
   on the article — unless the chain does not end at a surviving page, in which
   case the redirect is dropped with its target (`redirects_dropped_dangling`).
+- **Sections that are trimmed.** A concise reference is one a character can act
+  on, so a fixed set of headings is dropped at build time, on the raw wikitext,
+  heading line and body together: `external links`, `references`, `see also`,
+  `patch changes`, `patches and hotfixes`, `patch history`, `patch notes`,
+  `changes`, `gallery`, `videos`, `video`, `images`, `media`, `trivia`, `notes
+  and trivia`, `speculation`, `quotes`, `quote`, `dialogue`, `criticism`,
+  `reception`, `development`, `history`, `background`, `lore`, `in the rpg`,
+  `rpg`, `in the warcraft rpg`, `in the tcg`, `tcg`, `in the manga`, `in the
+  comics`, `in the novels`, `in hearthstone`, `in warcraft iii`, `in warcraft
+  ii`, `in warcraft i`, `addons`, `macros`. The heading is normalised first —
+  trimmed, case-folded, markup and trailing punctuation removed — and matched
+  **exactly**, never as a prefix or a substring, which is the whole reason
+  `changes` goes while `past changes` stays and `notes and trivia` goes while
+  `notes` stays. Nothing is rewritten: a section is here in full or not at all.
+  There is no keep list in the code, only the drop set, but these were
+  considered and deliberately kept: `notes`, `tips`, `tactics`, `tips and
+  tactics`, `strategy`, `abilities`, `drops`, `source`, `objectives`,
+  `description`, `progress`, `completion`, `rewards`, `gains`, `quests`,
+  `location`. They say what is there, what it does and how to get it — that is
+  the whole point of the bundle. A section left with no prose after all the cuts
+  and the strip is not emitted either, so a table-only `Drops` or a section the
+  paragraph rule emptied never becomes an orphan heading line. `sections_trimmed`
+  counts the lot and `sections_trimmed_json` breaks it down by heading, with the
+  empty ones under `(empty)`; the era counters above stay separate. See ADR-0040.
 - Wikitext is reduced to plain text: templates, tables, refs, comments and file
   links are removed, `[[link|label]]` becomes `label`, headings become plain lines,
   whitespace is collapsed. Most infobox data lives in templates and is therefore
@@ -117,8 +141,10 @@ so a page cannot be counted twice or lost quietly.
   (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
   `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
   naming one. The target is the beta stubs written *before* the cutoff about the
-  expansion that was coming. Also counts a page the section and paragraph rules
-  emptied.
+  expansion that was coming. Also counts a page that had prose and has none
+  after the cuts — the era rules or the section trim above, which is a wording
+  debt rather than a lie: a page that was nothing but an external-link list is
+  not a page about this world either.
 - `pages_dropped_meta` — out-of-game: patch notes, the Lua addon API, the client
   UI, a boxed product, a real-world topic. `classifyMetaPage` classifies from
   the title alone and the build does not emit what it classifies (see Search,
@@ -135,8 +161,9 @@ word — the census counts `Burning Legion` 39 times against `Legion` 29 — and
 `{{Removedwithlegion}}`/`{{Removedwithcataclysm}}` are not signals at all, since
 content removed later is content that exists here.
 
-Inside a surviving page, two more levels run on the raw wikitext before the
-strip (`wiki/src/wrath-only.ts`):
+Inside a surviving page, three more levels run on the raw wikitext before the
+strip (`wiki/src/wrath-only.ts`), the first two about the era and the third
+about whether the section is about the world at all:
 
 - **Sections.** A `{{cata-section}}`/`{{mists-section}}` marker or an
   `== In Cataclysm ==`-style heading drops the heading and everything under it,
@@ -150,6 +177,9 @@ strip (`wiki/src/wrath-only.ts`):
   `paragraphs_dropped`. A bare mention of Deathwing, the Legion, Draenor or
   Garrosh is not a rule: all four are in this world. Precision on a hand-checked
   33-paragraph sample is about 0.8; the residue is FOLLOW-UPS 62.
+- **Out-of-world sections.** The heading drop set described above, plus every
+  section left empty by any of the three cuts. `sections_trimmed` and
+  `sections_trimmed_json`.
 
 If the cut empties a page that had prose, the page is dropped and counted under
 `pages_dropped_post_wrath` — never left as an empty row.

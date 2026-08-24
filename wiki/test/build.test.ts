@@ -51,6 +51,12 @@ test("build.ts turns a dump into a searchable bundle", async () => {
               "",
               "== In Cataclysm ==",
               "The whole section describes a world this server does not run.",
+              "",
+              "== External links ==",
+              "* [http://example.invalid/beta Example Beta entry]",
+              "",
+              "== Background ==",
+              "Removable background lorem.",
             ].join("\n"),
           },
         ],
@@ -175,6 +181,15 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(searchReference(db, "does not run")).toEqual([]);
   expect(metaValue("sections_dropped")).toBe("1");
   expect(metaValue("paragraphs_dropped")).toBe("1");
+  // The out-of-world trim is a separate counter, with a breakdown saying what
+  // went. The link section is gone and left no heading behind.
+  expect(beta.snippet).not.toContain("Example Beta entry");
+  expect(beta.snippet).not.toContain("External links");
+  expect(beta.snippet).not.toContain("Removable background");
+  expect(metaValue("sections_trimmed")).toBe("2");
+  // Sorted, not in the order the dump happened to state them: the breakdown is
+  // part of what makes a rebuild reproducible.
+  expect(metaValue("sections_trimmed_json")).toBe('{"background":1,"external links":1}');
   // Coords were lifted off the raw wikitext before the strip and persisted.
   expect(beta.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
