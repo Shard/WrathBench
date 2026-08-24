@@ -321,8 +321,11 @@ export default function MapPage() {
    * honest picture of "we are between two states".
    */
   let trackToken = 0;
+  let wasReplaying = false;
   createEffect(() => {
     const id = replayId();
+    const leftReplay = wasReplaying && id === undefined;
+    wasReplaying = id !== undefined;
     const mine = ++trackToken;
     clearReplayState({
       setTrack: (t) => setTrack(() => t),
@@ -338,10 +341,15 @@ export default function MapPage() {
     pendingFit = true;
     needsDraw = true;
     if (id === undefined) {
-      // The live poll answers with nothing while a replay owns the map, so its
-      // last value is empty and the next tick is up to POLL_MS away. Ask now,
-      // or returning to live shows an empty world for five seconds.
-      feed.refresh();
+      /*
+       * Only when *leaving* a replay. The live poll answers with nothing while
+       * a replay owns the map, so its last value is empty and the next tick is
+       * up to POLL_MS away — without this the live map is blank for five
+       * seconds. On a cold load of `/map` the poll has just fetched of its own
+       * accord and asking again would double every visit's first request, which
+       * ADR-0022 counts as a public-hosting cost.
+       */
+      if (leftReplay) feed.refresh();
       return;
     }
     void api
