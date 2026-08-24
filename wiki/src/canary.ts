@@ -15,8 +15,11 @@
  * bundle where it is.
  *
  * The list is deliberately titles only — the ten capitals, the eight racial
- * starting zones, and the classic/TBC/Wrath zones Cataclysm reshaped hardest,
- * which are the ones an over-broad era rule reaches first. No page text is
+ * starting zones, the classic/TBC/Wrath zones Cataclysm reshaped hardest, which
+ * are the ones an over-broad era rule reaches first, and the low-level dungeons
+ * Cataclysm rebuilt, which are the ones a **page move** reaches first: their
+ * bare titles carry the new instance's history and this world's article sits
+ * under another name. No page text is
  * asserted here and none is quoted: `wiki/src/verify.ts` is where the deeper,
  * operator-run content checks live. Nothing in this file is game text beyond
  * the place names, which are the same names FOLLOW-UPS and the docs already
@@ -76,8 +79,30 @@ export const MUST_EXIST: readonly string[] = [
   "Dustwallow Marsh",
   "Wetlands",
   "Westfall",
+  // Zones Cataclysm rewrote whose 3.3.5 pages the phrase gates in `verify.ts`
+  // already assume are here.
+  "Silverpine Forest",
+  "Redridge Mountains",
+  "Ashenvale",
   // A Wetlands location in this world, an instance only in the next one.
   "Grim Batol",
+  // The low-level dungeons. Every one of these is a page Cataclysm moved: the
+  // expansion rebuilt the instance, took the bare title for the new version and
+  // left this world's article under `… (original)` or under another name
+  // entirely, so the name a character searches for survives only through a
+  // redirect. That is the whole reason the redirect rules in `build.ts` fall
+  // back to the newest revision and to the `(original)` sibling, and this is
+  // what stops that from silently regressing.
+  "Deadmines",
+  "Ragefire Chasm",
+  "Gnomeregan",
+  "Scarlet Monastery",
+  "Stormwind Stockade",
+  "Wailing Caverns",
+  "Shadowfang Keep",
+  "Blackfathom Deeps",
+  "Razorfen Kraul",
+  "Uldaman",
   // Wrath zones: the world the server actually runs.
   "Borean Tundra",
   "Howling Fjord",

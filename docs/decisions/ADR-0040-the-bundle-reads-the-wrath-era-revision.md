@@ -342,7 +342,8 @@ demand because only a page that came out empty ever needs it). If prose would
 have survived the trim alone, the era cuts are what emptied the page and it is
 dropped as before. If not, the page keeps its row with empty text, counted under
 `empty_pages` and a new `pages_emptied_by_trim` — a subset, like the protection
-counter, and outside the five-reasons identity, which still holds unchanged.
+counter, and outside the five-reasons identity, which an empty row does not
+disturb: the row is counted under `empty_pages` and under no reason.
 
 Era-only text was the obvious discriminator and is wrong: a Cataclysm page that
 also carries an external-links section still has prose in its era-only text, so
@@ -360,3 +361,117 @@ Measured over the dump: post-Wrath drops 10,027 → 5,016, empty rows 1,899 →
 6,910 of which 5,011 were emptied by the trim, id rows 64,284 → 71,751, coords
 7,433 → 7,631, quest rows 7,889 → 7,907, pages kept 74,393 → 81,303, and 174
 redirects that used to dangle now land. The canary passes. FOLLOW-UPS 49.
+
+## Names survive page moves
+
+Addendum, 2026-08-24. Every rule above asks which world a page is about. This
+one asks a question none of them can answer: which world a *title* is about,
+when MediaWiki has moved the page out from under it.
+
+### Context
+A move carries a page's whole history to the destination. When Cataclysm rebuilt
+the low-level dungeons, the wiki moved this world's article aside and wrote the
+new one under the bare title — so the bare title's oldest revisions are the move
+itself and everything after is the later instance, while the 3.3.5 article lives
+under `… (original)` or under a name the expansion invented. The era rules then
+do exactly the right thing to the page and exactly the wrong thing to the name.
+Measured over the dump (2026-08-24, scratch, not committed):
+
+- `Deadmines` is a page first written in 2010-09 whose first revision is a
+  redirect to `Deadmines (original)` and whose later pre-cutoff revisions are
+  the Cataclysm article. Dropped, correctly — and then the name is gone.
+- `Gnomeregan` has no revision before 2016 and is dropped as post-cutoff, though
+  its newest revision is `#REDIRECT [[Gnomeregan (dungeon)]]` and that target is
+  in the bundle.
+- `Stormwind Stockade` chains: the name a character searches for points at
+  `Stormwind Stockade (original)`, which is itself dropped and whose newest
+  revision redirects on to `The Stockade (original)`, which is kept.
+
+### Decision
+**A name may be recovered from a revision the prose rules do not read, and
+recovering a name never puts a page back.** Two rules, both candidate generation
+into the one pending list that the existing bounded chain walk resolves:
+
+- **Fall back to the newest revision.** When a Wrath-snapshot redirect's target
+  dangles, the newest revision's target is tried before the candidate is counted
+  dangling; when `admitPage` refuses a page whose newest revision is a
+  `#REDIRECT`, that is pushed as a candidate. 183 and 1,277 names respectively.
+  Counted as `redirects_recovered_newest`.
+- **The `(original)`/`(old)` sibling.** After the stream, a bare title with no
+  page and no redirect whose `T (original)` or `T (old)` sibling is in the
+  bundle becomes a redirect to it, `(original)` winning when both exist. 68
+  names, Deadmines, Ragefire Chasm and Scarlet Monastery among them. Counted as
+  `redirects_original_sibling`.
+
+Both feed the same six-hop walk, so the Stockade chain lands through a sibling
+that is itself only a redirect, and whichever target actually resolves is the
+one written — a row pointing at a title with no page and no redirect of its own
+would be a dead row. Out-of-game titles are excluded: ADR-0040 drops a patch
+archive rather than demoting it, and `verify.ts` checks exactly that by
+resolving `Patch 4.0.1` through the redirect table.
+
+**Stepping back through a page's revisions to find the pre-move article was
+rejected.** It is the obvious alternative — walk back past the move and index
+what the title said before it — and it does not work here. The revisions before
+a move are the article the move took *with* it, so a title whose history was
+carried away has none of them; what is left under the bare title is the
+destination's history, which is the later world's text. Where a pre-move
+revision does survive under the old title it is superseded text the wiki
+abandoned, and the measured yield is about 3% of the names these two rules
+reach. A name is cheap and a wrong article is not, so the rules recover the
+name and let the reader land on the article the wiki actually kept.
+
+**The accounting identity moves off `redirects`.** A redirect row can now be
+generated for a title that is also a counted page, so the rows written are no
+longer the pages that were redirects at the cutoff. Those are counted as
+`pages_era_redirect`, and the identity the build test asserts is now the five
+reasons plus `empty_pages` against `pages_in_namespaces - pages_era_redirect`.
+
+**The canary grows the moved dungeons**: Deadmines, Ragefire Chasm, Gnomeregan,
+Scarlet Monastery, Stormwind Stockade, Wailing Caverns, Shadowfang Keep,
+Blackfathom Deeps, Razorfen Kraul and Uldaman, with Silverpine Forest, Redridge
+Mountains and Ashenvale beside them. These are the titles a regression in either
+rule empties, and counters cannot see it: the pages are all still in the bundle,
+under names nobody types.
+
+### Two leak rules from an adversarial read
+Reading the built bundle looking for the later world rather than counting it
+found two classes the rules above cannot reach, and both are now closed:
+
+- **A category page's own title.** The category rule reads the categories
+  written *on* a page; a category page carries none of its own, so
+  `Category:Deepholm quests` sailed through every signal and 33 such stubs were
+  in the bundle. In **ns 14 only**, a title naming a post-Wrath zone or feature
+  is a post-Wrath signal. Never in ns 0: Mount Hyjal, Tol Barad, Gilneas and
+  Uldum all have Wrath-era lore pages under those names, which is why
+  `verify.ts` refuses to list them as forbidden titles. A title subpage suffix
+  (`Global functions/Cataclysm`) reads like the parenthetical, because it says
+  the same thing — the later client's fork of the page.
+- **Prose that describes the later world without naming the expansion.** Rated
+  battlegrounds, the Speedbarge moored in a Thousand Needles that is dry here,
+  an inline `(Expansion: …)` tag, `playable` beside worgen or goblin,
+  Archaeology the profession, and Mastery the stat. The last two are the narrow
+  ones: a quest's archaeology team and the Stance Mastery and Tactical Mastery
+  talents are in this world, so Archaeology fires only with no `dig site`,
+  `team`, `unit` or `expedition` within 20 characters and Mastery only beside
+  the 2010 dev voice. Both directions are tested. Speedbarge cuts a **line**
+  rather than a block, because a block is as often a list of subzones as it is a
+  paragraph. This is a dent in FOLLOW-UPS 62's paragraph residue, not a fix for
+  it: prose that describes the later world in words no rule names is still there.
+
+### Consequences
+- Roughly 1,500 names come back, and no pages. What a model searching for
+  `Deadmines` gets is this world's article under the title the wiki moved it to,
+  which is what the redirect table has always been for.
+- The counters say which rule earned which name (`redirects_recovered_newest`,
+  `redirects_original_sibling`), and `pages_era_redirect` is the term that keeps
+  the reason identity exact now that a name and a page can share a title.
+- The residue is a name the rules recover that the bundle would rather not
+  answer to. `verify.ts` resolves its forbidden titles through the redirect
+  table, so the shape to watch on the next real build is a title like
+  `Ruins of Gilneas` whose newest revision redirects to a Wrath lore page that
+  survives: no parenthetical, no subpage suffix, and ns 0, so nothing above
+  stops it. It is a gate failure rather than a silent leak, which is the right
+  way round.
+- Like every other era rule, this changes what every lane can read, so it lands
+  with the same harness minor bump and the same deploy window.

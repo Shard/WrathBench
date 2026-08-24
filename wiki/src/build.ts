@@ -30,7 +30,49 @@ import { admitPage, type AdmitReason } from "./post-wrath";
 import { assertCanaries } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
-import { stripWikitext } from "./strip";
+import { redirectTarget, stripWikitext } from "./strip";
+
+/** A source title with the `(original)`/`(old)` suffix a page move leaves behind. */
+const SIBLING_SUFFIX = /^(.*\S)\s+\((original|old)\)$/i;
+
+/**
+ * Names a page move left dangling: a bare title with no page and no redirect,
+ * whose `(original)` or `(old)` sibling is in the bundle.
+ *
+ * MediaWiki carries a page's history to its destination when it is moved, so
+ * after `Deadmines` was moved aside for the Cataclysm article the bare title
+ * holds the *new* dungeon's revisions and is dropped, while everything this
+ * world knows about the place sits under `Deadmines (original)`. The name a
+ * character would search for is then in the bundle under a title nobody types.
+ *
+ * A candidate is generated, not a redirect: it goes into the same pending list
+ * as every other and is resolved by the same bounded chain walk, so a sibling
+ * that is itself only a redirect (`Stormwind Stockade (original)` →
+ * `The Stockade (original)`) still lands, and one that leads nowhere is dropped
+ * as dangling like any other.
+ *
+ * `resolvable` is every title that already answers — a kept page or a redirect
+ * source — lower-cased. A bare title that already answers is left alone.
+ * `(original)` wins over `(old)` when a page has both.
+ */
+export function siblingRedirects(
+  survivors: readonly { title: string; ns: number }[],
+  resolvable: ReadonlySet<string>,
+): { source: string; target: string; ns: number }[] {
+  const best = new Map<string, { source: string; target: string; ns: number; rank: number }>();
+  for (const survivor of survivors) {
+    const m = SIBLING_SUFFIX.exec(survivor.title);
+    if (m === null) continue;
+    const source = m[1]!;
+    const key = source.toLowerCase();
+    if (resolvable.has(key)) continue;
+    const rank = m[2]!.toLowerCase() === "original" ? 0 : 1;
+    const prev = best.get(key);
+    if (prev !== undefined && prev.rank <= rank) continue;
+    best.set(key, { source, target: survivor.title, ns: survivor.ns, rank });
+  }
+  return [...best.values()].map(({ source, target, ns }) => ({ source, target, ns }));
+}
 
 const NS_NAMES: Record<number, string> = {
   0: "main",
@@ -183,6 +225,17 @@ async function main(): Promise<void> {
   let sectionsTrimmed = 0;
   const sectionsTrimmedBy: Record<string, number> = {};
   let redirectsDangling = 0;
+  /**
+   * Pages the parser yielded whose Wrath-snapshot revision was a `#REDIRECT`.
+   * They are names, not pages, so they are the term that takes the redirects
+   * out of the reason identity — `redirects` no longer does, because a redirect
+   * row can now also be generated for a title that *is* a counted page.
+   */
+  let eraRedirectPages = 0;
+  /** Redirects that only landed because the newest revision was read too. */
+  let redirectsRecoveredNewest = 0;
+  /** Redirects generated from an `(original)`/`(old)` sibling of a moved page. */
+  let redirectsOriginalSibling = 0;
   /** One counter per `admitPage` reason; the two admitting reasons are the kept pages. */
   const reasons: Record<AdmitReason, number> = {
     pre_cutoff: 0,
@@ -198,7 +251,23 @@ async function main(): Promise<void> {
    * the stream stops early, so a smoke build drops every redirect whose target
    * it never reached; its `redirects` count is not comparable to a full build's.
    */
-  const pendingRedirects: { source: string; target: string; ns: number }[] = [];
+  const pendingRedirects: {
+    source: string;
+    target: string;
+    ns: number;
+    /**
+     * Where the candidate came from: the Wrath-snapshot revision, the newest
+     * revision of a page this bundle has no article for, or the `(original)`
+     * sibling of a moved page. Only the counters read it.
+     */
+    origin: "era" | "newest" | "sibling";
+    /**
+     * The newest revision's target, when the era revision named a different one.
+     * A page move renames the target out from under a 2010 redirect, and the
+     * newest revision is where the wiki says where the name went.
+     */
+    fallback?: string;
+  }[] = [];
   const keptTitles = new Set<string>();
   let stoppedEarly = false;
   let distinctKeys = 0;
@@ -224,6 +293,29 @@ async function main(): Promise<void> {
   const chunks = decodeUtf8(stream, (total) => {
     bytes = total;
   });
+
+  /**
+   * A page this bundle has no article for, whose newest revision is a redirect:
+   * keep the *name*.
+   *
+   * A page move carries the history to the destination, so a title the wiki
+   * later redirected away has its whole 2010 history sitting under the new name
+   * and reads as post-cutoff here. The page is correctly absent; the name is
+   * not, and the newest revision is the only place the wiki says where it went.
+   * The candidate is resolved with all the others, so it lands only if the
+   * chain ends at a page this bundle actually has.
+   *
+   * Out-of-game titles are the exception and stay out entirely. ADR-0040 drops
+   * a patch archive or an addon-API page rather than demoting it, and a name
+   * that resolves is a name search can return; `verify.ts` checks exactly that
+   * for the patch pages.
+   */
+  const keepAsName = (page: WikiPage, reason: AdmitReason): void => {
+    if (reason === "dropped_meta") return;
+    const target = redirectTarget(page.wikitext);
+    if (target === null) return;
+    pendingRedirects.push({ source: page.title, target, ns: page.ns, origin: "newest" });
+  };
 
   /**
    * Write one admitted page. `source` is the revision its prose comes from —
@@ -301,30 +393,42 @@ async function main(): Promise<void> {
       // world's wiki, redirect or not.
       const target = page.eraRedirectTarget;
       if (target !== null) {
-        pendingRedirects.push({ source: page.title, target, ns: page.ns });
+        eraRedirectPages++;
+        const newest = redirectTarget(page.wikitext);
+        pendingRedirects.push({
+          source: page.title,
+          target,
+          ns: page.ns,
+          origin: "era",
+          ...(newest !== null && newest !== target ? { fallback: newest } : {}),
+        });
       } else if (!page.hasEraRevision) {
         // No revision before the cutoff. It may still be a page about this
         // world, written late; `admitPage` decides on the newest revision.
         const decision = admitPage({
           title: page.title,
+          ns: page.ns,
           eraWikitext: null,
           newestWikitext: page.wikitext,
           firstRevisionAt: page.firstRevisionAt,
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
+          keepAsName(page, decision.reason);
         } else {
           keep(page, page.wikitext, decision.reason);
         }
       } else {
         const decision = admitPage({
           title: page.title,
+          ns: page.ns,
           eraWikitext: page.eraWikitext,
           newestWikitext: page.wikitext,
           firstRevisionAt: page.firstRevisionAt,
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
+          keepAsName(page, decision.reason);
         } else {
           // A page with pre-cutoff revisions that all failed hygiene has no
           // prose to index; it is not a Wrath page for our purposes. `admitPage`
@@ -342,29 +446,60 @@ async function main(): Promise<void> {
         break;
       }
     }
+    // The pages are all in by now; the sibling rule reads them back out of the
+    // half-built bundle rather than keeping a second copy of every title in
+    // memory. `flush` is idempotent, so the one at the end of the block still
+    // stands.
+    writer.flush();
+    const resolvable = new Set(keptTitles);
+    for (const r of pendingRedirects) resolvable.add(r.source.toLowerCase());
+    const survivors: { title: string; ns: number }[] = [
+      ...db
+        .query<{ title: string; ns: number }, []>(
+          "SELECT title, ns FROM pages WHERE title LIKE '% (original)' OR title LIKE '% (old)'",
+        )
+        .all(),
+      // A sibling that is itself only a redirect counts: `Stormwind Stockade
+      // (original)` is one, and the chain through it is what reaches the page.
+      ...pendingRedirects.map((r) => ({ title: r.source, ns: r.ns })),
+    ];
+    for (const s of siblingRedirects(survivors, resolvable)) {
+      pendingRedirects.push({ ...s, origin: "sibling" });
+    }
+
     // Redirects, now that the surviving titles are known. A chain is walked
     // with the same bound `resolveTitle` uses, so a redirect to a redirect to a
     // page still lands; one that ends at a dropped page is dropped with it.
     const targets = new Map<string, string>();
     for (const r of pendingRedirects) targets.set(r.source.toLowerCase(), r.target);
-    for (const r of pendingRedirects) {
-      let current = r.target.toLowerCase();
-      let landed = false;
+    const walk = (from: string): boolean => {
+      let current = from.toLowerCase();
       for (let hop = 0; hop < 6; hop++) {
-        if (keptTitles.has(current)) {
-          landed = true;
-          break;
-        }
+        if (keptTitles.has(current)) return true;
         const next = targets.get(current);
-        if (next === undefined) break;
+        if (next === undefined) return false;
         current = next.toLowerCase();
       }
-      if (landed) {
-        writer.addRedirect(r.source, r.target, r.ns);
-        redirects++;
-      } else {
-        redirectsDangling++;
+      return false;
+    };
+    for (const r of pendingRedirects) {
+      // Whichever target lands is the one written: the row is walked again at
+      // query time, so a row pointing at a title with no page and no redirect
+      // of its own is a dead row.
+      let landed: string | null = walk(r.target) ? r.target : null;
+      let viaNewest = r.origin === "newest";
+      if (landed === null && r.fallback !== undefined && walk(r.fallback)) {
+        landed = r.fallback;
+        viaNewest = true;
       }
+      if (landed === null) {
+        redirectsDangling++;
+        continue;
+      }
+      writer.addRedirect(r.source, landed, r.ns);
+      redirects++;
+      if (viaNewest) redirectsRecoveredNewest++;
+      else if (r.origin === "sibling") redirectsOriginalSibling++;
     }
     writer.flush();
     if (stoppedEarly) cancel();
@@ -434,6 +569,17 @@ async function main(): Promise<void> {
       ),
     ),
     redirects_dropped_dangling: String(redirectsDangling),
+    // Pages whose Wrath-snapshot revision was a `#REDIRECT`. These are the
+    // pages that are names rather than pages, so this — not `redirects` — is
+    // what the five reasons plus `empty_pages` are counted against.
+    pages_era_redirect: String(eraRedirectPages),
+    // Redirect rows that exist only because the newest revision was read after
+    // the Wrath-snapshot one dangled, or because the page itself is gone and
+    // its newest revision says where the name went.
+    redirects_recovered_newest: String(redirectsRecoveredNewest),
+    // Redirect rows generated from an `(original)`/`(old)` sibling: the bare
+    // title a page move emptied.
+    redirects_original_sibling: String(redirectsOriginalSibling),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
     schema_version: "5",
@@ -486,6 +632,10 @@ async function main(): Promise<void> {
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);
   console.log(`redirects:   ${redirects} (${redirectsDangling} dropped, target not in the bundle)`);
+  console.log(
+    `  recovered: ${redirectsRecoveredNewest} via the newest revision, ` +
+      `${redirectsOriginalSibling} via an (original) sibling`,
+  );
   console.log(`empty:       ${empties} rows with no prose (${emptiedByTrim} emptied by the trim)`);
   for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {
     console.log(`  ns ${String(ns).padStart(3)} ${(NS_NAMES[ns] ?? "?").padEnd(9)} ${perNamespace[ns]}`);

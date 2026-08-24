@@ -442,3 +442,132 @@ describe("which cut emptied the page", () => {
     expect(dropPostWrathSections(page, { eraCuts: false }).sectionsDropped).toBe(0);
   });
 });
+
+/**
+ * The rules an adversarial read of a built bundle added: paragraphs that
+ * describe the later world without naming the expansion. Every fixture is
+ * invented, as everywhere else in this file.
+ */
+describe("paragraphs that never name the expansion", () => {
+  const drops: [string, string][] = [
+    [
+      "rated battlegrounds",
+      "Honour is also earned in rated battlegrounds, which use a separate rating.",
+    ],
+    [
+      "rated battleground, singular",
+      "A rated battleground team of ten holds its rating across the week.",
+    ],
+    [
+      "an inline expansion tag",
+      "Example Person Gamma sells the tabard here (Expansion: Cataclysm) for a token.",
+    ],
+    [
+      "a playable worgen",
+      "The worgen became a playable race and start their run in the ruined city.",
+    ],
+    [
+      "a playable goblin",
+      "Goblins are playable from the island, and the trial run ends at the harbour.",
+    ],
+    [
+      "Mastery as a planned stat",
+      "We plan to give every specialisation a Mastery, so the third talent tree bonus goes.",
+    ],
+    [
+      "Mastery as a new stat",
+      "Mastery is a new stat found on armour, replacing the older combat ratings.",
+    ],
+    [
+      "Mastery, planned in the other voice",
+      "Mastery will be a new passive bonus, and we're planning to tune it before release.",
+    ],
+    [
+      "archaeology the profession",
+      "Archaeology is trained in the capital and raises to 525 like any secondary skill.",
+    ],
+  ];
+  for (const [name, paragraph] of drops) {
+    test(`drops: ${name}`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(1);
+      expect(cut.text).toBe("Lead lorem.\n\nTail lorem.");
+    });
+  }
+
+  const keeps: [string, string][] = [
+    [
+      "an archaeology team is quest flavour",
+      "The archaeology team at the camp wants the tablets brought back before dusk.",
+    ],
+    [
+      "an archaeology expedition is quest flavour",
+      "An expedition of archaeology students is digging beside the road.",
+    ],
+    [
+      "a dig site is a place a character walks to",
+      "The archaeology dig site west of the camp was abandoned before the war.",
+    ],
+    ["Stance Mastery is a talent in this world", "Stance Mastery lets the warrior keep rage on a swap."],
+    [
+      "Tactical Mastery is a talent in this world",
+      "Tactical Mastery is three points deep in the arms tree and keeps rage on a stance change.",
+    ],
+    [
+      "battlegrounds without the rating",
+      "Battlegrounds are entered from the master beside the flightpath, or by the queue.",
+    ],
+    ["a worgen that is not playable", "A pack of worgen prowls the wood after dark and will not parley."],
+    [
+      "a goblin that is not playable",
+      "The goblin banker keeps a stall at the docks and charges for the privilege.",
+    ],
+    ["an expansion mentioned in prose", "The expansion of the mine reached the second seam last spring."],
+  ];
+  for (const [name, paragraph] of keeps) {
+    test(`keeps: ${name}`, () => {
+      const cut = dropPostWrathParagraphs(`Lead lorem.\n\n${paragraph}\n\nTail lorem.`);
+      expect(cut.paragraphsDropped).toBe(0);
+      expect(cut.text).toContain(paragraph);
+    });
+  }
+
+  test("a Speedbarge line goes and the rest of the list stays", () => {
+    // The block is a list of subzones, not a paragraph: dropping it whole would
+    // take every other subzone with it.
+    const page = [
+      "Lead lorem.",
+      "",
+      "* Example Camp, on the eastern rim",
+      "* The Speedbarge, moored in the water below",
+      "* Example Post, at the southern gate",
+    ].join("\n");
+    const cut = dropPostWrathParagraphs(page);
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.text).toContain("Example Camp");
+    expect(cut.text).toContain("Example Post");
+    expect(cut.text).not.toContain("Speedbarge");
+  });
+
+  test("a block that is nothing but the dropped line is not emitted", () => {
+    const cut = dropPostWrathParagraphs("Lead lorem.\n\n* The Speedbarge is moored below.");
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.text).toBe("Lead lorem.");
+  });
+
+  test("the prefilter does not gate the rules on the word Cataclysm", () => {
+    // The rules above exist because a page can describe the later world without
+    // ever naming it. A prefilter that still asked for `cataclysm` would make
+    // every one of them pass its unit test and never fire on a real page.
+    for (const page of [
+      "Lead lorem.\n\n* The Speedbarge is moored below.",
+      "Lead lorem.\n\nHonour is also earned in rated battlegrounds each week.",
+      "Lead lorem.\n\nArchaeology is trained in the capital like any secondary skill.",
+      "Lead lorem.\n\nMastery is a new stat found on armour from this point on.",
+      "Lead lorem.\n\nThe worgen became a playable race after the wall fell.",
+    ]) {
+      expect(page).not.toMatch(/cataclysm|shattering|deathwing/i);
+      expect(dropPostWrathParagraphs(page).paragraphsDropped).toBe(1);
+    }
+  });
+});

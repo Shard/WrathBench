@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
-import { parseArgs } from "../src/build";
+import { parseArgs, siblingRedirects } from "../src/build";
 import { DEFAULT_ERA_CUTOFF } from "../src/wrath-only";
 import { searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
@@ -306,6 +306,15 @@ test("build.ts turns a dump into a searchable bundle", async () => {
 
   // Every non-redirect page the parser yielded is accounted for exactly once.
   // Nothing else here catches a page counted twice or lost silently.
+  //
+  // The term on the right is `pages_era_redirect` and not `redirects`: a
+  // redirect row can now be generated for a title that is also a counted page
+  // (a page move left the name behind), so the rows written are no longer the
+  // pages that were redirects at the cutoff. Those are, and they are the only
+  // yielded pages that go into no reason bucket.
+  expect(metaValue("pages_era_redirect")).toBe("2");
+  expect(metaValue("redirects_recovered_newest")).toBe("0");
+  expect(metaValue("redirects_original_sibling")).toBe("0");
   const accounted =
     metaNumber("pages_pre_cutoff") +
     metaNumber("pages_post_cutoff_wrath_signal") +
@@ -313,9 +322,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
     metaNumber("pages_dropped_post_wrath") +
     metaNumber("pages_dropped_meta") +
     metaNumber("empty_pages");
-  expect(accounted).toBe(
-    metaNumber("pages_in_namespaces") - metaNumber("redirects") - metaNumber("redirects_dropped_dangling"),
-  );
+  expect(accounted).toBe(metaNumber("pages_in_namespaces") - metaNumber("pages_era_redirect"));
   // A subset counter, never a bucket: adding it to the sum would double-count.
   expect(metaNumber("pages_emptied_by_trim")).toBeLessThanOrEqual(metaNumber("empty_pages"));
   // Every row in the bundle is an admitted page or an empty one, and nothing else.
@@ -526,4 +533,222 @@ test("--era-cutoff overrides the default and is validated before the stream", ()
   // and quietly drop every page in the bundle.
   expect(() => parseArgs(["dump.xml", "--era-cutoff", "2010-10-12"])).toThrow(/ISO-8601/);
   expect(() => parseArgs(["dump.xml", "--era-cutoff", "yesterday"])).toThrow(/ISO-8601/);
+});
+
+/**
+ * Page moves, and the names they leave behind.
+ *
+ * MediaWiki carries a page's history to the destination when a page is moved,
+ * so a title Cataclysm took over holds the *new* article's whole history and is
+ * correctly dropped here — taking the name with it. Every fixture is invented;
+ * the shapes are real, the pages are not.
+ */
+test("a name survives the page move that emptied its title", async () => {
+  const xmlPath = join(dir, "moved-dump.xml");
+  const outPath = join(dir, "moved-bundle.sqlite");
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        // The survivor: this world's article, under the title the move gave it.
+        title: "Example Delve (original)",
+        ns: 0,
+        id: 1,
+        revisions: [
+          {
+            id: 1,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Example Delve''' is a mine full of consectetur, east of the example road.",
+          },
+        ],
+      },
+      {
+        // The bare title. Its own history is the later world's article, so the
+        // page is dropped — and the name a character searches for goes with it
+        // unless the `(original)` sibling puts it back.
+        title: "Example Delve",
+        ns: 0,
+        id: 2,
+        revisions: [
+          {
+            id: 3,
+            timestamp: "2013-01-01T00:00:00Z",
+            text: "{{stub/Cataclysm}}The rebuilt delve, lorem ipsum.",
+          },
+          {
+            id: 2,
+            timestamp: "2010-09-20T00:00:00Z",
+            text: "{{zonebox|patch=4.0.1}}The rebuilt delve, lorem.",
+          },
+        ],
+      },
+      {
+        // No pre-cutoff revision at all, so no page. Its newest revision says
+        // where the name went, and the target is in the bundle.
+        title: "Example Warren",
+        ns: 0,
+        id: 3,
+        revisions: [
+          {
+            id: 4,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "#REDIRECT [[Example Warren (dungeon)]]",
+          },
+        ],
+      },
+      {
+        title: "Example Warren (dungeon)",
+        ns: 0,
+        id: 4,
+        revisions: [
+          {
+            id: 5,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Example Warren''' is a burrow of adipiscing under the example hill.",
+          },
+        ],
+      },
+      {
+        // A chain: the bare title has no page and no redirect, its `(original)`
+        // sibling is itself only a redirect, and the page is a hop further on.
+        title: "Example Hold (original)",
+        ns: 0,
+        id: 5,
+        revisions: [
+          {
+            id: 6,
+            timestamp: "2017-01-01T00:00:00Z",
+            text: "#REDIRECT [[The Hold (original)]]",
+          },
+        ],
+      },
+      {
+        title: "The Hold (original)",
+        ns: 0,
+        id: 6,
+        revisions: [
+          {
+            id: 7,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''The Hold''' is a gaol of elit beneath the example keep.",
+          },
+        ],
+      },
+      {
+        // A 2010 redirect whose target was itself renamed afterwards: the era
+        // target is gone, the newest revision names one that is here.
+        title: "Example Old Spelling",
+        ns: 0,
+        id: 7,
+        revisions: [
+          {
+            id: 9,
+            timestamp: "2018-01-01T00:00:00Z",
+            text: "#REDIRECT [[Example Warren (dungeon)]]",
+          },
+          {
+            id: 8,
+            timestamp: "2009-06-01T00:00:00Z",
+            text: "#REDIRECT [[Example Warren Vanished]]",
+          },
+        ],
+      },
+      {
+        // Out-of-game, and its newest revision is a redirect to a page that is
+        // here. The name still stays out: a patch archive is dropped, not
+        // demoted, so it must not come back as something search can return.
+        title: "Patch 4.0.1",
+        ns: 0,
+        id: 8,
+        revisions: [
+          {
+            id: 10,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "#REDIRECT [[Example Warren (dungeon)]]",
+          },
+        ],
+      },
+      {
+        // A bare title whose `(original)` sibling leads nowhere: no page, no
+        // redirect row, counted dangling like any other candidate.
+        title: "Example Nowhere (original)",
+        ns: 0,
+        id: 9,
+        revisions: [
+          { id: 11, timestamp: "2017-01-01T00:00:00Z", text: "#REDIRECT [[Example Gone]]" },
+        ],
+      },
+    ]),
+  );
+
+  const proc = Bun.spawn(
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(0);
+
+  const db = new Database(outPath, { readonly: true });
+  const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
+  const metaValue = (key: string): string => meta.get(key)!.value;
+
+  // The bare titles all answer, and they answer with this world's article.
+  expect(searchReference(db, "Example Delve")[0]!.title).toBe("Example Delve (original)");
+  expect(searchReference(db, "Example Warren")[0]!.title).toBe("Example Warren (dungeon)");
+  expect(searchReference(db, "Example Hold")[0]!.title).toBe("The Hold (original)");
+  expect(searchReference(db, "Example Old Spelling")[0]!.title).toBe("Example Warren (dungeon)");
+
+  // Written targets resolve: a row pointing at a title with neither a page nor
+  // a redirect of its own would be a dead row.
+  const rows = db
+    .query<{ source: string; target: string }, []>("SELECT source, target FROM redirects ORDER BY source")
+    .all();
+  expect(rows).toEqual([
+    { source: "Example Delve", target: "Example Delve (original)" },
+    { source: "Example Hold", target: "Example Hold (original)" },
+    { source: "Example Hold (original)", target: "The Hold (original)" },
+    { source: "Example Old Spelling", target: "Example Warren (dungeon)" },
+    { source: "Example Warren", target: "Example Warren (dungeon)" },
+    // The destination of the chain is a moved page too, and its own bare title
+    // was free: the rule does not care how the sibling got into the bundle.
+    { source: "The Hold", target: "The Hold (original)" },
+  ]);
+
+  // The out-of-game title is not a page and not a name either.
+  expect(searchReference(db, "Patch 4.0.1").some((h) => h.title === "Patch 4.0.1")).toBe(false);
+  expect(metaValue("pages_dropped_meta")).toBe("1");
+
+  // Three through the newest revision — the late page, the renamed target, and
+  // the sibling that is itself only a redirect — and three through an
+  // `(original)` sibling.
+  expect(metaValue("redirects_recovered_newest")).toBe("3");
+  expect(metaValue("redirects_original_sibling")).toBe("3");
+  expect(metaValue("redirects")).toBe("6");
+  // One page in this dump was a redirect at the cutoff. Everything else here is
+  // a name recovered afterwards, which is why the accounting identity counts
+  // this and not the rows written.
+  expect(metaValue("pages_era_redirect")).toBe("1");
+  // `Example Nowhere (original)` leads nowhere, and neither does the sibling
+  // candidate generated from it.
+  expect(metaValue("redirects_dropped_dangling")).toBe("2");
+  // The bare `Example Delve` is still a dropped page, counted under its reason:
+  // recovering the name does not put the page back.
+  expect(metaValue("pages_dropped_post_wrath")).toBe("1");
+  db.close();
+}, 30_000);
+
+test("siblingRedirects prefers (original), and leaves a title that already answers alone", () => {
+  const survivors = [
+    { title: "Example Delve (original)", ns: 0 },
+    { title: "Example Delve (old)", ns: 0 },
+    { title: "Example Kept (old)", ns: 0 },
+    { title: "Example Answered (original)", ns: 0 },
+    { title: "Example Article", ns: 0 },
+    { title: "Example Category (original)", ns: 14 },
+  ];
+  const resolvable = new Set(["example answered", "example article"]);
+  expect(siblingRedirects(survivors, resolvable).sort((a, b) => (a.source < b.source ? -1 : 1))).toEqual([
+    { source: "Example Category", target: "Example Category (original)", ns: 14 },
+    { source: "Example Delve", target: "Example Delve (original)", ns: 0 },
+    { source: "Example Kept", target: "Example Kept (old)", ns: 0 },
+  ]);
 });

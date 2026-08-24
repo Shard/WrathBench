@@ -15,7 +15,8 @@
  * is the example — it acquired `|patch=4.0.1` in 2010 and the city is standing.
  *
  * `admitPage` is the one page-level decision, a pure function of the title, the
- * two revisions the parser holds and the page's creation date. It is deliberately the only door: an
+ * namespace, the two revisions the parser holds and the page's creation date.
+ * It is deliberately the only door: an
  * admission rule the evidence does not support today (see
  * `post_cutoff_wrath_signal` below, and ADR-0040 on the server-side id
  * cross-check that is not implemented) is added here, not in the parser or the
@@ -64,6 +65,12 @@ export type AdmitReason =
 
 export interface AdmitInput {
   title: string;
+  /**
+   * The page's namespace. Only the ns-14 category-title rule reads it, and it
+   * is required rather than defaulted so a new call site cannot opt out of that
+   * rule by omission.
+   */
+  ns: number;
   /**
    * The newest revision saved before the era cutoff that passed the parser's
    * hygiene rules, or null when the page has none.
@@ -126,6 +133,83 @@ const POST_WRATH_TEMPLATES = new Set([
 /** `(Cataclysm)`, `(Legion)` and friends as a title's disambiguation parenthetical. */
 const TITLE_PARENTHETICAL =
   /\((cataclysm|mists of pandaria|legion|warlords of draenor|battle for azeroth|shadowlands)\)(\/|$| )/i;
+
+/**
+ * The same expansion names as a **subpage** suffix: `Global functions/Cataclysm`,
+ * `Macro commands/Mists of Pandaria`. The wiki forks a reference page per
+ * expansion this way, and the fork documents the later client. It says exactly
+ * what the parenthetical above says, so it is read exactly the same way.
+ */
+const TITLE_SUBPAGE =
+  /\/(cataclysm|mists of pandaria|legion|warlords of draenor|battle for azeroth|shadowlands)(\/|$)/i;
+
+/**
+ * Zones and features Cataclysm and later coined, as they appear in a **category
+ * page's own title**.
+ *
+ * This is a title rule for ns 14 only, and it exists because the category rule
+ * below reads the categories written *on* a page and never the name of a
+ * category page itself: `Category:Deepholm quests` carries no category of its
+ * own, so it sailed through every signal. An adversarial read of the built
+ * bundle (2026-08-24) found 33 such stubs in it.
+ *
+ * It is deliberately **not** applied to ns 0. Mount Hyjal, Tol Barad, Gilneas
+ * and Uldum all have Wrath-era lore pages under those names — which is why
+ * `verify.ts` refuses to list them as forbidden titles — and dropping an
+ * article for naming one would delete this world's own lore. In ns 14 the
+ * precision runs the other way: a category grouping pages under one of these
+ * names is grouping the later world's pages.
+ *
+ * `Legion` is absent from the list and handled by `legionCategoryIsExpansion`,
+ * for the same reason it is absent from the substring list below:
+ * `Category:Burning Legion` is this world's.
+ */
+const POST_WRATH_TITLE_SUBJECTS = [
+  "deepholm",
+  "gilneas",
+  "mount hyjal",
+  "tol barad",
+  "twilight highlands",
+  "uldum",
+  "vashj'ir",
+  "kelp'thar forest",
+  "shimmering expanse",
+  "abyssal depths",
+  "kezan",
+  "lost isles",
+  "archaeology",
+  "cataclysm",
+  "mists of pandaria",
+  "pandaria",
+  "warlords of draenor",
+  "battle for azeroth",
+  "shadowlands",
+];
+
+/** Word-bounded: `Category:Gilneas quests` fires, a longer word containing it does not. */
+const POST_WRATH_TITLE_SUBJECT = new RegExp(
+  `\\b(${POST_WRATH_TITLE_SUBJECTS.join("|")})\\b`,
+  "i",
+);
+
+/**
+ * Does this **category page's own title** name a post-Wrath zone or feature?
+ *
+ * False in every other namespace, and the namespace is checked here rather than
+ * at the call site so the rule cannot be reused where its precision does not
+ * hold.
+ */
+export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
+  if (ns !== 14) return false;
+  const name = title
+    .replace(/^\s*category\s*:\s*/i, "")
+    .replace(/_/g, " ")
+    .trim()
+    .toLowerCase();
+  if (name.length === 0) return false;
+  if (POST_WRATH_TITLE_SUBJECT.test(name)) return true;
+  return legionCategoryIsExpansion(name);
+}
 
 /**
  * Category names that place the page in a later expansion.
@@ -251,8 +335,10 @@ const WRATH_OR_EARLIER_CATEGORIES = new Set([
  * added in 2011, and dropping the page for that would delete a zone that is
  * standing in this world.
  */
-export function hasPostWrathSignal(title: string, wikitext: string): boolean {
+export function hasPostWrathSignal(title: string, wikitext: string, ns = 0): boolean {
   if (TITLE_PARENTHETICAL.test(title)) return true;
+  if (TITLE_SUBPAGE.test(title)) return true;
+  if (categoryTitleIsPostWrath(ns, title)) return true;
   for (const name of categoryNames(wikitext)) {
     if (categoryIsPostWrath(name)) return true;
   }
@@ -374,14 +460,14 @@ export function admitPage(page: AdmitInput): AdmitDecision {
     if (
       hasWrathSignal(page.newestWikitext) &&
       !hasClassic2019Signal(page.title, page.newestWikitext) &&
-      !hasPostWrathSignal(page.title, page.newestWikitext)
+      !hasPostWrathSignal(page.title, page.newestWikitext, page.ns)
     ) {
       return { admit: true, reason: "post_cutoff_wrath_signal" };
     }
     return { admit: false, reason: "dropped_post_cutoff" };
   }
 
-  if (hasPostWrathSignal(page.title, page.eraWikitext)) {
+  if (hasPostWrathSignal(page.title, page.eraWikitext, page.ns)) {
     if (!isPreAnnouncementPage(page.firstRevisionAt)) {
       return { admit: false, reason: "dropped_post_wrath" };
     }
