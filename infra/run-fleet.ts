@@ -3297,7 +3297,12 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const argvs: string[] = [];
   const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
     const entries = fillEntries(spawn, stampToday);
-    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+    // The same resume decision the live spawn makes (see the spawn path):
+    // without it the plan showed a fresh launch for a job whose day jsonl was
+    // on disk, which read as "the paused probe gets clobbered" when the real
+    // spawn would have resumed it.
+    const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
+    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
     return {
       name: job.name,
       models: [...new Set(entries.map((e) => e.model))],
