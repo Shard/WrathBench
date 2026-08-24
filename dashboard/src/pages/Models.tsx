@@ -204,9 +204,11 @@ export default function Models() {
         </Show>
 
         {/*
-          Roster entries the policy does not schedule are named, not rowed: a
-          probe on a pinned account runs the same model under an objective, so a
-          row would show that model's counts twice (FOLLOW-UPS 52).
+          Roster entries the policy does not schedule are named, not rowed. One
+          reason is left — a pinned job holds that account — since ADR-0041 made
+          the roster a catalog: an entry cannot carry an objective, and a probe
+          campaign BORROWS a catalog entry rather than taking it out of the
+          schedule, so it produces no exclusion at all.
         */}
         <Show when={body()!.roster.excluded.length > 0}>
           <p class="dim">
@@ -251,7 +253,7 @@ function Detail(props: { row: ModelRowView }) {
             <tr>
               <th>run</th>
               <th>episode</th>
-              <th title="the starting character this run was launched on (ADR-0034's extras cycle)">character</th>
+              <th title="the starting character this run was launched on — a campaign cell for a probe (ADR-0041), the entry's own otherwise">character</th>
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
@@ -273,7 +275,8 @@ function Detail(props: { row: ModelRowView }) {
                     {r.episode}
                     <Show when={r.episodeOverride}> (overridden)</Show>
                   </td>
-                  {/* Extras cycle through races and classes; the baseline is Human Paladin. */}
+                  {/* A probe campaign's cells vary race and class; everything else
+                      starts on the entry's own character. */}
                   <td class="dim">{r.characterLabel ?? "—"}</td>
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>

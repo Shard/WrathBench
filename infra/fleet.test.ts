@@ -75,7 +75,7 @@ import {
   pinnedCampaignJobs,
   probeRunsOf,
 } from "./run-fleet";
-import { DEFAULT_POLICY, IDLE_CHARACTERS, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -218,7 +218,7 @@ describe("campaigns (ADR-0041)", () => {
     // must not smuggle it into a sweep that named its own.
     const config = parseFleet(
       fleetJson([], {
-        roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99, wikiCoords: true } },
+        roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99 } },
         campaigns: {
           nav: {
             cells: [{ id: "coldridge", race: 3, class: 2 }],
@@ -226,6 +226,7 @@ describe("campaigns (ADR-0041)", () => {
             models: ["son"],
             objective: "walk to Ironforge",
             maxToolCalls: 2500,
+            wikiCoords: true,
           },
         },
       }),
@@ -242,9 +243,12 @@ describe("campaigns (ADR-0041)", () => {
       race: 3,
       class: 2,
     });
-    // The entry said wikiCoords: true; the campaign said nothing, so the run
-    // gets nothing. A campaign is the whole authority on its task shape.
-    expect(spawn.entries[0]!.wikiCoords).toBeUndefined();
+    // The entry asked for a 99-call ceiling; the campaign's 2500 stands, and
+    // the entry's number does not leak in. A campaign is the whole authority on
+    // its task shape, and coordinates come from it rather than from the catalog
+    // (which may no longer ask for them at all).
+    expect(spawn.entries[0]!.wikiCoords).toBe(true);
+    expect(spawn.entries[0]!.maxToolCalls).toBe(2500);
   });
 
   test("two cells of one campaign are two job names, so nothing collides", () => {
@@ -534,11 +538,11 @@ describe("the shipped fleet files", () => {
      * budget. If any of those come back, this fails and says which.
      */
     for (const [name, e] of Object.entries(config.roster)) {
-      const steered = e.objective !== undefined;
-      // Steered entries are outside the policy and state no budget; everything
-      // else states exactly one, and it is a tier from the code table.
-      expect(steered ? e.tier === undefined : e.tier !== undefined).toBe(true);
-      if (!steered) expect(TIERS).toContain(e.tier!);
+      // Every entry states exactly one budget, and it is a tier from the code
+      // table. There is no steered-entry exception left to make: since
+      // ADR-0041 an entry cannot carry an objective, so it is always in the
+      // policy and always states a tier.
+      expect(TIERS).toContain(e.tier);
       expect(IDLE_MODES).toContain(e.idle);
       const asAny = e as unknown as Record<string, unknown>;
       expect(asAny["runsPerEpisode"], `${name} must not carry a run count of its own`).toBeUndefined();
@@ -598,23 +602,56 @@ describe("the shipped fleet files", () => {
     // Whatever it is called, the job parked on the paid account is disabled —
     // an enabled one would HOLD SHAKEOUT2 and starve the paid class.
     expect(config.jobs.find((j) => j.account === "SHAKEOUT2")!.enabled).toBe(false);
+    // SHAKEOUT is spoken for by the nav-probe CAMPAIGN now, not by a queue job.
     expect(Object.keys(config.accounts.pinned).sort()).toEqual(["SHAKEOUT", "SHAKEOUT2"]);
+    expect(config.accounts.pinned["SHAKEOUT"]).toBe("campaign nav-probe");
 
-    // nav-probe: the unscored navigation probe (ADR-0033) — an objective, 6h
-    // episodes, no-xp disabled, the only entry serving wiki coords. Outside the
-    // policy twice over, and carrying no tier because it owns no budget.
-    const probe = config.roster["nav-probe"]!;
-    expect(probe).toMatchObject({ model: "sonnet", driver: "claude-code", wikiCoords: true, maxToolCalls: 2500 });
-    expect(probe.objective).toContain("Ironforge");
-    expect(probe.tier).toBeUndefined();
-    expect(probe.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
-    for (const [n, e] of Object.entries(config.roster)) if (n !== "nav-probe") expect(e.wikiCoords).toBeUndefined();
-    expect(policyRefs(config).has("nav-probe")).toBe(false);
-    expect(rosterModels(config.roster).some((m) => m.name === "nav-probe")).toBe(false);
-    const pinned = pinnedJobs(config);
-    expect(pinned[0]!.name).toBe("nav-probe-freeplay");
-    const probeSpawn = jobSpawn(pinned[0]!, config.roster, "SHAKEOUT", "20260101");
-    expect(probeSpawn.entries[0]).toMatchObject({ episode: "freeplay", wikiCoords: true, maxToolCalls: 2500, watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 } });
+    // The roster is a CATALOG (ADR-0041): every entry is a model and nothing
+    // else, so nothing in it carries an objective or wiki coords, and the two
+    // probes that used to live there are campaigns.
+    for (const [n, e] of Object.entries(config.roster)) {
+      expect(e.objective, `${n} carries an objective`).toBeUndefined();
+      expect(e.wikiCoords, `${n} carries wikiCoords`).toBeUndefined();
+      expect(e.tier, `${n} has no tier`).toBeDefined();
+    }
+
+    // nav-probe: the navigation probe, pinned to its own account, 6h episodes,
+    // no-xp disabled, the only thing serving wiki coords. It borrows `sonnet`'s
+    // credentials and owns its whole task shape.
+    const nav = config.campaigns.find((c) => c.name === "nav-probe")!;
+    expect(nav).toMatchObject({ enabled: true, account: "SHAKEOUT", models: ["sonnet"], wikiCoords: true, maxToolCalls: 2500 });
+    expect(nav.objective).toContain("Ironforge");
+    expect(nav.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
+    expect(nav.cells.map((c) => c.id)).toEqual(["coldridge"]);
+    const navJob = pinnedCampaignJobs(config, [])[0]!;
+    expect(navJob).toMatchObject({ name: "nav-probe-coldridge", account: "SHAKEOUT", episode: "probing", ref: "sonnet" });
+    const probeSpawn = jobSpawn(navJob, config.roster, "SHAKEOUT", "20260101", undefined, config.campaigns);
+    expect(probeSpawn.entries[0]).toMatchObject({
+      episode: "probing",
+      campaign: "nav-probe",
+      cell: "coldridge",
+      wikiCoords: true,
+      maxToolCalls: 2500,
+      character: "Navprobe",
+      watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
+    });
+
+    // class-probe: the race/class sweep that used to be `idle: "characters"`.
+    // Eight cells named in the file rather than a code-side cycle indexed by a
+    // counter that meant something else, and unscored where it belongs.
+    const classes = config.campaigns.find((c) => c.name === "class-probe")!;
+    expect(classes.cells).toHaveLength(8);
+    expect(classes.account).toBeUndefined();
+    expect(classes.models).toEqual(["ox-alpha", "x-preview-f", "muse-spark"]);
+    for (const c of classes.cells) {
+      expect(c.race, `${c.id} names a race`).toBeDefined();
+      expect(c.class, `${c.id} names a class`).toBeDefined();
+    }
+    // Every campaign model is a real catalog entry.
+    for (const c of config.campaigns) {
+      if (c.models === "all") continue;
+      for (const m of c.models) expect(config.roster[m], `${c.name} names ${m}`).toBeDefined();
+    }
 
     // Manual pool jobs are operator steering; each must be a real roster ref.
     for (const j of poolJobs(config)) expect(config.roster[j.ref]).toBeDefined();
@@ -628,7 +665,7 @@ describe("the shipped fleet files", () => {
       expect(st.eligible).toEqual(["e90"]);
     }
     const plan = planTick(config, states, () => undefined, "20260101");
-    expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-freeplay"]);
+    expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-coldridge"]);
     /*
      * The cap is what matters, not which bucket spends it. Every claude-code
      * stream counts against `maxConcurrent["claude-code"]` wherever it is
@@ -700,36 +737,45 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(poolJobs(config)[3]).toMatchObject({ refs: ["glm", "qwen"], ref: "glm+qwen" });
   });
 
-  test("the job shape: a job with an account is pinned, accounts.pinned is derived, the probe is a roster entry", () => {
+  test("the job shape: a job with an account is pinned, accounts.pinned is derived, a probe is a campaign", () => {
     const config = parseFleet({
       accounts: { pool: ["RUNNER", "RUNNER2"] },
       roster: {
-        probe: { model: "sonnet", driver: "claude-code", objective: "walk to Ironforge", wikiCoords: true, watchdogs: { episodeMs: 21_600_000 } },
         son: { tier: "t1", model: "sonnet", driver: "claude-code" },
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
-      queue: [
-        { ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop" },
-        { ref: "glm", episode: "e90", repeat: 2 },
-      ],
+      campaigns: {
+        probe: {
+          account: "SHAKEOUT",
+          models: ["son"],
+          objective: "walk to Ironforge",
+          wikiCoords: true,
+          watchdogs: { episodeMs: 21_600_000 },
+          cells: [{ id: "ironforge" }],
+        },
+      },
+      queue: [{ ref: "glm", episode: "e90", repeat: 2 }],
     });
-    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "probe-freeplay" });
+    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "campaign probe" });
     expect(config.maxConcurrent).toEqual({ "claude-code": 2 });
-    expect(config.jobs.map((j) => [j.name, j.source])).toEqual([["probe-freeplay", "pinned"], ["glm-e90", "queue"]]);
-    // The pinned job materialises with the entry's own dimensions on the tier's.
-    const l = jobSpawn(config.jobs[0]!, config.roster, "SHAKEOUT", "20260101");
-    expect(l).toMatchObject({ name: "probe-freeplay", account: "SHAKEOUT", loop: true });
+    expect(config.jobs.map((j) => [j.name, j.source])).toEqual([["glm-e90", "queue"]]);
+    // The campaign materialises with its own dimensions over the episode's.
+    const job = pinnedCampaignJobs(config, [])[0]!;
+    const l = jobSpawn(job, config.roster, "SHAKEOUT", "20260101", undefined, config.campaigns);
+    expect(l).toMatchObject({ name: "probe-ironforge", account: "SHAKEOUT" });
     expect(fillEntries(l, "20260101")[0]).toMatchObject({
-      runId: "fleet-probe-freeplay-sonnet-20260101",
+      runId: "fleet-probe-ironforge-sonnet-20260101",
       objective: "walk to Ironforge",
       wikiCoords: true,
-      episode: "freeplay",
+      episode: "probing",
+      campaign: "probe",
+      cell: "ironforge",
       watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null },
     });
-    // The policy's roster: not the pinned ref, not a probe; `son` (same model, no objective) is in.
+    // Both entries are in the policy: a campaign borrows a model rather than
+    // taking it out of the schedule, which is the point of the catalog cut.
     expect([...policyRefs(config)]).toEqual(["son", "glm"]);
-    expect(policyExclusion(config, "probe")).toMatch(/pinned to SHAKEOUT by job probe-freeplay/);
     expect(policyExclusion(config, "son")).toBeUndefined();
     // Guards: two enabled jobs on one account; a pinned account in the pool.
     const pin = (over: Record<string, unknown>) => ({ accounts: { pool: ["RUNNER"] }, roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, ox: { tier: "t1", model: "stealth/ox-alpha" } }, ...over });
@@ -751,11 +797,14 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", account: "RUNNER" } }, queue: [] }))).toThrow(/must not pin an account/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }], accounts: { pool: [] } }))).toThrow(/pool is empty/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", runsPerEpisode: { e45: 1 } } }, queue: [] }))).toThrow(/runsPerEpisode is not a 0.5 key/);
-    expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/every policy-scheduled entry states its tier/);
+    expect(() => parseFleet(nextShape({ roster: { glm: { model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/every entry states its tier/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t9", model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/tier must be one of t0, t1, t2/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", idle: "sometimes", model: "z-ai/glm-5.2:free" } }, queue: [] }))).toThrow(/idle must be one of/);
-    // A steered entry is outside the policy, so a tier on it is refused, not ignored.
-    expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code", objective: "ride" } }, queue: [] }))).toThrow(/must not carry a tier/);
+    // The roster is a catalog: steering cannot enter it at all (ADR-0041), so
+    // an objective is refused rather than making the entry a second kind of
+    // thing that every scored surface then needs a branch for.
+    expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code", objective: "ride" } }, queue: [] }))).toThrow(/must not carry an objective/);
+    expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", wikiCoords: true } }, queue: [] }))).toThrow(/must not carry wikiCoords/);
     expect(() => parseFleet(nextShape({ policy: { runsPerEpisode: { e90: 3 } } }))).toThrow(/policy.runsPerEpisode is not a 0.5 key/);
     expect(() => parseFleet(nextShape({ policy: { extras: { characters: [] } } }))).toThrow(/policy.extras is not a 0.5 key/);
     expect(() => parseFleet(nextShape({ policy: { paid: { runsPerEpisode: { e90: 3 } } } }))).toThrow(/policy.paid.runsPerEpisode is not a 0.5 key/);
@@ -995,25 +1044,30 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     const config = parseFleet({
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
       roster: {
-        probe: { model: "sonnet", driver: "claude-code", objective: "x" },
         son: { tier: "t1", model: "sonnet", driver: "claude-code" },
         sonlo: { tier: "t1", model: "sonnet", driver: "claude-code", effort: "low" },
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
-      queue: [{ ref: "probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop" }],
+      campaigns: { probe: { account: "SHAKEOUT", models: ["son"], objective: "x", cells: [{ id: "c1" }] } },
     });
     const states = modelStatesOf(rosterModels(config.roster));
     const plan = planTick(config, states, () => undefined, "20260101");
-    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["probe-freeplay", "SHAKEOUT"]]);
+    // The campaign's pinned cell shows up HERE, not only in the live loop:
+    // `--status` and `--dry-run` read this planner, and a probe the supervisor
+    // would spawn but its own report never mentions is the disagreement this
+    // whole shape exists to prevent.
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["probe-c1", "SHAKEOUT"]]);
     expect(plan.queue.assign).toEqual([]);
-    // Three free accounts, three policy models — but only one more claude-code stream fits beside the probe.
-    expect(plan.policy.map((p) => [p.job.ref, p.account])).toEqual([["son", "RUNNER"], ["glm", "RUNNER2"]]);
-    // Without the cap, both sonnets go.
+    // The campaign holds `son`, so the second claude-code stream is `sonlo` —
+    // and the cap counts the probe's stream wherever it was scheduled from.
+    expect(plan.policy.map((p) => [p.job.ref, p.account])).toEqual([["sonlo", "RUNNER"], ["glm", "RUNNER2"]]);
+    // Without the cap, the other sonnet goes too.
     const uncapped = planTick({ ...config, maxConcurrent: {} }, states, () => undefined, "20260101");
-    expect(uncapped.policy.map((p) => p.job.ref)).toEqual(["son", "sonlo", "glm"]);
-    // A held pool account is not free; a disabled pinned job does not spawn and does not count.
-    const held = planTick({ ...config, jobs: config.jobs.map((j) => ({ ...j, enabled: false })) }, states, (a) => (a === "RUNNER" ? "hand" : undefined), "20260101");
+    expect(uncapped.policy.map((p) => p.job.ref)).toEqual(["sonlo", "glm"]);
+    // A disabled campaign does not spawn and does not count against the cap.
+    const off = { ...config, campaigns: config.campaigns.map((c) => ({ ...c, enabled: false })) };
+    const held = planTick(off, states, (a) => (a === "RUNNER" ? "hand" : undefined), "20260101");
     expect(held.pinned).toEqual([]);
     expect(held.policy.map((p) => [p.job.ref, p.account])).toEqual([["son", "RUNNER2"], ["sonlo", "RUNNER3"]]);
   });
@@ -1193,14 +1247,14 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(formatModels(states, new Set(), NOW, new Map([["ox", "pinned to X by job ox-freeplay"]])).join("\n")).toMatch(/ox +free +t1>t2 +pinned .*no: pinned to X by job ox-freeplay/);
   });
 
-  test("paid and free (ADR-0034 amendment): the paid cap holds a pick and says so; an extra rolls its character into the spawn", () => {
+  test("paid and free (ADR-0034 amendment): the paid cap holds a pick and says so; an idle pick is an unlimited session", () => {
     const raw = {
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"], paid: ["PAID"], local: ["LOCALBOX"] },
       roster: {
         big: { tier: "t1", model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
         bigger: { tier: "t1", model: "vendor/bigger", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
-        glm: { tier: "t1", idle: "characters", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "characters", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        glm: { tier: "t1", idle: "unlimited", model: "z-ai/glm-5.2:free" },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
         forced: { tier: "t1", model: "z-ai/other:free", billing: "paid" },
       },
       policy: { paid: {} },
@@ -1225,29 +1279,30 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(by["glm"]!.billing).toBe("free");
     expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
     const plan = planTick(config, states, () => undefined, "20260101");
-    // One paid model (roster order) on the PAID account, then extras for the
-    // free ones; bigger and forced are held by the cap. A paid pick never takes
-    // a pool account, an extra never takes a paid one, and the local model's
-    // extra takes the box rather than a pool account.
+    // One paid model (roster order) on the PAID account, then idle sessions for
+    // the free ones; bigger and forced are held by the cap. A paid pick never
+    // takes a pool account, an idle session never takes a paid one, and the
+    // local model's takes the box rather than a pool account. The idle job is
+    // named for `freeplay` now: an idle pick is an unlimited session, since the
+    // race/class cycle that used to make it a scored e90 extra is a campaign.
     expect(plan.policy.map((p) => [p.job.name, p.account, p.job.extra !== undefined])).toEqual([
       ["big-e90", "PAID", false],
-      ["glm-e90", "RUNNER", true],
-      ["local-e90", "LOCALBOX", true],
+      ["glm-freeplay", "RUNNER", false],
+      ["local-freeplay", "LOCALBOX", false],
     ]);
     expect(plan.heldPicks.map((h) => h.name)).toEqual(["bigger", "forced"]);
     // PAID went to `big` in this same round, so the honest reason for `bigger`
     // is the account, named with who has it — the cap is what a SECOND paid
     // account would run into (asserted below).
     expect(formatHeld(plan.heldPicks)[0]).toMatch(/bigger: HELD — e90 wanted, paid account\(s\) busy: PAID held by big/);
-    // glm has made no extras: the first character; local has made one: the second.
-    const chars = IDLE_CHARACTERS;
-    expect(plan.policy[1]!.job.extra).toEqual(chars[0]!);
-    expect(plan.policy[2]!.job.extra).toEqual(chars[1]!);
-    // The extra reaches the spawn as race/class plus the stamp, and the argv carries --extra.
+    // Both idle picks are unlimited freeplay sessions now: the race/class cycle
+    // that used to make them scored e90 extras is a probe campaign (ADR-0041),
+    // where an unscored question belongs.
+    expect(plan.policy[1]!.job.extra).toBeUndefined();
+    expect(plan.policy[2]!.job.extra).toBeUndefined();
     const extraSpawn = jobSpawn(plan.policy[2]!.job, config.roster, "LOCALBOX", "20260101");
-    expect(extraSpawn.entries[0]).toMatchObject({ race: chars[1]!.race, class: chars[1]!.class, extra: true, episode: "e90" });
+    expect(extraSpawn.entries[0]).toMatchObject({ episode: "freeplay" });
     expect((extraSpawn.entries[0] as unknown as Record<string, unknown>)["billing"]).toBeUndefined();
-    expect(jobArgv(extraSpawn, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-e90");
     // A paid model already in flight fills the cap before any pick.
     const paidStates = states.filter((st) => st.billing === "paid");
     const none = planPolicyHeld({ states: paidStates, pool: ["RUNNER"], classPools: { paid: ["PAID"] }, running: new Map(), held: () => undefined, queuePlan: empty, runningRefs: new Set(), policy: config.policy, paidRunning: 1 });
@@ -1300,7 +1355,7 @@ describe("scheduling policy (ADR-0032)", () => {
     const heldPlan = planTick(noAccount, states, () => undefined, "20260101");
     // No paid account AND no local account: both classes hold, the free pool
     // model still runs, and neither held class spills onto a pool account.
-    expect(heldPlan.policy.map((p) => p.job.name)).toEqual(["glm-e90"]);
+    expect(heldPlan.policy.map((p) => p.job.name)).toEqual(["glm-freeplay"]);
     expect(heldPlan.heldPicks.map((h) => [h.name, h.why])).toEqual([
       ["big", "no paid account configured — add one to accounts.paid"],
       ["bigger", "no paid account configured — add one to accounts.paid"],
@@ -1431,7 +1486,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
     ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
-    nav: { model: "sonnet", driver: "claude-code", objective: "probe", idle: "none" },
+    nav: { model: "sonnet", driver: "claude-code", tier: "t1", idle: "none" },
   };
   const paused = (over: Partial<RunFact> & { runId: string; model: string; account: string }): RunFact => ({
     effort: null,

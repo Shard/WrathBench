@@ -45,7 +45,6 @@ import {
   TIERS,
   TIER_TABLE,
   IDLE_MODES,
-  IDLE_CHARACTERS,
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
@@ -218,12 +217,12 @@ export function readFleetRoster(path: string | undefined, series: string | null 
       name: `${refs[0] ?? "job"}-${typeof j.episode === "string" ? j.episode : "e90"}`,
     };
   });
-  // Over every roster NAME, not just the rowed models: a steered entry carries
-  // no tier and so is never rowed, and naming it here is the only place the
-  // page can say that a probe exists and why nothing schedules it.
+  // Over every roster NAME. One reason is left — a pinned job holds this
+  // account — since a catalog entry can no longer carry an objective (ADR-0041)
+  // and a campaign borrows a model rather than removing it from the schedule.
   const excluded: { name: string; reason: string }[] = [];
   for (const name of Object.keys(parsed.roster)) {
-    const reason = policyExclusion(jobs, parsed.roster, name);
+    const reason = policyExclusion(jobs, {}, name);
     if (reason !== undefined) excluded.push({ name, reason });
   }
   const accounts: ClassAccountCounts = {
@@ -514,7 +513,6 @@ export function modelsResponse(opts: {
       series: opts.roster.policy.series,
       paid: opts.roster.policy.paid,
       tiers: TIER_TABLE,
-      idleCharacters: IDLE_CHARACTERS.length,
       maxConcurrent: opts.roster.maxConcurrent,
     },
     ladderMs: [...LADDER_MS],

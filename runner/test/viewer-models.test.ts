@@ -160,14 +160,18 @@ describe("readFleetRoster", () => {
     expect(read.maxConcurrent).toEqual({ "claude-code": 2 });
   });
 
-  test("an objective excludes an entry no job names", () => {
+  test("an entry is excluded only by a pinned job, never by anything on itself", () => {
+    // The viewer is deliberately lenient about a config the supervisor would
+    // refuse — it reports what a file says rather than adjudicating it — so an
+    // entry with a stray objective is still read. It is simply not a reason:
+    // since ADR-0041 nothing on an entry takes it out of the policy, and a
+    // campaign borrows a model rather than removing it from the schedule.
     const { fleetPath } = fixture({
       ...ROSTER,
-      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
+      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", tier: "t1", objective: "ride the tram" } },
     });
-    expect(readFleetRoster(fleetPath).excluded).toEqual([
-      { name: "probe", reason: "carries an objective (unscored probe)" },
-    ]);
+    expect(readFleetRoster(fleetPath).excluded).toEqual([]);
+    expect(readFleetRoster(fleetPath).models.some((m) => m.name === "probe")).toBe(true);
   });
 
   test("a config without a roster map is unreadable and empty, never a synthesised roster", () => {

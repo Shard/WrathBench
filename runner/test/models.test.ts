@@ -16,7 +16,6 @@ import {
   nextJobs,
   planNextJobs,
   DEFAULT_PAID,
-  IDLE_CHARACTERS,
   TIER_TABLE,
   effectiveTier,
   type SchedulingPolicy,
@@ -593,16 +592,16 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(busy.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
     expect(busy.held).toEqual([{ name: "l1", episode: "e90", why: "no local account configured — add one to accounts.local" }]);
     // An extra follows its model's class: the local model's extra takes the box.
-    // `idle` is the model's own axis, so a local model on the character cycle
-    // is now spelled on the entry rather than inferred from a policy knob.
-    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "characters" }, [
+    // `idle` is the model's own axis, so what a local model does when it is
+    // spent is spelled on the entry rather than inferred from a policy knob.
+    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" }, [
       good("qwen/q", "e90", 1, 5),
       good("qwen/q", "e90", 2),
       good("qwen/q", "e90", 3),
       good("qwen/q", "e360", 4),
     ]);
     const extras = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
-    expect(extras.jobs.map((j) => [j.name, j.account, j.extra !== undefined])).toEqual([["l1", "BOX", true]]);
+    expect(extras.jobs.map((j) => [j.name, j.account, j.episode])).toEqual([["l1", "BOX", "freeplay"]]);
     expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
   });
 
@@ -642,59 +641,12 @@ describe("paid and free (ADR-0034 amendment)", () => {
       episode: "e90",
       account: "BOX",
     });
-    // The axis is per model, so the same box on `characters` cycles instead —
-    // and, unlike the old knob, a NON-local model may take unlimited sessions.
-    const cycle = st({ ...local, idle: "characters" }, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
-    expect(planNextJobs([cycle], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
-      episode: "e90",
-      extra: IDLE_CHARACTERS[0]!,
-    });
+    // The axis is per model, so — unlike the old knob it replaced — a NON-local
+    // model may take unlimited sessions too.
     const pooled = st({ name: "f1", model: "v/f:free", idle: "unlimited" }, [good("v/f:free", "e90", 1, 3), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3)]);
     expect(planNextJobs([pooled], ["R1"], new Set(), { policy }).jobs[0]).toMatchObject({ episode: "freeplay", account: "R1" });
   });
 
-  test("idle: characters — extras past the target, cycling the code table, lowest priority, class-bound", () => {
-    const chars = IDLE_CHARACTERS;
-    const idle = { idle: "characters" as const };
-    // t1 climbs to t2 on the level-5 run, so e360 x1 is part of this budget.
-    const metFree = st({ name: "f", model: "v/f:free", ...idle }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4)]);
-    expect(metFree.tier).toBe("t2");
-    expect(schedulability(metFree, new Set(), policy).verdict).toBe("free");
-    expect(wantsIdle(schedulability(metFree, new Set(), policy), metFree)).toBe(true);
-    expect(schedulability(metFree, new Set(), policy).why).toContain("extra characters");
-    const unpromoted = st({ name: "u", model: "v/u:free", ...idle }, [good("v/u:free", "e90", 1), good("v/u:free", "e90", 2), good("v/u:free", "e90", 3)]);
-    const fresh = st({ name: "n", model: "v/n:free", ...idle }, []);
-    // A paid model with the default `idle: none` takes no extras — but now that
-    // is its entry's word, not a rule about its billing.
-    const metPaid = st({ name: "p", model: "v/p", tier: "t0" }, [good("v/p", "e90", 1)]);
-    const plan = planNextJobs([metFree, unpromoted, fresh, metPaid], ["R1", "R2", "R3", "R4"], new Set(), { policy });
-    // The fresh model first (a real target); then extras, e90 before e360, fewest extras first.
-    expect(plan.jobs.map((j) => [j.name, j.episode, j.extra])).toEqual([
-      ["n", "e90", undefined],
-      ["f", "e90", chars[0]],
-      ["u", "e90", chars[0]],
-    ]);
-    expect(plan.jobs[1]!.attempt).toBe(4);
-    expect(plan.jobs[1]!.why).toContain("extra #1");
-    // A tier with an open e360 makes a real pick, not an extra.
-    const oneExtra = st({ name: "f", model: "v/f:free", ...idle }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e90", 7, 2, true)]);
-    expect(oneExtra.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
-    expect(oneExtra.perEpisode.e360).toMatchObject({ counted: 0, attempts: 0, extras: 0, target: 1 });
-    const next = planNextJobs([oneExtra], ["R1"], new Set(), { policy }).jobs[0]!;
-    expect(next).toMatchObject({ episode: "e360", attempt: 1 });
-    expect(next.extra).toBeUndefined();
-    // With the whole tier met, the next extra is the second in the cycle.
-    const allMet = st({ name: "f", model: "v/f:free", ...idle }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e360", 4), good("v/f:free", "e90", 7, 2, true)]);
-    expect(planNextJobs([allMet], ["R1"], new Set(), { policy }).jobs[0]!.extra).toEqual(chars[1]!);
-    // Extras only ever take accounts nothing else wanted.
-    expect(planNextJobs([allMet, fresh], ["R1"], new Set(), { policy }).jobs.map((j) => j.name)).toEqual(["n"]);
-    // `idle: none` is the default and buys nothing.
-    const quiet = st({ name: "f", model: "v/f:free" }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e360", 4)]);
-    expect(planNextJobs([quiet], ["R1"], new Set(), { policy }).jobs).toEqual([]);
-    // An extra follows its model's class: a free model's never lands on a paid account.
-    expect(planNextJobs([allMet], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
-    expect(planNextJobs([allMet], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs.map((j) => j.account)).toEqual(["R1"]);
-  });
 });
 
 describe("outstandingWork", () => {

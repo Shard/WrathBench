@@ -57,18 +57,11 @@
     "local": ["RUNNER4"]
   },
   "roster": {
-    "nav-probe": {
-      "model": "sonnet", "driver": "claude-code", "character": "Navprobe", "race": 3, "class": 2,
-      "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
-      "watchdogs": {"episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000},
-      "maxToolCalls": 2500,
-      "wikiCoords": true
-    },
     "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2, "tier": "t0"},
     "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "tier": "t0"},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2, "tier": "t1"},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnetlo", "race": 3, "class": 2, "tier": "t1"},
-    "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "characters"},
+    "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "none"},
     "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tier": "t1", "idle": "none"},
     "north-mini-code": {"model": "cohere/north-mini-code:free", "tier": "t1", "idle": "none"},
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "none"},
@@ -77,18 +70,45 @@
     "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "character": "Gptluna", "race": 1, "class": 2, "tier": "t0"},
     "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "character": "Gemflash", "race": 1, "class": 2, "tier": "t0"},
     "laguna-or": {"model": "poolside/laguna-s-2.1:free", "tier": "t1", "idle": "none"},
-    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "characters"},
+    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
-    "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "characters"},
+    "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "tier": "t1", "idle": "unlimited"}
   },
   "policy": {
     "maxConcurrent": {"claude-code": 2, "openrouter": 1, "opencode": 1},
     "paid": {"maxConcurrent": 1}
   },
+  "campaigns": {
+    "nav-probe": {
+      "enabled": true,
+      "account": "SHAKEOUT",
+      "models": ["sonnet"],
+      "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
+      "watchdogs": {"episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000},
+      "maxToolCalls": 2500,
+      "wikiCoords": true,
+      "runsPerCell": 1,
+      "cells": [{ "id": "coldridge", "character": "Navprobe", "race": 3, "class": 2 }]
+    },
+    "class-probe": {
+      "enabled": true,
+      "models": ["ox-alpha", "x-preview-f", "muse-spark"],
+      "runsPerCell": 1,
+      "cells": [
+        { "id": "human-warrior", "race": 1, "class": 1 },
+        { "id": "dwarf-rogue", "race": 3, "class": 4 },
+        { "id": "nightelf-druid", "race": 4, "class": 11 },
+        { "id": "gnome-mage", "race": 7, "class": 8 },
+        { "id": "human-warlock", "race": 1, "class": 9 },
+        { "id": "dwarf-paladin", "race": 3, "class": 2 },
+        { "id": "nightelf-hunter", "race": 4, "class": 4 },
+        { "id": "human-priest", "race": 1, "class": 5 }
+      ]
+    }
+  },
   "queue": [
-    { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": 1, "enabled": true },
     { "ref": "sub-opus-low", "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
   ]
 }
