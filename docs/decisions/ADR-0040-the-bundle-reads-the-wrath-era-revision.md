@@ -100,8 +100,10 @@ The rules, in the order the build applies them:
   Garrosh does not, because all four are in this world.
   `{{Removedwithcataclysm}}` is not a drop signal — content removed later exists
   here — and the template goes the way every template goes, with nothing in its
-  place. If the cut empties a page that had prose, the page is dropped and
-  counted as `dropped_post_wrath`.
+  place. If the **era** cuts empty a page that had prose, the page is dropped and
+  counted as `dropped_post_wrath`; if the out-of-world trim is what emptied it,
+  the page keeps its row with empty text (see §Which cut emptied the page decides
+  what happens to it).
 - **`search_reference`'s description carries one fixed sentence** saying the
   bundle is a Wrath-era snapshot of the wiki and describing this world, and to
   prefer what can be observed in game. The clause about labelled paragraphs is
@@ -198,7 +200,9 @@ by rebuilding from the same dump.
 - A page that was nothing but a link list now empties and is counted as
   `pages_dropped_post_wrath` — the wrong name for the right outcome. The five
   reasons plus `empty_pages` are a build-test identity and not worth widening
-  for it.
+  for it. **Superseded**: it was not the right outcome, it was five thousand
+  pages of this world thrown away with their ids. See §Which cut emptied the
+  page decides what happens to it.
 - The cost is a fact that only ever appeared under a dropped heading: a tactic
   written under `Trivia`, a spawn note under `History`. The census says that is
   a thin tail against 16% of bytes, and the drop set is one edit away if a
@@ -317,3 +321,42 @@ acquired. FOLLOW-UPS 64. The canary's Orgrimmar failure recorded above is also
 closed, and was a stripper defect exactly as suspected: a repeated
 `<ref name="x" />` was read as an opening tag and ate the `}}` that closed the
 infobox, after which the brace scanner never returned to depth 0 (FOLLOW-UPS 63).
+
+## Which cut emptied the page decides what happens to it
+
+Addendum, 2026-08-24. The Consequences above accepted that a page the section
+trim empties would be counted `pages_dropped_post_wrath` — "the wrong name for
+the right outcome". The outcome was wrong too. On a full rebuild that bucket read
+10,027 where the signal arithmetic says about 5,000, and the surplus was five
+thousand pages of this world: an NPC whose body was an infobox, an item whose
+body was an infobox and an external-links list, a quest whose body was a table.
+The trim took their only prose, the page came out empty, and the row went — with
+the title, the `page_ids`, the `page_coords` and the `page_quest` rows on it.
+Bundle-wide, id rows had fallen 71,231 → 64,284.
+
+Trimming an out-of-world section is not evidence that a page is from a later
+world. Only the era cuts are. So the empty branch asks which cut did it, and the
+question is put to the **trim-only** text: the same section walker with the era
+half switched off (`dropOutOfWorldOnly`, an `eraCuts: false` option, computed on
+demand because only a page that came out empty ever needs it). If prose would
+have survived the trim alone, the era cuts are what emptied the page and it is
+dropped as before. If not, the page keeps its row with empty text, counted under
+`empty_pages` and a new `pages_emptied_by_trim` — a subset, like the protection
+counter, and outside the five-reasons identity, which still holds unchanged.
+
+Era-only text was the obvious discriminator and is wrong: a Cataclysm page that
+also carries an external-links section still has prose in its era-only text, so
+it would have been kept. Trim-only is the one that separates the two cleanly.
+
+An empty row is a row, not an FTS document. A page with no body is the shortest
+document in the index, and letting bm25 rank its title against pages that have
+something to say would buy the recovered ids with a ranking regression. It is
+found by exact title and by id, which is all it is there for. (A future
+`INSERT INTO pages_fts(pages_fts) VALUES('rebuild')` would regenerate the index
+from `pages` and silently re-add every empty row; the build runs `'optimize'`,
+which does not.)
+
+Measured over the dump: post-Wrath drops 10,027 → 5,016, empty rows 1,899 →
+6,910 of which 5,011 were emptied by the trim, id rows 64,284 → 71,751, coords
+7,433 → 7,631, quest rows 7,889 → 7,907, pages kept 74,393 → 81,303, and 174
+redirects that used to dangle now land. The canary passes. FOLLOW-UPS 49.
