@@ -17,11 +17,23 @@ import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type CampaignRowView, type CampaignsResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
-import { fmtWhen } from "../lib/format";
+import { campaignLiveRuns, progressOf, type CampaignRunRow } from "../lib/campaigns";
+import { useFeeds } from "../lib/feeds";
+import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
+import { fmtDuration, fmtWhen, num } from "../lib/format";
 import { poll } from "../lib/poll";
 
 /** Campaign progress moves when a probe ends, which is a ~90-minute event. */
 const POLL_MS = 60_000;
+
+/**
+ * The live rows inside a pane move on their own clock — a level, a playtime —
+ * so they are read faster than the campaign totals above them, and on the same
+ * cadence the fleet page reads the same feed at. Slower than the fleet's 5s
+ * shared poll because this page is not where an operator watches a run; the
+ * run page is.
+ */
+const RUNS_POLL_MS = 10_000;
 
 /** Cells done out of cells wanted, when the config still says what was wanted. */
 function coverage(row: CampaignRowView): string {
@@ -39,13 +51,23 @@ function stateOf(row: CampaignRowView): { label: string; cls: string } {
 
 export default function Campaigns() {
   const feed = poll(() => api.campaigns(), POLL_MS);
+  // Every run on disk, read for the live rows inside the panes: the campaigns
+  // projection carries a live COUNT and no run ids, so the attribution comes
+  // from the runs feed (which records the campaign per run) and the state from
+  // the shared fleet feed, joined by run id in lib/campaigns.
+  const runs = poll(() => api.runs().then((r) => r.runs), RUNS_POLL_MS);
+  const { fleet } = useFeeds();
   const body = (): CampaignsResponse | undefined => feed.latest;
   const rows = (): CampaignRowView[] => body()?.campaigns ?? [];
+  const live = (): Map<string, CampaignRunRow[]> => campaignLiveRuns(fleet.latest, runs.latest ?? []);
 
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
         <div class="banner bad">{String(feed.error)}</div>
+      </Show>
+      <Show when={runs.error !== undefined}>
+        <div class="banner bad">{String(runs.error)}</div>
       </Show>
 
       <h2 class="section">campaigns</h2>
@@ -113,6 +135,44 @@ export default function Campaigns() {
                   ({fmtWhen(row.newestAt)}).
                 </Show>
               </p>
+
+              {/*
+                What is running right now, listed the way the fleet page lists
+                the same rows — same state badge, same lvl/xp and elapsed cells,
+                same click-through — because it is the same job seen from the
+                campaign's side rather than the supervisor's. The rows are
+                joined client-side (lib/campaigns); nothing here re-derives a
+                fleet row.
+              */}
+              <Show
+                when={runs.latest !== undefined}
+                fallback={<p class="dim">live runs: loading…</p>}
+              >
+                <Show
+                  when={(live().get(row.campaign) ?? []).length > 0}
+                  fallback={<p class="dim">No live runs.</p>}
+                >
+                  <div class="scroller">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>state</th>
+                          <th>cell</th>
+                          <th>character</th>
+                          <th>model</th>
+                          <th class="right">lvl / xp</th>
+                          <th class="right">elapsed</th>
+                          <th>run</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <For each={live().get(row.campaign) ?? []}>{(r) => <LiveRunRow row={r} />}</For>
+                      </tbody>
+                    </table>
+                  </div>
+                </Show>
+              </Show>
+
               <div class="scroller">
                 <table>
                   <thead>
@@ -161,5 +221,58 @@ export default function Campaigns() {
         </Show>
       </Show>
     </div>
+  );
+}
+
+/**
+ * One live probe inside a pane. The state cell is the fleet's own — its badge,
+ * its percentage, its ETA title — so the two pages cannot disagree about what
+ * a job is doing.
+ *
+ * A row with no state is a run the runs feed calls unfinished that no job
+ * holds: said plainly rather than dressed as running, because that is a fact
+ * worth noticing (an orphaned probe) and not a rendering gap.
+ */
+function LiveRunRow(props: { row: CampaignRunRow }) {
+  const r = (): CampaignRunRow => props.row;
+  const prog = () => {
+    const p = progressOf(r());
+    return p === null ? null : rowProgress(p);
+  };
+  return (
+    <tr>
+      <td title={prog() === null ? "" : progressTitle(prog(), r())}>
+        <Show
+          when={r().state}
+          fallback={
+            <span class="dim" title="no job in the fleet is driving this run; it recorded no termination either">
+              no job
+            </span>
+          }
+        >
+          {(state) => (
+            <>
+              <span class={`dot ${state() === "running" ? "live" : ""}`} />
+              <span class={`badge ${state()}`}>{rowStateLabel(state())}</span>
+              <Show when={prog() !== null}>
+                <span class="dim mono progress">{progressLabel(prog())}</span>
+              </Show>
+            </>
+          )}
+        </Show>
+      </td>
+      <td class="dim">{r().cell ?? "—"}</td>
+      <td>{r().character ?? "—"}</td>
+      <td class="dim" title={r().account === null ? "" : `on ${r().account}${r().attempt === null ? "" : `, attempt #${r().attempt}`}`}>
+        {r().model ?? "—"}
+      </td>
+      <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
+      <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
+      <td>
+        <Show when={runHref(r().runId)} fallback={r().runId}>
+          {(to) => <A href={to()}>{r().runId}</A>}
+        </Show>
+      </td>
+    </tr>
   );
 }
