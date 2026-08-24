@@ -132,7 +132,16 @@ export class ContextBuilder {
   async snapshot(): Promise<SnapshotLike | null> {
     try {
       const snap = (await this.o.sandbox.stateSnapshot()) as SnapshotLike;
+      const wasLive = this.live;
       this.live = snap.self?.guid !== undefined && snap.self.guid !== null;
+      if (this.live && !wasLive) {
+        // The first sight of a character in the world: the fresh-episode
+        // precondition (ADR-0006) is judged here, once, by the watchdogs.
+        this.o.watchdogs.noteFirstLive({
+          guid: snap.self?.guid === undefined || snap.self.guid === null ? undefined : String(snap.self.guid),
+          level: snap.self?.level?.value as number | undefined,
+        });
+      }
       return snap;
     } catch {
       return null;
@@ -306,6 +315,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // 2. state line + 3. the fixed context (ADR-0012)
       turn++;
       const contextText = await builder.build(turn, pendingNotices);
+      // The sample above may have been the first sight of the character; a
+      // stale one ends the run here, not after a whole turn on it.
+      const integrity = watchdogs.check();
+      if (integrity !== null && integrity.reason === "stale-character") {
+        trajectory.append({ t: "watchdog", ...integrity });
+        return terminate(integrity.reason, integrity.detail);
+      }
 
       const messages: ChatMessage[] = [
         { role: "system", content: buildSystemPrompt(config.objective, config.episode) },

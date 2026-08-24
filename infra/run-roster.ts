@@ -1243,7 +1243,8 @@ async function attemptSpec(
       return "done";
     }
     if (verdict.kind === "terminated") {
-      const failed = verdict.reason === "adapter-error" || verdict.reason === "harness-error";
+      const failed =
+        verdict.reason === "adapter-error" || verdict.reason === "harness-error" || verdict.reason === "stale-character";
       say(
         `done ${spec.runId}: terminated ${verdict.reason}${level !== undefined ? `, level ${level}` : ""}`,
       );

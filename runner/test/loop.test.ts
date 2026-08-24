@@ -481,3 +481,26 @@ describe("prompt-cache prefix discipline", () => {
     expect(responses[0]!).not.toHaveProperty("provider");
   });
 });
+
+describe("runLoop fresh-character precondition", () => {
+  test("a used character on first sight terminates stale-character before the model gets a turn", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, {}, { self: { guid: "294", level: { value: 6 } } });
+    options.watchdogs.expectFreshCharacter(new Set(["294"]));
+    const outcome = await runLoop(options);
+    expect(outcome.kind).toBe("terminated");
+    if (outcome.kind !== "terminated") throw new Error("unreachable");
+    expect(outcome.reason).toBe("stale-character");
+    const records = readTrajectory(dir);
+    expect(records.filter((r) => r.t === "request")).toHaveLength(0);
+    expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("stale-character");
+  });
+
+  test("a fresh level-1 character with an unlisted guid plays on", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { options } = setup(adapter, {}, { self: { guid: "301", level: { value: 1 } } });
+    options.watchdogs.expectFreshCharacter(new Set(["294"]));
+    const outcome = await runLoop(options);
+    expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
+  });
+});
