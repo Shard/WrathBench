@@ -65,6 +65,7 @@ import {
   type ConfigRejection,
   currentSeries,
   classPoolsOf,
+  formatRefusals,
   planPolicyHeld,
   formatPaidClass,
   formatLocalClass,
@@ -118,16 +119,47 @@ describe("parseFleet", () => {
     expect(jobSpawn(config.jobs[0]!, config.roster, "SHAKEOUT", "20260101")).toMatchObject({ name: "son-freeplay", account: "SHAKEOUT", loop: true });
   });
 
-  test("two enabled jobs must not share an account", () => {
-    expect(() =>
-      parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }])),
-    ).toThrow(/shared by enabled jobs glm-e90 and ox-e90/);
+  test("two enabled jobs sharing an account: the LATER one is refused, the file survives", () => {
+    // Item 66. This used to take the whole config down, and because a rejected
+    // re-read keeps the last good one, every other `enabled:` flag in the file
+    // went inert with it. The rule stands — one live session per account — but
+    // it is enforced against the pin, in file order, so the first keeps it.
+    const config = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }]),
+    );
+    expect(config.jobs.map((j) => [j.name, j.enabled])).toEqual([["glm-e90", true], ["ox-e90", false]]);
+    expect(config.refusals).toEqual([`ox-e90 REFUSED and left disabled: account s is already glm-e90's — one enabled job per account`]);
   });
 
   test("a disabled job may sit on a running job's account — that is the burn switch", () => {
     const config = parseFleet(fleetJson([{ ref: "glm", episode: "e90", account: "SHAKEOUT" }, { ref: "ox", episode: "e90", account: "SHAKEOUT", enabled: false }]));
     expect(config.jobs).toHaveLength(2);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "glm-e90" });
+  });
+
+  test("a pin on the preflight account is refused; a listed account clashing with it still fails", () => {
+    // Where there IS a pin to name, it loses and the gate keeps its account —
+    // ADR-0023 runs before anything else does. Where there is not, the loser
+    // would be an account list, so the file still fails: nothing to disable.
+    const onGate = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90", account: "SMOKE" }], {
+        preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] },
+      }),
+    );
+    expect(onGate.jobs[0]!.enabled).toBe(false);
+    expect(onGate.refusals[0]).toMatch(/glm-e90 REFUSED and left disabled: account SMOKE is the preflight gate's/);
+    expect(() =>
+      parseFleet(fleetJson([], { accounts: { pool: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } })),
+    ).toThrow(/also in accounts.pool/);
+  });
+
+  test("a clean config refuses nothing, and the refusal block stays silent", () => {
+    expect(parseFleet(fleetJson([{ ref: "glm", episode: "e90" }])).refusals).toEqual([]);
+    expect(formatRefusals([])).toEqual([]);
+    expect(formatRefusals(["a-e90 REFUSED and left disabled: because"])).toEqual([
+      "! 1 pin(s) refused by the account rules — the rest of the file IS in effect:",
+      "   a-e90 REFUSED and left disabled: because",
+    ]);
   });
 
   test("pre-0.4 keys are refused by name, naming the 0.4 shape", () => {
@@ -150,14 +182,16 @@ describe("campaigns (ADR-0041)", () => {
     expect(() => parseFleet(fleetJson([], { campaigns: { probe1: { cells: [] } } }))).toThrow(/campaigns:/);
   });
 
-  test("an enabled pinned campaign sharing an account with an enabled pinned job is refused", () => {
-    expect(() =>
-      parseFleet(
-        fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
-          campaigns: { probe1: { cells: [{ id: "c1" }], account: "s" } },
-        }),
-      ),
-    ).toThrow(/shared by enabled jobs glm-e90 and campaign probe1/);
+  test("a pinned campaign sharing an account with an enabled job is refused, not the file", () => {
+    // Jobs come before campaigns in the pin order, so the job keeps the account.
+    const config = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
+        campaigns: { probe1: { cells: [{ id: "c1" }], account: "s" } },
+      }),
+    );
+    expect(config.jobs[0]!.enabled).toBe(true);
+    expect(config.campaigns[0]!.enabled).toBe(false);
+    expect(config.refusals[0]).toMatch(/^campaign probe1 REFUSED and left disabled: account s is already glm-e90's/);
   });
 
   test("a disabled pinned campaign may park on a listed account", () => {
@@ -397,11 +431,25 @@ describe("rereadFleet", () => {
     expect(r.error).toBeDefined();
   });
 
-  test("a re-read that violates a guard keeps the last good config too", () => {
-    const dupe = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90", account: "X" }, { ref: "ox", episode: "e90", account: "X" }]));
+  test("a re-read that violates a WHOLE-FILE guard keeps the last good config too", () => {
+    // A duplicate job name leaves the file ambiguous — there is no losing pin to
+    // pick — so it is still fatal, and the last good config stays in effect.
+    const dupe = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }]));
     const r = rereadFleet("fleet.json", good, () => dupe);
     expect(r.config).toBe(good);
-    expect(r.error).toMatch(/shared by enabled jobs/);
+    expect(r.error).toMatch(/two jobs would share the name/);
+  });
+
+  test("a re-read violating an ACCOUNT rule takes effect, minus the pin it refused", () => {
+    // The point of item 66. Before, this re-read was rejected and every other
+    // `enabled:` flag in the new file went inert behind the old config; now the
+    // file loads, one job is disabled, and the operator is told which.
+    const clash = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90", account: "X" }, { ref: "ox", episode: "e90", account: "X" }]));
+    const r = rereadFleet("fleet.json", good, () => clash);
+    expect(r.error).toBeUndefined();
+    expect(r.config).not.toBe(good);
+    expect(r.config.jobs.map((j) => [j.name, j.enabled])).toEqual([["glm-e90", true], ["ox-e90", false]]);
+    expect(r.config.refusals).toHaveLength(1);
   });
 
   test("a valid re-read replaces the config", () => {
@@ -776,11 +824,16 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     // taking it out of the schedule, which is the point of the catalog cut.
     expect([...policyRefs(config)]).toEqual(["son", "glm"]);
     expect(policyExclusion(config, "son")).toBeUndefined();
-    // Guards: two enabled jobs on one account; a pinned account in the pool.
+    // Account rules refuse the PIN and keep the file (item 66); shape errors
+    // still take the file down, because there is no losing pin to name.
     const pin = (over: Record<string, unknown>) => ({ accounts: { pool: ["RUNNER"] }, roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, ox: { tier: "t1", model: "stealth/ox-alpha" } }, ...over });
-    expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }] }))).toThrow(/shared by enabled jobs/);
+    const shared = parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }] }));
+    expect(shared.jobs.map((j) => j.enabled)).toEqual([true, false]);
+    expect(shared.refusals).toHaveLength(1);
     expect(parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s", enabled: false }] })).accounts.pinned).toEqual({ S: "glm-e90" });
-    expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "RUNNER" }] }))).toThrow(/also pinned to job glm-e90/);
+    const parked = parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "RUNNER" }] }));
+    expect(parked.jobs[0]!.enabled).toBe(false);
+    expect(parked.refusals[0]).toMatch(/glm-e90 REFUSED and left disabled: account RUNNER is in accounts.pool/);
     expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name glm-e90/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { warp: 1 } } }))).toThrow(/unknown concurrency key warp/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { openai: 0 } } }))).toThrow(/positive integer/);
@@ -789,7 +842,10 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
   });
 
   test("guards: pool/pinned overlap, bad refs, bad tiers, name collisions", () => {
-    expect(() => parseFleet(nextShape({ accounts: { pool: ["SHAKEOUT"] } }))).toThrow(/also pinned/);
+    // Not a throw since item 66: the pin is refused, the rest of the file loads.
+    const overlap = parseFleet(nextShape({ accounts: { pool: ["SHAKEOUT"] } }));
+    expect(overlap.jobs.every((j) => !j.enabled || j.account?.toUpperCase() !== "SHAKEOUT")).toBe(true);
+    expect(overlap.refusals[0]).toMatch(/account SHAKEOUT is in accounts.pool/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "nope", episode: "e90" }] }))).toThrow(/ref nope is not in roster/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e9000" }] }))).toThrow(/episode must be one of/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", tiers: ["e45"] } }, queue: [] }))).toThrow(/tiers is not a 0.5 key/);
@@ -1387,15 +1443,18 @@ describe("scheduling policy (ADR-0032)", () => {
       parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } }),
     ).toThrow(/also in accounts.local/);
     // Coexistence holds for the local class too: only a disabled job may park.
-    expect(() =>
-      parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] }, queue: [{ ref: "local", episode: "e90", account: "LOCALBOX" }] }),
-    ).toThrow(/accounts.local: LOCALBOX is also pinned to job local-e90 — only a disabled job may park/);
-    // Coexistence: a DISABLED pinned job may park on a listed account; an enabled one may not.
+    // Since item 66 the enforcement is a refusal of that job, not of the file.
+    const onBox = parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] }, queue: [{ ref: "local", episode: "e90", account: "LOCALBOX" }] });
+    expect(onBox.jobs[0]!.enabled).toBe(false);
+    expect(onBox.refusals[0]).toMatch(/local-e90 REFUSED and left disabled: account LOCALBOX is in accounts.local/);
+    // Coexistence: a DISABLED pinned job may park on a listed account, and says
+    // nothing; an ENABLED one is disabled on the spot and named.
     const parked = { ...raw, accounts: { pool: ["RUNNER"], paid: ["PAID"] }, queue: [{ ref: "big", episode: "e90", account: "PAID", enabled: false }] };
     expect(parseFleet(parked).accounts.paid).toEqual(["PAID"]);
-    expect(() => parseFleet({ ...parked, queue: [{ ref: "big", episode: "e90", account: "PAID" }] })).toThrow(
-      /accounts.paid: PAID is also pinned to job big-e90 — only a disabled job may park/,
-    );
+    expect(parseFleet(parked).refusals).toEqual([]);
+    const onPaid = parseFleet({ ...parked, queue: [{ ref: "big", episode: "e90", account: "PAID" }] });
+    expect(onPaid.jobs[0]!.enabled).toBe(false);
+    expect(onPaid.refusals[0]).toMatch(/big-e90 REFUSED and left disabled: account PAID is in accounts.paid/);
     // Without the blocks, today's behaviour: no cap, 3/3 for everyone, no extras.
     const plain = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] }, policy: {} });
     const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
@@ -1532,7 +1591,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(jobArgv(resumeSpawn, { stamp: "20260823", until: undefined })).toContain("--resume-roster");
     // Ordering: the tick's plan gives the resume its account before the queue or the policy can.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {} };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
     const tick = planTick(cfg, states, held, "20260823", plan.resume);
     expect(tick.policy.map((p) => p.account)).toEqual(["RUNNER3"]);
     expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox"]); // glm is held by its paused run, never rescheduled
@@ -1562,7 +1621,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(formatPaused(plan.listed)[1]).toContain("fleet-gone-e90-old-model-20260823 — gone/model on RUNNER3: operator-pause, 41m elapsed of 1h30m");
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {} };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
     expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 

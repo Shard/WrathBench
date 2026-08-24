@@ -472,7 +472,11 @@ as a config error (every per-entry account is checked), and none is ever
 ./infra/run-fleet.sh --status
 ```
 
-In order: the REJECTED banner when the file is not in effect; the supervisor
+In order: the REJECTED banner when the file is not in effect; the `!` refusal
+block when the file IS in effect but the account rules disabled a pin in it
+(item 66 — an enabled job or campaign on a listed account, or a second one on
+an account already taken, is refused by name rather than taking the whole file
+down with it); the supervisor
 line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the
 gate (last result, per smoke); the **accounts** table — every account, pinned
 first then the pool in preference order, with the job on it (`name: model

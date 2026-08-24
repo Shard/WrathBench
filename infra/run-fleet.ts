@@ -333,6 +333,12 @@ export interface FleetConfig {
   jobs: FleetJob[];
   /** The `campaigns` block (ADR-0041), in declaration order; empty when the file has none. */
   campaigns: Campaign[];
+  /**
+   * Pins refused at parse time (item 66), one line each. The rest of the file
+   * IS in effect — that is the whole point of a refusal over a `fail()`. Empty
+   * on a clean config; `--status` and the supervisor log name every entry.
+   */
+  refusals: string[];
   /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
@@ -371,6 +377,86 @@ export function classAccountsOf(config: Pick<FleetConfig, "accounts">, cls: Acco
   // `?? []`: a hand-built config (a test, a state file read back) may predate a
   // class. An absent list is an empty one, never a crash in the scheduler.
   return (cls === "pool" ? config.accounts.pool : cls === "paid" ? config.accounts.paid : config.accounts.local) ?? [];
+}
+
+/**
+ * A PIN: a queue job or a campaign with an `account`, reduced to what the
+ * account rules need. Jobs and campaigns are pinned by the same rules with the
+ * same consequences, so they are checked as one list rather than as two nearly
+ * identical loops.
+ */
+interface Pin {
+  /** `accounts.pinned`'s value: a job's name, or `campaign <name>`. */
+  readonly label: string;
+  readonly account: string | undefined;
+  /** Mutable: a refused pin is DISABLED in place, which is the enforcement. */
+  enabled: boolean;
+}
+
+/** Jobs then campaigns, in file order — the order a refusal picks its loser by. */
+function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[] {
+  return [
+    ...jobs.map((j) => ({
+      get label() { return j.name; },
+      get account() { return j.account; },
+      get enabled() { return j.enabled; },
+      set enabled(v: boolean) { j.enabled = v; },
+    })),
+    ...campaigns.map((c) => ({
+      get label() { return `campaign ${c.name}`; },
+      get account() { return c.account; },
+      get enabled() { return c.enabled; },
+      set enabled(v: boolean) { c.enabled = v; },
+    })),
+  ];
+}
+
+/** Disable one pin and say why. The message is the operator's only notice. */
+function refuse(pin: Pin, refusals: string[], why: string): void {
+  pin.enabled = false;
+  refusals.push(`${pin.label} REFUSED and left disabled: ${why}`);
+}
+
+/**
+ * The account rules that are LOCAL to one pin, enforced by refusing that pin
+ * rather than the whole file.
+ *
+ * They used to `fail()`. Since a rejected re-read keeps the last good config,
+ * that meant one bad `enabled: true` made every other flag in the file inert
+ * until somebody read the REJECTED banner — a config-wide outage from a
+ * one-line edit whose intent was local (item 66). The rules themselves are
+ * right: two enabled pins on one account starve each other, and an enabled pin
+ * on a listed account fights the scheduler for the session. So the violating
+ * pin is disabled and named, and the rest of the file takes effect. Shape
+ * errors still fail, because a file that does not parse has no rest to keep.
+ */
+export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccounts, refusals: string[]): void {
+  const byAccount = new Map<string, string>();
+  for (const pin of pins) {
+    if (pin.account === undefined || !pin.enabled) continue;
+    const key = pin.account.toUpperCase();
+    // One live session per account: two enabled pins on one account means one
+    // of them spends the whole window waiting behind the other. The FIRST in
+    // file order keeps the account, so which pin loses does not move when an
+    // unrelated entry is added above it.
+    const other = byAccount.get(key);
+    if (other !== undefined) {
+      refuse(pin, refusals, `account ${pin.account} is already ${other}'s — one enabled job per account`);
+      continue;
+    }
+    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS it,
+    // and only an enabled pin holds. So a DISABLED pin may park on a listed
+    // account (the burn switch on the paid account); an enabled one may not, or
+    // the pin and the scheduler would fight over the session.
+    const listed = ACCOUNT_CLASSES.find((c) =>
+      classAccountsOf({ accounts }, c).some((a) => a.toUpperCase() === key),
+    );
+    if (listed !== undefined) {
+      refuse(pin, refusals, `account ${pin.account} is in accounts.${listed} — only a disabled job may park on a listed account`);
+      continue;
+    }
+    byAccount.set(key, pin.label);
+  }
 }
 
 /** Every account the scheduler may hand out, whatever its class. */
@@ -690,63 +776,15 @@ export function parseFleet(raw: unknown): FleetConfig {
     jobs.push(job);
   };
   for (const job of parseQueue(o.queue, roster)) add(job);
-  // One live session per account: two enabled jobs on one account means one
-  // of them spends the whole window waiting behind the other.
-  const byAccount = new Map<string, string>();
-  for (const job of jobs) {
-    if (job.account === undefined || !job.enabled) continue;
-    const key = job.account.toUpperCase();
-    const other = byAccount.get(key);
-    if (other !== undefined) fail(`account ${job.account} is shared by enabled jobs ${other} and ${job.name} — one job per account`);
-    byAccount.set(key, job.name);
-  }
-  for (const job of jobs) {
-    if (job.account === undefined) continue;
-    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS
-    // it, and only an enabled job holds. So a disabled pinned job may park on
-    // a listed account (the burn switch on the paid account); an enabled one
-    // may not, or the pin and the scheduler would fight over the session.
-    if (job.enabled && accounts.pool.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-      fail(`accounts.pool: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
-    }
-    for (const cls of ["paid", "local"] as const) {
-      if (job.enabled && accounts[cls].some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-        fail(`accounts.${cls}: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
-      }
-    }
-    // Derived, enabled first so a disabled stand-in on a running job's
-    // account (the burn switch) never hides the live one.
-    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === job.account!.toUpperCase()) ?? job.account;
-    if (accounts.pinned[key] === undefined || job.enabled) accounts.pinned[key] = job.name;
-  }
-  // A campaign with `account` set is pinned exactly like a pinned job (see
-  // campaigns.ts): the same account-sharing and parking rules apply, with the
-  // campaign's name standing in for the job's.
-  for (const c of campaigns) {
-    if (c.account === undefined || !c.enabled) continue;
-    const key = c.account.toUpperCase();
-    const other = byAccount.get(key);
-    if (other !== undefined) fail(`account ${c.account} is shared by enabled jobs ${other} and campaign ${c.name} — one job per account`);
-    byAccount.set(key, `campaign ${c.name}`);
-  }
-  for (const c of campaigns) {
-    if (c.account === undefined) continue;
-    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS
-    // it, and only an enabled campaign holds. So a disabled pinned campaign
-    // may park on a listed account; an enabled one may not, or the pin and
-    // the scheduler would fight over the session.
-    if (c.enabled && accounts.pool.some((a) => a.toUpperCase() === c.account!.toUpperCase())) {
-      fail(`accounts.pool: ${c.account} is also pinned to campaign ${c.name} — only a disabled campaign may park on a listed account`);
-    }
-    for (const cls of ["paid", "local"] as const) {
-      if (c.enabled && accounts[cls].some((a) => a.toUpperCase() === c.account!.toUpperCase())) {
-        fail(`accounts.${cls}: ${c.account} is also pinned to campaign ${c.name} — only a disabled campaign may park on a listed account`);
-      }
-    }
-    // Derived, enabled first so a disabled stand-in on a running campaign's
-    // account never hides the live one.
-    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === c.account!.toUpperCase()) ?? c.account;
-    if (accounts.pinned[key] === undefined || c.enabled) accounts.pinned[key] = `campaign ${c.name}`;
+  const refusals: string[] = [];
+  applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
+  for (const pin of pinsOf(jobs, campaigns)) {
+    if (pin.account === undefined) continue;
+    // Derived, enabled first so a disabled stand-in on a running pin's account
+    // (the burn switch) never hides the live one. Every pin is listed here,
+    // refused ones included: `accounts.pinned` says who is parked, not who holds.
+    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === pin.account!.toUpperCase()) ?? pin.account;
+    if (accounts.pinned[key] === undefined || pin.enabled) accounts.pinned[key] = pin.label;
   }
   const preflight = parsePreflight(o.preflight);
   // The smokes hold a live session for their whole arc. Sharing an account with
@@ -755,8 +793,16 @@ export function parseFleet(raw: unknown): FleetConfig {
   // to discover live.
   if (preflight.enabled) {
     for (const account of preflightAccounts(preflight)) {
-      const clash = byAccount.get(account.toUpperCase());
-      if (clash !== undefined) fail(`preflight account ${account} is also job ${clash}'s — the gate needs its own account`);
+      // A pin on the gate's account is refused like any other local violation:
+      // there is one pin to name and disable, and the gate outranks it (ADR-0023
+      // runs before anything else does). The two rules below have no pin to
+      // refuse — the loser would be an account list — so they still fail.
+      const clash = pinsOf(jobs, campaigns).find(
+        (pin) => pin.enabled && pin.account?.toUpperCase() === account.toUpperCase(),
+      );
+      if (clash !== undefined) {
+        refuse(clash, refusals, `account ${account} is the preflight gate's — the gate needs its own account`);
+      }
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
         fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
       }
@@ -771,7 +817,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
-  return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent };
+  return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent, refusals };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
@@ -1712,6 +1758,23 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
 }
 
 /**
+ * The refused pins (item 66), printed under the rejection banner.
+ *
+ * A refusal is quieter than the outage it replaces, which is the point — and
+ * also the risk. The file IS in effect, so nothing else looks wrong; the only
+ * way an operator learns their `enabled: true` did not take is this block and
+ * the supervisor's log line. `!` rather than the banner's `!!`: the fleet is
+ * running, one pin is not.
+ */
+export function formatRefusals(refusals: readonly string[]): string[] {
+  if (refusals.length === 0) return [];
+  return [
+    `! ${refusals.length} pin(s) refused by the account rules — the rest of the file IS in effect:`,
+    ...refusals.map((r) => `   ${r}`),
+  ];
+}
+
+/**
  * Load a config for a read-only reader (`--status`), which must survive a file
  * the supervisor already rejected instead of dying on it.
  */
@@ -2517,6 +2580,13 @@ let preflightInFlight: { identity: string; since: number } | undefined;
 let configRejected: ConfigRejection | undefined;
 /** When the config actually in force was parsed. Set on load and on re-read. */
 let configLoadedAt: number | undefined;
+/**
+ * The refusals last logged, joined. Deduping on the SET rather than a count
+ * means a swap — one pin fixed and another broken in the same edit — is still
+ * announced. `undefined` until the first tick, so a file that boots with
+ * refusals says so once rather than never.
+ */
+let lastRefusals: string | undefined;
 
 /** Live job bookkeeping, published into the state file every tick. */
 interface PoolView {
@@ -2891,6 +2961,7 @@ function printStatus(configPath: string): void {
         " — rows below are what the supervisor last ran, not the file's",
     );
   }
+  for (const line of formatRefusals(config?.refusals ?? [])) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
   // in another PID namespace — it either says "no such process" for a healthy
@@ -3888,6 +3959,18 @@ async function main(): Promise<void> {
       }
     }
     config = next;
+
+    // Refused pins (item 66). Deduped on the joined set, the way the rejection
+    // is deduped on its message: a config that keeps refusing the same pin says
+    // so once, not every 60s, but a NEW refusal always speaks.
+    const refusals = config.refusals.join("\n");
+    if (refusals !== lastRefusals) {
+      lastRefusals = refusals;
+      for (const r of config.refusals) {
+        say(`config: ${r}`);
+        record({ job: "-", event: "config-refusal", detail: r });
+      }
+    }
 
     const actions = diffJobs(effectiveJobs(config), sets);
     for (const name of actions.undrain) {
