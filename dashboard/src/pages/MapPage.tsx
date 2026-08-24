@@ -59,6 +59,8 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
+import { useFeeds } from "../lib/feeds";
+import { filterBySeries, pageSeries } from "../lib/harness";
 import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
@@ -99,8 +101,20 @@ export default function MapPage() {
     POLL_MS,
   );
 
+  /*
+   * The shell's harness series (ADR-0046) narrows the live feed, so the map
+   * agrees with every other page about which runs exist. Never during a replay:
+   * a replay is one named run the reader asked for by id, and hiding it because
+   * of a header control would look like a broken link.
+   */
+  const feeds = useFeeds();
+  const liveSeries = (): string | null =>
+    replayId() === undefined ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), feedList()) : null;
+  const shownList = (): readonly AgentPosition[] => filterBySeries(feedList(), liveSeries());
+  const seriesHidden = (): number => feedList().length - shownList().length;
+
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
-    feed: feedList,
+    feed: shownList,
     track,
     pinned: pinnedMap,
     selectedId,
@@ -626,7 +640,9 @@ export default function MapPage() {
             <span class="err">{String(feed.error)}</span>
           ) : (
             <>
-              {count()} {count() === 1 ? "agent" : "agents"} · drag to pan · scroll to zoom · click a pip
+              {count()} {count() === 1 ? "agent" : "agents"}
+              <Show when={seriesHidden() > 0}> · {seriesHidden()} hidden by series {liveSeries()}</Show>
+              {" "}· drag to pan · scroll to zoom · click a pip
             </>
           )}
         </div>
