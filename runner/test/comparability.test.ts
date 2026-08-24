@@ -4,8 +4,15 @@
  * The load-bearing claims: a scored run's prompt hash is the fixed prompt's, an
  * objective run's is not, the tuple survives a JSON round trip through
  * meta.json, and the wire mirror in `runner/viewer/api-types.ts` still matches
- * the definition it mirrors — that last one is a type-level assertion, so it
- * fails at `tsc`/`bun test` parse time rather than at runtime.
+ * the definition it mirrors.
+ *
+ * That last one is a type-level assertion, and it is caught by `bun run
+ * typecheck` — NOT by `bun test`, which strips types without checking them.
+ * Verified 2026-08-24 by adding a member to `EPISODE_IDS`: this file still
+ * reported 16 pass, while tsc failed here and at `models.ts` in five places.
+ * The pin is transitive rather than by name — `EpisodeTier.id` is an
+ * `EpisodeId`, so pinning the tier to its view pins the id union too, which is
+ * why grepping the tests for `EpisodeIdView` finds nothing.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
