@@ -126,3 +126,44 @@ export function clearReplayState(w: MapWritables): void {
    */
   w.setError(undefined);
 }
+
+/**
+ * The replay link the selected-agent panel offers, or nothing.
+ *
+ * Nothing in two cases: no selection to link, and — the one worth a function —
+ * a selection that *is* the run already being replayed. In replay mode the
+ * panel always shows the replayed agent, so the link would navigate to the URL
+ * the page is already on: a control that visibly does nothing when clicked,
+ * which is worse than an absent one.
+ */
+export function replayHrefFor(
+  track: TrackResponse | undefined,
+  selected: AgentPosition | null,
+): string | null {
+  if (selected === null) return null;
+  if (track?.runId === selected.runId) return null;
+  return `/map?run=${encodeURIComponent(selected.runId)}`;
+}
+
+/**
+ * A route-change classifier: did *this* change leave a replay for the live map?
+ *
+ * The live poll answers with nothing while a replay owns the map, so its last
+ * value is empty and its next tick can be a whole interval away — returning to
+ * live has to ask for positions immediately or the map sits blank. But a cold
+ * load of `/map` must not, because the poll has just fetched of its own accord
+ * and a second request would double the first load of every visit.
+ *
+ * The distinction is a transition rather than a state, so it needs one bit of
+ * memory. Kept here, as a closure with the flag written from the id on every
+ * call, so it cannot drift out of step with the route no matter how often or
+ * why the effect re-runs — and so the transition table is testable.
+ */
+export function createLeftReplay(): (id: string | undefined) => boolean {
+  let wasReplaying = false;
+  return (id) => {
+    const left = wasReplaying && id === undefined;
+    wasReplaying = id !== undefined;
+    return left;
+  };
+}

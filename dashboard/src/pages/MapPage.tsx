@@ -34,7 +34,12 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
-import { clearReplayState, createMapState } from "../lib/mapstate";
+import {
+  clearReplayState,
+  createLeftReplay,
+  createMapState,
+  replayHrefFor,
+} from "../lib/mapstate";
 import {
   STALE_MS,
   TILE_MIN_PX,
@@ -321,11 +326,10 @@ export default function MapPage() {
    * honest picture of "we are between two states".
    */
   let trackToken = 0;
-  let wasReplaying = false;
+  const leftReplay = createLeftReplay();
   createEffect(() => {
     const id = replayId();
-    const leftReplay = wasReplaying && id === undefined;
-    wasReplaying = id !== undefined;
+    const returningToLive = leftReplay(id);
     const mine = ++trackToken;
     clearReplayState({
       setTrack: (t) => setTrack(() => t),
@@ -341,15 +345,8 @@ export default function MapPage() {
     pendingFit = true;
     needsDraw = true;
     if (id === undefined) {
-      /*
-       * Only when *leaving* a replay. The live poll answers with nothing while
-       * a replay owns the map, so its last value is empty and the next tick is
-       * up to POLL_MS away — without this the live map is blank for five
-       * seconds. On a cold load of `/map` the poll has just fetched of its own
-       * accord and asking again would double every visit's first request, which
-       * ADR-0022 counts as a public-hosting cost.
-       */
-      if (leftReplay) feed.refresh();
+      // Only when leaving a replay, never on a cold load — see createLeftReplay.
+      if (returningToLive) feed.refresh();
       return;
     }
     void api
@@ -596,7 +593,25 @@ export default function MapPage() {
               <div class="v">{fmtAge(ageTick() - p().ts)}</div>
               <div class="k">harness</div>
               <div class="v">{shortHarness(p().harnessVersion)}</div>
-              <A href={`/run/${encodeURIComponent(p().runId)}`}>open run →</A>
+              {/*
+                Both ways out of a selected pip, as one row of controls rather
+                than two bare links stacked in the panel's key/value flow — the
+                same `.side-controls` shape the run page uses, so the pair reads
+                as controls. The replay link is absent rather than inert when it
+                would point at the run already on screen.
+              */}
+              <div class="side-controls">
+                <A class="btn" href={`/run/${encodeURIComponent(p().runId)}`}>
+                  open run →
+                </A>
+                <Show when={replayHrefFor(track(), p())}>
+                  {(href) => (
+                    <A class="btn" href={href()}>
+                      replay →
+                    </A>
+                  )}
+                </Show>
+              </div>
             </>
           )}
         </Show>

@@ -218,6 +218,20 @@ and status.
     not a URL parameter. Unblocked by a run long enough for the scrub to be work
     worth not losing; today's tracks are minutes.
 
+62. **An open viewer tab keeps running the bundle it loaded, and a rebuild
+    deletes the one it might still ask for** (2026-08-24, after a bug report
+    against code that had already been fixed). Vite hashes chunk names and
+    empties `dist/` on every build, so an operator watching a live run through
+    `/map` is running whatever JavaScript their tab loaded — possibly hours and
+    several commits old — while any lazy chunk they have not yet fetched is now
+    a 404. The cost is not a crash: it is that a report of "X is broken" can
+    describe a bug that no longer exists, and half an hour goes into
+    establishing that. Two cheap halves to a fix, both in `runner/viewer`: serve
+    `index.html` with `no-store` so a reload always gets the current build, and
+    put the build id in the served page so the SPA can notice it is stale and
+    say so rather than failing quietly. Unblocked by nothing; it is small, it is
+    just not in `dashboard/`.
+
 62. **`playtimeMs`'s comment says the episode watchdog resets on every resume; it
     no longer does** (2026-08-24, found while putting a progress percentage on the
     fleet page). `runner/viewer/tail.ts` states that `Watchdogs` is built with
