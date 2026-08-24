@@ -22,7 +22,9 @@
  *      create it through the module (Human Paladin) and log straight out;
  *   1. apply the `vineyard-kill-credit` scenario to the logged-out character;
  *   2. login; assert the fixture landed — within 15y of the vineyard edge and
- *      quest 7 in the served quest log;
+ *      quest 7 in the served quest log; then empty the backpack of what
+ *      previous runs looted into it, through CMSG_DESTROYITEM (item 58) —
+ *      best effort, reported, never asserted;
  *   3. engage the nearest Kobold Vermin: set_target -> face -> attack_start ->
  *      the SMSG_ATTACKERSTATEUPDATE stream -> the kobold's health reaches 0 ->
  *      SMSG_QUESTUPDATE_ADD_KILL { questId 7, entry 6, current 1 } and a
@@ -85,6 +87,24 @@ const VINEYARD_EDGE = { x: -8790, y: -160, z: 82.5 };
 
 // Observed maxima (2026-08-23 logs): fights 11.6-25.9s. The only walk left is
 // the few yards to whichever kobold is nearest.
+// The backpack, addressed as the item actions address it (sdk/src/state.ts
+// `bag()`): `INVENTORY_SLOT_BAG_0` is bag 255 and its sixteen slots are 23-38
+// in the character's own `invSlot<n>` numbering. Equipment is 0-18 and worn
+// bags 19-22 — neither is ever touched here.
+const BACKPACK_BAG = 255;
+const BACKPACK_FIRST_SLOT = 23;
+const BACKPACK_LAST_SLOT = 38;
+const BACKPACK_SIZE = 16;
+/** Kept by the start-of-run clear: the starter Hearthstone (slot 23 on a fresh character). */
+const KEEP_ITEM_IDS = new Set([6948]);
+/**
+ * How long the guid -> item create block join is given to settle after login.
+ * It lands with the create block the login already waits for — both live runs
+ * joined immediately — so this is slack, not a budget, and the gate's total
+ * has no room for more (see the arithmetic in the header).
+ */
+const BAG_JOIN_TIMEOUT_MS = 1500;
+
 const WALK_TIMEOUT_MS = 30000;
 const FIGHT_TIMEOUT_MS = 40000;
 const REPLY_TIMEOUT_MS = 3000;
@@ -127,6 +147,12 @@ type Vec = { x: number; y: number; z: number };
 const units = new Map<string, { entry?: number; pos?: Vec; health?: number; dead?: boolean }>();
 const self = { guid: "", health: 0, maxHealth: 0, pos: { x: 0, y: 0, z: 0 } as Vec };
 const questLog = new Map<number, number>(); // slot -> questId
+// `invSlot<n>Lo/Hi` off our own update blocks: the two u32 halves of the item
+// guid carried in inventory slot n (equipment 0-18, worn bags 19-22, backpack
+// 23-38). A zero pair is an empty slot, and a slot cleared while we watch
+// arrives as a `values` update with the halves set to 0 — which is how the
+// clear below sees its own work land.
+const invSlots = new Map<number, { lo: number; hi: number }>();
 
 function trackEvent(e: any) {
   if (e.opcode === "SMSG_UPDATE_OBJECT" && Array.isArray(e.data?.objects)) {
@@ -161,6 +187,14 @@ function trackEvent(e: any) {
         for (const [k, v] of Object.entries(o.fields)) {
           const m = /^quest(\d+)Id$/.exec(k);
           if (m) questLog.set(+m[1]!, v as number);
+          const inv = /^invSlot(\d+)(Lo|Hi)$/.exec(k);
+          if (inv) {
+            const slot = +inv[1]!;
+            const half = invSlots.get(slot) ?? { lo: 0, hi: 0 };
+            if (inv[2] === "Lo") half.lo = (v as number) >>> 0;
+            else half.hi = (v as number) >>> 0;
+            invSlots.set(slot, half);
+          }
         }
       }
     }
@@ -285,7 +319,10 @@ async function endSession(): Promise<void> {
  * run fails, because the gate re-runs on the next tick anyway — and because
  * the three waits are sequential and their sum has to close under
  * `preflight.timeoutMs` (130s): 10s here + apply.ts's 90s online poll + a ~23s
- * arc is ~123s.
+ * arc is ~123s. The backpack clear (step 2b) is inside that arc and costs at
+ * most ~3s of waiting — a 1.5s join settle and a 1.5s destroy settle, both
+ * usually instant — so the margin is thin by design and any new wait added
+ * here has to be paid for out of it.
  */
 const fixtureCtx: FixtureContext = {
   base: BASE,
@@ -316,6 +353,94 @@ async function assertFixtureStart(): Promise<void> {
   log(`fixture start ok: ${d.toFixed(1)}y from the vineyard edge, quest ${QUEST_KILL} in the log`);
 }
 
+/**
+ * What the backpack holds right now, addressed the way `destroy_item` wants
+ * it: bag 255, slot 23-38 (sdk/src/state.ts `bag()`). A slot whose guid
+ * halves are both zero — or that has never been mentioned, since the wire
+ * compresses zeros out of create blocks — is free.
+ */
+function backpack(): { slot: number; guid: string; entry: number | undefined }[] {
+  const out: { slot: number; guid: string; entry: number | undefined }[] = [];
+  for (let slot = BACKPACK_FIRST_SLOT; slot <= BACKPACK_LAST_SLOT; slot++) {
+    const half = invSlots.get(slot);
+    if (!half || (half.lo === 0 && half.hi === 0)) continue;
+    const guid = ((BigInt(half.hi) << 32n) | BigInt(half.lo)).toString();
+    out.push({ slot, guid, entry: units.get(guid)?.entry });
+  }
+  return out;
+}
+
+/**
+ * Empty the backpack of everything the fixture did not put there (FOLLOW-UPS
+ * item 58), through `CMSG_DESTROYITEM` — the same opcode a player pressing
+ * delete sends, so this needs nothing from `infra/fixtures/*`, which refuses
+ * to touch item_instance rows for good reason (item 57: item guids are not
+ * safe to write from outside the running server).
+ *
+ * At the START of the run, not before logout, for three reasons:
+ *   1. it is idempotent — it does not matter how many previous runs left junk
+ *      behind, or how much;
+ *   2. it runs even after a previous run FAILED and skipped its own cleanup,
+ *      which is exactly the case where the bag is most likely to be full;
+ *   3. it makes the loot assertion precise: the bag had N free slots, then
+ *      loot arrived and occupied one.
+ *
+ * Best effort and REPORTED, never asserted. A cleanup that cannot run is a
+ * line in the log and the run carries on to its real claims; a cleanup that
+ * *aborted* the smoke would be a second failure mode wearing the costume of
+ * the loot bug this exists to prevent.
+ *
+ * The keep rule fails toward keeping. Only a slot positively identified as a
+ * non-keep item is destroyed: an item whose create block has not arrived (or
+ * whose entry we never saw) is left alone and reported, because the join can
+ * be incomplete and the Hearthstone sits in slot 23, the first one. Equipment
+ * (slots 0-18) and worn bags (19-22) are never addressed at all.
+ */
+async function clearBackpack(): Promise<void> {
+  // The join settles a moment after login: our own create block carries the
+  // slot guids, the items' own create blocks carry their entries. Wait for
+  // every occupied slot to name its item rather than reading the first block.
+  const deadline = Date.now() + BAG_JOIN_TIMEOUT_MS;
+  while (Date.now() < deadline && backpack().some((i) => i.entry === undefined)) await Bun.sleep(100);
+
+  const held = backpack();
+  // The fixture's Hearthstone is a permanent occupant, so an empty read is
+  // never "the bag is clean" — it is our own create block not having carried
+  // its `invSlot<n>` fields. Say so rather than logging a reassuring zero:
+  // a cleanup that silently did nothing is the failure this exists to avoid.
+  if (held.length === 0) {
+    log("cleanup: no inventory slots observed — our create block carried no invSlot fields; nothing cleared and the bag's real contents are unknown");
+    return;
+  }
+  const free = BACKPACK_SIZE - held.length;
+  const junk = held.filter((i) => i.entry !== undefined && !KEEP_ITEM_IDS.has(i.entry));
+  const unknown = held.filter((i) => i.entry === undefined);
+  log(`backpack: ${held.length}/${BACKPACK_SIZE} slots used, ${free} free — ${junk.length} to clear${unknown.length ? `, ${unknown.length} unidentified (kept)` : ""}`);
+  if (unknown.length) log(`cleanup: slots ${unknown.map((i) => i.slot).join(",")} never named their item; left alone`);
+  if (junk.length === 0) return;
+
+  for (const item of junk) {
+    // Not action(): that fails the run on a refusal, and this must not.
+    // Omitting `count` destroys the whole stack.
+    const r = await req("POST", "/action", { token: TOKEN, action: "destroy_item", bag: BACKPACK_BAG, slot: item.slot });
+    if (r.status !== 200 || !r.json?.ok) {
+      log(`cleanup: destroy_item slot ${item.slot} (item ${item.entry}) refused: ${r.status} ${JSON.stringify(r.json)}`);
+    }
+  }
+  // The slots we emptied come back as `values` updates with zeroed halves.
+  const settle = Date.now() + REPLY_TIMEOUT_MS;
+  const stillThere = () => backpack().filter((i) => junk.some((j) => j.slot === i.slot && j.guid === i.guid));
+  while (Date.now() < settle && stillThere().length > 0) await Bun.sleep(100);
+
+  const remaining = stillThere();
+  const after = backpack();
+  if (remaining.length === 0) {
+    log(`cleanup: cleared ${junk.length} of ${junk.length} — ${BACKPACK_SIZE - after.length} free slots`);
+  } else {
+    log(`cleanup: cleared ${junk.length - remaining.length} of ${junk.length}, ${remaining.length} remain (slots ${remaining.map((i) => i.slot).join(",")}) — ${BACKPACK_SIZE - after.length} free slots. Not fatal; the loot claims below still stand, but the bag fills.`);
+  }
+}
+
 async function main() {
   const health = await req("GET", "/health");
   if (health.status !== 200 || !health.json?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
@@ -336,6 +461,11 @@ async function main() {
   self.pos = { x: verify.data.x, y: verify.data.y, z: verify.data.z };
   await waitFor((e) => e.opcode === "SMSG_UPDATE_OBJECT" && e.data?.objects?.some((o: any) => o.self), 10000, "self create");
   await assertFixtureStart();
+
+  // 2b. Empty the backpack of what previous runs looted into it, before the
+  //     run adds to it (FOLLOW-UPS item 58). Best effort: reported, never
+  //     asserted.
+  await clearBackpack();
 
   // 3. The one fight. The fixture already stands at the vineyard edge, so the
   //    only walk left is up to whichever kobold is nearest.
@@ -406,7 +536,11 @@ async function main() {
   );
   if (lootEvt.opcode !== "SMSG_LOOT_RESPONSE") fail(`loot window never opened: first loot event was ${lootEvt.opcode}`);
   await waitFor((e) => e.opcode === "SMSG_LOOT_RELEASE_RESPONSE", REPLY_TIMEOUT_MS, "loot release", lootMark);
-  log(`looted: items=${lootEvt.data.items?.length ?? 0} gold=${lootEvt.data.gold ?? 0}`);
+  // What the cleared bag makes readable: N free slots before the kill, and
+  // what the loot occupied. Logged, not asserted — a money-only loot is a
+  // legitimate outcome and must not fail the gate.
+  await Bun.sleep(300);
+  log(`looted: items=${lootEvt.data.items?.length ?? 0} gold=${lootEvt.data.gold ?? 0}; backpack now ${BACKPACK_SIZE - backpack().length} free slots`);
 
   // 5. Logout. The character is not deleted: it is the fixture, and the next
   //    run's apply.ts rewrites its rows.
