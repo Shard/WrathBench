@@ -132,10 +132,13 @@ standing sandbox that never finishes. Duration separates neither pair.
   drift into a results chart by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
-- **Extras.** A model whose entry says `idle: "unlimited"` takes its extras here
-  rather than as extra `e90`/`e360` runs (ADR-0040; `idle: "characters"` puts it
-  on the race/class cycle instead, and the default `none` buys nothing). Once it
-  has met its tier's targets the policy gives it one freeplay session at a time,
+- **Extras.** A model whose entry says `idle: "unlimited"` takes its extras
+  here; the default `none` buys nothing, and those are now the only two values
+  the axis has. (It briefly had a third, `idle: "characters"`, which spent a
+  spare account on a scored run with the next race/class in a code-side cycle.
+  That was an unscored question asked in the scored lane, so ADR-0041 made it
+  the class-probe campaign instead.) Once a model has met its tier's targets the
+  policy gives it one freeplay session at a time,
   **capped at six hours on every account class** — the id pins no clock, but a
   session ended only by the idle watchdog would hold its account indefinitely
   and starve the scored targets behind it. When that session ends the next tick

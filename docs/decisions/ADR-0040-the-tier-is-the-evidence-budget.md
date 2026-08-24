@@ -39,11 +39,14 @@ runs, and it is the only thing that sets a run count.**
 | `t1` standard | e90 x3 | climbs to `t2` on one counted `e90` reaching the promotion level |
 | `t2` long | e90 x3 + e360 x1 | top rung today |
 
-`roster.<name>.tier` is **required** on every entry the policy can schedule and
-**refused** on one carrying an `objective` — a steered entry is outside the
-policy (ADR-0033) and has no budget to state. Required rather than defaulted
-because with a default, adding a model and forgetting the field quietly buys a
-full budget, and for a paid model that is money nobody approved.
+`roster.<name>.tier` is **required** on every entry the policy can schedule
+~~and **refused** on one carrying an `objective` — a steered entry is outside
+the policy (ADR-0033) and has no budget to state.~~ **Amended 2026-08-24 by
+ADR-0041**: required on every entry, full stop. The roster is a model catalog
+now and an entry cannot carry an objective at all, so there is no steered entry
+left to make an exception for. Required rather than defaulted because with a
+default, adding a model and forgetting the field quietly buys a full budget, and
+for a paid model that is money nobody approved.
 
 **The table is code** (`TIER_TABLE`, `runner/src/models.ts`), beside `EPISODES`.
 A budget every model is held to alike is a recorded decision — the same
@@ -77,8 +80,10 @@ legible — `t0* · rung 1 earned · ladder held` — where the old table could 
 manage `promoted, 0/0`.
 
 **Idle work becomes one axis.** `roster.<name>.idle` is `none` (default),
-`characters` (another scored run of an eligible episode, next race/class in
-`IDLE_CHARACTERS`) or `unlimited` (one freeplay session at a time). It replaces
+~~`characters` (another scored run of an eligible episode, next race/class in
+`IDLE_CHARACTERS`)~~ or `unlimited` (one freeplay session at a time).
+**`characters` was retired 2026-08-24 by ADR-0041** — see the note at the end of
+this section. It replaces
 both `policy.extras.characters`'s implicit scope and `policy.extras.local`'s
 class-conditional branch, under which the same model meant different things
 depending on which account it landed on and a non-local model could not take
@@ -117,6 +122,14 @@ is a deliberate experiment, not idle work, and pinning it to whichever model
 happens to be out of evals is the wrong axis — the sweep should be commissioned
 and it should complete. Splitting the two (a probing lane between evals and
 freeplay) is the open question this ADR does not settle.
+
+**Settled 2026-08-24 by ADR-0041, the same day.** The probing lane exists,
+`idle: "characters"` is gone, and the race/class sweep is the `class-probe`
+campaign: eight cells named in the config rather than a code-side cycle indexed
+by a counter that meant something else, unscored where it belongs, and completed
+rather than left running. `IdleMode` is `none | unlimited`. Everything above
+about tiers, promotion, account classes and the paid throttle stands; only the
+idle axis and the tier-refusal rule changed.
 
 **The retired keys are refused by name**, not ignored: `policy.runsPerEpisode`,
 `policy.paid.runsPerEpisode`, `policy.extras`, per-entry `runsPerEpisode`, and

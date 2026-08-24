@@ -15,7 +15,7 @@ harness that can carry agents from a level-1 character to a 25-man raid
 boss has solved long-horizon agency in a live world, and every intermediate
 milestone is independently measurable.
 
-## Two tracks, one harness
+## Three tracks, one harness
 
 - **Eval track** — what exists today: fixed episodes, versioned harness,
   scores comparable within a harness version (ADR-0004). Episodes come in
@@ -23,6 +23,13 @@ milestone is independently measurable.
   comparability group — and a model earns the longer tier by a mechanical
   promotion rule rather than by anyone's judgement (ADR-0033, ADR-0034,
   `docs/EPISODES.md`). Leaderboards live here.
+- **Probe track** — commissioned exploration: an objective swept over a set of
+  cells by a set of models, run once to completion and then switched off
+  (ADR-0041). What separates it from the eval track is not length or steering
+  but permanence: a harness bump re-arms every eval target and never re-arms a
+  campaign. Probes are how the frontier gets felt out — play every class, ride
+  the tram, walk into a dungeon with four others — and they come and go as the
+  questions do. Unscored, so nothing here reaches a leaderboard.
 - **Freeplay track** — ultra-long-horizon runs with no episode cap, in the
   spirit of Claude Plays Pokémon: "go play WoW" and the agent owns its own
   goals, coordination, and (eventually) its own context management. Freeplay
