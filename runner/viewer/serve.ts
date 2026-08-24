@@ -18,7 +18,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createApi, json } from "./api";
 
 const REQUIRED_HOST = "127.0.0.1";
@@ -59,9 +59,18 @@ const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086
  * rather than a startup failure — the viewer runs on machines that have no
  * fleet at all.
  */
-const fleetConfigPath =
-  process.env["WRATHBENCH_FLEET_CONFIG"] ??
-  ["infra/fleet.next.json", "infra/fleet.json"].find((p) => existsSync(p));
+const fleetConfigPath = ((): string | undefined => {
+  const given = process.env["WRATHBENCH_FLEET_CONFIG"];
+  if (given === undefined) return ["infra/fleet.next.json", "infra/fleet.json"].find((p) => existsSync(p));
+  // The same preference the supervisor applies to its own argument
+  // (`preferNextConfig`, infra/run-fleet.ts): whoever asks for `fleet.json`
+  // gets `fleet.next.json` while one exists. Without this the env var pointed
+  // the viewer at a file the supervisor was not running, so the Models page and
+  // `--status` reported different boards from the same machine — the exact kind
+  // of quiet disagreement between the two halves that is expensive to notice.
+  const next = join(dirname(given), "fleet.next.json");
+  return given.endsWith("fleet.json") && existsSync(next) ? next : given;
+})();
 
 if (!existsSync(runsDir)) {
   console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
