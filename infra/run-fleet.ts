@@ -3649,6 +3649,24 @@ async function main(): Promise<void> {
       // about what is billing at once, not about who asked for it.
       for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
     }
+    // Live processes the file no longer YIELDS still hold a session on their
+    // driver: a completed campaign cell draining to its episode boundary, a
+    // job whose config entry vanished. The pinned loop above walks what the
+    // config yields, so such a process silently stopped occupying a slot —
+    // which is how a third claude-code stream spilled onto a cap of 2 while
+    // nav-probe-coldridge (cell quota met, draining) was still alive
+    // (2026-08-24). Count every live job the loops above did not.
+    {
+      const yielded = new Set([...pinnedJobs(cfg), ...campaignJobs].map((j) => j.name));
+      for (const name of sets.running) {
+        if (yielded.has(name) || assigned.has(name)) continue;
+        const job = liveJobs.get(name);
+        if (job === undefined) continue;
+        for (const r of job.refs) runningRefs.add(r);
+        countKey(job.refs);
+        for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
+      }
+    }
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     // Resumes before anything fresh (ADR-0036): a paused run goes back onto
     // its own account ahead of the queue and the policy, so nothing can wipe
