@@ -30,6 +30,8 @@ import {
   formatAccounts,
   formatQueue,
   liveJobsFromState,
+  jobsByAccount,
+  type StateJob,
   stateJobFacts,
   pinnedJobs,
   poolJobs,
@@ -602,7 +604,7 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
 
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    ox: { model: "stealth/ox-alpha", tier: "t2" },
+    ox: { model: "stealth/ox-alpha", tier: "t2", idle: "none" },
     mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
   };
   const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
@@ -773,6 +775,52 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect([...liveJobsFromState({ jobs }).entries()]).toEqual([["glm-e90", jobs["glm-e90"]]]);
     expect(liveJobsFromState(undefined).size).toBe(0);
     expect(liveJobsFromState({ jobs: undefined as never }).size).toBe(0);
+  });
+
+  test("jobsByAccount: a dead job never masks the live run on its account, however late it was inserted", () => {
+    const job = (over: Partial<StateJob> & Pick<StateJob, "account" | "spawnedAt" | "alive">): StateJob => ({
+      ref: "x", episode: "e90", source: "policy", models: ["m"], pid: 2, rosterPath: "", jsonl: "", log: "",
+      exitCode: null, draining: false, ...over,
+    });
+    // The shape found on disk 2026-08-24: `hy3-e90` was inserted first and is
+    // live; `muse-spark-e90` was inserted later, on the same account, and
+    // exited. Last-write-wins over insertion order picked the dead one, so
+    // --status named a finished job where --live-runs named the running one.
+    const jobs = {
+      "hy3-e90": job({ account: "RUNNER2", spawnedAt: 13_15, alive: true }),
+      "north-mini-code-e90": job({ account: "RUNNER3", spawnedAt: 12_40, alive: true }),
+      "muse-spark-e90": job({ account: "RUNNER2", spawnedAt: 12_30, alive: false, exitCode: 0 }),
+      "nemotron-nano-e90": job({ account: "RUNNER3", spawnedAt: 12_00, alive: false, exitCode: 0 }),
+    };
+    const alive = (j: StateJob): boolean => j.alive;
+    const by = jobsByAccount(liveJobsFromState({ jobs }), alive);
+    expect(by.get("RUNNER2")?.name).toBe("hy3-e90");
+    expect(by.get("RUNNER3")?.name).toBe("north-mini-code-e90");
+    // Liveness outranks recency, and must: a job named onto an account by the
+    // file (pinned, or a queue entry) is spawned there whatever else holds it,
+    // so it can die at 13:30 on top of a run that has been going since 12:40.
+    // Newest-wins alone would then report the corpse.
+    const stillborn = {
+      "north-mini-code-e90": job({ account: "RUNNER3", spawnedAt: 12_40, alive: true }),
+      "probe-e90": job({ account: "RUNNER3", spawnedAt: 13_30, alive: false, exitCode: 1 }),
+    };
+    expect(jobsByAccount(liveJobsFromState({ jobs: stillborn }), alive).get("RUNNER3")?.name).toBe("north-mini-code-e90");
+    // Recency only decides among equals in liveness, so an account whose jobs
+    // have all exited still reports the last one that ran there, not the first.
+    const spent = { a: job({ account: "RUNNER", spawnedAt: 1, alive: false }), b: job({ account: "RUNNER", spawnedAt: 9, alive: false }) };
+    expect(jobsByAccount(liveJobsFromState({ jobs: spent }), alive).get("RUNNER")?.name).toBe("b");
+    // With the supervisor down every `alive` flag is stale, and the caller says
+    // so: the ranking then falls back to recency rather than trusting the flag.
+    expect(jobsByAccount(liveJobsFromState({ jobs }), () => false).get("RUNNER2")?.name).toBe("hy3-e90");
+    // Two live jobs on one account is a double-lease: named, not resolved.
+    const both = { "a-e90": job({ account: "RUNNER", spawnedAt: 1, alive: true }), "b-e90": job({ account: "RUNNER", spawnedAt: 9, alive: true }) };
+    const clash = jobsByAccount(liveJobsFromState({ jobs: both }), alive).get("RUNNER");
+    expect(clash?.name).toBe("b-e90");
+    expect(clash?.clash).toMatch(/also live here: a-e90/);
+    // And an operator reading the table sees it.
+    expect(
+      formatAccounts([{ account: "RUNNER", kind: "pool", job: { name: "b-e90", models: ["m"], episode: "e90", clash: clash!.clash } }]).join("\n"),
+    ).toMatch(/!! also live here: a-e90/);
   });
 
   test("planTick: pinned jobs spawn on their accounts, the queue then the policy fill the pool, per-driver cap counts the pinned stream", () => {
@@ -1236,7 +1284,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     jobs,
     roster,
     policy: DEFAULT_POLICY,
-    accounts: { pinned: Object.fromEntries(jobs.filter((j) => j.account !== undefined).map((j) => [j.account!, j.name])), pool: ["RUNNER3", "RUNNER4"], paid: [] },
+    accounts: { pinned: Object.fromEntries(jobs.filter((j) => j.account !== undefined).map((j) => [j.account!, j.name])), pool: ["RUNNER3", "RUNNER4"], paid: [], local: [] },
   });
   const held = (): string | undefined => undefined;
 
@@ -1331,7 +1379,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
 
   test("a paused run whose ref now names another model is ENDED by the supervisor, never resumed or listed", () => {
     // `ox` was re-pointed from stealth/ox-alpha to stealth/ox-beta; the paused ox-alpha run has no job to come back under.
-    const repointed = { ...roster, ox: { model: "stealth/ox-beta", tier: "t1", idle: "none" } };
+    const repointed = { ...roster, ox: { model: "stealth/ox-beta", tier: "t1", idle: "none" } satisfies FleetRosterEntry };
     const run = paused({ runId: "fleet-ox-e90-ox-alpha-20260823-a2", model: "stealth/ox-alpha", account: "RUNNER3" });
     const plan = planResumes({ runs: [run], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
@@ -1340,7 +1388,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(formatEnded(plan.end, false)[1]).toContain("fleet-ox-e90-ox-alpha-20260823-a2 — ended by the supervisor: model stealth/ox-alpha no longer under ref ox");
     // An effort change is a different entry too.
     const lowRun = paused({ runId: "fleet-ox-e90-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3" });
-    expect(planResumes({ runs: [lowRun], config: { ...config(), roster: { ...roster, ox: { model: "stealth/ox-alpha", effort: "low", tier: "t1", idle: "none" } } }, running: new Map(), held, now: NOW }).end).toHaveLength(1);
+    expect(planResumes({ runs: [lowRun], config: { ...config(), roster: { ...roster, ox: { model: "stealth/ox-alpha", effort: "low", tier: "t1", idle: "none" } satisfies FleetRosterEntry } }, running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // The same model under the same ref resumes as before; a run launched outside the fleet (no ref prefix) is not this rule's.
     expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).resume).toHaveLength(1);
     const hand = paused({ runId: "hand-ox-1", model: "stealth/ox-alpha", account: "RUNNER3" });

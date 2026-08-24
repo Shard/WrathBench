@@ -1959,6 +1959,12 @@ export interface JobRow {
    * class governs the next pick, not a run already in flight.
    */
   offClass?: string;
+  /**
+   * Another job's process is live on this account too. One session per account
+   * is the invariant the whole scheduler rests on, so this is a real fault,
+   * not a rendering choice: say both names rather than pick one quietly.
+   */
+  clash?: string;
 }
 
 /** What an account is doing right now, for the accounts table. */
@@ -2003,7 +2009,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     const run = j.runId !== undefined ? `${j.runId} — ${prog}` : "no run launched yet";
     out.push(
       `${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}` +
-        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}`,
+        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}${j.clash !== undefined ? ` !! ${j.clash}` : ""}`,
     );
   }
   return out;
@@ -2583,10 +2589,18 @@ function jobDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
 
 /**
  * Live episodes across every job account, for an operator (or a script) that
- * wants to know whether the world is busy. Same signal --status shows: the
- * roster's own account-busy inference over the trajectory stores. Exit code
- * carries the answer so bash never parses this text. The deploy script does
- * not use it any more: it stops the fleet for its window (runs pause).
+ * wants to know whether the world is busy: the roster's own account-busy
+ * inference over the trajectory stores, which is what the scheduler leases by.
+ *
+ * This is a DIFFERENT source than the --status accounts table, which reports
+ * the supervisor's own `jobs` record — and saying the two were "the same
+ * signal" is how a stale row there went unnoticed (FOLLOW-UPS 68). They should
+ * now agree on every fleet-managed account; where they cannot, this one is the
+ * truth about the world and that one is the truth about the supervisor.
+ *
+ * Exit code carries the answer so bash never parses this text. The deploy
+ * script does not use it any more: it stops the fleet for its window, and a
+ * live episode pauses as `operator-pause` and resumes on the far side.
  */
 function printLiveRuns(configPath: string): number {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
@@ -2612,6 +2626,59 @@ export function liveJobsFromState(state: Pick<FleetState, "jobs"> | undefined): 
   const out = new Map<string, StateJob>();
   if (state === undefined || typeof state.jobs !== "object" || state.jobs === null) return out;
   for (const [name, j] of Object.entries(state.jobs)) out.set(name, j);
+  return out;
+}
+
+/**
+ * Which job is on each account, out of every job the supervisor has spawned.
+ *
+ * `state.jobs` is keyed by job NAME — stable across attempts — so it is a
+ * cumulative record, not a live set: over a long night a dozen entries name
+ * the same pool account and all but one of them exited hours ago. Keying a map
+ * by account and letting the last write win therefore reads the object's
+ * insertion order, which is FIRST-spawn order, and a job that finished at noon
+ * can mask the run holding the account now. That is what made the accounts
+ * table disagree with --live-runs (FOLLOW-UPS 68).
+ *
+ * So rank rather than overwrite: a live job beats a dead one, and among live
+ * ones the most recently spawned wins. `alive` is passed in so the selection
+ * and the row's own liveness note are the same verdict — with the supervisor
+ * down, `j.alive` is stale on every job and only the caller knows that.
+ *
+ * Two live jobs on one account is a double-lease. It is reported, never
+ * resolved silently: the scheduler leases by `accountHeldBy`, so this table is
+ * the only place such a fault would ever surface.
+ */
+export function jobsByAccount(
+  live: ReadonlyMap<string, StateJob>,
+  alive: (j: StateJob) => boolean,
+): Map<string, { name: string; j: StateJob; clash?: string }> {
+  const groups = new Map<string, { name: string; j: StateJob }[]>();
+  for (const [name, j] of live) {
+    const key = j.account.toUpperCase();
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, [{ name, j }]);
+    else g.push({ name, j });
+  }
+  const out = new Map<string, { name: string; j: StateJob; clash?: string }>();
+  for (const [key, g] of groups) {
+    const ranked = [...g].sort((a, b) => {
+      const la = alive(a.j) ? 1 : 0;
+      const lb = alive(b.j) ? 1 : 0;
+      // A state file from another supervisor build carries no spawnedAt; it
+      // sorts last rather than throwing the comparison.
+      if (la !== lb) return lb - la;
+      return (typeof b.j.spawnedAt === "number" ? b.j.spawnedAt : 0) - (typeof a.j.spawnedAt === "number" ? a.j.spawnedAt : 0);
+    });
+    const pick = ranked[0]!;
+    const alsoLive = ranked.slice(1).filter((o) => alive(o.j));
+    out.set(
+      key,
+      alive(pick.j) && alsoLive.length > 0
+        ? { ...pick, clash: `also live here: ${alsoLive.map((o) => o.name).join(", ")} — one session per account` }
+        : pick,
+    );
+  }
   return out;
 }
 
@@ -2679,6 +2746,14 @@ function printStatus(configPath: string): void {
           now: Date.now(),
         })
       : { resume: [], listed: [], end: [] };
+  /**
+   * The one liveness verdict for this printing. A heartbeat is the only honest
+   * signal across a container boundary; without one (a host supervisor) the pid
+   * is. Shared with `jobsByAccount` so the job a row picks and the note that
+   * row prints can never contradict each other.
+   */
+  const isAlive = (j: StateJob): boolean =>
+    typeof j.pid !== "number" ? false : hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
   const jobRow = (name: string, j: StateJob): JobRow => {
     const row: JobRow = {
       name,
@@ -2693,7 +2768,7 @@ function printStatus(configPath: string): void {
       row.cooling = "state file from another supervisor build — restart the fleet service";
       return row;
     }
-    const alive = hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
+    const alive = isAlive(j);
     const stdoutLog = resolveStatePath(j.log, jobLogPath(name, state!.stamp));
     const jsonl = resolveStatePath(j.jsonl, jobJsonlPath(name, state!.stamp));
     const runId = lastLaunchedRunId(stdoutLog);
@@ -2716,8 +2791,7 @@ function printStatus(configPath: string): void {
     if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${j.exitCode !== null ? `exited ${j.exitCode}` : "dead"}`;
     return row;
   };
-  const byAccount = new Map<string, { name: string; j: StateJob }>();
-  for (const [name, j] of live) byAccount.set(j.account.toUpperCase(), { name, j });
+  const byAccount = jobsByAccount(live, isAlive);
   // With the config in hand the classes come from the file; without it (an
   // older or foreign checkout) from whatever the state file published.
   const classAccounts = (cls: AccountClass): string[] =>
@@ -2745,6 +2819,7 @@ function printStatus(configPath: string): void {
         const projected = entry === undefined ? [] : rosterModels({ [on.j.ref]: entry });
         const want = projected[0] === undefined ? undefined : rosterClass(projected[0]);
         const row = jobRow(on.name, on.j);
+        if (on.clash !== undefined) row.clash = on.clash;
         if (want !== undefined && on.j.source === "policy" && want !== classOfAccount(account)) {
           row.offClass = `${want} model on a ${classOfAccount(account)} account — left alone; the class applies to the next pick`;
         }

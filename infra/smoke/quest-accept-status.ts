@@ -138,9 +138,9 @@ function trackEvent(e: any) {
         if (o.fields.xp !== undefined) self.xp = o.fields.xp;
         for (const [k, v] of Object.entries(o.fields)) {
           const m = /^quest(\d+)Id$/.exec(k);
-          if (m) questLog.set(+m[1], v as number);
+          if (m) questLog.set(+m[1]!, v as number);
           const ms = /^quest(\d+)State$/.exec(k);
-          if (ms) questState.set(+ms[1], v as number);
+          if (ms) questState.set(+ms[1]!, v as number);
         }
       }
     }
