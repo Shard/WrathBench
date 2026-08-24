@@ -283,6 +283,8 @@ export function resultRunOf(
     class: run.class,
     className: run.className,
     characterLabel: run.characterLabel,
+    campaign: run.campaign,
+    cell: run.cell,
     effort: run.comparability?.effort ?? null,
     harness: run.harness,
     promptHash: run.comparability?.promptHash ?? null,
