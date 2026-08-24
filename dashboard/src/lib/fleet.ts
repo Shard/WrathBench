@@ -188,9 +188,14 @@ export interface FleetRow {
  * accuracy claimed here.
  *
  * **Freeplay.** No percentage and no ETA, whatever a `freeplay` run recorded.
- * The id is uncapped (docs/EPISODES.md): nav-probe's six hours is that one
+ * The id is uncapped (docs/EPISODES.md): a six-hour session is that one
  * experiment's watchdog, not a budget the tier gives runs to be measured
- * against, and "72% of freeplay" would read as a tier fact it is not.
+ * against, and "72% of freeplay" would read as a tier fact it is not. The gate
+ * is capped-ness, not scored-ness, which is why `probing` is deliberately not
+ * here: a campaign sets an enforced clock and its run ends on it (ADR-0041), so
+ * the percentage is a fact about that run. Whether a `freeplay` run carrying an
+ * explicit `episodeMs` should show one too is the operator's call (FOLLOW-UPS
+ * 74); until it is made, silence is the honest answer.
  *
  * **Past the budget.** The real figure, over 100%. A run that overruns its
  * watchdog is a signal (`fleet-deepseek-flash-e90-…-a3` ran 114 minutes against
