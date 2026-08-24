@@ -57,7 +57,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
 import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
-import { EPISODE_IDS, EPISODES, isEpisodeId, type EpisodeId } from "./episodes";
+import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -69,7 +69,7 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
  * never scheduled as evidence — but an `idle: "unlimited"` model's extras are
  * freeplay runs, so the projection still keeps stats for it.
  */
-export const POLICY_EPISODES: readonly EpisodeId[] = ["e90", "e360"];
+export const POLICY_EPISODES: readonly ScoredEpisodeId[] = ["e90", "e360"];
 
 /**
  * Every episode the projection keeps stats for, in presentation order. Wider
@@ -109,7 +109,7 @@ export type Tier = (typeof TIERS)[number];
 
 export interface TierSpec {
   /** The counted runs this tier buys, per scored episode. Zero: not eligible. */
-  runsPerEpisode: { e90: number; e360: number };
+  runsPerEpisode: Record<ScoredEpisodeId, number>;
   /**
    * The tier a counted rung-1 `e90` (level `promoteAtLevel`) promotes into, or
    * null when the ladder is held here. Held is not "rung zero": a `t0` model is
@@ -868,11 +868,18 @@ function matchesRoster(f: RunFact, r: RosterModel): boolean {
 /**
  * How many counted runs of an episode a tier buys. One input beyond the
  * episode — the tier — and no override anywhere: this is the whole answer to
- * "how many runs does this model get". `freeplay` is never evidence, so it is
- * always zero and is only ever reached as an idle session.
+ * "how many runs does this model get". An unscored episode is never evidence,
+ * so it is always zero: `freeplay` is reached only as an idle session and
+ * `probing` only through a campaign.
  */
 function targetFor(tier: Tier, ep: EpisodeId): number {
-  if (ep === "freeplay") return 0;
+  // Derived from the episode table, never from a list of names. A name check
+  // here is a landmine: when a new id lands, TypeScript forces *a* decision and
+  // the cheapest one that compiles is to widen `runsPerEpisode`, which silently
+  // wires an unscored episode into series-gated evidence and promotion. An
+  // episode that cannot be scored cannot be evidence, so it has no target, and
+  // `models.test.ts` asserts that for every id in the table.
+  if (!isScoredEpisode(ep)) return 0;
   return TIER_TABLE[tier].runsPerEpisode[ep];
 }
 

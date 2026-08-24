@@ -34,7 +34,7 @@ export interface EpisodeBudgetView {
  * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
  * rather than imported, because this module is import-free by construction.
  */
-export type EpisodeIdView = "e90" | "e360" | "freeplay";
+export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay";
 
 /** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
 export interface EpisodeTierView {

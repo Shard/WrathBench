@@ -34,7 +34,7 @@
 import { z } from "zod";
 
 /** Every episode tier a run can be launched under. */
-export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
+export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 export const episodeIdSchema = z.enum(EPISODE_IDS);
@@ -63,7 +63,7 @@ export interface EpisodeTier {
   summary: string;
 }
 
-export const EPISODES: Record<EpisodeId, EpisodeTier> = {
+export const EPISODES = {
   e90: {
     id: "e90",
     minutes: 90,
@@ -102,6 +102,22 @@ export const EPISODES: Record<EpisodeId, EpisodeTier> = {
       "times the opportunity. Entry is two qualifying e90 episodes on the current harness " +
       "version, and the 12000-call ceiling holds e90's rate of 1000 calls per thirty minutes.",
   },
+  probing: {
+    id: "probing",
+    minutes: 90,
+    idleMinutes: 20,
+    noXpMinutes: null,
+    toolCalls: null,
+    objectiveAllowed: true,
+    scored: false,
+    summary:
+      "The probe-campaign tier (ADR-0041): a commissioned run under a campaign's own objective, " +
+      "cell and clock. Unscored, and never a target — a campaign is run once to completion and a " +
+      "harness bump does not re-arm it, which is exactly what separates a probe from an eval. The " +
+      "ninety minutes here is the default a campaign inherits when it names no clock of its own, " +
+      "not a rule the tier enforces; the no-XP watchdog is off because a probe may spend its whole " +
+      "budget walking somewhere in order to find out what happens there. Exploration, not evidence.",
+  },
   freeplay: {
     id: "freeplay",
     minutes: null,
@@ -118,7 +134,24 @@ export const EPISODES: Record<EpisodeId, EpisodeTier> = {
       "freeplay are both often six hours long: duration is not what separates them, steering " +
       "is. A freeplay run neither qualifies nor disqualifies a model for anything.",
   },
-};
+} as const satisfies Record<EpisodeId, EpisodeTier>;
+
+/**
+ * The ids a run can be scored under, read off the table's own `scored` flags.
+ *
+ * Derived rather than listed, so "which episodes are evidence" has exactly one
+ * answer and flipping a flag in the table above moves the type with it. This is
+ * what makes `runsPerEpisode` unable to name an unscored episode at all: the
+ * landmine `targetFor` used to carry (a name check that a compiler error could
+ * be silenced by widening the tier table) is closed at the type level, not by a
+ * reviewer noticing.
+ */
+export type ScoredEpisodeId = { [K in EpisodeId]: (typeof EPISODES)[K]["scored"] extends true ? K : never }[EpisodeId];
+
+/** Whether this episode can enter a scored comparison, narrowing the id. */
+export function isScoredEpisode(id: EpisodeId): id is ScoredEpisodeId {
+  return EPISODES[id].scored;
+}
 
 /** The tiers as a list, in the order they are presented. */
 export const EPISODE_LIST: readonly EpisodeTier[] = EPISODE_IDS.map((id) => EPISODES[id]);
@@ -168,6 +201,11 @@ export function matchesTier(
     maxToolCalls?: number;
   },
 ): boolean {
+  // An unscored tier states no budget to depart from. Its numbers are defaults
+  // a campaign or an experiment inherits and then sets for itself, and they are
+  // recorded like everything else — so "overridden" is a claim about a scored
+  // comparison group, and there is no group here to fall out of.
+  if (!tier.scored) return true;
   const want = watchdogsFor(tier);
   // A ceiling the tier does not pin cannot be departed from: e360 leaves it to
   // the job on purpose, and comparing against a number it never named would
