@@ -248,11 +248,14 @@ leaves free. Inspect the config, and you have inspected the fleet.
     ./infra/run-fleet.sh infra/fleet.json --dry-run       # print the plan
     ./infra/run-fleet.sh --status                         # read-only report
 
-The file has a `roster` map (name → the exact per-entry schema the roster
-accepts, plus `tiers`/`runsPerEpisode`/`billing`), an `accounts` block
-(`pool`, `paid`, `local` lists), a `queue` of jobs (`ref`, `episode`,
-`repeat`, optional `account`, optional `enabled`), a `policy` block and a
-`preflight` block. A job's name is always `<first ref>-<episode>`. The fleet
+The file has a `roster` map — the model **catalog**: name → the per-entry
+schema the roster accepts, plus `tier` and `idle`, and never an `objective`
+(ADR-0041) — an `accounts` block (`pool`, `paid`, `local` lists), a
+`campaigns` map (probe campaigns: an objective swept over `cells` by a set of
+`models`, optionally pinned to an `account`), a `queue` of jobs (`ref`,
+`episode`, `repeat`, optional `account`, optional `enabled`), a `policy` block
+and a `preflight` block. A job's name is always `<first ref>-<episode>`, or
+`<campaign>-<cell>` for a pinned campaign. The fleet
 spawns one `run-roster` process per job it places — materialized roster at
 `data/runs/fleet-<job>-<date>.roster.json`, roster JSONL at
 `fleet-<job>-<date>.jsonl`, stdout at `fleet-<job>-<date>.log` — and

@@ -20,6 +20,8 @@ import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
 import type {
   ApiInfoResponse,
+  CampaignRowView,
+  CampaignsResponse,
   EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
@@ -38,6 +40,7 @@ import type {
   RunsResponse,
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
+import { campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
@@ -180,6 +183,33 @@ function staticFile(root: string, rel: string): Response | null {
       "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-store",
     },
   });
+}
+
+/**
+ * The dashboard build on disk, as Vite's fingerprinted entry filename.
+ *
+ * Vite hashes chunk names and empties `dist/` on every build, so that name
+ * changes exactly when the bundle does — which makes it a build id nobody has
+ * to remember to stamp. Parsed out of `index.html` rather than by listing
+ * `assets/` (which holds lazy chunks too, in no defined order).
+ *
+ * Cached on the file's mtime: `/api/info` is polled by every open tab, and a
+ * build id that reads the page off disk each time would be the cheapest route
+ * to a thundering herd on a rebuild.
+ */
+function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: string | null }): string | null {
+  if (dir === undefined) return null;
+  const file = join(dir, "index.html");
+  if (!existsSync(file)) return null;
+  const mtime = statSync(file).mtimeMs;
+  if (mtime === cache.mtime) return cache.id;
+  const html = readFileSync(file, "utf8");
+  // The entry script; `null` if the page has none, which is a build we cannot
+  // identify rather than an error — the field is nullable for exactly that.
+  const id = /src="\/assets\/([^"]+\.js)"/.exec(html)?.[1] ?? null;
+  cache.mtime = mtime;
+  cache.id = id;
+  return id;
 }
 
 /**
@@ -400,6 +430,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
   const dashboardDir = opts.dashboardDir;
+  /** Per-handle, so a test's temp dir never inherits another's build id. */
+  const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
@@ -614,6 +646,104 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return json(body);
   }
 
+  /**
+   * The probe lane, grouped by what commissioned each run (ADR-0041).
+   *
+   * Built from the RUN DIRECTORY and only annotated from the config, which is
+   * the property that matters: a campaign that has been completed, switched off
+   * and deleted from the file still has a row here, because its runs are what
+   * happened. A row with runs and no `config` is a finished campaign, not an
+   * error — and a cell the config no longer declares is still shown, because
+   * pretending a run did not happen is worse than showing one that no longer
+   * has a home.
+   */
+  async function campaignsResponse(): Promise<Response> {
+    const all = await resultRuns();
+    const probes = all.filter((r) => r.campaign !== null);
+    const roster = readFleetRoster(opts.fleetConfigPath);
+    const declared = new Map(roster.campaigns.map((c) => [c.name, c]));
+    const names = [
+      // Config order first, so the file's own priority is what the page shows;
+      // then any campaign only the runs remember.
+      ...roster.campaigns.map((c) => c.name),
+      ...[...new Set(probes.map((r) => r.campaign!))].filter((n) => !declared.has(n)),
+    ];
+    const catalog = roster.models.map((m) => m.name);
+    const rows: CampaignRowView[] = names.map((name) => {
+      const mine = probes.filter((r) => r.campaign === name);
+      const c = declared.get(name);
+      const cellIds = [
+        ...(c?.cells.map((x) => x.id) ?? []),
+        ...[...new Set(mine.map((r) => r.cell).filter((x): x is string => x !== null))].filter(
+          (id) => c === undefined || !c.cells.some((x) => x.id === id),
+        ),
+      ];
+      const newest = mine.reduce<ResultRun | null>((a, b) => ((a?.startedAt ?? 0) >= (b.startedAt ?? 0) ? a : b), null);
+      return {
+        campaign: name,
+        config:
+          c === undefined
+            ? null
+            : {
+                enabled: c.enabled,
+                runsPerCell: c.runsPerCell,
+                cells: c.cells.map((x) => x.id),
+                // No `eligible` predicate, deliberately: the scheduler passes
+                // one (`verdict !== "blocked"`) so it does not launch a cell
+                // against a dead endpoint, but `blocked` also covers `running`
+                // and `paused`, which are properties of this second, not of the
+                // sweep. Wired here, a model's count and the complete flag
+                // below would flicker with the live board on every poll. This
+                // page answers what the config asked for, so it counts every
+                // named model — health is the fleet strip's question.
+                models: campaignModels(c, catalog).length,
+                // Ended runs only, which is deliberately NOT the question the
+                // scheduler asks. The scheduler counts a live probe as done so
+                // it does not launch the same cell twice; a page must not
+                // announce a sweep complete while one of its runs could still
+                // end `manual` and re-open the cell.
+                complete: campaignComplete(
+                  c,
+                  catalog,
+                  mine
+                    .filter((r) => r.terminationReason !== null)
+                    .map((r) => ({ campaign: r.campaign, cell: r.cell, ref: refOf(roster, r) })),
+                ),
+                account: c.account ?? null,
+              },
+        runs: mine.filter((r) => r.terminationReason !== null).length,
+        live: mine.filter((r) => r.terminationReason === null).length,
+        models: [...new Set(mine.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
+        cells: cellIds.map((cell) => {
+          const runs = mine.filter((r) => r.cell === cell);
+          const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
+          return {
+            cell,
+            declared: c !== undefined && c.cells.some((x) => x.id === cell),
+            runs: runs.length,
+            models: [...new Set(runs.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
+            bestLevel: levels.length > 0 ? Math.max(...levels) : null,
+          };
+        }),
+        newestRunId: newest?.runId ?? null,
+        newestAt: newest?.startedAt ?? null,
+      };
+    });
+    const body: CampaignsResponse = {
+      campaigns: rows,
+      orphans: all.filter((r) => r.episode === "probing" && r.campaign === null).length,
+      configPath: roster.path,
+      now: Date.now(),
+    };
+    return json(body);
+  }
+
+  /** The roster name a probe run used, for the completion count. */
+  function refOf(roster: { models: readonly { name: string; model: string; effort?: string | undefined }[] }, r: ResultRun): string | null {
+    const hit = roster.models.find((m) => m.model === r.model && (m.effort ?? null) === (r.effort ?? null));
+    return hit?.name ?? null;
+  }
+
   async function listWithTotals(): Promise<RunListRow[]> {
     const out: RunListRow[] = [];
     for (const row of listRuns(runsDir)) {
@@ -658,6 +788,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         service: "wrathbench-viewer",
         publicMode,
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
+        dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
         now: Date.now(),
       };
@@ -669,6 +800,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
     if (path === "/api/episodes") return await episodesResponse();
+    if (path === "/api/campaigns") return await campaignsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
      * derivation stays client-side (`dashboard/src/lib/results.ts`, where its rung

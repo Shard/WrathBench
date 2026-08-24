@@ -2,6 +2,10 @@
 
 Status: Accepted. Date: 2026-08-23. Consolidates ADR-0024, ADR-0026, ADR-0028 and
 ADR-0030 (all superseded by this record); the promotion rule lives in ADR-0034.
+**Amended 2026-08-24 by ADR-0041**: there are two steered episodes now, not one.
+Where this record says `freeplay` is the only id that may carry an objective or
+serve coordinates, read "the steered ids, `freeplay` and `probing`". The
+principle is untouched — steering is what makes a run unscored — only the count.
 
 ## Context
 ADR-0004 makes scores comparable within a harness version, and ADR-0018 makes the
@@ -38,10 +42,10 @@ model. The dimensions:
   "in the inn at Goldshire", walk there, look). Harder is the point. When false,
   `search_reference` sets no `coords` field and redacts coordinate-shaped pairs in
   prose, best-effort; its description states which side the run is on so a
-  names-first model does not hunt for numbers that are not there. True only in
-  `freeplay`. If the names-only ladder proves unclimbable by every model, the
+  names-first model does not hunt for numbers that are not there. True only on a
+  steered id (`freeplay`, and `probing` since ADR-0041). If the names-only ladder proves unclimbable by every model, the
   pull-back is a labeled coords tier — a second row, never a silent change.
-- `episode` — a named ruleset (`e90`, `e360`, `freeplay`, defined in
+- `episode` — a named ruleset (`e90`, `e360`, `probing`, `freeplay`, defined in
   docs/EPISODES.md). **Each id is a comparability group**: scores never mix across
   ids, nor across harness versions within one. The id determines the leash; a run
   whose recorded watchdogs, wall clock or tool-call ceiling differ from its id's

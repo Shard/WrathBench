@@ -42,6 +42,8 @@ function run(p: Partial<RunRow> = {}): RunRow {
     harness: "wrathbench",
     shakeout: null,
     objective: null,
+    campaign: null,
+    cell: null,
     extra: false,
     character: "Benchy",
     race: 1,

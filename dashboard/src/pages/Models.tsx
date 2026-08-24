@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { TIER_COLUMNS, countedOf, extrasOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass } from "../lib/models";
+import { EPISODE_COLUMNS, countedOf, extrasOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 
 /** The roster moves when a run ends or an operator edits the config. */
@@ -83,9 +83,10 @@ export default function Models() {
                 <th>status</th>
                 <th>model</th>
                 <th>billing</th>
+                <th>tier</th>
                 <th>platform</th>
                 <th>harness</th>
-                <For each={TIER_COLUMNS}>{(t) => <th class="right">{t}</th>}</For>
+                <For each={EPISODE_COLUMNS}>{(t) => <th class="right">{t}</th>}</For>
                 <th class="right">extras</th>
                 <th>schedulable</th>
                 <th>note</th>
@@ -109,8 +110,8 @@ export default function Models() {
                         {row.name}
                         <Show when={isPromoted(row)}>
                           {" "}
-                          <span class="ok" title="promoted into e360">
-                            ↑e360
+                          <span class="ok" title="climbed a rung: it earned this tier">
+                            ↑{row.tier}
                           </span>
                         </Show>
                         <div class="dim">
@@ -118,12 +119,14 @@ export default function Models() {
                           <Show when={row.effort !== null}> · {row.effort}</Show>
                         </div>
                       </td>
-                      <td class="dim">{row.billing}</td>
+                      <td class="mono" title={tierTitle(row)}>
+                        {tierOf(row)}
+                      </td>
                       <td class="dim">{row.platform ?? "—"}</td>
                       <td>
                         <HarnessTag harness={row.harness} />
                       </td>
-                      <For each={TIER_COLUMNS}>
+                      <For each={EPISODE_COLUMNS}>
                         {(t) => {
                           const st = (): ModelRowView["perEpisode"][typeof t] => row.perEpisode[t];
                           return (
@@ -158,7 +161,7 @@ export default function Models() {
                     </tr>
                     <Show when={open() === row.name}>
                       <tr>
-                        <td colSpan={8 + TIER_COLUMNS.length}>
+                        <td colSpan={9 + EPISODE_COLUMNS.length}>
                           <Detail row={row} />
                         </td>
                       </tr>
@@ -172,9 +175,20 @@ export default function Models() {
 
         <Show when={rows().length > 0}>
           <p class="dim">
-            Targets are {body()!.policy.runsPerEpisode.e90} runs on e90 and{" "}
-            {body()!.policy.runsPerEpisode.e360} on e360, counted per model. A row's tier cell links
-            to that model's runs on the results page; the row itself opens its runs below. Cooling is
+            A model's budget is its tier
+            {/* Tolerate an API older than this bundle: a viewer and a dist/ are
+                two artefacts and they can be restarted out of order (item 64).
+                Missing detail is worth a shorter sentence, never a blank page. */}
+            <Show when={body()!.policy.tiers !== undefined} fallback=".">
+              {": "}
+              {Object.entries(body()!.policy.tiers)
+                .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
+                .join("; ")}
+              .
+            </Show>{" "}
+            A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
+            an operator moves it, and the rung it earned still counts when they do. A row's tier cell
+            links to that model's runs on the results page; the row itself opens its runs below. Cooling is
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
             {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more
             no-progress attempt at the ceiling retires the model until an operator clears it.
@@ -190,9 +204,11 @@ export default function Models() {
         </Show>
 
         {/*
-          Roster entries the policy does not schedule are named, not rowed: a
-          probe on a pinned account runs the same model under an objective, so a
-          row would show that model's counts twice (FOLLOW-UPS 52).
+          Roster entries the policy does not schedule are named, not rowed. One
+          reason is left — a pinned job holds that account — since ADR-0041 made
+          the roster a catalog: an entry cannot carry an objective, and a probe
+          campaign BORROWS a catalog entry rather than taking it out of the
+          schedule, so it produces no exclusion at all.
         */}
         <Show when={body()!.roster.excluded.length > 0}>
           <p class="dim">
@@ -237,7 +253,7 @@ function Detail(props: { row: ModelRowView }) {
             <tr>
               <th>run</th>
               <th>episode</th>
-              <th title="the starting character this run was launched on (ADR-0034's extras cycle)">character</th>
+              <th title="the starting character this run was launched on — a campaign cell for a probe (ADR-0041), the entry's own otherwise">character</th>
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>
@@ -259,7 +275,8 @@ function Detail(props: { row: ModelRowView }) {
                     {r.episode}
                     <Show when={r.episodeOverride}> (overridden)</Show>
                   </td>
-                  {/* Extras cycle through races and classes; the baseline is Human Paladin. */}
+                  {/* A probe campaign's cells vary race and class; everything else
+                      starts on the entry's own character. */}
                   <td class="dim">{r.characterLabel ?? "—"}</td>
                   <td class="right mono">{r.bestLevel ?? "—"}</td>
                   <td class="dim">{r.live ? "live" : fmtWhen(r.endedAt)}</td>

@@ -9,7 +9,15 @@
 
 import { describe, expect, test } from "bun:test";
 import type { TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
-import { indexAt, mapsVisited, positionsAt, routeUpTo, trackSpan } from "../src/lib/replay";
+import {
+  indexAt,
+  mapsVisited,
+  nextSampleAfter,
+  positionsAt,
+  routeUpTo,
+  runParam,
+  trackSpan,
+} from "../src/lib/replay";
 
 function point(ts: number, map: number, x: number, y: number): TrackPoint {
   return { ts, map, x, y, level: 5, xp: 100, money: null, questsCompleted: null, turn: ts };
@@ -71,5 +79,56 @@ describe("trackSpan / routeUpTo / mapsVisited", () => {
 
   test("maps come back in visit order", () => {
     expect(mapsVisited(TRACK.points)).toEqual([0, 530]);
+  });
+});
+
+describe("nextSampleAfter", () => {
+  test("walks the track one sample at a time and then stops", () => {
+    expect(nextSampleAfter(TRACK.points, 0)?.ts).toBe(100);
+    expect(nextSampleAfter(TRACK.points, 100)?.ts).toBe(200);
+    expect(nextSampleAfter(TRACK.points, 150)?.ts).toBe(200);
+    expect(nextSampleAfter(TRACK.points, 300)).toBeUndefined();
+    // Nothing to play: the caller reads this as "the run is over" and pauses.
+    expect(nextSampleAfter([], 0)).toBeUndefined();
+  });
+
+  test("two samples in the same millisecond do not stall playback", () => {
+    const tied = [point(100, 0, 1, 1), point(100, 0, 2, 2), point(200, 0, 3, 3)];
+    expect(nextSampleAfter(tied, 100)?.ts).toBe(200);
+  });
+});
+
+describe("degenerate tracks", () => {
+  test("a run that recorded one position still scrubs and draws", () => {
+    const one = [point(100, 0, 1, 1)];
+    expect(trackSpan(one)).toEqual({ from: 100, to: 100 });
+    expect(positionsAt({ ...TRACK, points: one }, 100)).toHaveLength(1);
+    // One point is a dot, not a line: the renderer skips a route this short.
+    expect(routeUpTo(one, 0, 100)).toHaveLength(1);
+    expect(nextSampleAfter(one, 100)).toBeUndefined();
+  });
+
+  test("a run that recorded nothing has no span, no feed and no route", () => {
+    expect(trackSpan([])).toBeNull();
+    expect(positionsAt({ ...TRACK, points: [] }, 0)).toEqual([]);
+    expect(routeUpTo([], 0, 0)).toEqual([]);
+    expect(mapsVisited([])).toEqual([]);
+  });
+});
+
+describe("runParam", () => {
+  /*
+   * `/map` and `/map?run=<id>` are the page's two states, so this is the whole
+   * of the mapping between a URL and a mode. A repeated parameter arrives as an
+   * array and an empty one as "": neither names a run, and both mean live.
+   */
+  test("a non-empty single value is the run id", () => {
+    expect(runParam("run-1")).toBe("run-1");
+  });
+
+  test("absent, empty and repeated all mean the live map", () => {
+    expect(runParam(undefined)).toBeUndefined();
+    expect(runParam("")).toBeUndefined();
+    expect(runParam(["run-1", "run-2"])).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, tierOf, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -18,6 +18,10 @@ function row(over: Partial<ModelRowView> = {}): ModelRowView {
     platform: "openrouter",
     harness: "wrathbench",
     billing: "free",
+    declaredTier: "t1",
+    tier: "t1",
+    earnedRung1: false,
+    idle: "none",
     status: "active",
     eligible: ["e90"],
     perEpisode: {
@@ -60,7 +64,7 @@ describe("cells", () => {
 
 describe("the --status columns", () => {
   test("billing, extras and the scheduler's verdict are the CLI's, phrased once", () => {
-    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "billing", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"]);
+    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"]);
     expect(schedulableOf(row())).toBe("yes: schedulable on e90");
     expect(schedulableOf(row({ schedulable: { ok: false, why: "running (one stream per model)", extras: false } }))).toBe("no: running (one stream per model)");
     expect(extrasOf(row())).toBe(0);
@@ -90,8 +94,15 @@ describe("noteOf", () => {
     expect(noteOf(row())).toBeNull();
   });
 
-  test("promotion is eligibility, not status text", () => {
-    expect(isPromoted(row({ eligible: ["e90", "e360"] }))).toBe(true);
+  test("promotion is a climb, not eligibility: a hand-placed tier never wears the badge", () => {
+    expect(isPromoted(row({ declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360"] }))).toBe(true);
+    // Placed on t2 by an operator: eligible for e360, but it earned nothing.
+    expect(isPromoted(row({ declaredTier: "t2", tier: "t2", eligible: ["e90", "e360"] }))).toBe(false);
+    // A t0 model holding a witness it may not spend is not promoted either.
+    expect(isPromoted(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe(false);
+    expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe("t0*");
+    expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedRung1: true }))).toBe("t1→t2");
+    expect(tierOf(row())).toBe("t1");
     expect(isPromoted(row())).toBe(false);
   });
 });

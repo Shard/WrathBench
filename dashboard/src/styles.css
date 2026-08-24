@@ -125,6 +125,8 @@ tbody tr:hover { background: var(--panel); }
 .badge.harness-wrathbench { color: var(--dim); }
 .badge.harness-claude-code { color: var(--accent); border-color: var(--accent); }
 .badge.harness-unknown { opacity: .6; }
+/* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
+.progress { font-size: 11px; margin-left: 6px; }
 
 tbody tr.clickable { cursor: pointer; }
 
@@ -135,7 +137,10 @@ button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
 }
-button:hover { border-color: var(--accent); }
+button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
+/* An anchor sitting in a row of buttons — the map's "live" control is a real
+   link, and has to read as a control next to play. */
+.btn { display: inline-block; color: var(--accent); line-height: 1.4; }
 button.on { border-color: var(--accent); font-weight: 700; }
 
 .banner { border: 1px solid var(--line); border-left-width: 3px; border-radius: 4px;
@@ -220,3 +225,14 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
   /* Keep the feed a scroll container so the autoscroll logic is the same here. */
   .runview-logs { flex: none; max-height: 70vh; }
 }
+
+/*
+ * The stale-build button, in the header beside the status badge. Coloured like
+ * a warning rather than an error: nothing is broken, the tab is just behind.
+ */
+button.update {
+  font: inherit; font-size: 11px; cursor: pointer; margin-right: 10px;
+  padding: 2px 8px; border-radius: 4px; border: 1px solid var(--warn);
+  background: transparent; color: var(--warn);
+}
+button.update:hover { background: var(--panel); }

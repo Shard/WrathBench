@@ -5,6 +5,8 @@
  * else. No strategy hints beyond what the tools themselves imply.
  */
 
+import type { EpisodeId } from "./episodes";
+
 /**
  * The standing goal. Fixed, identical for every model and every run: it names
  * no formula and no named task (ADR-0018).
@@ -79,16 +81,25 @@ export function objectiveSection(objective: string): string {
  * What the episode tier tells the model about itself (ADR-0034, EPISODES.md).
  * Facts a player has — the clock and the rule — not an objective: the standing
  * goal and the scoring are unchanged. Identical for every model; it varies only
- * with `episode`, which the comparability tuple already carries. `freeplay`
- * adds nothing (its objective block speaks for it).
+ * with `episode`, which the comparability tuple already carries. The steered
+ * tiers (`freeplay`, `probing`) add nothing — their objective block speaks for
+ * them.
  */
-export function episodeSection(episode: string | undefined): string | undefined {
+export function episodeSection(episode: EpisodeId | undefined): string | undefined {
+  if (episode === undefined) return undefined;
+  // Exhaustive over `EpisodeId` on purpose: a `default` arm made a new tier
+  // silently arrive with no self-description at all, which is a change to what
+  // the model is told and must never happen by omission.
   switch (episode) {
     case "e90":
       return "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes.";
     case "e360":
       return "This episode lasts six hours.";
-    default:
+    case "probing":
+    case "freeplay":
+      // Both are steered tiers whose clock is set per run: the objective block
+      // is what speaks for them, and a sentence naming a default the run may
+      // not be under would be a false fact rather than a missing one.
       return undefined;
   }
 }
@@ -98,7 +109,7 @@ export function episodeSection(episode: string | undefined): string | undefined 
  * `SYSTEM_PROMPT` unchanged; the episode sentence, then the delimited
  * objective block, sit between the standing goal and the runtime description.
  */
-export function buildSystemPrompt(objective?: string | undefined, episode?: string | undefined): string {
+export function buildSystemPrompt(objective?: string | undefined, episode?: EpisodeId | undefined): string {
   const parts = [GOAL_SECTION];
   const tier = episodeSection(episode);
   if (tier !== undefined) parts.push(tier);

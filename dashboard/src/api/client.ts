@@ -15,6 +15,7 @@ import type {
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
+  CampaignsResponse,
   ResultsResponse,
   FleetResponse,
   HarnessView,
@@ -36,6 +37,8 @@ export type {
   EpisodeIdView,
   EpisodeTierView,
   EpisodesResponse,
+  CampaignsResponse,
+  CampaignRowView,
   ResultsResponse,
   ResultRun,
   LevelMark,
@@ -129,6 +132,7 @@ export function createClient(opts: ClientOptions = {}) {
       get<ModelsResponse>(`/api/models${harness === "all" ? "" : `?harness=${harness}`}`, opts),
     /** The episode tiers (ADR-0030) and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes", opts),
+    campaigns: (): Promise<CampaignsResponse> => get<CampaignsResponse>("/api/campaigns", opts),
     /**
      * Every run projected onto the results surface: level marks and comparability.
      *

@@ -5,7 +5,7 @@
  */
 
 import { A, useLocation } from "@solidjs/router";
-import type { ParentProps } from "solid-js";
+import { Show, type ParentProps } from "solid-js";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { StatusBadge } from "./StatusBadge";
 
@@ -39,8 +39,31 @@ export function Layout(props: ParentProps) {
           <A href="/models" activeClass="on">
             models
           </A>
+          <A href="/campaigns" activeClass="on">
+            campaigns
+          </A>
         </nav>
         <span class="spacer" />
+        {/*
+          * In the header rather than as a page banner: it belongs next to the
+          * other thing that reports on the service, it survives the map's flush
+          * layout, and it costs no vertical space on a page that is mostly
+          * canvas. A button rather than a notice because there is exactly one
+          * thing to do about it, and it never dismisses itself — the tab really
+          * is running replaced code until it reloads, and a notice that goes
+          * away by itself is how half an hour gets spent debugging a bug that
+          * no longer exists (item 64).
+          */}
+        <Show when={feeds.stale()}>
+          <button
+            type="button"
+            class="update"
+            title="A newer dashboard build is on the server. This tab is still running the one it loaded, so anything odd may already be fixed."
+            onClick={() => window.location.reload()}
+          >
+            new build — reload
+          </button>
+        </Show>
         <StatusBadge />
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>

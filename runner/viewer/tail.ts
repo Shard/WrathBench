@@ -485,11 +485,16 @@ export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
  * A run that is paused right now has no open segment, so a fresh mtime (the
  * sqlite file still being touched) cannot make the current pause count.
  *
- * This is deliberately *not* what the `episode-limit` watchdog measures.
- * `Watchdogs` is constructed fresh in each worker process with
- * `startedAt = now()` (run.ts), so its `episodeMs` is per-process uptime since
- * the current resume: it resets on every resume and never sees paused time. It
- * is a subset of the number here, which is what the whole run has spent driving.
+ * Close to, but not the same as, what the `episode-limit` watchdog measures.
+ * `Watchdogs` is constructed fresh in each worker process, but since 08cd691
+ * run.ts passes `elapsedBeforeMs` from the persisted `episodeElapsedMs`, so the
+ * episode clock CARRIES ACROSS A PAUSE rather than resetting on every resume
+ * (this comment said otherwise until item 62). Both clocks now exclude paused
+ * time and differ only in how they accumulate it: the watchdog rewinds one
+ * start point by the elapsed total, this sums the observed active segments. So
+ * the two track each other, and neither is a subset of the other — a run that
+ * died without recording its elapsed time resumes the watchdog at zero while
+ * the segments here still remember the earlier work.
  */
 export function playtimeMs(
   segments: readonly ActiveSegment[],

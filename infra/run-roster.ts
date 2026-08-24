@@ -99,12 +99,20 @@ export interface RosterSpec {
   /** An extra run past the policy target (ADR-0034): stamped `extra: true`, never counted. */
   extra?: boolean;
   /**
-   * Episode tier id (ADR-0030/0031): `e90`, `e360` or `freeplay`. Passed to the
+   * Episode tier id (ADR-0030/0031): `e90`, `e360`, `probing` or `freeplay`. Passed to the
    * runner verbatim as `--episode <id>`; the explicit watchdog/maxToolCalls
    * flags the fleet derives from it travel alongside, so a runner that does
    * not know the flag yet still runs the right shape.
    */
   episode?: string;
+  /**
+   * The probe campaign that commissioned this entry and which of its cells it
+   * is (ADR-0041). Passed to the runner as `--campaign` / `--cell` and recorded
+   * on the run, which is what a campaign's remaining work is counted from and
+   * what keeps its results grouped after its config entry is deleted.
+   */
+  campaign?: string;
+  cell?: string;
 }
 
 export interface Resolved {
@@ -126,6 +134,8 @@ export interface Resolved {
   wikiCoords: boolean;
   extra: boolean;
   episode: string | undefined;
+  campaign: string | undefined;
+  cell: string | undefined;
 }
 
 type Outcome =
@@ -428,6 +438,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       wikiCoords: s.wikiCoords === true,
       extra: s.extra === true,
       episode: s.episode,
+      campaign: s.campaign,
+      cell: s.cell,
     });
   }
   return out;
@@ -476,6 +488,11 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // runner's argv parser ignores flags it does not know, so this is safe to
   // emit before the runner learns it.
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
+  // A probe's identity (ADR-0041). Recorded on the run rather than derived: the
+  // scheduler counts these to know what a sweep still owes, and they are what
+  // keeps a campaign's results grouped once its config entry is gone.
+  if (spec.campaign !== undefined) argv.push("--campaign", spec.campaign);
+  if (spec.cell !== undefined) argv.push("--cell", spec.cell);
   argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
   // The wall clock keeps its own flag when it is a number (that is what every
   // existing job emits); a disabled one can only travel in the JSON.

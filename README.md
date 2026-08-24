@@ -60,7 +60,7 @@ directory: `bun install` once at the root (Bun 1.4.0, pinned in
 
 ```sh
 bun test                     # every workspace's suite; all fixture-based
-bunx tsc --noEmit -p <dir>   # sdk, runner, wiki, minimap, dashboard, infra
+bun run typecheck            # sdk, runner, wiki, minimap, dashboard, infra
 bun run docs:api:check       # the generated SDK reference is in sync
 bun run dashboard:build      # the SPA, no data involved
 bun run viewer               # serves labelled empty states; creates data/runs

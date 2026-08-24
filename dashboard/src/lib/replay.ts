@@ -76,12 +76,29 @@ export function routeUpTo(
   ts: number,
 ): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
-  for (const p of points) {
-    if (p.ts > ts) break;
+  // The cursor's index is a binary search, so the walk is bounded by the route
+  // actually drawn rather than by the length of the track.
+  const end = indexAt(points, ts);
+  for (let i = 0; i <= end; i++) {
+    const p = points[i]!;
     if (p.map !== map) continue;
     out.push({ x: p.x, y: p.y });
   }
   return out;
+}
+
+/**
+ * The next sample strictly after the cursor, or nothing when the cursor has
+ * reached the end. This is playback's per-tick step: a linear scan here costs
+ * the whole track on every one of four ticks a second, which a six-hour run
+ * feels. `indexAt` returns the *last* index sharing a timestamp, so one past it
+ * is strictly later even when two samples land in the same millisecond.
+ */
+export function nextSampleAfter(
+  points: readonly TrackPoint[],
+  ts: number,
+): TrackPoint | undefined {
+  return points[indexAt(points, ts) + 1];
 }
 
 /** Every map the track visits, in the order it first visits them. */
@@ -89,4 +106,15 @@ export function mapsVisited(points: readonly TrackPoint[]): number[] {
   const out: number[] = [];
   for (const p of points) if (!out.includes(p.map)) out.push(p.map);
   return out;
+}
+
+/**
+ * The `?run=` search parameter as a run id.
+ *
+ * A URL is an external boundary: the parameter can be absent, empty (`?run=`),
+ * or repeated, and only a non-empty single value names a run. Empty means live
+ * rather than "a run called nothing", so the map shows the live feed.
+ */
+export function runParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

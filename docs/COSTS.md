@@ -125,7 +125,10 @@ much time has passed.
 | Claude Haiku 4.5 (API) | 1.00 | 5.00 | ~0.10 | ~1.25 | not in current fleet, listed for reference |
 | OpenRouter free models (glm-5.2, nemotron-3-ultra/super, north-mini-code, inkling, gemma-4-31b, gpt-oss-20b, laguna-s-2.1, dots-3-note, nemotron-nano-9b) | 0 | 0 | 0 | request-capped, not token-capped (§1) |
 | OpenCode Zen free models (hy3, mimo-v2.5, deepseek-v4-flash, x-preview-f) | 0 | 0 | 0 | same cap shape |
-| Typical paid open models on OpenRouter, for reference (DeepSeek V3-class, Qwen2.5-72B-class, GLM-4-class, Kimi K2-class) | ~0.25–0.60 | ~1.00–2.50 | usually ~10% of input | none currently in fleet.json — all current entries are `:free` per lane policy |
+| deepseek/deepseek-v4-flash-0731 (paid roster) | 0.08 | 0.18 | 0.016 | 0.08 | synced 2026-08-24. Real bills come in ~1.7x under `expected` — implicit caching beyond what `cached_tokens` reports (see below) |
+| openai/gpt-5.6-luna (paid roster, added 2026-08-24) | 0.20 | 1.20 | 0.02 | 0.25 | 1.05M ctx. `-pro` is the same price; `:batch` is half. There is no `chatgpt-luna`. Measured ~$1.46/e90 — fast, so ~8M prompt tokens per episode, not deepseek's 1.8M |
+| google/gemini-3.7-flash (paid roster, added 2026-08-24) | 0.375 | 1.875 | 0.0375 | 0.0208 | 1.05M ctx, and what `~google/gemini-flash-latest` resolves to. A generational cut, not a sale: 3.6-flash is 0.75/3.75, 3.5-flash 1.50/9.00. Heavy reasoner — a one-word reply spent 85 of 86 completion tokens on reasoning, so budget output high |
+| Other paid open models on OpenRouter, for reference (Kimi K2-class, Qwen3-max-class, MiniMax-class) | ~0.24–0.78 | ~0.96–3.90 | usually ~10% of input | not in fleet.json today; considered and deferred on 2026-08-24 for serial wall clock, not price |
 | local-qwen (qwen3.8-27b via LM Studio, 192.168.1.20) | 0 | 0 | 0 | zero marginal $; hardware operator to fill (not in any log or memory note found) |
 
 **Estimated $ per episode, as-if-metered.** The only ground truth we have is a real `costUsd` on a
@@ -202,11 +205,30 @@ viewer's `actual` note names it — "partial: N of M responses reported no cost"
 rather than letting the number pass as complete. A run started clean after the
 fix has no such line.
 
-A gap worth knowing about: `reportedUsage` never fills `cacheWrite` on the
-OpenAI-compatible shape (no provider in this fleet emits one), so if a model
-that *does* charge a cache-write tier joins the roster, `expected` will price its
-writes at zero. Nothing today is affected — the synced rows in use quote no write
-tier — but that is a wrong number rather than a blank when it lands.
+A gap that closed on 2026-08-24, worth recording because the diagnosis in this
+document was wrong. `expected` priced every cache **write** at zero, and the note
+here used to say the cause was that no provider emits the counter. It does:
+OpenRouter sends `cache_write_tokens` nested under `prompt_tokens_details`, never
+at the top level, and `toUsage` (`runner/src/adapter.ts`) read only the flat key —
+so the field arrived on every response and was dropped. It now flattens writes the
+same way it already flattened reads, and `costOf` subtracts both from the prompt
+before charging input, so nothing double-counts. This surfaced when
+`openai/gpt-5.6-luna` (write at $0.25/M, 1.25x its input) and
+`google/gemini-3.7-flash` (write at $0.0208/M, a storage-only rate well *below*
+input) joined the paid roster — the first two roster models quoting a write tier.
+Runs before this fix still carry no write counter, so their `expected` prices
+writes at zero and always will; `actual` is unaffected, since OpenRouter reports
+`usage.cost` for both models. Follow-up item 59, resolved same day.
+
+**`expected` also overstates where a provider discounts beyond what it reports.**
+Fitting the synced rates to the real bills on the deepseek runs: `...-a2` $0.0543
+actual against $0.1017 expected (1.88x), `...-a3` $0.0717 against $0.1188 (1.66x).
+To reproduce the real bill at listed rates ~70% of prompt tokens must have been
+cache reads, but `cached_tokens` logs only 12–30%. The consequence for choosing
+models is the one that matters: **deepseek's $0.07/e90 is a floor produced by
+implicit caching, not a yardstick candidates must approach.** Price a candidate
+assuming no caching — `1.8M x $/M-in + 54k x $/M-out`, the token shape of a full
+e90 (`...-a3`) — and treat anything better as upside.
 
 ### Where the prices come from
 
@@ -267,11 +289,42 @@ two-run rule of ADR-0030 — now one counted `e90` episode reaching rung 1 / lev
 4. **ox-alpha** — was the Phase-0 gate passer (gate2-ox-4) and still free, but the timeout-only
    adapter-error pattern (5/13 dirs) needs a root cause before spending more cycles: it isn't
    quota, so retries alone won't fix it.
-5. **Sonnet/Opus subscription** — hold at current usage. Not "expensive," structurally: $0
+5. **The paid track (updated 2026-08-24)** — `deepseek-flash` met its 3/3 e90 target
+   with a best run of **level 3**, short of the rung-1 gate, so it earned no e360.
+   `openai/gpt-5.6-luna` and `google/gemini-3.7-flash` joined beside it. The
+   Both sit on **`tier: "t0"`** — the trial rung: one e90, and the ladder is held
+   so a good run cannot promote them into an e360 nobody approved (ADR-0043; this
+   started as a per-entry `runsPerEpisode {e90: 1, e360: 0}` cap, which said the
+   same thing in a way the board then contradicted with `promoted 1/1 0/0`).
+   Measuring luna in flight had moved the estimate by 3.5x. Two constraints, and
+   money turned out to be the tighter one:
+   `accounts.paid` is one account at `maxConcurrent: 1` (a full e90 is ~90–114 min,
+   so runs are strictly serial), and a *full* paid quota on luna — 3 e90 plus one
+   e360 — prices at roughly **$10**, which is the whole daily budget for one model.
+   One scored e90 each first; move a model that earns it to `t1`, and the rung it
+   already earned on trial promotes it to `t2` at once, with nothing re-run.
+
+   Note the deliberate boundary (ADR-0043): a tier is denominated in **runs**, not
+   dollars. The reasoning above is in dollars and run counts are the proxy; hard
+   cost control is external to the fleet by decision (2026-08-24), and a money
+   budget, if one is ever wanted in-fleet, belongs beside `policy.paid.maxConcurrent`
+   rather than as a new tier.
+
+   **Do not size a run by token count alone — size it by the model's speed.** The
+   `1.8M prompt / 54k completion` shape of a deepseek e90 is not a harness
+   constant, it is what a *slow* model produces in 90 minutes. Luna runs ~7x more
+   snippets per minute (107 in 15.8 min against deepseek's 139 in 114 min), so it
+   burns ~8M prompt tokens in the same 90-minute window. Measured against
+   provider-reported cost: **$0.2562 at 15.8 min, projecting to ~$1.46 for a full
+   e90** — against the ~$0.42 this document estimated from deepseek's token shape.
+   The estimate was wrong by 3.5x in the direction that matters, and the fix is to
+   take a real `usage.cost` reading from the first 15 minutes of a new model's
+   first run rather than to extrapolate from another model's episode.
+6. **Sonnet/Opus subscription** — hold at current usage. Not "expensive," structurally: $0
    marginal, but every e90 episode is ~$22–38 of as-metered value and an e360 is ~$44, so it's the
    lane to reserve for confirmed promotion candidates or the nav-probe travel experiment, not
    volume sampling.
-6. **Prune, don't retry:** glm-5.2:free, gemma-4-31b:free, gpt-oss-20b:free, north-mini-code:free,
+7. **Prune, don't retry:** glm-5.2:free, gemma-4-31b:free, gpt-oss-20b:free, north-mini-code:free,
    inkling:free, mimo-v2.5-free, deepseek-v4-flash-free all show 0 recorded snippets/tokens in this
    window (dead on first request or provider-pulled, per fleet.json's curation notes) — confirm
    they're still worth a lane slot before the next roster edit.

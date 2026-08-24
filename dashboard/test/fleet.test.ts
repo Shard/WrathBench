@@ -18,6 +18,9 @@ import {
   gateVerdict,
   jobModelLabel,
   pausedLabel,
+  progressLabel,
+  progressTitle,
+  rowProgress,
   rowStateLabel,
   runHref,
   serverBanner,
@@ -350,3 +353,132 @@ describe("the deploy window (server-state.json)", () => {
   });
 });
 
+describe("episode progress in the state cell", () => {
+  // A run's own recorded watchdog is the denominator, so a run is built with one.
+  const budgeted = (episodeMs: number | null, over: Partial<RunListRow> = {}): RunListRow =>
+    run({ comparability: { budget: { episodeMs } }, ...over } as unknown as Partial<RunListRow>);
+  const rowFor = (f: FleetResponse, runs: RunListRow[]): FleetRow => fleetRows(f, runs).find((r) => r.job !== null)!;
+
+  test("a running row reads its percentage off the run's own recorded budget, with the ETA in the title", () => {
+    const row = rowFor(fleet(), [budgeted(90 * 60_000, { playtimeMs: 45 * 60_000 })]);
+    expect(row.budgetMs).toBe(5_400_000);
+    const p = rowProgress(row);
+    expect(p).toEqual({ pct: 50, remainingMs: 45 * 60_000, overMs: null });
+    expect(progressLabel(p)).toBe("50%");
+    expect(progressTitle(p, row)).toBe("ETA: 45m00s — 45m00s of 1h30m");
+  });
+
+  test("a draining row is still being driven, so it shows progress too", () => {
+    const row = rowFor(fleet({ jobs: [job({ draining: true })] }), [budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 })]);
+    expect(row.state).toBe("draining");
+    expect(progressLabel(rowProgress(row))).toBe("33%");
+  });
+
+  test("a freeplay row with a real recorded clock shows progress against it", () => {
+    // The discriminator is the RUN's recorded budget, not the episode id. A
+    // session launched under `idle: "unlimited"` records an enforced six hours
+    // and a watchdog ends it there, so the percentage is a fact about this run.
+    // Measured: four of the eight freeplay runs on disk carry 21_600_000.
+    const row = rowFor(
+      fleet({ jobs: [job({ episode: "freeplay" })] }),
+      [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
+    );
+    expect(row.budgetMs).toBe(21_600_000);
+    expect(rowProgress(row)).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
+    expect(progressLabel(rowProgress(row))).toBe("50%");
+    expect(progressTitle(rowProgress(row), row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
+  });
+
+  test("a freeplay row with no recorded clock still shows nothing", () => {
+    // The other four. Genuinely uncapped: there is no budget to be a percentage
+    // OF, and inventing one from a tier nominal is the thing this must never do
+    // (docs/EPISODES.md). Deleting the `budget === null` guard turns this red.
+    const row = rowFor(
+      fleet({ jobs: [job({ episode: "freeplay" })] }),
+      [budgeted(null, { playtimeMs: 3 * 3_600_000 })],
+    );
+    expect(row.budgetMs).toBeNull();
+    expect(rowProgress(row)).toBeNull();
+    expect(progressLabel(rowProgress(row))).toBe("");
+    expect(progressTitle(rowProgress(row), row)).toBe("");
+  });
+
+  test("a probing row shows real progress: unscored is not uncapped", () => {
+    // The gate is capped-ness, not scored-ness. A campaign sets an enforced
+    // clock and the run ends on it (ADR-0041), so the percentage is a fact
+    // about that run — nav-probe's six hours is this row, not the freeplay one.
+    const row = rowFor(
+      fleet({ jobs: [job({ episode: "probing" })] }),
+      [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
+    );
+    expect(row.budgetMs).toBe(21_600_000);
+    const p = rowProgress(row);
+    expect(p).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
+    expect(progressLabel(p)).toBe("50%");
+    expect(progressTitle(p, row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
+  });
+
+  test("a run past its budget shows the real figure over 100 and says how far past it is", () => {
+    // fleet-deepseek-flash-e90-…-a3: 114 minutes against a 90-minute budget.
+    const row = rowFor(fleet(), [budgeted(90 * 60_000, { playtimeMs: 114 * 60_000 })]);
+    const p = rowProgress(row);
+    expect(p).toEqual({ pct: 127, remainingMs: null, overMs: 24 * 60_000 });
+    expect(progressLabel(p)).toBe("127%");
+    expect(progressTitle(p, row)).toBe("ETA: past due — 1h54m of 1h30m, over by 24m00s");
+    // Never a negative duration in the title, whatever the overrun.
+    expect(progressTitle(p, row)).not.toContain("-");
+  });
+
+  test("a paused row carries its budget but shows no progress: nothing is advancing", () => {
+    const f = fleet({
+      jobs: [],
+      paused: [
+        {
+          runId: "fleet-ox-alpha-e90-20260823",
+          model: "stealth/ox-alpha",
+          account: "RUNNER",
+          reason: "rate-limited",
+          since: 1,
+          pauseCount: 2,
+          resumeAfter: null,
+          elapsedMs: 30 * 60_000,
+          budgetMs: 90 * 60_000,
+          why: "waiting on the window",
+        },
+      ],
+    });
+    const row = fleetRows(f, []).find((r) => r.account === "RUNNER")!;
+    expect(row.state).toBe("paused");
+    expect(row.budgetMs).toBe(5_400_000);
+    expect(rowProgress(row)).toBeNull();
+  });
+
+  test("a resuming row shows nothing even though it carries a run id", () => {
+    const row = rowFor(fleet({ jobs: [job({ runId: null, resuming: "fleet-ox-alpha-e90-20260823" })] }), [
+      budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 }),
+    ]);
+    expect(row.state).toBe("resuming");
+    expect(row.runId).toBe("fleet-ox-alpha-e90-20260823");
+    expect(rowProgress(row)).toBeNull();
+  });
+
+  test("an idle account row, and an exited job, show nothing", () => {
+    const rows = fleetRows(fleet({ jobs: [job({ alive: false })] }), [budgeted(90 * 60_000, { playtimeMs: 30 * 60_000 })]);
+    for (const r of rows.filter((x) => x.state === "idle" || x.state === "exited")) {
+      expect(rowProgress(r)).toBeNull();
+    }
+    const free = rows.find((r) => r.account === "RUNNER2")!;
+    expect(free.state).toBe("idle");
+    expect(free.budgetMs).toBeNull();
+  });
+
+  test("a run with no recorded budget shows nothing rather than a tier's nominal one", () => {
+    // A run assembled flag-by-flag, or one whose metadata predates the stamp.
+    const row = rowFor(fleet(), [run({ playtimeMs: 30 * 60_000 })]);
+    expect(row.episode).toBe("e90");
+    expect(row.budgetMs).toBeNull();
+    expect(rowProgress(row)).toBeNull();
+    // A recorded null episodeMs (the watchdog disabled) is the same nothing.
+    expect(rowProgress(rowFor(fleet(), [budgeted(null, { playtimeMs: 30 * 60_000 })]))).toBeNull();
+  });
+});

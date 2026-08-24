@@ -56,5 +56,5 @@ the policy above.
 - Subscription lane (claude driver) has no context policy: one growing CLI conversation; never compare its costs against API-driver runs.
 - Deploy windows: module image builds are safe anytime; `up -d worldserver` only with zero live runs. Full smoke = module-slice, module-session-state, module-accounts, death-recovery, travel (optional, exploratory).
 - Multi-agent same-worktree: instruct agents to stage by explicit path (never `git add -A`) — sweep commits misattributed work twice today.
-- Viewer LAN: WRATHBENCH_VIEWER_LAN=1 opt-in; firewalld rich rule for 8090 was runtime-only.
+- Viewer LAN: WRATHBENCH_VIEWER_LAN=1 opt-in binds 0.0.0.0:8090; the firewalld rich rule must be `--permanent` (a runtime-only rule dies on reload/reboot — that is why it kept lapsing). Recipe in runner/viewer/README.md. Verifying with curl from the HOST proves nothing: local traffic to the LAN IP goes over lo and never crosses the zone.
 - SHAKEOUT2 exists and is allowlisted; two roster processes (one per account) is the parallel-burn pattern.

@@ -105,7 +105,7 @@ describe("statusRows", () => {
   });
 
   test("the deploy detail appears only while not running; the worldserver's build only when it differs", () => {
-    const info = { service: "wrathbench-viewer" as const, publicMode: false, dashboard: true, worldserver: { build: "harness-0.4-73", startedAtMs: 1 }, now: NOW };
+    const info = { service: "wrathbench-viewer" as const, publicMode: false, dashboard: true, dashboardBuild: null, worldserver: { build: "harness-0.4-73", startedAtMs: 1 }, now: NOW };
     expect(labels(statusRows({ fleet: fleet(), error: undefined }, info, NOW))).not.toContain("worldserver");
     const other = { ...info, worldserver: { build: "harness-0.4-70", startedAtMs: 1 } };
     const rows = statusRows({ fleet: fleet({ server: server({ phase: "verifying", detail: "smoke 1 of 2" }) }), error: undefined }, other, NOW);

@@ -100,11 +100,11 @@ function fixture(fleet: unknown): { runsDir: string; fleetPath: string } {
 
 const ROSTER = {
   roster: {
-    alpha: { model: "vendor/alpha", character: "A" },
-    "alpha-low": { model: "vendor/alpha", effort: "low" },
-    beta: { model: "vendor/beta", apiBase: "https://openrouter.ai/api/v1" },
+    alpha: { model: "vendor/alpha", character: "A", tier: "t1" },
+    "alpha-low": { model: "vendor/alpha", effort: "low", tier: "t1" },
+    beta: { model: "vendor/beta", apiBase: "https://openrouter.ai/api/v1", tier: "t1" },
   },
-  policy: { runsPerEpisode: { e90: 3, e360: 3 } },
+  policy: { maxConcurrent: { openrouter: 1 } },
 };
 
 async function models(runsDir: string, fleetPath: string | undefined): Promise<ModelsResponse> {
@@ -125,14 +125,18 @@ describe("readFleetRoster", () => {
     expect(read.shape).toBe("roster");
     expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
     expect(read.models[1]!.effort).toBe("low");
-    expect(read.policy.runsPerEpisode.e90).toBe(3);
+    expect(read.models.map((m) => m.tier)).toEqual(["t1", "t1", "t1"]);
+    expect(read.maxConcurrent["openrouter"]).toBe(1);
   });
 
-  test("a policy block overrides the default targets", () => {
-    const { fleetPath } = fixture({ ...ROSTER, policy: { runsPerEpisode: { e90: 5 } } });
+  test("an entry with no tier is not the viewer's to reject — it is skipped, not rowed", () => {
+    // The supervisor is what refuses a bad config; the viewer reads one. An
+    // untiered entry is either steered (outside the policy) or a mistake the
+    // supervisor is already naming, and either way it owns no evidence budget.
+    const { fleetPath } = fixture({ ...ROSTER, roster: { ...ROSTER.roster, nope: { model: "vendor/nope" } } });
     const read = readFleetRoster(fleetPath);
-    expect(read.policy.runsPerEpisode.e90).toBe(5);
-    expect(read.policy.runsPerEpisode.e360).toBe(3);
+    expect(read.shape).toBe("roster");
+    expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
   });
 
   // FOLLOW-UPS 52: the same predicate the supervisor schedules on.
@@ -156,14 +160,18 @@ describe("readFleetRoster", () => {
     expect(read.maxConcurrent).toEqual({ "claude-code": 2 });
   });
 
-  test("an objective excludes an entry no job names", () => {
+  test("an entry is excluded only by a pinned job, never by anything on itself", () => {
+    // The viewer is deliberately lenient about a config the supervisor would
+    // refuse — it reports what a file says rather than adjudicating it — so an
+    // entry with a stray objective is still read. It is simply not a reason:
+    // since ADR-0041 nothing on an entry takes it out of the policy, and a
+    // campaign borrows a model rather than removing it from the schedule.
     const { fleetPath } = fixture({
       ...ROSTER,
-      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", objective: "ride the tram" } },
+      roster: { ...ROSTER.roster, probe: { model: "vendor/alpha", tier: "t1", objective: "ride the tram" } },
     });
-    expect(readFleetRoster(fleetPath).excluded).toEqual([
-      { name: "probe", reason: "carries an objective (unscored probe)" },
-    ]);
+    expect(readFleetRoster(fleetPath).excluded).toEqual([]);
+    expect(readFleetRoster(fleetPath).models.some((m) => m.name === "probe")).toBe(true);
   });
 
   test("a config without a roster map is unreadable and empty, never a synthesised roster", () => {

@@ -42,7 +42,7 @@ reports `NOT RUNNING`.
 ### Steer it
 
 Edit `infra/fleet.json`. Nothing to restart. The unit you steer is the **job**
-(ADR-0034): a roster entry (or a rotation of several), an episode tier, a
+(ADR-0034): a roster entry (or a rotation of several), an episode, a
 repeat count, on one account — pinned to it when the job names an `account`,
 otherwise on whichever pool account is free.
 
@@ -70,7 +70,11 @@ pool, and the roster policy (claude models on the claude-code driver only — th
 claude-code harness, ADR-0035; shared free pools carry free ids only) is
 enforced on every roster entry at every re-read.
 
-#### Config reference (`infra/fleet.json`)
+#### Config reference (`infra/fleet.next.json`)
+
+Shipped as a sibling file while 0.5 lands; whoever asks for `fleet.json` is
+handed `fleet.next.json` when one is beside it (`preferNextConfig`), so the
+running supervisor keeps its config until it restarts and the rename commutes.
 
 ```
 preflight   the gate (ADR-0023): enabled, account, smokes [{script, account}], timeoutMs,
@@ -80,29 +84,58 @@ accounts    { pool: [...], paid: [...], local: [...] } — the account classes (
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            Never an account. Optional scheduling fields: `tiers` (a manual FORCE into a tier;
-            normally absent — e360 is earned) and `runsPerEpisode {e90, e360}` (per-entry target).
-policy      runsPerEpisode {e90, e360} targets (default 3/3); maxConcurrent { <driver>: n } caps
-            the streams the policy may have in flight per driver, counting every job on that
-            driver, pinned ones included (`"claude-code": 2` today: the probe plus one sonnet).
-            Optional, off when absent (ADR-0034 amendment): `paid { runsPerEpisode {e90 3, e360 1},
-            maxConcurrent 1 }` — paid models get those hard targets and at most that many in
-            flight across the pool; `extras { characters [{race, class}, ...] }` — free models
-            past their targets get extra runs when the pool is idle, cycling those characters
-            (default: a short Alliance level-1 list). `{}` for either takes the defaults.
+            Never an account. Two scheduling axes (ADR-0043):
+            `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
+              ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
+              one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
+              (`TIER_TABLE`, runner/src/models.ts) — a bespoke volume is a NAMED tier added there,
+              not a number edited into one entry. On EVERY entry: the roster is a model catalog
+              (ADR-0041), so there is no unscheduled entry to make an exception for.
+            `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
+              under `models` and supplies its own task shape.
+            `idle` — what it does with an account once its tier is spent. `none` (default, and
+              what a paid model wants) or `unlimited` (one freeplay session at a time, capped at
+              6h on every class). Never bought by omission. A race/class sweep is a campaign now,
+              not an idle mode.
+            A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
+            it: move it to t1 and it promotes at once on evidence it already has. Moving a model
+            by hand is always allowed and never records a promotion — "promoted" is said only of
+            a climb.
+policy      Only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n }
+            caps the streams in flight per key (`concurrencyKeyOf`), counting every job on that
+            key, pinned ones included (`"claude-code": 2` today: the probe plus one sonnet).
+            Optional, off when absent: `paid { maxConcurrent 1 }` — at most that many paid runs in
+            flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
+            same sentence a free model's budget is written in.
             Billing is derived per model (free slug / LAN apiBase / claude-code / allowlist ->
-            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it.
+            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Since ADR-0043
+            billing says only WHERE a run may execute — the account class and the rate-limit key.
+            `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
+            by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
+campaigns   probe campaigns (ADR-0041): { <name>: { enabled, models "all"|[refs], runsPerCell,
+            cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,
+            wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
+            episode; the campaign owns its whole task shape, so a catalog entry's own objective
+            or leash never leaks into one. Precedence: episode defaults < campaign < cell.
+            With `account` the campaign is PINNED to it and follows the pinned-job account rules;
+            without, the policy schedules it between the evals and the idle work. Completion is
+            DERIVED (cells x models x runsPerCell against the counted probe runs on disk) — set
+            `enabled: false` when a sweep is done and its results stay visible. Progress is on
+            the /campaigns page.
 queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? }. With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
             `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>]-<stamp>`), one job
-            per (ref, episode). A pool job whose ref is not eligible for its tier is skipped with
-            the reason in --status; a pinned one waits the same way.
+            per (ref, episode). A pool job whose ref is not eligible for its EPISODE is skipped
+            with the reason in --status; a pinned one waits the same way. A waiting manual job
+            reserves the POOL only — the paid and local classes still pick, and the reservation
+            is named in --status.
 ```
 
-A roster entry referenced by a pinned job, or carrying an `objective`, is never
-policy-scheduled: the account is spoken for, and a probe's runs are not the
-model's evidence. Everything else in the roster is the policy's (below). This
+A roster entry referenced by a pinned job is never policy-scheduled: the account
+is spoken for. Nothing else takes an entry out of the policy — a campaign
+BORROWS a catalog entry rather than removing it from the schedule. Everything
+else in the roster is the policy's (below). This
 is the only shape: a file that still says `lanes` or `accounts.pinned` is
 refused by name, with the message naming the 0.4 keys.
 
@@ -153,7 +186,7 @@ docker compose -f infra/compose.yml up -d --no-deps fleet   # runs resume, then 
 
 The restart procedure is therefore **stop → (runs pause) → start → (runs
 resume)**. On boot, before the queue or the policy spawns anything, the
-supervisor finds every paused run whose model and tier are still in
+supervisor finds every paused run whose model and episode are still in
 `fleet.json`, maps it back to its job (a pinned or queued job from the file,
 else a synthetic policy job with the attempt read off the run id), and spawns
 that job's roster with the paused run id first and `--resume-roster`, on the
@@ -178,7 +211,7 @@ about the epoch (the run id is read from disk).
 of Ym) — <run id> Lx xp`, then a `paused runs not resumed` block for every
 paused run the supervisor is not resuming right now, with why:
 
-- **not in config** — the model or tier is gone from `fleet.json` (or the
+- **not in config** — the model or episode is gone from the fleet config (or the
   pinned job is disabled, or on another account). Resume it by hand
   (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
 - **stale** — paused longer than twice its own budget (a run with no wall
@@ -362,7 +395,7 @@ top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the jobs:
 }
 ```
 
-There are two tiers (ADR-0023, amended 2026-08-23):
+There are two kinds of smoke (ADR-0023, amended 2026-08-23):
 
 - **`smokes` is the per-tick gate.** It runs before the first job is spawned
   and again whenever the server identity changes — which is to say on every
@@ -439,7 +472,11 @@ as a config error (every per-entry account is checked), and none is ever
 ./infra/run-fleet.sh --status
 ```
 
-In order: the REJECTED banner when the file is not in effect; the supervisor
+In order: the REJECTED banner when the file is not in effect; the `!` refusal
+block when the file IS in effect but the account rules disabled a pin in it
+(item 66 — an enabled job or campaign on a listed account, or a second one on
+an account already taken, is refused by name rather than taking the whole file
+down with it); the supervisor
 line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the
 gate (last result, per smoke); the **accounts** table — every account, pinned
 first then the pool in preference order, with the job on it (`name: model
@@ -505,9 +542,9 @@ not be scheduled until cleared; `pinned` is outside the policy (a pinned ref or
 a probe). A launch that produced no model response never counts toward a target
 but does climb the ladder, so a dead provider costs at most ten launches over
 ~10 hours before it is retired. A manual pool job (`queue` entry without an account) always
-outranks the policy; add one to force a specific run (an `e360` for an
-unpromoted model needs `tiers: ["e360"]` on its roster entry as well). Targets:
-`policy.runsPerEpisode` for the fleet, `roster.<name>.runsPerEpisode` per entry.
+outranks the policy for a POOL account; add one to force a specific run (an
+`e360` for a model that has not climbed needs `tier: "t2"` on its roster entry
+as well). How many runs a model gets is its `tier` and nothing else (ADR-0043).
 
 ### Ad-hoc launches still work
 

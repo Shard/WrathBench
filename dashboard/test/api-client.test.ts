@@ -119,7 +119,8 @@ describe("shapes", () => {
     const payload: RunsResponse = {
       runs: [
         {
-          runId: "r1", model: "m", driver: "openai", harness: "wrathbench", shakeout: null, objective: null, extra: false,
+          runId: "r1", model: "m", driver: "openai", harness: "wrathbench", shakeout: null, objective: null,
+          campaign: null, cell: null, extra: false,
           comparability: null,
           character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
           characterLabel: "Dwarf Hunter", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
