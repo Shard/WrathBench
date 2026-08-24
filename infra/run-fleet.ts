@@ -346,29 +346,24 @@ export interface FleetConfig {
 }
 
 /**
- * The accounts a paid pick may use, or undefined when this file has no paid
- * class at all (pre-split behaviour: paid picks share the pool). A `policy.paid`
- * block with no `accounts.paid` is the configured-but-empty case: the split is
- * on and every paid pick is held, rather than spilling into the free pool.
- */
-export function paidPoolOf(config: Pick<FleetConfig, "accounts" | "policy">): string[] | undefined {
-  return config.accounts.paid.length > 0 || config.policy.paid !== null ? config.accounts.paid : undefined;
-}
-
-/**
- * The accounts each split-out class may use, for `planNextJobs`. A class absent
- * from the map is not split and shares the pool.
+ * The accounts each split-out class may use, for `planNextJobs`. `pool` is the
+ * base class and is never in the map.
  *
- * The two classes are deliberately asymmetric. **Paid** is split only when the
- * file says so: without `accounts.paid` and without a `policy.paid` block the
- * paid picks share the pool. **Local** has no such block to key on — the split
- * is always on, so a roster with a local model and no `accounts.local` is a
- * config gap that holds those picks rather than putting the box's model on a
- * shared account.
+ * Both split classes are unconditional. `paid` used to be split only when the
+ * file said so — `accounts.paid` non-empty, or a `policy.paid` block present —
+ * which left exactly one configuration where a paid pick took a free pool
+ * account and spent real money on it: neither of those set. The file's own
+ * `_notes` and ADR-0034's account-class amendment state the rule with no such
+ * exception, so the code was conditional where the record was absolute. An
+ * unconfigured paid class now HOLDS its picks and names them in --status,
+ * exactly as `local` has since ADR-0034: the failure of an incomplete config is
+ * a model that does not run, never an account that quietly bills.
+ *
+ * That leaves `policy.paid` with its one real job, the concurrency cap. It no
+ * longer doubles as the switch deciding whether the class exists.
  */
-export function classPoolsOf(config: Pick<FleetConfig, "accounts" | "policy">): Partial<Record<AccountClass, string[]>> {
-  const paid = paidPoolOf(config);
-  return { ...(paid !== undefined ? { paid } : {}), local: config.accounts.local };
+export function classPoolsOf(config: Pick<FleetConfig, "accounts">): Partial<Record<AccountClass, string[]>> {
+  return { paid: config.accounts.paid, local: config.accounts.local };
 }
 
 /** The accounts of one class, in file order. `pool` is the base class. */
@@ -1170,9 +1165,11 @@ export function planPolicy(opts: {
   pool: string[];
   /**
    * The accounts each split-out class may use (`classPoolsOf`): `accounts.paid`
-   * when the paid class is configured, `accounts.local` always. Picks of that
-   * class draw from here and never from `pool`; a class absent is the pre-split
-   * behaviour (its picks share the pool), an empty array holds them.
+   * and `accounts.local`, both unconditional. Picks of that class draw from
+   * here and never from `pool`; an EMPTY array holds them and reports them.
+   * A class ABSENT from the map shares the pool — a shape `classPoolsOf` no
+   * longer produces, kept because hand-built configs (tests, a state file read
+   * back) may predate a class.
    */
   classPools?: Partial<Record<AccountClass, string[]>>;
   running: Map<string, string>;
@@ -2269,13 +2266,24 @@ export function formatAccountClasses(config: Pick<FleetConfig, "accounts" | "pol
   return [...formatPaidClass(config), ...formatLocalClass(config)];
 }
 
-/** The paid class line. Silent on a file that predates the split entirely. */
-export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy">): string[] {
-  if (config.policy.paid === null) return config.accounts.paid.length === 0 ? [] : [`paid class: ${config.accounts.paid.join(", ")} (no policy.paid block — no cap, no paid targets)`];
+/**
+ * The paid class line — the same shape as the local one, now that the split is
+ * unconditional. It says what the roster wants, what the file provides, and the
+ * cap when there is one, and stays quiet only when there is neither a paid
+ * account nor a paid model to put on one.
+ */
+export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy" | "roster">): string[] {
+  const models = rosterModels(config.roster).filter((r) => rosterClass(r) === "paid");
   if (config.accounts.paid.length === 0) {
-    return ["paid class: NO PAID ACCOUNT CONFIGURED — paid picks are held, never spilled into the pool; add one to accounts.paid"];
+    if (models.length === 0) return [];
+    return [
+      `paid class: NO PAID ACCOUNT CONFIGURED — ${models.map((m) => m.name).join(", ")} held, never spilled into the pool; add one to accounts.paid`,
+    ];
   }
-  return [`paid class: ${config.accounts.paid.join(", ")} — paid picks only, at most ${config.policy.paid.maxConcurrent} in flight; the pool stays free-only`];
+  const cap = config.policy.paid === null ? "no policy.paid block, so no cap" : `at most ${config.policy.paid.maxConcurrent} in flight`;
+  return [
+    `paid class: ${config.accounts.paid.join(", ")} — paid models only (${models.length === 0 ? "none in the roster" : models.map((m) => m.name).join(", ")}); ${cap}; the pool stays free-only`,
+  ];
 }
 
 /**

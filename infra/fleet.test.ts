@@ -66,7 +66,6 @@ import {
   currentSeries,
   classPoolsOf,
   planPolicyHeld,
-  paidPoolOf,
   formatPaidClass,
   formatLocalClass,
   formatAccountClasses,
@@ -596,7 +595,7 @@ describe("the shipped fleet files", () => {
     // Account classes, which billing still governs — and only these.
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
     expect(config.accounts.paid).toEqual(["SHAKEOUT2"]);
-    expect(paidPoolOf(config)).toEqual(["SHAKEOUT2"]);
+    expect(classPoolsOf(config).paid).toEqual(["SHAKEOUT2"]);
     expect(config.accounts.local).toEqual(["RUNNER4"]);
     expect(rosterModels(config.roster).filter((r) => rosterClass(r) === "local").map((r) => r.name)).toEqual(["qwen3-8-27b"]);
     // Whatever it is called, the job parked on the paid account is disabled —
@@ -1351,7 +1350,7 @@ describe("scheduling policy (ADR-0032)", () => {
     // policy.paid with no accounts.paid: held for the actionable reason, never
     // spilled into the free pool, and --status says so.
     const noAccount = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] } });
-    expect(paidPoolOf(noAccount)).toEqual([]);
+    expect(classPoolsOf(noAccount).paid).toEqual([]);
     const heldPlan = planTick(noAccount, states, () => undefined, "20260101");
     // No paid account AND no local account: both classes hold, the free pool
     // model still runs, and neither held class spills onto a pool account.
@@ -1362,7 +1361,7 @@ describe("scheduling policy (ADR-0032)", () => {
       ["forced", "no paid account configured — add one to accounts.paid"],
     ]);
     expect(formatPaidClass(noAccount)[0]).toMatch(/NO PAID ACCOUNT CONFIGURED/);
-    expect(formatPaidClass(config)[0]).toMatch(/paid class: PAID — paid picks only, at most 1 in flight/);
+    expect(formatPaidClass(config)[0]).toMatch(/paid class: PAID — paid models only \(big, bigger, forced\); at most 1 in flight/);
     expect(formatLocalClass(noAccount)[0]).toMatch(/NO LOCAL ACCOUNT CONFIGURED — local held/);
     expect(formatLocalClass(config)[0]).toMatch(/local class: LOCALBOX — local models only \(local\)/);
     // No local model in the roster and no local accounts: the line stays quiet.
@@ -1401,15 +1400,17 @@ describe("scheduling policy (ADR-0032)", () => {
     const plain = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] }, policy: {} });
     const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
     const plainPlan = planTick(plain, plainStates, () => undefined, "20260101");
-    // No policy.paid and no accounts.paid: no split at all, paid models take
-    // pool accounts (local has met its targets and, with no extras policy, has
-    // nothing to ask for).
-    expect(paidPoolOf(plain)).toBeUndefined();
-    expect(plainPlan.policy.map((p) => [p.job.name, p.account])).toEqual([["big-e90", "RUNNER"], ["bigger-e90", "RUNNER2"], ["forced-e90", "RUNNER3"]]);
-    expect(plainPlan.heldPicks).toEqual([]);
-    // The local class has no such escape — it is always split. A local model
-    // with a target to meet and no accounts.local is HELD, never spilled onto a
-    // pool account, and the reason names the key to add.
+    // No policy.paid and no accounts.paid — the configuration item 65 was
+    // about. The paid class is split ANYWAY, so the paid models are held and
+    // named rather than quietly taking a free pool account and billing on it.
+    // The pool model still runs: an unconfigured class holds its own picks and
+    // nobody else's.
+    expect(classPoolsOf(plain).paid).toEqual([]);
+    expect(plainPlan.policy.map((p) => [p.job.name, p.account])).toEqual([["glm-freeplay", "RUNNER"]]);
+    expect(plainPlan.heldPicks.map((h) => h.name)).toEqual(["big", "bigger", "forced"]);
+    for (const h of plainPlan.heldPicks) expect(h.why).toMatch(/no paid account configured/);
+    // The local class works the same way, and always did — this is the pair
+    // being symmetric now rather than one class having an escape hatch.
     const noBox = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2"] }, roster: { local: raw.roster.local }, policy: {} });
     const noBoxPlan = planTick(noBox, modelStatesOf(rosterModels(noBox.roster), [], NOW, noBox.policy), () => undefined, "20260101");
     expect(noBoxPlan.policy).toEqual([]);
