@@ -450,9 +450,15 @@ export interface SegmentMark {
  * or `termination`. The last segment stays open when the run neither paused nor
  * ended — `playtimeMs` decides what to close it at.
  *
- * The "only if none is open" guard is load-bearing, not defensive: a resume
- * that regenerates the session token writes a *second* `meta` record mid-file
- * (run.ts), and without the guard that would open a duplicate segment.
+ * Only the FIRST `meta` opens a segment. `writeMeta` appends a `meta` record
+ * every time it is called, and run.ts calls it mid-file for two reasons that
+ * must not count as driving: a resume that regenerates the session token
+ * (which follows the `resume` mark and would otherwise open a duplicate), and
+ * the pause mark itself, written milliseconds after the `pause` record (commit
+ * 08cd691). That second case is what over-read every paused run at 100%+ of
+ * its budget on the fleet page until 2026-08-25: pause closed the segment and
+ * the pause-mark `meta` reopened it, so the whole quota wait counted as
+ * playtime. Reopening after a pause is `resume`'s job alone.
  *
  * A trajectory whose first record is neither `meta` nor `resume` — an older or
  * truncated file — opens its first segment at that record, so playtime degrades
@@ -463,8 +469,10 @@ export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
   let open: number | null = null;
   for (const m of marks) {
     if (m.ts <= 0) continue;
-    if (m.t === "meta" || m.t === "resume") {
+    if (m.t === "resume") {
       if (open === null) open = m.ts;
+    } else if (m.t === "meta") {
+      if (open === null && out.length === 0) open = m.ts;
     } else if (m.t === "pause" || m.t === "termination") {
       if (open !== null) {
         out.push({ start: open, end: m.ts });

@@ -406,6 +406,20 @@ describe("active segments and playtime", () => {
     ]);
   });
 
+  test("the pause-mark meta written right after a pause does not reopen the segment", () => {
+    // run.ts appends `pause`, then `writeMeta({ pause })` a few ms later, which
+    // appends another `meta`. The quota wait between them and `resume` is not
+    // playtime (this over-read paused runs past 100% of budget until 08-25).
+    const segs = segmentsFrom(
+      marks(["meta", 1_000], ["pause", 2_000], ["meta", 2_005], ["resume", 9_000], ["meta", 9_001], ["pause", 9_500], ["meta", 9_510]),
+    );
+    expect(segs).toEqual([
+      { start: 1_000, end: 2_000 },
+      { start: 9_000, end: 9_500 },
+    ]);
+    expect(playtimeMs(segs, { lastTs: 9_510, live: true, now: 99_000 })).toBe(1_500);
+  });
+
   test("a trajectory with no meta falls back to its first record", () => {
     expect(segmentsFrom(marks(["state", 3_000], ["termination", 4_000]))).toEqual([
       { start: 3_000, end: 4_000 },
