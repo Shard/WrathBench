@@ -243,7 +243,12 @@ and status.
       own title names a post-Wrath zone is a page-level signal in ns 14 (33
       stubs). That is a dent in this residue, not a fix: prose describing the
       later world in words no rule names is still there, and the only general
-      answer is still the clause-marking templates above.
+      answer is still the clause-marking templates above. The new rules have
+      their own measured floor: the Archaeology window is 20 characters, so a
+      paragraph that names a dig site in the same sentence but further off than
+      that still goes ("The dig site west of the camp is where the archaeology
+      notes were lost" was the case that showed it). Per spec, and the cost of a
+      wider window is the profession paragraphs the rule is for.
     - **A recovered name the bundle would rather not answer to.** The redirect
       rules added on 2026-08-24 (ADR-0040 §Names survive page moves) recover a
       title from the newest revision or from an `(original)` sibling, which is
