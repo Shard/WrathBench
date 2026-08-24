@@ -26,11 +26,59 @@ import {
 import { extractCoords } from "./coords";
 import { extractIds } from "./ids";
 import { extractQuest } from "./quests";
-import { admitPage, type AdmitReason } from "./post-wrath";
+import { admitPage, titleIsPostWrathCoinage, type AdmitReason } from "./post-wrath";
 import { assertCanaries } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
 import { redirectTarget, stripWikitext } from "./strip";
+
+/**
+ * How much of the signalled revision a stepped-back one has to be worth.
+ *
+ * The step-back below trades the newest pre-cutoff revision for an older, clean
+ * one, and an older revision is sometimes a stub or a blanking. Measured over
+ * the dump (2026-08-24): of 495 protected pages with an earlier signal-free
+ * revision, 10 fall under this line — Varian Wrynn's was zero bytes — and the
+ * other 485 keep 88% of the text at the median. A quarter is well clear of the
+ * 0.17 the refused ones reach at p90 and well under the 0.5 the real step-backs
+ * bottom out at, so nothing sits near the line.
+ */
+const STEP_BACK_MIN_RATIO = 0.25;
+
+/**
+ * Which revision a protected page's prose comes from.
+ *
+ * A page that predates the Cataclysm announcement is kept whatever a 2010
+ * editor annotated it with (`isPreAnnouncementPage`), and until now it was
+ * indexed from its newest pre-cutoff revision — which for Uldum, Gilneas,
+ * Stormwind City and 482 others is the beta rewrite, not the page. The prose
+ * is the newest pre-cutoff revision that carries **no** post-Wrath signal: the
+ * page before the beta touched it. If there is none, or if stepping back would
+ * trade an article for a stub, the signalled revision stays and is counted as a
+ * refusal.
+ */
+export function eraSource(
+  page: Pick<WikiPage, "eraWikitext" | "eraTimestamp" | "eraFreeWikitext" | "eraFreeTimestamp">,
+  protectedPage: boolean,
+): { text: string; timestamp: string; steppedBack: boolean; refused: boolean } {
+  const era = { text: page.eraWikitext ?? "", timestamp: page.eraTimestamp };
+  if (!protectedPage || page.eraFreeWikitext === null) {
+    return { ...era, steppedBack: false, refused: false };
+  }
+  if (page.eraFreeTimestamp === page.eraTimestamp) {
+    // The clean revision *is* the newest one: nothing stepped back.
+    return { ...era, steppedBack: false, refused: false };
+  }
+  if (page.eraFreeWikitext.length < era.text.length * STEP_BACK_MIN_RATIO) {
+    return { ...era, steppedBack: false, refused: true };
+  }
+  return {
+    text: page.eraFreeWikitext,
+    timestamp: page.eraFreeTimestamp,
+    steppedBack: true,
+    refused: false,
+  };
+}
 
 /** A source title with the `(original)`/`(old)` suffix a page move leaves behind. */
 const SIBLING_SUFFIX = /^(.*\S)\s+\((original|old)\)$/i;
@@ -222,6 +270,15 @@ async function main(): Promise<void> {
    * sixth bucket: it is deliberately outside the accounting identity.
    */
   let preAnnouncementProtected = 0;
+  /**
+   * Protected pages whose prose came from an earlier, signal-free revision
+   * instead of the newest pre-cutoff one (`eraSource`), and those where that
+   * step back was refused because the earlier revision was a stub. Both are
+   * tags on a subset of `pre_cutoff`, like the protection counter itself, and
+   * neither is part of the accounting identity.
+   */
+  let steppedBack = 0;
+  let stepBackRefused = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
   /** Out-of-world sections cut inside a surviving page, and what they were. */
@@ -315,6 +372,7 @@ async function main(): Promise<void> {
    */
   const keepAsName = (page: WikiPage, reason: AdmitReason): void => {
     if (reason === "dropped_meta") return;
+    if (titleIsPostWrathCoinage(page.ns, page.title)) return;
     const target = redirectTarget(page.wikitext);
     if (target === null) return;
     pendingRedirects.push({ source: page.title, target, ns: page.ns, origin: "newest" });
@@ -326,7 +384,13 @@ async function main(): Promise<void> {
    * signal. Structured fields always come off the newest revision, where a
    * decade of corrections lives and where 30% of the coordinates only exist.
    */
-  const keep = (page: WikiPage, source: string, reason: AdmitReason, protectedPage = false): void => {
+  const keep = (
+    page: WikiPage,
+    source: string,
+    reason: AdmitReason,
+    protectedPage = false,
+    sourceTimestamp: string = page.timestamp,
+  ): void => {
     // Coords and ids come off the RAW wikitext before the strip destroys the
     // templates that carry them.
     const coords = extractCoords(page.wikitext);
@@ -374,7 +438,7 @@ async function main(): Promise<void> {
       if (protectedPage) preAnnouncementProtected++;
       // Only meaningful for a pre-cutoff admission: a page admitted on a Wrath
       // signal has one revision to read, so its prose is never "swapped".
-      if (reason === "pre_cutoff" && page.eraTimestamp !== page.timestamp) eraSwapped++;
+      if (reason === "pre_cutoff" && sourceTimestamp !== page.timestamp) eraSwapped++;
     }
     keptTitles.add(page.title.toLowerCase());
     pagesKept++;
@@ -398,13 +462,18 @@ async function main(): Promise<void> {
       if (target !== null) {
         eraRedirectPages++;
         const newest = redirectTarget(page.wikitext);
-        pendingRedirects.push({
-          source: page.title,
-          target,
-          ns: page.ns,
-          origin: "era",
-          ...(newest !== null && newest !== target ? { fallback: newest } : {}),
-        });
+        // A later expansion's own coinage is not a name this world answers to,
+        // whatever the wiki later pointed it at (`Ruins of Gilneas` → `Gilneas`
+        // is the shape; FOLLOW-UPS 62).
+        if (!titleIsPostWrathCoinage(page.ns, page.title)) {
+          pendingRedirects.push({
+            source: page.title,
+            target,
+            ns: page.ns,
+            origin: "era",
+            ...(newest !== null && newest !== target ? { fallback: newest } : {}),
+          });
+        }
       } else if (!page.hasEraRevision) {
         // No revision before the cutoff. It may still be a page about this
         // world, written late; `admitPage` decides on the newest revision.
@@ -438,9 +507,14 @@ async function main(): Promise<void> {
           // has already counted this case as `dropped_post_cutoff`-shaped, but
           // the reason it returns is about the newest revision, so the counter
           // is set here.
-          const source = page.eraWikitext;
-          if (source === null) reasons.dropped_post_cutoff++;
-          else keep(page, source, decision.reason, decision.preAnnouncementProtected === true);
+          if (page.eraWikitext === null) reasons.dropped_post_cutoff++;
+          else {
+            const protectedPage = decision.preAnnouncementProtected === true;
+            const src = eraSource(page, protectedPage);
+            if (src.steppedBack) steppedBack++;
+            if (src.refused) stepBackRefused++;
+            keep(page, src.text, decision.reason, protectedPage, src.timestamp);
+          }
         }
       }
       logProgress();
@@ -532,10 +606,15 @@ async function main(): Promise<void> {
     for (const r of pendingRedirects) {
       if (written.has(r.source)) survivors.push({ title: r.source, ns: r.ns });
     }
-    const siblings: Pending[] = siblingRedirects(survivors, answered).map((s) => ({
-      ...s,
-      origin: "sibling" as const,
-    }));
+    // A later expansion's own coinage is not a name this world answers to,
+    // whatever the wiki later pointed it at (`Ruins of Gilneas` -> `Gilneas`
+    // is the shape; FOLLOW-UPS 62).
+    const siblings: Pending[] = siblingRedirects(survivors, answered)
+      .filter((s) => !titleIsPostWrathCoinage(s.ns, s.source))
+      .map((s) => ({
+        ...s,
+        origin: "sibling" as const,
+      }));
     // Overwriting the pending target for this key is load-bearing, not an
     // oversight to tidy away: the key is unanswered precisely because whatever
     // stood there dangled, and replacing it is what lets the rows that pointed
@@ -605,6 +684,11 @@ async function main(): Promise<void> {
     // predate the Cataclysm beta (`CATACLYSM_ANNOUNCED`). A subset of
     // `pages_pre_cutoff`, not a bucket of its own: do not add it to the sum.
     pages_pre_announcement_protected: String(preAnnouncementProtected),
+    // Protected pages whose prose came from an earlier signal-free revision,
+    // and those where that step back was refused as a stub trade. Subsets of
+    // `pages_pre_cutoff`, like the counter above: do not add them to the sum.
+    pages_stepped_back: String(steppedBack),
+    pages_step_back_refused: String(stepBackRefused),
     // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
     // These five plus `empty_pages` account for every non-redirect page seen.
     pages_pre_cutoff: String(reasons.pre_cutoff),
@@ -674,6 +758,10 @@ async function main(): Promise<void> {
   console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
   console.log(
     `  protected: ${preAnnouncementProtected} (post-Wrath signal, kept: the page predates the announcement)`,
+  );
+  console.log(
+    `  stepped back: ${steppedBack} (prose from the last signal-free revision), ` +
+      `${stepBackRefused} refused (that revision was a stub)`,
   );
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);

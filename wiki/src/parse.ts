@@ -12,12 +12,14 @@
  *   that cannot win is skipped without being buffered or decoded. Peak memory
  *   is the newest body plus at most two era candidates (below), whatever the
  *   history depth.
- * - Two slots per page. `wikitext` is the newest revision, which is what the
+ * - Three slots per page. `wikitext` is the newest revision, which is what the
  *   structured extractors (coords, ids, quest infobox) read. `eraWikitext` is
  *   the newest revision saved before the era cutoff, which is what the prose
  *   index reads: the dump is from 2020 and this world is patch 3.3.5a
  *   (ADR-0040). A page with no pre-cutoff revision has `eraWikitext` null and
- *   the build drops it.
+ *   the build drops it. `eraFreeWikitext` is the newest pre-cutoff revision
+ *   that carries no post-Wrath signal, which is the page before the beta
+ *   touched it — the slot a protected page's prose comes from.
  * - The newest pre-cutoff revision also decides whether the page is a redirect,
  *   reported as `eraRedirectTarget`: the bundle is a snapshot of the Wrath-era
  *   wiki, so a page that was a redirect then is one here whatever it became
@@ -55,6 +57,7 @@
 
 import { decodeEntities } from "./entities";
 import { DEFAULT_ERA_CUTOFF } from "./wrath-only";
+import { hasPostWrathSignal } from "./post-wrath";
 import { redirectTarget } from "./strip";
 
 export interface WikiPage {
@@ -72,6 +75,21 @@ export interface WikiPage {
   eraWikitext: string | null;
   /** Timestamp of that revision, or "" when there is none. */
   eraTimestamp: string;
+  /**
+   * Raw wikitext of the newest pre-cutoff revision that passed the same hygiene
+   * rules **and** carries no post-Wrath signal of its own, or null when every
+   * candidate carries one (and when the title alone carries one, which no
+   * revision can undo).
+   *
+   * This is the page as it stood before the beta touched it, and it is what a
+   * pre-announcement page's prose comes from: Deepholm and Uldum are Wrath lore
+   * pages whose 2010 revisions were rewritten into Cataclysm zone articles, so
+   * the newest pre-cutoff revision is the wrong one to index even though the
+   * page is right to keep (ADR-0040). `build.ts` decides whether to use it.
+   */
+  eraFreeWikitext: string | null;
+  /** Timestamp of that revision, or "" when there is none. */
+  eraFreeTimestamp: string;
   /**
    * Timestamp of the page's *oldest* revision, ISO 8601, or "" when no revision
    * carried one. This is when the page was created, and `admitPage` reads it as
@@ -146,6 +164,18 @@ interface PageAccum {
   bestText: string | null;
   /** The two newest pre-cutoff non-redirect revisions, newest first. */
   eraCands: EraCandidate[];
+  /**
+   * The same window over the subset that carries no post-Wrath signal. Two
+   * deep for the same reason `eraCands` is: the newest one may turn out to have
+   * been reverted, and then the runner-up has to be there.
+   */
+  eraFreeCands: EraCandidate[];
+  /**
+   * True when the page's **title** alone carries a post-Wrath signal, so no
+   * revision of it can ever be signal-free. Computed once, when the title and
+   * namespace are known, and it short-circuits every per-revision test below.
+   */
+  titleSignal: boolean;
   /** Every revision seen, for the revert test at page finish. */
   revs: RevMeta[];
   /** Oldest revision timestamp seen, over every block of the page. "" if none. */
@@ -225,12 +255,38 @@ function wasReverted(revs: readonly RevMeta[], cand: EraCandidate): boolean {
   return false;
 }
 
-/** The newest candidate in the window that survives the hygiene rules. */
-function eraWinner(p: PageAccum): EraCandidate | null {
-  for (const cand of p.eraCands) {
+/** The newest candidate in a window that survives the hygiene rules. */
+function eraWinner(p: PageAccum, cands: readonly EraCandidate[]): EraCandidate | null {
+  for (const cand of cands) {
     if (!wasReverted(p.revs, cand)) return cand;
   }
   return null;
+}
+
+/**
+ * A cheap first pass before the full signal test: no rule in
+ * `hasPostWrathSignal` can fire on a body without one of these words, and on
+ * this dump three revisions in four carry none of them.
+ *
+ * It has to name every rule's own trigger: the expansion names the category and
+ * template rules read (`cata` covers `cataclysm` and `cata-stub`), the short
+ * template aliases, and the two infobox fields. A prefilter one word short is a
+ * signal that silently never fires.
+ */
+const SIGNAL_PREFILTER =
+  /cata|legion|pandaria|draenor|shadowlands|\bwod\b|\bmop\b|\bbfa\b|patch\s*=|expansion\s*=/i;
+
+/**
+ * Does this revision body carry a post-Wrath signal?
+ *
+ * Measured over the dump (2026-08-24): 110,192 revisions tested across 91,108
+ * pages — 1.2 per page, because the search stops as soon as a signal-free
+ * revision is found and this dump is newest-first — of which 26.5% passed the
+ * prefilter. Total 0.96s, 2.2% of a 43s scan of 22.2 GiB.
+ */
+function bodyHasSignal(p: PageAccum, text: string): boolean {
+  if (!SIGNAL_PREFILTER.test(text)) return false;
+  return hasPostWrathSignal(p.title, decodeEntities(text), p.ns);
 }
 
 /**
@@ -285,7 +341,8 @@ export async function* parsePages(
   const toWikiPage = (p: PageAccum | null): WikiPage | null => {
     if (p === null || p.bestText === null) return null;
     if (!namespaces.has(p.ns)) return null;
-    const era = eraWinner(p);
+    const era = eraWinner(p, p.eraCands);
+    const eraFree = eraWinner(p, p.eraFreeCands);
     return {
       title: p.title,
       ns: p.ns,
@@ -293,6 +350,8 @@ export async function* parsePages(
       timestamp: p.bestTimestamp,
       eraWikitext: era === null ? null : decodeEntities(era.text),
       eraTimestamp: era === null ? "" : era.ts,
+      eraFreeWikitext: eraFree === null ? null : decodeEntities(eraFree.text),
+      eraFreeTimestamp: eraFree === null ? "" : eraFree.ts,
       firstRevisionAt: p.firstTs,
       hasEraRevision: p.eraTop !== null,
       eraRedirectTarget: p.eraTop === null ? null : p.eraTop.redirect,
@@ -322,6 +381,8 @@ export async function* parsePages(
             bestRevId: -1,
             bestText: null,
             eraCands: [],
+            eraFreeCands: [],
+            titleSignal: false,
             revs: [],
             firstTs: "",
             eraTop: null,
@@ -383,6 +444,10 @@ export async function* parsePages(
                   const done = toWikiPage(prev);
                   if (done !== null) yield done;
                 }
+                // Once per page: a title that is itself a post-Wrath signal
+                // makes every revision signalled, so the signal-free slot is
+                // known to stay empty and no body is ever tested.
+                if (page !== null) page.titleSignal = hasPostWrathSignal(page.title, "", page.ns);
                 break;
               }
               case "id":
@@ -403,7 +468,10 @@ export async function* parsePages(
                 // Era slot: pre-cutoff, and not a revision where the page was a
                 // redirect. The revert test needs revisions that have not
                 // arrived yet, so it waits until the page is finished.
-                if (revTs !== "" && revTs < eraCutoff && eraWants(block.eraCands, revTs, revId)) {
+                const wantsEra = eraWants(block.eraCands, revTs, revId);
+                const wantsFree =
+                  !block.titleSignal && eraWants(block.eraFreeCands, revTs, revId);
+                if (revTs !== "" && revTs < eraCutoff && (wantsEra || wantsFree)) {
                   // Decoded, so this reads the same string the build's own
                   // redirect decision reads.
                   const target = redirectTarget(decodeEntities(value));
@@ -414,7 +482,14 @@ export async function* parsePages(
                     block.eraTop = { ts: revTs, id: revId, redirect: target };
                   }
                   if (target === null) {
-                    eraOffer(block.eraCands, { ts: revTs, id: revId, text: value });
+                    const cand = { ts: revTs, id: revId, text: value };
+                    if (wantsEra) eraOffer(block.eraCands, cand);
+                    // The signal test runs only on a body that could still take
+                    // the signal-free slot, so a page whose newest pre-cutoff
+                    // revision is already clean costs exactly one test.
+                    if (wantsFree && !bodyHasSignal(block, value)) {
+                      eraOffer(block.eraFreeCands, cand);
+                    }
                   }
                 }
                 break;
@@ -494,7 +569,8 @@ export async function* parsePages(
                 (beats(revTs, revId, page.bestTimestamp, page.bestRevId) ||
                   (revTs !== "" &&
                     revTs < eraCutoff &&
-                    eraWants(page.eraCands, revTs, revId)));
+                    (eraWants(page.eraCands, revTs, revId) ||
+                      (!page.titleSignal && eraWants(page.eraFreeCands, revTs, revId)))));
               state = startCapture("text", win, State.InRevision);
             }
           } else if (closing && name === "revision") {

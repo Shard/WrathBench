@@ -475,3 +475,105 @@ found two classes the rules above cannot reach, and both are now closed:
   way round.
 - Like every other era rule, this changes what every lane can read, so it lands
   with the same harness minor bump and the same deploy window.
+
+## A protected page is the page before the beta touched it
+
+Addendum, 2026-08-24. The protection above keeps a page that predates the
+Cataclysm announcement whatever a 2010 editor later annotated it with. It says
+nothing about **which revision of it** the bundle should read, and the answer it
+inherited — the newest one before the cutoff — is the wrong one for the pages
+the protection exists for.
+
+### Context
+The cutoff is 2010-10-12, which is eight months into the Cataclysm beta. That
+window is exactly when the wiki rewrote this world's zone pages into the next
+world's: an adversarial read of a built bundle found `Uldum` (2,106 characters)
+and `Gilneas` (3,642) sitting there as Cataclysm zone articles. Both pages are
+old — 2005 — so the protection kept them, correctly; both were rewritten in
+2010, so the prose was the beta's, incorrectly. `Southern Barrens` (1,179) was
+there for the same reason under a name the expansion invented.
+
+Measured over the dump (2026-08-24, scratch scan, not committed): of 77,168
+pages that predate the announcement and have pre-cutoff prose, 510 have a
+post-Wrath signal on the revision the bundle was reading. 495 of those have an
+earlier pre-cutoff revision with no signal on it at all; 15 do not.
+
+### Decision
+**A protected page's prose is the newest pre-cutoff revision that carries no
+post-Wrath signal — the page before the beta touched it — falling back to the
+signalled revision when there is none.** The signal is the same one `admitPage`
+reads (title, category, template, infobox patch and expansion), evaluated on the
+raw wikitext of each candidate revision during the parse. The parser gains a
+third slot for it, `eraFreeWikitext`, held to the same two-deep window and the
+same revert hygiene as the era slot; a title that is itself a signal makes every
+revision signalled, so that case is decided once per page and no body is read.
+
+**Stepping back is refused when the older revision is under a quarter of the
+newer one's length.** An older revision is sometimes a stub or a blanking, and
+trading an article for a blank page is worse than reading the rewrite. 10 of the
+495 fall under that line — one of them was zero bytes — and the other 485 keep
+88% of their text at the median. Nothing sits near the line: the refused ones
+reach 0.17 at p90 and the accepted ones bottom out around 0.5. Counted as
+`pages_stepped_back` and `pages_step_back_refused`, both tags on a subset of
+`pages_pre_cutoff` in the same way `pages_pre_announcement_protected` is, and
+both outside the five-reasons-plus-`empty_pages` identity.
+
+The cost is a regex prefilter and, on the revisions that pass it, one
+`hasPostWrathSignal` call: 110,192 revisions tested over 91,108 pages — 1.2 per
+page, because the search stops at the first clean revision — of which 26.5%
+passed the prefilter, for 0.96s of a 43s pass over 22.2 GiB. Two percent of the
+read.
+
+**Two lists Cataclysm coined are dropped by title in ns 0**, unconditionally and
+before the protection: `Southern Barrens`, `Northern Barrens`,
+`Twilight Highlands`, `Vashj'ir`, `Kelp'thar Forest`, `Shimmering Expanse`,
+`Abyssal Depths`, `The Lost Isles`, `Lost Isles`, `Molten Front`,
+`Tol Barad Peninsula` — names with no pre-Cataclysm meaning at all, so no
+revision of such a page is about this world. It has to be a veto rather than a
+signal: a signal fires per revision, and a page whose every revision carries one
+lands in the protection and is *kept*, which is the opposite of what these
+titles want. The same predicate refuses to recover the title as a redirect
+**source**, which closes the leak FOLLOW-UPS 62 predicted and asked to be
+checked on a real build (`Ruins of Gilneas` → `Gilneas`).
+
+Deepholm, Uldum, Kezan, Gilneas, Mount Hyjal, Tol Barad and Grim Batol are
+deliberately absent from that list. Every one of them is this world's own lore
+under that name, and deleting the article for naming a zone the expansion later
+invented would delete the lore with it. What those pages may *say* is gated
+instead: `verify.ts` gains seven forbidden phrases on four of them, each checked
+absent from the revision the bundle now indexes.
+
+**The April 2010 class previews are era sections.** Blizzard posted one per
+class and the wiki pasted each into the class page under standardised headings,
+so a Wrath Rogue page carried a Cataclysm talent tree, a stat that does not exist
+yet, and abilities no trainer here teaches. `new … abilities`, `changes to
+abilities and mechanics`, `new talents and talent changes`, `mastery` and its
+`passive`/`talent`/`tree`/`bonuses` variants, `cataclysm class preview…` and
+`cataclysm changes`/`cataclysm preview` join the era heading set — cuts, not
+out-of-world trims, because this is the next world rather than the wiki talking
+about itself. Measured over the era revision of every page in the kept
+namespaces: 46 pages, of which the first four rules reach the ten class pages and
+nothing else. `mastery` was the rule to watch, since Stance Mastery and Tactical
+Mastery are 3.3.5 talents; anchored at both ends it reaches neither. The
+preview's own framing sentence is a paragraph rule too, for the talent pages
+that quoted one paragraph rather than the whole post.
+
+### Consequences
+- The zone pages a starting character reads describe the world the character is
+  standing in. Stormwind City's prose moves from 2010-10-07 to 2010-05-06 and
+  stays a full article (28,608 → 25,278 characters); Durotar, Ashenvale,
+  Desolace, Thousand Needles, Westfall, Darkshore and the rest of the reshaped
+  zones move the same way, most of them to the 2010-04-30 revision that precedes
+  the beta rewrite wave.
+- Every phrase pair in `verify.ts` was re-checked against the stepped-back
+  revision, not only the old one. A step back loses months of edits, and a
+  `REQUIRED_PHRASES` row is as easy to break that way as a `FORBIDDEN_PHRASES`
+  row is to fix. All of them hold.
+- **The mechanism does not reach a rewrite that left no signal.** Deepholm and
+  Kezan are the counterexample: their beta-era revisions carry no category, no
+  banner template and no patch field, so they are already "signal-free" and the
+  step back does not move them. Their prose is still the 2010-09/10 revision.
+  The `verify.ts` phrases are the only gate on that residue, and it is a real
+  one — FOLLOW-UPS 62.
+- Like every other era rule, this changes what every lane can read, so it lands
+  with the same harness minor bump and the same deploy window.

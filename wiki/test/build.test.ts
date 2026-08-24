@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
-import { parseArgs, siblingRedirects } from "../src/build";
+import { eraSource, parseArgs, siblingRedirects } from "../src/build";
 import { DEFAULT_ERA_CUTOFF } from "../src/wrath-only";
 import { EMPTY_PAGE_SNIPPET, searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
@@ -249,9 +249,10 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(beta.snippet).not.toContain("road runs south");
   expect(searchReference(db, "does not run")).toEqual([]);
   expect(metaValue("sections_dropped")).toBe("1");
-  // Beta's Cataclysm paragraph, and the capital's: protection keeps the page,
-  // it does not keep the paragraph that named a later world.
-  expect(metaValue("paragraphs_dropped")).toBe("2");
+  // Beta's Cataclysm paragraph only. The capital's never reaches the paragraph
+  // rules: the capital is protected, so its prose steps back to the revision
+  // before the annotation was written and that paragraph is not in it.
+  expect(metaValue("paragraphs_dropped")).toBe("1");
   const capital = searchReference(db, "Example Capital City")[0]!;
   expect(capital.snippet).toContain("seat of the example kingdom");
   expect(capital.snippet).not.toContain("harbour is rebuilt");
@@ -292,6 +293,10 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   // A subset of `pages_pre_cutoff`, deliberately outside the identity below:
   // the capital carried a post-Wrath signal and predates the Cataclysm announcement.
   expect(metaValue("pages_pre_announcement_protected")).toBe("1");
+  // Same shape, same exclusion: the capital's prose came from the last revision
+  // with no post-Wrath signal on it, which is an older one than the era slot's.
+  expect(metaValue("pages_stepped_back")).toBe("1");
+  expect(metaValue("pages_step_back_refused")).toBe("0");
   expect(metaValue("pages_post_cutoff_wrath_signal")).toBe("1"); // the trinket
   // The late page that says nothing, and the late page that names Cataclysm:
   // neither has prose from before the cutoff, which is the reason for both.
@@ -831,4 +836,180 @@ test("siblingRedirects prefers (original), and leaves a title that already answe
     { source: "Example Delve", target: "Example Delve (original)", ns: 0 },
     { source: "Example Kept", target: "Example Kept (old)", ns: 0 },
   ]);
+});
+
+/**
+ * Titles Cataclysm coined: not a page, and not a name either.
+ *
+ * The prose is invented, as everywhere here. The titles are real, because the
+ * rule is a list of them — the same names `verify.ts` and FOLLOW-UPS already
+ * write down.
+ */
+test("a Cataclysm-coined title is neither a page nor a recovered name", async () => {
+  const xmlPath = join(dir, "coinage-dump.xml");
+  const outPath = join(dir, "coinage-bundle.sqlite");
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        // Old enough to be protected, and its pre-cutoff revision says nothing
+        // about a later expansion. The title is what drops it.
+        title: "Southern Barrens",
+        ns: 0,
+        id: 1,
+        revisions: [
+          {
+            id: 1,
+            timestamp: "2006-06-03T00:00:00Z",
+            text: "A stretch of savannah, lorem ipsum dolor sit amet consectetur.",
+          },
+        ],
+      },
+      {
+        // No pre-cutoff revision, so no page — and its newest revision is a
+        // redirect to a page that *is* here, which is exactly what `keepAsName`
+        // would otherwise recover.
+        title: "Northern Barrens",
+        ns: 0,
+        id: 2,
+        revisions: [
+          { id: 2, timestamp: "2012-01-01T00:00:00Z", text: "#REDIRECT [[The Barrens]]" },
+        ],
+      },
+      {
+        title: "The Barrens",
+        ns: 0,
+        id: 3,
+        revisions: [
+          {
+            id: 3,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''The Barrens''' is a stretch of savannah, lorem ipsum dolor sit.",
+          },
+        ],
+      },
+      {
+        // A redirect at the cutoff, so it goes down the era-redirect path
+        // rather than through `keepAsName`. Vetoed there too.
+        title: "Twilight Highlands",
+        ns: 0,
+        id: 5,
+        revisions: [
+          { id: 5, timestamp: "2010-09-01T00:00:00Z", text: "#REDIRECT [[The Barrens]]" },
+        ],
+      },
+      {
+        // On neither list: the name is older than the expansion that took it,
+        // so the page stays and `verify.ts` gates what it may say instead.
+        title: "Deepholm",
+        ns: 0,
+        id: 4,
+        revisions: [
+          {
+            id: 4,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Deepholm''' is a plane of elit, lorem ipsum dolor sit amet.",
+          },
+        ],
+      },
+    ]),
+  );
+
+  const proc = Bun.spawn(
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(0);
+
+  const db = new Database(outPath, { readonly: true });
+  const titles = db
+    .query<{ title: string }, []>("SELECT title FROM pages ORDER BY title")
+    .all()
+    .map((r) => r.title);
+  expect(titles).toEqual(["Deepholm", "The Barrens"]);
+  // Not a redirect source either, by any of the three routes a name comes back
+  // on: a name that resolves is a name search returns.
+  expect(db.query<{ source: string }, []>("SELECT source FROM redirects").all()).toEqual([]);
+  // The redirect page is still counted as one; only the row is refused, so the
+  // accounting identity is undisturbed.
+  const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
+  expect(meta.get("pages_era_redirect")!.value).toBe("1");
+  // Neither title resolves as an exact title, directly or through a redirect.
+  // Body prose still matches the word, which is what the full-text index is
+  // for; what the rule denies is a page or a name under these titles.
+  expect(searchReference(db, "Southern Barrens").some((r) => r.exactTitle === true)).toBe(false);
+  expect(searchReference(db, "Northern Barrens").some((r) => r.exactTitle === true)).toBe(false);
+  db.close();
+}, 30_000);
+
+/**
+ * Which revision a protected page's prose comes from (ADR-0040, "a protected
+ * page is the page before the beta touched it").
+ */
+const ARTICLE = "x".repeat(1000);
+
+test("a protected page's prose steps back to the last revision with no signal on it", () => {
+  expect(
+    eraSource(
+      {
+        eraWikitext: ARTICLE,
+        eraTimestamp: "2010-09-26T00:00:00Z",
+        eraFreeWikitext: "y".repeat(800),
+        eraFreeTimestamp: "2010-04-30T00:00:00Z",
+      },
+      true,
+    ),
+  ).toEqual({
+    text: "y".repeat(800),
+    timestamp: "2010-04-30T00:00:00Z",
+    steppedBack: true,
+    refused: false,
+  });
+});
+
+test("stepping back is refused when it would trade an article for a stub", () => {
+  const got = eraSource(
+    {
+      eraWikitext: ARTICLE,
+      eraTimestamp: "2010-09-26T00:00:00Z",
+      // Under a quarter of the article: a blanking or a stub, not the page.
+      eraFreeWikitext: "y".repeat(200),
+      eraFreeTimestamp: "2008-04-30T00:00:00Z",
+    },
+    true,
+  );
+  expect(got.text).toBe(ARTICLE);
+  expect(got.timestamp).toBe("2010-09-26T00:00:00Z");
+  expect(got.steppedBack).toBe(false);
+  expect(got.refused).toBe(true);
+});
+
+test("a page that is not protected is never stepped back", () => {
+  const got = eraSource(
+    {
+      eraWikitext: ARTICLE,
+      eraTimestamp: "2010-09-26T00:00:00Z",
+      eraFreeWikitext: "y".repeat(800),
+      eraFreeTimestamp: "2010-04-30T00:00:00Z",
+    },
+    false,
+  );
+  expect(got.text).toBe(ARTICLE);
+  expect(got.steppedBack).toBe(false);
+  expect(got.refused).toBe(false);
+});
+
+test("no signal-free revision at all leaves the page on the one it has", () => {
+  const got = eraSource(
+    {
+      eraWikitext: ARTICLE,
+      eraTimestamp: "2010-09-26T00:00:00Z",
+      eraFreeWikitext: null,
+      eraFreeTimestamp: "",
+    },
+    true,
+  );
+  expect(got.text).toBe(ARTICLE);
+  expect(got.steppedBack).toBe(false);
+  expect(got.refused).toBe(false);
 });

@@ -109,6 +109,24 @@ const HEADING_ERA: RegExp[] = [
   /^(in\s+)?legion$/i,
   /^(in\s+)?battle for azeroth$/i,
   /^(in\s+)?shadowlands$/i,
+  // The April 2010 Cataclysm class previews. Blizzard posted one per class and
+  // the wiki pasted each into the class page under these standardised headings,
+  // so a Wrath class page carries a Cataclysm talent tree, a stat that does not
+  // exist yet and abilities no trainer here teaches. A run read the Rogue one.
+  //
+  // These are ERA cuts, not out-of-world trims: the content is about the next
+  // world, not about the wiki. Measured on the dump (2026-08-24) over the era
+  // revision of every page in the kept namespaces — 46 pages in total, and the
+  // count per rule is in `wiki/README.md`. `mastery` was the one to watch,
+  // since Stance Mastery and Tactical Mastery are 3.3.5 talents: anchored at
+  // both ends it hits the nine class pages and nothing else, and a plain
+  // `== Talents ==` heading is untouched.
+  /^new .* abilities$/i,
+  /^changes to abilities and mechanics$/i,
+  /^new talents and talent changes$/i,
+  /^mastery( passive)?( talent)?( tree)?( bonuses)?$/i,
+  /^cataclysm class preview/i,
+  /^cataclysm (changes|preview)$/i,
 ];
 
 /**
@@ -268,6 +286,17 @@ const POST_WRATH_PARAGRAPH: { name: string; test: (prose: string) => boolean }[]
   // are talents in 3.3.5 and must survive. The separator is the dev voice the
   // wiki quoted out of the announcement posts; a bare mention is not a rule.
   { name: "mastery-stat", test: (p) => /\bmastery\b/i.test(p) && DEV_VOICE.test(p) },
+  // The class-preview boilerplate, in the two forms the wiki pasted it in. Both
+  // are the preview's own framing sentence, so they survive on a page whose
+  // heading a section rule above did not catch — a talent page that quoted one
+  // paragraph of it rather than the whole post. Both phrases contain
+  // "cataclysm", so `PARAGRAPH_PREFILTER` already admits them and needs no new
+  // word.
+  {
+    name: "class-preview",
+    test: (p) =>
+      /\bdevelopment on cataclysm continues\b/i.test(p) || /\bcataclysm class preview\b/i.test(p),
+  },
 ];
 
 /**
@@ -409,7 +438,12 @@ export function dropPostWrathSections(
       const text = heading[2] ?? "";
       if (current !== undefined && level <= current.level) current = undefined;
       pending = undefined;
-      if (eraCuts && headingIsPostWrath(text.replace(/\[\[|\]\]/g, "").trim())) {
+      // `normaliseHeading`, not a bare link strip: the class-preview headings
+      // are written with trailing colons and with bold markup, and the drop set
+      // below already reads headings this way. It widens the expansion-name
+      // patterns above by the same amount — `== In Cataclysm: ==` now matches,
+      // which it should have all along.
+      if (eraCuts && headingIsPostWrath(normaliseHeading(text))) {
         current = { level };
         sectionsDropped++;
         drop[i] = true;
