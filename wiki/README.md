@@ -265,6 +265,11 @@ out empty.
 
 ## Counters
 
+Every counter is one row in the `METRICS` table in `wiki/src/build.ts` — name,
+help text and its place in the accounting identity — and the build loop, the
+`meta` write, the console summary and the identity test all read that table, so
+a counter cannot be in one of them and silently missing from another.
+
 `admitPage` (`wiki/src/post-wrath.ts`) is the one page-level decision, a pure
 function of the title, the namespace, the two revisions and — when the build was
 given one — the world-id oracle. It returns one of six reasons, each a `meta`
