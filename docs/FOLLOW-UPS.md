@@ -231,14 +231,17 @@ and status.
     live run was in flight through the viewer when it was found.
 
 63. **Freeplay rows show no episode progress even when their run recorded a real
-    watchdog** (2026-08-24, deliberate). `rowProgress` in
-    `dashboard/src/lib/fleet.ts` returns null for `episode === "freeplay"`
-    because the id is uncapped (docs/EPISODES.md) and a percentage would read as
-    a tier fact. But `nav-probe` records `episodeMs: 21600000` and runs six hours
-    against it, so there *is* an honest number to show for that job and the page
-    withholds it. If the operator wants it, deleting one predicate is the whole
-    change — and the freeplay test in `dashboard/test/fleet.test.ts` is what
-    would have to be rewritten to say the opposite.
+    watchdog** (2026-08-24, deliberate; re-scoped 2026-08-24 by ADR-0041).
+    `rowProgress` in `dashboard/src/lib/fleet.ts` returns null for
+    `episode === "freeplay"` because the id is uncapped (docs/EPISODES.md) and a
+    percentage would read as a tier fact. The example that motivated this —
+    `nav-probe` recording `episodeMs: 21600000` — is a `probing` run now, and
+    `probing` is deliberately NOT in that predicate: a campaign sets a real
+    enforced clock and the run ends on it, so the percentage means something.
+    What remains is the narrower original question: whether a *freeplay* run
+    carrying an explicit `episodeMs` should show one too. If the operator wants
+    it, deleting one predicate is the whole change, and the freeplay test in
+    `dashboard/test/fleet.test.ts` is what would have to say the opposite.
 
 64. **An open viewer tab keeps running the bundle it loaded, and a rebuild
     deletes the one it might still ask for** (2026-08-24, after a bug report
@@ -294,6 +297,27 @@ and status.
 
 
 
+
+70. **A probe failure cools the model out of evals too** (2026-08-24,
+    deliberate, ADR-0041). The defer ladder is not split per lane: a probe that
+    fails to launch climbs the same ladder an eval would. That is the right
+    default — the ladder backs off from endpoint failures (stillborn launches,
+    adapter errors), which are properties of the model's endpoint and equally
+    relevant to both lanes, and splitting it would keep firing probes at a dead
+    key. It costs no eval throughput today because probes only run for models
+    that owe no evidence. Revisit only if a campaign with a genuinely harder
+    task starts retiring models that were fine on `e90`; the fix would be a
+    lane-keyed ladder, which is a real change to `projectModel`, not a flag.
+
+71. **`campaignWork` recomputes the whole sweep on every tick** (2026-08-24).
+    `campaignWork` walks every enabled campaign × model × cell and tallies the
+    probe runs on disk each time `planNextJobs` is called, which is once a
+    minute. At 2 campaigns × 3 models × 8 cells it is nothing. It is O(campaigns
+    × models × cells + probe runs) with a `find` over the campaign list per
+    work item, so a board with a dozen campaigns and thousands of probe runs
+    would notice. Nothing to do yet; the shape to reach for is memoising the
+    tally by (campaign, ref, cell) across ticks keyed on the newest run mtime,
+    the way `readRunFactsCached` already does for the projection.
 
 ## Module
 
@@ -428,3 +452,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66
 - 68 — 2026-08-24 — found and fixed the same hour — the `--status` accounts table named a finished job where `--live-runs` named the running one. `state.jobs` is keyed by job NAME, stable across attempts, so it is a cumulative record; `printStatus` keyed a map by account and let the last write win, which reads the object's INSERTION order (first-spawn order), so a job that exited at noon masked the run holding the account. Display only — every scheduling path leases by `accountHeldBy` — but it made the board unreadable at exactly the moment a deploy needed reading. Now `jobsByAccount` in `infra/run-fleet.ts` ranks live-before-dead then newest-first, shares one liveness verdict with the row's own note, and reports two live jobs on one account as a `!!` clash instead of picking silently. The comment claiming `--live-runs` was "the same signal --status shows" is corrected: they are two sources, and that claim is how this hid
 - 69 — 2026-08-24 — `infra/` had no tsconfig, so nothing ever typechecked the 3.6k-line supervisor: `bun test` strips types without checking them, and four `fleet.test.ts` fixtures were silently missing the `idle` and `local` fields that ADR-0040 made required. `infra/tsconfig.json` added, the 17 errors it found fixed (4 fixtures, 12 index/group assertions in `infra/smoke/`, 1 import extension), and `bun run typecheck` now covers all six projects — cited in CLAUDE.md next to `bun test` so the next agent runs both
+- 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 and 71 are new, both deliberate: the defer ladder is not split per lane, and the sweep is recomputed per tick
