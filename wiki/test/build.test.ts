@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
@@ -112,6 +112,52 @@ test("build.ts turns a dump into a searchable bundle", async () => {
         ],
       },
       {
+        // Written after the cutoff, about a later expansion: not this world's
+        // wiki at all. It is counted as post-cutoff, not post-Wrath — the
+        // reason it is absent is that the page did not exist here.
+        title: "Example Zone Iota",
+        ns: 0,
+        id: 13,
+        revisions: [
+          {
+            id: 15,
+            timestamp: "2013-01-01T00:00:00Z",
+            text: "{{stub/Cataclysm}}Example Zone Iota, lorem ipsum.",
+          },
+        ],
+      },
+      {
+        // The 588-page pocket: a page of this world that acquired a later
+        // expansion's patch field and category in 2010, before the cutoff. It
+        // predates the beta, so it is kept and the annotated paragraph is cut.
+        title: "Example Capital City",
+        ns: 0,
+        id: 14,
+        revisions: [
+          {
+            id: 18,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "The rewritten capital, lorem.",
+          },
+          {
+            id: 17,
+            timestamp: "2010-09-15T00:00:00Z",
+            text: [
+              "{{zonebox|patch=4.0.1}}'''Example Capital City''' is the seat of the example kingdom.",
+              "",
+              "In Cataclysm the city is rearranged and the harbour is rebuilt.",
+              "",
+              "[[Category:Cataclysm]]",
+            ].join("\n"),
+          },
+          {
+            id: 16,
+            timestamp: "2005-06-01T00:00:00Z",
+            text: "'''Example Capital City''' is the seat of the example kingdom.",
+          },
+        ],
+      },
+      {
         // Out-of-game: classified by title, never emitted.
         title: "Hotfixes/2015 Archive",
         ns: 0,
@@ -135,7 +181,9 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   );
 
   const proc = Bun.spawn(
-    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath],
+    // `--no-canary`: the fixtures are invented pages, so the capitals the
+    // canary requires are not among them. `canary.test.ts` covers the gate.
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
     { stdout: "pipe", stderr: "pipe" },
   );
   expect(await proc.exited).toBe(0);
@@ -144,16 +192,16 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const db = new Database(outPath, { readonly: true });
 
   const pages = db.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!;
-  // Alpha, Beta and Zeta. The talk page is out of namespace; the late page, the
-  // Cataclysm stub and the hotfix archive are dropped; the infobox-only page is
-  // empty; the two redirects are not pages.
-  expect(pages.n).toBe(3);
+  // Alpha, Beta, Zeta and the capital. The talk page is out of namespace; the
+  // late pages, the Cataclysm stub and the hotfix archive are dropped; the
+  // infobox-only page is empty; the two redirects are not pages.
+  expect(pages.n).toBe(4);
   const redirects = db.query<{ n: number }, []>("SELECT count(*) AS n FROM redirects").get()!;
   expect(redirects.n).toBe(1); // the dangling one went with its target
   const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
   const metaValue = (key: string): string => meta.get(key)!.value;
   const metaNumber = (key: string): number => Number.parseInt(metaValue(key), 10);
-  expect(metaValue("pages_kept")).toBe("3");
+  expect(metaValue("pages_kept")).toBe("4");
 
   // The prose came from the pre-cutoff revision and the templates are gone from
   // the indexed text; the id below still comes off the newest revision.
@@ -180,7 +228,13 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(beta.snippet).not.toContain("road runs south");
   expect(searchReference(db, "does not run")).toEqual([]);
   expect(metaValue("sections_dropped")).toBe("1");
-  expect(metaValue("paragraphs_dropped")).toBe("1");
+  // Beta's Cataclysm paragraph, and the capital's: protection keeps the page,
+  // it does not keep the paragraph that named a later world.
+  expect(metaValue("paragraphs_dropped")).toBe("2");
+  const capital = searchReference(db, "Example Capital City")[0]!;
+  expect(capital.snippet).toContain("seat of the example kingdom");
+  expect(capital.snippet).not.toContain("harbour is rebuilt");
+  expect(capital.snippet).not.toContain("rewritten capital");
   // The out-of-world trim is a separate counter, with a breakdown saying what
   // went. The link section is gone and left no heading behind.
   expect(beta.snippet).not.toContain("Example Beta entry");
@@ -209,10 +263,15 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   // The era channel records what it did: the cutoff, the pages whose prose came
   // from an older revision, and one reason per page for being in or out.
   expect(metaValue("era_cutoff")).toBe(DEFAULT_ERA_CUTOFF);
-  expect(metaValue("pages_era_swapped")).toBe("2"); // alpha and beta
-  expect(metaValue("pages_pre_cutoff")).toBe("2");
+  expect(metaValue("pages_era_swapped")).toBe("3"); // alpha, beta and the capital
+  expect(metaValue("pages_pre_cutoff")).toBe("3");
+  // A subset of `pages_pre_cutoff`, deliberately outside the identity below:
+  // the capital carried a post-Wrath signal and predates the Cataclysm beta.
+  expect(metaValue("pages_pre_beta_protected")).toBe("1");
   expect(metaValue("pages_post_cutoff_wrath_signal")).toBe("1"); // the trinket
-  expect(metaValue("pages_dropped_post_cutoff")).toBe("1");
+  // The late page that says nothing, and the late page that names Cataclysm:
+  // neither has prose from before the cutoff, which is the reason for both.
+  expect(metaValue("pages_dropped_post_cutoff")).toBe("2");
   expect(metaValue("pages_dropped_post_wrath")).toBe("1");
   expect(metaValue("pages_dropped_meta")).toBe("1");
   expect(metaValue("empty_pages")).toBe("1");
@@ -238,8 +297,18 @@ test("build.ts turns a dump into a searchable bundle", async () => {
     .query<{ title: string }, []>("SELECT title FROM pages ORDER BY title")
     .all()
     .map((r) => r.title);
-  expect(titles).toEqual(["Example Item Zeta", "Example Quest Alpha", "Example Zone Beta"]);
-  for (const gone of ["Example Late Page", "Example Zone Theta", "Hotfixes/2015 Archive"]) {
+  expect(titles).toEqual([
+    "Example Capital City",
+    "Example Item Zeta",
+    "Example Quest Alpha",
+    "Example Zone Beta",
+  ]);
+  for (const gone of [
+    "Example Late Page",
+    "Example Zone Theta",
+    "Example Zone Iota",
+    "Hotfixes/2015 Archive",
+  ]) {
     expect(searchReference(db, gone).some((h) => h.title === gone)).toBe(false);
   }
   expect(searchReference(db, "Example Item Zeta")[0]!.title).toBe("Example Item Zeta");
@@ -248,12 +317,14 @@ test("build.ts turns a dump into a searchable bundle", async () => {
 
   // Rebuilding replaces the bundle in place.
   const again = Bun.spawn(
-    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath],
+    // `--no-canary`: the fixtures are invented pages, so the capitals the
+    // canary requires are not among them. `canary.test.ts` covers the gate.
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
     { stdout: "pipe", stderr: "pipe" },
   );
   expect(await again.exited).toBe(0);
   const db2 = new Database(outPath, { readonly: true });
-  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(3);
+  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(4);
   db2.close();
 }, 30_000);
 
@@ -298,7 +369,9 @@ test("a page split into 50-revision blocks builds as one row", async () => {
   );
 
   const proc = Bun.spawn(
-    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath],
+    // `--no-canary`: the fixtures are invented pages, so the capitals the
+    // canary requires are not among them. `canary.test.ts` covers the gate.
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
     { stdout: "pipe", stderr: "pipe" },
   );
   expect(await proc.exited).toBe(0);
@@ -344,6 +417,44 @@ test("the build refuses to ship two rows for one page", () => {
   cleanWriter.addPage("Example Shared Name", 14, "The category, lorem.");
   cleanWriter.flush();
   expect(assertUniquePages(clean)).toBe(2);
+});
+
+test("the canary refuses to rename a bundle that lost this world's pages", async () => {
+  const xmlPath = join(dir, "canary-dump.xml");
+  const outPath = join(dir, "canary-bundle.sqlite");
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 1, timestamp: "2009-01-01T00:00:00Z", text: "A zone of lorem ipsum." },
+        ],
+      },
+    ]),
+  );
+  // No `--no-canary` here: a full build must contain the capitals, and this
+  // dump contains none of them.
+  const proc = Bun.spawn(
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(1);
+  expect(await new Response(proc.stderr).text()).toContain("canary failed");
+  // The bundle was not written, and neither was the temp file beside it.
+  expect(existsSync(outPath)).toBe(false);
+  expect(readdirSync(dir).filter((f) => f.startsWith(".canary-bundle"))).toEqual([]);
+}, 30_000);
+
+test("--no-canary and --max-pages decide whether the gate runs", () => {
+  expect(parseArgs(["dump.xml"]).canary).toBe(true);
+  expect(parseArgs(["dump.xml", "--no-canary"]).canary).toBe(false);
+  // A smoke build stops before most of the dump, so the gate is off unless it
+  // is asked for.
+  expect(parseArgs(["dump.xml", "--max-pages", "50"]).canary).toBe(false);
+  expect(parseArgs(["dump.xml", "--max-pages", "50", "--canary"]).canary).toBe(true);
 });
 
 test("--era-cutoff overrides the default and is validated before the stream", () => {

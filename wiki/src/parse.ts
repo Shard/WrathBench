@@ -73,6 +73,13 @@ export interface WikiPage {
   /** Timestamp of that revision, or "" when there is none. */
   eraTimestamp: string;
   /**
+   * Timestamp of the page's *oldest* revision, ISO 8601, or "" when no revision
+   * carried one. This is when the page was created, and `admitPage` reads it as
+   * the deterministic proxy for "this page existed in Wrath" — see
+   * `CATACLYSM_BETA_START` in `post-wrath.ts`.
+   */
+  firstRevisionAt: string;
+  /**
    * True when the page has any revision before the cutoff at all, whether or
    * not one survived the hygiene rules. `eraWikitext` null with this true is a
    * page whose whole pre-cutoff history was redirects or reverted edits.
@@ -141,6 +148,8 @@ interface PageAccum {
   eraCands: EraCandidate[];
   /** Every revision seen, for the revert test at page finish. */
   revs: RevMeta[];
+  /** Oldest revision timestamp seen, over every block of the page. "" if none. */
+  firstTs: string;
   /**
    * The newest pre-cutoff revision seen, redirect or not. The era slot skips
    * redirect revisions, so it cannot answer "was this page a redirect in 2010";
@@ -284,6 +293,7 @@ export async function* parsePages(
       timestamp: p.bestTimestamp,
       eraWikitext: era === null ? null : decodeEntities(era.text),
       eraTimestamp: era === null ? "" : era.ts,
+      firstRevisionAt: p.firstTs,
       hasEraRevision: p.eraTop !== null,
       eraRedirectTarget: p.eraTop === null ? null : p.eraTop.redirect,
       redirectAttr: p.redirectAttr,
@@ -313,6 +323,7 @@ export async function* parsePages(
             bestText: null,
             eraCands: [],
             revs: [],
+            firstTs: "",
             eraTop: null,
           };
           state = State.InPage;
@@ -488,7 +499,14 @@ export async function* parsePages(
             }
           } else if (closing && name === "revision") {
             // One ledger entry per revision, whether or not it had a <sha1>.
-            if (page !== null) page.revs.push({ ts: revTs, id: revId, sha1: revSha1 });
+            if (page !== null) {
+              page.revs.push({ ts: revTs, id: revId, sha1: revSha1 });
+              // Oldest revision wins, and an absent `<timestamp>` is not a
+              // date: "" sorts before every real one, so it must not enter.
+              if (revTs !== "" && (page.firstTs === "" || revTs < page.firstTs)) {
+                page.firstTs = revTs;
+              }
+            }
             state = State.InPage;
           } else if (closing && name === "page") {
             if (page !== null) {

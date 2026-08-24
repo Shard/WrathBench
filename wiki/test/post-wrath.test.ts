@@ -7,12 +7,19 @@
 import { describe, expect, test } from "bun:test";
 import {
   admitPage,
+  CATACLYSM_BETA_START,
   hasClassic2019Signal,
   hasPostWrathSignal,
   hasWrathSignal,
+  isPreBetaPage,
 } from "../src/post-wrath";
 
 const PROSE = "Example Zone Beta is a starting region full of lorem ipsum.";
+
+/** A page created years before the Cataclysm beta: a page of this world. */
+const EARLY = "2006-04-02T11:00:00Z";
+/** A page created during the beta ramp: a page about the world that is coming. */
+const LATE = "2010-08-15T11:00:00Z";
 
 describe("post-Wrath page signals fire", () => {
   const fires: [string, string, string][] = [
@@ -33,10 +40,14 @@ describe("post-Wrath page signals fire", () => {
   for (const [name, title, wikitext] of fires) {
     test(name, () => {
       expect(hasPostWrathSignal(title, wikitext)).toBe(true);
-      expect(admitPage({ title, eraWikitext: wikitext, newestWikitext: wikitext })).toEqual({
-        admit: false,
-        reason: "dropped_post_wrath",
-      });
+      expect(
+        admitPage({
+          title,
+          eraWikitext: wikitext,
+          newestWikitext: wikitext,
+          firstRevisionAt: LATE,
+        }),
+      ).toEqual({ admit: false, reason: "dropped_post_wrath" });
     });
   }
 });
@@ -88,7 +99,12 @@ describe("Wrath-or-earlier signals", () => {
 describe("admitPage reasons", () => {
   test("pre_cutoff: a pre-cutoff revision and nothing post-Wrath about it", () => {
     expect(
-      admitPage({ title: "Example Zone Beta", eraWikitext: PROSE, newestWikitext: "Rewritten lorem." }),
+      admitPage({
+        title: "Example Zone Beta",
+        eraWikitext: PROSE,
+        newestWikitext: "Rewritten lorem.",
+        firstRevisionAt: EARLY,
+      }),
     ).toEqual({ admit: true, reason: "pre_cutoff" });
   });
 
@@ -98,6 +114,7 @@ describe("admitPage reasons", () => {
         title: "Example Item Zeta",
         eraWikitext: null,
         newestWikitext: `{{itembox|patch=3.0.2}}\n${PROSE}`,
+        firstRevisionAt: "2014-02-02T00:00:00Z",
       }),
     ).toEqual({ admit: true, reason: "post_cutoff_wrath_signal" });
   });
@@ -108,13 +125,19 @@ describe("admitPage reasons", () => {
         title: "Example Classic realms",
         eraWikitext: null,
         newestWikitext: `{{patchbox|patch=1.13.2}}\n${PROSE}`,
+        firstRevisionAt: "2019-09-01T00:00:00Z",
       }),
     ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
   });
 
   test("dropped_post_cutoff: written late and silent about which world", () => {
     expect(
-      admitPage({ title: "Example Late Page", eraWikitext: null, newestWikitext: PROSE }),
+      admitPage({
+        title: "Example Late Page",
+        eraWikitext: null,
+        newestWikitext: PROSE,
+        firstRevisionAt: "2015-06-06T00:00:00Z",
+      }),
     ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
   });
 
@@ -124,16 +147,27 @@ describe("admitPage reasons", () => {
         title: "Example Zone Theta",
         eraWikitext: `{{stub/Cataclysm}}\nExample Zone Theta will open with the next expansion.`,
         newestWikitext: "Example Zone Theta, lorem.",
+        firstRevisionAt: LATE,
       }),
     ).toEqual({ admit: false, reason: "dropped_post_wrath" });
   });
 
   test("dropped_meta: out-of-game, whatever era it names", () => {
     expect(
-      admitPage({ title: "Hotfixes/2015 Archive", eraWikitext: PROSE, newestWikitext: PROSE }),
+      admitPage({
+        title: "Hotfixes/2015 Archive",
+        eraWikitext: PROSE,
+        newestWikitext: PROSE,
+        firstRevisionAt: EARLY,
+      }),
     ).toEqual({ admit: false, reason: "dropped_meta" });
     expect(
-      admitPage({ title: "API GetSpellInfo", eraWikitext: PROSE, newestWikitext: PROSE }),
+      admitPage({
+        title: "API GetSpellInfo",
+        eraWikitext: PROSE,
+        newestWikitext: PROSE,
+        firstRevisionAt: EARLY,
+      }),
     ).toEqual({ admit: false, reason: "dropped_meta" });
   });
 
@@ -146,7 +180,113 @@ describe("admitPage reasons", () => {
         title: "Example Zone Beta",
         eraWikitext: PROSE,
         newestWikitext: `${PROSE}\n[[Category:Cataclysm zones]]`,
+        firstRevisionAt: EARLY,
       }),
     ).toEqual({ admit: true, reason: "pre_cutoff" });
+  });
+});
+
+describe("a page that predates the Cataclysm beta is a Wrath page", () => {
+  // The 588-page pocket of FOLLOW-UPS 49: a capital or a starting zone whose
+  // 2010 editors annotated what was coming, dropped by its own annotation.
+  const SIGNALLED = `{{zonebox|patch=4.0.1}}\n${PROSE}\n[[Category:Cataclysm]]`;
+
+  test("a signal on a page created in 2006 does not drop it, and is counted", () => {
+    expect(
+      admitPage({
+        title: "Example Capital City",
+        eraWikitext: SIGNALLED,
+        newestWikitext: SIGNALLED,
+        firstRevisionAt: EARLY,
+      }),
+    ).toEqual({ admit: true, reason: "pre_cutoff", preBetaProtected: true });
+  });
+
+  test("the same signal on a page created during the beta still drops it", () => {
+    expect(
+      admitPage({
+        title: "Example Capital City",
+        eraWikitext: SIGNALLED,
+        newestWikitext: SIGNALLED,
+        firstRevisionAt: LATE,
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+  });
+
+  test("protection is not a flag on a page with no signal", () => {
+    expect(
+      admitPage({
+        title: "Example Zone Beta",
+        eraWikitext: PROSE,
+        newestWikitext: PROSE,
+        firstRevisionAt: EARLY,
+      }),
+    ).toEqual({ admit: true, reason: "pre_cutoff" });
+  });
+
+  test("out-of-game still wins over protection", () => {
+    expect(
+      admitPage({
+        title: "API GetSpellInfo",
+        eraWikitext: SIGNALLED,
+        newestWikitext: SIGNALLED,
+        firstRevisionAt: EARLY,
+      }),
+    ).toEqual({ admit: false, reason: "dropped_meta" });
+  });
+
+  test("a dump that states no creation date protects nothing", () => {
+    expect(isPreBetaPage("")).toBe(false);
+    expect(isPreBetaPage(EARLY)).toBe(true);
+    expect(isPreBetaPage(CATACLYSM_BETA_START)).toBe(false);
+    expect(isPreBetaPage(LATE)).toBe(false);
+    expect(
+      admitPage({
+        title: "Example Zone Theta",
+        eraWikitext: SIGNALLED,
+        newestWikitext: SIGNALLED,
+        firstRevisionAt: "",
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+  });
+});
+
+describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
+  // The counter fix: the reason a late page is not in the bundle is that this
+  // world's wiki does not have it, whether or not it also names a later
+  // expansion. The admitted set is unchanged — the post-Wrath signal still
+  // vetoes the Wrath-signal admission.
+  test("a late page carrying a post-Wrath signal counts as post-cutoff", () => {
+    expect(
+      admitPage({
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        newestWikitext: `{{stub/Cataclysm}}\n${PROSE}`,
+        firstRevisionAt: "2012-01-01T00:00:00Z",
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+
+  test("a late page carrying both signals is still not admitted", () => {
+    expect(
+      admitPage({
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        newestWikitext: `{{zonebox|patch=4.0.1|expansion=Wrath of the Lich King}}\n${PROSE}`,
+        firstRevisionAt: "2012-01-01T00:00:00Z",
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+
+  test("a pre-beta creation date does not admit a page with no pre-cutoff prose", () => {
+    // Protection is about a page's own prose surviving; there is none here.
+    expect(
+      admitPage({
+        title: "Example Zone Theta",
+        eraWikitext: null,
+        newestWikitext: `{{stub/Cataclysm}}\n${PROSE}`,
+        firstRevisionAt: EARLY,
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
   });
 });

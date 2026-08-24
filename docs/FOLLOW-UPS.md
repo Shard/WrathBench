@@ -250,6 +250,37 @@ and status.
       the *build* may read — not about what the agent may see. Deliberately not
       implemented pending that decision (ADR-0040).
 
+63. **The stripper empties pages with a multi-line infobox** (2026-08-24, found by
+    the item-49 canary). `stripWikitext` returns the empty string for the 2010
+    revision of Orgrimmar — 14,412 characters of wikitext, a real article — so the
+    page is dropped as empty and no bundle built since the era work has a capital
+    of the Horde in it. `removeBraced` never gets back to depth 0 on that page's
+    multi-line `{{infobox zone}}` with its nested `{{Race|…}}` arguments, and
+    everything after the opening brace is discarded; dropping the first three lines
+    restores the prose, and the head on its own strips fine. Braces are balanced
+    (34 `{{` against 34 `}}`), so the depth counter is miscounting a sequence, not
+    a truncated page. Blast radius: `empty_pages` is 1,952 on a full build and has
+    always been described as "a bare infobox, a category stub", which is now known
+    to be false for at least one article. Unblocks the canary, which fails on
+    Orgrimmar today and is right to. Next step: count pages where the era revision
+    strips to nothing but the newest revision does not, then fix the scanner and
+    re-measure.
+
+64. **The pre-beta protection admits ~119 late-2009 Cataclysm pages** (2026-08-24,
+    from item 49, ADR-0040 §Pages that predate the beta). `CATACLYSM_BETA_START` is
+    2010-06-01, which is where the 588-page pocket was measured, but Cataclysm was
+    announced at BlizzCon on 2009-08-21 and the wiki started stub pages the same
+    week. 119 of the 588 protected pages were created in 2009 or later, clustered
+    at 2009-08-21/22/23 and 2010-04, and most of those are Cataclysm content:
+    Blackwing Descent, Blackrock Caverns, Halls of Origination, Lost City of the
+    Tol'vir, Gilneas City, the Lost Isles, a run of beta ability pages. Precision
+    cost, not correctness: they are Cataclysm pages in a Wrath bundle, and the
+    search bands will surface them for a query that names them. Measured
+    alternative: moving the line to the announcement date keeps roughly 500 of the
+    588 and drops roughly 88 of the residue. Not done here because the pocket was
+    measured at the June line. Unblocks on someone re-running the attribution pass
+    at 2009-08-21 and confirming which of the 588 it costs.
+
 ## Docs and release
 
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
@@ -290,7 +321,7 @@ and status.
 
 One line per number so citations resolve; the day file carries the detail.
 
-- 49 — 2026-08-24 — 40b3054, 9194abb, ac50f51, 551dba1 — the wiki bundle reads the era, not 2020. Prerequisite first: a `<page>` block is 50 revisions, not a page, so the parser merges a title's blocks and the build asserts one row per (title, ns) — 9,693 stale duplicate rows were competing in `pages_fts`. Then prose comes from the newest revision saved before 2010-10-12 (patch 4.0.1) while coordinates, ids and the quest infobox stay on the newest revision, where the corrections are (ADR-0040); the 20,428 pages with no pre-cutoff revision keep their newest text under a fixed page-level label rather than being dropped. Out-of-game reference pages (patch notes, the Lua API, the client UI, addons, boxed products) are classified from the title and sunk below every body hit with a label, never deleted, exact titles never demoted. The runner stamps the bundle's identity (`schema_version`, `built_at`, `source`, `era_cutoff`) into the run's comparability tuple, so a rebuild is visible instead of indistinguishable. Verified on a rebuilt bundle: unlabelled Cataclysm-mentioning pages 2,025 → 650, Deathwing/Shattering/Pandaria mentions 2,032 → 306, the Coldridge Valley "collapse" prose 3 → 0, coordinates −2.6% and ids −1% (the stale duplicate rows going away). **Deploy pending:** the rebuilt bundle sits at `data/wiki/bundle.next.sqlite` and is not swapped in; the swap is a harness minor bump (ADR-0033 addendum) and waits for a deploy window after review. That staged file predates the out-of-world section trim (2026-08-24, ADR-0040 §Sections) and has to be rebuilt before the swap. Residue is item 62
+- 49 — 2026-08-24 — 40b3054, 9194abb, ac50f51, 551dba1 — the wiki bundle reads the era, not 2020. Prerequisite first: a `<page>` block is 50 revisions, not a page, so the parser merges a title's blocks and the build asserts one row per (title, ns) — 9,693 stale duplicate rows were competing in `pages_fts`. Then prose comes from the newest revision saved before 2010-10-12 (patch 4.0.1) while coordinates, ids and the quest infobox stay on the newest revision, where the corrections are (ADR-0040); the 20,428 pages with no pre-cutoff revision keep their newest text under a fixed page-level label rather than being dropped. Out-of-game reference pages (patch notes, the Lua API, the client UI, addons, boxed products) are classified from the title and sunk below every body hit with a label, never deleted, exact titles never demoted. The runner stamps the bundle's identity (`schema_version`, `built_at`, `source`, `era_cutoff`) into the run's comparability tuple, so a rebuild is visible instead of indistinguishable. Verified on a rebuilt bundle: unlabelled Cataclysm-mentioning pages 2,025 → 650, Deathwing/Shattering/Pandaria mentions 2,032 → 306, the Coldridge Valley "collapse" prose 3 → 0, coordinates −2.6% and ids −1% (the stale duplicate rows going away). **Deploy pending:** the rebuilt bundle sits at `data/wiki/bundle.next.sqlite` and is not swapped in; the swap is a harness minor bump (ADR-0033 addendum) and waits for a deploy window after review. That staged file predates the out-of-world section trim (2026-08-24, ADR-0040 §Sections) and the pre-beta protection below, and has to be rebuilt before the swap. **Amended 2026-08-24:** the era rules were dropping 588 pages of this world — a page that existed before the Cataclysm beta had picked up `|patch=4.0.1` or a Cataclysm category in a 2010 revision, and was read as a beta stub; Stormwind City, Durotar, the Barrens, Thousand Needles, Auberdine, Southshore and Camp Taurajo among them. A page whose first revision predates 2010-06-01 is now a Wrath page and a post-Wrath signal never drops it (`pages_pre_beta_protected`), while the section and paragraph cuts still strip what the 2010 editors wrote about the next world; a page with no pre-cutoff prose is counted `dropped_post_cutoff` whatever else it says, which moves 1,429 pages between counters and admits nothing new. Every counter in that build added up, which is why the build now ends with a **canary**: the ten capitals, the eight racial starting zones and the reshaped classic zones must resolve in the finished bundle or the build fails before the rename (`wiki/src/canary.ts`, `--no-canary` for smoke builds), with `wiki/src/verify.ts` as the operator-run pre-swap gate over the same list plus forbidden titles and phrase pairs. Residue is items 62, 63 and 64
 - 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`
