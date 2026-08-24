@@ -34,6 +34,7 @@ function resultRun(over: Partial<ResultRun> = {}): ResultRun {
   return {
     runId: "r", model: "m", platform: null, harnessVersion: "v", harnessSeries: null, extra: false, effort: null,
     race: 1, raceName: "Human", class: 2, className: "Paladin", characterLabel: "Human Paladin",
+    campaign: null, cell: null,
     harness: null, promptHash: null, serverBuild: null, wikiCoords: null,
     toolCalls: null, snippets: null, modelResponses: null,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
