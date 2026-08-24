@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
@@ -564,6 +564,46 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     };
     expect(d.states).toHaveLength(1);
     expect(d.states[0]!.turn).toBeNull();
+  });
+
+  test("achievement and flight milestones cross the wire on both the results row and the run page (ADR-0048)", async () => {
+    const runs = fixture();
+    // Appended, not rewritten: this is what the loop adds to a live file.
+    appendFileSync(
+      join(runs, RUN_ID, "trajectory.jsonl"),
+      [
+        { ts: 1300, t: "milestone", kind: "achievements_at_login", ids: [6], points: 10, turn: 1 },
+        { ts: 1400, t: "milestone", kind: "achievement", id: 12, name: "Explore Elwynn Forest", points: 10, turn: 1 },
+        { ts: 1500, t: "milestone", kind: "taxi", from: { areaId: 9 }, turn: 2 },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const handle = api(runs);
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; achievements: unknown; taxi: unknown }[];
+    };
+    const row = results.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.achievements).toEqual({ earned: 2, points: 20, ids: [6, 12] });
+    expect(row.taxi).toEqual({ flights: 1 });
+    // The run page reads the same facts off the incremental tail, so the two
+    // views of one run cannot disagree.
+    const detail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      achievements: unknown;
+      taxi: unknown;
+    };
+    expect(detail.achievements).toEqual(row.achievements);
+    expect(detail.taxi).toEqual(row.taxi);
+  });
+
+  test("a run with no milestone records reads not-recorded on both, never zero", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; achievements: unknown; taxi: unknown }[];
+    };
+    const row = body.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.achievements).toBeNull();
+    expect(row.taxi).toBeNull();
   });
 
   test("/api/results projects each run with its level marks and scorability", async () => {

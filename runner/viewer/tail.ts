@@ -12,7 +12,14 @@
  * as long as the bytes after the last newline are carried over untouched.
  */
 
-import type { AreaFacts, EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+import type {
+  AchievementFacts,
+  AreaFacts,
+  EntrySummary,
+  ReportedUsage,
+  TaxiFacts,
+  TokenTotals,
+} from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
@@ -28,7 +35,7 @@ const MAX_ARRAY = 8;
  * The summary, usage and totals shapes live in `api-types.ts` — the type-only
  * contract the dashboard imports too — and are re-exported here unchanged.
  */
-export type { AreaFacts, EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+export type { AchievementFacts, AreaFacts, EntrySummary, ReportedUsage, TaxiFacts, TokenTotals } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -584,6 +591,85 @@ export function areaMarkOf(rec: Record<string, unknown>): AreaMark | null {
   return { kind, to, from: typeof from === "number" ? from : null };
 }
 
+/* ------------------------------------------- achievement and taxi milestones */
+
+/**
+ * One achievement milestone, projected to what a derivation needs: an own earn
+ * (`kind: "earned"`, with the points when the module could name them) or the
+ * login backlog (`kind: "login"`, ids plus the aggregate points).
+ */
+export type AchievementMark =
+  | { kind: "earned"; id: number; points: number | null }
+  | { kind: "login"; ids: number[]; points: number };
+
+/** Read one trajectory record as an `AchievementMark`, or null when it is not one. */
+export function achievementMarkOf(rec: Record<string, unknown>): AchievementMark | null {
+  const kind = rec["kind"];
+  if (kind === "achievement") {
+    const id = rec["id"];
+    if (typeof id !== "number") return null;
+    const points = rec["points"];
+    return { kind: "earned", id, points: typeof points === "number" ? points : null };
+  }
+  if (kind === "achievements_at_login") {
+    const ids = rec["ids"];
+    if (!Array.isArray(ids)) return null;
+    const points = rec["points"];
+    return {
+      kind: "login",
+      ids: ids.filter((v): v is number => typeof v === "number"),
+      points: typeof points === "number" ? points : 0,
+    };
+  }
+  return null;
+}
+
+/** `taxi` (a takeoff) or `taxi_landed`, or null when the record is neither. */
+export function taxiMarkOf(rec: Record<string, unknown>): "taxi" | "taxi_landed" | null {
+  const kind = rec["kind"];
+  return kind === "taxi" || kind === "taxi_landed" ? kind : null;
+}
+
+/**
+ * Derive a run's achievement facts, or null when it recorded none.
+ *
+ * Points come from the **last** login record plus every earn outside that
+ * record's id set: a resumed run writes one backlog record per process and the
+ * later one is the superset, so adding them all would count the same
+ * achievement's points once per resume. `earned` is the union of every id seen,
+ * which is what the character holds.
+ */
+export function achievementFactsFrom(marks: readonly AchievementMark[]): AchievementFacts | null {
+  if (marks.length === 0) return null;
+  const logins = marks.filter((m): m is Extract<AchievementMark, { kind: "login" }> => m.kind === "login");
+  const lastLogin = logins.length > 0 ? logins[logins.length - 1]! : null;
+  const backlog = new Set(lastLogin?.ids ?? []);
+  const ids = new Set<number>();
+  for (const m of marks) {
+    if (m.kind === "login") for (const id of m.ids) ids.add(id);
+    else ids.add(m.id);
+  }
+  let points = lastLogin?.points ?? 0;
+  for (const m of marks) {
+    if (m.kind === "earned" && !backlog.has(m.id) && m.points !== null) points += m.points;
+  }
+  return { earned: ids.size, points, ids: [...ids].sort((a, b) => a - b) };
+}
+
+/**
+ * Derive a run's flight facts. `flights` counts takeoffs; landings only witness
+ * that the taps were live. Null when nothing proves they were — no taxi record
+ * and no achievement record — because a run from before the deploy and a run
+ * that never flew would otherwise read the same (see `TaxiFacts`).
+ */
+export function taxiFactsFrom(
+  marks: readonly ("taxi" | "taxi_landed")[],
+  sawAchievementRecord: boolean,
+): TaxiFacts | null {
+  if (marks.length === 0 && !sawAchievementRecord) return null;
+  return { flights: marks.filter((m) => m === "taxi").length };
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -620,6 +706,13 @@ export interface RunTotals {
    * must read as "not recorded" and never as "never left". See `AreaFacts`.
    */
   areas: AreaFacts | null;
+  /**
+   * Achievements and flights from the same pass over the milestone records
+   * (ADR-0048); null when the run wrote none of each — "not recorded", never
+   * zero. See `AchievementFacts` / `TaxiFacts`.
+   */
+  achievements: AchievementFacts | null;
+  taxi: TaxiFacts | null;
 }
 
 /**
@@ -645,6 +738,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let costed = 0;
   let uncosted = 0;
   const areaMarks: AreaMark[] = [];
+  const achievementMarks: AchievementMark[] = [];
+  const taxiMarks: ("taxi" | "taxi_landed")[] = [];
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -682,6 +777,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     if (t === "milestone") {
       const mark = areaMarkOf(rec);
       if (mark !== null) areaMarks.push(mark);
+      const ach = achievementMarkOf(rec);
+      if (ach !== null) achievementMarks.push(ach);
+      const taxi = taxiMarkOf(rec);
+      if (taxi !== null) taxiMarks.push(taxi);
     }
     if (t !== "request" && t !== "response") return;
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
@@ -732,6 +831,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     reportedCostUsd: costUsd,
     responseCost: { costed, uncosted },
     areas: areaFactsFrom(areaMarks),
+    achievements: achievementFactsFrom(achievementMarks),
+    taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
   };
 }
 
@@ -743,6 +844,15 @@ function unparseable(text: string, i: number, start: number, end: number): Entry
 export class TrajectoryTail {
   readonly path: string;
   readonly entries: EntrySummary[] = [];
+  /**
+   * Achievement and flight milestones seen so far (ADR-0048), accumulated as
+   * the file is indexed so the run page reads them without the whole-file
+   * `scanRunTotals` pass a live run would miss the cache on every poll. Same
+   * pure derivations the results page uses, so the two cannot disagree — the
+   * principle this file already applies to `segmentsFrom` / `playtimeMs`.
+   */
+  private readonly achievementMarks: AchievementMark[] = [];
+  private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
   /** Bytes consumed as complete lines. */
   private consumed = 0;
   /** Bytes after the last newline: an entry still being written. */
@@ -773,6 +883,10 @@ export class TrajectoryTail {
       this.entries.length = 0;
       this.consumed = 0;
       this.pending = new Uint8Array(0);
+      // The accumulators are part of the index: a truncated or rotated file is
+      // re-read whole, and keeping them would double-count everything in it.
+      this.achievementMarks.length = 0;
+      this.taxiMarks.length = 0;
     }
     if (size === this.size) return [];
 
@@ -791,7 +905,14 @@ export class TrajectoryTail {
       const i = this.entries.length;
       let summary: EntrySummary;
       try {
-        summary = summarize(JSON.parse(text) as Record<string, unknown>, i, start, end);
+        const rec = JSON.parse(text) as Record<string, unknown>;
+        if (rec["t"] === "milestone") {
+          const ach = achievementMarkOf(rec);
+          if (ach !== null) this.achievementMarks.push(ach);
+          const taxi = taxiMarkOf(rec);
+          if (taxi !== null) this.taxiMarks.push(taxi);
+        }
+        summary = summarize(rec, i, start, end);
       } catch {
         summary = unparseable(text, i, start, end);
       }
@@ -801,6 +922,16 @@ export class TrajectoryTail {
     this.consumed = offset;
     this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     return added;
+  }
+
+  /** Achievements this run's records account for; null when it wrote none. */
+  get achievements(): AchievementFacts | null {
+    return achievementFactsFrom(this.achievementMarks);
+  }
+
+  /** Flights taken; null when flights were not recorded for this run. */
+  get taxi(): TaxiFacts | null {
+    return taxiFactsFrom(this.taxiMarks, this.achievementMarks.length > 0);
   }
 
   /** The raw JSON text of one entry, read back from disk. */

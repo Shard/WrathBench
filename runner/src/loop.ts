@@ -101,6 +101,22 @@ export class ContextBuilder {
   private lastZoneId: number | undefined;
   private lastAreaId: number | undefined;
   /**
+   * Achievement ids already written as a milestone, and whether the login
+   * backlog record has been written (ADR-0048).
+   *
+   * By id rather than by high-water mark, because the sandbox can restart: a
+   * rebuilt cache re-reads the whole login backlog, and a second pass over it
+   * must write nothing rather than re-report a run's own past as fresh earns.
+   */
+  private readonly recordedAchievements = new Set<number>();
+  private loginAchievementsRecorded = false;
+  /**
+   * The last `taxiFlight` reading. Seeded silently by the first observation:
+   * a resumed process whose first sample is already `true` joined a flight in
+   * progress, and calling that a takeoff would invent one.
+   */
+  private lastTaxiFlight: boolean | undefined;
+  /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
    * Set by the driver rather than counted here: the fixed loop and the
@@ -201,6 +217,61 @@ export class ContextBuilder {
         ...turn,
       });
       this.lastAreaId = area.id;
+    }
+    // Achievements (ADR-0048, issue #8): the backlog once, then one record per
+    // own earn. The state cache has already dropped the say-range broadcasts
+    // that were another player's, so everything here is this character's.
+    const ach = snap.self?.achievements;
+    if (ach !== undefined) {
+      const entries = ach.entries ?? [];
+      if (!this.loginAchievementsRecorded && ach.loginSeen === true) {
+        const backlog = entries.filter((e) => e.source === "login");
+        const ids: number[] = [];
+        let points = 0;
+        for (const e of backlog) {
+          if (typeof e.achievementId !== "number") continue;
+          ids.push(e.achievementId);
+          if (typeof e.points === "number") points += e.points;
+        }
+        trajectory.recordMilestone({ kind: "achievements_at_login", ids, points, ...turn });
+        for (const id of ids) this.recordedAchievements.add(id);
+        this.loginAchievementsRecorded = true;
+      }
+      for (const e of entries) {
+        if (e.source !== "earned" || typeof e.achievementId !== "number") continue;
+        if (this.recordedAchievements.has(e.achievementId)) continue;
+        trajectory.recordMilestone({
+          kind: "achievement",
+          id: e.achievementId,
+          ...(typeof e.name === "string" ? { name: e.name } : {}),
+          ...(typeof e.points === "number" ? { points: e.points } : {}),
+          ...(typeof e.categoryId === "number" ? { categoryId: e.categoryId } : {}),
+          ...turn,
+        });
+        this.recordedAchievements.add(e.achievementId);
+      }
+    }
+    // Flights: no packet says "a flight began", so the flip is read the way a
+    // client reads it — an accepted reply, then the taxi flag turning on
+    // (ADR-0048). The flag turning off is the landing, recorded whether or not
+    // the takeoff was seen, because it is its own observation.
+    const taxiFlight = snap.self?.taxiFlight?.value;
+    if (typeof taxiFlight === "boolean") {
+      const accepted = (snap.self?.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
+      if (this.lastTaxiFlight === false && taxiFlight && accepted) {
+        trajectory.recordMilestone({
+          kind: "taxi",
+          ...(typeof area?.id === "number" ? { from: { areaId: area.id } } : {}),
+          ...turn,
+        });
+      } else if (this.lastTaxiFlight === true && !taxiFlight) {
+        trajectory.recordMilestone({
+          kind: "taxi_landed",
+          ...(typeof area?.id === "number" ? { to: { areaId: area.id } } : {}),
+          ...turn,
+        });
+      }
+      this.lastTaxiFlight = taxiFlight;
     }
     trajectory.recordState(config.runId, {
       level,

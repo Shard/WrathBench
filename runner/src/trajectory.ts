@@ -74,12 +74,42 @@ export interface ItemSample {
  * names — so the record stays what the server said, and a rendering choice
  * (which locale, which DBC) never changes a trajectory after the fact.
  */
-export interface MilestoneLine {
-  kind: "zone" | "area";
-  from: { id: number } | undefined;
-  to: { id: number };
-  turn?: number | undefined;
-}
+/**
+ * One `{ t: "milestone", ... }` trajectory record (FOLLOW-UPS 35). Kinds are
+ * additive and every consumer ignores the ones it does not know, so a new kind
+ * never invalidates a run (ADR-0018 rule 3).
+ *
+ * - `zone` / `area`: a change of `self.zone` / `self.area`, ids only, `from`
+ *   absent on the first observation of a process.
+ * - `achievement`: one of **our own** earns (ADR-0048). Never another player's:
+ *   `SMSG_ACHIEVEMENT_EARNED` is a say-range broadcast.
+ * - `achievements_at_login`: the backlog `SMSG_ALL_ACHIEVEMENT_DATA` carried,
+ *   written once per process so a resumed run's history is visible without its
+ *   past being re-emitted as fresh firsts. Written even when the backlog is
+ *   empty — it is the record that says the taps were live for this run, which
+ *   is what lets a reader tell "flew nowhere" from "flights were not recorded".
+ * - `taxi` / `taxi_landed`: `taxiFlight` on self flipping on after an accepted
+ *   reply, and flipping back. The area id is keyed `areaId`, not `id`, so no
+ *   consumer can mistake a flight record for a zone/area mark.
+ */
+export type MilestoneLine =
+  | {
+      kind: "zone" | "area";
+      from: { id: number } | undefined;
+      to: { id: number };
+      turn?: number | undefined;
+    }
+  | {
+      kind: "achievement";
+      id: number;
+      name?: string | undefined;
+      points?: number | undefined;
+      categoryId?: number | undefined;
+      turn?: number | undefined;
+    }
+  | { kind: "achievements_at_login"; ids: number[]; points: number; turn?: number | undefined }
+  | { kind: "taxi"; from?: { areaId: number } | undefined; turn?: number | undefined }
+  | { kind: "taxi_landed"; to?: { areaId: number } | undefined; turn?: number | undefined };
 
 export interface RunMeta {
   runId: string;

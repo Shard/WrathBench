@@ -20,6 +20,7 @@ import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { EPISODES } from "../src/episodes";
 import type {
+  AchievementFacts,
   AreaFacts,
   CostFigure,
   EpisodeIdView,
@@ -27,6 +28,7 @@ import type {
   ResultRun,
   RunRow,
   StatePoint,
+  TaxiFacts,
   TokenTotals,
   TrackPoint,
 } from "./api-types";
@@ -299,6 +301,14 @@ export function resultRunOf(
    * no milestone at all, which the ladder must be able to tell from `false`.
    */
   areas: AreaFacts | null = null,
+  /**
+   * Achievements and flights from the same pass (ADR-0048). Their own
+   * parameters for the same reason `areas` is one, and `null` in either means
+   * the run recorded none of that kind — the ladder's rung 4 must be able to
+   * tell that from "flew nowhere".
+   */
+  achievements: AchievementFacts | null = null,
+  taxi: TaxiFacts | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -355,6 +365,8 @@ export function resultRunOf(
     actualCost: listing?.actualCost ?? null,
     expectedCost: listing?.expectedCost ?? null,
     areas,
+    achievements,
+    taxi,
     pauseReason: run.pauseReason,
   };
 }
