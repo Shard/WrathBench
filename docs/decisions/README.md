@@ -57,3 +57,4 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |
 | 0038 | The deploy owns the window | current | One command drains (runs pause), swaps, verifies, resumes — and publishes its phase so the page states what the server is doing instead of guessing. |
 | 0039 | Run data storage | proposed | Files stay the record; Parquet + DuckDB next for analysis and a snapshot publisher for the dashboard; ClickHouse only on a named trigger. |
+| 0040 | The bundle's prose comes from the Wrath-era revision | current | The pre-4.0.1 revision describes this world; the newest one has the coordinates and ids, so the bundle reads both. |

@@ -11,11 +11,14 @@ Every contributor builds their own bundle from their own dump.
 
 ```
 bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
+                                          [--era-cutoff 2010-10-12T00:00:00Z]
 ```
 
 The archive is streamed through `7z x -so`; the 24 GB XML is never written to disk.
 A plain `.xml` path also works. `--max-pages n` stops early, which is useful for a
-quick smoke build.
+quick smoke build. `--era-cutoff` moves the revision line the prose is taken at
+(below); it must be a full ISO-8601 UTC instant, and a malformed one is rejected
+before the stream starts rather than turning every page into a fallback.
 
 The build writes to a hidden temp file beside the destination and renames it into
 place at the end, so it is idempotent: a rebuild either replaces the bundle wholly
@@ -27,16 +30,35 @@ not hours.
 - Namespaces main (0), Category (14), Portal (116) and Quest (118). Talk, User,
   File, Template, Forum, Guild, Server and the semantic-mediawiki namespaces are
   dropped without being parsed.
-- One row per page, holding the **newest** revision. The dump is full history, so
-  most of its bulk is revisions that never reach the bundle. A page with more
-  than 50 revisions is exported as several consecutive `<page>` blocks of 50, so
-  a block is not a page: the parser holds a page open until the (title, ns) key
-  changes and merges its blocks, and the build asserts `pages` holds one row per
-  (title, ns) — recorded as `pages_distinct_keys` in `meta` — so a regression
-  here fails the build instead of quietly indexing stale text beside current
-  text. A bundle built before this keeps its duplicate rows until it is rebuilt.
-- Redirects are not pages. Their source and target go in `redirects`, so a search
-  for an old or alternate name still lands on the article.
+- One row per page, built from **two** revisions of it. The prose is the newest
+  revision saved before the era cutoff — 2010-10-12, patch 4.0.1 — so what the
+  model reads describes a world at most one patch from 3.3.5a instead of the
+  2020 one. Everything structured (coordinates, entity ids, the quest infobox)
+  still comes off the **newest** revision, where a decade of corrections lives
+  and where 30% of the coordinates only exist. See ADR-0040.
+- The era revision has to survive two hygiene rules to win: a revision where the
+  page was a `#REDIRECT` is not prose, and a revision that was immediately
+  reverted — the revision right after it restored a sha1 the page already had —
+  is not what the page said. Otherwise the newest pre-cutoff revision wins,
+  whatever order the dump lists revisions in.
+- A page with no pre-cutoff revision at all (18.6% of them; the wiki grew after
+  2010) keeps its newest text and carries a fixed page-level label saying so,
+  the same way era sections carry theirs. Nothing is dropped for being late.
+  `meta` records how often each path was taken as `pages_era_swapped` (the prose
+  came from an older timestamp than the structured fields) and
+  `pages_era_fallback`.
+- The dump is full history, so most of its bulk is revisions that never reach
+  the bundle. A page with more than 50 revisions is exported as several
+  consecutive `<page>` blocks of 50, so a block is not a page: the parser holds
+  a page open until the (title, ns) key changes and merges its blocks, and the
+  build asserts `pages` holds one row per (title, ns) — recorded as
+  `pages_distinct_keys` in `meta` — so a regression here fails the build instead
+  of quietly indexing stale text beside current text. A bundle built before this
+  keeps its duplicate rows until it is rebuilt.
+- Redirects are not pages, decided by the newest revision: a page that is a
+  redirect today stays one, whatever it held in 2010. Their source and target go
+  in `redirects`, so a search for an old or alternate name still lands on the
+  article.
 - Wikitext is reduced to plain text: templates, tables, refs, comments and file
   links are removed, `[[link|label]]` becomes `label`, headings become plain lines,
   whitespace is collapsed. Most infobox data lives in templates and is therefore
@@ -57,8 +79,10 @@ not hours.
   `start`**: 11,013 quest pages state a giver, 6,637 state an ender, and search
   says "not stated on this page" for the rest rather than guessing the giver.
   See ADR-0029.
-- Era sections are marked, not dropped. The dump is from 2020, four expansions
-  past the server this harness runs. `markEraSections` runs before the strip and
+- Era sections are marked, not dropped, and this still runs on whichever
+  revision won: a 2009 page can describe the expansion that had been announced. The dump is from 2020, four expansions
+  past the server this harness runs, and even a pre-cutoff revision can carry a
+  section about what was coming. `markEraSections` runs before the strip and
   prefixes every paragraph of a `{{cata-section}}`/`== In Cataclysm ==` style
   section with `[Cataclysm-era, not in patch 3.3.5]` (per paragraph, because
   search returns a snippet window); a page the wiki says was *removed* in
@@ -81,7 +105,8 @@ redirects   (source TEXT PRIMARY KEY, target TEXT, ns INTEGER)
 page_coords (page_id INTEGER, zone TEXT, x REAL, y REAL, raw TEXT)  -- wiki-derived, one row per coord
 page_ids    (page_id INTEGER, kind TEXT, id INTEGER)  -- quest/npc/item/object/spell/unknown
 page_quest  (page_id INTEGER PRIMARY KEY, start TEXT, end TEXT, category TEXT)  -- NULL end = page does not say
-meta        (key TEXT PRIMARY KEY, value TEXT)   -- source, built_at, counts, build_ms, schema_version
+meta        (key TEXT PRIMARY KEY, value TEXT)   -- source, built_at, counts, build_ms,
+                                                 -- schema_version, era_cutoff
 pages_fts   FTS5 over (title, text), external content over pages
 ```
 
@@ -111,6 +136,26 @@ dump gives the same rows.
 `page_quest` arrived with `schema_version` 4 and degrades the same way
 `page_ids` does: `bundleHasQuest` reports its absence and `searchReference`
 simply omits the quest line, so a bundle one version behind still answers.
+
+`schema_version` 5 is the era revision. It adds no table — the same `pages.text`
+column simply holds older prose — so nothing fails closed on a version-4 bundle
+and a deployed bundle keeps answering until it is rebuilt; the difference is
+visible instead, as `meta.era_cutoff`, which the runner records on every run's
+comparability tuple (a version-4 bundle reads as `null` there, never as "no
+cutoff was applied"). `openBundle` still fails closed below 2, where the missing
+`page_coords` table would silently cost search a whole channel.
+
+Rebuild and swap, with runs in flight:
+
+```
+bun wiki/src/build.ts data/wiki/<dump>.7z --out data/wiki/bundle.sqlite.next
+ln data/wiki/bundle.sqlite data/wiki/bundle.sqlite.bak-$(date +%Y%m%d-%H%M)
+mv -f data/wiki/bundle.sqlite.next data/wiki/bundle.sqlite
+```
+
+The rename is atomic and each runner process holds its bundle open by handle, so
+a live run keeps reading the file it opened and the next process to start picks
+up the new one. Nothing has to be drained to swap a bundle.
 
 FTS5 is required and checked before the stream starts; a sqlite build without it
 fails the build loudly rather than producing an unindexed bundle.

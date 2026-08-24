@@ -9,6 +9,12 @@ export interface FixtureRevision {
   id: number;
   timestamp: string;
   text: string;
+  /**
+   * Content hash. Defaults to one derived from the revision id, so distinct
+   * revisions look distinct; give two revisions the same value to render a
+   * revert, which is what the era slot's hygiene rule looks for.
+   */
+  sha1?: string;
 }
 
 export interface FixturePage {
@@ -39,7 +45,7 @@ export function renderPage(page: FixturePage): string {
     </contributor>
     <comment>example edit</comment>
     <text bytes="${r.text.length}" space="preserve">${esc(r.text)}</text>
-    <sha1>0000000000000000000000000000000</sha1>
+    <sha1>${(r.sha1 ?? `rev${r.id}`).padEnd(31, "0")}</sha1>
   </revision>`,
     )
     .join("\n");

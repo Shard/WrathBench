@@ -148,7 +148,7 @@ export function bundleHasQuest(db: Database): boolean {
  *
  * The dump splits a long page history into several `<page>` blocks; a parser
  * that took a block for a page silently wrote thousands of stale duplicate rows
- * competing with current text in the FTS index (FOLLOW-UPS 49). Returns the
+ * competing with current text in the FTS index. Returns the
  * distinct key count so the build can record it, and throws otherwise, so that
  * class of bug fails the build instead of shipping.
  */

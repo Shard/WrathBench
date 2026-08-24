@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
+import { parseArgs } from "../src/build";
+import { DEFAULT_ERA_CUTOFF, POST_ERA_PAGE_NOTE } from "../src/era";
 import { searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
 
@@ -74,11 +76,12 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
   expect(meta.get("pages_kept")!.value).toBe("2");
 
-  // The newest revision won, and the template is gone from the indexed text.
+  // The prose came from the pre-cutoff revision and the templates are gone from
+  // the indexed text; the id below still comes off the newest revision.
   const alpha = searchReference(db, "Example Quest Alpha")[0]!;
-  expect(alpha.snippet).toContain("the beta zone");
+  expect(alpha.snippet).toContain("older draft");
   expect(alpha.snippet).not.toContain("questbox");
-  expect(alpha.snippet).not.toContain("older draft");
+  expect(alpha.snippet).not.toContain("the beta zone");
 
   // Redirects resolve.
   const viaRedirect = searchReference(db, "Example Old Name")[0]!;
@@ -87,12 +90,15 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   // Full text search works over the stripped text.
   const beta = searchReference(db, "consectetur")[0]!;
   expect(beta.title).toBe("Example Zone Beta");
+  // Beta has no revision older than the cutoff, so its prose is the newest text
+  // carrying the page-level label.
+  expect(beta.snippet).toContain(POST_ERA_PAGE_NOTE);
   // Coords were lifted off the raw wikitext before the strip and persisted.
   expect(beta.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
   const coordRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_coords").get()!;
   expect(coordRows.n).toBe(1);
-  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("4");
+  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("5");
 
   // Ids were lifted off the raw wikitext too, and an id query finds the page
   // through the id table rather than through body prose.
@@ -102,6 +108,12 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const byId = searchReference(db, "quest 4242")[0]!;
   expect(byId.title).toBe("Example Quest Alpha");
   expect(byId.matchedId).toEqual({ kind: "quest", id: 4242 });
+
+  // The era channel records what it did: the cutoff it used, one page whose
+  // prose came from an older revision, one page with no pre-cutoff revision.
+  expect(meta.get("era_cutoff")!.value).toBe(DEFAULT_ERA_CUTOFF);
+  expect(meta.get("pages_era_swapped")!.value).toBe("1");
+  expect(meta.get("pages_era_fallback")!.value).toBe("1");
 
   // The dropped namespace is really absent.
   expect(searchReference(db, "chatter")).toEqual([]);
@@ -175,10 +187,13 @@ test("a page split into 50-revision blocks builds as one row", async () => {
   // Four blocks were read for two pages.
   expect(meta.get("page_blocks_seen")!.value).toBe("4");
 
-  // The row holds the newest text, and no stale row competes with it.
+  // One row, and its prose is the newest pre-cutoff revision — which arrived in
+  // the third block, not the first.
   const hit = searchReference(db, "Example Long History")[0]!;
-  expect(hit.snippet).toContain("current lorem");
-  expect(searchReference(db, "oldest stub")).toEqual([]);
+  expect(hit.snippet).toContain("oldest stub");
+  // "consectetur" appears only in the post-cutoff text, so it is not indexed.
+  expect(searchReference(db, "consectetur")).toEqual([]);
+  expect(meta.get("pages_era_swapped")!.value).toBe("1");
   db.close();
 }, 30_000);
 
@@ -199,4 +214,15 @@ test("the build refuses to ship two rows for one page", () => {
   cleanWriter.addPage("Example Shared Name", 14, "The category, lorem.");
   cleanWriter.flush();
   expect(assertUniquePages(clean)).toBe(2);
+});
+
+test("--era-cutoff overrides the default and is validated before the stream", () => {
+  expect(parseArgs(["dump.xml"]).eraCutoff).toBe(DEFAULT_ERA_CUTOFF);
+  expect(parseArgs(["dump.xml", "--era-cutoff", "2009-01-01T00:00:00Z"]).eraCutoff).toBe(
+    "2009-01-01T00:00:00Z",
+  );
+  // A date without a time would compare wrongly against the dump's timestamps
+  // and quietly send every page down the fallback path.
+  expect(() => parseArgs(["dump.xml", "--era-cutoff", "2010-10-12"])).toThrow(/ISO-8601/);
+  expect(() => parseArgs(["dump.xml", "--era-cutoff", "yesterday"])).toThrow(/ISO-8601/);
 });
