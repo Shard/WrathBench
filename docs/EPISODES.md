@@ -7,14 +7,17 @@ version; the exact build is recorded and listed, the series is the group —
 ADR-0034). The decision and its reasoning
 are in `docs/decisions/ADR-0033-run-dimensions-and-the-comparability-tuple.md`;
 this page is the definition an operator tags against. Who gets scheduled on
-which tier, including promotion, is ADR-0034 — it is stated there and only there.
+which episode, including promotion, is ADR-0040 — it is stated there and only
+there. Note that **tier** is not a word for an episode: since ADR-0040 a tier is
+a rung of the evidence ladder (`t0`/`t1`/`t2`) — how many runs a model gets —
+and an episode is the ruleset a run happens under. This page is about episodes.
 
 An id fixes the shape of the run — how long, what start state, which watchdogs,
 whether the operator may steer. It fixes nothing about the model: the prompt,
 the tools and the loop are identical across all three ids, and no model is ever
 told which one it is in.
 
-## `e90` — the default tier
+## `e90` — the default episode
 
 - **Duration.** 90 minutes of wall clock (`episode-limit`).
 - **Start state.** A fresh level-1 character, deleted and recreated per episode
@@ -29,29 +32,30 @@ told which one it is in.
   or `harness-error` (our defect). A `quota-exhausted` or `rate-limited` pause
   is not an end — the run is suspended and resumable.
 - **Scoring.** Scored.
-- **Promotion.** Every model starts here. Reaching rung 1 in one counted
-  episode earns `e360`; the rule, targets and what counts are in ADR-0034.
+- **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
+  climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
+  witness and stays. The rule, the budgets and what counts are in ADR-0040.
 - **Extras.** A free model past its target may be given extra `e90` runs with
-  a different starting race/class (ADR-0034). An extra is this tier — scored,
+  a different starting race/class (ADR-0040). An extra is this episode — scored,
   same prompt and leash — stamped `extra: true`; it is never counted toward a
   target and never a promotion witness.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
   thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`.
 
 Ninety minutes is short enough that a full roster gets several episodes a
-night, which is what makes `e90` the sampling tier. If it turns out to be the
+night, which is what makes `e90` the sampling episode. If it turns out to be the
 wrong default it will be replaced by a **new id** — never widened in place,
 because that would silently re-scope every score already carrying this label.
 
-## `e360` — the long tier
+## `e360` — the long episode
 
 - **Duration.** Six hours of wall clock.
 - **Start state.** Identical to `e90`: a fresh level-1 character, same prompt,
   same tools, no carry-over.
-- **Objective.** None. This is a scored tier.
+- **Objective.** None. This is a scored episode.
 - **Prompt.** The standing goal plus "This episode lasts six hours." Nothing about levels: past the gate, breadth is the point.
 - **Watchdogs.** Idle only. **The no-XP watchdog is off.** Walking across a
-  continent earns nothing for hours, and that is the behaviour this tier exists
+  continent earns nothing for hours, and that is the behaviour this episode exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
   would end runs for doing the right thing. Tool-call ceiling **12000** — the
   runaway guard of 1000 calls per 30 minutes (operator, 2026-08-23), sized so a
@@ -61,10 +65,11 @@ because that would silently re-scope every score already carrying this label.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
-- **Promotion in.** Earned on `e90` per ADR-0034. **Out:** none; a model that
-  stalls its `e360` runs meets its target and is simply not scheduled here again.
-  A paid model's default target here is one run; a promoted free model may get
-  `e360` extras once everything else is met (ADR-0034).
+- **Promotion in.** Earned on `e90` per ADR-0040: a `t1` model that reaches rung
+  1 climbs to `t2`, and `t2` is the tier that buys an `e360`. **Out:** none; a
+  model that stalls its `e360` runs meets its target and is simply not scheduled
+  here again. Every tier's budget is the same whoever is paying — billing says
+  where a run may execute, never how many (ADR-0040).
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling.
@@ -84,13 +89,14 @@ because that would silently re-scope every score already carrying this label.
   drift into a results chart by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
-- **Extras.** A **local** model — one served from the operator's own hardware —
-  takes its extras here rather than as extra `e90`/`e360` runs
-  (`policy.extras.local: "freeplay"`, the default for that class; `"characters"`
-  puts it back on the free models' race/class cycle). Once it has met its
-  scheduled targets the policy gives it one freeplay run at a time, unbounded,
-  with the tier's own watchdogs; when that run ends the next tick starts
-  another. Such a run is stamped `extra: true` — an attempt, shown as an extra
+- **Extras.** A model whose entry says `idle: "unlimited"` takes its extras here
+  rather than as extra `e90`/`e360` runs (ADR-0040; `idle: "characters"` puts it
+  on the race/class cycle instead, and the default `none` buys nothing). Once it
+  has met its tier's targets the policy gives it one freeplay session at a time,
+  **capped at six hours on every account class** — the id pins no clock, but a
+  session ended only by the idle watchdog would hold its account indefinitely
+  and starve the scored targets behind it. When that session ends the next tick
+  starts another. Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.
@@ -112,7 +118,7 @@ from (ADR-0034).
 
 ## Runs launched without an episode
 
-A run launched without `--episode` is not a member of any tier. It reads
+A run launched without `--episode` is not a member of any episode. It reads
 `episode: null`, ADR-0034's policy counts it toward nothing (no target, no
 promotion, no chart), and it therefore carries no comparability claim to
 protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —

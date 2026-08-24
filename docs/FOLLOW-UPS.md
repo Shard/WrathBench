@@ -254,6 +254,44 @@ and status.
     say so rather than failing quietly. Unblocked by nothing; it is small, it is
     just not in `dashboard/`.
 
+65. **`paidPoolOf` spills paid picks into the free pool when neither
+    `accounts.paid` nor `policy.paid` is set** (2026-08-24, from the fanout that
+    preceded ADR-0040). `infra/run-fleet.ts:337` only creates the paid class
+    when one of those is present; without them a paid pick takes whatever pool
+    account is free. `fleet.json`'s `_notes` state the rule unconditionally ("a
+    paid pick lands only here, never in the pool"), and ADR-0034's account-class
+    amendment exists precisely to remove spilling — so the code is conditional
+    where the record is absolute. It is not live today (the shipped config sets
+    both), which is why it is an item and not a fix: the failure mode is a
+    future config that drops `policy.paid` and quietly starts spending on pool
+    accounts. Either make the class unconditional like `local`, or refuse a
+    config with paid-billed models and no paid class.
+
+66. **The disabled-pinned-job coexistence rule is enforced at parse time, so
+    flipping one job takes the whole file down** (2026-08-24, same fanout;
+    nearly walked into it on 2026-08-23). `run-fleet.ts:613-631` fails the
+    ENTIRE config when an enabled job sits on a listed account. Since a bad
+    re-read keeps the last good config, flipping `sub-opus-low` to `enabled:
+    true` without also editing `accounts.paid` makes every other `enabled:` flag
+    in the file inert until someone reads the REJECTED banner — a config-wide
+    outage from a one-line edit whose intent was local. The rule itself is
+    right; the blast radius is not. Refuse the job, name it, and keep the rest
+    of the file. Related: the preflight check at `:637-650` reads only enabled
+    pinned jobs, so a disabled job may share an account with preflight and
+    validation says nothing.
+
+67. **Freeplay characters do not persist between sessions, which is what the
+    "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0040
+    conversation). `idle: "unlimited"` now gives a model repeated six-hour
+    freeplay sessions, but every episode still deletes and recreates a fresh
+    level-1 character (ADR-0006), so session N+1 starts where session 1 did and
+    the long horizon is six hours, not a week. Carry-over is exactly what the
+    scored episodes forbid, so this is not a knob — it needs its own record:
+    what identity a resumable freeplay character has, how its run ids and
+    trajectory relate across sessions, and how the viewer shows a character
+    rather than a run. Out of scope for ADR-0040 deliberately; the six-hour cap
+    there is what makes the sessions restartable in the first place.
+
 
 
 
