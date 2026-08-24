@@ -29,6 +29,8 @@ interface Probe {
   cell: string | null;
   level?: number;
   ended?: boolean;
+  /** `pause_reason` on an unended run: what makes its model unhealthy (ADR-0036). */
+  paused?: string;
 }
 
 /** A runs directory holding probe runs, and optionally a fleet config beside it. */
@@ -91,7 +93,7 @@ function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: s
     );
     db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
       p.runId, config.model, "openai", null, "harness-test", 1000,
-      p.ended === false ? null : 2000, p.ended === false ? null : "episode-limit", null, null,
+      p.ended === false ? null : 2000, p.ended === false ? null : "episode-limit", p.paused ?? null, null,
       JSON.stringify(config),
     ]);
     db.run(`CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
@@ -229,6 +231,21 @@ describe("/api/campaigns", () => {
     const body = await campaigns([{ runId: "r1", campaign: null, cell: null }], CONFIG);
     expect(body.orphans).toBe(1);
     expect(body.campaigns.every((c) => c.runs === 0)).toBe(true);
+  });
+
+  test("model health is not this page's question, so an unhealthy model still counts", async () => {
+    // The scheduler passes `campaignModels`/`campaignComplete` an `eligible`
+    // predicate (`verdict !== "blocked"`) so it will not launch a cell against
+    // a dead endpoint. This page deliberately does NOT: `blocked` also covers
+    // `running` and `paused`, which are facts about this second rather than
+    // about the sweep, so wiring it here would make the count flicker with the
+    // live board on every poll. If a future change passes `eligible` through,
+    // this drops to 0 and the test fails — that is the point of it.
+    const body = await campaigns(
+      [{ runId: "r1", campaign: "class-probe", cell: "human-warrior", ended: false, paused: "operator-pause" }],
+      CONFIG,
+    );
+    expect(body.campaigns[0]!.config!.models).toBe(1);
   });
 
   test("no config at all still serves the runs", async () => {
