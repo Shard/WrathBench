@@ -98,11 +98,14 @@ and its own `--status` rows. Consolidated:
   are jobs too, synthetic and never persisted. Every job reaches the spawner
   through one path (`jobLane` → `spawnLane`); a job's name is always
   `<first ref>-<episode>`, one job per (ref, episode).
-- **The roster is the only place a model is described.** A probe with an
+- **The roster is the only place a model is described.** ~~A probe with an
   objective is a roster entry like any other (the entry carries `objective`,
-  `watchdogs`, `maxToolCalls`, `wikiCoords`), referenced by a pinned job. An
-  entry referenced by a pinned job, or carrying an objective, is outside the
-  policy: the account is spoken for, and unscored runs are not evidence.
+  `watchdogs`, `maxToolCalls`, `wikiCoords`), referenced by a pinned job.~~
+  **Superseded 2026-08-24 by ADR-0041**: the roster is a model *catalog* and may
+  not carry an `objective` at all. A probe is a **campaign**, which names catalog
+  entries for their credentials and supplies its own task shape. The rest holds:
+  an entry referenced by a pinned job is outside the policy, because the account
+  is spoken for and unscored runs are not evidence.
 - **`policy.maxConcurrent { <driver>: n }`** caps the policy's streams per
   driver, counting every job on that driver, pinned ones included. It exists
   so that a subscription that tolerates two sessions is a number in the file

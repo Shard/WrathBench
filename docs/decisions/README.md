@@ -57,3 +57,5 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |
 | 0038 | The deploy owns the window | current | One command drains (runs pause), swaps, verifies, resumes — and publishes its phase so the page states what the server is doing instead of guessing. |
 | 0039 | Run data storage | proposed | Files stay the record; Parquet + DuckDB next for analysis and a snapshot publisher for the dashboard; ClickHouse only on a named trigger. |
+| 0040 | The tier is the evidence budget | current | How much a model runs is one word in the config; the four blocks that could disagree about it are refused by name. |
+| 0041 | Probe campaigns are the third lane | current | Commissioned exploration gets its own episode and its own scheduling loop; what separates it from an eval is that a harness bump never re-arms it. |
