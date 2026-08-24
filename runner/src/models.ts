@@ -58,6 +58,7 @@ import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
 import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
+import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -549,6 +550,12 @@ export interface NextJob {
   why: string;
   /** An extra run past the target (free models only), with the character it rolls. */
   extra?: StartingCharacter;
+  /**
+   * Set on a probe pick (ADR-0041): which campaign commissioned it and which
+   * cell it is. The supervisor reads the campaign back out of the config for
+   * the run dimensions; only the identity travels on the pick.
+   */
+  probe?: { campaign: string; cell: string };
 }
 
 /** A pick the policy would have made but held back, with the reason — what `--dry-run` explains. */
@@ -1082,9 +1089,28 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
 // -------------------------------------------------------------- scheduling
 
 /**
+ * What the scheduler may do with a model right now, as one answer instead of
+ * two booleans.
+ *
+ * It was `{ ok, extras }`, and both call sites were written as an if-else over
+ * exactly two outcomes — fine while there are two lanes, wrong the moment there
+ * are three. The states are about the model's AVAILABILITY, not about which
+ * lane wants it:
+ *
+ * - `eval` — owes counted runs on a scored episode. The highest-priority work,
+ *   and the only state the viewer's `ok` field has ever meant.
+ * - `free` — nothing blocking it, and nothing owed. Probe campaigns and idle
+ *   work both draw from here, in that order.
+ * - `blocked` — retired, cooling, already running, or holding a paused run. No
+ *   lane may have it.
+ *
+ * Lane priority lives at the pick, not here: a model is never "a probe model",
+ * it is a model that happens to owe nothing.
+ */
+export type Verdict = { verdict: "eval" | "free" | "blocked"; why: string };
+
+/**
  * Why a model is or is not schedulable right now — the `--status` line.
- * `extras` is true when the model has met its tier's targets and its own
- * `idle` axis says it still wants an account (not cooling, retired or paused).
  * The policy argument is vestigial: nothing about how much a model runs is
  * read from the file any more.
  */
@@ -1092,20 +1118,19 @@ export function schedulability(
   s: ModelState,
   running: ReadonlySet<string> = new Set(),
   _policy: Pick<SchedulingPolicy, "paid"> = DEFAULT_POLICY,
-): { ok: boolean; why: string; extras: boolean } {
-  if (s.retired !== undefined) return { ok: false, extras: false, why: `retired: ${s.retired.reason} — clear with --clear-model ${s.name}` };
+): Verdict {
+  const blocked = (why: string): Verdict => ({ verdict: "blocked", why });
+  if (s.retired !== undefined) return blocked(`retired: ${s.retired.reason} — clear with --clear-model ${s.name}`);
   if (s.cooling !== undefined) {
-    return { ok: false, extras: false, why: `cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})` };
+    return blocked(`cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})`);
   }
-  if (running.has(s.name)) return { ok: false, extras: false, why: "running (one stream per model)" };
+  if (running.has(s.name)) return blocked("running (one stream per model)");
   if (s.paused !== undefined) {
     const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
     const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
-    return {
-      ok: false,
-      extras: false,
-      why: `paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — resumed by the supervisor, never rescheduled`,
-    };
+    return blocked(
+      `paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — resumed by the supervisor, never rescheduled`,
+    );
   }
   const open = s.eligible.filter((ep) => {
     const st = s.perEpisode[ep];
@@ -1117,9 +1142,30 @@ export function schedulability(
     // says it does. A paid model defaults to `none` and so buys nothing extra.
     const extras = s.idle !== "none";
     const how = s.idle === "unlimited" ? " — unlimited sessions while its account is idle" : " — extra characters when its class is idle";
-    return { ok: false, extras, why: `targets met on ${s.eligible.join(", ")}${extras ? how : ""}` };
+    return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${extras ? how : ""}` };
   }
-  return { ok: true, extras: false, why: `schedulable on ${open.join(", ")}` };
+  return { verdict: "eval", why: `schedulable on ${open.join(", ")}` };
+}
+
+/**
+ * Whether this model's idle axis wants a spare account. Asked of a verdict
+ * rather than folded into it: "does it owe anything" and "does it want extra
+ * work" are two questions, and only the second is a property of the entry.
+ */
+export function wantsIdle(v: Verdict, s: ModelState): boolean {
+  return v.verdict === "free" && s.idle !== "none";
+}
+
+/**
+ * The wire shape the viewer has always served, as a projection of the verdict.
+ *
+ * Not the verdict itself: a dashboard bundle and the API it talks to are two
+ * artefacts that can restart out of order, so the names on the wire are not
+ * free to change alongside an internal refactor. `ok` has always meant "owes a
+ * counted run", which is exactly `verdict === "eval"`.
+ */
+export function schedulableView(v: Verdict, s: ModelState): { ok: boolean; why: string; extras: boolean } {
+  return { ok: v.verdict === "eval", why: v.why, extras: wantsIdle(v, s) };
 }
 
 /** Extras made so far across every episode, which is what the character cycle indexes. */
@@ -1205,6 +1251,14 @@ export interface NextJobsOptions {
    * reserved pool read as "the models are just not schedulable today".
    */
   poolHeld?: string;
+  /**
+   * The enabled, UNPINNED campaigns the policy may schedule (ADR-0041), in
+   * declaration order. A pinned campaign is a pinned job and never appears
+   * here. Absent means no campaign work, which is what an older config gets.
+   */
+  campaigns?: readonly Campaign[];
+  /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
+  probeRuns?: readonly ProbeRun[];
 }
 
 /**
@@ -1232,6 +1286,8 @@ export function planNextJobs(
   opts: NextJobsOptions = {},
 ): { jobs: NextJob[]; held: HeldPick[] } {
   const policy = opts.policy ?? DEFAULT_POLICY;
+  const campaigns = opts.campaigns ?? [];
+  const probeRuns = opts.probeRuns ?? [];
   interface Cand {
     s: ModelState;
     ep: EpisodeId;
@@ -1242,9 +1298,13 @@ export function planNextJobs(
   }
   const cands: Cand[] = [];
   const extraCands: Cand[] = [];
+  /** Every model's verdict, computed once: the probe loop below asks it again. */
+  const verdicts = new Map<string, Verdict>();
+  const byName = new Map(states.map((s) => [s.name, s]));
   states.forEach((s, order) => {
     const v = schedulability(s, running, policy);
-    if (v.extras) {
+    verdicts.set(s.name, v);
+    if (wantsIdle(v, s)) {
       if (idleModeOf(s) === "unlimited") {
         // One candidate, not one per tier: an unlimited session has no tier,
         // and there is only ever one of them in flight.
@@ -1258,7 +1318,7 @@ export function planNextJobs(
       }
       return;
     }
-    if (!v.ok) return;
+    if (v.verdict !== "eval") return;
     const fresh = s.eligible.every((ep) => (s.perEpisode[ep]?.counted ?? 0) === 0) ? 0 : 1;
     for (const ep of s.eligible) {
       const st = s.perEpisode[ep];
@@ -1332,6 +1392,45 @@ export function planNextJobs(
       account,
       attempt: st.attempts + 1,
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
+    });
+  }
+  // Probe campaigns (ADR-0041): commissioned work, above idle work and below
+  // evidence. Only a model that owes nothing is eligible — a probe never delays
+  // a counted run — and the sweep order is the fan-out's, which spreads across
+  // models before finishing any one of them.
+  //
+  // A campaign PINNED to an account is not here: it is a pinned job, built by
+  // the supervisor from the same machinery a manual pinned job uses, because
+  // that account is by definition not one the policy may draw from. This loop
+  // is the pool case.
+  for (const w of campaignWork(campaigns, [...byName.keys()], probeRuns, (n) => verdicts.get(n)?.verdict !== "blocked")) {
+    if (empty()) break;
+    if (taken.has(w.model)) continue;
+    const s = byName.get(w.model);
+    if (s === undefined) continue;
+    // The loop's own precondition, and deliberately redundant with `taken`
+    // above: a model that owed evidence was already taken by the eval loop, so
+    // this line only bites when a campaign set `excludeUnhealthy: false` and the
+    // fan-out therefore handed us a blocked model. Stating it here anyway is
+    // what makes the loop correct on its own terms rather than correct because
+    // of the order the loops happen to run in.
+    if (verdicts.get(w.model)?.verdict !== "free") continue;
+    const pcls = accountClassOf(s);
+    const from = listOf(pcls);
+    if (from.length === 0) continue;
+    taken.add(w.model);
+    // Attempt numbers come from the probing bucket, which exists precisely so a
+    // second probe in one day gets a real run id rather than colliding.
+    const st = s.perEpisode["probing"];
+    const account = from.shift()!;
+    if (split[pcls] !== undefined) tookHere.set(pcls, [...(tookHere.get(pcls) ?? []), { account, by: w.model }]);
+    jobs.push({
+      name: w.model,
+      episode: "probing",
+      account,
+      attempt: (st?.attempts ?? 0) + 1,
+      why: `campaign ${w.campaign} cell ${w.cell.id} (${w.done}/${w.want})`,
+      probe: { campaign: w.campaign, cell: w.cell.id },
     });
   }
   // Idle work: lowest priority, only for accounts nothing else wanted, and only
