@@ -496,40 +496,80 @@ async function main(): Promise<void> {
     // Episode hygiene (ADR-0006 fresh character per episode): the account has
     // ~10 character slots and every character on it is disposable between
     // episodes. Clear them so the model can always create its assigned one.
-    // Best-effort: a failure here degrades to the old behaviour, it does not
-    // block the run.
+    //
+    // Mostly best-effort — EXCEPT for the assigned name. On 2026-08-24 a
+    // delete timed out (the previous episode's character was still mid-logout
+    // save), the run proceeded anyway, and the model's `createSession` reused
+    // the level-6 character it found: a scored e90 that started at level 6.
+    // So deletion is confirmed by re-listing (a timed-out delete may still
+    // have landed) and retried with backoff, and if the ASSIGNED name is
+    // still standing at the end, the run refuses to start: it terminates as a
+    // zero-response `harness-error`, which the stillborn path below archives
+    // and the scheduler's defer ladder retries in a minute — after the save
+    // has landed. Any other survivor only eats a slot, and is logged.
     try {
-      const listRes = await fetch(`${config.moduleUrl}/characters`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // Derived from the session secret, as `deleteCharacter` does: these are
-        // throwaway tokens for one call each, but they still have to clear the
-        // module's `weak_token` floor.
-        body: JSON.stringify({ token: `${config.token}-hygiene`, account: config.account }),
-      });
-      const list = (await listRes.json()) as {
-        ok?: boolean;
-        enum?: { characters?: { name?: string }[] };
-      };
-      const names = (list.enum?.characters ?? []).map((c) => c.name).filter((n): n is string => !!n);
-      for (const name of names) {
-        const del = await fetch(`${config.moduleUrl}/character-delete`, {
+      // Derived from the session secret, as `deleteCharacter` does: these are
+      // throwaway tokens for one call each, but they still have to clear the
+      // module's `weak_token` floor.
+      const listNames = async (i: number): Promise<string[]> => {
+        const res = await fetch(`${config.moduleUrl}/characters`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token: `${config.token}-hygiene-del-${name}`,
-            account: config.account,
-            character: name,
-          }),
+          body: JSON.stringify({ token: `${config.token}-hygiene-${i}`, account: config.account }),
         });
-        const dj = (await del.json()) as { deleted?: boolean; error?: string };
-        if (dj.deleted !== true) {
-          console.error(`[wrathbench] hygiene: could not delete leftover character ${name} (${dj.error ?? del.status})`);
+        const j = (await res.json()) as { ok?: boolean; enum?: { characters?: { name?: string }[] } };
+        return (j.enum?.characters ?? []).map((c) => c.name).filter((n): n is string => !!n);
+      };
+      let names = await listNames(0);
+      const initial = names.length;
+      for (let attempt = 0; names.length > 0; attempt++) {
+        for (const name of names) {
+          const del = await fetch(`${config.moduleUrl}/character-delete`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              token: `${config.token}-hygiene-del-${attempt}-${name}`,
+              account: config.account,
+              character: name,
+            }),
+          });
+          const dj = (await del.json()) as { deleted?: boolean; error?: string };
+          if (dj.deleted !== true) {
+            console.error(`[wrathbench] hygiene: could not delete leftover character ${name} (${dj.error ?? del.status})`);
+          }
         }
+        names = await listNames(attempt + 1);
+        if (names.length === 0 || attempt >= 3) break;
+        const waitMs = 5000 * (attempt + 1);
+        console.error(
+          `[wrathbench] hygiene: ${names.length} character(s) survived delete — retrying in ${waitMs / 1000}s (a logout save may still be landing)`,
+        );
+        await Bun.sleep(waitMs);
+      }
+      const cleared = initial - names.length;
+      if (cleared > 0) {
+        console.error(`[wrathbench] hygiene: cleared ${cleared} leftover character(s)`);
+        trajectory.append({ t: "harness", kind: "hygiene", cleared });
+      }
+      const survivor = names.find((n) => n.toLowerCase() === config.character.toLowerCase());
+      if (survivor !== undefined) {
+        const detail = `hygiene: assigned character ${survivor} survived deletion — a scored run must not start on a used character`;
+        console.error(`[wrathbench] ${detail}`);
+        trajectory.setTermination(config.runId, "harness-error", detail);
+        trajectory.close();
+        try {
+          const moved = archiveIfNoResponses(config.runsDir, config.runId);
+          if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
+        } catch (err) {
+          console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        wiki?.close();
+        process.exit(1);
       }
       if (names.length > 0) {
-        console.error(`[wrathbench] hygiene: cleared ${names.length} leftover character(s)`);
-        trajectory.append({ t: "harness", kind: "hygiene", cleared: names.length });
+        console.error(
+          `[wrathbench] hygiene: ${names.length} leftover character(s) not cleared (${names.join(", ")}) — proceeding, the assigned name is free`,
+        );
       }
     } catch (err) {
       console.error(`[wrathbench] hygiene: skipped (${err instanceof Error ? err.message : String(err)})`);
