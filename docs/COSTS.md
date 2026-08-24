@@ -79,10 +79,24 @@ for the first several turns then plateau — confirmed both in this window (`ox-
 18,343) and in `docs/worklogs/2026-08-21.md` ("requests plateau at roughly 8–12k tokens regardless
 of episode length"). The runner trims older conversation aggressively (system prompt: "the
 scratchpad is your memory, not the chat history"), so cost per turn is bounded regardless of how
-long the episode runs. `cached_tokens` on these lanes is mostly 0 or sporadic — no `cache_control`
-is set for the OpenRouter/OpenAI-compatible path (memory: "Anthropic via OpenRouter needs
-cache_control (0%→89% measured)"; the free models here are not Anthropic so this doesn't apply
-directly, but it confirms caching is opt-in per adapter, not automatic).
+long the episode runs. `cached_tokens` on these lanes is sporadic, and as of 2026-08-24 the
+sporadicity is measured, not assumed (FOLLOW-UPS 78, run
+`fleet-deepseek-flash-e90-deepseek-v4-flash-0731-20260824-a4`, 150 calls). The harness's side is
+clean: replaying every consecutive request pair from the trajectory, the serialized message array
+was byte-identical up to the append point in all 139 non-trim pairs — the prefix the context
+policy promises (ADR-0012) is the prefix that goes over the wire, and a loop-level test now pins
+it. The misses decompose as: (1) the 11 block trims, one designed miss per ~11-turn block; (2)
+OpenRouter routing the same model slug across backends — correlating each call's generation id
+with OpenRouter's generation API, every `cached_tokens: 128` stretch was a different serving
+provider than the surrounding calls, and that provider barely caches at all (128 tokens flat
+against 13k prompts); (3) same-provider misses — ~1/3 of mid-block calls on the majority backend
+returned `cached_tokens: 0` on a byte-identical prefix sent seconds after a hit, which is backend-
+internal (load-balancing across replicas with per-node KV caches), not anything the request can
+change. Classes 2 and 3 are provider weather; the response record now carries the serving
+`provider` name so future sweeps can attribute misses without generation-API replays. The
+mid-run `prompt_tokens` drop this item flagged is class 1 — the trim working as designed.
+Separately: Anthropic models via OpenRouter still need explicit `cache_control` breakpoints
+(memory: 0%→89% measured); the open models cache implicitly, no opt-in involved.
 
 **claude-code harness (Sonnet/Opus via the Claude Code CLI on a subscription; ADR-0035):** no trimming
 — the full conversation replays every turn and grows essentially unbounded. `roster-sonnet-20260822`
