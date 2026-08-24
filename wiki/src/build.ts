@@ -51,9 +51,12 @@ const SIBLING_SUFFIX = /^(.*\S)\s+\((original|old)\)$/i;
  * `The Stockade (original)`) still lands, and one that leads nowhere is dropped
  * as dangling like any other.
  *
- * `resolvable` is every title that already answers — a kept page or a redirect
- * source — lower-cased. A bare title that already answers is left alone.
- * `(original)` wins over `(old)` when a page has both.
+ * `resolvable` is every title that already answers — a kept page, or a redirect
+ * whose chain actually landed — lower-cased. A redirect *source* is not enough:
+ * a candidate that dangles answers nothing, and counting it here is what hid
+ * this world's `Scarlet Monastery` behind a lower-cased spelling of the title
+ * whose own redirect was never written. A bare title that already answers is
+ * left alone. `(original)` wins over `(old)` when a page has both.
  */
 export function siblingRedirects(
   survivors: readonly { title: string; ns: number }[],
@@ -446,30 +449,25 @@ async function main(): Promise<void> {
         break;
       }
     }
-    // The pages are all in by now; the sibling rule reads them back out of the
-    // half-built bundle rather than keeping a second copy of every title in
-    // memory. `flush` is idempotent, so the one at the end of the block still
-    // stands.
+    // The pages are all in by now. Redirects are resolved in two passes, and
+    // the order is the fix for a name that used to go missing: whether a
+    // candidate *answers* its title is not known until its chain has been
+    // walked, so the sibling rule cannot run until every other candidate has
+    // been resolved. `Scarlet Monastery` was the case that showed it — a
+    // lower-cased spelling of the title redirected to it, that redirect
+    // dangled, and the bare title counted as answered on the strength of a row
+    // that was never written, so the sibling rule left it alone and this
+    // world's article sat in the bundle under a title nobody types.
+    //
+    // The sibling rule also reads the pages back out of the half-built bundle
+    // rather than keeping a second copy of every title in memory. `flush` is
+    // idempotent, so the one at the end of the block still stands.
     writer.flush();
-    const resolvable = new Set(keptTitles);
-    for (const r of pendingRedirects) resolvable.add(r.source.toLowerCase());
-    const survivors: { title: string; ns: number }[] = [
-      ...db
-        .query<{ title: string; ns: number }, []>(
-          "SELECT title, ns FROM pages WHERE title LIKE '% (original)' OR title LIKE '% (old)'",
-        )
-        .all(),
-      // A sibling that is itself only a redirect counts: `Stormwind Stockade
-      // (original)` is one, and the chain through it is what reaches the page.
-      ...pendingRedirects.map((r) => ({ title: r.source, ns: r.ns })),
-    ];
-    for (const s of siblingRedirects(survivors, resolvable)) {
-      pendingRedirects.push({ ...s, origin: "sibling" });
-    }
+    type Pending = (typeof pendingRedirects)[number];
 
-    // Redirects, now that the surviving titles are known. A chain is walked
-    // with the same bound `resolveTitle` uses, so a redirect to a redirect to a
-    // page still lands; one that ends at a dropped page is dropped with it.
+    // A chain is walked with the same bound `resolveTitle` uses, so a redirect
+    // to a redirect to a page still lands; one that ends at a dropped page is
+    // dropped with it.
     const targets = new Map<string, string>();
     for (const r of pendingRedirects) targets.set(r.source.toLowerCase(), r.target);
     const walk = (from: string): boolean => {
@@ -482,24 +480,81 @@ async function main(): Promise<void> {
       }
       return false;
     };
-    for (const r of pendingRedirects) {
-      // Whichever target lands is the one written: the row is walked again at
-      // query time, so a row pointing at a title with no page and no redirect
-      // of its own is a dead row.
-      let landed: string | null = walk(r.target) ? r.target : null;
-      let viaNewest = r.origin === "newest";
-      if (landed === null && r.fallback !== undefined && walk(r.fallback)) {
-        landed = r.fallback;
-        viaNewest = true;
+    /**
+     * The target that lands, or null when the chain leads nowhere. Whichever
+     * target lands is the one written: the row is walked again at query time,
+     * so a row pointing at a title with no page and no redirect of its own is a
+     * dead row.
+     */
+    const resolveCandidate = (r: Pending): { landed: string; viaNewest: boolean } | null => {
+      if (walk(r.target)) return { landed: r.target, viaNewest: r.origin === "newest" };
+      if (r.fallback !== undefined && walk(r.fallback)) {
+        return { landed: r.fallback, viaNewest: true };
       }
-      if (landed === null) {
+      return null;
+    };
+    /** Exact source strings a row has been written for; the counters key on it. */
+    const written = new Set<string>();
+    const write = (r: Pending, res: { landed: string; viaNewest: boolean }): void => {
+      writer.addRedirect(r.source, res.landed, r.ns);
+      written.add(r.source);
+      redirects++;
+      if (res.viaNewest) redirectsRecoveredNewest++;
+      else if (r.origin === "sibling") redirectsOriginalSibling++;
+    };
+
+    // Pass one: every candidate the stream produced. One that leads nowhere is
+    // held back rather than dropped — the sibling rule may yet put a page at
+    // the end of its chain.
+    const unresolved: Pending[] = [];
+    const answered = new Set(keptTitles);
+    for (const r of pendingRedirects) {
+      const res = resolveCandidate(r);
+      if (res === null) {
+        unresolved.push(r);
+        continue;
+      }
+      write(r, res);
+      answered.add(r.source.toLowerCase());
+    }
+
+    // Pass two: the sibling rule, over the titles that are still unanswered.
+    // `answered` is a kept page or a redirect that actually landed, never one
+    // that dangled.
+    const survivors: { title: string; ns: number }[] = db
+      .query<{ title: string; ns: number }, []>(
+        "SELECT title, ns FROM pages WHERE title LIKE '% (original)' OR title LIKE '% (old)'",
+      )
+      .all();
+    // A sibling that is itself only a redirect counts: `Stormwind Stockade
+    // (original)` is one, and the chain through it is what reaches the page.
+    // Only the ones that landed, so a sibling never points into a dead row.
+    for (const r of pendingRedirects) {
+      if (written.has(r.source)) survivors.push({ title: r.source, ns: r.ns });
+    }
+    const siblings: Pending[] = siblingRedirects(survivors, answered).map((s) => ({
+      ...s,
+      origin: "sibling" as const,
+    }));
+    // Overwriting the pending target for this key is load-bearing, not an
+    // oversight to tidy away: the key is unanswered precisely because whatever
+    // stood there dangled, and replacing it is what lets the rows that pointed
+    // at the bare title — an alternate spelling, an older name — land through
+    // the sibling when they are retried below.
+    for (const s of siblings) targets.set(s.source.toLowerCase(), s.target);
+    pendingRedirects.push(...siblings);
+
+    // The new candidates, and the retry of the held-back ones. A held-back row
+    // whose own title the sibling rule just claimed stays dangling: its
+    // candidate still leads nowhere, and the row that answers for that title is
+    // the sibling's.
+    for (const r of [...siblings, ...unresolved]) {
+      const res = written.has(r.source) ? null : resolveCandidate(r);
+      if (res === null) {
         redirectsDangling++;
         continue;
       }
-      writer.addRedirect(r.source, landed, r.ns);
-      redirects++;
-      if (viaNewest) redirectsRecoveredNewest++;
-      else if (r.origin === "sibling") redirectsOriginalSibling++;
+      write(r, res);
     }
     writer.flush();
     if (stoppedEarly) cancel();
