@@ -11,8 +11,9 @@ Convention:
   the day, opening with a 3–6 line summary of what the day was about.
 - Completed work goes in the day file it shipped on. It never stays in
   `docs/FOLLOW-UPS.md`, which holds open items only; when an item closes, the day file
-  gets a one-line `shipped: item N — commit — where it lives` and FOLLOW-UPS moves the
-  number to its resolved ledger.
+  gets a one-line `shipped: item N — commit — where it lives` and the number simply
+  leaves FOLLOW-UPS. The day file is where a citation to a closed number resolves, so
+  that line is not optional — it is the only bridge.
 - Agents append to today's day file (create it if absent). This index gets one line per
   day.
 - Decisions go in `docs/decisions/` as ADRs; a day file cites the ADR, it does not
