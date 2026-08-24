@@ -306,6 +306,17 @@ describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
     };
   }
 
+  /**
+   * The SDK's abort-path stop() is deliberately fire-and-forget (the signal
+   * holder has already moved on — sdk/src/client.ts), so under load the stub
+   * can record it a beat after the timed-out eval returns. Wait for it,
+   * bounded; the assertions after still pin the exact action sequence.
+   */
+  async function eventually(cond: () => boolean, ms = 1_000): Promise<void> {
+    const deadline = Date.now() + ms;
+    while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  }
+
   test("signal is ambient, per-eval, and unfired while the snippet runs", async () => {
     const host = makeHost();
     const res = await host.evalSnippet("[signal instanceof AbortSignal, signal.aborted]");
@@ -328,6 +339,7 @@ describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
     const after = await host.evalSnippet("[fired, await walk.catch((e) => e.name), globalThis.reached]");
     expect(after.value).toBe('[ true, "EventAbortedError", undefined ]');
     // Exactly one stop followed the move_to; a later snippet's work is unaffected.
+    await eventually(() => stub.actions.includes("stop"));
     expect(stub.actions).toEqual(["move_to", "stop"]);
     expect(host.totalRestarts).toBe(0);
     await host.stop();
@@ -349,6 +361,7 @@ describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
     const next = await host.evalSnippet("'next'");
     expect(next.ok).toBe(true);
     expect(next.value).toBe(JSON.stringify("next"));
+    await eventually(() => stub.actions.includes("stop"));
     expect(stub.actions.filter((a) => a === "stop")).toHaveLength(1);
     await host.stop();
     await stub.stop();
@@ -377,7 +390,11 @@ describe("cooperative abort on timeout (FOLLOW-UPS 44)", () => {
   });
 
   test("a routine launched by a snippet that returned normally is never aborted by a later timeout", async () => {
-    const host = makeHost({ snippetTimeoutMs: 300 });
+    // The routine must outlive the second snippet's timeout (sleep > timeout)
+    // to prove it was not aborted, and resolve inside the third snippet's
+    // budget: two timeouts minus the sleep is the margin, so 400+400-600 keeps
+    // 200ms of slack where 300+300-600 had none and failed under load.
+    const host = makeHost({ snippetTimeoutMs: 400 });
     // The trailing value matters: a lone expression is awaited REPL-style,
     // which would make the *launching* snippet wait on the trip and time out.
     await host.evalSnippet("globalThis.trip = (async () => { await sleep(600); return 'done'; })().catch((e) => 'aborted:' + e.message); 'started'");

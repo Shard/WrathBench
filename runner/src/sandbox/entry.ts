@@ -183,6 +183,17 @@ const currentDeadline = (): number | undefined => evalContext.getStore()?.deadli
  * only the abandoned snippet is unwinding at that moment.
  */
 let abandonNote: string | undefined;
+/**
+ * Resolves when the eval an `abort` just interrupted finishes unwinding. The
+ * host sends `abort` then `ping` back-to-back; when both land in one IPC chunk
+ * the pong would read `abandonNote` before the SDK rejection has climbed the
+ * snippet's await chain to set it, and the note the abort learned is silently
+ * lost. A snippet that ignores its signal never settles, so the pong's wait on
+ * this is bounded (ABANDON_UNWIND_GRACE_MS), well under the host's pingGraceMs.
+ */
+let abandonUnwind: Promise<void> | undefined;
+const abandonUnwindSettled = new Map<number, () => void>();
+const ABANDON_UNWIND_GRACE_MS = 100;
 /** Live controllers by eval id, for the host's `abort`. */
 const evalControllers = new Map<number, AbortController>();
 
@@ -468,6 +479,11 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     });
   } finally {
     evalControllers.delete(id);
+    const settled = abandonUnwindSettled.get(id);
+    if (settled !== undefined) {
+      abandonUnwindSettled.delete(id);
+      settled();
+    }
   }
 }
 
@@ -476,6 +492,7 @@ function abortEval(id: number): void {
   const controller = evalControllers.get(id);
   if (controller === undefined) return;
   evalControllers.delete(id);
+  abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
   controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
 
@@ -533,9 +550,15 @@ function handle(msg: HostToChild | HostcallResult): void {
       // snippet times out, and this is how the abandoned snippet's logs reach
       // the model instead of `logs: []`.
       {
-        const note = abandonNote;
-        abandonNote = undefined;
-        send({ t: "pong", id: msg.id, logs: drainLogs(), ...(note !== undefined ? { note } : {}) });
+        const unwinding = abandonUnwind;
+        abandonUnwind = undefined;
+        const pong = (): void => {
+          const note = abandonNote;
+          abandonNote = undefined;
+          send({ t: "pong", id: msg.id, logs: drainLogs(), ...(note !== undefined ? { note } : {}) });
+        };
+        if (unwinding === undefined) pong();
+        else void Promise.race([unwinding, Bun.sleep(ABANDON_UNWIND_GRACE_MS)]).then(pong);
       }
       return;
     case "rpc": {

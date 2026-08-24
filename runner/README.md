@@ -223,7 +223,11 @@ turns can run for tens of minutes (see Drivers above).
 
 ## Tests
 
-`bun test runner` — sandbox eval semantics against the real child process, MCP
+`bun test runner` — needs one `bun install` at the repo root first: that links
+the wiki workspace package, and without it anything importing
+`@wrathbench/wiki/bundle` (searchmemo, wiki, tools) fails with a bare
+module-resolution error that reads like a missing dump but is not. The suite
+covers sandbox eval semantics against the real child process, MCP
 dispatch with fixture JSON-RPC, byte-identical context assembly, watchdogs on a
 fake clock, trajectory writer, and the claude-code driver against a
 scripted fake `claude` on PATH (`test/fixtures/fake-claude.ts`, which really
