@@ -77,7 +77,7 @@
     "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "character": "Gptluna", "race": 1, "class": 2, "tier": "t0"},
     "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "character": "Gemflash", "race": 1, "class": 2, "tier": "t0"},
     "laguna-or": {"model": "poolside/laguna-s-2.1:free", "tier": "t1", "idle": "none"},
-    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "characters"},
     "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "characters"},
