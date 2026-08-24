@@ -1,7 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "../src/bundle";
-import { META_PAGE_LABEL } from "../src/meta-pages";
 import {
   EXACT_TITLE_RANK,
   normaliseTitle,
@@ -42,18 +41,6 @@ beforeAll(() => {
     0,
     "Example Person Delta stands at (48.2, 42.1) in Example Zone Beta, near the inn [50, 41]. Patch (3.3.5) notes.",
     [{ zone: "Example Zone Beta", x: 48.2, y: 42.1, raw: "{{coords|48.2|42.1|Example Zone Beta}}" }],
-  );
-  // Out-of-game reference pages. Titles are structural (namespace prefixes and
-  // template-generated archive names); the bodies are invented.
-  writer.addPage(
-    "Hotfixes/2015 Archive",
-    0,
-    "Archive of hotfix notes. Example Zone Beta lorem ipsum adjusted. Example Person Gamma corrected.",
-  );
-  writer.addPage(
-    "Example Bars (AddOn)",
-    0,
-    "Example Bars is an interface addon. It draws bars while you stand in Example Zone Beta.",
   );
   writer.addPage(
     "Example Bars Vendor",
@@ -371,60 +358,12 @@ describe("searchReference coords channel", () => {
 });
 
 describe("out-of-game reference pages", () => {
-  test("meta hits sink below every body hit and say what they are", () => {
+  test("are not in the bundle to be found", () => {
+    // `classifyMetaPage` runs at build time now and the build does not emit a
+    // classified page (ADR-0040), so search has no band, no label and no
+    // exact-title carve-out for them. This asserts the absence of the field a
+    // consumer might still be reading.
     const hits = searchReference(db, "Example Zone Beta", { limit: 8 });
-    const titles = hits.map((h) => h.title);
-    expect(titles).toContain("Hotfixes/2015 Archive");
-    expect(titles).toContain("Example Bars (AddOn)");
-
-    const lastReal = Math.max(
-      titles.indexOf("Example Person Gamma"),
-      titles.indexOf("Example Bars Vendor"),
-    );
-    expect(lastReal).toBeGreaterThanOrEqual(0);
-    for (const meta of ["Hotfixes/2015 Archive", "Example Bars (AddOn)"]) {
-      expect(titles.indexOf(meta)).toBeGreaterThan(lastReal);
-    }
-  });
-
-  test("the label leads the snippet and the reason is reported", () => {
-    const hits = searchReference(db, "Example Zone Beta", { limit: 8 });
-    const hotfix = hits.find((h) => h.title === "Hotfixes/2015 Archive");
-    expect(hotfix).toBeDefined();
-    expect(hotfix!.snippet.startsWith(META_PAGE_LABEL)).toBe(true);
-    expect(hotfix!.metaPage).toBe("hotfixes");
-
-    const addon = hits.find((h) => h.title === "Example Bars (AddOn)");
-    expect(addon!.metaPage).toBe("addon");
-  });
-
-  test("a title-token hit is demoted too, below a plain body hit", () => {
-    const hits = searchReference(db, "Example Bars", { limit: 8 });
-    const titles = hits.map((h) => h.title);
-    expect(titles.indexOf("Example Bars (AddOn)")).toBeGreaterThan(
-      titles.indexOf("Example Bars Vendor"),
-    );
-  });
-
-  test("world pages are untouched", () => {
-    const hits = searchReference(db, "Example Zone Beta", { limit: 8 });
-    const zone = hits.find((h) => h.title === "Example Zone Beta");
-    expect(zone!.metaPage).toBeUndefined();
-    expect(zone!.snippet).not.toInclude(META_PAGE_LABEL);
-  });
-
-  test("asking for a meta page by name still returns it first, labelled", () => {
-    const hits = searchReference(db, "Hotfixes/2015 Archive", { limit: 8 });
-    expect(hits[0]!.title).toBe("Hotfixes/2015 Archive");
-    expect(hits[0]!.exactTitle).toBe(true);
-    expect(hits[0]!.rank).toBe(EXACT_TITLE_RANK);
-    expect(hits[0]!.metaPage).toBe("hotfixes");
-    expect(hits[0]!.snippet.startsWith(META_PAGE_LABEL)).toBe(true);
-  });
-
-  test("an exact-title meta page keeps its place above real body hits", () => {
-    const hits = searchReference(db, "Example Bars (AddOn)", { limit: 8 });
-    expect(hits[0]!.title).toBe("Example Bars (AddOn)");
-    expect(hits[0]!.exactTitle).toBe(true);
+    expect(JSON.stringify(hits)).not.toContain("metaPage");
   });
 });

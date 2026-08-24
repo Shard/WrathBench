@@ -46,7 +46,7 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0026 | The comparability tuple is stamped, never recomputed | superseded by 0033 | — |
 | 0027 | Navigation is the module's: typed causes, triggers, transports | proposed (gate run pending) | Pathing recovery, areatriggers and transports are what a client does locally, so the module does them. |
 | 0028 | Wiki coordinates are a run dimension, withheld in scored runs | superseded by 0033 | — |
-| 0029 | The reference bundle states the quest's ender and the wiki's era | current | The facts were in the wikitext and the strip destroyed them; lift, label, never infer or delete. |
+| 0029 | The reference bundle states the quest's ender and the wiki's era | current, non-deletion rule retracted by 0040 | The facts were in the wikitext and the strip destroyed them; lift them, and never infer the ender from the giver. |
 | 0030 | Episode tiers and promotion | superseded by 0033, 0034 | — |
 | 0031 | Runner pool and job queue | superseded by 0034 | — |
 | 0032 | Scheduling policy from run history | superseded by 0034 | — |
@@ -57,4 +57,4 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |
 | 0038 | The deploy owns the window | current | One command drains (runs pause), swaps, verifies, resumes — and publishes its phase so the page states what the server is doing instead of guessing. |
 | 0039 | Run data storage | proposed | Files stay the record; Parquet + DuckDB next for analysis and a snapshot publisher for the dashboard; ClickHouse only on a named trigger. |
-| 0040 | The bundle's prose comes from the Wrath-era revision | current | The pre-4.0.1 revision describes this world; the newest one has the coordinates and ids, so the bundle reads both. |
+| 0040 | The bundle is a Wrath snapshot | current | Nothing is labelled by era because what is not 3.3.5 is not in the bundle: the cutoff, the page rules and the section rules drop it, with counts in meta. |

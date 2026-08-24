@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { META_PAGE_LABEL, classifyMetaPage } from "../src/meta-pages";
+import { classifyMetaPage } from "../src/meta-pages";
 
 /**
  * Every title here is either invented or a structural title (a namespace
@@ -85,7 +85,7 @@ describe("classifyMetaPage — negatives", () => {
     // `Widget` alone is UI documentation; an NPC that starts with it is not.
     "Widget the Example Deceased",
     // `* (old)` is a superseded version of a real thing, which is an era
-    // problem (`markEraSections`), not an out-of-game one.
+    // problem (`post-wrath.ts`), not an out-of-game one.
     "Example Shield (old)",
     "Quest:Example Quest Alpha (old)",
     // `Blizzard` alone is a spell.
@@ -107,15 +107,6 @@ describe("classifyMetaPage — negatives", () => {
       expect(classifyMetaPage(title)).toBeNull();
     });
   }
-});
-
-describe("META_PAGE_LABEL", () => {
-  test("is a fixed, single-line literal", () => {
-    expect(META_PAGE_LABEL).toBe(
-      "[out-of-game reference page: patch notes, UI/API docs, addon or real-world topic]",
-    );
-    expect(META_PAGE_LABEL).not.toInclude("\n");
-  });
 });
 
 describe("classifyMetaPage — purity", () => {

@@ -221,22 +221,34 @@ and status.
 
 ## Wiki
 
-62. **The era bundle's residue: unlabelled Cataclysm prose and the fallback pages**
-    (2026-08-24, from item 49). The era build cut the unlabelled Cataclysm-mentioning
-    pages from 2,025 to 650, and what is left is a different shape: mostly 2009–10
-    prose written present-tense about the expansion that had been *announced* but not
-    shipped, which no revision line can remove because the pre-cutoff revision is the
-    one saying it. Beside it sit the 20,428 pages with no pre-cutoff revision at
-    all, which keep their 2020 text under the fixed page-level label — correct, but
-    the label is the only thing separating them from era-correct prose. Both are
-    labelled or bounded, not silent, so this is a precision item and not a
-    correctness one. Two directions when a run shows it costing something: tag the
-    announced-expansion prose the way `markEraSections` tags a marked section (the
-    wiki's own `{{cata-inline}}`-style templates are the lead), and promote the
-    era/out-of-game labels from snippet text to structured fields on the search
-    result, so a model can be told about them once rather than re-reading the same
-    prefix in every snippet. Evidence for either is a trajectory where a labelled
-    page still misleads.
+62. **What the Wrath bundle still cannot decide** (2026-08-24, from item 49;
+    rewritten when the bundle stopped labelling and started dropping, ADR-0040).
+    Two residues, both precision rather than correctness now, and one open
+    decision.
+    - **The paragraph rule's floor.** The phrase rules (`in Cataclysm`, `with
+      Cataclysm`, `after the Shattering`, `upcoming`/`beta` beside Cataclysm or
+      Deathwing, `will` within 60 characters of `Cataclysm`) reach the prose that
+      names the expansion. What they cannot reach is 2009–10 prose written
+      present-tense about a zone or NPC that had been *announced* but not
+      shipped, without naming it — the pre-cutoff revision is the one saying it,
+      so no revision line helps. Precision on a hand-checked 33-paragraph sample
+      is about 0.8: `with Cataclysm` also catches "removed with Cataclysm",
+      which is a statement about content that *is* here. Direction when a run
+      shows it costing something: the wiki's own `{{cata-inline}}`-style
+      templates, which mark the clause rather than the section.
+    - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
+      pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
+      Wrath signal (`post_cutoff_wrath_signal` admits those). The rest say
+      nothing either way and are dropped. Most of them are almost certainly
+      correct about 3.3.5 — items, NPCs and quests documented late — and the
+      bundle is smaller than it needs to be by roughly that much.
+    - **Open decision, for the operator.** The only rule that reaches those
+      18,717 is a **server-side id cross-check**: admit a post-cutoff quest, NPC
+      or item page whose stated id exists in the world DB. The wiki tooling reads
+      nothing from the server by design (CONTRACTS.md), and the id tables are
+      not something a client could query, so this is an operator call about what
+      the *build* may read — not about what the agent may see. Deliberately not
+      implemented pending that decision (ADR-0040).
 
 ## Docs and release
 

@@ -76,6 +76,8 @@ describe("the era revision slot", () => {
     const [got] = await parse(xml);
     expect(got!.eraWikitext).toBeNull();
     expect(got!.eraTimestamp).toBe("");
+    expect(got!.hasEraRevision).toBe(false);
+    expect(got!.eraRedirectTarget).toBeNull();
   });
 
   test("a revision where the page was a redirect never wins the era slot", async () => {
@@ -95,6 +97,9 @@ describe("the era revision slot", () => {
     for (const size of [3, 512]) {
       const [got] = await parse(xml, size);
       expect(`${size}:${got!.eraWikitext}`).toBe(`${size}:The era lorem.`);
+      // …but the page *was* a redirect at the cutoff, and that is what the
+      // build reads to decide whether the bundle holds a page or a redirect.
+      expect(`${size}:${got!.eraRedirectTarget}`).toBe(`${size}:Example Zone Gamma`);
     }
   });
 
@@ -228,5 +233,62 @@ describe("the era revision slot", () => {
     ]);
     const [got] = await parse(xml, 128, "2008-01-01T00:00:00Z");
     expect(got!.eraWikitext).toBe("The first stub, lorem.");
+  });
+});
+
+describe("the Wrath snapshot decides redirect-ness", () => {
+  test("a page that redirects today but was an article then is an article", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 2, timestamp: "2014-01-01T00:00:00Z", text: "#REDIRECT [[Example Zone Gamma]]" },
+          { id: 1, timestamp: "2009-01-01T00:00:00Z", text: "The era lorem." },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraRedirectTarget).toBeNull();
+    expect(got!.eraWikitext).toBe("The era lorem.");
+    expect(got!.hasEraRevision).toBe(true);
+  });
+
+  test("a page that was a redirect then is a redirect, whatever it became", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Old Name",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 3, timestamp: "2016-01-01T00:00:00Z", text: "An article again, lorem." },
+          { id: 2, timestamp: "2010-09-01T00:00:00Z", text: "#REDIRECT [[Example Zone Beta]]" },
+          { id: 1, timestamp: "2007-01-01T00:00:00Z", text: "The first stub, lorem." },
+        ],
+      },
+    ]);
+    for (const size of CHUNK_SIZES) {
+      const [got] = await parse(xml, size);
+      expect(`${size}:${got!.eraRedirectTarget}`).toBe(`${size}:Example Zone Beta`);
+    }
+  });
+
+  test("a page whose whole pre-cutoff history was redirects has no prose but is known", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Old Name",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 2, timestamp: "2016-01-01T00:00:00Z", text: "An article, lorem." },
+          { id: 1, timestamp: "2009-01-01T00:00:00Z", text: "#REDIRECT [[Example Zone Beta]]" },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraWikitext).toBeNull();
+    expect(got!.hasEraRevision).toBe(true);
+    expect(got!.eraRedirectTarget).toBe("Example Zone Beta");
   });
 });

@@ -10,10 +10,11 @@
  * product page and `UI coordinates` besides. Every one of those is a slot of
  * the model's reference budget spent on something it cannot act on.
  *
- * So: classify, never delete. `searchReference` moves a classified page below
- * the body band and prefixes its snippet with a fixed label; a model that asks
- * for the page by name still gets it at the top, because an exact title hit is
- * a deliberate request, not a stray match.
+ * So: classify, and the build does not emit a classified page. This used to
+ * label and demote at query time instead; the bundle is now a concise Wrath
+ * reference and what is not in the world is not in it (ADR-0040). The
+ * carve-out that kept an exact-title hit at the top goes with the band — the
+ * page is not there to return.
  *
  * The rules are deterministic and read the **title** only — no body text, no
  * heuristics over prose. They are also deliberately conservative: a rule earns
@@ -21,9 +22,10 @@
  * ones were dropped for a single counterexample. `Widget*` looked safe until
  * `Widget the Departed` turned out to be an NPC. `* (old)` looked safe until it
  * turned out to be mostly superseded spell and quest versions — `Holy Shield
- * (old)`, `Ignite (old)` — which are an era problem (`markEraSections` owns
+ * (old)`, `Ignite (old)` — which are an era problem (`post-wrath.ts` owns
  * that), not an out-of-game problem. Precision matters more than recall here:
- * a missed hotfix archive costs one slot, a demoted quest page costs the run.
+ * a missed hotfix archive costs a page of bundle, a dropped quest page costs
+ * the run.
  */
 
 /** Why a page is out of the world. Reported so the caller can see the rule. */
@@ -39,12 +41,6 @@ export type MetaReason =
   | "real-world"
   | "meta-category"
   | "legacy-meta";
-
-/**
- * Prefixed to the snippet of every classified result. Fixed literal: the model
- * should learn to skip these on sight, which it cannot do if the wording moves.
- */
-export const META_PAGE_LABEL = "[out-of-game reference page: patch notes, UI/API docs, addon or real-world topic]";
 
 /**
  * Legacy meta pages. `* (old)` is not a safe rule (see the module note), so the

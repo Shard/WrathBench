@@ -2,6 +2,15 @@
 
 Status: Accepted. Date: 2026-08-23.
 
+2026-08-24: **the non-deletion rule is retracted.** "Mark, never delete" — and
+the out-of-game classifier's "classify, never delete" beside it — was the
+implementing agent's own call on 2026-08-23 and was never put to the operator.
+The operator's standing position is that the wiki dump is a known rough source
+and the bundle is filtered and stripped as the evidence warrants. Post-Wrath
+pages, sections and paragraphs are now removed at build time, and out-of-game
+pages are not emitted at all: see ADR-0040. Everything else here — the quest
+infobox as data, and never inferring the ender from the giver — stands.
+
 ## Context
 Two findings from the 2026-08-23 night report sit on one seam: the bundle build
 strips wikitext templates, and everything a quest page knows about itself lives
@@ -28,8 +37,8 @@ Nothing here reads the server's DB or DBC (CONTRACTS.md).
 - **Every paragraph** of a post-Wrath era section is prefixed with an era label,
   because search returns a snippet window and a note at the top of a section is
   not in it. Pages the wiki says were removed in Cataclysm get the converse
-  note. Nothing is deleted: flagging is verifiable and reversible; deletion
-  loses prose that is often still correct and hides that anything was done.
+  note. Nothing is deleted. *(Retracted 2026-08-24, see the status note: the
+  section is dropped, not labelled, and the removed-later note is gone.)*
 - `search_reference`'s description carries one fixed sentence, identical in
   every lane, saying the world is 3.3.5a. This is the primary mitigation, not
   the fallback: a 2020 page's lead describes the post-Cataclysm world in the
@@ -42,3 +51,4 @@ Nothing here reads the server's DB or DBC (CONTRACTS.md).
 - A page that states the wrong ender teaches the wrong ender; this is wiki
   reference, not ground truth, and the description already frames it that way.
 - Unlabelled post-3.3.5 prose in page leads stays unfixed (FOLLOW-UPS 49).
+  *(Addressed by the revision cutoff in ADR-0040; the residue is FOLLOW-UPS 62.)*

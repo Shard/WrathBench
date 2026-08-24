@@ -10,10 +10,11 @@
  *      infobox (`page_ids`, bundle schema 3).
  *   2. title tokens — every word of the query appears in the page title.
  *   3. body — the words appear somewhere in the text.
- *   4. out-of-game — the page is patch notes, addon/UI documentation, a boxed
- *      product or a real-world topic (`classifyMetaPage`). Labelled and sunk
- *      below every body hit, but never deleted, and never demoted when the
- *      query was its own title.
+ *
+ * Out-of-game pages (patch notes, addon/UI documentation, boxed products,
+ * real-world topics) used to be a fifth band, labelled and sunk. They are no
+ * longer in the bundle at all: `classifyMetaPage` runs at build time and the
+ * build does not emit them (ADR-0040).
  *
  * The bands exist because bm25 alone put a page whose only connection to
  * "quest 783" was the digits 783 inside an arithmetic example above the quest
@@ -26,8 +27,6 @@
 import { Database } from "bun:sqlite";
 import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds, bundleHasQuest } from "./bundle";
 import type { IdKind } from "./ids";
-import { META_PAGE_LABEL, classifyMetaPage } from "./meta-pages";
-import type { MetaReason } from "./meta-pages";
 import type { WikiQuest } from "./quests";
 
 export interface SearchOptions {
@@ -80,14 +79,6 @@ export interface SearchResult {
    * field exists to fix (night-report 2026-08-23 §2a).
    */
   quest?: WikiQuest;
-  /**
-   * Set when the page is an out-of-game reference page (patch notes, the addon
-   * API, the client UI, a boxed product, a real-world topic). Such a result is
-   * banded below every body hit and its snippet leads with `META_PAGE_LABEL` —
-   * except when the query was the page's own title, which is a deliberate
-   * request and keeps its place at the top. See `meta-pages.ts`.
-   */
-  metaPage?: MetaReason;
 }
 
 /** Sorts ahead of any bm25 score and survives JSON.stringify. */
@@ -100,7 +91,7 @@ export const ID_MATCH_RANK = -5e8;
  * Result bands. Ordering is by band first, bm25 second; `rank` is what the
  * caller displays, `band` is what sorts.
  */
-const BAND = { title: 0, id: 1, titleTokens: 2, body: 3, meta: 4 } as const;
+const BAND = { title: 0, id: 1, titleTokens: 2, body: 3 } as const;
 
 const TOKEN = /[\p{L}\p{N}][\p{L}\p{N}'_-]*/gu;
 
@@ -407,20 +398,6 @@ export function searchReference(
   const push = (band: number, result: SearchResult): void => {
     if (seen.has(result.title)) return;
     seen.add(result.title);
-    // Out-of-game pages are labelled wherever they land and demoted below every
-    // body hit — but only when they were *found*, not when they were *asked
-    // for*: an exact title (or an id) is a deliberate request and keeps its
-    // band. The label leads the snippet, ahead of the quest line, because it is
-    // the first thing the model needs in order to skip the result.
-    const metaPage = classifyMetaPage(result.title);
-    if (metaPage !== null) {
-      const demoted = band === BAND.titleTokens || band === BAND.body;
-      banded.push({
-        band: demoted ? BAND.meta : band,
-        result: { ...result, snippet: `${META_PAGE_LABEL}\n${result.snippet}`, metaPage },
-      });
-      return;
-    }
     banded.push({ band, result });
   };
 

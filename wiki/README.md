@@ -16,9 +16,9 @@ bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
 
 The archive is streamed through `7z x -so`; the 24 GB XML is never written to disk.
 A plain `.xml` path also works. `--max-pages n` stops early, which is useful for a
-quick smoke build. `--era-cutoff` moves the revision line the prose is taken at
+quick smoke build. `--era-cutoff` moves the revision line the bundle is taken at
 (below); it must be a full ISO-8601 UTC instant, and a malformed one is rejected
-before the stream starts rather than turning every page into a fallback.
+before the stream starts rather than quietly dropping every page.
 
 The build writes to a hidden temp file beside the destination and renames it into
 place at the end, so it is idempotent: a rebuild either replaces the bundle wholly
@@ -27,38 +27,39 @@ not hours.
 
 ## What ends up in the bundle
 
+The bundle is a concise reference for **this world**: patch 3.3.5a, Wrath of the
+Lich King. Nothing in it is labelled by era, because content that is not 3.3.5 is
+not in it — the build drops it, by deterministic rules, with a count in `meta`
+for every rule. Removal is verifiable by rebuilding from the same dump. See
+ADR-0040.
+
 - Namespaces main (0), Category (14), Portal (116) and Quest (118). Talk, User,
   File, Template, Forum, Guild, Server and the semantic-mediawiki namespaces are
   dropped without being parsed.
-- One row per page, built from **two** revisions of it. The prose is the newest
-  revision saved before the era cutoff — 2010-10-12, patch 4.0.1 — so what the
-  model reads describes a world at most one patch from 3.3.5a instead of the
-  2020 one. Everything structured (coordinates, entity ids, the quest infobox)
-  still comes off the **newest** revision, where a decade of corrections lives
-  and where 30% of the coordinates only exist. See ADR-0040.
+- One row per surviving page, built from **two** revisions of it. The prose is
+  the newest revision saved before the era cutoff — 2010-10-12, patch 4.0.1 — so
+  what the model reads describes a world at most one patch from 3.3.5a instead
+  of the 2020 one. Everything structured (coordinates, entity ids, the quest
+  infobox) still comes off the **newest** revision, where a decade of
+  corrections lives and where 30% of the coordinates only exist.
 - The era revision has to survive two hygiene rules to win: a revision where the
   page was a `#REDIRECT` is not prose, and a revision that was immediately
   reverted — the revision right after it restored a sha1 the page already had —
   is not what the page said. Otherwise the newest pre-cutoff revision wins,
   whatever order the dump lists revisions in.
-- A page with no pre-cutoff revision at all (18.6% of them; the wiki grew after
-  2010) keeps its newest text and carries a fixed page-level label saying so,
-  the same way era sections carry theirs. Nothing is dropped for being late.
-  `meta` records how often each path was taken as `pages_era_swapped` (the prose
-  came from an older timestamp than the structured fields) and
-  `pages_era_fallback`.
 - The dump is full history, so most of its bulk is revisions that never reach
   the bundle. A page with more than 50 revisions is exported as several
   consecutive `<page>` blocks of 50, so a block is not a page: the parser holds
   a page open until the (title, ns) key changes and merges its blocks, and the
   build asserts `pages` holds one row per (title, ns) — recorded as
   `pages_distinct_keys` in `meta` — so a regression here fails the build instead
-  of quietly indexing stale text beside current text. A bundle built before this
-  keeps its duplicate rows until it is rebuilt.
-- Redirects are not pages, decided by the newest revision: a page that is a
-  redirect today stays one, whatever it held in 2010. Their source and target go
-  in `redirects`, so a search for an old or alternate name still lands on the
-  article.
+  of quietly indexing stale text beside current text.
+- Redirects are decided by the same Wrath snapshot: a page that was a redirect
+  at the cutoff is a redirect here whatever it became later, and one that was an
+  article then is an article here even if it was merged away in 2014. Source and
+  target go in `redirects`, so a search for an old or alternate name still lands
+  on the article — unless the chain does not end at a surviving page, in which
+  case the redirect is dropped with its target (`redirects_dropped_dangling`).
 - Wikitext is reduced to plain text: templates, tables, refs, comments and file
   links are removed, `[[link|label]]` becomes `label`, headings become plain lines,
   whitespace is collapsed. Most infobox data lives in templates and is therefore
@@ -70,7 +71,7 @@ not hours.
   a live observation and not proof anything is at that spot now. Nothing here
   reads the AzerothCore DB, DBC tables or Questie; it is all deterministic parsing
   of the wikitext.
-- Quest giver and ender are the third exception, for the same reason: a quest
+- Quest giver and ender are the second exception, for the same reason: a quest
   page's `{{questbox | start=… | end=… | category=… }}` is a template, so the
   strip takes the ender's name off the page entirely. `extractQuest` lifts the
   three fields into `page_quest` before the strip. It reads only the
@@ -79,23 +80,77 @@ not hours.
   `start`**: 11,013 quest pages state a giver, 6,637 state an ender, and search
   says "not stated on this page" for the rest rather than guessing the giver.
   See ADR-0029.
-- Era sections are marked, not dropped, and this still runs on whichever
-  revision won: a 2009 page can describe the expansion that had been announced. The dump is from 2020, four expansions
-  past the server this harness runs, and even a pre-cutoff revision can carry a
-  section about what was coming. `markEraSections` runs before the strip and
-  prefixes every paragraph of a `{{cata-section}}`/`== In Cataclysm ==` style
-  section with `[Cataclysm-era, not in patch 3.3.5]` (per paragraph, because
-  search returns a snippet window); a page the wiki says was *removed* in
-  Cataclysm gets the converse note. Nothing is deleted. A page's unlabelled
-  present-tense lead is beyond this — the `search_reference` tool description
-  carries the standing warning for that half.
-- Entity ids are the other exception, and for the same reason: `extractIds` lifts
+- Entity ids are the third exception, and for the same reason: `extractIds` lifts
   the numeric ids a page states about itself (`{{questbox|…|id=783}}`,
   `{{npcbox|…|id=721}}`, `|itemid=`, `|npcid=`, `|questid=`, `|entry=`) off the raw
   wikitext into `page_ids`, tagged with the kind the enclosing template implies.
   Without this an id can only be matched against body prose, and a page whose
   arithmetic happens to contain the digits outranks the entity page (FOLLOW-UPS
   25). Same provenance rule: deterministic parsing of wikitext, nothing else.
+
+## What is dropped, and how it is counted
+
+`admitPage` (`wiki/src/post-wrath.ts`) is the one page-level decision, a pure
+function of the title and the two revisions. It returns one of five reasons, and
+each is a `meta` counter; the five plus `empty_pages` account for every
+non-redirect page the parser yields, which the build test asserts as an identity
+so a page cannot be counted twice or lost quietly.
+
+- `pages_pre_cutoff` — has a pre-cutoff revision and no post-Wrath signal. Its
+  prose is that revision. `pages_era_swapped` counts how many of these took
+  their prose from an older timestamp than their structured fields.
+- `pages_post_cutoff_wrath_signal` — **no** pre-cutoff revision, but the newest
+  revision says outright that its subject is Wrath-or-earlier: an infobox
+  `|patch=` below 4.0, an `|expansion=` naming Wrath, the Burning Crusade or
+  vanilla, or a `[[Category:Wrath of the Lich King]]`-style category. Vetoed
+  when the page is WoW Classic (2019), whose patches are 1.13/1.14 and read as
+  vanilla to every one of those rules. Its prose is the newest revision, because
+  it is the only one there is. This is the only admission rule for late pages;
+  the rule that would reach the rest is a server-side id cross-check, which the
+  wiki tooling deliberately does not do (ADR-0040, FOLLOW-UPS 62).
+- `pages_dropped_post_cutoff` — no revision before the cutoff and nothing saying
+  it is this world. 18.6% of the dump's pages; the wiki kept growing after 2010.
+- `pages_dropped_post_wrath` — the page names a later expansion in its title
+  parenthetical, a `[[Category:…]]`, a page-banner template
+  (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
+  `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
+  naming one. The target is the beta stubs written *before* the cutoff about the
+  expansion that was coming. Also counts a page the section and paragraph rules
+  emptied.
+- `pages_dropped_meta` — out-of-game: patch notes, the Lua addon API, the client
+  UI, a boxed product, a real-world topic. `classifyMetaPage` classifies from
+  the title alone and the build does not emit what it classifies (see Search,
+  below).
+
+The signals are read on the revision the prose comes from, **never** on a later
+one: a Wrath zone that Cataclysm rearranged had its Cataclysm category added in
+2011, and reading the newest revision would delete a zone that is standing in
+this world. They are also narrow where the words collide. The Burning Legion,
+the 7th Legion, `Legion's`-anything, Deathwing, Garrosh and Draenor (Outland's
+own name) are all Wrath content: the category rule fires only on a category that
+*is* `Legion` or starts with `Legion `, never on one that merely contains the
+word — the census counts `Burning Legion` 39 times against `Legion` 29 — and
+`{{Removedwithlegion}}`/`{{Removedwithcataclysm}}` are not signals at all, since
+content removed later is content that exists here.
+
+Inside a surviving page, two more levels run on the raw wikitext before the
+strip (`wiki/src/wrath-only.ts`):
+
+- **Sections.** A `{{cata-section}}`/`{{mists-section}}` marker or an
+  `== In Cataclysm ==`-style heading drops the heading and everything under it,
+  down to the next heading of the same or a shallower level. `sections_dropped`.
+  Pre-Wrath eras (`{{bc-section}}`, `== The Burning Crusade ==`) are untouched.
+- **Paragraphs.** A blank-line-separated block whose prose (its templates
+  removed first, so an infobox field never decides) matches a narrow phrase rule
+  goes: `in Cataclysm`, `with Cataclysm`, `World of Warcraft: Cataclysm`,
+  `after the Shattering`, `upcoming`/`beta` beside Cataclysm, Deathwing or the
+  Shattering, and `will` within 60 characters of `Cataclysm`.
+  `paragraphs_dropped`. A bare mention of Deathwing, the Legion, Draenor or
+  Garrosh is not a rule: all four are in this world. Precision on a hand-checked
+  33-paragraph sample is about 0.8; the residue is FOLLOW-UPS 62.
+
+If the cut empties a page that had prose, the page is dropped and counted under
+`pages_dropped_post_wrath` — never left as an empty row.
 
 ## Schema
 
@@ -137,13 +192,16 @@ dump gives the same rows.
 `page_ids` does: `bundleHasQuest` reports its absence and `searchReference`
 simply omits the quest line, so a bundle one version behind still answers.
 
-`schema_version` 5 is the era revision. It adds no table — the same `pages.text`
-column simply holds older prose — so nothing fails closed on a version-4 bundle
-and a deployed bundle keeps answering until it is rebuilt; the difference is
-visible instead, as `meta.era_cutoff`, which the runner records on every run's
-comparability tuple (a version-4 bundle reads as `null` there, never as "no
-cutoff was applied"). `openBundle` still fails closed below 2, where the missing
-`page_coords` table would silently cost search a whole channel.
+`schema_version` 5 is the Wrath snapshot, and **stays 5** through the drop
+rules: no table is added or removed — the same `pages.text` column simply holds
+fewer, older rows — so nothing fails closed on a version-4 bundle and a deployed
+bundle keeps answering until it is rebuilt. The difference is visible instead,
+as `meta.era_cutoff`, which the runner records on every run's comparability
+tuple (a version-4 bundle reads as `null` there, never as "no cutoff was
+applied"), and as the `pages_dropped_*` counters, which are what tells a
+version-5 bundle built before the drop rules from one built after. `openBundle`
+still fails closed below 2, where the missing `page_coords` table would silently
+cost search a whole channel.
 
 Rebuild and swap, with runs in flight:
 
@@ -185,9 +243,6 @@ Results come back in bands, and only inside a band does `bm25` decide:
    another kind.
 3. **title tokens** — every word of the query appears in the page title.
 4. **body** — the words appear somewhere in the text.
-5. **out-of-game** — the page is patch notes, addon or UI/API documentation, a boxed
-   product, or a real-world topic. Sunk below every body hit and labelled, but never
-   deleted.
 
 `parseIdQuery` decides what counts as an id. A numeric token is an id lookup when
 it is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`,
@@ -203,14 +258,14 @@ found a `Hotfixes` archive served fifteen times and a pop-culture-reference list
 thirty-eight, to a character standing in a zone. `classifyMetaPage`
 (`wiki/src/meta-pages.ts`) recognises those from the title alone — the wiki
 namespaces them by prefix (`API GetSpellInfo`, `MACRO cast`, `Hotfixes/2015
-Archive`) or disambiguates them with `(AddOn)` — and `searchReference` moves such a
-hit below every body hit and prefixes its snippet with `META_PAGE_LABEL`. Nothing is
-removed, and an exact-title hit is never demoted: asking for the page by name is a
-deliberate request. The rules are deliberately conservative, since a missed hotfix
-archive costs one slot and a demoted quest page costs the run: `Widget*` was dropped
-because an NPC shares the name, `Patch *` because items do, and `* (old)` because
-those are mostly superseded spell versions — an era matter, not an out-of-game one.
-2,570 of the bundle's 104,808 titles classify, 2.45%.
+Archive`) or disambiguates them with `(AddOn)`. It runs at **build** time and the
+build does not emit what it classifies, so there is no band, no label and no
+exact-title carve-out: the page is not in the bundle to return. The rules are
+deliberately conservative, since a missed hotfix archive costs a page of bundle
+and a dropped quest page costs the run: `Widget*` was dropped because an NPC
+shares the name, `Patch *` because items do, and `* (old)` because those are
+mostly superseded spell versions — an era matter, which `post-wrath.ts` owns, not
+an out-of-game one. 2,570 of the pre-drop dump's 104,808 titles classify, 2.45%.
 
 The full-text candidate set is fetched far wider than `limit` before the bands are
 applied, because the title band is decided in TypeScript: a title match sitting
