@@ -16,6 +16,7 @@ import {
   DEFAULT_BUNDLE_PATH,
   applyBuildPragmas,
   assertFts5,
+  assertUniquePages,
   createIndexes,
   createSchema,
   makeWriter,
@@ -129,7 +130,8 @@ async function main(): Promise<void> {
   let idRows = 0;
   let questRows = 0;
   let stoppedEarly = false;
-  const parseStats: ParseStats = { pagesSkipped: 0 };
+  let distinctKeys = 0;
+  const parseStats: ParseStats = { pagesSkipped: 0, blocksSeen: 0 };
 
   const started = Date.now();
   let lastLog = started;
@@ -141,7 +143,7 @@ async function main(): Promise<void> {
     const rate = bytes / 1024 ** 2 / Math.max(elapsed, 0.001);
     console.log(
       `[${fmtDuration(now - started)}] ${fmtBytes(bytes)} read (${rate.toFixed(0)} MiB/s), ` +
-        `${pagesSeen + parseStats.pagesSkipped} pages seen ` +
+        `${parseStats.blocksSeen + parseStats.pagesSkipped} page blocks seen ` +
         `(${parseStats.pagesSkipped} in dropped namespaces), ${pagesKept} kept, ` +
         `${redirects} redirects`,
     );
@@ -190,6 +192,7 @@ async function main(): Promise<void> {
     writer.flush();
     if (stoppedEarly) cancel();
     else await done();
+    distinctKeys = assertUniquePages(db);
   } catch (err) {
     writer.flush();
     db.close();
@@ -211,10 +214,13 @@ async function main(): Promise<void> {
     source: basename(args.dump),
     built_at: new Date().toISOString(),
     namespaces: [...DEFAULT_NAMESPACES].join(","),
-    pages_seen: String(pagesSeen + parseStats.pagesSkipped),
+    // A `<page>` block is not a page: a long history is several blocks of one
+    // page, so blocks seen exceeds pages seen.
+    page_blocks_seen: String(parseStats.blocksSeen + parseStats.pagesSkipped),
+    page_blocks_skipped_namespace: String(parseStats.pagesSkipped),
     pages_in_namespaces: String(pagesSeen),
-    pages_skipped_namespace: String(parseStats.pagesSkipped),
     pages_kept: String(pagesKept),
+    pages_distinct_keys: String(distinctKeys),
     redirects: String(redirects),
     empty_pages: String(empties),
     coord_rows: String(coordRows),
@@ -233,9 +239,9 @@ async function main(): Promise<void> {
   console.log("");
   console.log(`bundle:      ${args.out} (${fmtBytes(size)})`);
   console.log(`read:        ${fmtBytes(bytes)} of XML in ${fmtDuration(elapsedMs)}`);
-  console.log(`pages seen:  ${pagesSeen + parseStats.pagesSkipped}`);
-  console.log(`  in ns:     ${pagesSeen}`);
+  console.log(`page blocks: ${parseStats.blocksSeen + parseStats.pagesSkipped}`);
   console.log(`  dropped:   ${parseStats.pagesSkipped} (namespace)`);
+  console.log(`pages seen:  ${pagesSeen} (blocks merged by title)`);
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);

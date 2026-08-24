@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
 import { searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
 
@@ -117,3 +118,85 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(2);
   db2.close();
 }, 30_000);
+
+test("a page split into 50-revision blocks builds as one row", async () => {
+  const xmlPath = join(dir, "split-dump.xml");
+  const outPath = join(dir, "split-bundle.sqlite");
+  // Three consecutive <page> blocks for one title, newest-first as the dump
+  // emits them, plus a neighbour that must stay its own page.
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        title: "Example Long History",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 30, timestamp: "2018-01-01T00:00:00Z", text: "The current lorem, full of consectetur." },
+        ],
+      },
+      {
+        title: "Example Long History",
+        ns: 0,
+        id: 1,
+        revisions: [{ id: 20, timestamp: "2012-01-01T00:00:00Z", text: "A middling draft, lorem." }],
+      },
+      {
+        title: "Example Long History",
+        ns: 0,
+        id: 1,
+        revisions: [{ id: 10, timestamp: "2006-01-01T00:00:00Z", text: "The oldest stub, lorem." }],
+      },
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 2,
+        revisions: [{ id: 40, timestamp: "2016-01-01T00:00:00Z", text: "Example Zone Beta is a region." }],
+      },
+    ]),
+  );
+
+  const proc = Bun.spawn(
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(0);
+
+  const db = new Database(outPath, { readonly: true });
+  const counts = db
+    .query<{ rows: number; keys: number }, []>(
+      "SELECT count(*) AS rows, count(DISTINCT title || ns) AS keys FROM pages",
+    )
+    .get()!;
+  expect(counts).toEqual({ rows: 2, keys: 2 });
+  const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
+  expect(meta.get("pages_distinct_keys")!.value).toBe("2");
+  expect(meta.get("pages_kept")!.value).toBe("2");
+  // Four blocks were read for two pages.
+  expect(meta.get("page_blocks_seen")!.value).toBe("4");
+
+  // The row holds the newest text, and no stale row competes with it.
+  const hit = searchReference(db, "Example Long History")[0]!;
+  expect(hit.snippet).toContain("current lorem");
+  expect(searchReference(db, "oldest stub")).toEqual([]);
+  db.close();
+}, 30_000);
+
+test("the build refuses to ship two rows for one page", () => {
+  const db = new Database(":memory:");
+  createSchema(db);
+  const writer = makeWriter(db, 10);
+  writer.addPage("Example Long History", 0, "The current lorem.");
+  writer.addPage("Example Long History", 0, "A stale draft, lorem.");
+  writer.flush();
+  expect(() => assertUniquePages(db)).toThrow(/distinct \(title, ns\)/);
+
+  // The same title in two namespaces is two pages, not a duplicate.
+  const clean = new Database(":memory:");
+  createSchema(clean);
+  const cleanWriter = makeWriter(clean, 10);
+  cleanWriter.addPage("Example Shared Name", 0, "The article, lorem.");
+  cleanWriter.addPage("Example Shared Name", 14, "The category, lorem.");
+  cleanWriter.flush();
+  expect(assertUniquePages(clean)).toBe(2);
+});

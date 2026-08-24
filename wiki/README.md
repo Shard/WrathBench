@@ -28,7 +28,13 @@ not hours.
   File, Template, Forum, Guild, Server and the semantic-mediawiki namespaces are
   dropped without being parsed.
 - One row per page, holding the **newest** revision. The dump is full history, so
-  most of its bulk is revisions that never reach the bundle.
+  most of its bulk is revisions that never reach the bundle. A page with more
+  than 50 revisions is exported as several consecutive `<page>` blocks of 50, so
+  a block is not a page: the parser holds a page open until the (title, ns) key
+  changes and merges its blocks, and the build asserts `pages` holds one row per
+  (title, ns) — recorded as `pages_distinct_keys` in `meta` — so a regression
+  here fails the build instead of quietly indexing stale text beside current
+  text. A bundle built before this keeps its duplicate rows until it is rebuilt.
 - Redirects are not pages. Their source and target go in `redirects`, so a search
   for an old or alternate name still lands on the article.
 - Wikitext is reduced to plain text: templates, tables, refs, comments and file
