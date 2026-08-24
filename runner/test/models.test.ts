@@ -16,8 +16,9 @@ import {
   nextJobs,
   planNextJobs,
   DEFAULT_PAID,
-  DEFAULT_EXTRA_CHARACTERS,
-  DEFAULT_LOCAL_EXTRAS,
+  IDLE_CHARACTERS,
+  TIER_TABLE,
+  effectiveTier,
   type SchedulingPolicy,
   parseModelsSidecar,
   projectModel,
@@ -93,11 +94,12 @@ function writeRun(runsDir: string, r: SynthRun): void {
 }
 
 const roster: RosterModel[] = [
-  { name: "ox", model: "stealth/ox-alpha" },
-  { name: "glm", model: "z-ai/glm:free", apiBase: "https://openrouter.ai/api/v1" },
-  { name: "sonnet", model: "sonnet", driver: "claude-code" },
-  { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-code", runsPerEpisode: { e90: 1 } },
-  { name: "local", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" },
+  { name: "ox", model: "stealth/ox-alpha", tier: "t1" },
+  { name: "glm", model: "z-ai/glm:free", apiBase: "https://openrouter.ai/api/v1", tier: "t1" },
+  { name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t1" },
+  // t0 is the one-run trial tier: the same budget the old per-entry override spelled.
+  { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-code", tier: "t0" },
+  { name: "local", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1", tier: "t1", idle: "unlimited" },
 ];
 
 let runsDir: string;
@@ -163,10 +165,12 @@ describe("modelStates", () => {
     const states = modelStates({ runsDir, roster, now: NOW, sidecar: { version: 1, cleared: {} } });
     const by = Object.fromEntries(states.map((s) => [s.name, s]));
 
-    expect(by["ox"]).toMatchObject({ status: "promoted", eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
+    // ox is t1 and earned rung 1, so it climbed to t2 — which is what unlocks
+    // e360 at all. The declared tier is unchanged: the config is not rewritten.
+    expect(by["ox"]).toMatchObject({ status: "promoted", declaredTier: "t1", tier: "t2", earnedRung1: true, eligible: ["e90", "e360"], platform: "openrouter", ladder: 0 });
     // attempts 4: the archived ox run is an attempt — it numbers the next run id.
     expect(by["ox"]!.perEpisode.e90).toMatchObject({ counted: 2, stillborn: 0, attempts: 4, target: 3, bestLevel: 6, reachedL5: true, lastReason: "episode-limit" });
-    expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 3, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
+    expect(by["ox"]!.perEpisode.e360).toMatchObject({ counted: 0, target: 1, bestLevel: null, reachedL5: false, lastEnded: null, lastReason: null });
 
     expect(by["glm"]!.status).toBe("cooling");
     expect(by["glm"]!.ladder).toBe(3);
@@ -180,11 +184,12 @@ describe("modelStates", () => {
     expect(by["ox"]).toMatchObject({ harness: "wrathbench" });
     expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, reachedL5: false });
 
-    // A live, answered run counts; the per-entry target override applies.
+    // A live, answered run counts; t0 buys exactly one of them.
     expect(by["sonnet-low"]!.perEpisode.e90).toMatchObject({ counted: 1, stillborn: 0, target: 1 });
     // No series on the policy: the 0.2 run is an attempt like any other; the extra is an attempt, never counted.
     expect(by["local"]).toMatchObject({ status: "promoted", platform: "local", billing: "free" });
     expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 1, attempts: 2, extras: 1, otherSeries: 0, target: 3, bestLevel: 7 });
+    expect(by["local"]).toMatchObject({ declaredTier: "t1", tier: "t2", idle: "unlimited" });
     expect(by["ox"]!.billing).toBe("free"); // allowlisted stealth id
     expect(by["glm"]!.billing).toBe("free");
     expect(by["sonnet"]!.billing).toBe("free"); // subscription
@@ -206,10 +211,15 @@ describe("modelStates", () => {
     expect(none.find((s) => s.name === "ox")!.perEpisode.e90!.otherSeries).toBe(4);
   });
 
-  test("a forced tier is eligible without a witness; the pre-tier run never promotes", () => {
-    const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tiers: ["e360"] }], now: NOW, sidecar: { version: 1, cleared: {} } });
+  test("a hand-set tier is eligible without a witness, and never reads as earned", () => {
+    const [s] = modelStates({ runsDir, roster: [{ name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t2" }], now: NOW, sidecar: { version: 1, cleared: {} } });
     expect(s!.eligible).toEqual(["e90", "e360"]);
-    expect(s!.status).toBe("promoted");
+    // Hand-placed on t2: eligible, but it did not climb, so "promoted" — the
+    // earned word — is not said of it, and the witness stays false.
+    expect(s!.status).toBe("active");
+    expect(s!.declaredTier).toBe("t2");
+    expect(s!.tier).toBe("t2");
+    expect(s!.earnedRung1).toBe(false);
     expect(s!.perEpisode.e90!.reachedL5).toBe(false);
   });
 });
@@ -234,7 +244,7 @@ describe("the ladder", () => {
     account: null,
     episodeMs: null,
   });
-  const m: RosterModel = { name: "m", model: "m" };
+  const m: RosterModel = { name: "m", model: "m", tier: "t1" };
 
   test("rungs escalate with consecutive failures and the deadline is the last failure plus the rung", () => {
     const runs = [fail(1, NOW - 10 * HOUR), fail(2, NOW - 9 * HOUR), fail(3, NOW - 1000)];
@@ -335,8 +345,8 @@ describe("the ladder", () => {
 });
 
 describe("nextJobs", () => {
-  const st = (name: string, over: Partial<Parameters<typeof projectModel>[1][number]>[] | RunFact[], tiers?: ("e90" | "e360")[]) =>
-    projectModel({ name, model: name, tiers: tiers as never }, over as RunFact[], DEFAULT_POLICY, { now: NOW });
+  const st = (name: string, over: Partial<Parameters<typeof projectModel>[1][number]>[] | RunFact[], tier: "t0" | "t1" | "t2" = "t1") =>
+    projectModel({ name, model: name, tier }, over as RunFact[], DEFAULT_POLICY, { now: NOW });
   const good = (model: string, ep: "e90" | "e360", i: number, level = 3): RunFact => ({
     runId: `${model}-${ep}-${i}`,
     model,
@@ -419,8 +429,9 @@ describe("paid and free (ADR-0034 amendment)", () => {
     account: null,
     episodeMs: null,
   });
-  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: { characters: [...DEFAULT_EXTRA_CHARACTERS], local: DEFAULT_LOCAL_EXTRAS } };
-  const st = (r: RosterModel, runs: RunFact[], p = policy) => projectModel(r, runs, p, { now: NOW });
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
+  const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[], p = policy) =>
+    projectModel({ tier: "t1", ...r }, runs, p, { now: NOW });
 
   test("billing is derived once: slug, LAN, subscription, allowlist, override", () => {
     expect(st({ name: "p", model: "vendor/big" }, []).billing).toBe("paid");
@@ -432,15 +443,41 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
   });
 
-  test("paid targets are 3/1 by default and hard; per-entry override still wins; no paid policy means 3/3", () => {
-    const p = st({ name: "p", model: "vendor/big" }, [good("vendor/big", "e90", 1, 5)]);
-    expect(p.perEpisode.e90!.target).toBe(3);
-    expect(p.perEpisode.e360!.target).toBe(1);
-    expect(st({ name: "p", model: "vendor/big", runsPerEpisode: { e360: 2 } }, []).perEpisode.e360!.target).toBe(2);
-    expect(st({ name: "p", model: "vendor/big" }, [], DEFAULT_POLICY).perEpisode.e360!.target).toBe(3);
-    const met = st({ name: "p", model: "vendor/big" }, [good("vendor/big", "e90", 1), good("vendor/big", "e90", 2), good("vendor/big", "e90", 3)]);
+  test("a target is the tier and only the tier — billing buys no runs and costs none (ADR-0040)", () => {
+    // The same tier means the same budget whoever is paying. This is the whole
+    // point of the split: billing says where a run may execute, never how many.
+    for (const model of ["vendor/big", "vendor/big:free"]) {
+      const t1 = st({ name: "m", model, tier: "t1" }, [good(model, "e90", 1, 5)]);
+      expect(t1.perEpisode.e90!.target).toBe(3);
+      expect(t1.tier).toBe("t2");
+      expect(t1.perEpisode.e360!.target).toBe(1);
+      expect(st({ name: "m", model, tier: "t0" }, []).perEpisode.e90!.target).toBe(1);
+    }
+    // A tier that buys no e360 is not eligible for one: the target and the
+    // eligibility are one statement, so `promoted, 0/0` cannot be said again.
+    const trial = st({ name: "p", model: "vendor/big", tier: "t0" }, [good("vendor/big", "e90", 1, 5)]);
+    expect(trial.earnedRung1).toBe(true);
+    expect(trial.tier).toBe("t0");
+    expect(trial.eligible).toEqual(["e90"]);
+    expect(trial.perEpisode.e360!.target).toBe(0);
+    expect(trial.status).not.toBe("promoted");
+    // And the witness it kept is what makes the move to t1 free: same runs, and
+    // it lands on t2 immediately without re-running anything.
+    const moved = st({ name: "p", model: "vendor/big", tier: "t1" }, [good("vendor/big", "e90", 1, 5)]);
+    expect(moved.tier).toBe("t2");
+    expect(moved.status).toBe("promoted");
+    const met = st({ name: "p", model: "vendor/big", tier: "t0" }, [good("vendor/big", "e90", 1)]);
     expect(schedulability(met, new Set(), policy)).toMatchObject({ ok: false, extras: false });
     expect(planNextJobs([met], ["R1"], new Set(), { policy })).toEqual({ jobs: [], held: [] });
+  });
+
+  test("effectiveTier: t0 holds the ladder, t1 climbs once, t2 is the top rung", () => {
+    expect(effectiveTier("t0", true)).toBe("t0");
+    expect(effectiveTier("t1", false)).toBe("t1");
+    expect(effectiveTier("t1", true)).toBe("t2");
+    expect(effectiveTier("t2", true)).toBe("t2");
+    // A climb is one rung, never two: t2 is where the ladder ends today.
+    expect(TIER_TABLE[effectiveTier("t1", true)].promotesTo).toBeNull();
   });
 
   test("the paid cap: one paid model in flight across the pool, the next candidate takes the account, held says why", () => {
@@ -543,31 +580,30 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(busy.jobs.map((j) => [j.name, j.account])).toEqual([["f1", "R1"]]);
     expect(busy.held).toEqual([{ name: "l1", episode: "e90", why: "no local account configured — add one to accounts.local" }]);
     // An extra follows its model's class: the local model's extra takes the box.
-    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1" }, [
+    // `idle` is the model's own axis, so a local model on the character cycle
+    // is now spelled on the entry rather than inferred from a policy knob.
+    const met = st({ name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "characters" }, [
       good("qwen/q", "e90", 1, 5),
       good("qwen/q", "e90", 2),
       good("qwen/q", "e90", 3),
       good("qwen/q", "e360", 4),
-      good("qwen/q", "e360", 5),
-      good("qwen/q", "e360", 6),
     ]);
-    const chars: SchedulingPolicy = { ...policy, extras: { characters: [...policy.extras!.characters], local: "characters" } };
-    const extras = planNextJobs([met], ["R1"], new Set(), { policy: chars, classAccounts: { local: ["BOX"] } });
+    const extras = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
     expect(extras.jobs.map((j) => [j.name, j.account, j.extra !== undefined])).toEqual([["l1", "BOX", true]]);
-    expect(planNextJobs([met], ["R1"], new Set(), { policy: chars, classAccounts: { local: [] } }).jobs).toEqual([]);
+    expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
   });
 
-  test("local extras are freeplay by default: one unbounded run at a time, on the box, never counted", () => {
-    const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1" };
+  test("idle: unlimited — one freeplay session at a time, on its own class's account, never counted", () => {
+    const local = { name: "l1", model: "qwen/q", apiBase: "http://10.0.0.5:1234/v1", idle: "unlimited" as const };
     // Targets met on e90 only: unpromoted (no counted run reached L5), so e360 is not open.
     const met = st(local, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
     expect(met.eligible).toEqual(["e90"]);
     const v = schedulability(met, new Set(), policy);
     expect(v).toMatchObject({ ok: false, extras: true });
-    expect(v.why).toContain("freeplay extras");
+    expect(v.why).toContain("unlimited sessions");
     const plan = planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: ["BOX"] } });
     expect(plan.jobs.map((j) => [j.name, j.episode, j.account, j.extra])).toEqual([["l1", "freeplay", "BOX", undefined]]);
-    expect(plan.jobs[0]!.why).toContain("freeplay");
+    expect(plan.jobs[0]!.why).toContain("unlimited session");
     // Never on a pool account, and one at a time: a running model is not picked again.
     expect(planNextJobs([met], ["R1"], new Set(), { policy, classAccounts: { local: [] } }).jobs).toEqual([]);
     expect(planNextJobs([met], ["R1"], new Set(["l1"]), { policy, classAccounts: { local: ["BOX"] } }).jobs).toEqual([]);
@@ -592,24 +628,32 @@ describe("paid and free (ADR-0034 amendment)", () => {
       episode: "e90",
       account: "BOX",
     });
-    // The knob puts the box back on the character cycle.
-    const cycle: SchedulingPolicy = { ...policy, extras: { characters: [...policy.extras!.characters], local: "characters" } };
-    expect(planNextJobs([met], [], new Set(), { policy: cycle, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
+    // The axis is per model, so the same box on `characters` cycles instead —
+    // and, unlike the old knob, a NON-local model may take unlimited sessions.
+    const cycle = st({ ...local, idle: "characters" }, [good("qwen/q", "e90", 1, 3), good("qwen/q", "e90", 2, 4), good("qwen/q", "e90", 3, 2)]);
+    expect(planNextJobs([cycle], [], new Set(), { policy, classAccounts: { local: ["BOX"] } }).jobs[0]).toMatchObject({
       episode: "e90",
-      extra: policy.extras!.characters[0]!,
+      extra: IDLE_CHARACTERS[0]!,
     });
+    const pooled = st({ name: "f1", model: "v/f:free", idle: "unlimited" }, [good("v/f:free", "e90", 1, 3), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3)]);
+    expect(planNextJobs([pooled], ["R1"], new Set(), { policy }).jobs[0]).toMatchObject({ episode: "freeplay", account: "R1" });
   });
 
-  test("extras: free models past their targets get lowest-priority runs, cycling characters; e360 extras only when promoted", () => {
-    const chars = policy.extras!.characters;
-    const metFree = st({ name: "f", model: "v/f:free" }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4), good("v/f:free", "e360", 5), good("v/f:free", "e360", 6)]);
+  test("idle: characters — extras past the target, cycling the code table, lowest priority, class-bound", () => {
+    const chars = IDLE_CHARACTERS;
+    const idle = { idle: "characters" as const };
+    // t1 climbs to t2 on the level-5 run, so e360 x1 is part of this budget.
+    const metFree = st({ name: "f", model: "v/f:free", ...idle }, [good("v/f:free", "e90", 1, 5), good("v/f:free", "e90", 2), good("v/f:free", "e90", 3), good("v/f:free", "e360", 4)]);
+    expect(metFree.tier).toBe("t2");
     expect(schedulability(metFree, new Set(), policy)).toMatchObject({ ok: false, extras: true });
-    expect(schedulability(metFree, new Set(), policy).why).toContain("extras");
-    const unpromoted = st({ name: "u", model: "v/u:free" }, [good("v/u:free", "e90", 1), good("v/u:free", "e90", 2), good("v/u:free", "e90", 3)]);
-    const fresh = st({ name: "n", model: "v/n:free" }, []);
-    const metPaid = st({ name: "p", model: "v/p" }, [good("v/p", "e90", 1), good("v/p", "e90", 2), good("v/p", "e90", 3)]);
+    expect(schedulability(metFree, new Set(), policy).why).toContain("extra characters");
+    const unpromoted = st({ name: "u", model: "v/u:free", ...idle }, [good("v/u:free", "e90", 1), good("v/u:free", "e90", 2), good("v/u:free", "e90", 3)]);
+    const fresh = st({ name: "n", model: "v/n:free", ...idle }, []);
+    // A paid model with the default `idle: none` takes no extras — but now that
+    // is its entry's word, not a rule about its billing.
+    const metPaid = st({ name: "p", model: "v/p", tier: "t0" }, [good("v/p", "e90", 1)]);
     const plan = planNextJobs([metFree, unpromoted, fresh, metPaid], ["R1", "R2", "R3", "R4"], new Set(), { policy });
-    // The fresh model first (a real target); then extras, e90 before e360, fewest extras first; paid never.
+    // The fresh model first (a real target); then extras, e90 before e360, fewest extras first.
     expect(plan.jobs.map((j) => [j.name, j.episode, j.extra])).toEqual([
       ["n", "e90", undefined],
       ["f", "e90", chars[0]],
@@ -617,21 +661,22 @@ describe("paid and free (ADR-0034 amendment)", () => {
     ]);
     expect(plan.jobs[1]!.attempt).toBe(4);
     expect(plan.jobs[1]!.why).toContain("extra #1");
-    // The cycle: with two extras already made, the third takes characters[2]; an extra is an attempt, never counted.
-    const twoExtras = st({ name: "f", model: "v/f:free" }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e90", 7, 2, true), good("v/f:free", "e360", 8, 2, true)]);
-    expect(twoExtras.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
-    expect(twoExtras.perEpisode.e360).toMatchObject({ counted: 0, attempts: 1, extras: 1, target: 3 });
-    // e360 target is still open, so that is a real pick, not an extra.
-    const next = planNextJobs([twoExtras], ["R1"], new Set(), { policy }).jobs[0]!;
-    expect(next).toMatchObject({ episode: "e360", attempt: 2 });
+    // A tier with an open e360 makes a real pick, not an extra.
+    const oneExtra = st({ name: "f", model: "v/f:free", ...idle }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e90", 7, 2, true)]);
+    expect(oneExtra.perEpisode.e90).toMatchObject({ counted: 3, attempts: 4, extras: 1 });
+    expect(oneExtra.perEpisode.e360).toMatchObject({ counted: 0, attempts: 0, extras: 0, target: 1 });
+    const next = planNextJobs([oneExtra], ["R1"], new Set(), { policy }).jobs[0]!;
+    expect(next).toMatchObject({ episode: "e360", attempt: 1 });
     expect(next.extra).toBeUndefined();
-    // With e360 met too, the next extra is the third in the cycle; accounts nothing else wants are the only ones extras take.
-    const allMet = st({ name: "f", model: "v/f:free" }, [...twoExtras.perEpisode.e90!.counted > 0 ? [] : [], ...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), ...[4, 5, 6].map((i) => good("v/f:free", "e360", i)), good("v/f:free", "e90", 7, 2, true), good("v/f:free", "e360", 8, 2, true)]);
-    expect(planNextJobs([allMet], ["R1"], new Set(), { policy }).jobs[0]!.extra).toEqual(chars[2]!);
+    // With the whole tier met, the next extra is the second in the cycle.
+    const allMet = st({ name: "f", model: "v/f:free", ...idle }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e360", 4), good("v/f:free", "e90", 7, 2, true)]);
+    expect(planNextJobs([allMet], ["R1"], new Set(), { policy }).jobs[0]!.extra).toEqual(chars[1]!);
+    // Extras only ever take accounts nothing else wanted.
     expect(planNextJobs([allMet, fresh], ["R1"], new Set(), { policy }).jobs.map((j) => j.name)).toEqual(["n"]);
-    // No extras policy: nothing.
-    expect(planNextJobs([allMet], ["R1"], new Set(), { policy: { ...policy, extras: null } }).jobs).toEqual([]);
-    // An extra is a free model's run and only ever lands on a free account.
+    // `idle: none` is the default and buys nothing.
+    const quiet = st({ name: "f", model: "v/f:free" }, [...[1, 2, 3].map((i) => good("v/f:free", "e90", i, 5)), good("v/f:free", "e360", 4)]);
+    expect(planNextJobs([quiet], ["R1"], new Set(), { policy }).jobs).toEqual([]);
+    // An extra follows its model's class: a free model's never lands on a paid account.
     expect(planNextJobs([allMet], [], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs).toEqual([]);
     expect(planNextJobs([allMet], ["R1"], new Set(), { policy, classAccounts: { paid: ["PAID"] } }).jobs.map((j) => j.account)).toEqual(["R1"]);
   });
@@ -657,19 +702,20 @@ describe("outstandingWork", () => {
     account: null,
     episodeMs: null,
   });
-  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID, runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode } }, extras: null };
-  const st = (r: RosterModel, runs: RunFact[]): ModelState => projectModel(r, runs, policy, { now: NOW });
+  const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
+  const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[]): ModelState =>
+    projectModel({ tier: "t1", ...r }, runs, policy, { now: NOW });
 
-  // One of each thing the metric has to tell apart: a promoted model (owes
-  // e360 now), an unpromoted one (owes it only in the upper bound), a paid one
-  // (its own 3/1 targets and a cap of 1), a local one (its own single box), a
-  // force-tiered one (eligible without a witness), a claude-code one (the
-  // driver cap), and a pinned one that owes runs nobody schedules.
+  // One of each thing the metric has to tell apart: a model that climbed (owes
+  // e360 now), one that has not (owes it only in the upper bound), a paid one,
+  // a local one (its own single box), one placed on t2 by hand (eligible
+  // without a witness), a claude-code one (the driver cap), and a pinned one
+  // that owes runs nobody schedules.
   const promoted = st({ name: "promoted", model: "v/promoted:free" }, [1, 2, 3].map((i) => good("v/promoted:free", "e90", i, 5)));
   const unpromoted = st({ name: "unpromoted", model: "v/unpromoted:free" }, [good("v/unpromoted:free", "e90", 1)]);
   const paid = st({ name: "paid", model: "vendor/paid" }, []);
   const local = st({ name: "local", model: "vendor/local", apiBase: "http://192.168.1.20:1234/v1" }, []);
-  const forced = st({ name: "forced", model: "v/forced:free", tiers: ["e360"] }, []);
+  const forced = st({ name: "forced", model: "v/forced:free", tier: "t2" }, []);
   const cc = st({ name: "cc", model: "opus", driver: "claude-code" }, []);
   const pinned = st({ name: "pinned", model: "v/pinned:free" }, []);
   const states = [promoted, unpromoted, paid, local, forced, cc, pinned];
@@ -683,32 +729,38 @@ describe("outstandingWork", () => {
 
   test("bounds: promotion is the only unknown, and extras and excluded models are not work", () => {
     const o = outstandingWork(input);
-    // lower: promoted 3xe360, unpromoted 2xe90, forced 3xe90 + 3xe360, cc 3xe90, paid 3xe90, local 3xe90.
-    expect(o.lower).toBe(20);
-    // upper adds the e360 target of everyone still eligible: unpromoted 3, cc 3, local 3, paid 1.
-    expect(o.upper).toBe(30);
+    // lower: promoted 1xe360, unpromoted 2xe90, forced 3xe90 + 1xe360, cc 3xe90, paid 3xe90, local 3xe90.
+    expect(o.lower).toBe(16);
+    // upper adds the e360 a climb would buy, for everyone who could still climb:
+    // unpromoted, cc, local, paid — one each, because t2 buys one e360.
+    expect(o.upper).toBe(20);
     expect(o.upper).toBeGreaterThanOrEqual(o.lower);
     // The pinned model owes 3 e90 runs and contributes none of them.
     expect(pinned.perEpisode.e90!.target - pinned.perEpisode.e90!.counted).toBe(3);
-    expect(outstandingWork({ ...input, excluded: [] }).lower).toBe(23);
+    expect(outstandingWork({ ...input, excluded: [] }).lower).toBe(19);
     // A retired model is not work either, however much it still owes.
     const dead = { ...pinned, name: "dead", retired: { at: NOW, reason: "gave up" } };
-    expect(outstandingWork({ ...input, states: [...states, dead] }).lower).toBe(20);
+    expect(outstandingWork({ ...input, states: [...states, dead] }).lower).toBe(16);
+    // A t0 model's ladder is held, so the upper bound makes no bet on it:
+    // a trial is one run, and the metric says so rather than hinting at four.
+    const trial = st({ name: "trial", model: "v/trial:free", tier: "t0" }, []);
+    const t = outstandingWork({ states: [trial], accounts: { pool: 1 } });
+    expect(t).toMatchObject({ lower: 1, upper: 1 });
   });
 
   test("eta: class-wise minutes over class concurrency, claude-code carved out of the pool", () => {
     const o = outstandingWork(input);
     const by = new Map(o.breakdown.map((g) => [g.group, g]));
     expect([...by.keys()].sort()).toEqual(["claude-code", "local", "paid", "pool"]);
-    expect(by.get("pool")).toMatchObject({ concurrency: 5, lowerRuns: 11, lowerMinutes: 2610, upperRuns: 14, upperMinutes: 3690 });
+    expect(by.get("pool")).toMatchObject({ concurrency: 5, lowerRuns: 7, lowerMinutes: 1170, upperRuns: 8, upperMinutes: 1530 });
     // The driver cap binds tighter than the five pool accounts.
-    expect(by.get("claude-code")).toMatchObject({ concurrency: 2, lowerMinutes: 270, upperMinutes: 1350 });
+    expect(by.get("claude-code")).toMatchObject({ concurrency: 2, lowerMinutes: 270, upperMinutes: 630 });
     // policy.paid.maxConcurrent caps the paid class at one in flight.
     expect(by.get("paid")).toMatchObject({ concurrency: 1, lowerRuns: 3, upperRuns: 4 });
     expect(by.get("local")).toMatchObject({ concurrency: 1, lowerRuns: 3 });
     const min = (ms: number | null): number => Math.round((ms ?? 0) / 60_000);
-    expect(min(o.etaLowerMs)).toBe(2610 / 5 + 270 / 2 + 270 + 270);
-    expect(min(o.etaUpperMs)).toBe(3690 / 5 + 1350 / 2 + 630 + 1350);
+    expect(min(o.etaLowerMs)).toBe(1170 / 5 + 270 / 2 + 270 + 270);
+    expect(min(o.etaUpperMs)).toBe(1530 / 5 + 630 / 2 + 630 + 630);
     expect(o.etaLowerMs!).toBeLessThanOrEqual(o.etaUpperMs!);
   });
 
@@ -717,7 +769,7 @@ describe("outstandingWork", () => {
     const none = outstandingWork({ states: [], accounts: { pool: 5 } });
     expect(none).toMatchObject({ lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0 });
     expect(formatOutstanding(none)).toContain("exhausted");
-    expect(formatOutstanding(outstandingWork(input))).toBe("outstanding: 20–30 scheduled runs, ≈ 20h–57h to exhaust");
+    expect(formatOutstanding(outstandingWork(input))).toBe("outstanding: 16–20 scheduled runs, ≈ 15h–31h to exhaust");
   });
 });
 

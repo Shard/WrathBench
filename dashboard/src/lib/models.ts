@@ -13,13 +13,17 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/ap
 
 /**
  * The table, left to right. Status leads: it is what an operator scans for.
- * The same columns `run-fleet --status` prints — billing, status, the tiers,
- * extras, the verdict — plus where the model is served and its newest run.
+ * The same columns `run-fleet --status` prints — billing, the tier, status, the
+ * episodes, extras, the verdict — plus where the model is served and its
+ * newest run.
+ *
+ * On the word "tier": since ADR-0040 it means a rung of the EVIDENCE ladder
+ * (t0/t1/t2), never an episode. The episode columns are named by their ids.
  */
-export const MODEL_COLUMNS = ["status", "model", "billing", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
+export const MODEL_COLUMNS = ["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
 
-/** The tiers the page shows a counted/target cell for, in policy order. */
-export const TIER_COLUMNS = ["e90", "e360"] as const;
+/** The episodes the page shows a counted/target cell for, in policy order. */
+export const EPISODE_COLUMNS = ["e90", "e360"] as const;
 
 /** A status the CSS has a badge colour for; anything else falls back to plain. */
 export function statusClass(status: ModelStatusView): string {
@@ -71,9 +75,33 @@ export function schedulableOf(row: ModelRowView): string {
   return `${row.schedulable.ok ? "yes" : "no"}: ${row.schedulable.why}`;
 }
 
-/** Whether a row has earned the long tier — the marker beside its name. */
+/**
+ * Whether the ladder actually moved this model — the marker beside its name.
+ * Not "is it eligible for e360": a model an operator placed on t2 by hand is
+ * eligible without having earned anything, and must not wear the badge.
+ */
 export function isPromoted(row: ModelRowView): boolean {
-  return row.eligible.includes("e360");
+  return row.tier !== row.declaredTier;
+}
+
+/**
+ * The tier cell: a climb as the move it was, a held witness as `t0*`. A trial
+ * model that has earned its rung is exactly the row an operator scans for when
+ * deciding what to promote, so it gets a mark of its own rather than hiding
+ * behind a status word it is not allowed to have.
+ */
+export function tierOf(row: ModelRowView): string {
+  if (row.tier !== row.declaredTier) return `${row.declaredTier}→${row.tier}`;
+  return row.earnedRung1 ? `${row.tier}*` : row.tier;
+}
+
+/** The tier cell's hover: what the model was admitted to, and what it earned. */
+export function tierTitle(row: ModelRowView): string {
+  const budget = (t: string): string => `tier ${t}`;
+  const earned = row.earnedRung1 ? "earned rung 1 (a counted e90 reached the promotion level)" : "has not earned rung 1";
+  if (row.tier !== row.declaredTier) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
+  if (row.earnedRung1) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
+  return `${budget(row.tier)} — ${earned}`;
 }
 
 /**

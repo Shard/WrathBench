@@ -66,8 +66,8 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 /**
  * The episode tiers the policy has targets on. `freeplay` has none — it is
- * never scheduled as evidence — but a local model's extras are freeplay runs
- * (`ExtrasMode`), so the projection still keeps stats for it.
+ * never scheduled as evidence — but an `idle: "unlimited"` model's extras are
+ * freeplay runs, so the projection still keeps stats for it.
  */
 export const POLICY_EPISODES: readonly EpisodeId[] = ["e90", "e360"];
 
@@ -80,26 +80,97 @@ export const POLICY_EPISODES: readonly EpisodeId[] = ["e90", "e360"];
  */
 export const STATS_EPISODES: readonly EpisodeId[] = EPISODE_IDS;
 
-/**
- * How a model past its targets takes its extras (ADR-0034, "Local extras are
- * freeplay"): `characters` cycles `extras.characters` over the scored tiers,
- * `freeplay` runs one unbounded freeplay episode at a time.
- */
-export type ExtrasMode = "characters" | "freeplay";
-
-/** The local class's default: an inference-bound model that just keeps playing. */
-export const DEFAULT_LOCAL_EXTRAS: ExtrasMode = "freeplay";
-
 /** A starting character for an extra run: race and class ids as the client sends them. */
 export interface StartingCharacter {
   race: number;
   class: number;
 }
 
-export interface SchedulingPolicy {
-  /** Runs per (model, episode) the policy aims for; a roster entry may override. */
+/**
+ * The ladder a model climbs, named once here (ADR-0040). A tier is a statement
+ * of **how much evidence** a model gets, denominated in runs, and it is the
+ * only thing that sets a run count: there is no per-entry override and no
+ * per-billing table, so "how many runs does this model get" has exactly one
+ * answer and it is the word in the config.
+ *
+ * The table lives in code, not in `fleet.json`, for the reason promotion is a
+ * threshold rather than a judgement (ADR-0034): a budget that every model is
+ * held to alike is a recorded decision, and a bespoke volume is a NAMED tier
+ * added here, reviewed like an episode id — never a number edited into one
+ * model's entry at 03:00.
+ *
+ * Money is deliberately not modelled. A tier is denominated in runs; a spend
+ * cap, when one is wanted, belongs beside `paid.maxConcurrent` as its own
+ * thing. Minting `t0a`/`t0b` to approximate dollars is the accretion this
+ * table exists to stop.
+ */
+export const TIERS = ["t0", "t1", "t2"] as const;
+export type Tier = (typeof TIERS)[number];
+
+export interface TierSpec {
+  /** The counted runs this tier buys, per scored episode. Zero: not eligible. */
   runsPerEpisode: { e90: number; e360: number };
-  /** The level an e90 run must reach to promote the model into e360. */
+  /**
+   * The tier a counted rung-1 `e90` (level `promoteAtLevel`) promotes into, or
+   * null when the ladder is held here. Held is not "rung zero": a `t0` model is
+   * not unpromoted, it is not admitted to the ladder, and its witness is still
+   * recorded so that moving it to `t1` promotes it on evidence it already has.
+   */
+  promotesTo: Tier | null;
+  /** What `--status` calls it. */
+  label: string;
+}
+
+export const TIER_TABLE: Record<Tier, TierSpec> = {
+  t0: { runsPerEpisode: { e90: 1, e360: 0 }, promotesTo: null, label: "trial" },
+  t1: { runsPerEpisode: { e90: 3, e360: 0 }, promotesTo: "t2", label: "standard" },
+  t2: { runsPerEpisode: { e90: 3, e360: 1 }, promotesTo: null, label: "long" },
+};
+
+/**
+ * The tier a model is actually scheduled under: its declared tier, advanced
+ * once if it has earned rung 1 and its tier promotes. Derived every tick and
+ * never written back — the config states where a model was ADMITTED, the run
+ * history states what it EARNED, and the two are read together rather than one
+ * overwriting the other. So an operator may hand-promote by editing the tier,
+ * and that never fabricates a promotion record.
+ */
+export function effectiveTier(declared: Tier, earnedRung1: boolean): Tier {
+  const to = TIER_TABLE[declared].promotesTo;
+  return earnedRung1 && to !== null ? to : declared;
+}
+
+/**
+ * What a model does with an account when it has no counted runs left to earn.
+ * One axis replacing two mechanisms (the free roster's race/class cycle and the
+ * local class's freeplay), so idle behaviour is a property of the model rather
+ * than a consequence of which account class it landed in.
+ *
+ * - `none` — nothing. The default, and what a paid model wants.
+ * - `characters` — another scored run of an eligible tier with the next
+ *   race/class in the cycle: a start-state dimension sampled for free.
+ * - `unlimited` — a freeplay session, unscored, up to `UNLIMITED_SESSION_MS`.
+ */
+export const IDLE_MODES = ["none", "characters", "unlimited"] as const;
+export type IdleMode = (typeof IDLE_MODES)[number];
+
+/**
+ * The wall clock an `unlimited` idle session gets, on every account class.
+ *
+ * It is a clock rather than the unbounded run local extras used to get, because
+ * a class governs the next pick and never a run in flight (ADR-0034): an
+ * endless session ended only by a 20-minute idle watchdog — which a model that
+ * keeps playing never trips — holds its account forever, and after a series
+ * bump the re-armed scored targets would queue behind it indefinitely. Six
+ * hours is `e360`'s constant, and the tier pins no clock of its own
+ * (docs/EPISODES.md), so nothing about comparability changes. Long-horizon
+ * continuity is meant to come from resuming the character, not from one run
+ * that never ends (FOLLOW-UPS 67).
+ */
+export const UNLIMITED_SESSION_MS = 6 * 60 * 60_000;
+
+export interface SchedulingPolicy {
+  /** The level an e90 run must reach to promote the model up its tier. */
   promoteAtLevel: number;
   /**
    * The harness series (`comparability.ts`) runs must carry to count. Null:
@@ -107,29 +178,30 @@ export interface SchedulingPolicy {
    */
   series: string | null;
   /**
-   * The paid-model policy, or null to treat paid and free alike (the
-   * pre-split behaviour). Paid targets are hard — never extras — and at most
-   * `maxConcurrent` paid models are in flight across the pool at once.
+   * The paid-model throttle, or null to treat paid and free alike. Only a
+   * throttle now: how much evidence a paid model gets is its tier, the same
+   * sentence a free model's budget is written in. Paid-ness buys a model
+   * nothing and costs it nothing here — it says only where a run may
+   * physically execute (the paid account class) and how many at once.
    */
-  paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
-  /**
-   * Extra runs for free models once nothing else is schedulable, or null for
-   * none. Each extra takes the next character in `characters`, cycling —
-   * except for the local class, whose extras are whatever `local` says.
-   */
-  extras: { characters: StartingCharacter[]; local: ExtrasMode } | null;
+  paid: { maxConcurrent: number } | null;
 }
 
-/** Paid defaults once `policy.paid` is present: one long run is enough to see the shape. */
-export const DEFAULT_PAID = { runsPerEpisode: { e90: 3, e360: 1 }, maxConcurrent: 1 } as const;
+/** The paid default once `policy.paid` is present: one paid run in flight. */
+export const DEFAULT_PAID = { maxConcurrent: 1 } as const;
 
 /**
+ * The race/class cycle an `idle: "characters"` model walks, one combo per
+ * extra. In code beside the tier table and for the same reason: it is the
+ * start-state dimension every such model is sampled over alike, so changing it
+ * changes what the fleet is sampling and wants a commit rather than an edit.
+ *
  * Sensible level-1 combos for the Alliance starting zones the wiki bundle
  * covers: human (1), dwarf (3), night elf (4), gnome (7); classes a fresh
  * character can play solo — warrior 1, paladin 2, hunter 3, rogue 4, priest 5,
  * mage 8, warlock 9, druid 11.
  */
-export const DEFAULT_EXTRA_CHARACTERS: readonly StartingCharacter[] = [
+export const IDLE_CHARACTERS: readonly StartingCharacter[] = [
   { race: 1, class: 1 },
   { race: 3, class: 3 },
   { race: 4, class: 11 },
@@ -141,31 +213,38 @@ export const DEFAULT_EXTRA_CHARACTERS: readonly StartingCharacter[] = [
 ];
 
 export const DEFAULT_POLICY: SchedulingPolicy = {
-  runsPerEpisode: { e90: 3, e360: 3 },
   promoteAtLevel: 5,
   series: null,
   paid: null,
-  extras: null,
 };
 
 /**
  * The file's `policy` block (`infra/fleet.json`) over the defaults, in one
  * place so the supervisor, `--status` and the viewer read the same answer.
  *
- * Every field is optional and absent means today's behaviour: `paid` absent
- * is no paid/free split, `extras` absent is no extras, and a present block
- * with nothing in it takes `DEFAULT_PAID` / `DEFAULT_EXTRA_CHARACTERS`. The
- * series is the caller's (the checkout it runs from), never the file's.
- * Throws on a malformed block with a message naming the field; the viewer
- * catches and shows the defaults, the supervisor refuses the config.
+ * What is left here is only ever about **where a run may physically execute
+ * and how many at once**: `maxConcurrent` per rate-limit key, and `paid` as
+ * the paid class's throttle. How much evidence a model gets is its tier
+ * (ADR-0040) and is not expressible in this block at all.
+ *
+ * The removed keys are refused BY NAME rather than ignored. A file still
+ * carrying `policy.runsPerEpisode` meant something specific by it, and
+ * silently dropping it would quietly re-scope every model's budget; the
+ * supervisor keeps its last good config and says which key to move where.
+ * The series is the caller's (the checkout it runs from), never the file's.
  */
 export function parsePolicyBlock(raw: unknown, series: string | null = null): SchedulingPolicy & { maxConcurrent: Record<string, number> } {
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
   const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown };
-  const runs = parseRunsPerEpisode(o.runsPerEpisode, "policy.runsPerEpisode");
-  const out = { ...base, runsPerEpisode: { ...DEFAULT_POLICY.runsPerEpisode, ...runs } };
+  const out = { ...base };
+  if (o.runsPerEpisode !== undefined) {
+    throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
+  }
+  if (o.extras !== undefined) {
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "characters" or "unlimited"');
+  }
   if (o.maxConcurrent !== undefined) {
     if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
       throw new Error('policy.maxConcurrent must be an object like { "claude-code": 2 }');
@@ -178,55 +257,36 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     }
   }
   if (o.paid !== undefined) {
-    if (typeof o.paid !== "object" || o.paid === null || Array.isArray(o.paid)) throw new Error('policy.paid must be an object like { "runsPerEpisode": { "e90": 3, "e360": 1 }, "maxConcurrent": 1 }');
+    if (typeof o.paid !== "object" || o.paid === null || Array.isArray(o.paid)) throw new Error('policy.paid must be an object like { "maxConcurrent": 1 }');
     const p = o.paid as { runsPerEpisode?: unknown; maxConcurrent?: unknown };
-    const pr = parseRunsPerEpisode(p.runsPerEpisode, "policy.paid.runsPerEpisode");
+    if (p.runsPerEpisode !== undefined) {
+      throw new Error("policy.paid.runsPerEpisode is not a 0.5 key — a paid model's budget is its tier, the same sentence a free model's is written in");
+    }
     let cap: number = DEFAULT_PAID.maxConcurrent;
     if (p.maxConcurrent !== undefined) {
       if (typeof p.maxConcurrent !== "number" || !Number.isInteger(p.maxConcurrent) || p.maxConcurrent < 0) throw new Error("policy.paid.maxConcurrent must be a non-negative integer");
       cap = p.maxConcurrent;
     }
-    out.paid = { runsPerEpisode: { ...DEFAULT_PAID.runsPerEpisode, ...pr }, maxConcurrent: cap };
-  }
-  if (o.extras !== undefined) {
-    if (typeof o.extras !== "object" || o.extras === null || Array.isArray(o.extras)) throw new Error('policy.extras must be an object like { "characters": [{ "race": 1, "class": 1 }] }');
-    const e = o.extras as { characters?: unknown };
-    let characters: StartingCharacter[] = [...DEFAULT_EXTRA_CHARACTERS];
-    if (e.characters !== undefined) {
-      if (!Array.isArray(e.characters)) throw new Error("policy.extras.characters must be an array of { race, class }");
-      characters = (e.characters as unknown[]).map((c, i) => {
-        const cc = c as { race?: unknown; class?: unknown };
-        const ok = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 11;
-        if (typeof c !== "object" || c === null || !ok(cc.race) || !ok(cc.class)) {
-          throw new Error(`policy.extras.characters[${i}] must be { race: 1..11, class: 1..11 }`);
-        }
-        return { race: cc.race, class: cc.class };
-      });
-    }
-    let local: ExtrasMode = DEFAULT_LOCAL_EXTRAS;
-    if ((e as { local?: unknown }).local !== undefined) {
-      const l = (e as { local?: unknown }).local;
-      if (l !== "characters" && l !== "freeplay") {
-        throw new Error('policy.extras.local must be "freeplay" (one unbounded freeplay run at a time) or "characters" (the race/class cycle)');
-      }
-      local = l;
-    }
-    out.extras = { characters, local };
+    out.paid = { maxConcurrent: cap };
   }
   return out;
 }
 
-/** `{ e90?, e360? }` as targets; `where` names the field in the error. */
-export function parseRunsPerEpisode(raw: unknown, where: string): Partial<Record<"e90" | "e360", number>> | undefined {
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${where} must be an object like { "e90": 3, "e360": 3 }`);
-  const out: Partial<Record<"e90" | "e360", number>> = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (k !== "e90" && k !== "e360") throw new Error(`${where}: unknown episode ${k} (e90 or e360; freeplay has no target — it is only ever an extra)`);
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new Error(`${where}.${k} must be a non-negative integer`);
-    out[k] = v;
+/** A tier name; `where` names the entry in the error. */
+export function parseTier(raw: unknown, where: string): Tier {
+  if (typeof raw !== "string" || !(TIERS as readonly string[]).includes(raw)) {
+    throw new Error(`${where}: tier must be one of ${TIERS.join(", ")} — it is how many runs this model gets, and every entry states it`);
   }
-  return out;
+  return raw as Tier;
+}
+
+/** An idle mode; absent is `none`, so idle work is never bought by omission. */
+export function parseIdle(raw: unknown, where: string): IdleMode {
+  if (raw === undefined) return "none";
+  if (typeof raw !== "string" || !(IDLE_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`${where}: idle must be one of ${IDLE_MODES.join(", ")}`);
+  }
+  return raw as IdleMode;
 }
 
 /**
@@ -265,10 +325,14 @@ export interface RosterModel {
   effort?: string;
   driver?: string;
   apiBase?: string;
-  /** Manual force: tiers listed here are eligible regardless of history. */
-  tiers?: EpisodeId[];
-  /** Per-entry target override. */
-  runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
+  /**
+   * How much evidence this model gets (`TIER_TABLE`). Required: with a default,
+   * adding a model and forgetting the field quietly buys a full budget, and for
+   * a paid model that is money nobody approved.
+   */
+  tier: Tier;
+  /** What it does with an account once its tier is spent. Absent: nothing. */
+  idle?: IdleMode;
   /** Operator override of the billing verdict (`model-cost.ts`). */
   billing?: Billing;
 }
@@ -436,6 +500,23 @@ export interface ModelState {
   status: ModelStatus;
   /** Free or paid, decided by `model-cost.ts` (or the roster's override). */
   billing: Billing;
+  /** The tier the config admitted this model to — what an operator wrote. */
+  declaredTier: Tier;
+  /**
+   * The tier it is scheduled under: `declaredTier`, advanced once if it earned
+   * rung 1 and that tier promotes. Equal to `declaredTier` for a `t0` model
+   * however well it plays, and for one an operator hand-promoted.
+   */
+  tier: Tier;
+  /**
+   * A counted `e90` in this series reached `promoteAtLevel`. Kept apart from
+   * the tier on purpose: this is what the model EARNED, the tier is where it
+   * was ADMITTED, and a hand-promoted model must never read as having earned
+   * it. It is also why moving a `t0` model to `t1` promotes it immediately.
+   */
+  earnedRung1: boolean;
+  /** What it does with an account once its tier is spent. */
+  idle: IdleMode;
   /** Episode tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeId[];
   perEpisode: Partial<Record<EpisodeId, EpisodeStats>>;
@@ -784,10 +865,15 @@ function matchesRoster(f: RunFact, r: RosterModel): boolean {
   return f.model === r.model && (f.effort ?? null) === (r.effort ?? null);
 }
 
-function targetFor(r: RosterModel, ep: EpisodeId, policy: SchedulingPolicy, billing: Billing): number {
+/**
+ * How many counted runs of an episode a tier buys. One input beyond the
+ * episode — the tier — and no override anywhere: this is the whole answer to
+ * "how many runs does this model get". `freeplay` is never evidence, so it is
+ * always zero and is only ever reached as an idle session.
+ */
+function targetFor(tier: Tier, ep: EpisodeId): number {
   if (ep === "freeplay") return 0;
-  const base = billing === "paid" && policy.paid !== null ? policy.paid.runsPerEpisode : policy.runsPerEpisode;
-  return r.runsPerEpisode?.[ep] ?? base[ep];
+  return TIER_TABLE[tier].runsPerEpisode[ep];
 }
 
 /** The billing verdict for a roster entry, as the projection stamps it. */
@@ -827,7 +913,9 @@ export function projectModel(
       attempts: 0,
       extras: 0,
       otherSeries: all.filter((f) => f.episode === ep && !inSeries(f, policy)).length,
-      target: targetFor(r, ep, policy, billing),
+      // Filled below: a target depends on the effective tier, which depends on
+      // whether the e90 walk found a rung-1 witness. Two passes, not a guess.
+      target: 0,
       bestLevel: null,
       reachedL5: false,
       lastEnded: null,
@@ -851,10 +939,19 @@ export function projectModel(
     perEpisode[ep] = stats;
   }
 
-  // Eligibility: e90 always; e360 on promotion or by force.
-  const eligible: EpisodeId[] = ["e90"];
-  const promoted = perEpisode.e90!.reachedL5;
-  if (promoted || r.tiers?.includes("e360") === true) eligible.push("e360");
+  // The tier the model is actually scheduled under: what the config admitted it
+  // to, advanced once if it earned rung 1 and its tier promotes. `t0` holds the
+  // ladder, so a trial model keeps its witness and gains nothing from it until
+  // an operator moves it up — which is what makes that move cost no re-runs.
+  const earnedRung1 = perEpisode.e90!.reachedL5;
+  const tier = effectiveTier(r.tier, earnedRung1);
+  for (const ep of STATS_EPISODES) perEpisode[ep]!.target = targetFor(tier, ep);
+
+  // Eligibility falls out of the budget: an episode the tier buys no runs of is
+  // not one this model may be scheduled on. One statement, so a target of zero
+  // and "not eligible" can no longer disagree the way `promoted, 0/0` did.
+  const eligible: EpisodeId[] = POLICY_EPISODES.filter((ep) => targetFor(tier, ep) > 0);
+  if (!eligible.includes("e90")) eligible.unshift("e90");
 
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
@@ -876,6 +973,10 @@ export function projectModel(
     harness: harnessOf(driverOf(r)),
     status: "active",
     billing,
+    declaredTier: r.tier,
+    tier,
+    earnedRung1,
+    idle: r.idle ?? "none",
     eligible,
     perEpisode,
     ladder,
@@ -910,7 +1011,11 @@ export function projectModel(
     }
   }
   const anyCounted = eligible.some((ep) => (perEpisode[ep]?.counted ?? 0) > 0);
-  state.status = !anyCounted ? "new" : eligible.includes("e360") ? "promoted" : "active";
+  // "promoted" is the earned word, so it is said only when the ladder actually
+  // moved this model — never for one hand-placed on t2, and never for a t0
+  // model holding a rung-1 witness it has not been allowed to spend.
+  const climbed = tier !== r.tier;
+  state.status = !anyCounted ? "new" : climbed ? "promoted" : "active";
   return state;
 }
 
@@ -953,13 +1058,15 @@ export function modelStates(input: ModelStatesInput): ModelState[] {
 
 /**
  * Why a model is or is not schedulable right now — the `--status` line.
- * `extras` is true when the model has met its targets but may still take
- * an extra run (free billing, an extras policy, not cooling or retired).
+ * `extras` is true when the model has met its tier's targets and its own
+ * `idle` axis says it still wants an account (not cooling, retired or paused).
+ * The policy argument is vestigial: nothing about how much a model runs is
+ * read from the file any more.
  */
 export function schedulability(
   s: ModelState,
   running: ReadonlySet<string> = new Set(),
-  policy: Pick<SchedulingPolicy, "extras"> = DEFAULT_POLICY,
+  _policy: Pick<SchedulingPolicy, "paid"> = DEFAULT_POLICY,
 ): { ok: boolean; why: string; extras: boolean } {
   if (s.retired !== undefined) return { ok: false, extras: false, why: `retired: ${s.retired.reason} — clear with --clear-model ${s.name}` };
   if (s.cooling !== undefined) {
@@ -980,9 +1087,11 @@ export function schedulability(
     return st !== undefined && st.counted < st.target;
   });
   if (open.length === 0) {
-    const mode = extrasModeOf(s, policy);
-    const extras = policy.extras !== null && s.billing === "free" && (mode === "freeplay" || policy.extras.characters.length > 0);
-    const how = mode === "freeplay" ? " — freeplay extras while the box is idle" : " — extras when the pool is idle";
+    // Idle work is the model's own axis now, not a consequence of its billing
+    // or its account class: what it does with a spare account is what its entry
+    // says it does. A paid model defaults to `none` and so buys nothing extra.
+    const extras = s.idle !== "none";
+    const how = s.idle === "unlimited" ? " — unlimited sessions while its account is idle" : " — extra characters when its class is idle";
     return { ok: false, extras, why: `targets met on ${s.eligible.join(", ")}${extras ? how : ""}` };
   }
   return { ok: true, extras: false, why: `schedulable on ${open.join(", ")}` };
@@ -1028,23 +1137,23 @@ export function rosterClass(r: RosterModel): AccountClass {
 }
 
 /**
- * How this model takes its extras (ADR-0034, "Local extras are freeplay").
+ * What a model does with an idle account: the entry's own `idle` axis, read
+ * straight off the state.
  *
- * A knob on the policy rather than a fact about the class, so the choice is
- * readable in `fleet.json`: `policy.extras.local` is `"freeplay"` by default
- * and `"characters"` puts the local class back on the race/class cycle the
- * free models run. Every other class cycles characters; only the local class
- * asks the knob.
+ * It used to be inferred — the local class asked `policy.extras.local`, every
+ * other class was assumed to want characters — so the same model meant
+ * different things depending on which account it landed on, and a non-local
+ * model could not take unlimited sessions at all. One axis, stated per model,
+ * replaces both spellings (ADR-0040).
  */
-export function extrasModeOf(s: Pick<ModelState, "billing" | "platform">, policy: Pick<SchedulingPolicy, "extras">): ExtrasMode {
-  if (policy.extras === null) return "characters";
-  return accountClassOf(s) === "local" ? policy.extras.local : "characters";
+export function idleModeOf(s: Pick<ModelState, "idle">): IdleMode {
+  return s.idle;
 }
 
 export interface NextJobsOptions {
   /** Paid models already in flight (pinned jobs excluded), for the paid cap. */
   paidRunning?: number;
-  policy?: Pick<SchedulingPolicy, "paid" | "extras">;
+  policy?: Pick<SchedulingPolicy, "paid">;
   /**
    * The accounts each SPLIT-OUT class may use (`accounts.paid`,
    * `accounts.local`; ADR-0034's account classes). A class missing from this
@@ -1111,13 +1220,14 @@ export function planNextJobs(
   states.forEach((s, order) => {
     const v = schedulability(s, running, policy);
     if (v.extras) {
-      if (extrasModeOf(s, policy) === "freeplay") {
-        // One candidate, not one per tier: a freeplay extra has no tier, and
-        // there is only ever one of them in flight.
+      if (idleModeOf(s) === "unlimited") {
+        // One candidate, not one per tier: an unlimited session has no tier,
+        // and there is only ever one of them in flight.
         extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
         return;
       }
-      // `eligible` already gates e360 on promotion (or a forced tier).
+      // `eligible` is already the tier's own budget, so an extra never reaches
+      // an episode the model was not admitted to.
       for (const ep of s.eligible) {
         extraCands.push({ s, ep, epOrder: episodeOrder(ep), fresh: 1, counted: extrasSoFar(s), order });
       }
@@ -1199,16 +1309,15 @@ export function planNextJobs(
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
   }
-  // Extras: lowest priority, only for accounts nothing else wanted — and only
-  // ever on the candidate's own class, so a local model's extra takes the local
-  // box and never a pool account. An extra is a free model's run by
-  // construction, so the paid class is never reached here.
-  const chars = policy.extras?.characters ?? [];
+  // Idle work: lowest priority, only for accounts nothing else wanted, and only
+  // ever on the candidate's own class — so an unlimited session takes the
+  // account its own class owns and never one a counted run could have used.
+  const chars = IDLE_CHARACTERS;
   for (const c of extraCands) {
     if (empty()) break;
     if (taken.has(c.s.name)) continue;
-    // A freeplay extra rolls no character: the roster entry's own start stands,
-    // and the run is unbounded (the tier pins no wall clock).
+    // An unlimited session rolls no character: the roster entry's own start
+    // stands, and the session carries `UNLIMITED_SESSION_MS`.
     const freeplay = c.ep === "freeplay";
     if (!freeplay && chars.length === 0) continue;
     const xcls = accountClassOf(c.s);
@@ -1226,7 +1335,7 @@ export function planNextJobs(
       account,
       attempt: st.attempts + 1,
       why: freeplay
-        ? `extra #${n + 1}: freeplay (targets met; one unbounded run at a time)`
+        ? `extra #${n + 1}: unlimited session (targets met; one at a time, up to ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`
         : `extra #${n + 1} on ${c.ep} (targets met; race ${character!.race} class ${character!.class})`,
       ...(character !== undefined ? { extra: character } : {}),
     });
@@ -1363,14 +1472,19 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
   for (const s of input.states) {
     if (excluded.has(s.name) || s.retired !== undefined) continue;
     const g = groupFor(outstandingGroupOf(s));
+    // The upper bound's bet is that the model climbs: what its tier would buy
+    // if it earned rung 1. For a `t0` model the bet is off — the ladder is
+    // held — so its upper and lower agree, which is the honest reading of a
+    // trial: one run, and no more without an operator deciding.
+    const climbed = TIER_TABLE[effectiveTier(s.declaredTier, true)].runsPerEpisode;
     for (const ep of POLICY_EPISODES) {
       const st = s.perEpisode[ep];
       if (st === undefined) continue;
-      const owed = Math.max(0, st.target - st.counted);
+      const owed = Math.max(0, climbed[ep as "e90" | "e360"] - st.counted);
       if (owed === 0) continue;
       // e360 is owed now only if the model may already be scheduled on it;
       // otherwise it is the upper bound's bet that the model promotes.
-      const now = ep === "e360" && !s.eligible.includes("e360") ? 0 : owed;
+      const now = ep === "e360" && !s.eligible.includes("e360") ? 0 : Math.max(0, st.target - st.counted);
       const minutes = EPISODES[ep].minutes ?? 0;
       g.lowerRuns += now;
       g.lowerMinutes += now * minutes;
