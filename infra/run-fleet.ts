@@ -3445,6 +3445,12 @@ async function main(): Promise<void> {
    * deleted drains); the manual jobs the queue just handed a free account;
    * and the policy's picks for what is left. Jobs with nothing free wait.
    */
+  /**
+   * The pinned-campaign jobs the newest tick generated. Published rather than
+   * re-derived because `spawnJob` needs the job a spawn came from, and a
+   * campaign's jobs exist only for the tick that planned them.
+   */
+  let campaignJobs: FleetJob[] = [];
   const effectiveJobs = (cfg: FleetConfig): JobSpawn[] => {
     const out: JobSpawn[] = [];
     // The run facts once a tick, shared by the projection and the resume
@@ -3468,7 +3474,8 @@ async function main(): Promise<void> {
     // campaign's next cell, which is a pinned job in everything but where it
     // was written down (ADR-0041).
     const probes = probeRunsOf(runs, cfg.roster);
-    for (const job of [...pinnedJobs(cfg), ...pinnedCampaignJobs(cfg, probes)]) {
+    campaignJobs = pinnedCampaignJobs(cfg, probes);
+    for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
@@ -3676,7 +3683,15 @@ async function main(): Promise<void> {
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
-    const pj = pending.get(spawn.name) ?? pinnedJobs(config).find((j) => j.name === spawn.name);
+    // A pinned CAMPAIGN's job is not in `config.jobs` — it is generated from the
+    // campaigns block each tick — so looking only at `pinnedJobs` left its
+    // process with no job at all, and every state row for it read "episode
+    // unknown" through `stateJobFacts`' fallback. `campaignJobs` is what the
+    // tick that planned this spawn generated, so the lookup finds it without
+    // re-deriving the sweep here.
+    const pj =
+      pending.get(spawn.name) ??
+      [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
     const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
