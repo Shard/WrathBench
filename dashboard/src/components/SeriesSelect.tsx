@@ -12,7 +12,14 @@
 
 import { For, Show } from "solid-js";
 import { useFeeds } from "../lib/feeds";
-import { type SeriesChoice, displayedChoice, seriesOptions } from "../lib/harness";
+import {
+  type SeriesChoice,
+  displayedChoice,
+  filterBySeries,
+  pageSeries,
+  seriesFilteredOut,
+  seriesOptions,
+} from "../lib/harness";
 
 export function SeriesSelect() {
   const feeds = useFeeds();
@@ -54,6 +61,36 @@ export function SeriesSelect() {
  * because the control doing the dropping is in the header rather than on the
  * page the reader is looking at.
  */
+export interface SeriesFilterResult<T> {
+  /** What the shell's choice resolves to for this page's rows, or null for "all". */
+  series: () => string | null;
+  /** The rows that survive the filter. */
+  kept: () => T[];
+  /** How many of the input rows the filter removed. */
+  filteredOut: () => number;
+}
+
+/**
+ * The shell's series filter, applied to one page's rows.
+ *
+ * Every page that shows runs did `pageSeries` → `filterBySeries` →
+ * `seriesFilteredOut` as three separate call sites; this is that triple as one
+ * hook, so a page reads its filtered rows and prints `<SeriesFilterNote>`
+ * without re-deriving the same three values. `active` lets a page keep the
+ * shell's series available without applying it — the map's replay mode, which
+ * is one named run and must not vanish because of a header control.
+ */
+export function useSeriesFilter<
+  T extends { harnessSeries?: string | null; harnessVersion?: string | null },
+>(rows: () => readonly T[], active: () => boolean = () => true): SeriesFilterResult<T> {
+  const feeds = useFeeds();
+  const series = (): string | null =>
+    active() ? pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), rows()) : null;
+  const kept = (): T[] => filterBySeries(rows(), series());
+  const filteredOut = (): number => seriesFilteredOut(rows().length, kept().length);
+  return { series, kept, filteredOut };
+}
+
 export function SeriesFilterNote(props: { series: string | null; filteredOut: number }) {
   return (
     <Show when={props.series !== null && props.filteredOut > 0}>
