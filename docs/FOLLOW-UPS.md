@@ -260,6 +260,12 @@ and status.
       shape. `verify.ts` resolves its forbidden titles through the redirect
       table, so this fails the pre-swap gate rather than leaking quietly; check
       it on the next real build and add a source-side veto if it fires.
+      **Resolved 2026-08-24** (d0f3ec8): `titleIsPostWrathCoinage` is that veto
+      — an exact-title ns-0 list of names Cataclysm coined, applied to the page,
+      to redirect recovery from the newest revision, and to the sibling rule,
+      so the name never resolves from any side. `Ruins of Gilneas` and ten
+      others are in `verify.ts`'s forbidden titles; the phrase pairs gate what
+      the surviving lore pages (Deepholm, Uldum, Kezan, Gilneas) may say.
     - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
       pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
       Wrath signal (`post_cutoff_wrath_signal` admits those). The rest say
