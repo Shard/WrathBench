@@ -181,15 +181,23 @@ so a page cannot be counted twice or lost quietly.
   template (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
   `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
   naming one — **and the page was created on or after the day Cataclysm was
-  announced**. That is now the whole of what this reason means: the stubs
-  written before the cutoff about the expansion that was coming. Also counts a page that had
-  prose and has none after the cuts — the era rules or the section trim above,
-  which is a wording debt rather than a lie: a page that was nothing but an
-  external-link list is not a page about this world either.
+  announced**: the stubs written before the cutoff about the expansion that was
+  coming. Also counts a page whose prose the **era cuts** took in full — a page
+  whose every paragraph was about a later world is a page about a later world,
+  whatever its infobox says. Only the era cuts: a page the out-of-world trim
+  emptied is kept, see `empty_pages` below.
 - `pages_dropped_meta` — out-of-game: patch notes, the Lua addon API, the client
   UI, a boxed product, a real-world topic. `classifyMetaPage` classifies from
   the title alone and the build does not emit what it classifies (see Search,
   below).
+- `empty_pages` — in the bundle, with no prose. A page whose body was an infobox,
+  a table or a link farm is still this world's item, quest or NPC, and its title,
+  its ids, its coordinates and its quest infobox are still the right answer to a
+  query, so it is kept as a row with empty text. `pages_emptied_by_trim` counts
+  how many of them had prose before the out-of-world trim took it — a subset,
+  like the protection counter, and not part of the identity. An empty row is not
+  an FTS document: indexing a title with no body behind it would let bm25 rank
+  it above a page that has something to say.
 
 **A page that predates the Cataclysm announcement is a Wrath page, and a signal
 never drops it.** Stormwind City picked up `|patch=4.0.1` and a
@@ -238,8 +246,15 @@ about whether the section is about the world at all:
   section left empty by any of the three cuts. `sections_trimmed` and
   `sections_trimmed_json`.
 
-If the cut empties a page that had prose, the page is dropped and counted under
-`pages_dropped_post_wrath` — never left as an empty row.
+Which cut emptied a page decides what happens to it. If the **era** cuts took
+all of its prose the page is dropped, counted under `pages_dropped_post_wrath`:
+a page whose every paragraph was about a later world is a page about a later
+world. If the out-of-world trim or the strip is what left it empty, the page
+stays as an empty row under `empty_pages` and `pages_emptied_by_trim` —
+trimming a link list says nothing about which world the page is from, and
+dropping the row would throw away a title, an id and a coordinate that are this
+world's. `dropOutOfWorldOnly` is the discriminator: the same section walker with
+the era half switched off, run only on a page that came out empty.
 
 ## Schema
 

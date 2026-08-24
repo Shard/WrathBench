@@ -245,7 +245,12 @@ export function makeWriter(db: Database, batchSize = 2000): Writer {
       begin();
       const id = nextId++;
       insertPage.run(id, title, ns, text, text.length);
-      insertFts.run(id, title, text);
+      // A page with no prose is a row but not an FTS document. It is in the
+      // bundle to be found by its exact title, its ids and its infobox fields;
+      // indexing its title alone would let bm25 rank it above a page that has
+      // something to say, because a document with no body is the shortest
+      // document there is.
+      if (text.length > 0) insertFts.run(id, title, text);
       if (coords !== undefined) {
         for (const c of coords) {
           insertCoord.run(id, c.zone ?? null, c.x, c.y, c.raw);

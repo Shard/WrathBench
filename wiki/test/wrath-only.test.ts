@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { dropPostWrath, dropPostWrathParagraphs, dropPostWrathSections } from "../src/wrath-only";
+import {
+  dropOutOfWorldOnly,
+  dropPostWrath,
+  dropPostWrathParagraphs,
+  dropPostWrathSections,
+} from "../src/wrath-only";
 import { stripWikitext } from "../src/strip";
 
 // Every fixture here is invented. No wiki or game text appears in this repo.
@@ -382,5 +387,58 @@ describe("out-of-world sections", () => {
     const cut = dropPostWrath(page);
     expect(cut.sectionsTrimmed).toBe(0);
     expect(stripWikitext(cut.text)).toBe(page);
+  });
+});
+
+describe("which cut emptied the page", () => {
+  // `dropOutOfWorldOnly` answers one question, asked only of a page that ended
+  // up with no prose at all: would anything have survived if only the
+  // out-of-world trim had run? Yes means the era cuts took the page's prose and
+  // the page is about a later world; no means it was a link farm or an infobox,
+  // and its title and ids are still this world's. `build.ts` drops the first and
+  // keeps the second as an empty row.
+
+  test("an infobox and a link list leave nothing, and no era cut was involved", () => {
+    const page = [
+      "{{itembox|patch=3.0.2|itemid=7311}}",
+      "",
+      "== External links ==",
+      "* [http://example.invalid/kappa Example Kappa entry]",
+    ].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toBe("");
+  });
+
+  test("a page the era section emptied still has prose without the era cuts", () => {
+    const page = ["== In Cataclysm ==", "The whole page is about the next world."].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toContain("next world");
+  });
+
+  test("an era page with a link section is still an era page", () => {
+    // The case a trim-only text has to get right: both cuts fire, and only one
+    // of them is evidence about the page's world.
+    const page = [
+      "== Cataclysm ==",
+      "{{cata-section}}",
+      "A zone that does not exist in this world.",
+      "",
+      "== External links ==",
+      "* [http://example.invalid/theta Example Theta entry]",
+    ].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toContain("does not exist");
+  });
+
+  test("a paragraph rule that empties a page counts as an era cut", () => {
+    const page = "In Cataclysm the camp is gone and nothing else is said here.";
+    expect(stripWikitext(dropPostWrath(page).text)).toBe("");
+    expect(stripWikitext(dropOutOfWorldOnly(page))).toBe(page);
+  });
+
+  test("the trim-only walk leaves era sections exactly where they were", () => {
+    const page = ["Lead lorem.", "", "== In Cataclysm ==", "Later lorem."].join("\n");
+    expect(dropOutOfWorldOnly(page)).toBe(page);
+    expect(dropPostWrathSections(page, { eraCuts: false }).sectionsDropped).toBe(0);
   });
 });

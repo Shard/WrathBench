@@ -28,7 +28,7 @@ import { extractIds } from "./ids";
 import { extractQuest } from "./quests";
 import { admitPage, type AdmitReason } from "./post-wrath";
 import { assertCanaries } from "./canary";
-import { DEFAULT_ERA_CUTOFF, dropPostWrath } from "./wrath-only";
+import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
 import { stripWikitext } from "./strip";
 
@@ -154,7 +154,17 @@ async function main(): Promise<void> {
   let pagesSeen = 0;
   let pagesKept = 0;
   let redirects = 0;
+  /**
+   * Pages in the bundle with no prose: an infobox-only page, and now a page the
+   * out-of-world trim emptied. They are rows, not drops — the title, the ids,
+   * the coords and the quest infobox are still this world's.
+   */
   let empties = 0;
+  /**
+   * The subset of `empties` that had prose before the out-of-world trim took it.
+   * A page emptied by the ERA cuts is not here: it is dropped as post-Wrath.
+   */
+  let emptiedByTrim = 0;
   let bytes = 0;
   let charsKept = 0;
   let coordRows = 0;
@@ -237,28 +247,46 @@ async function main(): Promise<void> {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
     const text = stripWikitext(cut.text);
+    let emptied = false;
     if (text.length === 0) {
-      // Prose that existed before the cut and not after it is a page the cut
-      // emptied — a page about a later world, counted as one. A page that never
-      // had prose (a bare infobox, a category stub) is just empty.
-      if (stripWikitext(source).length === 0) empties++;
-      else reasons.dropped_post_wrath++;
-      return;
+      // Which cut emptied it decides whether the page is dropped or kept.
+      //
+      // Only the ERA cuts are evidence about the page's world: prose that would
+      // have survived the out-of-world trim and did not survive the era cuts
+      // belongs to a later world, and the page goes. The trim is not evidence of
+      // anything — a page whose body was an infobox and an external-links list
+      // is still this world's item, and its title, ids, coords and quest infobox
+      // are still the right answer to a query. So it stays, as an empty row,
+      // beside the page that never had prose at all.
+      const trimmedOnly = stripWikitext(dropOutOfWorldOnly(source));
+      if (trimmedOnly.length > 0) {
+        reasons.dropped_post_wrath++;
+        return;
+      }
+      const hadProse = stripWikitext(source).length > 0;
+      emptied = true;
+      empties++;
+      if (hadProse) emptiedByTrim++;
     }
     writer.addPage(page.title, page.ns, text, coords, ids, quest);
-    reasons[reason]++;
-    // Counted here rather than at decision time: a protected page can still be
-    // dropped by the cuts above, and the counter is about what is in the bundle.
-    if (protectedPage) preAnnouncementProtected++;
+    if (!emptied) {
+      // An empty row is counted under `empty_pages` and nowhere else: the
+      // admitting reasons are about pages with prose, and the accounting
+      // identity would double-count it.
+      reasons[reason]++;
+      // Counted here rather than at decision time: a protected page can still be
+      // emptied by the cuts above, and the counter is a subset of `pre_cutoff`.
+      if (protectedPage) preAnnouncementProtected++;
+      // Only meaningful for a pre-cutoff admission: a page admitted on a Wrath
+      // signal has one revision to read, so its prose is never "swapped".
+      if (reason === "pre_cutoff" && page.eraTimestamp !== page.timestamp) eraSwapped++;
+    }
     keptTitles.add(page.title.toLowerCase());
     pagesKept++;
     charsKept += text.length;
     coordRows += coords.length;
     idRows += ids.length;
     if (quest !== null) questRows++;
-    // Only meaningful for a pre-cutoff admission: a page admitted on a Wrath
-    // signal has one revision to read, so its prose is never "swapped".
-    if (reason === "pre_cutoff" && page.eraTimestamp !== page.timestamp) eraSwapped++;
     perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
   };
 
@@ -371,7 +399,11 @@ async function main(): Promise<void> {
     pages_kept: String(pagesKept),
     pages_distinct_keys: String(distinctKeys),
     redirects: String(redirects),
+    // Rows with no prose, and how many of them lost it to the out-of-world trim
+    // rather than never having had any. A subset of `empty_pages`, not a bucket
+    // of its own: do not add it to the sum below.
     empty_pages: String(empties),
+    pages_emptied_by_trim: String(emptiedByTrim),
     coord_rows: String(coordRows),
     id_rows: String(idRows),
     quest_rows: String(questRows),
@@ -454,7 +486,7 @@ async function main(): Promise<void> {
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);
   console.log(`redirects:   ${redirects} (${redirectsDangling} dropped, target not in the bundle)`);
-  console.log(`empty:       ${empties}`);
+  console.log(`empty:       ${empties} rows with no prose (${emptiedByTrim} emptied by the trim)`);
   for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {
     console.log(`  ns ${String(ns).padStart(3)} ${(NS_NAMES[ns] ?? "?").padEnd(9)} ${perNamespace[ns]}`);
   }
