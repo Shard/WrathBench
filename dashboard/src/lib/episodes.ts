@@ -2,8 +2,9 @@
  * The episode and harness filter values, as pure functions of a URL.
  *
  * Apart from the picker that renders them so they can be tested without a DOM
- * (dashboard/README.md) — and because three pages parse the same two query
- * parameters, and must not be able to disagree about what a shared link means.
+ * (dashboard/README.md) — the ladder page parses these two query parameters,
+ * and any future page reading the same ones must not be able to disagree
+ * about what a shared link means.
  */
 
 import type { EpisodeIdView, HarnessView } from "../api/client";

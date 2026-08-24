@@ -181,7 +181,7 @@ export default function Models() {
             </Show>{" "}
             A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
             an operator moves it, and the rung it earned still counts when they do. Rows are ordered by
-            tier, highest first; an episode cell links to that model's runs on the results page, and the
+            tier, highest first; an episode cell links to that model's runs on the runs page, and the
             row itself opens its runs below. Cooling is
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
             {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more

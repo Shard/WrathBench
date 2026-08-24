@@ -97,8 +97,9 @@ because that would silently re-scope every score already carrying this label.
 - **Tool-call ceiling.** None pinned; the campaign's own stands.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always** — the `scored: false` flag is what excludes
-  it from Results, the Ladder and every chart, through the same predicate that
-  excludes `freeplay`. Nothing about a probe is a second mechanism.
+  it from the Ladder and every chart, through the same predicate that excludes
+  `freeplay`. It still appears in the runs table (ADR-0047), which lists every
+  run regardless of scorability. Nothing about a probe is a second mechanism.
 - **Promotion.** None in either direction, and no target: no tier can buy a
   `probing` run, which is enforced by the type of a tier's run counts rather
   than by a check someone has to remember (`ScoredEpisodeId`).
@@ -129,7 +130,7 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
   labeling machinery as every other steered run, so a freeplay result cannot
-  drift into a results chart by being forgotten about.
+  drift into the Ladder by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
 - **Extras.** A model whose entry says `idle: "unlimited"` takes its extras
