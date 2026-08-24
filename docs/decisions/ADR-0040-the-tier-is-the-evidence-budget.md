@@ -101,13 +101,22 @@ every free entry therefore does not sample the matrix — it gives each model it
 first cell, and eight models produce eight Human Warriors. The matrix only
 exists if one model stays on it long enough to reach cell eight.
 
-So the shipped 0.5 config names one per rate-limit lane: **`ox-alpha`** on
-OpenRouter and **`x-preview-f`** on OpenCode. Both have met their e90 targets
-and both already have extras on the board, so neither pick is speculative; and
-because `maxConcurrent` is 1 on each lane, one per lane is also the most that
-can ever run at once. Every other free entry is `none`. This costs nothing
-already recorded: extras counts come from run facts on disk (`f.extra`), not
-from the config, so the history of a model moved to `none` stays on its row.
+So the 0.5 config designates rather than defaults: **`ox-alpha`** (OpenRouter),
+**`x-preview-f`** and **`muse-spark`** (OpenCode). The first two have met their
+e90 targets and already have extras on the board; `muse-spark` is the strongest
+free model we have seen (L6) and is carried on capability even though it is
+1/3 through its evals — idle work is the lowest priority in `planNextJobs`, so
+eligibility costs nothing that a counted run wanted, and something beats
+nothing on a lane that only ever gets scraps. Every other free entry is `none`.
+This costs nothing already recorded either: extras counts come from run facts
+on disk (`f.extra`), not from the config, so the history of a model moved to
+`none` stays on its row.
+
+This is a stopgap, and it is worth saying why. Sweeping the race/class matrix
+is a deliberate experiment, not idle work, and pinning it to whichever model
+happens to be out of evals is the wrong axis — the sweep should be commissioned
+and it should complete. Splitting the two (a probing lane between evals and
+freeplay) is the open question this ADR does not settle.
 
 **The retired keys are refused by name**, not ignored: `policy.runsPerEpisode`,
 `policy.paid.runsPerEpisode`, `policy.extras`, per-entry `runsPerEpisode`, and
