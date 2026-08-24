@@ -335,6 +335,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
             }
           : {}),
       };
+      // The backend that actually served the call, when the response body names
+      // one (OpenRouter's top-level `provider`). Logged because cache-miss
+      // attribution is impossible without it (FOLLOW-UPS 78): an aggregator
+      // routing the same model across backends legitimately zeroes the prompt
+      // cache, and a cost sweep must be able to tell that from harness prefix
+      // instability without replaying per-generation API lookups.
+      const servedBy = (outcome.turn.raw as { provider?: unknown } | null | undefined)?.provider;
       trajectory.append({
         t: "response",
         turn,
@@ -342,6 +349,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // Only when the provider reported it; absent otherwise, so the viewer
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
+        ...(typeof servedBy === "string" && servedBy.length > 0 ? { provider: servedBy } : {}),
         ...(outcome.turn.providerRequestId !== undefined
           ? { providerRequestId: outcome.turn.providerRequestId }
           : {}),

@@ -418,3 +418,66 @@ describe("itemSample", () => {
     expect(itemSample({})).toBeUndefined();
   });
 });
+
+/**
+ * Prompt-cache prefix discipline (FOLLOW-UPS 78). Measured on a real paid run
+ * (fleet-deepseek-…-20260824-a4): all 150 consecutive request pairs were
+ * byte-stable up to the append point; every mid-block cached_tokens=0 was the
+ * aggregator routing to a different backend or backend-internal cache
+ * weather. These tests pin the half the harness controls: the serialized
+ * request prefix, and the provider attribution that makes the other half
+ * diagnosable from the trajectory alone.
+ */
+describe("prompt-cache prefix discipline", () => {
+  test("serialized request N+1 extends request N byte-for-byte up to the append point, across a trim", async () => {
+    // One tool call per turn -> history grows 2 messages/turn, so 30 turns
+    // cross the MESSAGE_WINDOW_MAX=48 ceiling and exercise one block trim.
+    const adapter = new StubAdapter(
+      Array.from({ length: 30 }, (_, i) => ({
+        content: `turn ${i}`,
+        toolCalls: [{ name: "run_snippet", arguments: { code: `ping(${i})` } }],
+      })),
+    );
+    const { dir, options } = setup(adapter);
+    await runLoop(options);
+    const reqs = readTrajectory(dir).filter((r) => r.t === "request");
+    expect(reqs.length).toBe(31); // 30 scripted turns + the stub-complete turn
+    let trims = 0;
+    for (let i = 1; i < reqs.length; i++) {
+      // Drop the trailing per-turn user context message: it is regenerated
+      // every turn by design and is never part of the cacheable prefix.
+      const prev = (reqs[i - 1]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
+      const next = (reqs[i]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
+      if (next.length < prev.length) {
+        trims++; // the one deliberate cache miss per block (ADR-0012)
+        continue;
+      }
+      expect(next.slice(0, prev.length)).toEqual(prev);
+    }
+    expect(trims).toBe(1);
+  });
+
+  test("the serving provider named in the response body lands on the response record", async () => {
+    const adapter: ChatAdapter = {
+      label: "fake-aggregator",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
+        Promise.resolve({
+          kind: "ok",
+          turn: { content: "done", toolCalls: [], raw: { provider: "SomeBackend" } },
+        }),
+    };
+    const { dir, options } = setup(adapter, { maxTurns: 1 });
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses.length).toBe(1);
+    expect(responses[0]!.provider).toBe("SomeBackend");
+  });
+
+  test("no provider field appears when the body names none", async () => {
+    const adapter = new StubAdapter([{ content: "done", toolCalls: [] }]);
+    const { dir, options } = setup(adapter, { maxTurns: 1 });
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses[0]!).not.toHaveProperty("provider");
+  });
+});
