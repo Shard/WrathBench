@@ -236,6 +236,25 @@ and status.
       which is a statement about content that *is* here. Direction when a run
       shows it costing something: the wiki's own `{{cata-inline}}`-style
       templates, which mark the clause rather than the section.
+      **Narrowed 2026-08-24** by an adversarial read of the built bundle rather
+      than a count of it: rated battlegrounds, the Speedbarge, an inline
+      `(Expansion: …)` tag, `playable` beside worgen or goblin, Archaeology the
+      profession and Mastery the stat are rules now, and a category page whose
+      own title names a post-Wrath zone is a page-level signal in ns 14 (33
+      stubs). That is a dent in this residue, not a fix: prose describing the
+      later world in words no rule names is still there, and the only general
+      answer is still the clause-marking templates above.
+    - **A recovered name the bundle would rather not answer to.** The redirect
+      rules added on 2026-08-24 (ADR-0040 §Names survive page moves) recover a
+      title from the newest revision or from an `(original)` sibling, which is
+      how `Deadmines` and `Gnomeregan` come back. Out-of-game titles are
+      excluded, and a title with a post-Wrath parenthetical or subpage suffix
+      never had a page to recover. What is not excluded is a bare ns-0 title
+      that is a later world's coinage whose newest revision redirects to a
+      Wrath lore page that survives — `Ruins of Gilneas` → `Gilneas` is the
+      shape. `verify.ts` resolves its forbidden titles through the redirect
+      table, so this fails the pre-swap gate rather than leaking quietly; check
+      it on the next real build and add a source-side veto if it fires.
     - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
       pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
       Wrath signal (`post_cutoff_wrath_signal` admits those). The rest say

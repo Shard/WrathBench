@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   admitPage,
+  categoryTitleIsPostWrath,
   CATACLYSM_ANNOUNCED,
   hasClassic2019Signal,
   hasPostWrathSignal,
@@ -44,6 +45,7 @@ describe("post-Wrath page signals fire", () => {
       expect(hasPostWrathSignal(title, wikitext)).toBe(true);
       expect(
         admitPage({
+          ns: 0,
           title,
           eraWikitext: wikitext,
           newestWikitext: wikitext,
@@ -102,6 +104,7 @@ describe("admitPage reasons", () => {
   test("pre_cutoff: a pre-cutoff revision and nothing post-Wrath about it", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Beta",
         eraWikitext: PROSE,
         newestWikitext: "Rewritten lorem.",
@@ -113,6 +116,7 @@ describe("admitPage reasons", () => {
   test("post_cutoff_wrath_signal: written late, explicitly about this world", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Item Zeta",
         eraWikitext: null,
         newestWikitext: `{{itembox|patch=3.0.2}}\n${PROSE}`,
@@ -124,6 +128,7 @@ describe("admitPage reasons", () => {
   test("post_cutoff_wrath_signal does not admit a Classic 2019 page", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Classic realms",
         eraWikitext: null,
         newestWikitext: `{{patchbox|patch=1.13.2}}\n${PROSE}`,
@@ -135,6 +140,7 @@ describe("admitPage reasons", () => {
   test("dropped_post_cutoff: written late and silent about which world", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Late Page",
         eraWikitext: null,
         newestWikitext: PROSE,
@@ -146,6 +152,7 @@ describe("admitPage reasons", () => {
   test("dropped_post_wrath: a beta stub written before the cutoff", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Theta",
         eraWikitext: `{{stub/Cataclysm}}\nExample Zone Theta will open with the next expansion.`,
         newestWikitext: "Example Zone Theta, lorem.",
@@ -157,6 +164,7 @@ describe("admitPage reasons", () => {
   test("dropped_meta: out-of-game, whatever era it names", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Hotfixes/2015 Archive",
         eraWikitext: PROSE,
         newestWikitext: PROSE,
@@ -165,6 +173,7 @@ describe("admitPage reasons", () => {
     ).toEqual({ admit: false, reason: "dropped_meta" });
     expect(
       admitPage({
+        ns: 0,
         title: "API GetSpellInfo",
         eraWikitext: PROSE,
         newestWikitext: PROSE,
@@ -179,6 +188,7 @@ describe("admitPage reasons", () => {
     // itself is standing in this world.
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Beta",
         eraWikitext: PROSE,
         newestWikitext: `${PROSE}\n[[Category:Cataclysm zones]]`,
@@ -196,6 +206,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
   test("a signal on a page created in 2006 does not drop it, and is counted", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Capital City",
         eraWikitext: SIGNALLED,
         newestWikitext: SIGNALLED,
@@ -207,6 +218,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
   test("the same signal on a page created after the announcement still drops it", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Capital City",
         eraWikitext: SIGNALLED,
         newestWikitext: SIGNALLED,
@@ -220,6 +232,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
     // page created then is a page about it, not a page that acquired it.
     expect(
       admitPage({
+        ns: 0,
         title: "Example Raid Epsilon",
         eraWikitext: SIGNALLED,
         newestWikitext: SIGNALLED,
@@ -232,6 +245,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
   test("protection is not a flag on a page with no signal", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Beta",
         eraWikitext: PROSE,
         newestWikitext: PROSE,
@@ -243,6 +257,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
   test("out-of-game still wins over protection", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "API GetSpellInfo",
         eraWikitext: SIGNALLED,
         newestWikitext: SIGNALLED,
@@ -258,6 +273,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
     expect(isPreAnnouncementPage(LATE)).toBe(false);
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Theta",
         eraWikitext: SIGNALLED,
         newestWikitext: SIGNALLED,
@@ -275,6 +291,7 @@ describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
   test("a late page carrying a post-Wrath signal counts as post-cutoff", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Theta",
         eraWikitext: null,
         newestWikitext: `{{stub/Cataclysm}}\n${PROSE}`,
@@ -286,6 +303,7 @@ describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
   test("a late page carrying both signals is still not admitted", () => {
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Theta",
         eraWikitext: null,
         newestWikitext: `{{zonebox|patch=4.0.1|expansion=Wrath of the Lich King}}\n${PROSE}`,
@@ -298,11 +316,114 @@ describe("a page with no pre-cutoff prose is dropped_post_cutoff", () => {
     // Protection is about a page's own prose surviving; there is none here.
     expect(
       admitPage({
+        ns: 0,
         title: "Example Zone Theta",
         eraWikitext: null,
         newestWikitext: `{{stub/Cataclysm}}\n${PROSE}`,
         firstRevisionAt: EARLY,
       }),
     ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+});
+
+describe("a category page's own title", () => {
+  const CATEGORY_PROSE = "Pages about the example subject.";
+
+  const fires: [string, string][] = [
+    ["Category:Deepholm quests", "a zone the next expansion coined"],
+    ["Category:Ruins of Gilneas", "a place name that exists only after the Shattering"],
+    ["Category:Uldum NPCs", "a zone Cataclysm opened"],
+    ["Category:Vashj'ir", "an ocean zone with no Wrath-era page"],
+    ["Category:Kelp'thar Forest mobs", "a Vashj'ir subzone"],
+    ["Category:Archaeology", "a Cataclysm secondary profession"],
+    ["Category:Mount Hyjal quests", "the ns-14 side of a name that has Wrath lore in ns 0"],
+    ["Category:Lost Isles", "the goblin starting zone"],
+    ["Category:Legion", "the expansion, named exactly"],
+    ["Category:Legion dungeons", "the expansion, as a prefix"],
+    ["Category:Mists of Pandaria items", "a later expansion still"],
+  ];
+  for (const [title, why] of fires) {
+    test(`${title} — ${why}`, () => {
+      expect(hasPostWrathSignal(title, CATEGORY_PROSE, 14)).toBe(true);
+      expect(
+        admitPage({
+          ns: 14,
+          title,
+          eraWikitext: CATEGORY_PROSE,
+          newestWikitext: CATEGORY_PROSE,
+          firstRevisionAt: LATE,
+        }),
+      ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+    });
+  }
+
+  const keeps: [string, string][] = [
+    ["Category:Burning Legion", "the army, which is in this world"],
+    ["Category:7th Legion", "a Wrath-era faction whose name ends in the word"],
+    ["Category:Elwynn Forest quests", "an ordinary Wrath category"],
+    ["Category:Legion's Bane", "an apostrophe, not a space"],
+  ];
+  for (const [title, why] of keeps) {
+    test(`${title} stays — ${why}`, () => {
+      expect(hasPostWrathSignal(title, CATEGORY_PROSE, 14)).toBe(false);
+    });
+  }
+
+  test("the rule is ns 14 only: an article named for a later zone keeps its Wrath lore", () => {
+    // Mount Hyjal, Tol Barad and Gilneas all have pre-2010 lore pages, which is
+    // why `verify.ts` refuses to list them as forbidden titles.
+    for (const title of ["Mount Hyjal", "Tol Barad", "Gilneas", "Uldum"]) {
+      expect(hasPostWrathSignal(title, PROSE, 0)).toBe(false);
+      expect(
+        admitPage({
+          ns: 0,
+          title,
+          eraWikitext: PROSE,
+          newestWikitext: PROSE,
+          firstRevisionAt: LATE,
+        }).admit,
+      ).toBe(true);
+    }
+  });
+
+  test("the namespace is checked inside the rule, not at the call site", () => {
+    expect(categoryTitleIsPostWrath(14, "Category:Deepholm")).toBe(true);
+    expect(categoryTitleIsPostWrath(0, "Category:Deepholm")).toBe(false);
+    expect(categoryTitleIsPostWrath(118, "Deepholm")).toBe(false);
+    // The namespace defaults to 0, so a caller that omits it gets the old rules.
+    expect(hasPostWrathSignal("Category:Deepholm", CATEGORY_PROSE)).toBe(false);
+  });
+});
+
+describe("a subpage named for a later expansion", () => {
+  const fires = [
+    "Global functions/Cataclysm",
+    "Macro commands/Mists of Pandaria",
+    "API/Legion",
+    "Widget handlers/Battle for Azeroth/Frames",
+  ];
+  for (const title of fires) {
+    test(`${title} is the later client's fork of the page`, () => {
+      expect(hasPostWrathSignal(title, PROSE)).toBe(true);
+      expect(
+        admitPage({
+          ns: 0,
+          title,
+          eraWikitext: PROSE,
+          newestWikitext: PROSE,
+          firstRevisionAt: LATE,
+        }),
+      ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+    });
+  }
+
+  test("the parent page and a Wrath-era fork are untouched", () => {
+    for (const title of [
+      "Global functions",
+      "Global functions/Wrath of the Lich King",
+      "Example Legionnaire/Tactics",
+    ]) {
+      expect(hasPostWrathSignal(title, PROSE)).toBe(false);
+    }
   });
 });

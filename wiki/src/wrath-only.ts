@@ -40,7 +40,9 @@
  * - Paragraph: prose that names a later expansion in the future or past tense
  *   inside an otherwise Wrath-era section. Phrase rules, deliberately narrow;
  *   see `POST_WRATH_PARAGRAPH` for what each one is for and what it must not
- *   catch.
+ *   catch. A handful of rules cut a single line instead of the block
+ *   (`POST_WRATH_LINE`), because a block is as often a list of subzones as it is
+ *   a paragraph and one item of it can be the only later-world thing there.
  * - Empty section: what the two cuts above and the strip leave behind. A
  *   heading whose subtree carries no prose is not emitted, so a page never
  *   grows an orphan heading line where a table or a link list used to be.
@@ -238,7 +240,71 @@ const POST_WRATH_PARAGRAPH: { name: string; test: (prose: string) => boolean }[]
       /\b(upcoming|beta)\b/i.test(p) && /\b(cataclysm|deathwing|the shattering)\b/i.test(p),
   },
   { name: "future-tense", test: (p) => nearWord(p, /\bcataclysm\b/gi, /\bwill\b/i, 60) },
+  // The rules below came out of an adversarial read of a built bundle
+  // (2026-08-24): paragraphs that describe the later world without ever naming
+  // the expansion, which is exactly the residue FOLLOW-UPS 62 records.
+  //
+  // Rated battlegrounds are a Cataclysm system; the phrase has no other meaning.
+  { name: "rated-battlegrounds", test: (p) => /\brated battlegrounds?\b/i.test(p) },
+  // `(Expansion: Cataclysm)` and friends — an inline era tag the wiki writes in
+  // prose rather than in a template, so no template rule reaches it.
+  { name: "expansion-tag", test: (p) => /\(expansions?:\s*[^)]+\)/i.test(p) },
+  // Archaeology is a Cataclysm secondary profession. The word is older than the
+  // profession, though: quest flavour text sends you after an archaeology team,
+  // an archaeology expedition or a dig site, and those quests are in this world.
+  // So the profession fires only when none of those words sits within 20
+  // characters of it, either side.
+  {
+    name: "archaeology",
+    test: (p) =>
+      /\barchaeology\b/i.test(p) &&
+      !nearWord(p, /\barchaeology\b/gi, /\b(dig site|team|unit|expedition)\b/i, 20),
+  },
+  // Worgen and goblins exist in this world as NPCs and are on plenty of Wrath
+  // pages; what does not exist is either as a *playable* race. Both words are
+  // required, in the same paragraph.
+  { name: "playable-race", test: (p) => /\bplayable\b/i.test(p) && /\b(worgen|goblins?)\b/i.test(p) },
+  // Mastery the Cataclysm stat, not Stance Mastery or Tactical Mastery — which
+  // are talents in 3.3.5 and must survive. The separator is the dev voice the
+  // wiki quoted out of the announcement posts; a bare mention is not a rule.
+  { name: "mastery-stat", test: (p) => /\bmastery\b/i.test(p) && DEV_VOICE.test(p) },
 ];
+
+/**
+ * Blizzard's own pre-release voice, as the wiki quoted it in 2010. It is what
+ * separates a paragraph about a stat that does not exist yet from a paragraph
+ * about a talent that does.
+ */
+const DEV_VOICE = /\bwe plan\b|\bwe['’]re planning\b|\bwill be (a|the) new\b|\bnew (passive )?stat\b/i;
+
+/**
+ * Rules that cut a **line** rather than a whole block.
+ *
+ * A blank-line-separated block is usually a paragraph, but on a zone page it is
+ * as often a bulleted list of subzones, and one item of that list can be the
+ * only later-world thing on the page. Dropping the block would take the whole
+ * list with it, so these run per line inside a surviving block.
+ *
+ * The Speedbarge is the goblin flotilla in the flooded Thousand Needles: the
+ * needles are dry in this world and there is nothing there to sail to.
+ * `verify.ts` already refuses a bundle whose Thousand Needles page says the
+ * word, which is the gate this rule answers to.
+ */
+const POST_WRATH_LINE: { name: string; test: (prose: string) => boolean }[] = [
+  { name: "speedbarge", test: (p) => /\bspeedbarge\b/i.test(p) },
+];
+
+/**
+ * A cheap first pass over the whole page: no rule above or below can fire
+ * without one of these words, and most pages carry none of them.
+ *
+ * It has to name every rule's own trigger word — a prefilter that is one word
+ * short is a rule that never runs on a real page while its unit test passes,
+ * which is what happened when the Cataclysm-only prefilter met the Speedbarge
+ * rule.
+ */
+const PARAGRAPH_PREFILTER =
+  /cataclysm|shattering|deathwing|speedbarge|rated battleground|archaeology|expansion|playable|mastery/i;
 
 /** True when `other` occurs within `window` characters of any `anchor` match. */
 function nearWord(text: string, anchor: RegExp, other: RegExp, window: number): boolean {
@@ -480,7 +546,7 @@ export function dropPostWrathParagraphs(wikitext: string): {
   text: string;
   paragraphsDropped: number;
 } {
-  if (!/cataclysm|shattering|deathwing/i.test(wikitext)) {
+  if (!PARAGRAPH_PREFILTER.test(wikitext)) {
     return { text: wikitext, paragraphsDropped: 0 };
   }
   const blocks = wikitext.split(/\n[ \t]*\n/);
@@ -488,11 +554,26 @@ export function dropPostWrathParagraphs(wikitext: string): {
   let paragraphsDropped = 0;
   for (const block of blocks) {
     const prose = proseOf(block).trim();
-    if (prose.length === 0 || !POST_WRATH_PARAGRAPH.some((rule) => rule.test(prose))) {
-      kept.push(block);
+    if (prose.length > 0 && POST_WRATH_PARAGRAPH.some((rule) => rule.test(prose))) {
+      paragraphsDropped++;
       continue;
     }
-    paragraphsDropped++;
+    // The block stays; a line of it may not. A block with nothing left is not
+    // emitted, so the line rules never leave a bullet-less list behind.
+    const lines = block.split("\n");
+    const keptLines: string[] = [];
+    for (const line of lines) {
+      const lineProse = proseOf(line).trim();
+      if (lineProse.length > 0 && POST_WRATH_LINE.some((rule) => rule.test(lineProse))) {
+        paragraphsDropped++;
+        continue;
+      }
+      keptLines.push(line);
+    }
+    if (keptLines.length < lines.length && proseOf(keptLines.join("\n")).trim().length === 0) {
+      continue;
+    }
+    kept.push(keptLines.join("\n"));
   }
   if (paragraphsDropped === 0) return { text: wikitext, paragraphsDropped: 0 };
   return { text: kept.join("\n\n"), paragraphsDropped };

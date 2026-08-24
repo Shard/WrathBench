@@ -30,8 +30,9 @@ not hours.
 
 **The canary runs before that rename.** `wiki/src/canary.ts` holds a fixed list
 of titles a patch-3.3.5a reference cannot be missing — the ten capitals, the
-eight racial starting zones, and the classic and Wrath zones an over-broad era
-rule reaches first — and the build fails, naming every missing one, rather than
+eight racial starting zones, the classic and Wrath zones an over-broad era rule
+reaches first, and the low-level dungeons Cataclysm moved out from under their
+own names — and the build fails, naming every missing one, rather than
 renaming a bundle that has lost this world. Counters cannot catch a rule that is
 one word too broad; they all add up either way. This is what would have caught
 the drop of Stormwind City and Durotar (FOLLOW-UPS 49). Redirects count: a title
@@ -89,6 +90,25 @@ ADR-0040.
   target go in `redirects`, so a search for an old or alternate name still lands
   on the article — unless the chain does not end at a surviving page, in which
   case the redirect is dropped with its target (`redirects_dropped_dangling`).
+- **Names survive page moves.** A MediaWiki move carries the page's history to
+  the destination, so after Cataclysm took the bare title of a rebuilt dungeon,
+  that title holds the *new* article's revisions and is dropped here — correctly
+  — while this world's article sits under `… (original)` or under another name
+  entirely, and the name a character would search for is gone. Two rules put the
+  name back, and neither puts the page back. First, the **newest revision** is
+  read when the Wrath-snapshot one does not answer: a snapshot redirect whose
+  target was itself renamed retries the newest revision's target, and a page
+  that has no article here at all becomes a name when its newest revision is a
+  `#REDIRECT` (`redirects_recovered_newest`). Second, a bare title with no page
+  and no redirect whose **`(original)` or `(old)` sibling** is in the bundle
+  becomes a redirect to it, `(original)` winning when a page has both
+  (`redirects_original_sibling`). Both are candidate generation only: every
+  candidate goes into the same pending list and is resolved by the same bounded
+  chain walk, so a sibling that is itself only a redirect still lands, whichever
+  target actually resolves is the one written, and a candidate that leads
+  nowhere is dropped as dangling like any other. Out-of-game titles are the one
+  exclusion — a patch archive is dropped, not demoted, so its name does not come
+  back either.
 - **Sections that are trimmed.** A concise reference is one a character can act
   on, so a fixed set of headings is dropped at build time, on the raw wikitext,
   heading line and body together: `external links`, `references`, `see also`,
@@ -150,10 +170,14 @@ ADR-0040.
 ## What is dropped, and how it is counted
 
 `admitPage` (`wiki/src/post-wrath.ts`) is the one page-level decision, a pure
-function of the title and the two revisions. It returns one of five reasons, and
-each is a `meta` counter; the five plus `empty_pages` account for every
-non-redirect page the parser yields, which the build test asserts as an identity
-so a page cannot be counted twice or lost quietly.
+function of the title, the namespace and the two revisions. It returns one of
+five reasons, and each is a `meta` counter; the five plus `empty_pages` account
+for every page the parser yields except those that were a `#REDIRECT` at the
+cutoff (`pages_era_redirect`), which the build test asserts as an identity so a
+page cannot be counted twice or lost quietly. The term on the right is
+`pages_era_redirect` and not `redirects`, because a redirect row can now be
+generated for a title that is also a counted page: a page a move emptied is
+still a dropped page, and recovering its name does not put the page back.
 
 - `pages_pre_cutoff` — has pre-cutoff prose, and either no post-Wrath signal or
   the pre-announcement protection below. Its prose is that revision.
@@ -177,15 +201,25 @@ so a page cannot be counted twice or lost quietly.
   `pages_dropped_post_wrath`. Roughly a fifth of the dump's pages; the wiki kept
   growing after 2010.
 - `pages_dropped_post_wrath` — the page has pre-cutoff prose that names a later
-  expansion in its title parenthetical, a `[[Category:…]]`, a page-banner
-  template (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
-  `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
-  naming one — **and the page was created on or after the day Cataclysm was
-  announced**: the stubs written before the cutoff about the expansion that was
-  coming. Also counts a page whose prose the **era cuts** took in full — a page
-  whose every paragraph was about a later world is a page about a later world,
-  whatever its infobox says. Only the era cuts: a page the out-of-world trim
-  emptied is kept, see `empty_pages` below.
+  expansion in its title parenthetical or in a `/Cataclysm`-style **subpage
+  suffix** (`Global functions/Cataclysm` is the later client's fork of the
+  page), a `[[Category:…]]`, a page-banner template (`{{stub/Cataclysm}}`,
+  `{{Legion-article}}`, `{{DraenorZone}}`, `{{Pandaria}}`), an infobox `|patch=`
+  at 4.0 or later, or an `|expansion=` naming one — **and the page was created
+  on or after the day Cataclysm was announced**: the stubs written before the
+  cutoff about the expansion that was coming. In **ns 14 only**, a category
+  page whose own title names a post-Wrath zone or feature counts too
+  (`Category:Deepholm quests`, `Category:Uldum NPCs`, `Category:Archaeology`):
+  the category rule reads the categories written *on* a page and a category page
+  carries none of its own, which left 33 such stubs in a built bundle. It is
+  never applied to ns 0 — Mount Hyjal, Tol Barad, Gilneas and Uldum all have
+  Wrath-era lore pages under those names, which is why `verify.ts` refuses to
+  list them as forbidden titles — and `Category:Burning Legion` is this world's,
+  by the same `Legion`-exactly rule as everywhere else. Also counts a page whose
+  prose the **era cuts** took in full — a page whose every paragraph was about a
+  later world is a page about a later world, whatever its infobox says. Only the
+  era cuts: a page the out-of-world trim emptied is kept, see `empty_pages`
+  below.
 - `pages_dropped_meta` — out-of-game: patch notes, the Lua addon API, the client
   UI, a boxed product, a real-world topic. `classifyMetaPage` classifies from
   the title alone and the build does not emit what it classifies (see Search,
@@ -238,10 +272,22 @@ about whether the section is about the world at all:
   removed first, so an infobox field never decides) matches a narrow phrase rule
   goes: `in Cataclysm`, `with Cataclysm`, `World of Warcraft: Cataclysm`,
   `after the Shattering`, `upcoming`/`beta` beside Cataclysm, Deathwing or the
-  Shattering, and `will` within 60 characters of `Cataclysm`.
-  `paragraphs_dropped`. A bare mention of Deathwing, the Legion, Draenor or
-  Garrosh is not a rule: all four are in this world. Precision on a hand-checked
-  33-paragraph sample is about 0.8; the residue is FOLLOW-UPS 62.
+  Shattering, and `will` within 60 characters of `Cataclysm`. An adversarial
+  read of a built bundle added the rules for prose that describes the later
+  world **without** naming the expansion: `rated battleground(s)`, an inline
+  `(Expansion: …)` tag, `playable` beside `worgen` or `goblin`, `Archaeology`
+  unless a `dig site`, `team`, `unit` or `expedition` sits within 20 characters
+  of it either side, and `Mastery` only when the paragraph also carries the 2010
+  dev voice (`we plan`, `we're planning`, `will be a new`, `new passive stat`).
+  The last two are the narrow ones and are tested both ways: a quest's
+  archaeology team and the Stance Mastery and Tactical Mastery talents are all
+  in this world and all survive. A handful of rules cut a single **line** rather
+  than the block — `Speedbarge` is the only one today — because a block is as
+  often a list of subzones as it is a paragraph, and one item of it can be the
+  only later-world thing on the page. `paragraphs_dropped` counts both. A bare
+  mention of Deathwing, the Legion, Draenor or Garrosh is not a rule: all four
+  are in this world. Precision on a hand-checked 33-paragraph sample is about
+  0.8; the residue is FOLLOW-UPS 62.
 - **Out-of-world sections.** The heading drop set described above, plus every
   section left empty by any of the three cuts. `sections_trimmed` and
   `sections_trimmed_json`.
