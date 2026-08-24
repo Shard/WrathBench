@@ -175,11 +175,18 @@ export default function Models() {
 
         <Show when={rows().length > 0}>
           <p class="dim">
-            A model's budget is its tier:{" "}
-            {Object.entries(body()!.policy.tiers)
-              .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
-              .join("; ")}
-            . A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
+            A model's budget is its tier
+            {/* Tolerate an API older than this bundle: a viewer and a dist/ are
+                two artefacts and they can be restarted out of order (item 64).
+                Missing detail is worth a shorter sentence, never a blank page. */}
+            <Show when={body()!.policy.tiers !== undefined} fallback=".">
+              {": "}
+              {Object.entries(body()!.policy.tiers)
+                .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
+                .join("; ")}
+              .
+            </Show>{" "}
+            A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
             an operator moves it, and the rung it earned still counts when they do. A row's tier cell
             links to that model's runs on the results page; the row itself opens its runs below. Cooling is
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
