@@ -9,8 +9,13 @@
  * of 2026-08-24 counted at 444 one-paragraph beta stubs for Cataclysm zones and
  * NPCs.
  *
- * `admitPage` is the one page-level decision, a pure function of the title and
- * the two revisions the parser holds. It is deliberately the only door: an
+ * The signals are read on the revision the prose comes from, and one more thing
+ * about the page: a page that existed before the Cataclysm beta is a Wrath page
+ * and a signal never drops it (see `CATACLYSM_BETA_START`). Stormwind City is
+ * the example — it acquired `|patch=4.0.1` in 2010 and the city is standing.
+ *
+ * `admitPage` is the one page-level decision, a pure function of the title, the
+ * two revisions the parser holds and the page's creation date. It is deliberately the only door: an
  * admission rule the evidence does not support today (see
  * `post_cutoff_wrath_signal` below, and ADR-0040 on the server-side id
  * cross-check that is not implemented) is added here, not in the parser or the
@@ -28,7 +33,10 @@ import { classifyMetaPage } from "./meta-pages";
  * non-redirect page the parser yielded.
  */
 export type AdmitReason =
-  /** Has a pre-cutoff revision and no post-Wrath signal. The prose is that revision. */
+  /**
+   * Has pre-cutoff prose and either no post-Wrath signal or the pre-beta
+   * protection (`CATACLYSM_BETA_START`). The prose is that revision.
+   */
   | "pre_cutoff"
   /**
    * No pre-cutoff revision, but the newest revision carries an explicit
@@ -37,9 +45,18 @@ export type AdmitReason =
    * revision, because it is the only one there is.
    */
   | "post_cutoff_wrath_signal"
-  /** No revision before the cutoff, and nothing says it is Wrath content. */
+  /**
+   * No pre-cutoff prose, and the newest revision does not say outright that it
+   * is Wrath content. Whether or not it carries a post-Wrath signal: this
+   * world's wiki simply does not have the page.
+   */
   | "dropped_post_cutoff"
-  /** The page names a later expansion in its title, categories, banners or infobox. */
+  /**
+   * The page has pre-cutoff prose that names a later expansion in its title,
+   * categories, banners or infobox, and the page was created after the
+   * Cataclysm beta started: a beta stub, written before the cutoff about what
+   * was coming.
+   */
   | "dropped_post_wrath"
   /** Out-of-game reference: patch notes, addon/UI docs, a boxed product, a real-world topic. */
   | "dropped_meta";
@@ -53,11 +70,24 @@ export interface AdmitInput {
   eraWikitext: string | null;
   /** The newest revision, which is what the structured extractors read. */
   newestWikitext: string;
+  /**
+   * Timestamp of the page's oldest revision, ISO 8601, or "" when the dump
+   * states none. A page created before `CATACLYSM_BETA_START` existed in the
+   * Wrath world and is protected from the post-Wrath signals; see below.
+   */
+  firstRevisionAt: string;
 }
 
 export interface AdmitDecision {
   admit: boolean;
   reason: AdmitReason;
+  /**
+   * True when the page carried a post-Wrath signal and was kept anyway, because
+   * it predates the Cataclysm beta. A tag on a subset of `pre_cutoff`, not a
+   * sixth bucket: it is counted separately and is not part of the accounting
+   * identity.
+   */
+  preBetaProtected?: boolean;
 }
 
 /**
@@ -276,26 +306,75 @@ export function hasClassic2019Signal(title: string, wikitext: string): boolean {
 }
 
 /**
+ * The Cataclysm beta ramp on the wiki, and the line that separates a page
+ * *about* the coming expansion from a page that merely *acquired* it.
+ *
+ * The signals below are read on the revision the prose comes from, but a Wrath
+ * page edited in 2010 can carry them honestly: Stormwind City picked up
+ * `|patch=4.0.1` and a `[[Category:Cataclysm]]` in its own pre-cutoff history,
+ * and the city is standing in this world. The census of 2026-08-24 found 588
+ * such pages — capitals, starting zones, the zones Cataclysm reshaped — against
+ * 4,859 genuine beta stubs, a mid-2010 bot import that created its pages from
+ * scratch. What separates the two is not the wikitext, it is the page's age: a
+ * page that existed before the beta documented this world first.
+ *
+ * So: **a page whose first revision predates 2010-06-01 is a Wrath page**, and
+ * a post-Wrath signal never drops it. The section and paragraph rules in
+ * `wrath-only.ts` still strip what they strip, so the Cataclysm paragraph that
+ * arrived with the category still goes; the page stays. A page created on or
+ * after that date with a signal is dropped as before.
+ *
+ * The date is the deterministic proxy available in the dump — creation date,
+ * not content — and it is deliberately loose: the beta ramp is mid-2010, well
+ * before the 2010-10-12 era cutoff, so protection can only ever apply to a page
+ * that also has pre-cutoff prose. (An `--era-cutoff` set earlier than this
+ * would invert that; nothing in the build depends on it.)
+ */
+export const CATACLYSM_BETA_START = "2010-06-01T00:00:00Z";
+
+/** True when the page existed before the Cataclysm beta, so it is a Wrath page. */
+export function isPreBetaPage(firstRevisionAt: string): boolean {
+  return firstRevisionAt !== "" && firstRevisionAt < CATACLYSM_BETA_START;
+}
+
+/**
  * The one page-level admission decision.
  *
  * Order matters and is: out-of-game first (a hotfix archive is out whatever era
  * it names), then the post-Wrath signal (a Cataclysm beta stub written in
- * September 2010 has a pre-cutoff revision and is still not this world), then
- * the cutoff, then the explicit-Wrath-signal admission for late pages.
+ * September 2010 has a pre-cutoff revision and is still not this world) —
+ * unless the page predates the Cataclysm beta, which makes it a Wrath page
+ * whatever it later acquired — then the cutoff, then the explicit-Wrath-signal
+ * admission for late pages.
+ *
+ * A page with no pre-cutoff prose is `dropped_post_cutoff` whether or not it
+ * carries a post-Wrath signal: the signal is why it is *also* not admitted by
+ * the Wrath-signal rule, but the reason it is not in the bundle is that this
+ * world's wiki does not have the page.
  */
 export function admitPage(page: AdmitInput): AdmitDecision {
   if (classifyMetaPage(page.title) !== null) return { admit: false, reason: "dropped_meta" };
 
-  const source = page.eraWikitext ?? page.newestWikitext;
-  if (hasPostWrathSignal(page.title, source)) return { admit: false, reason: "dropped_post_wrath" };
-
-  if (page.eraWikitext !== null) return { admit: true, reason: "pre_cutoff" };
-
-  if (
-    hasWrathSignal(page.newestWikitext) &&
-    !hasClassic2019Signal(page.title, page.newestWikitext)
-  ) {
-    return { admit: true, reason: "post_cutoff_wrath_signal" };
+  if (page.eraWikitext === null) {
+    // No prose from before the cutoff. The only door is an explicit
+    // Wrath-or-earlier statement on the one revision there is, with the
+    // Classic-2019 veto and the post-Wrath veto both still standing.
+    if (
+      hasWrathSignal(page.newestWikitext) &&
+      !hasClassic2019Signal(page.title, page.newestWikitext) &&
+      !hasPostWrathSignal(page.title, page.newestWikitext)
+    ) {
+      return { admit: true, reason: "post_cutoff_wrath_signal" };
+    }
+    return { admit: false, reason: "dropped_post_cutoff" };
   }
-  return { admit: false, reason: "dropped_post_cutoff" };
+
+  if (hasPostWrathSignal(page.title, page.eraWikitext)) {
+    if (!isPreBetaPage(page.firstRevisionAt)) {
+      return { admit: false, reason: "dropped_post_wrath" };
+    }
+    return { admit: true, reason: "pre_cutoff", preBetaProtected: true };
+  }
+
+  return { admit: true, reason: "pre_cutoff" };
 }

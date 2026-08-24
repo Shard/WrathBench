@@ -203,3 +203,93 @@ by rebuilding from the same dump.
   written under `Trivia`, a spawn note under `History`. The census says that is
   a thin tail against 16% of bytes, and the drop set is one edit away if a
   trajectory shows otherwise.
+
+## Pages that predate the beta, and a canary
+
+Addendum, 2026-08-24. The rules above read the post-Wrath signals on the
+revision the prose comes from, which was meant to stop a Cataclysm category
+added in 2011 from deleting a zone that is standing in this world. It is not
+enough, because some of those categories were added in 2010.
+
+### Context
+An attribution pass over the 6,935 pages `admitPage` dropped as post-Wrath
+(2026-08-24, scratch, not committed) splits them three ways:
+
+- 4,859 are a mid-2010 bot import of beta-datamined Cataclysm items and quests
+  (`{{Stub/Cataclysm}}`, no revision at all before 2010-06-01). Correct drops,
+  and the reason the rule exists.
+- 1,429 have no pre-cutoff revision, so they were being counted under the wrong
+  reason — see below.
+- **588 are pages that existed before the Cataclysm beta and picked up
+  `|patch=4.0.1`, `[[Category:Cataclysm]]`, a `{{Cataclysm}}` banner or
+  `{{stub/cataclysm}}` in a 2010 revision.** Stormwind City is one. So are
+  Orgrimmar's neighbours Durotar and the Barrens, Thousand Needles, Auberdine,
+  Southshore, Camp Taurajo, Azshara, Darkshore, Desolace, Stonetalon Mountains,
+  Stranglethorn Vale, the Wetlands and Westfall — the capitals and the zones
+  Cataclysm was about to reshape, annotated by editors who were reading the beta
+  notes. Every one of them is a place a character can walk into on this server.
+
+The wikitext cannot separate the two groups: both say Cataclysm, in the same
+words, in the same fields. What separates them is the page's age. A page that
+existed before the beta documented this world first and acquired the annotation;
+a page created during the beta was written about the world that was coming.
+
+### Decision
+**A page whose first revision predates 2010-06-01 (`CATACLYSM_BETA_START`) is a
+Wrath page, and a post-Wrath signal never drops it.** The parser tracks each
+page's oldest revision timestamp (`firstRevisionAt`) and `admitPage` reads it.
+The section and paragraph rules still run on the surviving page, so the
+Cataclysm paragraph that arrived with the category still goes — the page stays,
+minus what was written about the next world. Kept pages that used the protection
+are counted as `pages_pre_beta_protected`, a subset of `pages_pre_cutoff` and
+deliberately outside the five-reasons-plus-`empty_pages` identity.
+
+The creation date is a proxy, not evidence about content, and that is the point:
+it is deterministic, it is in the dump, and it does not require reading the
+server (CONTRACTS.md) or judging prose. The line is drawn at the beta rather
+than at the announcement because the 588 was measured there and because the bot
+import that motivates the whole rule is mid-2010.
+
+**The reason counter for a page with no pre-cutoff prose is
+`dropped_post_cutoff`, whatever else the page says.** Previously the post-Wrath
+signal was tested first, so 1,429 late pages that also named a later expansion
+were counted as beta stubs. The admitted set does not change — the post-Wrath
+signal still vetoes the explicit-Wrath-signal admission — only the reason a page
+is absent, which is that this world's wiki does not have the page.
+
+**A canary guards the result.** `wiki/src/canary.ts` holds the titles a
+patch-3.3.5a reference cannot be missing — the ten capitals, the eight racial
+starting zones, and the classic and Wrath zones an over-broad era rule reaches
+first — and the build checks them, through redirects, after the indexes are
+written and **before** the temp bundle is renamed into place. A miss fails the
+build, names every missing title, and leaves the deployed bundle alone.
+`--max-pages` smoke builds skip it (`--no-canary`). `wiki/src/verify.ts` is the
+operator-run version on an already-written bundle, adding Cataclysm-or-later
+titles that must not exist and phrase pairs on named pages.
+
+This is the lesson the 588 pages actually taught: every counter in that build
+added up. Six thousand pages dropped, five reasons, an accounting identity the
+build test asserts — and no capital city. **A rule that is one word too broad is
+invisible to counters and obvious to a list of names.**
+
+### Consequences
+- The bundle regains about 500 pages of this world, including its capitals and
+  the zones a starting character walks through. That is a change in what every
+  lane can read, so it lands with the same harness minor bump and deploy window
+  as the rest of the era work.
+- The residue is measured: 119 of the 588 protected pages were created in 2009
+  or later, and the clusters at 2009-08-21/22/23 (BlizzCon, where Cataclysm was
+  announced) and 2010-04 are largely Cataclysm content — Blackwing Descent,
+  Blackrock Caverns, Halls of Origination, Lost City of the Tol'vir, Gilneas
+  City, the Lost Isles, and a run of beta ability pages. They are admitted now.
+  Moving the line to the announcement date would keep roughly 500 and drop
+  roughly 88 of those; it was not done here because 2010-06-01 is the line the
+  588 was measured at. FOLLOW-UPS 64.
+- The canary is a fixed list, so it is a maintenance surface: a title that a
+  future dump spells differently fails a good build. It is checked against the
+  dump when it changes, and redirect resolution absorbs the common case.
+- The canary fails today on **Orgrimmar**, and correctly. Its 2010 revision is
+  emptied by the wikitext stripper before any era rule runs, so the page has
+  been absent from every bundle built since the era work, counted quietly under
+  `empty_pages`. That is a `strip.ts` defect, not an era one (FOLLOW-UPS 63); the
+  canary is what made it visible.

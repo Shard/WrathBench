@@ -27,6 +27,7 @@ import { extractCoords } from "./coords";
 import { extractIds } from "./ids";
 import { extractQuest } from "./quests";
 import { admitPage, type AdmitReason } from "./post-wrath";
+import { assertCanaries } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
 import { stripWikitext } from "./strip";
@@ -43,6 +44,12 @@ interface Args {
   out: string;
   maxPages: number;
   eraCutoff: string;
+  /**
+   * Run the canary check before the bundle is renamed into place. On by default
+   * for a full build and off for a `--max-pages` smoke build, whose truncated
+   * page set cannot contain the capitals except by luck.
+   */
+  canary: boolean;
 }
 
 /**
@@ -58,18 +65,21 @@ export function parseArgs(argv: string[]): Args {
   let out = DEFAULT_BUNDLE_PATH;
   let maxPages = Infinity;
   let eraCutoff = DEFAULT_ERA_CUTOFF;
+  let canary: boolean | null = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--out") out = argv[++i] ?? out;
     else if (arg === "--max-pages") maxPages = Number.parseInt(argv[++i] ?? "0", 10);
     else if (arg === "--era-cutoff") eraCutoff = argv[++i] ?? eraCutoff;
+    else if (arg === "--no-canary") canary = false;
+    else if (arg === "--canary") canary = true;
     else if (arg.startsWith("--")) throw new Error(`unknown flag ${arg}`);
     else dump = arg;
   }
   if (dump === "") {
     throw new Error(
       "usage: bun wiki/src/build.ts <dump.7z|dump.xml> [--out path] [--max-pages n] " +
-        "[--era-cutoff YYYY-MM-DDTHH:MM:SSZ]",
+        "[--era-cutoff YYYY-MM-DDTHH:MM:SSZ] [--no-canary]",
     );
   }
   if (!ISO_INSTANT.test(eraCutoff)) {
@@ -77,7 +87,7 @@ export function parseArgs(argv: string[]): Args {
       `--era-cutoff must be a full ISO-8601 UTC instant like ${DEFAULT_ERA_CUTOFF}, got ${eraCutoff}`,
     );
   }
-  return { dump, out, maxPages, eraCutoff };
+  return { dump, out, maxPages, eraCutoff, canary: canary ?? !Number.isFinite(maxPages) };
 }
 
 /** Byte stream of the dump XML, decompressing on the fly when needed. */
@@ -151,6 +161,12 @@ async function main(): Promise<void> {
   let idRows = 0;
   let questRows = 0;
   let eraSwapped = 0;
+  /**
+   * Kept pages that carried a post-Wrath signal and were kept anyway, because
+   * they predate the Cataclysm beta. A tag on a subset of `pre_cutoff`, never a
+   * sixth bucket: it is deliberately outside the accounting identity.
+   */
+  let preBetaProtected = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
   /** Out-of-world sections cut inside a surviving page, and what they were. */
@@ -205,7 +221,7 @@ async function main(): Promise<void> {
    * signal. Structured fields always come off the newest revision, where a
    * decade of corrections lives and where 30% of the coordinates only exist.
    */
-  const keep = (page: WikiPage, source: string, reason: AdmitReason): void => {
+  const keep = (page: WikiPage, source: string, reason: AdmitReason, protectedPage = false): void => {
     // Coords and ids come off the RAW wikitext before the strip destroys the
     // templates that carry them.
     const coords = extractCoords(page.wikitext);
@@ -231,6 +247,9 @@ async function main(): Promise<void> {
     }
     writer.addPage(page.title, page.ns, text, coords, ids, quest);
     reasons[reason]++;
+    // Counted here rather than at decision time: a protected page can still be
+    // dropped by the cuts above, and the counter is about what is in the bundle.
+    if (protectedPage) preBetaProtected++;
     keptTitles.add(page.title.toLowerCase());
     pagesKept++;
     charsKept += text.length;
@@ -262,6 +281,7 @@ async function main(): Promise<void> {
           title: page.title,
           eraWikitext: null,
           newestWikitext: page.wikitext,
+          firstRevisionAt: page.firstRevisionAt,
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
@@ -273,15 +293,19 @@ async function main(): Promise<void> {
           title: page.title,
           eraWikitext: page.eraWikitext,
           newestWikitext: page.wikitext,
+          firstRevisionAt: page.firstRevisionAt,
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
         } else {
           // A page with pre-cutoff revisions that all failed hygiene has no
-          // prose to index; it is not a Wrath page for our purposes.
+          // prose to index; it is not a Wrath page for our purposes. `admitPage`
+          // has already counted this case as `dropped_post_cutoff`-shaped, but
+          // the reason it returns is about the newest revision, so the counter
+          // is set here.
           const source = page.eraWikitext;
           if (source === null) reasons.dropped_post_cutoff++;
-          else keep(page, source, decision.reason);
+          else keep(page, source, decision.reason, decision.preBetaProtected === true);
         }
       }
       logProgress();
@@ -355,6 +379,10 @@ async function main(): Promise<void> {
     // Kept pages whose prose came from an older revision than the structured
     // fields did.
     pages_era_swapped: String(eraSwapped),
+    // Kept pages that carried a post-Wrath signal and were kept because they
+    // predate the Cataclysm beta (`CATACLYSM_BETA_START`). A subset of
+    // `pages_pre_cutoff`, not a bucket of its own: do not add it to the sum.
+    pages_pre_beta_protected: String(preBetaProtected),
     // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
     // These five plus `empty_pages` account for every non-redirect page seen.
     pages_pre_cutoff: String(reasons.pre_cutoff),
@@ -379,6 +407,24 @@ async function main(): Promise<void> {
     schema_version: "5",
   });
   db.run("PRAGMA optimize");
+
+  // The pre-swap gate: if the capitals and the starting zones are not in the
+  // bundle, the era rules have eaten this world and the bundle must not be
+  // renamed into place. Skipped for a `--max-pages` smoke build, which never
+  // reaches most of the dump.
+  if (args.canary) {
+    try {
+      assertCanaries(db);
+    } catch (err) {
+      db.close();
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        /* best effort */
+      }
+      throw err;
+    }
+  }
   db.close();
 
   renameSync(tmpPath, args.out);
@@ -393,6 +439,7 @@ async function main(): Promise<void> {
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
   console.log(`era cutoff:  ${args.eraCutoff}`);
   console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
+  console.log(`  pre-beta:  ${preBetaProtected} (post-Wrath signal, kept: the page predates the beta)`);
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
   console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);

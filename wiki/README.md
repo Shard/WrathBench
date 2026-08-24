@@ -12,6 +12,7 @@ Every contributor builds their own bundle from their own dump.
 ```
 bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
                                           [--era-cutoff 2010-10-12T00:00:00Z]
+                                          [--no-canary]
 ```
 
 The archive is streamed through `7z x -so`; the 24 GB XML is never written to disk.
@@ -26,6 +27,32 @@ The build writes to a hidden temp file beside the destination and renames it int
 place at the end, so it is idempotent: a rebuild either replaces the bundle wholly
 or leaves the previous one untouched. There is no resume; a full pass is minutes,
 not hours.
+
+**The canary runs before that rename.** `wiki/src/canary.ts` holds a fixed list
+of titles a patch-3.3.5a reference cannot be missing — the ten capitals, the
+eight racial starting zones, and the classic and Wrath zones an over-broad era
+rule reaches first — and the build fails, naming every missing one, rather than
+renaming a bundle that has lost this world. Counters cannot catch a rule that is
+one word too broad; they all add up either way. This is what would have caught
+the drop of Stormwind City and Durotar (FOLLOW-UPS 49). Redirects count: a title
+resolves directly or through the chain. `--no-canary` skips it, and is the
+default for a `--max-pages` smoke build, which never reaches most of the dump;
+`--canary` forces it back on.
+
+`wiki/src/verify.ts` is the deeper, operator-run gate on a bundle that is already
+written — the same required titles, a list of Cataclysm-or-later titles that must
+**not** be there, and phrase pairs on named pages (no `flooded` on Thousand
+Needles; `Stonewrought Dam` on Loch Modan). It exits non-zero with a report:
+
+```
+bun wiki/src/verify.ts [--db data/wiki/bundle.sqlite]
+```
+
+Every entry in both lists was checked against the dump before it was added. A
+title that also existed pre-2010 as lore — Mount Hyjal, Tol Barad, Grim Batol,
+Kul Tiras, Zandalar, Worgen, Goblin — is deliberately not a forbidden title, and
+a phrase pair the wiki's own 2010 editors had already broken is not a pair: a
+gate that cries wolf is a gate that gets skipped.
 
 ## What ends up in the bundle
 
@@ -122,9 +149,12 @@ each is a `meta` counter; the five plus `empty_pages` account for every
 non-redirect page the parser yields, which the build test asserts as an identity
 so a page cannot be counted twice or lost quietly.
 
-- `pages_pre_cutoff` — has a pre-cutoff revision and no post-Wrath signal. Its
-  prose is that revision. `pages_era_swapped` counts how many of these took
-  their prose from an older timestamp than their structured fields.
+- `pages_pre_cutoff` — has pre-cutoff prose, and either no post-Wrath signal or
+  the pre-beta protection below. Its prose is that revision. `pages_era_swapped`
+  counts how many of these took their prose from an older timestamp than their
+  structured fields, and `pages_pre_beta_protected` how many were kept by the
+  protection — a subset of this counter, deliberately outside the accounting
+  identity, never a bucket of its own.
 - `pages_post_cutoff_wrath_signal` — **no** pre-cutoff revision, but the newest
   revision says outright that its subject is Wrath-or-earlier: an infobox
   `|patch=` below 4.0, an `|expansion=` naming Wrath, the Burning Crusade or
@@ -134,21 +164,37 @@ so a page cannot be counted twice or lost quietly.
   it is the only one there is. This is the only admission rule for late pages;
   the rule that would reach the rest is a server-side id cross-check, which the
   wiki tooling deliberately does not do (ADR-0040, FOLLOW-UPS 62).
-- `pages_dropped_post_cutoff` — no revision before the cutoff and nothing saying
-  it is this world. 18.6% of the dump's pages; the wiki kept growing after 2010.
-- `pages_dropped_post_wrath` — the page names a later expansion in its title
-  parenthetical, a `[[Category:…]]`, a page-banner template
-  (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
+- `pages_dropped_post_cutoff` — no prose from before the cutoff, and not admitted
+  by the explicit Wrath signal above. Whether the page also names a later
+  expansion does not change the reason: this world's wiki does not have the page
+  at all, which is why the signalled late pages are counted here and not under
+  `pages_dropped_post_wrath`. Roughly a fifth of the dump's pages; the wiki kept
+  growing after 2010.
+- `pages_dropped_post_wrath` — the page has pre-cutoff prose that names a later
+  expansion in its title parenthetical, a `[[Category:…]]`, a page-banner
+  template (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
   `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
-  naming one. The target is the beta stubs written *before* the cutoff about the
-  expansion that was coming. Also counts a page that had prose and has none
-  after the cuts — the era rules or the section trim above, which is a wording
-  debt rather than a lie: a page that was nothing but an external-link list is
-  not a page about this world either.
+  naming one — **and the page was created after the Cataclysm beta started**.
+  That is now the whole of what this reason means: the beta stubs written before
+  the cutoff about the expansion that was coming. Also counts a page that had
+  prose and has none after the cuts — the era rules or the section trim above,
+  which is a wording debt rather than a lie: a page that was nothing but an
+  external-link list is not a page about this world either.
 - `pages_dropped_meta` — out-of-game: patch notes, the Lua addon API, the client
   UI, a boxed product, a real-world topic. `classifyMetaPage` classifies from
   the title alone and the build does not emit what it classifies (see Search,
   below).
+
+**A page that predates the Cataclysm beta is a Wrath page, and a signal never
+drops it.** Stormwind City picked up `|patch=4.0.1` and a `[[Category:Cataclysm]]`
+in its own pre-cutoff history, and the city is standing in this world: 588 pages
+are in that pocket — capitals, starting zones, the zones Cataclysm reshaped —
+against 4,859 genuine beta stubs, a mid-2010 bot import that created its pages
+from scratch. What separates the two is not the wikitext but the page's age, so
+`admitPage` reads the page's **first** revision timestamp and treats
+`2010-06-01` (`CATACLYSM_BETA_START`) as the line. The section and paragraph
+rules still strip what they strip, so the Cataclysm paragraph that arrived with
+the category still goes; the page stays. Counted as `pages_pre_beta_protected`.
 
 The signals are read on the revision the prose comes from, **never** on a later
 one: a Wrath zone that Cataclysm rearranged had its Cataclysm category added in
@@ -239,6 +285,7 @@ Rebuild and swap, with runs in flight:
 
 ```
 bun wiki/src/build.ts data/wiki/<dump>.7z --out data/wiki/bundle.sqlite.next
+bun wiki/src/verify.ts --db data/wiki/bundle.sqlite.next   # gate: non-zero = do not swap
 ln data/wiki/bundle.sqlite data/wiki/bundle.sqlite.bak-$(date +%Y%m%d-%H%M)
 mv -f data/wiki/bundle.sqlite.next data/wiki/bundle.sqlite
 ```
