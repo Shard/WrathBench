@@ -453,6 +453,14 @@ export interface RunFact {
   account: string | null;
   /** The run's wall-clock budget (`watchdogs.episodeMs`), null when disabled. */
   episodeMs: number | null;
+  /**
+   * The probe campaign and cell this run was commissioned by (ADR-0041), or
+   * null on anything that is not a campaign run. Read straight off the run's own
+   * config, which is why a campaign's progress survives an edit to the file —
+   * and why a completed campaign's results outlive the deletion of its entry.
+   */
+  campaign: string | null;
+  cell: string | null;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -624,7 +632,15 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
   let meta: {
     harnessVersion?: unknown;
     startedAt?: unknown;
-    config?: { model?: unknown; effort?: unknown; extra?: unknown; account?: unknown; watchdogs?: { episodeMs?: unknown } };
+    config?: {
+      model?: unknown;
+      effort?: unknown;
+      extra?: unknown;
+      account?: unknown;
+      campaign?: unknown;
+      cell?: unknown;
+      watchdogs?: { episodeMs?: unknown };
+    };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown };
   };
@@ -656,6 +672,8 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     pause: null,
     account: str(meta.config?.account),
     episodeMs: num(meta.config?.watchdogs?.episodeMs),
+    campaign: str(meta.config?.campaign),
+    cell: str(meta.config?.cell),
   };
 
   const jsonl = join(dir, "trajectory.jsonl");

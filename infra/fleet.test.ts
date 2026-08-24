@@ -413,6 +413,8 @@ describe("the shipped fleet files", () => {
         pause: null,
         account: null,
         episodeMs: null,
+        campaign: null,
+        cell: null,
       };
       const st = modelStatesOf(rosterModels(config.roster), [witness], NOW, config.policy).find((x) => x.name === name)!;
       expect(st.earnedRung1).toBe(true);
@@ -902,6 +904,8 @@ describe("scheduling policy (ADR-0032)", () => {
     pause: null,
     account: null,
     episodeMs: null,
+    campaign: null,
+    cell: null,
     ...over,
   });
   const roster: Record<string, FleetRosterEntry> = {
@@ -1278,6 +1282,8 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     live: false,
     pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 },
     episodeMs: 90 * 60_000,
+    campaign: null,
+    cell: null,
     ...over,
   });
   const config = (jobs: FleetJob[] = []): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
