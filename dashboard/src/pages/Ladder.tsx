@@ -23,7 +23,10 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { SeriesFilterNote } from "../components/SeriesSelect";
 import { episodeParam, harnessParam } from "../lib/episodes";
+import { useFeeds } from "../lib/feeds";
+import { filterBySeries, pageSeries } from "../lib/harness";
 import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/results";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -40,7 +43,12 @@ export default function Ladder() {
   const feed = poll(() => api.ladder(episode(), overrides(), harness()), POLL_MS);
   createEffect(on([episode, overrides, harness], () => feed.refresh(), { defer: true }));
   const body = (): ResultsResponse | undefined => feed.latest;
-  const all = (): ResultRun[] => body()?.runs ?? [];
+  // The shell's harness series (ADR-0046), applied before anything else reads
+  // the rows: a rung reached on 0.4 is not evidence about 0.5.
+  const feeds = useFeeds();
+  const served = (): ResultRun[] => body()?.runs ?? [];
+  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
+  const all = (): ResultRun[] => filterBySeries(served(), series());
   /*
    * The starting character (ADR-0034's extras cycle) narrows the rungs; it is
    * never a row key. A model's row is its best run whatever it was played on,
@@ -72,6 +80,7 @@ export default function Ladder() {
         onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
       />
       <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
+      <SeriesFilterNote series={series()} filteredOut={served().length - all().length} />
 
       <Show when={characters().length > 0}>
         <div class="chips">

@@ -31,7 +31,10 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type EpisodesResponse, type ResultRun, type ResultsResponse } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { SeriesFilterNote } from "../components/SeriesSelect";
 import { episodeParam, harnessParam } from "../lib/episodes";
+import { useFeeds } from "../lib/feeds";
+import { filterBySeries, pageSeries } from "../lib/harness";
 import { fmtDuration, fmtMoney, fmtTokens, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -88,7 +91,12 @@ export default function Episodes() {
 
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
   const body = (): ResultsResponse | undefined => feed.latest;
-  const all = (): ResultRun[] => body()?.runs ?? [];
+  // The shell's harness series (ADR-0046), client-side for the reason `?model=`
+  // is: every row already carries `harnessSeries`.
+  const feeds = useFeeds();
+  const served = (): ResultRun[] => body()?.runs ?? [];
+  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
+  const all = (): ResultRun[] => filterBySeries(served(), series());
   const rows = createMemo(() => {
     const m = model();
     const mine = m === null ? all() : all().filter((r) => r.model === m && (r.effort ?? null) === effort());
@@ -120,6 +128,7 @@ export default function Episodes() {
         value={harness()}
         onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })}
       />
+      <SeriesFilterNote series={series()} filteredOut={served().length - all().length} />
 
       <Show when={model() !== null}>
         <p class="dim">

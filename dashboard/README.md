@@ -50,6 +50,25 @@ running *now* and links to a run, never listing them; `/episodes` is the runs;
 `/results` and `/ladder` are aggregates over them, and a results row links to
 the runs behind it.
 
+## The series selector
+
+The harness series (`major.minor`) is the comparability group, so every page
+that shows runs is a view of one. There is one selector for all of them, in the
+top bar (ADR-0046) — `all`, `latest`, then each series with runs, descending —
+and it filters `/episodes`, `/ladder` and the live agents on `/map` (the runs
+grain inherits it when `/runs` lands). `latest` is stored as the token, so it
+follows a minor bump. The choice
+rides in `?series=` and in `localStorage`; the URL wins, so a shared link means
+what its sender saw.
+
+It is not the `?harness=` filter of ADR-0035, which selects which *loop* owned a
+run (`wrathbench` or `claude-code`). Different dimension, same word; both
+controls exist and compose.
+
+`/` and `/models` are not filtered: the fleet is what is running now, and the
+models page is the scheduler's verdict computed against the current series
+server-side. `lib/harness.ts` holds the pure half and its tests.
+
 ## Structure
 
 ```
