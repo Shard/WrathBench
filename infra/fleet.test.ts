@@ -72,6 +72,7 @@ import {
   formatAccountClasses,
   formatHeld,
   unpinnedCampaigns,
+  pinnedCampaignJobs,
   probeRunsOf,
 } from "./run-fleet";
 import { DEFAULT_POLICY, IDLE_CHARACTERS, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
@@ -176,6 +177,92 @@ describe("campaigns (ADR-0041)", () => {
     );
     expect(config.campaigns.map((c) => c.name)).toEqual(["pinned1", "free1"]);
     expect(unpinnedCampaigns(config).map((c) => c.name)).toEqual(["free1"]);
+  });
+
+  test("a pinned campaign becomes a job on its own account, one cell at a time", () => {
+    const config = parseFleet(
+      fleetJson([], {
+        campaigns: {
+          nav: { cells: [{ id: "coldridge" }, { id: "loch" }], account: "SHAKEOUT", models: ["son"], objective: "walk" },
+        },
+      }),
+    );
+    const jobs = pinnedCampaignJobs(config, []);
+    // One job, not one per cell: an account runs a single live session, so
+    // offering it the whole sweep would only queue behind itself.
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      ref: "son",
+      episode: "probing",
+      account: "SHAKEOUT",
+      enabled: true,
+      probe: { campaign: "nav", cell: "coldridge" },
+    });
+  });
+
+  test("a pinned campaign whose cells are all done offers no job", () => {
+    const config = parseFleet(
+      fleetJson([], { campaigns: { nav: { cells: [{ id: "coldridge" }], account: "SHAKEOUT", models: ["son"] } } }),
+    );
+    expect(pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son" }])).toEqual([]);
+  });
+
+  test("an unpinned campaign is never built into a job here", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { free1: { cells: [{ id: "c1" }] } } }));
+    expect(pinnedCampaignJobs(config, [])).toEqual([]);
+  });
+
+  test("a probe spawn carries the campaign and drops the catalog entry's own task shape", () => {
+    // The load-bearing precedence rule: the campaign owns the task, the entry
+    // owns only the credentials. An entry that happens to carry an objective
+    // must not smuggle it into a sweep that named its own.
+    const config = parseFleet(
+      fleetJson([], {
+        roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99, wikiCoords: true } },
+        campaigns: {
+          nav: {
+            cells: [{ id: "coldridge", race: 3, class: 2 }],
+            account: "SHAKEOUT",
+            models: ["son"],
+            objective: "walk to Ironforge",
+            maxToolCalls: 2500,
+          },
+        },
+      }),
+    );
+    const job = pinnedCampaignJobs(config, [])[0]!;
+    const spawn = jobSpawn(job, config.roster, "SHAKEOUT", "20260824", undefined, config.campaigns);
+    expect(spawn.entries[0]).toMatchObject({
+      model: "sonnet",
+      episode: "probing",
+      campaign: "nav",
+      cell: "coldridge",
+      objective: "walk to Ironforge",
+      maxToolCalls: 2500,
+      race: 3,
+      class: 2,
+    });
+    // The entry said wikiCoords: true; the campaign said nothing, so the run
+    // gets nothing. A campaign is the whole authority on its task shape.
+    expect(spawn.entries[0]!.wikiCoords).toBeUndefined();
+  });
+
+  test("two cells of one campaign are two job names, so nothing collides", () => {
+    // The job name is what run ids, log paths and the defer sidecar hang off,
+    // so the cell has to be in it — otherwise a whole sweep accumulates under
+    // one name and no run id says which cell it was.
+    const config = parseFleet(
+      fleetJson([], {
+        campaigns: { nav: { cells: [{ id: "coldridge" }, { id: "loch" }], account: "SHAKEOUT", models: ["son"] } },
+      }),
+    );
+    const first = pinnedCampaignJobs(config, [])[0]!;
+    const second = pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son" }])[0]!;
+    expect(first.name).toBe("nav-coldridge");
+    expect(second.name).toBe("nav-loch");
+    expect(policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "nav", cell: "loch" } }).name).toBe(
+      "son-nav-loch",
+    );
   });
 
   test("probeRunsOf recovers the roster ref from model+effort, and nulls it when nothing matches", () => {
