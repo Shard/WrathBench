@@ -59,3 +59,9 @@ an aggregate view the reader reads as *results*: the route is `/results`, the
 API route is `/api/results`, and there is no alias — pre-v1, a rename is a
 rename (`/api/ladder` still serves the same projection). The ladder page keeps
 its name, and the query parameters (`?episode=`, `?harness=`) keep theirs.
+
+**Superseded in part by ADR-0047 (2026-08-24):** the page route is `/runs`,
+not `/results`, and the per-run grain moved off the episodes page onto it —
+episodes went back to listing no runs. `/results` is now an alias after all,
+a redirect to `/runs` with its query intact, kept for old links. `/api/results`
+was not renamed; it still serves the run listing under its original name.

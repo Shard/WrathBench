@@ -14,7 +14,7 @@
  */
 
 import { A, useLocation, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, getOwner, on, onCleanup, onMount, runWithOwner } from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
   api,
@@ -30,6 +30,7 @@ import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
+import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 
@@ -131,11 +132,10 @@ export default function RunDetail() {
      */
     let stop: (() => void) | undefined;
     onCleanup(() => stop?.());
-    // Same reason as `stop`: registered here, filled in after the first await.
-    let resummarise: ReturnType<typeof setInterval> | undefined;
-    onCleanup(() => {
-      if (resummarise !== undefined) clearInterval(resummarise);
-    });
+    // `poll()` (lib/poll.ts) registers its own `onCleanup`, which has the same
+    // owner requirement as `stop` above; captured now so it can be started
+    // from inside the async continuation below.
+    const owner = getOwner();
 
     void api.info().then(setInfo).catch(() => undefined);
     void api
@@ -154,14 +154,13 @@ export default function RunDetail() {
         setTotal(page.total);
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
-        resummarise = setInterval(() => {
-          void api
-            .run(params.id)
-            .then((next) => setDetail(next))
-            .catch(() => {
-              /* a failed poll keeps the last good summary, like `poll()` does */
-            });
-        }, DETAIL_POLL_MS);
+        runWithOwner(owner, () => {
+          const detailPoll = poll(() => api.run(params.id), DETAIL_POLL_MS);
+          createEffect(() => {
+            const next = detailPoll.latest;
+            if (next !== undefined) setDetail(next);
+          });
+        });
         // Only a live run needs the tail; a finished one never grows again.
         stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {

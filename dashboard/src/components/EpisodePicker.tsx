@@ -1,11 +1,11 @@
 /**
- * The episode filter, shared by the episodes, results and ladder pages.
+ * The episode filter, used by the ladder page (ADR-0047 moved the runs table
+ * to `/runs`, which filters by clicking a cell rather than this chip row; the
+ * episodes page lists no runs at all).
  *
- * One control in one place, because the two pages must not be able to disagree
- * about what "e90" selects. `all` is offered alongside the three tiers: a run
- * that predates the tiers is labeled but is not a member of any group
- * (ADR-0030), so the default view is deliberately narrow and the reader needs
- * an obvious way out of it.
+ * `all` is offered alongside the three tiers: a run that predates the tiers is
+ * labeled but is not a member of any group (ADR-0030), so the default view is
+ * deliberately narrow and the reader needs an obvious way out of it.
  */
 
 import { For, Show } from "solid-js";
@@ -75,7 +75,8 @@ export function EpisodePicker(props: {
  * The line under a filtered chart saying what the filter removed.
  *
  * A chart that silently drops rows is a lie of omission — the same rule the
- * results page already applies to unscorable runs, applied to the episode filter.
+ * runs page applies by listing every run regardless of scorability, applied
+ * here to the episode filter.
  */
 export function EpisodeFilterNote(props: {
   episode: EpisodeChoice;
