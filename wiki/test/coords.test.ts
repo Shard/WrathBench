@@ -140,6 +140,14 @@ describe("bundle schema", () => {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-coords-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+  test("openBundle names the build command when there is no bundle at all", () => {
+    // The other documented failure mode (a bare clone, no data/): the message
+    // must point at build.ts, not surface sqlite's "unable to open".
+    const path = join(dir, "never-built", "bundle.sqlite");
+    expect(() => openBundle(path)).toThrow(/no wiki bundle at /);
+    expect(() => openBundle(path)).toThrow(/bun wiki\/src\/build\.ts/);
+  });
+
   test("openBundle fails loudly on a bundle without page_coords", () => {
     const path = join(dir, "old-bundle.sqlite");
     const w = new Database(path, { create: true });

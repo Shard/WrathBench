@@ -443,7 +443,7 @@ when the module's widens.
 ## Running things
 
 ```bash
-bun test sdk                 # 133 tests, no game stack needed
+bun test sdk                 # the whole suite, no game stack needed
 bunx tsc --noEmit -p sdk     # strict typecheck of src, test and examples
 
 # live checks, need the stack up; not part of bun test
