@@ -11,7 +11,7 @@
 
 import { describe, expect, mock, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
-import { worldToPixel } from "../../runner/viewer/worldmap";
+import { TILE_PX, TILE_SIZE, worldToPixel } from "../../runner/viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
 import {
   type Pip,
@@ -21,14 +21,17 @@ import {
   chooseMap,
   clampScale,
   colorOf,
+  decimateRoute,
   fitTo,
   hitTest,
   hueOf,
+  latticeLines,
   mapCounts,
   project,
   stepPips,
   syncPips,
   visibleGrid,
+  worldPerPixel,
   zoomAt,
 } from "../src/lib/mapview";
 
@@ -537,5 +540,140 @@ describe("replayHrefFor", () => {
 
   test("a run id with URL punctuation is encoded", () => {
     expect(replayHrefFor(undefined, agent("run/a b", 0, 1, 1))).toBe("/map?run=run%2Fa%20b");
+  });
+});
+
+/*
+ * The two costs of FOLLOW-UPS 60, both of which scaled with the thing being
+ * drawn rather than with the screen. The canvas calls themselves are not tested
+ * — there is no canvas here — but the geometry they are handed is, because that
+ * is where the picture is decided.
+ */
+
+describe("latticeLines", () => {
+  test("the whole world is 130 segments, not 4096 rects", () => {
+    // Zoomed out below the tile threshold the old loop stroked every cell of the
+    // 64×64 grid; one line per boundary is 65 + 65.
+    const l = latticeLines({ scale: 0.02, ox: 0, oy: 0 }, SCREEN);
+    expect(l.xs.length).toBe(65);
+    expect(l.ys.length).toBe(65);
+  });
+
+  test("only the visible cells get lines", () => {
+    const view = { scale: 1, ox: 0, oy: 0 };
+    const g = visibleGrid(view, SCREEN);
+    const l = latticeLines(view, SCREEN);
+    expect(l.xs.length).toBe(g.col1 - g.col0 + 2);
+    expect(l.ys.length).toBe(g.row1 - g.row0 + 2);
+  });
+
+  test("every cell edge the per-cell rects drew is still a line", () => {
+    // The batching must not change *which* boundaries are lattice, only how
+    // many calls draw them: each visible cell's left/top edge is in the runs,
+    // and the extent closes the last cell on each axis.
+    const view = { scale: 0.5, ox: -300, oy: -220 };
+    const g = visibleGrid(view, SCREEN);
+    const l = latticeLines(view, SCREEN);
+    for (let col = g.col0; col <= g.col1; col++) {
+      expect(l.xs).toContain(col * g.size + view.ox + 0.5);
+    }
+    for (let row = g.row0; row <= g.row1; row++) {
+      expect(l.ys).toContain(row * g.size + view.oy + 0.5);
+    }
+    expect(l.x1).toBeCloseTo((g.col1 + 1) * g.size + view.ox + 0.5, 6);
+    expect(l.y1).toBeCloseTo((g.row1 + 1) * g.size + view.oy + 0.5, 6);
+  });
+
+  test("the half-pixel offset is kept so a 1px line stays crisp", () => {
+    const l = latticeLines({ scale: 1, ox: 0, oy: 0 }, SCREEN);
+    for (const x of l.xs) expect(x - Math.floor(x)).toBeCloseTo(0.5, 9);
+    for (const y of l.ys) expect(y - Math.floor(y)).toBeCloseTo(0.5, 9);
+  });
+
+  test("the lattice spans the box it covers", () => {
+    const l = latticeLines({ scale: 0.02, ox: 0, oy: 0 }, SCREEN);
+    expect(l.x0).toBe(l.xs[0]!);
+    expect(l.y0).toBe(l.ys[0]!);
+    expect(l.x1).toBe(l.xs[l.xs.length - 1]!);
+    expect(l.y1).toBe(l.ys[l.ys.length - 1]!);
+  });
+});
+
+describe("worldPerPixel", () => {
+  test("is the transform's own factor, inverted", () => {
+    expect(worldPerPixel(1)).toBeCloseTo(TILE_SIZE / TILE_PX, 9);
+    expect(worldPerPixel(0.25)).toBeCloseTo(worldPerPixel(1) * 4, 9);
+  });
+
+  test("that world distance really is one screen pixel", () => {
+    // The claim the decimation rests on: one factor for both axes, so a world
+    // distance can stand in for a screen distance without projecting.
+    const view = { scale: 0.4, ox: 17, oy: -9 };
+    const d = worldPerPixel(view.scale);
+    const a = project(view, ANVILMAR.x, ANVILMAR.y);
+    const bx = project(view, ANVILMAR.x + d, ANVILMAR.y);
+    const by = project(view, ANVILMAR.x, ANVILMAR.y + d);
+    expect(Math.abs(by.sx - a.sx)).toBeCloseTo(1, 6);
+    expect(Math.abs(bx.sy - a.sy)).toBeCloseTo(1, 6);
+  });
+});
+
+describe("decimateRoute", () => {
+  /* A 400-sample walk stepping 0.3 world units — well under a one-unit
+     tolerance, and spanning 120 of them end to end. */
+  const walk = Array.from({ length: 400 }, (_, i) => ({ x: i * 0.3, y: Math.sin(i * 0.05) * 4 }));
+
+  test("a dense track collapses without collapsing to its endpoints", () => {
+    const kept = decimateRoute(walk, 1);
+    expect(kept.length).toBeLessThan(walk.length / 2);
+    // The lower bound is the discriminating half: dropping everything between
+    // the ends would satisfy the upper one and draw a straight line.
+    expect(kept.length).toBeGreaterThan(20);
+  });
+
+  test("the kept points still trace the same shape within the tolerance", () => {
+    // This is what catches measuring against the previous *input* point instead
+    // of the last kept one: every step here is 0.3, so that variant drops the
+    // whole interior and the error runs to the length of the walk.
+    const kept = decimateRoute(walk, 1);
+    for (const p of walk) {
+      let best = Infinity;
+      for (const q of kept) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+      expect(best).toBeLessThanOrEqual(1.000001);
+    }
+  });
+
+  test("the first and last points always survive", () => {
+    // The last is where the pip sits: drop it and the route's tail detaches
+    // from the character. Here it is a hair from its predecessor, which is the
+    // case a plain distance filter gets wrong.
+    const track = [...walk, { x: walk[walk.length - 1]!.x + 0.001, y: walk[walk.length - 1]!.y }];
+    const kept = decimateRoute(track, 1);
+    expect(kept[0]).toEqual(track[0]!);
+    expect(kept[kept.length - 1]).toEqual(track[track.length - 1]!);
+  });
+
+  test("real movement is never dropped", () => {
+    const far = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { x: 50, y: 50 },
+      { x: 0, y: 50 },
+    ];
+    expect(decimateRoute(far, 1)).toEqual(far);
+  });
+
+  test("a coarser tolerance keeps fewer points", () => {
+    // Zooming out is the only thing that changes the tolerance, and it must
+    // move the answer — a decimation that ignored it would be the stale-cache
+    // bug wearing a different hat.
+    expect(decimateRoute(walk, 8).length).toBeLessThan(decimateRoute(walk, 1).length);
+  });
+
+  test("nothing to decimate is handed back unchanged", () => {
+    expect(decimateRoute([], 1)).toEqual([]);
+    expect(decimateRoute([{ x: 1, y: 2 }], 1)).toEqual([{ x: 1, y: 2 }]);
+    expect(decimateRoute(walk, 0)).toEqual(walk);
+    expect(decimateRoute(walk, -1)).toEqual(walk);
   });
 });

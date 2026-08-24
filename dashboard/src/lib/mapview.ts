@@ -13,7 +13,7 @@
  */
 
 import type { AgentPosition } from "@viewer/api-types";
-import { GRID, TILE_PX, worldToPixel } from "@viewer/worldmap";
+import { GRID, TILE_PX, TILE_SIZE, worldToPixel } from "@viewer/worldmap";
 
 export const MIN_SCALE = 0.01;
 export const MAX_SCALE = 8;
@@ -107,6 +107,91 @@ export function visibleGrid(
     row1: clamp(Math.floor((screen.h - view.oy) / size)),
     size,
   };
+}
+
+/**
+ * The fallback lattice as two runs of lines rather than one rect per cell.
+ *
+ * Below `TILE_MIN_PX` no tile is drawn, so no cell can be covered and the whole
+ * lattice is one stroked path: the 64x64 world used to put up to 4096
+ * `strokeRect` calls into a pan's frame budget, and this is at most 130
+ * segments (FOLLOW-UPS 60). Above the threshold the caller still strokes per
+ * cell, because there a drawn tile must suppress its own cell's outline.
+ *
+ * `x0`/`x1` and `y0`/`y1` are the extent to span: the lines cover exactly the
+ * clamped grid box `visibleGrid` reports, so the lattice stops at the world's
+ * edge rather than running off into empty space.
+ *
+ * The 0.5 offset is kept — a 1px stroke lands on a pixel centre or it blurs.
+ * One difference from the per-cell rects is deliberate: those were inset by a
+ * pixel, so every interior boundary carried *two* lines a pixel apart. A shared
+ * boundary is now one line, which reads thinner and cleaner at this zoom.
+ */
+export function latticeLines(
+  view: View,
+  screen: Screen,
+): { xs: number[]; ys: number[]; x0: number; x1: number; y0: number; y1: number } {
+  const g = visibleGrid(view, screen);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let col = g.col0; col <= g.col1 + 1; col++) xs.push(col * g.size + view.ox + 0.5);
+  for (let row = g.row0; row <= g.row1 + 1; row++) ys.push(row * g.size + view.oy + 0.5);
+  return {
+    xs,
+    ys,
+    x0: xs[0]!,
+    x1: xs[xs.length - 1]!,
+    y0: ys[0]!,
+    y1: ys[ys.length - 1]!,
+  };
+}
+
+/**
+ * World yards that project to one screen pixel under a scale.
+ *
+ * Both axes carry the same factor — `worldToPixel` is `TILE_PX / TILE_SIZE` on
+ * each — so a world Euclidean distance maps to a screen distance by this one
+ * number. That is what lets `decimateRoute` measure in world units instead of
+ * projecting every point; if the axes ever diverged, it would go anisotropic
+ * without saying so.
+ */
+export function worldPerPixel(scale: number): number {
+  return TILE_SIZE / (TILE_PX * scale);
+}
+
+/**
+ * Drop route points that would land within `minDist` of the previously kept
+ * one, in world units.
+ *
+ * A six-hour track is one `lineTo` per recorded sample every frame the operator
+ * drags (FOLLOW-UPS 60); at a screen-pixel tolerance the dropped points are
+ * points that had nowhere of their own to be drawn. The comparison is against
+ * the last *kept* point, not the last input point: comparing against the input
+ * would let a slow drift accumulate an unbounded error, because every step is
+ * small even when the walk is long.
+ *
+ * The first and last points always survive. The last is where the pip sits, and
+ * dropping it detaches the route's tail from the character.
+ *
+ * Measuring in world units rather than on screen is what makes the result
+ * independent of the view's offset: a pan reuses it, and only a zoom (a new
+ * `minDist`) or a new prefix rebuilds. The caller owns that cache.
+ */
+export function decimateRoute<T extends Placeable>(points: readonly T[], minDist: number): T[] {
+  if (points.length < 3 || !(minDist > 0)) return [...points];
+  const min2 = minDist * minDist;
+  const out: T[] = [points[0]!];
+  let anchor = points[0]!;
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i]!;
+    const dx = p.x - anchor.x;
+    const dy = p.y - anchor.y;
+    if (dx * dx + dy * dy < min2) continue;
+    out.push(p);
+    anchor = p;
+  }
+  out.push(points[points.length - 1]!);
+  return out;
 }
 
 /** The nearest placeable within `radius` screen pixels, or null. */

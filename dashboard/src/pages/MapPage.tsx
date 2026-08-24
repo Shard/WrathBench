@@ -46,12 +46,15 @@ import {
   type Pip,
   type View,
   colorOf,
+  decimateRoute,
   fitTo,
   hitTest,
+  latticeLines,
   project,
   stepPips,
   syncPips,
   visibleGrid,
+  worldPerPixel,
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
@@ -114,6 +117,10 @@ export default function MapPage() {
   let view: View = { scale: 0.25, ox: 0, oy: 0 };
   let route: { x: number; y: number }[] = [];
   let routeColor = "";
+  /* The decimation of `route` last handed to the canvas, and what it was for. */
+  let routeDrawn: { x: number; y: number }[] = [];
+  let routeSrc: { x: number; y: number }[] | null = null;
+  let routeScale = 0;
   /* Fitting is deliberate, not reactive — see the fit effect for why. */
   let pendingFit = true;
   let needsDraw = true;
@@ -199,12 +206,43 @@ export default function MapPage() {
     ctx.textBaseline = "top";
     ctx.strokeStyle = theme.gridline;
     ctx.fillStyle = theme.dim;
+    if (!useTiles) {
+      /*
+       * Below the threshold nothing is drawn into a cell, so nothing can be
+       * covered and the lattice is one path rather than one rect per cell: the
+       * whole world on screen was up to 4096 `strokeRect` calls, and a pan made
+       * that per frame (FOLLOW-UPS 60). Shared boundaries now carry one line
+       * where the inset rects carried two, which reads thinner and is the only
+       * visible change.
+       */
+      const l = latticeLines(view, { w: W, h: H });
+      ctx.beginPath();
+      for (const x of l.xs) {
+        ctx.moveTo(x, l.y0);
+        ctx.lineTo(x, l.y1);
+      }
+      for (const y of l.ys) {
+        ctx.moveTo(l.x0, y);
+        ctx.lineTo(l.x1, y);
+      }
+      ctx.stroke();
+      // Labels stay per cell and stay bounded: they need a cell wider than 64px,
+      // which caps them at a screenful.
+      if (g.size > 64) {
+        for (let row = g.row0; row <= g.row1; row++) {
+          for (let col = g.col0; col <= g.col1; col++) {
+            ctx.fillText(`${row}_${col}`, col * g.size + view.ox + 6, row * g.size + view.oy + 5);
+          }
+        }
+      }
+      return;
+    }
     for (let row = g.row0; row <= g.row1; row++) {
       for (let col = g.col0; col <= g.col1; col++) {
         const x = col * g.size + view.ox;
         const y = row * g.size + view.oy;
-        const t = useTiles ? tile(map, row, col) : null;
-        if (t !== null && t.ok) {
+        const t = tile(map, row, col);
+        if (t.ok) {
           // A hair of overdraw: neighbouring tiles must not show a seam when
           // the scale puts their edges on a fractional device pixel.
           ctx.drawImage(t.img, x, y, g.size + 1, g.size + 1);
@@ -216,6 +254,23 @@ export default function MapPage() {
         if (g.size > 64) ctx.fillText(`${row}_${col}`, x + 6, y + 5);
       }
     }
+  }
+
+  /**
+   * The prefix decimated to screen resolution, cached across frames.
+   *
+   * The tolerance comes from the scale alone, so the result is independent of
+   * the offset: a pan — the gesture that redraws every frame — reuses it, and
+   * only a zoom or a freshly built prefix rebuilds. Identity is enough to spot
+   * the latter because the effect that owns `route` assigns a new array every
+   * time, including the empty one on a mode swap.
+   */
+  function drawnRoute(): { x: number; y: number }[] {
+    if (route === routeSrc && view.scale === routeScale) return routeDrawn;
+    routeSrc = route;
+    routeScale = view.scale;
+    routeDrawn = decimateRoute(route, worldPerPixel(view.scale));
+    return routeDrawn;
   }
 
   /** The path walked so far on this map, behind the pip. Replay only. */
@@ -288,10 +343,12 @@ export default function MapPage() {
           const map = activeMap();
           if (map !== null) {
             drawGrid(ctx, map);
-            // The route is cached by the effect that owns it: recomputing a
-            // six-hour prefix on every pointer-move frame is the one thing in
-            // this loop that scales with the length of a run.
-            drawRoute(ctx, route);
+            // The route is cached twice over: the effect that owns it rebuilds
+            // the prefix only when the cursor or map moves, and `drawnRoute`
+            // decimates that to screen resolution only when the zoom changes.
+            // Recomputing either per pointer-move frame is the one thing in this
+            // loop that scales with the length of a run.
+            drawRoute(ctx, drawnRoute());
             drawPips(ctx, list, selected());
           } else {
             ctx.fillStyle = theme.grid;
