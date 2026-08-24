@@ -44,7 +44,7 @@ export type MetaReason =
  * Prefixed to the snippet of every classified result. Fixed literal: the model
  * should learn to skip these on sight, which it cannot do if the wording moves.
  */
-export const META_PAGE_LABEL = "[out-of-game reference page: patch notes, addon or real-world topic]";
+export const META_PAGE_LABEL = "[out-of-game reference page: patch notes, UI/API docs, addon or real-world topic]";
 
 /**
  * Legacy meta pages. `* (old)` is not a safe rule (see the module note), so the

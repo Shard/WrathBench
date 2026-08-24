@@ -221,25 +221,22 @@ and status.
 
 ## Wiki
 
-49. **Unlabelled post-3.3.5 prose in wiki page leads** (2026-08-23, from ADR-0029;
-    previously carried under a duplicate number 47). ADR-0029 marks the era sections
-    the wiki labels itself, but a 2020 page's lead is written present-tense about the
-    post-Cataclysm world with no marker at all — the Coldridge Valley lead still says
-    the pass linked the valley to Dun Morogh "prior to its collapse", which is false
-    here, and no build-time rule separates that from Wrath-era prose. The
-    `search_reference` description carries the standing warning. A real fix needs
-    either a pre-Cataclysm revision of each page (the dump is full history, so the
-    revision from before 2010-12 is in it — a second bundle channel, expensive) or
-    per-sentence classification (not deterministic). **Triggered 2026-08-24** by
-    `fleet-nav-probe-freeplay-sonnet-20260823-c4-c2`: `search_reference` returned the
-    "prior to its collapse" / "after Coldridge Pass collapses before adventurers can
-    make it through to Kharanos" prose, and the model's scratchpad planned a
-    gyrocopter detour around the pass it believed unreliable (it walked the intact
-    pass in the end, so strategy was shaped, not blocked). Cheaper fix than a second
-    bundle channel: tag the known post-Cataclysm geography changes (collapses,
-    rebuilds) at bundle-build time for at least the starter-zone pages, where new
-    characters are most exposed. Not urgent — the era warning held enough that the run
-    still crossed.
+62. **The era bundle's residue: unlabelled Cataclysm prose and the fallback pages**
+    (2026-08-24, from item 49). The era build cut the unlabelled Cataclysm-mentioning
+    pages from 2,025 to 650, and what is left is a different shape: mostly 2009–10
+    prose written present-tense about the expansion that had been *announced* but not
+    shipped, which no revision line can remove because the pre-cutoff revision is the
+    one saying it. Beside it sit the 20,428 pages with no pre-cutoff revision at
+    all, which keep their 2020 text under the fixed page-level label — correct, but
+    the label is the only thing separating them from era-correct prose. Both are
+    labelled or bounded, not silent, so this is a precision item and not a
+    correctness one. Two directions when a run shows it costing something: tag the
+    announced-expansion prose the way `markEraSections` tags a marked section (the
+    wiki's own `{{cata-inline}}`-style templates are the lead), and promote the
+    era/out-of-game labels from snippet text to structured fields on the search
+    result, so a model can be told about them once rather than re-reading the same
+    prefix in every snippet. Evidence for either is a trajectory where a labelled
+    page still misleads.
 
 ## Docs and release
 
@@ -281,6 +278,7 @@ and status.
 
 One line per number so citations resolve; the day file carries the detail.
 
+- 49 — 2026-08-24 — 40b3054, 9194abb, ac50f51, 551dba1 — the wiki bundle reads the era, not 2020. Prerequisite first: a `<page>` block is 50 revisions, not a page, so the parser merges a title's blocks and the build asserts one row per (title, ns) — 9,693 stale duplicate rows were competing in `pages_fts`. Then prose comes from the newest revision saved before 2010-10-12 (patch 4.0.1) while coordinates, ids and the quest infobox stay on the newest revision, where the corrections are (ADR-0040); the 20,428 pages with no pre-cutoff revision keep their newest text under a fixed page-level label rather than being dropped. Out-of-game reference pages (patch notes, the Lua API, the client UI, addons, boxed products) are classified from the title and sunk below every body hit with a label, never deleted, exact titles never demoted. The runner stamps the bundle's identity (`schema_version`, `built_at`, `source`, `era_cutoff`) into the run's comparability tuple, so a rebuild is visible instead of indistinguishable. Verified on a rebuilt bundle: unlabelled Cataclysm-mentioning pages 2,025 → 650, Deathwing/Shattering/Pandaria mentions 2,032 → 306, the Coldridge Valley "collapse" prose 3 → 0, coordinates −2.6% and ids −1% (the stale duplicate rows going away). **Deploy pending:** the rebuilt bundle sits at `data/wiki/bundle.next.sqlite` and is not swapped in; the swap is a harness minor bump (ADR-0033 addendum) and waits for a deploy window after review. Residue is item 62
 - 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`
