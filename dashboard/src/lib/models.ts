@@ -14,8 +14,8 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "
 /**
  * The table, left to right, as the header prints it — these are labels, not
  * keys, the way `FLEET_COLUMNS` is. The page renders its header from this
- * array, so a column can no longer exist in the header and not in the body:
- * that drift is exactly what put a `billing` heading over the tier's cells.
+ * array, so the header and the body cells cannot number their columns
+ * differently.
  *
  * Status leads because it is what an operator scans for, and the tier follows
  * the name because it is the second question asked of a row. Billing is not a
@@ -119,34 +119,41 @@ export function schedulableOf(row: ModelRowView): string {
 /**
  * Whether the ladder actually moved this model — the marker beside its name.
  * Not "is it eligible for e360": a model an operator placed on t2 by hand is
- * eligible without having earned anything, and must not wear the badge.
+ * eligible without having earned anything, and must not wear the badge. A rank
+ * comparison, the same one `highestTierOf` uses, so a declared tier lowered by
+ * a config edit cannot read as a climb.
  */
-export function isPromoted(row: ModelRowView): boolean {
-  return row.tier !== row.declaredTier;
+export function isPromoted(row: Pick<ModelRowView, "tier" | "declaredTier">): boolean {
+  return TIER_RANK[row.tier] > TIER_RANK[row.declaredTier];
 }
 
 /**
- * The tier cell: the highest tier the model has reached, and nothing else.
- *
- * The climb it made to get there is a fact about its history, not about what it
- * is scheduled on today, and it was costing the column twice its width to say
- * `t1→t2` — the hover carries it now, and the ↑ beside the name still marks the
- * row as one that moved.
+ * The tier cell: the highest tier the model has reached, and nothing else —
+ * the climb itself moved to the hover, and the ↑ beside the name still marks a
+ * row that moved.
  *
  * The `*` stays: a held witness (`t0*`) is a trial model that has earned a rung
  * its tier will not let it spend, which is exactly the row an operator scans for
- * when deciding what to promote. It is a rung, not a second tier.
+ * when deciding what to promote. It is a rung, not a second tier. A model that
+ * is both promoted and holding an unspent witness (declared t2, scheduled back
+ * to t1, `earnedRung1`) shows the star: the witness is still true of it.
  */
 export function tierOf(row: ModelRowView): string {
   const tier = highestTierOf(row);
-  return row.earnedRung1 && row.tier === row.declaredTier ? `${tier}*` : tier;
+  return row.earnedRung1 && !isPromoted(row) ? `${tier}*` : tier;
 }
 
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
 export function tierTitle(row: ModelRowView): string {
   const budget = (t: string): string => `tier ${t}`;
   const earned = row.earnedRung1 ? "earned rung 1 (a counted e90 reached the promotion level)" : "has not earned rung 1";
-  if (row.tier !== row.declaredTier) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
+  if (isPromoted(row)) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
+  // The mirror case: a config edit lowered the declared tier below where the
+  // model is scheduled. The `*` still reads the highest tier reached, so the
+  // hover has to say the same thing rather than naming the lower one.
+  if (TIER_RANK[row.declaredTier] > TIER_RANK[row.tier]) {
+    return `${budget(row.declaredTier)} in the config, scheduled on ${row.tier} — ${earned}`;
+  }
   if (row.earnedRung1) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
   return `${budget(row.tier)} — ${earned}`;
 }
