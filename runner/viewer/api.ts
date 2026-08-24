@@ -660,10 +660,17 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 runsPerCell: c.runsPerCell,
                 cells: c.cells.map((x) => x.id),
                 models: campaignModels(c, catalog).length,
+                // Ended runs only, which is deliberately NOT the question the
+                // scheduler asks. The scheduler counts a live probe as done so
+                // it does not launch the same cell twice; a page must not
+                // announce a sweep complete while one of its runs could still
+                // end `manual` and re-open the cell.
                 complete: campaignComplete(
                   c,
                   catalog,
-                  mine.map((r) => ({ campaign: r.campaign, cell: r.cell, ref: refOf(roster, r) })),
+                  mine
+                    .filter((r) => r.terminationReason !== null)
+                    .map((r) => ({ campaign: r.campaign, cell: r.cell, ref: refOf(roster, r) })),
                 ),
                 account: c.account ?? null,
               },
