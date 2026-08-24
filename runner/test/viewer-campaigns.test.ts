@@ -198,6 +198,20 @@ describe("/api/campaigns", () => {
     expect(body.campaigns.map((c) => c.campaign)).toEqual(["class-probe", "zzz-old"]);
   });
 
+  test("a live probe does not make a sweep complete, though it does stop a relaunch", async () => {
+    // Two different questions. The scheduler counts a live probe as done so it
+    // will not launch the same cell twice; this page must not announce the sweep
+    // finished while a run could still end `manual` and re-open its cell.
+    const body = await campaigns(
+      [
+        { runId: "r1", campaign: "class-probe", cell: "human-warrior" },
+        { runId: "r2", campaign: "class-probe", cell: "dwarf-rogue", ended: false },
+      ],
+      CONFIG,
+    );
+    expect(body.campaigns[0]!.config!.complete).toBe(false);
+  });
+
   test("a live probe is counted apart from a finished one", async () => {
     const body = await campaigns(
       [
