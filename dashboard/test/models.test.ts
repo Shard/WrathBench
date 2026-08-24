@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -114,6 +114,26 @@ describe("the tier order", () => {
       "alpha-low",
       "beta",
     ]);
+  });
+});
+
+describe("promoted and highest tier agree", () => {
+  test("a declared tier lowered below the scheduled one is not a climb", () => {
+    // Config edit: declared t2, scheduled back to t1. highestTierOf still
+    // reports t2 (the max), and isPromoted must use the same rank comparison
+    // or the row would render `↑t1` beside a `t2` cell.
+    const lowered = row({ declaredTier: "t2", tier: "t1" });
+    expect(highestTierOf(lowered)).toBe("t2");
+    expect(isPromoted(lowered)).toBe(false);
+  });
+
+  test("a witness earned while lowered still wears its star", () => {
+    // Pinned choice: the star answers "has this model earned rung 1", which is
+    // still true here, even though the row is not shown as promoted.
+    expect(tierOf(row({ declaredTier: "t2", tier: "t1", earnedRung1: true }))).toBe("t2*");
+    // The hover has to say the same thing the cell does: highest tier t2,
+    // scheduled lower — never "tier t1", which would contradict the `t2*`.
+    expect(tierTitle(row({ declaredTier: "t2", tier: "t1", earnedRung1: true }))).toContain("scheduled on t1");
   });
 });
 

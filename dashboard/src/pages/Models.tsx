@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 
 /** The roster moves when a run ends or an operator edits the config. */
@@ -103,7 +103,7 @@ export default function Models() {
                         <Show when={isPromoted(row)}>
                           {" "}
                           <span class="ok" title="climbed a rung: it earned this tier">
-                            ↑{row.tier}
+                            ↑{highestTierOf(row)}
                           </span>
                         </Show>
                         <div class="dim">
