@@ -427,6 +427,18 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("persistent 5xx");
   });
 
+  test("attempts exhausted on pure network errors pause instead of terminating", async () => {
+    // The other half of the 2026-08-22 fix: a timeout/reset/DNS failure never
+    // has an HTTP status, so it fell past the persistent-5xx branch and three
+    // episodes died as adapter-error on 2026-08-24 ("network error: The
+    // operation timed out.", two different platforms). Provider-down weather
+    // either way — the run is resumable, the roster defers it.
+    const out = await adapterPlaying([new Error("The operation timed out."), new Error("The operation timed out.")]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+    expect(out.kind === "pause" && out.detail).toContain("persistent network failure");
+  });
+
   test("a 2xx error body without any status shape still hard-errors", async () => {
     const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
     await expect(
@@ -461,11 +473,14 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
   });
 
-  test("network failures with no 4xx anywhere are still a hard error", async () => {
-    await expect(
-      adapterPlaying([new Error("boom"), new Error("boom")]).complete(req),
-    ).rejects.toThrow(/failed after 2 attempts/);
-  });
+  // "network failures with no 4xx anywhere are still a hard error" was pinned
+  // here (af7e4aa) without a defence, and 2026-08-24 overturned it the same
+  // way 2026-08-22 overturned it for 5xx: three live episodes died to pure
+  // timeouts. The boundary now pauses — see "attempts exhausted on pure
+  // network errors pause instead of terminating" above. What still hard-errors
+  // on exhausted attempts is a failure that is neither an HTTP status nor a
+  // socket error, which no longer has a test to itself because no such shape
+  // has been observed.
 
   test("a non-retryable 4xx is fatal immediately", async () => {
     await expect(adapterPlaying([status(400, "bad request")]).complete(req)).rejects.toThrow(

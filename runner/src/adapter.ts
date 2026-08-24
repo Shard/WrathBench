@@ -494,6 +494,20 @@ export class OpenAiChatAdapter implements ChatAdapter {
         detail: `persistent 5xx after ${this.maxAttempts} attempts: ${lastError}`,
       };
     }
+    // The same reasoning for a request that never got a status at all: a
+    // timeout, a reset, a DNS failure is the provider (or the path to it)
+    // down, not the harness. The 5xx branch above was the 2026-08-22 fix;
+    // pure network errors fell past it — `lastStatus` stays undefined — and
+    // three episodes died on 2026-08-24 to the identical "network error: The
+    // operation timed out." across two different platforms. Pause, defer,
+    // come back.
+    if (lastStatus === undefined && lastError.startsWith("network error:")) {
+      return {
+        kind: "pause",
+        reason: "rate-limited",
+        detail: `persistent network failure after ${this.maxAttempts} attempts: ${lastError}`,
+      };
+    }
     // The last request id even when the final attempt died on the socket and
     // carried none: it is what a provider-side support thread asks for first.
     const idSuffix =
