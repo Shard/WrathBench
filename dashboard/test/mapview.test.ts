@@ -42,7 +42,7 @@ import {
 const solid = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => solid);
 const { createComputed, createRoot, createSignal } = solid;
-const { createMapState, clearReplayState } = await import("../src/lib/mapstate");
+const { createMapState, clearReplayState, replayHrefFor } = await import("../src/lib/mapstate");
 
 const SCREEN = { w: 800, h: 600 };
 
@@ -497,5 +497,45 @@ describe("returning to live", () => {
     expect(g.state.activeMap()).toBe(0);
     expect(g.state.selected()?.runId).toBe("run-2");
     g.dispose();
+  });
+});
+
+describe("replayHrefFor", () => {
+  /*
+   * The map's selected-agent panel offers both ways out — the run page and the
+   * run's replay — so a character on the live map reaches its own replay without
+   * a detour. The gate is the interesting half: in replay mode the panel is
+   * showing the replayed agent, and a link back to the URL the page is already
+   * on is a control that does nothing when clicked.
+   */
+  const TRACK: TrackResponse = {
+    runId: "run-1",
+    character: "Benchy",
+    model: "test/model",
+    harnessVersion: "harness-0.2",
+    points: [],
+  };
+
+  test("a live selection gets a link into its own replay", () => {
+    expect(replayHrefFor(undefined, agent("run-1", 0, 1, 1))).toBe("/map?run=run-1");
+  });
+
+  test("the run already being replayed gets none", () => {
+    expect(replayHrefFor(TRACK, agent("run-1", 0, 1, 1))).toBeNull();
+  });
+
+  test("a different run during a replay still gets one", () => {
+    // Not reachable today — replay shows one pip — but the gate is about the
+    // selection, not about the mode, so it holds if a replay ever shows two.
+    expect(replayHrefFor(TRACK, agent("run-2", 0, 1, 1))).toBe("/map?run=run-2");
+  });
+
+  test("nothing selected, nothing to link", () => {
+    expect(replayHrefFor(undefined, null)).toBeNull();
+    expect(replayHrefFor(TRACK, null)).toBeNull();
+  });
+
+  test("a run id with URL punctuation is encoded", () => {
+    expect(replayHrefFor(undefined, agent("run/a b", 0, 1, 1))).toBe("/map?run=run%2Fa%20b");
   });
 });
