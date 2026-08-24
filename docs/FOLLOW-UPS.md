@@ -223,8 +223,10 @@ and status.
 
 62. **What the Wrath bundle still cannot decide** (2026-08-24, from item 49;
     rewritten when the bundle stopped labelling and started dropping, ADR-0040).
-    Two residues, both precision rather than correctness now, and one open
-    decision.
+    One residue left, precision rather than correctness. The other two are
+    resolved below: the recovered-name leak on 2026-08-24 (d0f3ec8), and the
+    18,717 undecidable late pages by the world-id door the operator approved the
+    same day (ADR-0042).
     - **The paragraph rule's floor.** The phrase rules (`in Cataclysm`, `with
       Cataclysm`, `after the Shattering`, `upcoming`/`beta` beside Cataclysm or
       Deathwing, `will` within 60 characters of `Cataclysm`) reach the prose that
@@ -268,17 +270,28 @@ and status.
       the surviving lore pages (Deepholm, Uldum, Kezan, Gilneas) may say.
     - **The 18,717 undecidable late pages.** Of the 20,407 pages with no
       pre-cutoff revision, 1,901 are provably post-Wrath and 15 carry an explicit
-      Wrath signal (`post_cutoff_wrath_signal` admits those). The rest say
-      nothing either way and are dropped. Most of them are almost certainly
-      correct about 3.3.5 — items, NPCs and quests documented late — and the
-      bundle is smaller than it needs to be by roughly that much.
-    - **Open decision, for the operator.** The only rule that reaches those
-      18,717 is a **server-side id cross-check**: admit a post-cutoff quest, NPC
-      or item page whose stated id exists in the world DB. The wiki tooling reads
-      nothing from the server by design (CONTRACTS.md), and the id tables are
-      not something a client could query, so this is an operator call about what
-      the *build* may read — not about what the agent may see. Deliberately not
-      implemented pending that decision (ADR-0040).
+      Wrath signal (`post_cutoff_wrath_signal` admits those). The rest said
+      nothing either way and were dropped, and most of them were right about
+      3.3.5 — items, NPCs and quests documented late.
+      **Resolved 2026-08-24** (ADR-0042, approved by the operator): the build may
+      ask the world DB whether an id exists. `infra/export-world-ids.sh` writes
+      the four id sets to `data/wiki/world-ids.json`, `--world-ids` feeds them to
+      the build, and a late page that states an id this server has is admitted as
+      `post_cutoff_id_match`. The export is server-derived, stays under `data/`
+      and never enters git; CONTRACTS.md is untouched, because this is a
+      build-time input and the agent still reads nothing but wiki text.
+      **The premise was wrong about the size of the prize**, and the first full
+      build says so: 145 pages, not thousands. 16,010 of the 22,727 late pages
+      state no id at all, and of the 6,717 that do, nearly all state an id in
+      the 40,000–130,000 range this server has never had — the undecidable
+      population was mostly genuinely later content. A hand-check of 18 admitted
+      titles found 5 Cataclysm-or-later pages carrying a 3.3.5 id: an entry a
+      later boss inherited from the one it replaced (Daakara on Zul'jin's
+      23863), and an infobox id copied from another page and never corrected
+      (three unrelated battle-pet and guild pages all state `itemid=44822`). So
+      the door is ~0.7 precision on a 0.18% coverage gain. Levers if it ever
+      matters, neither built: require the stated id to agree with the page's own
+      name, and treat an id claimed by several unrelated pages as no evidence.
 
 ## Docs and release
 

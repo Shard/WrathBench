@@ -298,6 +298,10 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(metaValue("pages_stepped_back")).toBe("1");
   expect(metaValue("pages_step_back_refused")).toBe("0");
   expect(metaValue("pages_post_cutoff_wrath_signal")).toBe("1"); // the trinket
+  // This build was given no world-id export, so the id door does not exist and
+  // `meta` says so rather than leaving it to be inferred from a zero.
+  expect(metaValue("world_ids")).toBe("none");
+  expect(metaValue("pages_post_cutoff_id_match")).toBe("0");
   // The late page that says nothing, and the late page that names Cataclysm:
   // neither has prose from before the cutoff, which is the reason for both.
   expect(metaValue("pages_dropped_post_cutoff")).toBe("2");
@@ -323,6 +327,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const accounted =
     metaNumber("pages_pre_cutoff") +
     metaNumber("pages_post_cutoff_wrath_signal") +
+    metaNumber("pages_post_cutoff_id_match") +
     metaNumber("pages_dropped_post_cutoff") +
     metaNumber("pages_dropped_post_wrath") +
     metaNumber("pages_dropped_meta") +
@@ -334,6 +339,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(metaNumber("pages_kept")).toBe(
     metaNumber("pages_pre_cutoff") +
       metaNumber("pages_post_cutoff_wrath_signal") +
+      metaNumber("pages_post_cutoff_id_match") +
       metaNumber("empty_pages"),
   );
 
@@ -1013,3 +1019,126 @@ test("no signal-free revision at all leaves the page on the one it has", () => {
   expect(got.steppedBack).toBe(false);
   expect(got.refused).toBe(false);
 });
+
+/**
+ * `--world-ids`: a late page whose stated id exists on this server is admitted
+ * (ADR-0042). The export here is invented, like every other fixture.
+ */
+test("the world-id door admits late pages, and only with the flag", async () => {
+  const xmlPath = join(dir, "world-ids-dump.xml");
+  const idsPath = join(dir, "world-ids.json");
+  await Bun.write(
+    idsPath,
+    JSON.stringify({
+      exported_at: "2026-08-24T12:00:00Z",
+      quest: [4242],
+      creature: [7001],
+      item: [9100],
+      gameobject: [3300],
+    }),
+  );
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        // Written in 2016, silent about its era, and the id is this server's.
+        title: "Example Late Quest",
+        ns: 118,
+        id: 1,
+        revisions: [
+          {
+            id: 1,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "{{questbox|id=4242}}Example Late Quest sends you to the lorem hills.",
+          },
+        ],
+      },
+      {
+        // Same shape, an id this server does not have: still dropped.
+        title: "Example Later Quest",
+        ns: 118,
+        id: 2,
+        revisions: [
+          {
+            id: 2,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "{{questbox|id=90001}}Example Later Quest is somewhere else entirely.",
+          },
+        ],
+      },
+      {
+        // The id is this server's — reused by a later expansion — but the page
+        // says which world it belongs to, and the signal outranks the id.
+        title: "Example Late Cataclysm Quest",
+        ns: 118,
+        id: 3,
+        revisions: [
+          {
+            id: 3,
+            timestamp: "2016-01-01T00:00:00Z",
+            text: "{{questbox|id=4242}}[[Category:Cataclysm quests]]A quest of the later world.",
+          },
+        ],
+      },
+    ]),
+  );
+
+  const build = async (extra: string[]): Promise<Database> => {
+    const outPath = join(dir, `world-ids-${extra.length}.sqlite`);
+    const proc = Bun.spawn(
+      [
+        "bun",
+        join(import.meta.dir, "..", "src", "build.ts"),
+        xmlPath,
+        "--out",
+        outPath,
+        "--no-canary",
+        ...extra,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    expect(await proc.exited).toBe(0);
+    return new Database(outPath, { readonly: true });
+  };
+
+  // Without the flag the build is what it always was: all three are late pages
+  // that say nothing this world can act on.
+  const without = await build([]);
+  expect(without.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(0);
+  expect(
+    without
+      .query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?")
+      .get("world_ids")!.value,
+  ).toBe("none");
+  without.close();
+
+  const db = await build(["--world-ids", idsPath]);
+  const titles = db
+    .query<{ title: string }, []>("SELECT title FROM pages ORDER BY title")
+    .all()
+    .map((r) => r.title);
+  expect(titles).toEqual(["Example Late Quest"]);
+  const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
+  const metaNumber = (key: string): number => Number.parseInt(meta.get(key)!.value, 10);
+  expect(metaNumber("pages_post_cutoff_id_match")).toBe(1);
+  expect(metaNumber("pages_dropped_post_cutoff")).toBe(2);
+  // The export's identity is on the bundle, so a rebuild against a different
+  // one is visible rather than inferred.
+  const worldIds = JSON.parse(meta.get("world_ids")!.value) as {
+    exported_at: string;
+    counts: Record<string, number>;
+  };
+  expect(worldIds.exported_at).toBe("2026-08-24T12:00:00Z");
+  expect(worldIds.counts).toEqual({ quest: 1, creature: 1, item: 1, gameobject: 1 });
+  // The identity still holds with the sixth reason in it.
+  const accounted =
+    metaNumber("pages_pre_cutoff") +
+    metaNumber("pages_post_cutoff_wrath_signal") +
+    metaNumber("pages_post_cutoff_id_match") +
+    metaNumber("pages_dropped_post_cutoff") +
+    metaNumber("pages_dropped_post_wrath") +
+    metaNumber("pages_dropped_meta") +
+    metaNumber("empty_pages");
+  expect(accounted).toBe(metaNumber("pages_in_namespaces") - metaNumber("pages_era_redirect"));
+  db.close();
+}, 30_000);

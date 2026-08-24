@@ -13,8 +13,10 @@ import {
   hasPostWrathSignal,
   hasWrathSignal,
   isPreAnnouncementPage,
+  statesWorldId,
   titleIsPostWrathCoinage,
 } from "../src/post-wrath";
+import type { IdKind } from "../src/ids";
 
 const PROSE = "Example Zone Beta is a starting region full of lorem ipsum.";
 
@@ -486,5 +488,152 @@ describe("a main-namespace title that is a Cataclysm coinage", () => {
 
   test("underscores and case are the same title", () => {
     expect(titleIsPostWrathCoinage(0, "southern_barrens")).toBe(true);
+  });
+});
+
+/**
+ * The world-id door (ADR-0042): a page written after the cutoff that says
+ * nothing about its era is admitted when an id it states about itself exists in
+ * this server's 3.3.5a world DB.
+ *
+ * The oracle is passed in as data, so these tests need no export file and no
+ * server. Every id below is invented.
+ */
+describe("post_cutoff_id_match", () => {
+  /** An oracle over four invented id sets, one per world-DB table. */
+  const oracle = {
+    has(kind: IdKind, id: number): boolean {
+      const sets: Partial<Record<IdKind, number[]>> = {
+        quest: [4242],
+        npc: [7001],
+        item: [9100],
+        object: [3300],
+      };
+      return (sets[kind] ?? []).includes(id);
+    },
+  };
+
+  const late = (
+    title: string,
+    newestWikitext: string,
+    worldIds: { has(kind: IdKind, id: number): boolean } = oracle,
+  ) =>
+    admitPage({
+      ns: 0,
+      title,
+      eraWikitext: null,
+      newestWikitext,
+      firstRevisionAt: "2016-06-06T00:00:00Z",
+      worldIds,
+    });
+
+  test("a quest page whose stated id is on this server is admitted", () => {
+    expect(late("Example Quest Alpha", `{{questbox|id=4242}}\n${PROSE}`)).toEqual({
+      admit: true,
+      reason: "post_cutoff_id_match",
+    });
+  });
+
+  test("every kind the world DB has a table for maps through", () => {
+    expect(late("Example NPC", `{{npcbox|id=7001}}\n${PROSE}`).reason).toBe("post_cutoff_id_match");
+    expect(late("Example Item", `{{itembox|itemid=9100}}\n${PROSE}`).reason).toBe(
+      "post_cutoff_id_match",
+    );
+    expect(late("Example Node", `{{objectbox|id=3300}}\n${PROSE}`).reason).toBe(
+      "post_cutoff_id_match",
+    );
+  });
+
+  test("an id this server does not have is no evidence", () => {
+    expect(late("Example Quest Omega", `{{questbox|id=4243}}\n${PROSE}`)).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+    });
+  });
+
+  test("spell and unknown ids never match: neither is in the world DB", () => {
+    // The same number, stated as a spell and as a bare id in a template that
+    // implies no kind. Spells live in the client's DBC files, so the world DB's
+    // silence about one says nothing, and an unknown kind is a number the page
+    // did not classify. `world-ids.ts` is where that guarantee lives; here the
+    // oracle would answer for any other kind, and the page is still dropped.
+    const anyKindButThose = {
+      has(kind: IdKind, id: number): boolean {
+        return id === 4242 && kind !== "spell" && kind !== "unknown";
+      },
+    };
+    expect(late("Example Ability", `{{spellbox|id=4242}}\n${PROSE}`, anyKindButThose).reason).toBe(
+      "dropped_post_cutoff",
+    );
+    expect(late("Example Thing", `{{infobox|id=4242}}\n${PROSE}`, anyKindButThose).reason).toBe(
+      "dropped_post_cutoff",
+    );
+  });
+
+  test("a post-Wrath signal outranks the id: a reused id admits nothing", () => {
+    expect(
+      late(
+        "Example Cataclysm Quest",
+        `{{questbox|id=4242}}\n[[Category:Cataclysm quests]]\n${PROSE}`,
+      ),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+
+  test("a Classic 2019 page is vetoed the same way", () => {
+    expect(late("Example Classic quest", `{{questbox|id=4242}}\n${PROSE}`)).toEqual({
+      admit: false,
+      reason: "dropped_post_cutoff",
+    });
+  });
+
+  test("a coinage title is vetoed before any of it", () => {
+    expect(late("Vashj'ir", `{{questbox|id=4242}}\n${PROSE}`)).toEqual({
+      admit: false,
+      reason: "dropped_post_wrath",
+    });
+  });
+
+  test("an explicit Wrath signal still wins the reason", () => {
+    // Both doors would admit; the page says what it is, so it is counted for
+    // saying it rather than for the id.
+    expect(late("Example Item Zeta", `{{itembox|patch=3.0.2|itemid=9100}}\n${PROSE}`).reason).toBe(
+      "post_cutoff_wrath_signal",
+    );
+  });
+
+  test("without an oracle the door does not exist", () => {
+    expect(
+      admitPage({
+        ns: 0,
+        title: "Example Quest Alpha",
+        eraWikitext: null,
+        newestWikitext: `{{questbox|id=4242}}\n${PROSE}`,
+        firstRevisionAt: "2016-06-06T00:00:00Z",
+      }),
+    ).toEqual({ admit: false, reason: "dropped_post_cutoff" });
+  });
+
+  test("a page with pre-cutoff prose is decided by the cutoff, not the id", () => {
+    expect(
+      admitPage({
+        ns: 0,
+        title: "Example Zone Beta",
+        eraWikitext: PROSE,
+        newestWikitext: `{{questbox|id=4242}}\n${PROSE}`,
+        firstRevisionAt: EARLY,
+        worldIds: oracle,
+      }),
+    ).toEqual({ admit: true, reason: "pre_cutoff" });
+  });
+});
+
+describe("statesWorldId", () => {
+  const everything = { has: (): boolean => true };
+  const nothing = { has: (): boolean => false };
+
+  test("it reads the ids the page states, and nothing else", () => {
+    expect(statesWorldId(`{{questbox|id=4242}}\n${PROSE}`, everything)).toBe(true);
+    expect(statesWorldId(PROSE, everything)).toBe(false);
+    expect(statesWorldId(`{{questbox|id=4242}}\n${PROSE}`, nothing)).toBe(false);
   });
 });
