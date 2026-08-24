@@ -36,6 +36,9 @@ export {
   dropPostWrath,
   dropPostWrathSections,
   dropPostWrathParagraphs,
+  dropEmptySections,
+  normaliseHeading,
+  EMPTY_SECTION_KEY,
   DEFAULT_ERA_CUTOFF,
 } from "./wrath-only";
 export type { WrathOnlyResult } from "./wrath-only";

@@ -1,5 +1,6 @@
 /**
- * Cutting a page down to what patch 3.3.5a knows: sections and paragraphs.
+ * Cutting a page down to what a character here can act on: sections and
+ * paragraphs.
  *
  * This world is Wrath of the Lich King. The dump is from 2020, four expansions
  * later, and even the pre-cutoff revision the prose is taken from can carry a
@@ -21,16 +22,28 @@
  * counted in `meta`, and reversible by rebuilding — which is the reversibility
  * that matters (ADR-0040).
  *
- * Two levels here, both running on the RAW wikitext before the strip, because
- * the strip destroys the templates and headings that identify an era section:
+ * The same file also holds the second reason a section is cut: not that it is
+ * about a later world, but that it is not about the world at all. A character
+ * driving through Azeroth cannot act on an external link, a patch-note list, a
+ * gallery or a lore essay, and the census says those are most of the bundle's
+ * bulk — `External links` alone is 66,140 pages and 14% of raw bytes. The
+ * `OUT_OF_WORLD_SECTION` set names them by heading and the same walker drops
+ * them, counted separately from the era cut (ADR-0040).
+ *
+ * Three levels here, all running on the RAW wikitext before the strip, because
+ * the strip destroys the templates and headings that identify a section:
  *
  * - Section: `{{cata-section}}` under an `== Cataclysm ==` heading, or an
- *   `== In Mists of Pandaria ==` heading on its own. The heading and everything
- *   under it, down to the next heading of the same or a shallower level, goes.
+ *   `== In Mists of Pandaria ==` heading on its own, or a heading in the
+ *   out-of-world drop set. The heading and everything under it, down to the
+ *   next heading of the same or a shallower level, goes.
  * - Paragraph: prose that names a later expansion in the future or past tense
  *   inside an otherwise Wrath-era section. Phrase rules, deliberately narrow;
  *   see `POST_WRATH_PARAGRAPH` for what each one is for and what it must not
  *   catch.
+ * - Empty section: what the two cuts above and the strip leave behind. A
+ *   heading whose subtree carries no prose is not emitted, so a page never
+ *   grows an orphan heading line where a table or a link list used to be.
  *
  * Pre-Wrath eras (`{{bc-section}}`, `== The Burning Crusade ==`) are untouched:
  * that content is in this world. So is `{{Removedwithcataclysm}}` and its
@@ -39,6 +52,8 @@
  *
  * Deterministic, never throws, no network.
  */
+
+import { stripWikitext } from "./strip";
 
 /**
  * The revision cutoff the bundle is taken at: patch 4.0.1, the client patch
@@ -63,6 +78,14 @@ export interface WrathOnlyResult {
   sectionsDropped: number;
   /** How many paragraphs were dropped by the phrase rules. */
   paragraphsDropped: number;
+  /** How many sections were trimmed as out-of-world, including empty ones. */
+  sectionsTrimmed: number;
+  /**
+   * The trim, by normalised heading, so a rebuild says exactly what went.
+   * Sections dropped because nothing survived in them are counted under
+   * `EMPTY_SECTION_KEY` rather than under a real heading name.
+   */
+  sectionsTrimmedBy: Record<string, number>;
 }
 
 /** Expansions after Wrath of the Lich King: their content is not in this world. */
@@ -96,6 +119,87 @@ const ERA_SECTION_TEMPLATE = /\{\{\s*([A-Za-z]{2,12})-section\s*[|}]/g;
 
 /** A wikitext heading line, with its level. */
 const HEADING_LINE = /^[ \t]*(={2,6})[ \t]*(.*?)[ \t]*\1[ \t]*$/;
+
+/**
+ * Sections a character cannot act on: they are about the wiki, the franchise or
+ * the patch record, not about the world the character is standing in.
+ *
+ * Matched on the **normalised** heading and only ever exactly — no prefix, no
+ * substring. That is what keeps `changes` out of the bundle while `past changes`
+ * stays, `notes and trivia` out while `notes` stays, and `patch changes` out
+ * while every other `patch …` heading is untouched. There is no keep list in
+ * this file on purpose: everything not named here is kept, and the headings that
+ * were deliberately considered and kept are listed in `wiki/README.md`.
+ *
+ * Rewriting is not on the table — a section is here in full or not at all.
+ */
+const OUT_OF_WORLD_SECTION: ReadonlySet<string> = new Set([
+  // The link farm and the citation apparatus: 14.1% of raw bytes on its own.
+  "external links",
+  "references",
+  "see also",
+  // The patch record. The world is one patch; its history is not actionable.
+  "patch changes",
+  "patches and hotfixes",
+  "patch history",
+  "patch notes",
+  "changes",
+  // Media, which survives the strip as a caption at best.
+  "gallery",
+  "videos",
+  "video",
+  "images",
+  "media",
+  // Commentary and colour.
+  "trivia",
+  "notes and trivia",
+  "speculation",
+  "quotes",
+  "quote",
+  "dialogue",
+  "criticism",
+  "reception",
+  "development",
+  // Story about the world rather than the state of it.
+  "history",
+  "background",
+  "lore",
+  // Other Warcraft products: not this game, not this world.
+  "in the rpg",
+  "rpg",
+  "in the warcraft rpg",
+  "in the tcg",
+  "tcg",
+  "in the manga",
+  "in the comics",
+  "in the novels",
+  "in hearthstone",
+  "in warcraft iii",
+  "in warcraft ii",
+  "in warcraft i",
+  // Out-of-game client tooling. `classifyMetaPage` drops whole pages of this;
+  // these are the sections of a page that is otherwise about the world.
+  "addons",
+  "macros",
+]);
+
+/** The breakdown key for a section dropped because nothing survived inside it. */
+export const EMPTY_SECTION_KEY = "(empty)";
+
+/**
+ * A heading as the drop set sees it: link and bold markup gone, whitespace
+ * collapsed, trailing punctuation and colons removed, case-folded.
+ */
+export function normaliseHeading(text: string): string {
+  return text
+    .replace(/\[\[|\]\]/g, "")
+    .replace(/'{2,5}/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\s:;,.!?]+$/, "")
+    .trim()
+    .toLowerCase();
+}
 
 /** How far past a heading an era-section template still counts as that section's marker. */
 const MARKER_WINDOW = 400;
@@ -173,24 +277,47 @@ function headingIsPostWrath(text: string): boolean {
  */
 export function dropPostWrath(wikitext: string): WrathOnlyResult {
   if (typeof wikitext !== "string" || wikitext.length === 0) {
-    return { text: wikitext, sectionsDropped: 0, paragraphsDropped: 0 };
+    return {
+      text: wikitext,
+      sectionsDropped: 0,
+      paragraphsDropped: 0,
+      sectionsTrimmed: 0,
+      sectionsTrimmedBy: {},
+    };
   }
   const sections = dropPostWrathSections(wikitext);
   const paragraphs = dropPostWrathParagraphs(sections.text);
+  // Empty sections last: both cuts above are themselves a source of a heading
+  // with nothing under it.
+  const empties = dropEmptySections(paragraphs.text);
+  const sectionsTrimmedBy = { ...sections.sectionsTrimmedBy };
+  if (empties.sectionsTrimmed > 0) {
+    sectionsTrimmedBy[EMPTY_SECTION_KEY] =
+      (sectionsTrimmedBy[EMPTY_SECTION_KEY] ?? 0) + empties.sectionsTrimmed;
+  }
   return {
-    text: paragraphs.text,
+    text: empties.text,
     sectionsDropped: sections.sectionsDropped,
     paragraphsDropped: paragraphs.paragraphsDropped,
+    sectionsTrimmed: sections.sectionsTrimmed + empties.sectionsTrimmed,
+    sectionsTrimmedBy,
   };
 }
 
 /**
- * Drop `== In Cataclysm ==` / `{{cata-section}}` sections: the heading line and
- * everything under it until the next heading of the same or a shallower level.
+ * Drop `== In Cataclysm ==` / `{{cata-section}}` sections and out-of-world
+ * sections: in both cases the heading line and everything under it until the
+ * next heading of the same or a shallower level.
+ *
+ * One walker, two reasons, two counters. The era check runs first, so a heading
+ * that is both never increments both; a heading inside an already-dropped
+ * section is not counted at all, since its section is what went.
  */
 export function dropPostWrathSections(wikitext: string): {
   text: string;
   sectionsDropped: number;
+  sectionsTrimmed: number;
+  sectionsTrimmedBy: Record<string, number>;
 } {
   const lines = wikitext.split("\n");
   const drop = new Array<boolean>(lines.length).fill(false);
@@ -198,6 +325,8 @@ export function dropPostWrathSections(wikitext: string): {
   /** A heading whose era marker may still arrive on a line just below it. */
   let pending: { level: number; index: number } | undefined;
   let sectionsDropped = 0;
+  let sectionsTrimmed = 0;
+  const sectionsTrimmedBy: Record<string, number> = {};
 
   for (let i = 0; i < lines.length; i++) {
     const heading = HEADING_LINE.exec(lines[i]!);
@@ -214,6 +343,14 @@ export function dropPostWrathSections(wikitext: string): {
       }
       if (current !== undefined) {
         // A sub-heading inside a dropped section goes with it.
+        drop[i] = true;
+        continue;
+      }
+      const normalised = normaliseHeading(text);
+      if (OUT_OF_WORLD_SECTION.has(normalised)) {
+        current = { level };
+        sectionsTrimmed++;
+        sectionsTrimmedBy[normalised] = (sectionsTrimmedBy[normalised] ?? 0) + 1;
         drop[i] = true;
         continue;
       }
@@ -242,12 +379,64 @@ export function dropPostWrathSections(wikitext: string): {
     if (current !== undefined) drop[i] = true;
   }
 
-  if (sectionsDropped === 0) return { text: wikitext, sectionsDropped: 0 };
+  if (sectionsDropped === 0 && sectionsTrimmed === 0) {
+    return { text: wikitext, sectionsDropped: 0, sectionsTrimmed: 0, sectionsTrimmedBy };
+  }
   const kept: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (!drop[i]) kept.push(lines[i]!);
   }
-  return { text: kept.join("\n"), sectionsDropped };
+  return { text: kept.join("\n"), sectionsDropped, sectionsTrimmed, sectionsTrimmedBy };
+}
+
+/**
+ * Drop a heading whose whole subtree carries no prose.
+ *
+ * This is the trailing-cruft rule. A `== Drops ==` that is one wiki table, or a
+ * section whose only paragraph the phrase rules took, leaves a heading line the
+ * strip would happily emit on its own — a word of noise in a snippet that says
+ * nothing about the world.
+ *
+ * The test is on the **subtree**, not on the direct body: a heading with no text
+ * of its own but a subsection that has some is a real heading, and dropping it
+ * would orphan the subsection. Heading lines are excluded from what is stripped,
+ * since a heading always strips to its own text and would make every subtree
+ * look occupied. The lead — everything before the first heading — is never
+ * touched by this rule.
+ */
+export function dropEmptySections(wikitext: string): { text: string; sectionsTrimmed: number } {
+  const lines = wikitext.split("\n");
+  const levels = lines.map((line) => {
+    const m = HEADING_LINE.exec(line);
+    return m === null ? 0 : m[1]!.length;
+  });
+  const drop = new Array<boolean>(lines.length).fill(false);
+  let sectionsTrimmed = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const level = levels[i]!;
+    if (level === 0) continue;
+    let end = i + 1;
+    while (end < lines.length && (levels[end] === 0 || levels[end]! > level)) end++;
+    const body: string[] = [];
+    for (let j = i + 1; j < end; j++) {
+      if (levels[j] === 0) body.push(lines[j]!);
+    }
+    if (stripWikitext(body.join("\n")).length === 0) {
+      for (let j = i; j < end; j++) drop[j] = true;
+      sectionsTrimmed++;
+      i = end - 1;
+    }
+    // Otherwise fall through into the subtree: an empty subsection of an
+    // occupied section still goes.
+  }
+
+  if (sectionsTrimmed === 0) return { text: wikitext, sectionsTrimmed: 0 };
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!drop[i]) kept.push(lines[i]!);
+  }
+  return { text: kept.join("\n"), sectionsTrimmed };
 }
 
 /**

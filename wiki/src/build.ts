@@ -153,6 +153,9 @@ async function main(): Promise<void> {
   let eraSwapped = 0;
   let sectionsDropped = 0;
   let paragraphsDropped = 0;
+  /** Out-of-world sections cut inside a surviving page, and what they were. */
+  let sectionsTrimmed = 0;
+  const sectionsTrimmedBy: Record<string, number> = {};
   let redirectsDangling = 0;
   /** One counter per `admitPage` reason; the two admitting reasons are the kept pages. */
   const reasons: Record<AdmitReason, number> = {
@@ -213,6 +216,10 @@ async function main(): Promise<void> {
     const cut = dropPostWrath(source);
     sectionsDropped += cut.sectionsDropped;
     paragraphsDropped += cut.paragraphsDropped;
+    sectionsTrimmed += cut.sectionsTrimmed;
+    for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
+      sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
+    }
     const text = stripWikitext(cut.text);
     if (text.length === 0) {
       // Prose that existed before the cut and not after it is a page the cut
@@ -357,6 +364,15 @@ async function main(): Promise<void> {
     pages_dropped_meta: String(reasons.dropped_meta),
     sections_dropped: String(sectionsDropped),
     paragraphs_dropped: String(paragraphsDropped),
+    // Out-of-world sections, a separate cut from the era one above. The
+    // breakdown is keyed by normalised heading, sorted so two builds from the
+    // same dump write the same string.
+    sections_trimmed: String(sectionsTrimmed),
+    sections_trimmed_json: JSON.stringify(
+      Object.fromEntries(
+        Object.entries(sectionsTrimmedBy).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      ),
+    ),
     redirects_dropped_dangling: String(redirectsDangling),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
@@ -380,6 +396,12 @@ async function main(): Promise<void> {
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
   console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);
+  console.log(`trimmed:     ${sectionsTrimmed} out-of-world sections`);
+  for (const [heading, n] of Object.entries(sectionsTrimmedBy)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)) {
+    console.log(`  ${String(n).padStart(8)} ${heading}`);
+  }
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);
   console.log(`redirects:   ${redirects} (${redirectsDangling} dropped, target not in the bundle)`);

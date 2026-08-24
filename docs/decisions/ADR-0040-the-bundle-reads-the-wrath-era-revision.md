@@ -142,3 +142,64 @@ implementer's (FOLLOW-UPS 62).
   looked like in a given patch.
 - Peak parser memory is the newest body plus at most two era candidates, held
   only while a page is open.
+
+## Sections
+
+Addendum, 2026-08-24. The rules above ask which world a page is about. This one
+asks a different question of a page that survived them: can a character driving
+through the world act on this section at all?
+
+### Context
+A heading census over the Wrath-snapshot revisions (2026-08-24, scratch, not
+committed) says the bundle's bulk is not world facts. `External links` is on
+66,140 pages and 14.1% of raw bytes — a link farm the strip reduces to a list of
+bare labels. The patch record (`patch changes`, `patches and hotfixes`, `patch
+history`, `patch notes`) is another 1.4%. Lore and story (`history`,
+`background`, `lore`) is about 1.3%, and the commentary and media set (`trivia`,
+`quotes`, `speculation`, `gallery`, `videos`, `images`, `dialogue`, the other
+Warcraft products) about 1.8%. None of it names a coordinate, an id, a giver or
+a reward. The unambiguous drop candidates come to 16.3% of corpus bytes.
+
+The sections the model actually needs are cheap and few: `source`, `objectives`,
+`description`, `completion`, `progress`, `rewards`, `gains`, `notes`,
+`abilities`, `drops`, `location`.
+
+### Decision
+**A fixed set of headings is dropped at build time — the heading line through
+the next heading of the same or a shallower level — and nothing is rewritten.**
+The set is matched on the normalised heading (trimmed, case-folded, markup and
+trailing punctuation removed) and only ever exactly, never as a prefix or a
+substring: that is what separates `changes` from `past changes` and `notes and
+trivia` from `notes`. The set and the deliberately kept headings are listed in
+`wiki/README.md`; the code carries the drop set only, because a keep list would
+have to be exhaustive to mean anything and no heading needs permission to stay.
+
+It runs in the same section walker as the era cut (`dropPostWrathSections`),
+with the era check first so a heading can never be counted under both. A third
+pass runs last, after the paragraph rules: **a section whose subtree carries no
+prose once everything is stripped is not emitted at all**, so a table-only
+section, or one the era rules emptied, never leaves an orphan heading line. The
+test is on the subtree rather than the direct body — a heading with no text of
+its own but an occupied subsection is a real heading.
+
+Rewriting, summarising or truncating a section is not on the table. A section is
+in the bundle in full or it is not there, which is what keeps removal verifiable
+by rebuilding from the same dump.
+
+### Consequences
+- `sections_trimmed` is the total and `sections_trimmed_json` the breakdown by
+  normalised heading, with empty-section removals under `(empty)`, so a rebuild
+  says exactly what went. The keys are sorted before serialising, so two builds
+  from the same dump write the same string. The era counters
+  (`sections_dropped`, `paragraphs_dropped`) stay separate: they answer a
+  different question, and a regression in one should not hide in the other.
+- Like the era rules, this changes what every lane can read, so it lands with the
+  same harness minor bump and the same deploy window.
+- A page that was nothing but a link list now empties and is counted as
+  `pages_dropped_post_wrath` — the wrong name for the right outcome. The five
+  reasons plus `empty_pages` are a build-test identity and not worth widening
+  for it.
+- The cost is a fact that only ever appeared under a dropped heading: a tactic
+  written under `Trivia`, a spawn note under `History`. The census says that is
+  a thin tail against 16% of bytes, and the drop set is one edit away if a
+  trajectory shows otherwise.
