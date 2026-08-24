@@ -95,6 +95,18 @@ export interface ComparabilityView {
    */
   wikiCoords?: boolean;
   /**
+   * Which reference bundle the run read, off the bundle's own `meta` table
+   * (ADR-0033). An annotation: a text-changing rebuild is paired with a harness
+   * minor bump, which is what actually groups. Null when the run had no bundle;
+   * absent on runs stamped before the field existed.
+   */
+  wikiBundle?: {
+    schemaVersion: string | null;
+    builtAt: string | null;
+    source: string | null;
+    eraCutoff: string | null;
+  } | null;
+  /**
    * The episode tier the run was launched under, or null for a run assembled
    * flag-by-flag. Absent on runs stamped before the field existed.
    */
