@@ -85,51 +85,6 @@ and status.
 ## Fleet and gate
 
 
-23. **Helm chart for the fleet** (2026-08-22). ADR-0020 made the supervisor a compose
-    service shaped as the chart's rehearsal: Deployment (the `fleet` service, `restart:
-    unless-stopped` → a restartPolicy), ConfigMap (`infra/fleet.json`, read-only and
-    hot-reloaded — a remount is the same edit-the-file steering), PVC (`data/`, which
-    already holds every piece of supervisor state: run dirs, `fleet-state.json`, lane
-    logs, defer sidecars, `fleet-models.json`). The actual work is the two things that
-    do not port: the repo bind mount (the chart wants the harness baked into the image,
-    so the `git describe` stamp comes from a build arg rather than a mounted `.git`),
-    and `.env` (a Secret mounted at the same path so "never via argv" survives).
-
-
-47. **A cooldown the agent can actually watch — the premise was wrong** (2026-08-23,
-    rewritten 2026-08-24 after a live probe). `state.cooldowns()` is fed by
-    `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT` and no smoke asserts a running
-    cooldown. The item used to say that was a level-1 problem and that a Hearthstone
-    would fix it, because its 30-minute cooldown "the server does send". **It does
-    not.** Measured on a fresh Human Paladin: `useItem` on 6948 produced
-    `SMSG_SPELL_START` (`castTimeMs 10000`), `SMSG_SPELL_GO`, `MSG_MOVE_TELEPORT_ACK`
-    and no cooldown opcode of any kind; `state.cooldowns()` stayed empty.
-    The source says why, and generalises: `Player::AddSpellAndCategoryCooldowns` sets
-    `needsCooldownPacket` only inside `if (GetTotalAuraModifier(SPELL_AURA_MOD_COOLDOWN))`
-    (`Player.cpp:11148`), so **no ordinary player cast emits `SMSG_SPELL_COOLDOWN` in
-    3.3.5** — the packet exists for cooldowns a *modifier* changed, which is exactly
-    the case a client cannot derive. `SMSG_ITEM_COOLDOWN` is the 30-second equip path
-    only (`Player.cpp:12048`), not a use path. Both opcodes are tapped by the module
-    already (`WbManager.cpp:3913/3932`); they simply never fire. **Do not re-attempt
-    this with a bigger character or a different item** — level is not the variable.
-    What the probe did establish: the cooldown is real, it is just client-derived.
-    It persists (`character_spell_cooldown`: spell 8690 and the category-1176 row,
-    both `item 6948`) and comes back at login in `SMSG_INITIAL_SPELLS.cooldowns[]`,
-    which the module decodes correctly — a relog read `{spellId 8690, cooldownMs
-    1687000}` and `state.cooldowns()` agreed. That block is genuinely untested and
-    a smoke *could* cover it: fixture-clear `character_spell_cooldown` (keyed by
-    `(guid, spell)`, no guid generator, not in ObjectMgr's reap list — item 57 does
-    not apply here), cast, log out, relog, assert. It costs a new smoke, a new
-    fixture capability and **~3 minutes on every deploy**, so it is an operator's
-    call to price, not a cleanup — and it would cover `INITIAL_SPELLS`, never the
-    opcode this item is named for. The one live route to `SMSG_COOLDOWN_EVENT` is
-    the potion path (`Spell.cpp:4374`: `IsPotion()` -> `SetLastPotionId` ->
-    `UpdatePotionCooldown` -> `SendCooldownEvent`), which needs a purchased potion,
-    so it is blocked on item 57 and on a fixture with money. That is the successor,
-    and it is the only one. Status: open, unblocked by nothing; the decode stays
-    uncovered until a potion route exists.
-
-
 57. **Item fixtures need a guid-safe design** (2026-08-23, split out of item 45). A
     fixture cannot write inventory or mail, so no smoke can be staged with a specific
     bag or mailbox: `item_instance` guids come from an in-memory generator seeded once
@@ -200,7 +155,6 @@ and status.
     talent and the firsts are still unwritten; the dashboard reads none of them yet.
 
 
-
 61. **Browser back into a replay restarts it from the beginning** (2026-08-24, a
     consequence of making `/map` and `/map?run=<id>` the only two URL states).
     The cursor is deliberately not in the URL — putting it there would rewrite
@@ -240,36 +194,10 @@ and status.
     there is what makes the sessions restartable in the first place.
 
 
-
-
-
 ## Module
 
-37. **World-level log, via achievements** (2026-08-22; later, when the freeplay server
-    has more than one agent). Per-session trajectories cannot answer "who was near whom
-    when" or "who did X first". Before a bespoke world log, tap the achievement system:
-    3.3.5 awards achievements server-side including realm-firsts, and the client
-    observes them through `SMSG_ACHIEVEMENT_EARNED` / `SMSG_CRITERIA_UPDATE` — neither
-    is in the tap (`module/src/WbManager.cpp` opcode switch) nor in CONTRACTS.md. One
-    tap case plus an `achievement` event type gives every character a server-authored
-    ledger of firsts for free, contract-clean. A server-wide position sampler (every
-    character, ~10s) is the other half and is cheap because the module already sees
-    every session; defer until it is the next obstacle.
-
-40. **Group tier — rung 6** (harness-0.4, after 38). Party actions
-    (`CMSG_GROUP_INVITE` / `ACCEPT` / `DECLINE` / `UNINVITE` / `DISBAND`,
-    `CMSG_LOOT_METHOD`), taps (`SMSG_GROUP_INVITE`, `SMSG_GROUP_LIST`,
-    `SMSG_PARTY_MEMBER_STATS`, `SMSG_PARTY_COMMAND_RESULT`), `state.group` in the
-    cache, party chat and `whisper`, quest sharing (`CMSG_PUSHQUESTTOPARTY`). Harness
-    side: item 10 and a multi-session runner. Consider 3.3.5's Dungeon Finder
-    (`CMSG_LFG_JOIN` family): it teleports a formed party into the instance, a
-    client-legal way to attempt Deadmines before cross-continent travel and
-    instance-portal triggers are reliable. Trade, mail, bank, auction house and guilds
-    stay behind the earned-by-need rule until a freeplay run asks.
-
-
 72. **`SMSG_INITIAL_SPELLS` declares a cooldown count it does not carry** (2026-08-24,
-    found while disproving item 47). `Player::_LoadSpells`' packet builder writes
+    found while disproving issue #11, which was item 47). `Player::_LoadSpells`' packet builder writes
     `uint16(m_spellCooldowns.size())` as the entry count (`Player.cpp:2852`) and only
     *then* skips rows whose `needSendToClient` is false — unlike the spell count two
     lines above, which is fixed up with a `data.put` after the loop. A character with
@@ -319,21 +247,6 @@ and status.
     folded in here: the account pool delivered run parallelism, and what remained of 10
     — nothing binds a caller to an account or a token to a character — is exactly (1)
     and (2).
-
-33. **Public hosting checklist for the dashboard** (2026-08-22, ADR-0022). Before any
-    of it is exposed: **Legal, first and blocking** — minimap tiles are Blizzard
-    textures and must not ship; `WRATHBENCH_VIEWER_PUBLIC=1` withholds them (the map
-    degrades to a labelled grid) and raw entries and scratchpads, but entry *summaries*
-    still carry model output and snippet code and whether those are publishable is
-    undecided (DATA-AND-LEGAL). **Auth-less read-only exposure** — the API takes no
-    bodies, opens every database readonly and strips bearer tokens, but has no rate
-    limit and no cache, and `/api/runs` reads every trajectory on a cold process; decide
-    a caching layer and a per-IP limit with the hosting. **Caching** — only `/tiles` and
-    fingerprinted assets are cacheable; every `/api` response is `no-store`; short-TTL
-    on the listing and the position feed is the cheap win. **A public run set** — a
-    public page should not list every run the fleet ever produced (stillborn runs are
-    already hidden by default); decide what the listing selects before pointing a domain
-    at it.
 
 ## Resolved ledger
 
@@ -388,6 +301,11 @@ One line per number so citations resolve; the day file carries the detail.
 - 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66
 - 68 — 2026-08-24 — found and fixed the same hour — the `--status` accounts table named a finished job where `--live-runs` named the running one. `state.jobs` is keyed by job NAME, stable across attempts, so it is a cumulative record; `printStatus` keyed a map by account and let the last write win, which reads the object's INSERTION order (first-spawn order), so a job that exited at noon masked the run holding the account. Display only — every scheduling path leases by `accountHeldBy` — but it made the board unreadable at exactly the moment a deploy needed reading. Now `jobsByAccount` in `infra/run-fleet.ts` ranks live-before-dead then newest-first, shares one liveness verdict with the row's own note, and reports two live jobs on one account as a `!!` clash instead of picking silently. The comment claiming `--live-runs` was "the same signal --status shows" is corrected: they are two sources, and that claim is how this hid
 - 69 — 2026-08-24 — `infra/` had no tsconfig, so nothing ever typechecked the 3.6k-line supervisor: `bun test` strips types without checking them, and four `fleet.test.ts` fixtures were silently missing the `idle` and `local` fields that ADR-0043 made required. `infra/tsconfig.json` added, the 17 errors it found fixed (4 fixtures, 12 index/group assertions in `infra/smoke/`, 1 import extension), and `bun run typecheck` now covers all six projects — cited in CLAUDE.md next to `bun test` so the next agent runs both
+- 23 — 2026-08-24 — moved to issue #7, not resolved — the compose service is the chart's rehearsal and nothing is blocked on the chart itself; no Kubernetes move is scheduled
+- 33 — 2026-08-24 — moved to issue #10, not resolved — a checklist for a decision not yet taken. The security blockers stay HERE as item 19; the blocking legal line (minimap tiles are Blizzard textures and must never ship) travels with the issue
+- 37 — 2026-08-24 — moved to issue #8, not resolved — its own trigger is a freeplay server with more than one agent, which does not exist yet
+- 40 — 2026-08-24 — moved to issue #9, not resolved — a feature tier rather than a follow-up — gated behind item 38 and needing a multi-session runner; kept whole so the opcode and tap lists are not re-derived
+- 47 — 2026-08-24 — moved to issue #11, not resolved — a record rather than a task: no ordinary player cast emits SMSG_SPELL_COOLDOWN in 3.3.5 at any level (`Player.cpp:11148`), so level is not the variable and this must not be retried with a bigger character. The potion route to SMSG_COOLDOWN_EVENT stays blocked on item 57, which remains open here
 - 62 — 2026-08-24 — moved to issue #6, not resolved — the wiki bundle's remaining era-rule imprecision (the paragraph rule's ~0.8 precision floor, and the ~15 late pages whose id and name both exist in the 3.3.5 DB). Open-ended measurement work with no trigger and nothing blocked behind it, so it is tracked where open-ended things belong. Its other two bullets were genuinely resolved (d0f3ec8, ADR-0042) and the issue keeps them as history
 - 76 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
 - 66 — 2026-08-24 — 4eb455d, 64319d9 — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. 64319d9 fixed a regression in the first commit: a refused pin is disabled, and `diffJobs` drains a running job whose spawn is disabled, so a refusal would have SIGTERMed a live campaign probe where the whole-file rejection left it alone — a refusal now suppresses scheduling only, and the tick spares (and records) any live run under a refused pin. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
