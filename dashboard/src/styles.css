@@ -192,6 +192,44 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .detail table { font-size: 12px; }
 .detail p { margin: 0 0 6px; }
 
+/* --- the collapsible pane (components/Collapsible.tsx) --- */
+/*
+ * The slide is a grid row going 0fr→1fr with the content clipped inside it,
+ * which is the one way to animate to "however tall the content is" without
+ * measuring anything. The clip element needs `min-height: 0`, or a grid item
+ * refuses to shrink below its content and nothing moves. Padding lives on a
+ * third element because padding on the clip would leak out of a zero row.
+ */
+.collapsible { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; }
+.collapsible-head { margin: 0; font-size: inherit; font-weight: inherit; }
+.collapsible-toggle {
+  display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left;
+  font: inherit; color: var(--fg); cursor: pointer;
+  background: none; border: none; border-radius: 6px; padding: 7px 10px;
+}
+/* Lifts from --panel, so the step has to clear it: --grid is two hex values away. */
+.collapsible-toggle:hover { background: var(--line); }
+.collapsible-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+/* Drawn rather than typed: the mono stack renders ▸ at a size the eye misses. */
+.collapsible-chev { flex: none; align-self: center; width: 0; height: 0; color: var(--dim);
+                    border-left: 6px solid currentColor;
+                    border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+                    transition: transform .18s ease; }
+.collapsible.open > .collapsible-head .collapsible-chev { transform: rotate(90deg); }
+.collapsible-title { font-weight: 700; }
+.collapsible-summary { margin-left: auto; font-size: 12px; text-align: right; }
+
+.collapsible-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease; }
+.collapsible.open > .collapsible-body { grid-template-rows: 1fr; }
+.collapsible-clip { overflow: hidden; min-height: 0; }
+.collapsible-content { padding: 0 10px 8px; }
+.collapsible-content > :first-child { margin-top: 0; }
+.collapsible-content > :last-child { margin-bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .collapsible-body, .collapsible-chev { transition: none; }
+}
+
 /* --- the run view: XP chart on top, feed left, everything else right (sticky) --- */
 /*
  * The log column is its own scroll container and the sidebar another, so the
