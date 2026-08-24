@@ -95,21 +95,38 @@ and status.
     and `.env` (a Secret mounted at the same path so "never via argv" survives).
 
 
-47. **A cooldown the agent can actually watch** (2026-08-23; small, after item 45).
-    `state.cooldowns()` is fed by `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT`, and no
-    smoke asserts a *running* cooldown because a level-1 character cannot produce one:
-    3.3.5 sends those packets only for cooldowns the client cannot derive, so GCD-only
-    spells are silent (measured on a Human Paladin: 21084 and the racial 59752 both
-    emit `SMSG_SPELL_GO` and nothing else; worklogs/2026-08-23). `spellbook.ts` asserts
-    `SMSG_SPELL_GO` instead, which leaves the `SMSG_SPELL_COOLDOWN` decode with no smoke
-    coverage — the login-time `cooldowns[]` block in `SMSG_INITIAL_SPELLS` is empty at
-    level 1. When a smoke has a character past level 1 — or a Hearthstone `use_item`,
-    whose 30-minute cooldown the server does send — assert the packet and the cache
-    entry, and `SPELL_GO` goes back to being a cast-path check. Unblocked as of
-    2026-08-23: item 45 shipped, so `trainer-northshire` (level 4) or any fixture
-    character is available, and the Hearthstone route needs no fixture item row at all
-    — every character is created holding one, server-side, so item 57's guid problem
-    does not apply.
+47. **A cooldown the agent can actually watch — the premise was wrong** (2026-08-23,
+    rewritten 2026-08-24 after a live probe). `state.cooldowns()` is fed by
+    `SMSG_SPELL_COOLDOWN` / `SMSG_COOLDOWN_EVENT` and no smoke asserts a running
+    cooldown. The item used to say that was a level-1 problem and that a Hearthstone
+    would fix it, because its 30-minute cooldown "the server does send". **It does
+    not.** Measured on a fresh Human Paladin: `useItem` on 6948 produced
+    `SMSG_SPELL_START` (`castTimeMs 10000`), `SMSG_SPELL_GO`, `MSG_MOVE_TELEPORT_ACK`
+    and no cooldown opcode of any kind; `state.cooldowns()` stayed empty.
+    The source says why, and generalises: `Player::AddSpellAndCategoryCooldowns` sets
+    `needsCooldownPacket` only inside `if (GetTotalAuraModifier(SPELL_AURA_MOD_COOLDOWN))`
+    (`Player.cpp:11148`), so **no ordinary player cast emits `SMSG_SPELL_COOLDOWN` in
+    3.3.5** — the packet exists for cooldowns a *modifier* changed, which is exactly
+    the case a client cannot derive. `SMSG_ITEM_COOLDOWN` is the 30-second equip path
+    only (`Player.cpp:12048`), not a use path. Both opcodes are tapped by the module
+    already (`WbManager.cpp:3913/3932`); they simply never fire. **Do not re-attempt
+    this with a bigger character or a different item** — level is not the variable.
+    What the probe did establish: the cooldown is real, it is just client-derived.
+    It persists (`character_spell_cooldown`: spell 8690 and the category-1176 row,
+    both `item 6948`) and comes back at login in `SMSG_INITIAL_SPELLS.cooldowns[]`,
+    which the module decodes correctly — a relog read `{spellId 8690, cooldownMs
+    1687000}` and `state.cooldowns()` agreed. That block is genuinely untested and
+    a smoke *could* cover it: fixture-clear `character_spell_cooldown` (keyed by
+    `(guid, spell)`, no guid generator, not in ObjectMgr's reap list — item 57 does
+    not apply here), cast, log out, relog, assert. It costs a new smoke, a new
+    fixture capability and **~3 minutes on every deploy**, so it is an operator's
+    call to price, not a cleanup — and it would cover `INITIAL_SPELLS`, never the
+    opcode this item is named for. The one live route to `SMSG_COOLDOWN_EVENT` is
+    the potion path (`Spell.cpp:4374`: `IsPotion()` -> `SetLastPotionId` ->
+    `UpdatePotionCooldown` -> `SendCooldownEvent`), which needs a purchased potion,
+    so it is blocked on item 57 and on a fixture with money. That is the successor,
+    and it is the only one. Status: open, unblocked by nothing; the decode stays
+    uncovered until a potion route exists.
 
 
 57. **Item fixtures need a guid-safe design** (2026-08-23, split out of item 45). A
@@ -126,17 +143,6 @@ and status.
     write with the world stopped and reseed the watermark. Blocks nothing today —
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
-
-58. **The gate's fixture characters accumulate what a fixture cannot clear**
-    (2026-08-23, from the kill-credit fixture conversion). `Smokekc` is now
-    persistent and loots a kobold corpse every tick, into a 16-slot backpack that
-    `infra/fixtures/scenarios.ts` deliberately refuses to touch (item 57: item guids
-    are not safe to write from outside). Durability drifts down on the same clock.
-    Neither bites for days — the observed loot is 0–1 items and a copper per run —
-    but a full bag makes `loot_all` stop proving what the smoke says it proves, and
-    the failure will read as a loot bug. Cheapest honest fixes: have the smoke sell
-    or destroy through the module before logout, or rotate the character. Do it when
-    the gate first fails on loot, or before leaving the fleet unattended for a week.
 
 ## Episodes and results
 
@@ -261,6 +267,19 @@ and status.
     stay behind the earned-by-need rule until a freeplay run asks.
 
 
+72. **`SMSG_INITIAL_SPELLS` declares a cooldown count it does not carry** (2026-08-24,
+    found while disproving item 47). `Player::_LoadSpells`' packet builder writes
+    `uint16(m_spellCooldowns.size())` as the entry count (`Player.cpp:2852`) and only
+    *then* skips rows whose `needSendToClient` is false — unlike the spell count two
+    lines above, which is fixed up with a `data.put` after the loop. A character with
+    a category cooldown therefore gets a packet declaring 2 entries and carrying 1.
+    Measured: our Hearthstone probe hit exactly that (spell 8690 `needSend 1`, the
+    category-1176 row `needSend 0`). The module's decoder tolerated it cleanly — one
+    row, no `decodeError` — but **that tolerance is currently proven by one manual
+    observation and by no test**, and it is C++ decode, so nothing in `bun test` can
+    reach it. Upstream bug, not ours; the risk is that a future decoder tightening
+    trusts the count. Worth a comment at the decode site at minimum. Blocks nothing.
+
 ## Wiki
 
 49. **Unlabelled post-3.3.5 prose in wiki page leads** (2026-08-23, from ADR-0029;
@@ -373,6 +392,7 @@ One line per number so citations resolve; the day file carries the detail.
 - 66 — 2026-08-24 — 4eb455d, 64319d9 — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. 64319d9 fixed a regression in the first commit: a refused pin is disabled, and `diffJobs` drains a running job whose spawn is disabled, so a refusal would have SIGTERMed a live campaign probe where the whole-file rejection left it alone — a refusal now suppresses scheduling only, and the tick spares (and records) any live run under a refused pin. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
 - 62 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
 - 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 was withdrawn the same day — see its own ledger line
+- 58 — 2026-08-24 — 9848d70 — the loot half, with the durability half quantified and left open. `kill-credit.ts` empties `Smokekc`'s backpack at the START of the run, not before logout: start-of-run is idempotent, it runs after a previous run failed and skipped its own cleanup (exactly when the bag is fullest), and it makes the loot line readable as "N free, then loot arrived". `destroy_item` goes through the module like a client's delete, so no fixture and no item-57 guid problem. The keep rule fails toward keeping — only a slot positively identified as non-keep is destroyed, unidentified slots are kept and named, and 6948 is protected, because a fixture cannot restore a Hearthstone it destroys. Best-effort and reported, never asserted: it uses `req()` not `action()`, so a refusal is a log line and the run carries on to its real claims — a cleanup failure must not be indistinguishable from the loot bug this prevents. An empty read is reported as "contents unknown", not as a reassuring zero. Found in passing: the real accumulation is ~2-3 items per run, not the 0-1 the item assumed, and five runs' backlog was already sitting there. Durability is NOT fixed and is not close to biting: both durability-bearing items were 25/25 before and after three fights, and the steady-state drift is ~0.5% x 2/19 slots per damage event — order of one point per ~100 runs, thousands of gate ticks from zero. `DurabilityLoss.OnDeath` is the only fast path and this smoke treats a death as a failure by construction. A repair needs a vendor, a walk and money; open when something makes it worth that
 - 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
 - 70 — 2026-08-24 — withdrawn, not fixed: the item described intentional behaviour on a premise the code contradicts. The ladder is per roster entry (`matchesRoster` is model + effort), so no model's failure can cool another. It is climbed ONLY by a stillborn launch or `adapter-error` (`NO_PROGRESS_REASONS`), both endpoint properties — a probe that runs its full episode and achieves nothing ends `episode-limit` or `idle` and does not climb it at all. So the item's own revisit trigger, "a campaign with a harder task starts retiring models that were fine on e90", cannot occur: task difficulty is invisible to the ladder. Sharing it across lanes is correct and needs no lane key
 - 64 — 2026-08-24 — 6287b0a — `/api/info` carries `dashboardBuild` (Vite's fingerprinted entry name, parsed from index.html, cached on mtime); the SPA keeps the first id it sees — its own, since index.html is `no-store` — and shows a `new build — reload` button beside the status badge when a later poll disagrees. The item's other half was ALREADY true: `staticFile` has served index.html `no-store` all along, verified against the live viewer
