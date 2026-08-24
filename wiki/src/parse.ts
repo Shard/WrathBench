@@ -13,6 +13,13 @@
  * - Selection is by (timestamp, revision id), so it does not depend on the
  *   dump's revision ordering. This dump happens to be newest-first; others are
  *   oldest-first.
+ * - A page with more than 50 revisions is exported as several consecutive
+ *   `<page>` blocks carrying the same title and ns, 50 revisions each. A block
+ *   is therefore not a page: the accumulator is held pending and finished only
+ *   when the (title, ns) key changes or the stream ends, so a split page still
+ *   yields one WikiPage holding its genuinely newest revision. Blocks for a
+ *   page are contiguous in the dump; a stray later block would yield a second
+ *   page, which the build's uniqueness check catches.
  *
  * The buffer is compacted once per input chunk and every scan starts at the
  * cursor, so there is no quadratic re-scan of accumulated text.
@@ -34,10 +41,16 @@ export interface WikiPage {
   redirectAttr: string | null;
 }
 
-/** Counters the caller can read after (or during) a parse. */
+/**
+ * Counters the caller can read after (or during) a parse. Both count `<page>`
+ * *blocks*, not pages: a long history arrives as several blocks of the same
+ * page (see the header), and only the yielded WikiPages are pages.
+ */
 export interface ParseStats {
-  /** Pages dropped because their namespace is not wanted. */
+  /** Blocks dropped because their namespace is not wanted. */
   pagesSkipped: number;
+  /** Blocks in a wanted namespace, before merging. */
+  blocksSeen: number;
 }
 
 /** Namespaces worth keeping for an agent playing the game. */
@@ -122,6 +135,12 @@ export async function* parsePages(
   } = { end: "", field: "", parts: null, keep: false };
 
   let page: PageAccum | null = null;
+  /**
+   * The last block's accumulator, awaiting a key change (see the header). In an
+   * object for the same reason `cap` is: the compiler otherwise narrows a `let`
+   * to its initialiser here.
+   */
+  const held: { pending: PageAccum | null } = { pending: null };
   let revId = -1;
   let revTs = "";
   let revIdSeen = false;
@@ -135,9 +154,7 @@ export async function* parsePages(
     return State.Capturing;
   };
 
-  const finishPage = (): WikiPage | null => {
-    const p = page;
-    page = null;
+  const toWikiPage = (p: PageAccum | null): WikiPage | null => {
     if (p === null || p.bestText === null) return null;
     if (!namespaces.has(p.ns)) return null;
     return {
@@ -206,11 +223,27 @@ export async function* parsePages(
                 page.title = decodeEntities(value).replace(/_/g, " ").trim();
                 break;
               case "ns": {
-                page.ns = Number.parseInt(value.trim(), 10);
-                if (!namespaces.has(page.ns)) {
+                const block = page;
+                block.ns = Number.parseInt(value.trim(), 10);
+                if (!namespaces.has(block.ns)) {
                   page = null;
                   state = State.SkippingPage;
                   if (stats !== undefined) stats.pagesSkipped++;
+                  break;
+                }
+                if (stats !== undefined) stats.blocksSeen++;
+                // Title and ns are both known now, and revisions have not
+                // started, so this is where a continuation block rejoins the
+                // page it continues: adopt the pending accumulator and let
+                // `beats` go on discarding anything older than its best.
+                const prev = held.pending;
+                if (prev !== null && prev.ns === block.ns && prev.title === block.title) {
+                  page = prev;
+                  held.pending = null;
+                } else if (prev !== null) {
+                  held.pending = null;
+                  const done = toWikiPage(prev);
+                  if (done !== null) yield done;
                 }
                 break;
               }
@@ -256,16 +289,22 @@ export async function* parsePages(
             } else if (!closing && name === "ns") {
               state = startCapture("ns", true, State.InPage);
             } else if (!closing && name === "redirect") {
-              if (page !== null) page.redirectAttr = attrOf(tag, "title");
+              // A continuation block need not repeat it, so a missing one never
+              // clears a target already seen.
+              const target = attrOf(tag, "title");
+              if (page !== null && target !== null) page.redirectAttr = target;
             } else if (!closing && name === "revision") {
               revId = -1;
               revTs = "";
               revIdSeen = false;
               state = State.InRevision;
             } else if (closing && name === "page") {
-              const done = finishPage();
+              // Not finished: the next block may continue this page.
+              if (page !== null) {
+                held.pending = page;
+                page = null;
+              }
               state = State.OutsidePage;
-              if (done !== null) yield done;
             }
             continue;
           }
@@ -290,15 +329,23 @@ export async function* parsePages(
           } else if (closing && name === "revision") {
             state = State.InPage;
           } else if (closing && name === "page") {
-            const done = finishPage();
+            if (page !== null) {
+              held.pending = page;
+              page = null;
+            }
             state = State.OutsidePage;
-            if (done !== null) yield done;
           }
           continue;
         }
       }
     }
   }
+
+  // End of stream: nothing follows to close the last page. A block still
+  // mid-parse (a truncated dump) is dropped, as it was before.
+  const last = toWikiPage(held.pending);
+  held.pending = null;
+  if (last !== null) yield last;
 }
 
 /** Decode a byte stream to text chunks, reporting bytes consumed. */

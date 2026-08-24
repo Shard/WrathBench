@@ -213,10 +213,14 @@ export function questPrefix(quest: WikiQuest | undefined): string {
  */
 function resolveTitle(db: Database, title: string): { page: PageRow; via: string | null } | null {
   const pageStmt = db.query<PageRow, [string]>(
-    "SELECT id, title, ns, text FROM pages WHERE title = ? COLLATE NOCASE LIMIT 1",
+    // A case-insensitive title can match more than one row, and on a bundle
+    // built before the page-block merge it can match a stale duplicate too. The
+    // dump is newest-first, so the block holding the newest revision was written
+    // first and holds the lowest id: ascending id picks the right row.
+    "SELECT id, title, ns, text FROM pages WHERE title = ? COLLATE NOCASE ORDER BY id LIMIT 1",
   );
   const redirectStmt = db.query<{ target: string }, [string]>(
-    "SELECT target FROM redirects WHERE source = ? COLLATE NOCASE LIMIT 1",
+    "SELECT target FROM redirects WHERE source = ? COLLATE NOCASE ORDER BY source LIMIT 1",
   );
 
   // Titles in the dump carry their namespace prefix, so a bare quest name has to
