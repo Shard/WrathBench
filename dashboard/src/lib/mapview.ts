@@ -12,6 +12,7 @@
  *     screen = worldPixel * scale + offset
  */
 
+import type { AgentPosition } from "@viewer/api-types";
 import { GRID, TILE_PX, worldToPixel } from "@viewer/worldmap";
 
 export const MIN_SCALE = 0.01;
@@ -145,4 +146,100 @@ export function hueOf(runId: string): number {
 
 export function colorOf(runId: string): string {
   return `hsl(${hueOf(runId)} 70% 60%)`;
+}
+
+/* --- the renderer's pip state, kept pure so Solid never has to own it --- */
+
+/**
+ * A drawn agent: its newest reading, and where it is *currently drawn*, which
+ * lags the reading while the pip walks toward it.
+ */
+export interface Pip extends Placeable {
+  runId: string;
+  data: AgentPosition;
+}
+
+/**
+ * Fold a feed into the renderer's pip map, in place.
+ *
+ * The point of this being a plain function over a plain `Map` is that it touches
+ * no signal. It used to be a method on the component that read `activeMap` and
+ * `selected` and wrote both back, which made every feed tick re-enter its own
+ * effect; the derived state now hangs off the feed instead (see `mapstate.ts`)
+ * and this does nothing but move pips.
+ *
+ * Identity is stable: a run already on the map keeps its `Pip` object, so a
+ * re-run with the same feed is a no-op rather than a fresh set of objects.
+ */
+export function syncPips(
+  pips: Map<string, Pip>,
+  list: readonly AgentPosition[],
+  snap = false,
+): void {
+  const seen = new Set<string>();
+  for (const p of list) {
+    seen.add(p.runId);
+    const existing = pips.get(p.runId);
+    if (existing === undefined) {
+      pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y });
+      continue;
+    }
+    existing.data = p;
+    // Scrubbing: the pip belongs where the cursor says, now. Walking there at
+    // 0.18/frame would trail every drag of the slider.
+    if (snap) {
+      existing.x = p.x;
+      existing.y = p.y;
+    }
+  }
+  for (const id of [...pips.keys()]) if (!seen.has(id)) pips.delete(id);
+}
+
+/** A plain lerp toward the newest reading: a pip walks rather than teleports. */
+export function stepPips(list: readonly Pip[], rate = 0.18): boolean {
+  let moving = false;
+  for (const pip of list) {
+    const dx = pip.data.x - pip.x;
+    const dy = pip.data.y - pip.y;
+    if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) {
+      pip.x = pip.data.x;
+      pip.y = pip.data.y;
+      continue;
+    }
+    pip.x += dx * rate;
+    pip.y += dy * rate;
+    moving = true;
+  }
+  return moving;
+}
+
+/** How many of a feed stand on each map, busiest first, ties broken by map id. */
+export function mapCounts(list: readonly { map: number }[]): [number, number][] {
+  const counts = new Map<number, number>();
+  for (const p of list) counts.set(p.map, (counts.get(p.map) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+}
+
+/**
+ * Which map the canvas shows, given everything that has an opinion.
+ *
+ * Sticky by construction, and a pure function of its inputs — the previous
+ * answer is an *argument*, not state read back out of a signal. That is what
+ * lets the caller express "stay on this map while it still has an agent"
+ * without a derivation that writes to what it reads.
+ *
+ * Precedence: an operator's chip click, then the replay cursor's own map, then
+ * where we already were, then the busiest map in the feed.
+ */
+export function chooseMap(
+  maps: readonly [number, number][],
+  prev: number | null,
+  pinned: number | null,
+  cursor: number | null,
+): number | null {
+  const has = (m: number): boolean => maps.some(([id]) => id === m);
+  if (pinned !== null && has(pinned)) return pinned;
+  if (cursor !== null) return cursor;
+  if (prev !== null && has(prev)) return prev;
+  return maps.length > 0 ? maps[0]![0] : null;
 }

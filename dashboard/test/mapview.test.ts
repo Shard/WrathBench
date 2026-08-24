@@ -4,24 +4,45 @@
  *
  * The transform itself is `runner/viewer/worldmap.ts` and is tested there; what
  * these pin is the layer the SPA adds — projection under a view, fitting,
- * cursor-anchored zoom, and hit testing.
+ * cursor-anchored zoom, hit testing, the pip fold, and the derived state the
+ * page hangs off its feed. The last of those is a regression: the derivation
+ * used to write back into signals it read, and the map recursed.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
 import { worldToPixel } from "../../runner/viewer/worldmap";
+import { positionsAt } from "../src/lib/replay";
 import {
+  type Pip,
   MAX_SCALE,
   MIN_SCALE,
   centreOn,
+  chooseMap,
   clampScale,
   colorOf,
   fitTo,
   hitTest,
   hueOf,
+  mapCounts,
   project,
+  stepPips,
+  syncPips,
   visibleGrid,
   zoomAt,
 } from "../src/lib/mapview";
+
+/*
+ * `bun test` resolves `solid-js` under the node condition, which is the server
+ * build: its signals never notify, so a test of the derivation graph would pass
+ * against it no matter what the graph did. Point the name at the same reactive
+ * build the browser gets, then load the derivation — dynamically, because a
+ * static import would be hoisted above the redirect and get the server build.
+ */
+const solid = await import("solid-js/dist/solid.js");
+mock.module("solid-js", () => solid);
+const { createComputed, createRoot, createSignal } = solid;
+const { createMapState } = await import("../src/lib/mapstate");
 
 const SCREEN = { w: 800, h: 600 };
 
@@ -145,5 +166,215 @@ describe("pip colour", () => {
     expect(colorOf("a")).toMatch(/^hsl\(\d+ 70% 60%\)$/);
     const hues = new Set(["a", "b", "c", "d", "e", "f"].map(hueOf));
     expect(hues.size).toBe(6);
+  });
+});
+
+/* --- the pip layer and the derived state over a feed --- */
+
+function agent(runId: string, map: number, x: number, y: number): AgentPosition {
+  return {
+    runId,
+    character: runId,
+    model: "test/model",
+    map,
+    x,
+    y,
+    ts: 1000,
+    level: 5,
+    xp: 100,
+    money: null,
+    questsCompleted: null,
+    items: null,
+    harnessVersion: "harness-0.2",
+  };
+}
+
+describe("syncPips", () => {
+  test("keeps pip identity across a re-ingest of the same feed", () => {
+    const pips = new Map<string, Pip>();
+    syncPips(pips, [agent("a", 0, 10, 10)]);
+    const first = pips.get("a")!;
+    syncPips(pips, [agent("a", 0, 10, 10)]);
+    // The bug this pins: the fold used to write its results into signals the
+    // same scope read, and a fresh object every call made that a live loop.
+    // Identity stability is what makes a repeated fold a no-op instead.
+    expect(pips.get("a")).toBe(first);
+    expect(pips.size).toBe(1);
+  });
+
+  test("a pip walks toward its new reading unless the caller snaps it", () => {
+    const pips = new Map<string, Pip>();
+    syncPips(pips, [agent("a", 0, 0, 0)]);
+    syncPips(pips, [agent("a", 0, 100, 100)]);
+    expect(pips.get("a")).toMatchObject({ x: 0, y: 0 });
+    syncPips(pips, [agent("a", 0, 100, 100)], true);
+    expect(pips.get("a")).toMatchObject({ x: 100, y: 100 });
+  });
+
+  test("a run that leaves the feed leaves the map", () => {
+    const pips = new Map<string, Pip>();
+    syncPips(pips, [agent("a", 0, 1, 1), agent("b", 0, 2, 2)]);
+    syncPips(pips, [agent("b", 0, 2, 2)]);
+    expect([...pips.keys()]).toEqual(["b"]);
+    syncPips(pips, []);
+    expect(pips.size).toBe(0);
+  });
+});
+
+describe("stepPips", () => {
+  test("converges on the reading and then reports nothing moving", () => {
+    const pips = new Map<string, Pip>();
+    syncPips(pips, [agent("a", 0, 0, 0)]);
+    syncPips(pips, [agent("a", 0, 100, 100)]);
+    const list = [...pips.values()];
+    let frames = 0;
+    while (stepPips(list) && frames < 500) frames++;
+    expect(frames).toBeLessThan(200);
+    expect(list[0]).toMatchObject({ x: 100, y: 100 });
+    expect(stepPips(list)).toBe(false);
+  });
+});
+
+describe("mapCounts", () => {
+  test("busiest first, ties broken by map id", () => {
+    const list = [agent("a", 530, 0, 0), agent("b", 0, 0, 0), agent("c", 0, 0, 0), agent("d", 1, 0, 0)];
+    expect(mapCounts(list)).toEqual([
+      [0, 2],
+      [1, 1],
+      [530, 1],
+    ]);
+    expect(mapCounts([])).toEqual([]);
+  });
+});
+
+describe("chooseMap", () => {
+  const MAPS: [number, number][] = [
+    [0, 2],
+    [1, 1],
+  ];
+
+  test("nothing on the map means no map", () => {
+    expect(chooseMap([], null, null, null)).toBeNull();
+  });
+
+  test("stays where it was while that map still has an agent", () => {
+    expect(chooseMap(MAPS, 1, null, null)).toBe(1);
+    expect(chooseMap([[0, 2]], 1, null, null)).toBe(0);
+  });
+
+  test("a chip click outranks both stickiness and the busiest map", () => {
+    expect(chooseMap(MAPS, 0, 1, null)).toBe(1);
+    // A pin for a map nothing is on is ignored rather than blanking the canvas.
+    expect(chooseMap(MAPS, 0, 530, null)).toBe(0);
+  });
+
+  test("the replay cursor's map wins over where we were", () => {
+    expect(chooseMap(MAPS, 0, null, 530)).toBe(530);
+  });
+
+  test("is a fixpoint: feeding its own answer back changes nothing", () => {
+    // The sticky derivation is a memo over its own previous value, so a second
+    // pass on unchanged inputs has to settle rather than oscillate.
+    const first = chooseMap(MAPS, null, null, null);
+    expect(chooseMap(MAPS, first, null, null)).toBe(first);
+    const pinned = chooseMap(MAPS, first, 1, null);
+    expect(chooseMap(MAPS, pinned, 1, null)).toBe(pinned);
+  });
+});
+
+describe("createMapState", () => {
+  const TRACK: TrackResponse = {
+    runId: "run-1",
+    character: "Benchy",
+    model: "test/model",
+    harnessVersion: "harness-0.2",
+    points: [
+      { ts: 100, map: 0, x: 1, y: 1, level: 1, xp: 0, money: null, questsCompleted: null, turn: 1 },
+      { ts: 200, map: 530, x: 9, y: 9, level: 2, xp: 5, money: null, questsCompleted: null, turn: 2 },
+    ],
+  };
+
+  /*
+   * A live graph, driven from outside the root. Writes made *inside* the root's
+   * own initialisation are batched until it returns, so a test that asserted in
+   * there would only ever see the first pass.
+   */
+  function graph(track: TrackResponse | undefined, selectedId: string | null) {
+    return createRoot((dispose) => {
+      const [feed, setFeed] = createSignal<readonly AgentPosition[]>([]);
+      const state = createMapState({
+        feed,
+        track: () => track,
+        pinned: () => null,
+        selectedId: () => selectedId,
+      });
+      // A subscriber, so every memo is pulled on every update rather than
+      // sitting stale until something reads it.
+      const seen = { runs: 0 };
+      createComputed(() => {
+        seen.runs++;
+        state.maps();
+        state.activeMap();
+        state.selected();
+        state.count();
+      });
+      return { state, setFeed, seen, dispose };
+    });
+  }
+
+  test("a feed of fresh objects settles instead of re-entering", () => {
+    /*
+     * The regression. `positionsAt` mints a new object per call, so a feed tick
+     * always looks like a change; the old page wrote that object into a signal
+     * it read in the same effect, and Firefox reported `too much recursion`
+     * under the play slider. Nothing in the derivation writes now, so a
+     * downstream computation runs exactly once per update — the count is the
+     * assertion, and under the old shape it did not terminate at all.
+     */
+    const g = graph(undefined, "a");
+    expect(g.seen.runs).toBe(1);
+    for (let i = 0; i < 5; i++) g.setFeed([agent("a", 0, 10, 10)]);
+    expect(g.seen.runs).toBe(6);
+    expect(g.state.activeMap()).toBe(0);
+    expect(g.state.selected()?.runId).toBe("a");
+    g.dispose();
+  });
+
+  test("replay derives its chips from the track and follows the cursor", () => {
+    const g = graph(TRACK, null);
+    g.setFeed(positionsAt(TRACK, 100));
+    // Both maps are chips even though the cursor stands on one of them.
+    expect(g.state.maps()).toEqual([
+      [0, 1],
+      [530, 1],
+    ]);
+    expect(g.state.activeMap()).toBe(0);
+    // The sidebar follows the cursor in replay, with no click involved.
+    expect(g.state.selected()?.map).toBe(0);
+    g.setFeed(positionsAt(TRACK, 200));
+    expect(g.state.cursorMap()).toBe(530);
+    expect(g.state.activeMap()).toBe(530);
+    expect(g.state.selected()?.map).toBe(530);
+    g.dispose();
+  });
+
+  test("a cursor before the first sample leaves nothing selected", () => {
+    const g = graph(TRACK, null);
+    g.setFeed(positionsAt(TRACK, 1));
+    expect(g.state.selected()).toBeNull();
+    expect(g.state.count()).toBe(0);
+    // The chips still name where the run went, so the canvas keeps a map.
+    expect(g.state.activeMap()).toBe(0);
+    g.dispose();
+  });
+
+  test("a live selection that leaves the feed clears the sidebar", () => {
+    const g = graph(undefined, "a");
+    g.setFeed([agent("a", 0, 1, 1), agent("b", 0, 2, 2)]);
+    expect(g.state.selected()?.runId).toBe("a");
+    g.setFeed([agent("b", 0, 2, 2)]);
+    expect(g.state.selected()).toBeNull();
+    expect(g.state.count()).toBe(1);
+    g.dispose();
   });
 });

@@ -193,6 +193,21 @@ and status.
     talent and the firsts are still unwritten; the dashboard reads none of them yet.
 
 
+60. **The map canvas still has two costs that scale with the thing being drawn**
+    (2026-08-24, found while fixing the replay recursion). Both are bounded and
+    neither is felt today, so they are recorded rather than fixed. (1) Zoomed out
+    below the tile threshold, `drawGrid` strokes every visible cell of the 64x64
+    world — up to 4096 `strokeRect` calls per redraw, which a pan turns into 4096
+    per frame. A single stroked path, or simply not drawing the lattice below a
+    scale, is the fix. (2) The replay route is one `lineTo` per recorded sample:
+    the prefix is now cached and rebuilt only when the cursor or map moves
+    (`MapPage.tsx`), but a six-hour track still emits thousands of segments per
+    frame while the operator drags. Decimating to screen resolution — drop points
+    closer than a pixel apart under the current view — is the same picture for a
+    fraction of the path. Unblocked by a run long enough to feel it; the tracks we
+    have are minutes, not hours.
+
+
 
 ## Module
 
