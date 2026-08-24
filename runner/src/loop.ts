@@ -38,6 +38,13 @@ export interface LoopOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /**
+   * How often the world is sampled while a turn is in flight (a model request
+   * or a tool call can hold the turn for minutes). Defaults to the same 5s
+   * tick the claude-code driver uses; tests shrink it. Recording stays
+   * throttled by `stateIntervalMs` regardless.
+   */
+  stateTickMs?: number;
+  /**
    * The runner's stop request. Its `reason` is a `StopRequest`: a pause
    * (the supervisor is stopping; the run is suspended, not judged) or a
    * termination (`manual`, the operator's Ctrl-C). Read at the turn
@@ -109,6 +116,8 @@ export class ContextBuilder {
    * "before the first turn", which is recorded as no turn at all.
    */
   private turn = 0;
+  /** The sample in flight, if any; concurrent callers share it. */
+  private sampling: Promise<SnapshotLike | null> | null = null;
   private readonly now: () => number;
 
   constructor(private readonly o: ContextBuilderOptions) {
@@ -145,8 +154,22 @@ export class ContextBuilder {
    * claude-code driver: one turn can run for tens of minutes) must
    * sample the world on the clock, not once per turn, or the timeline has no
    * data mid-turn and `no-xp` has nothing to measure.
+   *
+   * Coalesced, never concurrent: the mid-turn ticker and the turn preamble
+   * can call this at the same time, and two interleaved samples would each
+   * read the quest/zone/area high-water marks before either advanced them —
+   * double-logging every completion and milestone in the window. A caller
+   * landing mid-sample gets that sample's snapshot, which is as fresh as the
+   * one it would have taken.
    */
-  async sampleState(): Promise<SnapshotLike | null> {
+  sampleState(): Promise<SnapshotLike | null> {
+    this.sampling ??= this.sampleOnce().finally(() => {
+      this.sampling = null;
+    });
+    return this.sampling;
+  }
+
+  private async sampleOnce(): Promise<SnapshotLike | null> {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null || this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
@@ -240,6 +263,52 @@ export class ContextBuilder {
   }
 }
 
+/**
+ * The mid-turn state clock, shared by both drivers (FOLLOW-UPS 77): sampling
+ * only at the turn boundary leaves everything inside a long turn invisible —
+ * the claude-code driver's turns run tens of minutes, and one 485s model
+ * request on the openai-compatible path left an 8-minute blackout in a run's
+ * timeline. The ticker samples on wall clock while a turn is in flight;
+ * `ContextBuilder.sampleState` throttles what is *recorded* to
+ * `stateIntervalMs`, so a fast tick costs snapshots, never duplicate rows.
+ *
+ * Ticks never overlap (a slow sample makes later ticks no-ops rather than a
+ * queue), a failed sample is dropped (the sandbox may be mid-restart, and the
+ * next tick tries again), and `stop()` resolves only after any in-flight tick
+ * has settled — so nothing appends to the trajectory after the episode has
+ * been finalised and the trajectory closed. The sample itself is bounded (the
+ * sandbox RPC has its own timeout), so awaiting it cannot park a shutdown.
+ */
+export function startStateTicker(o: {
+  sample: () => Promise<unknown>;
+  intervalMs: number;
+  /** Skip ticking entirely (the claude driver: episode already ended). */
+  done?: (() => boolean) | undefined;
+  /** After every tick, even a failed one (the claude driver checks watchdogs here). */
+  afterSample?: (() => void) | undefined;
+}): { stop: () => Promise<void> } {
+  let inFlight: Promise<void> | null = null;
+  const timer = setInterval(() => {
+    if (inFlight !== null || o.done?.() === true) return;
+    inFlight = o
+      .sample()
+      .catch(() => null)
+      .then(() => o.afterSample?.())
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = null;
+      });
+  }, o.intervalMs);
+  // Observability must never be what keeps the process alive.
+  timer.unref?.();
+  return {
+    stop: async () => {
+      clearInterval(timer);
+      await inFlight;
+    },
+  };
+}
+
 export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
@@ -289,6 +358,21 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     }
     return terminate("manual", s.detail);
   };
+
+  // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn,
+  // and that used to be this loop's only sampling — one 485s request left an
+  // 8.1-minute blackout with no state row and no XP signal. The ticker keeps
+  // state rows and the no-xp progress signal flowing while `adapter.complete`
+  // or a long tool call holds the turn. Deliberately no watchdog enforcement
+  // here, unlike the claude driver's ticker: this loop reads its watchdogs at
+  // the turn boundary, the boundary is never further away than the adapter's
+  // own retry budget, and a mid-request kill would have to abandon a request
+  // the adapter still accounts for — the ticker's job is the record, not the
+  // kill.
+  const ticker = startStateTicker({
+    sample: () => builder.sampleState(),
+    intervalMs: o.stateTickMs ?? 5_000,
+  });
 
   let turn = 0;
   try {
@@ -422,6 +506,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       return terminate("adapter-error", `${err.message}${err.status !== undefined ? ` (HTTP ${err.status})` : ""}`);
     }
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+  } finally {
+    await ticker.stop();
   }
 }
 
