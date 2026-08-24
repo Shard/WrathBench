@@ -34,6 +34,8 @@
 
 import { z } from "zod";
 
+import { CHARACTER_NAME_RULE, isValidCharacterName } from "./config";
+
 /** The watchdog overrides a campaign or a cell may set, in the config's own spelling. */
 const watchdogsSchema = z
   .object({
@@ -59,7 +61,9 @@ const dimensionsSchema = {
   /** The starting character, as the client's own race/class ids. */
   race: z.number().int().positive().optional(),
   class: z.number().int().positive().optional(),
-  character: z.string().min(1).max(12).optional(),
+  // The shared game-rule predicate (config.ts): a cell's bad name should be a
+  // named config refusal here, not a create-failure the probe run dies on.
+  character: z.string().refine(isValidCharacterName, { message: CHARACTER_NAME_RULE }).optional(),
 };
 
 export const campaignCellSchema = z

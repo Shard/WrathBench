@@ -10,11 +10,15 @@
  * name began `Bqeee…`, and the full-arc deploy smoke rolled back the 0.5
  * worldserver deploy on it. Random letters, re-rolled while a triple exists.
  */
+import { isValidCharacterName } from "../../../runner/src/config";
+
 export function probeName(prefix: string): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz";
   for (;;) {
     const letters = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => alphabet[b % 26]!).join("");
     const name = prefix + letters;
-    if (!/(.)\1\1/i.test(name)) return name;
+    // The shared game-rule predicate (runner/src/config.ts), so the reroll
+    // condition can never drift from what the boundaries accept.
+    if (isValidCharacterName(name)) return name;
   }
 }
