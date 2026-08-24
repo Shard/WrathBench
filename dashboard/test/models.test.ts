@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, tierOf, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, countedOf, episodesHref, extrasOf, isPromoted, modelsHref, noteOf, resultsHref, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -64,7 +64,11 @@ describe("cells", () => {
 
 describe("the --status columns", () => {
   test("billing, extras and the scheduler's verdict are the CLI's, phrased once", () => {
-    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"]);
+    // The header is rendered from this array, so its length is the body's
+    // column count — the page's colSpan reads it rather than counting by hand.
+    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"]);
+    expect(MODEL_COLUMNS).not.toContain("billing");
+    expect(MODEL_COLUMNS.indexOf("tier")).toBe(MODEL_COLUMNS.indexOf("model") + 1);
     expect(schedulableOf(row())).toBe("yes: schedulable on e90");
     expect(schedulableOf(row({ schedulable: { ok: false, why: "running (one stream per model)", extras: false } }))).toBe("no: running (one stream per model)");
     expect(extrasOf(row())).toBe(0);
@@ -72,6 +76,44 @@ describe("the --status columns", () => {
     expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 2 }, e360: { ...e90, extras: 1 } } }))).toBe(3);
     // A local model's extras are freeplay runs (ADR-0034) and count here too.
     expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 0 }, freeplay: { ...e90, extras: 2 } } }))).toBe(2);
+  });
+
+  test("the numeric columns are right-aligned in the header too", () => {
+    expect(columnClass("e90")).toBe("right");
+    expect(columnClass("e360")).toBe("right");
+    expect(columnClass("extras")).toBe("right");
+    expect(columnClass("model")).toBe("");
+    expect(columnClass("newest run")).toBe("");
+  });
+});
+
+describe("the tier order", () => {
+  test("the highest tier is a max, not an alias for the scheduled one", () => {
+    expect(highestTierOf({ declaredTier: "t1", tier: "t2" })).toBe("t2");
+    // A config edit that lowers the declared tier must not read as un-climbing.
+    expect(highestTierOf({ declaredTier: "t2", tier: "t1" })).toBe("t2");
+    expect(highestTierOf({ declaredTier: "t0", tier: "t0" })).toBe("t0");
+  });
+
+  test("the cell shows one tier, and a held witness still wears its star", () => {
+    expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedRung1: true }))).toBe("t2");
+    expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe("t0*");
+    expect(tierOf(row())).toBe("t1");
+  });
+
+  test("highest tier first, then the name — so a poll cannot reshuffle the table", () => {
+    const rows = [
+      row({ name: "beta", declaredTier: "t0", tier: "t0" }),
+      row({ name: "alpha", declaredTier: "t1", tier: "t2" }),
+      row({ name: "gamma", declaredTier: "t0", tier: "t1" }),
+      row({ name: "alpha-low", declaredTier: "t0", tier: "t0" }),
+    ];
+    expect([...rows].sort(compareModelRows).map((r) => r.name)).toEqual([
+      "alpha",
+      "gamma",
+      "alpha-low",
+      "beta",
+    ]);
   });
 });
 
@@ -100,9 +142,6 @@ describe("noteOf", () => {
     expect(isPromoted(row({ declaredTier: "t2", tier: "t2", eligible: ["e90", "e360"] }))).toBe(false);
     // A t0 model holding a witness it may not spend is not promoted either.
     expect(isPromoted(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe(false);
-    expect(tierOf(row({ declaredTier: "t0", tier: "t0", earnedRung1: true }))).toBe("t0*");
-    expect(tierOf(row({ declaredTier: "t1", tier: "t2", earnedRung1: true }))).toBe("t1→t2");
-    expect(tierOf(row())).toBe("t1");
     expect(isPromoted(row())).toBe(false);
   });
 });

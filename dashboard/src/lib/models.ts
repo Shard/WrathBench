@@ -9,21 +9,62 @@
  * once, so the table and the detail panel cannot word the same fact two ways.
  */
 
-import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/api-types";
+import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
 
 /**
- * The table, left to right. Status leads: it is what an operator scans for.
- * The same columns `run-fleet --status` prints — billing, the tier, status, the
- * episodes, extras, the verdict — plus where the model is served and its
- * newest run.
+ * The table, left to right, as the header prints it — these are labels, not
+ * keys, the way `FLEET_COLUMNS` is. The page renders its header from this
+ * array, so a column can no longer exist in the header and not in the body:
+ * that drift is exactly what put a `billing` heading over the tier's cells.
+ *
+ * Status leads because it is what an operator scans for, and the tier follows
+ * the name because it is the second question asked of a row. Billing is not a
+ * column: since ADR-0043 it says only where a run may execute, which is the
+ * platform's business, and the tier is what buys runs.
  *
  * On the word "tier": since ADR-0043 it means a rung of the EVIDENCE ladder
  * (t0/t1/t2), never an episode. The episode columns are named by their ids.
  */
-export const MODEL_COLUMNS = ["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
+export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"] as const;
 
 /** The episodes the page shows a counted/target cell for, in policy order. */
 export const EPISODE_COLUMNS = ["e90", "e360"] as const;
+
+/** Numbers are right-aligned; the header has to say so too, or it drifts off its column. */
+export function columnClass(column: (typeof MODEL_COLUMNS)[number]): string {
+  return column === "extras" || (EPISODE_COLUMNS as readonly string[]).includes(column) ? "right" : "";
+}
+
+/** The ladder's order (ADR-0043), so "higher" is a comparison rather than a string sort. */
+const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
+
+/**
+ * The highest tier this model has actually stood on.
+ *
+ * Today the server derives `tier` from `declaredTier` advanced at most once, so
+ * this is usually just `tier` — but "usually" is not a contract, and a config
+ * edit that lowers a model's declared tier must not make the page report that
+ * it un-climbed. A max over both is the honest reading either way.
+ *
+ * What it is not: a tier the model could reach. `earnedRung1` is a rung, not a
+ * tier, and a witness the model has not been allowed to spend buys it nothing.
+ */
+export function highestTierOf(row: Pick<ModelRowView, "tier" | "declaredTier">): TierView {
+  return TIER_RANK[row.declaredTier] > TIER_RANK[row.tier] ? row.declaredTier : row.tier;
+}
+
+/**
+ * The table's order: the highest tier first, then the name.
+ *
+ * Tier is the budget, so tier-descending puts the models the fleet spends most
+ * on at the top and leaves the t0 long tail below — the order an operator reads
+ * the roster in. The name breaks ties so the table is stable across polls
+ * rather than reshuffling every 30 seconds on the server's iteration order.
+ */
+export function compareModelRows(a: ModelRowView, b: ModelRowView): number {
+  const byTier = TIER_RANK[highestTierOf(b)] - TIER_RANK[highestTierOf(a)];
+  return byTier !== 0 ? byTier : a.name.localeCompare(b.name);
+}
 
 /** A status the CSS has a badge colour for; anything else falls back to plain. */
 export function statusClass(status: ModelStatusView): string {
@@ -85,14 +126,20 @@ export function isPromoted(row: ModelRowView): boolean {
 }
 
 /**
- * The tier cell: a climb as the move it was, a held witness as `t0*`. A trial
- * model that has earned its rung is exactly the row an operator scans for when
- * deciding what to promote, so it gets a mark of its own rather than hiding
- * behind a status word it is not allowed to have.
+ * The tier cell: the highest tier the model has reached, and nothing else.
+ *
+ * The climb it made to get there is a fact about its history, not about what it
+ * is scheduled on today, and it was costing the column twice its width to say
+ * `t1→t2` — the hover carries it now, and the ↑ beside the name still marks the
+ * row as one that moved.
+ *
+ * The `*` stays: a held witness (`t0*`) is a trial model that has earned a rung
+ * its tier will not let it spend, which is exactly the row an operator scans for
+ * when deciding what to promote. It is a rung, not a second tier.
  */
 export function tierOf(row: ModelRowView): string {
-  if (row.tier !== row.declaredTier) return `${row.declaredTier}→${row.tier}`;
-  return row.earnedRung1 ? `${row.tier}*` : row.tier;
+  const tier = highestTierOf(row);
+  return row.earnedRung1 && row.tier === row.declaredTier ? `${tier}*` : tier;
 }
 
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
