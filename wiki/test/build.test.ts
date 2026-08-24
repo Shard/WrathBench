@@ -949,8 +949,7 @@ test("a Cataclysm-coined title is neither a page nor a recovered name", async ()
 }, 30_000);
 
 /**
- * Which revision a protected page's prose comes from (ADR-0040, "a protected
- * page is the page before the beta touched it").
+ * Which revision a protected page's prose comes from (ADR-0040).
  */
 const ARTICLE = "x".repeat(1000);
 
