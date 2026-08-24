@@ -71,6 +71,8 @@ import {
   formatLocalClass,
   formatAccountClasses,
   formatHeld,
+  unpinnedCampaigns,
+  probeRunsOf,
 } from "./run-fleet";
 import { DEFAULT_POLICY, IDLE_CHARACTERS, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
@@ -133,6 +135,83 @@ describe("parseFleet", () => {
     expect(() => parseFleet(fleetJson([], { lanes: [] }))).toThrow(/`lanes` is not a 0.4 key — a job goes in `queue`/);
     expect(() => parseFleet(fleetJson([], { accounts: { pinned: { S: "x" }, pool: [] } }))).toThrow(/accounts.pinned is not a 0.4 key/);
     expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code\)/);
+  });
+});
+
+describe("campaigns (ADR-0041)", () => {
+  test("a campaigns section parses", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { probe1: { cells: [{ id: "c1" }] } } }));
+    expect(config.campaigns).toHaveLength(1);
+    expect(config.campaigns[0]).toMatchObject({ name: "probe1", enabled: true, models: "all", runsPerCell: 1 });
+    expect(config.campaigns[0]!.cells).toEqual([{ id: "c1" }]);
+  });
+
+  test("a bad campaign is refused with a useful message", () => {
+    expect(() => parseFleet(fleetJson([], { campaigns: { probe1: { cells: [] } } }))).toThrow(/campaigns:/);
+  });
+
+  test("an enabled pinned campaign sharing an account with an enabled pinned job is refused", () => {
+    expect(() =>
+      parseFleet(
+        fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
+          campaigns: { probe1: { cells: [{ id: "c1" }], account: "s" } },
+        }),
+      ),
+    ).toThrow(/shared by enabled jobs glm-e90 and campaign probe1/);
+  });
+
+  test("a disabled pinned campaign may park on a listed account", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { probe1: { cells: [{ id: "c1" }], account: "RUNNER", enabled: false } } }));
+    expect(config.campaigns[0]).toMatchObject({ name: "probe1", enabled: false, account: "RUNNER" });
+  });
+
+  test("a pinned campaign is NOT passed to the scheduler while an unpinned enabled one is", () => {
+    const config = parseFleet(
+      fleetJson([], {
+        campaigns: {
+          pinned1: { cells: [{ id: "c1" }], account: "CAMPACCT" },
+          free1: { cells: [{ id: "c1" }] },
+        },
+      }),
+    );
+    expect(config.campaigns.map((c) => c.name)).toEqual(["pinned1", "free1"]);
+    expect(unpinnedCampaigns(config).map((c) => c.name)).toEqual(["free1"]);
+  });
+
+  test("probeRunsOf recovers the roster ref from model+effort, and nulls it when nothing matches", () => {
+    const roster: Record<string, FleetRosterEntry> = {
+      glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
+    };
+    const fact = (over: Partial<RunFact>): RunFact => ({
+      runId: "r",
+      model: "z-ai/glm-5.2:free",
+      effort: null,
+      episode: "probing",
+      episodeOverride: false,
+      harnessVersion: null,
+      harnessSeries: null,
+      extra: false,
+      startedAt: 0,
+      endedAt: 1,
+      terminationReason: "episode-limit",
+      modelResponses: 5,
+      bestLevel: 1,
+      live: false,
+      pause: null,
+      account: null,
+      episodeMs: null,
+      campaign: "probe1",
+      cell: "c1",
+      ...over,
+    });
+    const matched = fact({});
+    const unmatched = fact({ runId: "r2", model: "unknown/model" });
+    // A run that never produced a response is not counted, so it never reaches probeRunsOf's output.
+    const stillborn = fact({ runId: "r3", modelResponses: 0 });
+    expect(probeRunsOf([matched, unmatched, stillborn], roster)).toEqual([
+      { campaign: "probe1", cell: "c1", ref: "glm" },
+      { campaign: "probe1", cell: "c1", ref: null },
+    ]);
   });
 });
 
@@ -1310,7 +1389,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(jobArgv(resumeSpawn, { stamp: "20260823", until: undefined })).toContain("--resume-roster");
     // Ordering: the tick's plan gives the resume its account before the queue or the policy can.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, maxConcurrent: {} };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {} };
     const tick = planTick(cfg, states, held, "20260823", plan.resume);
     expect(tick.policy.map((p) => p.account)).toEqual(["RUNNER3"]);
     expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox"]); // glm is held by its paused run, never rescheduled
@@ -1340,7 +1419,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(formatPaused(plan.listed)[1]).toContain("fleet-gone-e90-old-model-20260823 — gone/model on RUNNER3: operator-pause, 41m elapsed of 1h30m");
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, maxConcurrent: {} };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {} };
     expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 
