@@ -338,7 +338,7 @@ export interface FleetConfig {
    * IS in effect — that is the whole point of a refusal over a `fail()`. Empty
    * on a clean config; `--status` and the supervisor log name every entry.
    */
-  refusals: string[];
+  refusals: ConfigRefusal[];
   /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
@@ -391,6 +391,13 @@ interface Pin {
   readonly account: string | undefined;
   /** Mutable: a refused pin is DISABLED in place, which is the enforcement. */
   enabled: boolean;
+  /**
+   * Every job name this pin can spawn under. A job is itself; a campaign is one
+   * job per declared cell (`pinnedCampaignJobs` names them `<campaign>-<cell>`).
+   * The tick uses these to tell a run that is live under a REFUSED pin apart
+   * from one the operator deliberately disabled — the first must not be drained.
+   */
+  readonly jobNames: readonly string[];
 }
 
 /** Jobs then campaigns, in file order — the order a refusal picks its loser by. */
@@ -401,20 +408,35 @@ function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[
       get account() { return j.account; },
       get enabled() { return j.enabled; },
       set enabled(v: boolean) { j.enabled = v; },
+      jobNames: [j.name],
     })),
     ...campaigns.map((c) => ({
       get label() { return `campaign ${c.name}`; },
       get account() { return c.account; },
       get enabled() { return c.enabled; },
       set enabled(v: boolean) { c.enabled = v; },
+      jobNames: c.cells.map((cell) => `${c.name}-${cell.id}`),
     })),
   ];
 }
 
+/**
+ * A pin the account rules refused. `jobs` is what it could have spawned under,
+ * so the tick can leave a live one alone instead of draining it.
+ */
+export interface ConfigRefusal {
+  /** The pin: a job's name, or `campaign <name>`. */
+  pin: string;
+  /** Why. The operator's only notice that their `enabled: true` did not take. */
+  why: string;
+  /** Job names this refusal suppresses (`Pin.jobNames`). */
+  jobs: string[];
+}
+
 /** Disable one pin and say why. The message is the operator's only notice. */
-function refuse(pin: Pin, refusals: string[], why: string): void {
+function refuse(pin: Pin, refusals: ConfigRefusal[], why: string): void {
   pin.enabled = false;
-  refusals.push(`${pin.label} REFUSED and left disabled: ${why}`);
+  refusals.push({ pin: pin.label, why, jobs: [...pin.jobNames] });
 }
 
 /**
@@ -430,7 +452,7 @@ function refuse(pin: Pin, refusals: string[], why: string): void {
  * pin is disabled and named, and the rest of the file takes effect. Shape
  * errors still fail, because a file that does not parse has no rest to keep.
  */
-export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccounts, refusals: string[]): void {
+export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccounts, refusals: ConfigRefusal[]): void {
   const byAccount = new Map<string, string>();
   for (const pin of pins) {
     if (pin.account === undefined || !pin.enabled) continue;
@@ -776,7 +798,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     jobs.push(job);
   };
   for (const job of parseQueue(o.queue, roster)) add(job);
-  const refusals: string[] = [];
+  const refusals: ConfigRefusal[] = [];
   applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
   for (const pin of pinsOf(jobs, campaigns)) {
     if (pin.account === undefined) continue;
@@ -1766,11 +1788,17 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
  * the supervisor's log line. `!` rather than the banner's `!!`: the fleet is
  * running, one pin is not.
  */
-export function formatRefusals(refusals: readonly string[]): string[] {
+export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = true): string[] {
   if (refusals.length === 0) return [];
+  // `inForce` false means the banner above already said the file is NOT what
+  // the supervisor is running — a fixed file within a tick of being re-read, or
+  // a whole-file failure. Saying "the rest IS in effect" under that banner
+  // would contradict it at exactly the moment a board needs reading.
   return [
-    `! ${refusals.length} pin(s) refused by the account rules — the rest of the file IS in effect:`,
-    ...refusals.map((r) => `   ${r}`),
+    `! ${refusals.length} pin(s) refused by the account rules` +
+      (inForce ? " — the rest of the file IS in effect:" : " IN THE FILE — see the banner above for what is actually running:"),
+    ...refusals.map((r) => `   ${r.pin} REFUSED and left disabled: ${r.why}`),
+    "   a live run under a refused pin is left alone; it just will not respawn",
   ];
 }
 
@@ -2587,6 +2615,8 @@ let configLoadedAt: number | undefined;
  * refusals says so once rather than never.
  */
 let lastRefusals: string | undefined;
+/** Live jobs spared a drain because their pin was refused — logged once each. */
+const spared = new Set<string>();
 
 /** Live job bookkeeping, published into the state file every tick. */
 interface PoolView {
@@ -2961,7 +2991,7 @@ function printStatus(configPath: string): void {
         " — rows below are what the supervisor last ran, not the file's",
     );
   }
-  for (const line of formatRefusals(config?.refusals ?? [])) console.log(line);
+  for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
   // in another PID namespace — it either says "no such process" for a healthy
@@ -3963,16 +3993,34 @@ async function main(): Promise<void> {
     // Refused pins (item 66). Deduped on the joined set, the way the rejection
     // is deduped on its message: a config that keeps refusing the same pin says
     // so once, not every 60s, but a NEW refusal always speaks.
-    const refusals = config.refusals.join("\n");
+    const refusals = config.refusals.map((r) => `${r.pin}: ${r.why}`).join("\n");
     if (refusals !== lastRefusals) {
       lastRefusals = refusals;
       for (const r of config.refusals) {
-        say(`config: ${r}`);
-        record({ job: "-", event: "config-refusal", detail: r });
+        say(`config: ${r.pin} REFUSED and left disabled: ${r.why}`);
+        record({ job: "-", event: "config-refusal", detail: `${r.pin}: ${r.why}` });
       }
     }
 
     const actions = diffJobs(effectiveJobs(config), sets);
+    // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
+    // normally means the operator parked it, so `diffJobs` drains its live run
+    // at the next episode boundary — but a refused pin was not parked, it was
+    // overruled, and under the old whole-file rejection the live run was never
+    // touched at all. Without this, adding one queue job on an account a
+    // campaign already holds would SIGTERM a probe hours into its episode:
+    // strictly worse than the outage this replaced, because it destroys work
+    // rather than confusing someone. The run finishes and does not respawn.
+    const refusedJobs = new Set(config.refusals.flatMap((r) => r.jobs));
+    for (const name of actions.drain.filter((n) => refusedJobs.has(n))) {
+      if (spared.has(name)) continue;
+      spared.add(name);
+      say(`job ${name}: its pin was refused by the account rules — the live run is left alone, and will not respawn`);
+      record({ job: name, event: "refusal-spared" });
+    }
+    actions.drain = actions.drain.filter((n) => !refusedJobs.has(n));
+    // A pin that stops being refused may be drained again like any other.
+    for (const name of [...spared]) if (!refusedJobs.has(name)) spared.delete(name);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
       say(`job ${name}: re-enabled before it drained — keeping it running`);
