@@ -726,6 +726,21 @@ export interface ApiInfoResponse {
    * unreachable from the viewer or predates the field (cached briefly).
    */
   worldserver: { build: string; startedAtMs: number } | null;
+  /**
+   * Every harness series (ADR-0034's `major.minor`) that recorded runs, newest
+   * first, with how many runs each holds.
+   *
+   * The shell's series selector (ADR-0046) is a global filter, so it needs the
+   * list of series before any page has loaded its own rows. It rides on
+   * `/api/info` for the reason the build stamp does: the shell already polls
+   * this route, and a poller per shell control is exactly the budget ADR-0022
+   * says not to spend. Runs whose stamp names no series are not listed —
+   * they belong to no group, and only the "all" selection shows them.
+   *
+   * Optional: a dashboard built against a viewer that predates this field must
+   * still work, so it is absent rather than empty on an older process.
+   */
+  harnessSeries?: { series: string; runs: number }[];
   now: number;
 }
 

@@ -4,15 +4,22 @@
  * the badge and the fleet page read one `/api/fleet` poller between them.
  */
 
-import { A, useLocation } from "@solidjs/router";
+import { A, useLocation, useSearchParams } from "@solidjs/router";
 import { Show, type ParentProps } from "solid-js";
 import { FeedsContext, createFeeds } from "../lib/feeds";
+import { SeriesSelect } from "./SeriesSelect";
 import { StatusBadge } from "./StatusBadge";
 
 export function Layout(props: ParentProps) {
   const location = useLocation();
   const flush = (): boolean => location.pathname === "/map";
-  const feeds = createFeeds();
+  // The shell owns the router, so it hands `createFeeds` the `?series=` half of
+  // the selection rather than the state module reaching for the router itself.
+  const [params, setParams] = useSearchParams();
+  const feeds = createFeeds({
+    read: () => params.series,
+    write: (v) => setParams({ series: v }, { replace: true }),
+  });
   return (
     <FeedsContext.Provider value={feeds}>
     <div class="app">
@@ -64,6 +71,13 @@ export function Layout(props: ParentProps) {
             new build — reload
           </button>
         </Show>
+        {/*
+          * The one series filter for the whole dashboard (ADR-0046), next to
+          * the badge for the same reason the badge is here: it is a property of
+          * the whole view rather than of any page, and a per-page copy of it
+          * was four controls that could disagree.
+          */}
+        <SeriesSelect />
         <StatusBadge />
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>

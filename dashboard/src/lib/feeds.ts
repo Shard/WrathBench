@@ -12,6 +12,7 @@ import { createContext, useContext } from "solid-js";
 import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
 import { api } from "../api/client";
 import { type Poll, poll } from "./poll";
+import { SERIES_LATEST, type SeriesChoice, readSeriesPref, seriesParam, writeSeriesPref } from "./harness";
 
 export interface Feeds {
   fleet: Poll<FleetResponse>;
@@ -19,6 +20,15 @@ export interface Feeds {
   info: Poll<ApiInfoResponse>;
   /** True once the served dashboard build differs from the one this tab loaded. */
   stale: () => boolean;
+  /**
+   * The one harness-series selection (ADR-0046), owned by the shell because the
+   * operator decided it is one choice for the whole dashboard rather than a
+   * control per page.
+   */
+  seriesChoice: () => SeriesChoice;
+  setSeriesChoice: (v: SeriesChoice) => void;
+  /** The series `/api/info` says have runs, newest first; empty on an older viewer. */
+  seriesAvailable: () => string[];
 }
 
 /**
@@ -44,8 +54,35 @@ export function isStaleBuild(first: string | null | undefined, current: string |
 export const FeedsContext = createContext<Feeds>();
 
 /** Start the shared pollers; called once, in the shell. */
-export function createFeeds(): Feeds {
+/**
+ * The URL half of the series selection, injected rather than read here.
+ *
+ * `useSearchParams` would drag `@solidjs/router` into this module, and the
+ * router's entry throws on import outside a browser — which would take the
+ * tests of the pure helpers in this file down with it. The shell owns the
+ * router; this file owns the state.
+ */
+export interface SeriesUrl {
+  read: () => string | string[] | undefined;
+  write: (v: string) => void;
+}
+
+export function createFeeds(url: SeriesUrl): Feeds {
   const info = poll(() => api.info(), 60_000);
+  const seriesAvailable = (): string[] => (info.latest?.harnessSeries ?? []).map((s) => s.series);
+  /*
+   * URL first, then what this browser last chose, then `latest`. The URL wins
+   * so a shared link means what its sender saw; the remembered choice is a
+   * convenience for the operator's own tab, and `latest` is the default the
+   * operator asked for. `latest` is kept as the token rather than the series it
+   * resolves to today, so it follows a minor bump instead of freezing.
+   */
+  const seriesChoice = (): SeriesChoice =>
+    seriesParam(url.read()) ?? readSeriesPref() ?? SERIES_LATEST;
+  const setSeriesChoice = (v: SeriesChoice): void => {
+    writeSeriesPref(v);
+    url.write(v);
+  };
   // Captured once, on the first poll that carries a build id, and never
   // rewritten: the whole comparison is "what I loaded" against "what is served
   // now", so letting it follow the newest value would make it always equal.
@@ -58,6 +95,9 @@ export function createFeeds(): Feeds {
       if (first === undefined && now !== undefined) first = now;
       return isStaleBuild(first, now);
     },
+    seriesChoice,
+    setSeriesChoice,
+    seriesAvailable,
   };
 }
 

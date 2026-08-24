@@ -16,6 +16,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { harnessSeries } from "../src/comparability";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
 import type {
@@ -210,6 +211,33 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
   cache.mtime = mtime;
   cache.id = id;
   return id;
+}
+
+/** How long one series census stands in for the next. */
+export const SERIES_CACHE_MS = 30_000;
+
+/**
+ * The harness series present in the run directory, newest first, with counts.
+ *
+ * The shell's global series selector (ADR-0046) needs this before any page has
+ * fetched rows of its own, so it rides on `/api/info`. Cached on a window
+ * because that route is polled by every open tab and the answer changes only
+ * when a run starts; the census reads run metadata, never a trajectory.
+ */
+export function harnessSeriesCensus(rows: readonly { harnessVersion: string | null }[]): { series: string; runs: number }[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const s = harnessSeries(r.harnessVersion);
+    if (s === null) continue;
+    counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  return [...counts]
+    .map(([series, runs]) => ({ series, runs }))
+    .sort((a, b) => {
+      const [am, an] = a.series.split(".").map((n) => Number.parseInt(n, 10));
+      const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
+      return (bm! - am!) || (bn! - an!);
+    });
 }
 
 /**
@@ -432,6 +460,16 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
+  // The series census for /api/info, on a window: every open tab polls that
+  // route, and the answer only moves when a run starts.
+  let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
+  const seriesCensus = (): { series: string; runs: number }[] => {
+    const now = Date.now();
+    if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
+      seriesCache = { at: now, value: harnessSeriesCensus(listRuns(runsDir, now)) };
+    }
+    return seriesCache.value;
+  };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
@@ -790,6 +828,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
+        harnessSeries: seriesCensus(),
         now: Date.now(),
       };
       return json(body);
