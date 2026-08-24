@@ -159,16 +159,6 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
-77. **The openai-compatible adapter samples state only between turns** (2026-08-24,
-    log sweep of the first 0.5 runs). A 485s LM Studio call left the qwen3 run an
-    8.1-minute observability blackout: no state row, no XP signal, ~9% of the
-    episode invisible. `adapter-claude.ts:737` grew an independent `setInterval`
-    ticker for exactly this ("claude-code turns can run long"); the openai path
-    still calls `sampleState()` once per turn from `loop.ts`, serialized behind
-    the in-flight HTTP request. Next action: port the ticker pattern to the
-    openai-compatible path (or hoist it into the loop so both drivers share it).
-    Matters most for the local box, whose turns are inference-bound and slow.
-
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
     audit). `openSocket()` (`sdk/src/events.ts`) puts no timeout of its own around the
     WebSocket construction, so one stalled TCP/WS handshake during a reconnect silently
