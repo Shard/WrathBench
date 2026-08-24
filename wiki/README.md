@@ -395,6 +395,14 @@ Results come back in bands, and only inside a band does `bm25` decide:
 3. **title tokens** — every word of the query appears in the page title.
 4. **body** — the words appear somewhere in the text.
 
+A page with no article text is never in bands 3 and 4 — it is not an FTS
+document — and bands 1 and 2 return it only when it has something structured to
+state (a quest infobox, an id, or coordinates when they are served), with the
+fixed snippet `(no article text; the page states only what is listed here)`
+ahead of the quest line. An empty page that states nothing is skipped outright
+and the query falls through to the other bands, rather than answering its own
+title at rank 1 with silence.
+
 `parseIdQuery` decides what counts as an id. A numeric token is an id lookup when
 it is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`,
 `entry 721 Northshire`), or when the number opens the query and an id word follows

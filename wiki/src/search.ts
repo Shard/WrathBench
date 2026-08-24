@@ -18,7 +18,10 @@
  *
  * The bands exist because bm25 alone put a page whose only connection to
  * "quest 783" was the digits 783 inside an arithmetic example above the quest
- * page itself (FOLLOW-UPS 25). Numbers are the sharp case: a numeric token that
+ * page itself (FOLLOW-UPS 25). A page with no article text is a second sharp
+ * case: it is not an FTS document at all, so bands 2 and 3 cannot reach it, and
+ * bands 0 and 1 return it only when it has something structured to state
+ * (`EMPTY_PAGE_SNIPPET`). Numbers are the sharp case: a numeric token that
  * the query marks as an id ("783", "quest 783", "npc entry 721") is looked up
  * against id fields only and is never handed to the full-text index, so body
  * prose can no longer answer an id question.
@@ -211,6 +214,47 @@ export function questPrefix(quest: WikiQuest | undefined): string {
   if (quest.category !== undefined) parts.push(`category ${quest.category}`);
   if (parts.length === 0) return "";
   return `[quest infobox: ${parts.join("; ")}]\n`;
+}
+
+/**
+ * The whole snippet of a page that has no article text.
+ *
+ * Roughly 6,900 pages in the bundle are infobox-only: kept as rows for their
+ * title, their ids, their coordinates and their quest infobox, but with nothing
+ * to quote (see `empty_pages` in the README). Resolved by exact title such a
+ * page used to arrive at rank 1 with a blank snippet, ahead of a page with
+ * prose on the same topic — the model read silence. Saying so in words costs a
+ * line and is the difference between "the wiki is quiet about this" and "the
+ * wiki has nothing here"; the structured lines that follow are what the page
+ * does state.
+ */
+export const EMPTY_PAGE_SNIPPET = "(no article text; the page states only what is listed here)";
+
+/**
+ * True when the page states at least one entity id. Returns false (not a throw)
+ * on a pre-ids bundle, like `coordsForPage` and `questForPage`.
+ */
+function pageHasIds(db: Database, hasIds: boolean, pageId: number): boolean {
+  if (!hasIds) return false;
+  const row = db
+    .query<{ n: number }, [number]>("SELECT count(*) AS n FROM page_ids WHERE page_id = ? LIMIT 1")
+    .get(pageId);
+  return (row?.n ?? 0) > 0;
+}
+
+/**
+ * The snippet for a page with no article text, or null when the page states
+ * nothing at all and should not be returned.
+ *
+ * `text.length === 0` is deliberately the same predicate the writer used when
+ * it decided not to index the page (`makeWriter`): the two must not drift, or a
+ * whitespace-only page would be skipped here and still answer from the body
+ * band with a blank snippet.
+ */
+function emptyPageSnippet(quest: WikiQuest | undefined, structured: boolean): string | null {
+  if (!structured) return null;
+  const prefix = questPrefix(quest).trimEnd();
+  return prefix === "" ? EMPTY_PAGE_SNIPPET : `${EMPTY_PAGE_SNIPPET}\n${prefix}`;
 }
 
 /**
@@ -409,10 +453,21 @@ export function searchReference(
     if (direct === null || !inNamespace(direct.page.ns)) continue;
     const coords = coordsForPage(db, hasCoords, direct.page.id);
     const quest = questForPage(db, hasQuest, direct.page.id);
+    let snippet = snip(questPrefix(quest) + headSnippet(direct.page.text));
+    if (direct.page.text.length === 0) {
+      // An infobox-only page answers its own title only with what it states.
+      // With nothing to state it is skipped outright and the query falls
+      // through to the other bands, rather than winning rank 1 with silence.
+      const structured =
+        quest !== undefined || coords !== undefined || pageHasIds(db, hasIds, direct.page.id);
+      const empty = emptyPageSnippet(quest, structured);
+      if (empty === null) continue;
+      snippet = snip(empty);
+    }
     push(BAND.title, {
       title: direct.page.title,
       ns: direct.page.ns,
-      snippet: snip(questPrefix(quest) + headSnippet(direct.page.text)),
+      snippet,
       rank: EXACT_TITLE_RANK,
       exactTitle: true,
       ...(direct.via !== null ? { redirectedFrom: direct.via } : {}),
@@ -449,10 +504,16 @@ export function searchReference(
         idBudget--;
         const coords = coordsForPage(db, hasCoords, row.id);
         const quest = questForPage(db, hasQuest, row.id);
+        // The page was found *because* it states an id, so it always carries
+        // structured data: an empty one is returned, saying so in words.
+        const snippet =
+          row.text.length === 0
+            ? snip(emptyPageSnippet(quest, true)!)
+            : snip(questPrefix(quest) + headSnippet(row.text));
         push(BAND.id, {
           title: row.title,
           ns: row.ns,
-          snippet: snip(questPrefix(quest) + headSnippet(row.text)),
+          snippet,
           rank: ID_MATCH_RANK,
           matchedId: { kind: row.kind as IdKind, id: row.entity_id },
           ...(coords !== undefined ? { coords } : {}),
