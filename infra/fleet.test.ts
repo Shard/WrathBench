@@ -354,7 +354,10 @@ describe("the shipped fleet files", () => {
   test("fleet.json: the job shape — pinned probe, sonnet back in the roster under a concurrency cap", async () => {
     const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
-    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe-freeplay", SHAKEOUT2: "sub-opus-e90" });
+    // The durable invariant is that SHAKEOUT2 is parked by a DISABLED job, not
+    // which job: the operator splits and renames these to steer a one-off run.
+    expect(Object.keys(config.accounts.pinned).sort()).toEqual(["SHAKEOUT", "SHAKEOUT2"]);
+    expect(config.accounts.pinned["SHAKEOUT"]).toBe("nav-probe-freeplay");
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
     // The paid class: SHAKEOUT2 is paid-only, and coexists with the DISABLED job pinned to it.
     expect(config.accounts.paid).toEqual(["SHAKEOUT2"]);
@@ -378,38 +381,67 @@ describe("the shipped fleet files", () => {
     expect(probe.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
     for (const [n, e] of Object.entries(config.roster)) if (n !== "nav-probe") expect(e.wikiCoords).toBeUndefined();
     const pinned = pinnedJobs(config);
-    expect(pinned.map((j) => [j.name, j.account, j.repeat, j.enabled])).toEqual([
-      ["nav-probe-freeplay", "SHAKEOUT", 1, true],
-      ["sub-opus-e90", "SHAKEOUT2", "loop", false],
+expect(pinned.map((j) => [j.account, j.enabled])).toEqual([
+      ["SHAKEOUT", true],
+      // Whatever it is called, the job parked on the paid account is disabled —
+      // an enabled one would HOLD SHAKEOUT2 and starve the paid class.
+      ["SHAKEOUT2", false],
     ]);
+    expect(pinned[0]!.name).toBe("nav-probe-freeplay");
     const probeSpawn = jobSpawn(pinned[0]!, config.roster, "SHAKEOUT", "20260101");
     expect(probeSpawn.entries[0]).toMatchObject({ episode: "freeplay", wikiCoords: true, maxToolCalls: 2500, watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 } });
     // The policy never touches a pinned ref; sonnet and sonnet-low are its to schedule (ADR-0035: scored, tagged).
     expect(policyRefs(config).has("nav-probe")).toBe(false);
-    expect(policyRefs(config).has("sub-opus")).toBe(false);
+// A PINNED ref is the job's alone. A manual pool job does NOT take its ref
+    // out of the policy's hands — it only outranks it for the next slot — so a
+    // one-off baseline run is bounded by the entry's own runsPerEpisode, not by
+    // the job's `repeat`.
+    expect(policyRefs(config).has("sub-opus")).toBe(true);
+    expect(config.roster["sub-opus"]!.runsPerEpisode).toEqual({ e90: 1, e360: 0 });
     expect(policyRefs(config).has("sonnet")).toBe(true);
     expect(policyRefs(config).has("sonnet-low")).toBe(true);
-    expect(poolJobs(config)).toEqual([]);
+// Manual pool jobs are operator steering: zero normally, one while a
+    // one-off baseline run is queued. Each must be a real roster ref.
+    for (const j of poolJobs(config)) expect(config.roster[j.ref]).toBeDefined();
     // With an empty run history every policy model is "new" and e90-only.
     const states = modelStatesOf(rosterModels(config.roster));
     expect(states.every((st) => st.status === "new" && st.eligible.join() === "e90")).toBe(true);
     rosterPolicy(config);
-    // The cap: with the probe up, one of sonnet/sonnet-low runs, not both.
     const plan = planTick(config, states, () => undefined, "20260101");
     expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-freeplay"]);
-    const claude = plan.policy.filter((p) => config.roster[p.job.ref]!.driver === "claude-code");
-    expect(claude).toHaveLength(1);
-    // Under the free-key caps (openrouter <= 1, opencode <= 1) the pool no
-    // longer fills every account: one openrouter free model (ox-alpha) and one
-    // opencode free model (muse-spark) take two pool accounts, one claude-code
-    // model (sonnet) takes a third, and two pool accounts (RUNNER5/RUNNER6) go
-    // idle for want of an uncapped free model — that is the cap working.
-    // deepseek-flash is the only paid model and lands on SHAKEOUT2 (governed by
-    // policy.paid, not a free key); qwen3-8-27b is the only local one and lands
-    // on RUNNER4. Neither ever takes a pool account.
-    expect(plan.policy.length).toBe(5);
+    /*
+     * The cap is what matters, not which bucket spends it. Every claude-code
+     * stream counts against `maxConcurrent["claude-code"]` wherever it is
+     * scheduled from — the pinned probe, a manual queue job, or the policy —
+     * so with the probe up there is exactly one slot left and whoever takes it
+     * displaces the others. A queued one-off (the opus baseline) outranks the
+     * policy for that slot, which is the point of a manual job.
+     */
+    const isClaude = (ref: string): boolean => config.roster[ref]?.driver === "claude-code";
+    const claudeStreams = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) =>
+      isClaude(p.job.ref),
+    );
+    expect(claudeStreams.length).toBeLessThanOrEqual(config.maxConcurrent["claude-code"]!);
+    expect(claudeStreams.length).toBeGreaterThan(0);
+    /*
+     * Under the free-key caps (openrouter <= 1, opencode <= 1) the pool no
+     * longer fills every account: one openrouter free model (ox-alpha) and one
+     * opencode free model (muse-spark) take two pool accounts, one claude-code
+     * model takes a third, and two pool accounts (RUNNER5/RUNNER6) go idle for
+     * want of an uncapped free model — that is the cap working. deepseek-flash
+     * is the only paid model and lands on SHAKEOUT2 (governed by policy.paid,
+     * not a free key); qwen3-8-27b is the only local one and lands on RUNNER4.
+     * Neither ever takes a pool account.
+     *
+     * Counted across queue and policy together, because which bucket fills the
+     * third slot is operator steering: with a one-off baseline queued the job
+     * takes it, otherwise the policy does. The total is what the caps decide.
+     */
+    expect(plan.queue.assign.length + plan.policy.length).toBe(5);
     // Exactly one openrouter-free and one opencode-free model got a pool slot.
-    const freeOnPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account) && config.roster[p.job.ref]!.driver !== "claude-code");
+    const freeOnPool = [...plan.queue.assign, ...plan.policy].filter(
+      (p) => config.accounts.pool.includes(p.account) && config.roster[p.job.ref]!.driver !== "claude-code",
+    );
     expect(freeOnPool).toHaveLength(2);
     expect(plan.policy.filter((p) => p.job.ref === "deepseek-flash").map((p) => p.account)).toEqual(["SHAKEOUT2"]);
     expect(plan.policy.filter((p) => p.job.ref === "qwen3-8-27b").map((p) => p.account)).toEqual(["RUNNER4"]);
