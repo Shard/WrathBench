@@ -243,6 +243,8 @@ describe("the ladder", () => {
     pause: null,
     account: null,
     episodeMs: null,
+    campaign: null,
+    cell: null,
   });
   const m: RosterModel = { name: "m", model: "m", tier: "t1" };
 
@@ -365,6 +367,8 @@ describe("nextJobs", () => {
     pause: null,
     account: null,
     episodeMs: null,
+    campaign: null,
+    cell: null,
   });
 
   test("priority: never-run first, then e90 before e360, then fewest counted, then roster order", () => {
@@ -428,6 +432,8 @@ describe("paid and free (ADR-0034 amendment)", () => {
     pause: null,
     account: null,
     episodeMs: null,
+    campaign: null,
+    cell: null,
   });
   const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[], p = policy) =>
@@ -701,6 +707,8 @@ describe("outstandingWork", () => {
     pause: null,
     account: null,
     episodeMs: null,
+    campaign: null,
+    cell: null,
   });
   const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[]): ModelState =>

@@ -214,6 +214,22 @@ export const runConfigSchema = z.object({
   extra: z.boolean().default(false),
 
   /**
+   * The probe campaign that commissioned this run, and which of its cells this
+   * is (ADR-0041). Both present or both absent; set only on a `probing` run.
+   *
+   * Recorded on the run rather than derived, for two reasons. It is what the
+   * scheduler counts to know what a sweep still owes, so it has to survive a
+   * restart. And it is what lets a campaign's results outlive the deletion of
+   * its config entry — the results surfaces read the run directory, so a
+   * campaign that has been switched off and removed from the file still groups.
+   *
+   * Deliberately NOT `extra: true`, which means "past-target idle work" and
+   * would put a commissioned run in the same bucket as a spare-account one.
+   */
+  campaign: z.string().min(1).max(64).optional(),
+  cell: z.string().min(1).max(64).optional(),
+
+  /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).
    *
    * A tier names the whole shape of a run at once — wall clock, watchdogs, and
