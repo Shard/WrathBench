@@ -143,16 +143,19 @@ export function effectiveTier(declared: Tier, earnedRung1: boolean): Tier {
 
 /**
  * What a model does with an account when it has no counted runs left to earn.
- * One axis replacing two mechanisms (the free roster's race/class cycle and the
- * local class's freeplay), so idle behaviour is a property of the model rather
- * than a consequence of which account class it landed in.
+ *
+ * Two values, not three. `characters` used to mean "another scored run of an
+ * eligible tier with the next race/class in a code-side cycle", and it was the
+ * wrong shape for what it was doing: sampling start states is exploration, so
+ * putting it in a SCORED episode meant an unscored question was being asked in
+ * the scored lane, with the cell chosen by a counter that meant something else
+ * (how many extras this model had made). It is a probe campaign now (ADR-0041),
+ * where the cells are named in the config and the runs are unscored.
  *
  * - `none` — nothing. The default, and what a paid model wants.
- * - `characters` — another scored run of an eligible tier with the next
- *   race/class in the cycle: a start-state dimension sampled for free.
  * - `unlimited` — a freeplay session, unscored, up to `UNLIMITED_SESSION_MS`.
  */
-export const IDLE_MODES = ["none", "characters", "unlimited"] as const;
+export const IDLE_MODES = ["none", "unlimited"] as const;
 export type IdleMode = (typeof IDLE_MODES)[number];
 
 /**
@@ -191,28 +194,6 @@ export interface SchedulingPolicy {
 /** The paid default once `policy.paid` is present: one paid run in flight. */
 export const DEFAULT_PAID = { maxConcurrent: 1 } as const;
 
-/**
- * The race/class cycle an `idle: "characters"` model walks, one combo per
- * extra. In code beside the tier table and for the same reason: it is the
- * start-state dimension every such model is sampled over alike, so changing it
- * changes what the fleet is sampling and wants a commit rather than an edit.
- *
- * Sensible level-1 combos for the Alliance starting zones the wiki bundle
- * covers: human (1), dwarf (3), night elf (4), gnome (7); classes a fresh
- * character can play solo — warrior 1, paladin 2, hunter 3, rogue 4, priest 5,
- * mage 8, warlock 9, druid 11.
- */
-export const IDLE_CHARACTERS: readonly StartingCharacter[] = [
-  { race: 1, class: 1 },
-  { race: 3, class: 3 },
-  { race: 4, class: 11 },
-  { race: 7, class: 8 },
-  { race: 1, class: 9 },
-  { race: 3, class: 2 },
-  { race: 4, class: 4 },
-  { race: 1, class: 5 },
-];
-
 export const DEFAULT_POLICY: SchedulingPolicy = {
   promoteAtLevel: 5,
   series: null,
@@ -244,7 +225,7 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
   if (o.extras !== undefined) {
-    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "characters" or "unlimited"');
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign (ADR-0041)');
   }
   if (o.maxConcurrent !== undefined) {
     if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
@@ -356,10 +337,15 @@ export interface PolicyJob {
   name?: string | undefined;
 }
 
-/** A roster entry as the same predicate needs it: only the objective matters. */
-export interface PolicyRosterEntry {
-  objective?: string | undefined;
-}
+/**
+ * A roster as the two predicates below need it: the NAMES, and nothing else.
+ *
+ * It used to need each entry's `objective`, because an entry carrying one was
+ * outside the policy. Since ADR-0041 a catalog entry cannot carry one, so
+ * nothing about an entry excludes it any more — only a pinned job holding its
+ * account does, and that is a property of the queue.
+ */
+export type PolicyRoster = Readonly<Record<string, unknown>>;
 
 /** Roster names a pinned job references: never the policy's to schedule. */
 export function pinnedRefs(jobs: readonly PolicyJob[]): Set<string> {
@@ -367,32 +353,30 @@ export function pinnedRefs(jobs: readonly PolicyJob[]): Set<string> {
 }
 
 /**
- * The roster names the policy may schedule: not referenced by a pinned job
- * (that account is spoken for, and a probe's runs are not the model's
- * evidence), and not carrying an objective (an objective stamps every run
- * unscored, and the policy schedules evidence).
+ * The roster names the policy may schedule: every name not referenced by a
+ * pinned job, whose account is spoken for.
+ *
+ * It used to also exclude an entry carrying an objective. Since ADR-0041 an
+ * entry cannot carry one — steering is a campaign, which BORROWS a catalog
+ * entry rather than taking it out of the schedule — so that clause described a
+ * state the parser now refuses.
  */
 export function policyRefs(
   jobs: readonly PolicyJob[],
-  roster: Record<string, PolicyRosterEntry>,
+  roster: PolicyRoster,
 ): Set<string> {
   const pinned = pinnedRefs(jobs);
-  return new Set(
-    Object.entries(roster)
-      .filter(([n, e]) => !pinned.has(n) && e.objective === undefined)
-      .map(([n]) => n),
-  );
+  return new Set(Object.keys(roster).filter((n) => !pinned.has(n)));
 }
 
 /** Why a roster name is outside the policy, or undefined when it is inside. */
 export function policyExclusion(
   jobs: readonly PolicyJob[],
-  roster: Record<string, PolicyRosterEntry>,
+  _roster: PolicyRoster,
   name: string,
 ): string | undefined {
   const job = jobs.find((j) => j.account !== undefined && j.refs.includes(name));
   if (job !== undefined) return `pinned to ${job.account} by job ${job.name ?? job.refs.join("+")}`;
-  if (roster[name]?.objective !== undefined) return "carries an objective (unscored probe)";
   return undefined;
 }
 
@@ -1305,17 +1289,11 @@ export function planNextJobs(
     const v = schedulability(s, running, policy);
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
-      if (idleModeOf(s) === "unlimited") {
-        // One candidate, not one per tier: an unlimited session has no tier,
-        // and there is only ever one of them in flight.
-        extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
-        return;
-      }
-      // `eligible` is already the tier's own budget, so an extra never reaches
-      // an episode the model was not admitted to.
-      for (const ep of s.eligible) {
-        extraCands.push({ s, ep, epOrder: episodeOrder(ep), fresh: 1, counted: extrasSoFar(s), order });
-      }
+      // One candidate, not one per tier: `unlimited` is the only idle mode left
+      // (ADR-0041 moved the race/class cycle to a probe campaign, where an
+      // unscored question belongs), an unlimited session has no tier, and there
+      // is only ever one of them in flight.
+      extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
       return;
     }
     if (v.verdict !== "eval") return;
@@ -1436,21 +1414,15 @@ export function planNextJobs(
   // Idle work: lowest priority, only for accounts nothing else wanted, and only
   // ever on the candidate's own class — so an unlimited session takes the
   // account its own class owns and never one a counted run could have used.
-  const chars = IDLE_CHARACTERS;
   for (const c of extraCands) {
     if (empty()) break;
     if (taken.has(c.s.name)) continue;
-    // An unlimited session rolls no character: the roster entry's own start
-    // stands, and the session carries `UNLIMITED_SESSION_MS`.
-    const freeplay = c.ep === "freeplay";
-    if (!freeplay && chars.length === 0) continue;
     const xcls = accountClassOf(c.s);
     const from = listOf(xcls);
     if (from.length === 0) continue;
     taken.add(c.s.name);
     const st = c.s.perEpisode[c.ep]!;
     const n = extrasSoFar(c.s);
-    const character = freeplay ? undefined : chars[n % chars.length]!;
     const account = from.shift()!;
     if (split[xcls] !== undefined) tookHere.set(xcls, [...(tookHere.get(xcls) ?? []), { account, by: c.s.name }]);
     jobs.push({
@@ -1458,10 +1430,7 @@ export function planNextJobs(
       episode: c.ep,
       account,
       attempt: st.attempts + 1,
-      why: freeplay
-        ? `extra #${n + 1}: unlimited session (targets met; one at a time, up to ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`
-        : `extra #${n + 1} on ${c.ep} (targets met; race ${character!.race} class ${character!.class})`,
-      ...(character !== undefined ? { extra: character } : {}),
+      why: `extra #${n + 1}: unlimited session (targets met; one at a time, up to ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
     });
   }
   return { jobs, held };

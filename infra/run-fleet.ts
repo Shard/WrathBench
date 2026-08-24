@@ -99,7 +99,6 @@ import {
   parseIdle,
   TIERS,
   TIER_TABLE,
-  IDLE_CHARACTERS,
   UNLIMITED_SESSION_MS,
   type Tier,
   type IdleMode,
@@ -243,8 +242,8 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
  * objective is a roster entry like any other, referenced by a pinned job.
  */
 export interface FleetRosterEntry extends RosterSpec {
-  /** Absent only on a steered entry, which the policy never schedules. */
-  tier?: Tier;
+  /** Required: since ADR-0041 there is no such thing as an entry outside the policy. */
+  tier: Tier;
   idle: IdleMode;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: Billing;
@@ -843,17 +842,24 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
     // An entry carrying an objective is outside the policy entirely
-    // (`policyRefs`), so a tier on it would be a budget nothing reads. Required
-    // where it means something, refused where it does not.
-    const steered = typeof rest["objective"] === "string" && rest["objective"].length > 0;
-    if (steered && rawTier !== undefined) {
-      fail(`roster ${name}: an entry with an objective is outside the policy (unscored, ADR-0033) — it must not carry a tier`);
+    // The roster is a CATALOG (ADR-0041): an entry describes a model and says
+    // how much evidence it gets, and nothing else. Steering belongs to a
+    // campaign, which owns its whole task shape — an entry that could carry an
+    // objective is what used to make the roster two kinds of thing, and every
+    // scored surface then needed a branch to tell them apart.
+    if (rest["objective"] !== undefined) {
+      fail(`roster ${name}: an entry must not carry an objective — steering is a campaign now (ADR-0041), which names this entry under "models"`);
     }
-    if (!steered && rawTier === undefined) fail(`roster ${name}: every policy-scheduled entry states its tier (${TIERS.join(", ")})`);
-    let tier: Tier | undefined;
+    if (rest["wikiCoords"] !== undefined) {
+      fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them (ADR-0041)`);
+    }
+    // Required, with no exception left to make: every entry is now something
+    // the policy can schedule, so an absent tier is always a mistake.
+    if (rawTier === undefined) fail(`roster ${name}: every entry states its tier (${TIERS.join(", ")})`);
+    let tier: Tier;
     let idle: IdleMode = "none";
     try {
-      if (!steered) tier = parseTier(rawTier, `roster ${name}`);
+      tier = parseTier(rawTier, `roster ${name}`);
       idle = parseIdle(rawIdle, `roster ${name}`);
     } catch (err) {
       fail((err as Error).message);
@@ -861,7 +867,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     const [validated] = validateEntries(`roster:${name}`, [rawBilling === undefined ? rest : { ...rest, billing: rawBilling }]);
     out[name] = {
       ...validated!,
-      ...(tier !== undefined ? { tier } : {}),
+      tier,
       idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
     };
@@ -883,8 +889,11 @@ function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: R
 
 /**
  * The roster as the projection reads it: ordered, named, with its tier and
- * idle axis. Steered entries (an objective, hence outside the policy) carry no
- * tier and are dropped here rather than given a fictional one.
+ * idle axis.
+ *
+ * Every entry projects. It used to drop the tierless ones, which were the
+ * steered probes — and since ADR-0041 there are none: an entry cannot carry an
+ * objective, so it cannot be outside the policy, so it always states a tier.
  */
 export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterModel[] {
   return Object.entries(roster).flatMap(([name, e]) =>
@@ -1333,7 +1342,12 @@ export function jobSpawn(
    */
   const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign);
   const cell = campaign?.cells.find((x) => x.id === job.probe!.cell);
-  const probeDims = campaign !== undefined && cell !== undefined ? workDimensions(campaign, cell) : undefined;
+  const allProbeDims = campaign !== undefined && cell !== undefined ? workDimensions(campaign, cell) : undefined;
+  // Watchdogs are merged into their own key below, so they are held apart here:
+  // spreading them with the rest would replace that merge with the campaign's
+  // partial override and silently drop the episode's idle and no-XP thresholds.
+  const probeWatchdogs = allProbeDims?.watchdogs;
+  const probeDims = allProbeDims === undefined ? undefined : (({ watchdogs: _w, ...rest }) => rest)(allProbeDims);
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
@@ -1354,7 +1368,7 @@ export function jobSpawn(
     const base: RosterSpec = {
       ...spec,
       ...dims,
-      watchdogs: { ...dims.watchdogs, ...unlimited, ...(own.watchdogs ?? {}), ...(probeDims?.watchdogs ?? {}) },
+      watchdogs: { ...dims.watchdogs, ...unlimited, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
       ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
@@ -2194,7 +2208,7 @@ export function formatModels(
     `models: ${states.length} in roster (policy: ADR-0040; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
       `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
-      `; idle cycle ${IDLE_CHARACTERS.length} character(s), unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
+      `; idle unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
     `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
@@ -3104,7 +3118,12 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
 } {
   const eligible = eligibleFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
-  const pinned = pinnedJobs(config)
+  // A pinned campaign's next cell is a pinned job, and it has to be one HERE
+  // too: `planTick` is what `--status` and `--dry-run` print, and a probe the
+  // live loop would spawn but this planner never mentions is exactly the kind
+  // of quiet disagreement between the supervisor and its own report that has
+  // cost a night before.
+  const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns)]
     .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.

@@ -49,6 +49,60 @@ export interface EpisodeTierView {
   summary: string;
 }
 
+/**
+ * One probe campaign as `/api/campaigns` serves it (ADR-0041).
+ *
+ * Built from the RUN DIRECTORY, not from the config, which is the whole point:
+ * a campaign that has been completed, switched off and deleted from the file
+ * still has a row here, because its runs are what happened. `config` is the
+ * config's side of the story when the entry is still present, and null when it
+ * is not — a row with runs and no config is a finished campaign, not an error.
+ */
+export interface CampaignRowView {
+  campaign: string;
+  /** The config entry, when the file still names this campaign. */
+  config: {
+    enabled: boolean;
+    runsPerCell: number;
+    /** Cell ids the config declares, in declaration order. */
+    cells: string[];
+    /** How many catalog entries the campaign sweeps, as resolved right now. */
+    models: number;
+    /** Whether every (model, cell) has its runs: derived, never recorded. */
+    complete: boolean;
+    /** The account it is pinned to, or null when it draws from the pool. */
+    account: string | null;
+  } | null;
+  /** Counted probe runs recorded against this campaign. */
+  runs: number;
+  /** Runs still in flight. */
+  live: number;
+  /** Distinct models that have run a cell of it. */
+  models: string[];
+  /** Per cell, what has happened — including a cell the config no longer declares. */
+  cells: {
+    cell: string;
+    /** Null when the config no longer declares this cell but runs of it exist. */
+    declared: boolean;
+    runs: number;
+    models: string[];
+    /** Best level any run of this cell reached, or null. */
+    bestLevel: number | null;
+  }[];
+  newestRunId: string | null;
+  newestAt: number | null;
+}
+
+/** `/api/campaigns`: the probe lane, grouped by what commissioned each run. */
+export interface CampaignsResponse {
+  campaigns: CampaignRowView[];
+  /** Probe runs that recorded no campaign at all — a launch that should not exist. */
+  orphans: number;
+  /** Where the fleet config was read from, so a missing `config` can be explained. */
+  configPath: string | null;
+  now: number;
+}
+
 /** `/api/episodes`: the table, plus how many runs are tagged against each tier. */
 export interface EpisodesResponse {
   episodes: (EpisodeTierView & {
@@ -693,6 +747,13 @@ export interface ResultRun {
   className: string | null;
   /** "Dwarf Hunter", or null when neither id was recorded. */
   characterLabel: string | null;
+  /**
+   * The probe campaign that commissioned this run and its cell (ADR-0041), or
+   * null. A grouping key for the campaigns page and nothing else: a probe is
+   * unscored, so these never reach a chart.
+   */
+  campaign: string | null;
+  cell: string | null;
   effort: string | null;
   /** The harness tag (ADR-0035). A tag on the row, not a partition. */
   harness: HarnessView | null;
@@ -826,7 +887,7 @@ export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retir
 export type TierView = "t0" | "t1" | "t2";
 
 /** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
-export type IdleModeView = "none" | "characters" | "unlimited";
+export type IdleModeView = "none" | "unlimited";
 
 /** One tier's counts for one model, plus the runs behind them. */
 export interface ModelEpisodeView {
@@ -964,8 +1025,6 @@ export interface ModelsResponse {
     paid: { maxConcurrent: number } | null;
     /** The ladder itself (ADR-0040), so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
-    /** How many combos the `idle: "characters"` cycle holds. */
-    idleCharacters: number;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per
      * key (`concurrencyKeyOf`), counting every run on that key. An absent
