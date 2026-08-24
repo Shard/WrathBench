@@ -6,9 +6,17 @@
  * ### Retry policy (fixed, documented here and only here)
  *
  * - Retryable: network errors, HTTP 408/429/5xx. Exponential backoff
- *   1s * 2^attempt with ±25% jitter, capped at 30s, max 5 attempts. A
- *   `Retry-After` on the response overrides that backoff for the next attempt,
- *   clamped to the same 30s cap and jittered upward only.
+ *   1s * 2^attempt with ±25% jitter, capped at 30s, max 10 attempts, all of
+ *   it under a 5-minute wall-clock budget for the whole complete() — 2026-08-24:
+ *   five attempts (~15s of backoff) was too impatient for provider weather
+ *   that a sixth try at 30s would have ridden out, but attempts alone are the
+ *   wrong unit, because ten 120s request timeouts would spend 20+ minutes
+ *   inside one complete(), where no watchdog can see it, and the idle watchdog
+ *   would then kill the run AS THE MODEL'S FAULT mid-retry. Fast failures get
+ *   every attempt; slow timeouts get as many as fit the budget; either way the
+ *   outcome past the budget is the pause/throw decision below, reached sooner.
+ *   A `Retry-After` on the response overrides the backoff for the next
+ *   attempt, clamped to the same 30s cap and jittered upward only.
  * - Any 429 or 402 seen during the attempts makes the outcome a PAUSE, not a
  *   failure: a spent budget says nothing about the model, so the run is
  *   suspended and resumable. The body wording only picks which pause it is —
@@ -190,8 +198,12 @@ export interface OpenAiAdapterOptions {
   effort?: string;
   maxAttempts?: number;
   requestTimeoutMs?: number;
+  /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
+  retryBudgetMs?: number;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable clock for the retry budget, the way Trajectory does it. */
+  now?: () => number;
   /** Attribution referer override. Falls back to env, then to APP_URL. */
   appUrl?: string;
   /** Injectable for tests, the way version.ts does it. */
@@ -263,17 +275,21 @@ export class OpenAiChatAdapter implements ChatAdapter {
   readonly label: string;
   private readonly maxAttempts: number;
   private readonly requestTimeoutMs: number;
+  private readonly retryBudgetMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   /** Built once: nothing in here varies per request. */
   private readonly headers: Record<string, string>;
 
   constructor(private readonly opts: OpenAiAdapterOptions) {
     this.label = `openai-compatible:${opts.model}`;
-    this.maxAttempts = opts.maxAttempts ?? 5;
+    this.maxAttempts = opts.maxAttempts ?? 10;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 120_000;
+    this.retryBudgetMs = opts.retryBudgetMs ?? 300_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.now = opts.now ?? Date.now;
     const env = opts.env ?? process.env;
     const fromEnv = env["WRATHBENCH_APP_URL"];
     const configured = opts.appUrl ?? fromEnv;
@@ -334,8 +350,14 @@ export class OpenAiChatAdapter implements ChatAdapter {
     // consumed by the next iteration's sleep — the sleep happens at the top of
     // the loop, so honouring the header means carrying it across one iteration.
     let retryAfterMs: number | null = null;
+    const retriesStartedAt = this.now();
+    let made = 0;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       if (req.signal?.aborted === true) throw new AdapterError("request abandoned: the runner is stopping");
+      // The wall-clock budget (see the retry policy above): attempts are the
+      // wrong unit when each one can spend requestTimeoutMs on the wire.
+      if (attempt > 0 && this.now() - retriesStartedAt >= this.retryBudgetMs) break;
+      made = attempt + 1;
       if (attempt > 0) {
         const base = Math.min(1_000 * 2 ** (attempt - 1), 30_000);
         // Jitter is subtractive on the computed backoff but NOT on a
@@ -491,7 +513,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       return {
         kind: "pause",
         reason: "rate-limited",
-        detail: `persistent 5xx after ${this.maxAttempts} attempts: ${lastError}`,
+        detail: `persistent 5xx after ${made} attempt(s): ${lastError}`,
       };
     }
     // The same reasoning for a request that never got a status at all: a
@@ -505,7 +527,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       return {
         kind: "pause",
         reason: "rate-limited",
-        detail: `persistent network failure after ${this.maxAttempts} attempts: ${lastError}`,
+        detail: `persistent network failure after ${made} attempt(s): ${lastError}`,
       };
     }
     // The last request id even when the final attempt died on the socket and
@@ -513,7 +535,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
     const idSuffix =
       lastRequestId !== undefined && !lastError.includes(lastRequestId) ? ` (last req ${lastRequestId})` : "";
     throw new AdapterError(
-      `model API failed after ${this.maxAttempts} attempts${idSuffix}: ${lastError}`,
+      `model API failed after ${made} attempt(s)${idSuffix}: ${lastError}`,
       lastStatus,
     );
   }
