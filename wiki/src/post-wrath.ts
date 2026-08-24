@@ -15,22 +15,24 @@
  * is the example — it acquired `|patch=4.0.1` in 2010 and the city is standing.
  *
  * `admitPage` is the one page-level decision, a pure function of the title, the
- * namespace, the two revisions the parser holds and the page's creation date.
- * It is deliberately the only door: an
- * admission rule the evidence does not support today (see
- * `post_cutoff_wrath_signal` below, and ADR-0040 on the server-side id
- * cross-check that is not implemented) is added here, not in the parser or the
- * build loop.
+ * namespace, the two revisions the parser holds, the page's creation date and —
+ * when the build was given one — an existence oracle over this server's world
+ * ids. It is deliberately the only door: a new admission rule is added here,
+ * not in the parser or the build loop.
  *
- * Every rule is deterministic over raw wikitext and the title. Nothing reads
- * the server DB, the DBC tables or anything outside the dump (CONTRACTS.md).
+ * Every rule is deterministic over raw wikitext and the title, with the one
+ * exception the operator approved on 2026-08-24: the id oracle, which comes off
+ * an exported file at BUILD time and reaches the agent as nothing but ordinary
+ * wiki text (ADR-0042). Nothing here reads a live server, the DBC tables or
+ * anything else outside the dump and that export (CONTRACTS.md).
  */
 
+import { extractIds, type IdKind } from "./ids";
 import { classifyMetaPage } from "./meta-pages";
 
 /**
  * Why a page is in the bundle, or is not. Each value is a `meta` counter on the
- * built bundle, and the five of them plus `empty_pages` account for every
+ * built bundle, and the six of them plus `empty_pages` account for every
  * non-redirect page the parser yielded.
  */
 export type AdmitReason =
@@ -47,6 +49,14 @@ export type AdmitReason =
    * revision, because it is the only one there is.
    */
   | "post_cutoff_wrath_signal"
+  /**
+   * No pre-cutoff revision and no explicit era signal either way, but an id the
+   * page states about itself exists in this server's 3.3.5a world DB: the page
+   * documents something that is in this world, written late. Only reachable
+   * when the build was given a world-id export (`--world-ids`), and never over a
+   * post-Wrath signal or a Classic-2019 one. See ADR-0042.
+   */
+  | "post_cutoff_id_match"
   /**
    * No pre-cutoff prose, and the newest revision does not say outright that it
    * is Wrath content. Whether or not it carries a post-Wrath signal: this
@@ -84,6 +94,38 @@ export interface AdmitInput {
    * Wrath world and is protected from the post-Wrath signals; see below.
    */
   firstRevisionAt: string;
+  /**
+   * Existence oracle for the 3.3.5a world DB, or undefined when the build was
+   * not given one (`--world-ids`). Passed as data — a predicate over (kind, id)
+   * — rather than a path or a connection, so `admitPage` stays pure and the
+   * tests need no file and no server.
+   */
+  worldIds?: WorldIdOracle;
+}
+
+/**
+ * Does this server have an entity with this id? The only question the build
+ * asks the world DB, and it is asked of an exported file rather than a live
+ * server (`wiki/src/world-ids.ts`, `infra/export-world-ids.sh`).
+ */
+export interface WorldIdOracle {
+  has(kind: IdKind, id: number): boolean;
+}
+
+/**
+ * Does the page state an id that exists in this world?
+ *
+ * Read on the newest revision — for a late page the only one there is — and off
+ * the raw wikitext, because `extractIds` reads the infobox templates a strip
+ * would have thrown away. `spell` and `unknown` ids never match: spells are
+ * client DBC data the world DB knows nothing about, and an `unknown` id is a
+ * number whose kind the page did not state; neither absence is evidence.
+ */
+export function statesWorldId(wikitext: string, worldIds: WorldIdOracle): boolean {
+  for (const { kind, id } of extractIds(wikitext)) {
+    if (worldIds.has(kind, id)) return true;
+  }
+  return false;
 }
 
 export interface AdmitDecision {
@@ -411,8 +453,9 @@ export function hasPostWrathSignal(title: string, wikitext: string, ns = 0): boo
  * content? This is what admits a page created after the cutoff: the wiki kept
  * documenting the old world for a decade, and such a page is right about this
  * one. The evidence has to be explicit — an infobox patch or expansion field,
- * or one of four category names — because the alternative is admitting 18,717
- * pages the census could classify neither way.
+ * or one of four category names — because the alternative would be admitting on
+ * the wikitext alone the 18,717 pages the census could classify neither way.
+ * What decides those is the id oracle below, not this rule.
  */
 export function hasWrathSignal(wikitext: string): boolean {
   for (const value of infoboxFields(wikitext, "patch")) {
@@ -495,12 +538,12 @@ export function isPreAnnouncementPage(firstRevisionAt: string): boolean {
  * September 2010 has a pre-cutoff revision and is still not this world) —
  * unless the page predates the Cataclysm announcement, which makes it a Wrath page
  * whatever it later acquired — then the cutoff, then the explicit-Wrath-signal
- * admission for late pages.
+ * admission for late pages, and last the world-id door.
  *
  * A page with no pre-cutoff prose is `dropped_post_cutoff` whether or not it
  * carries a post-Wrath signal: the signal is why it is *also* not admitted by
- * the Wrath-signal rule, but the reason it is not in the bundle is that this
- * world's wiki does not have the page.
+ * the Wrath-signal or the id rule, but the reason it is not in the bundle is
+ * that this world's wiki does not have the page.
  */
 export function admitPage(page: AdmitInput): AdmitDecision {
   if (classifyMetaPage(page.title) !== null) return { admit: false, reason: "dropped_meta" };
@@ -517,11 +560,20 @@ export function admitPage(page: AdmitInput): AdmitDecision {
     // Wrath-or-earlier statement on the one revision there is, with the
     // Classic-2019 veto and the post-Wrath veto both still standing.
     if (
-      hasWrathSignal(page.newestWikitext) &&
       !hasClassic2019Signal(page.title, page.newestWikitext) &&
       !hasPostWrathSignal(page.title, page.newestWikitext, page.ns)
     ) {
-      return { admit: true, reason: "post_cutoff_wrath_signal" };
+      if (hasWrathSignal(page.newestWikitext)) {
+        return { admit: true, reason: "post_cutoff_wrath_signal" };
+      }
+      // Then, and only then, the world DB. The page says nothing about its era,
+      // and the id it states about itself is the only evidence left. Below the
+      // explicit signal, so a page that says what it is is counted for saying
+      // it, and below both vetoes, so a page that names a later expansion can
+      // never be admitted by an id that expansion reused (ADR-0042).
+      if (page.worldIds !== undefined && statesWorldId(page.newestWikitext, page.worldIds)) {
+        return { admit: true, reason: "post_cutoff_id_match" };
+      }
     }
     return { admit: false, reason: "dropped_post_cutoff" };
   }

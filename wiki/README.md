@@ -12,6 +12,7 @@ Every contributor builds their own bundle from their own dump.
 ```
 bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
                                           [--era-cutoff 2010-10-12T00:00:00Z]
+                                          [--world-ids data/wiki/world-ids.json]
                                           [--no-canary]
 ```
 
@@ -22,6 +23,18 @@ actually seen, so a truncated run drops every redirect whose target sits past th
 stopping point and its `redirects` count means nothing. `--era-cutoff` moves the revision line the bundle is taken at
 (below); it must be a full ISO-8601 UTC instant, and a malformed one is rejected
 before the stream starts rather than quietly dropping every page.
+
+`--world-ids` is the one input that does not come out of the dump. It takes a
+world-id export written by `infra/export-world-ids.sh` — four SELECTs against
+`acore_world` for the quest, creature, item and gameobject id sets, landing in
+`data/wiki/world-ids.json` — and admits a page written after the cutoff when an
+id the page states about itself exists on this server (`post_cutoff_id_match`
+below, ADR-0042). The export is server-derived and stays under `data/`,
+gitignored like the dump and the bundle. Without the flag the build behaves
+exactly as it did before the door existed and `meta.world_ids` reads `none`;
+with it, `meta.world_ids` records the export's `exported_at` and per-kind counts,
+so a bundle built against a different export is visible rather than inferred.
+A malformed or empty export fails the build rather than quietly shrinking it.
 
 The build writes to a hidden temp file beside the destination and renames it into
 place at the end, so it is idempotent: a rebuild either replaces the bundle wholly
@@ -171,7 +184,9 @@ ADR-0040.
   These are wiki-derived reference notes — what an editor wrote on the page — not
   a live observation and not proof anything is at that spot now. Nothing here
   reads the AzerothCore DB, DBC tables or Questie; it is all deterministic parsing
-  of the wikitext.
+  of the wikitext. (The world-id export is the one place the build reads the
+  server, and it decides only *whether a page is in the bundle* — no value off
+  it ever reaches a row, a snippet or the model. ADR-0042.)
 - Quest giver and ender are the second exception, for the same reason: a quest
   page's `{{questbox | start=… | end=… | category=… }}` is a template, so the
   strip takes the ender's name off the page entirely. `extractQuest` lifts the
@@ -192,8 +207,9 @@ ADR-0040.
 ## What is dropped, and how it is counted
 
 `admitPage` (`wiki/src/post-wrath.ts`) is the one page-level decision, a pure
-function of the title, the namespace and the two revisions. It returns one of
-five reasons, and each is a `meta` counter; the five plus `empty_pages` account
+function of the title, the namespace, the two revisions and — when the build was
+given one — the world-id oracle. It returns one of
+six reasons, and each is a `meta` counter; the six plus `empty_pages` account
 for every page the parser yields except those that were a `#REDIRECT` at the
 cutoff (`pages_era_redirect`), which the build test asserts as an identity so a
 page cannot be counted twice or lost quietly. The term on the right is
@@ -216,9 +232,20 @@ still a dropped page, and recovering its name does not put the page back.
   vanilla, or a `[[Category:Wrath of the Lich King]]`-style category. Vetoed
   when the page is WoW Classic (2019), whose patches are 1.13/1.14 and read as
   vanilla to every one of those rules. Its prose is the newest revision, because
-  it is the only one there is. This is the only admission rule for late pages;
-  the rule that would reach the rest is a server-side id cross-check, which the
-  wiki tooling deliberately does not do (ADR-0040, FOLLOW-UPS 62).
+  it is the only one there is.
+- `pages_post_cutoff_id_match` — no pre-cutoff revision, nothing said about the
+  era either way, and an id the page states about itself exists in this server's
+  3.3.5a world DB: a quest, NPC, item or object that is here, documented late.
+  Only reachable with `--world-ids`, and last in the order — a page carrying a
+  post-Wrath or Classic-2019 signal is never admitted by an id a later expansion
+  reused, and a page that says outright it is Wrath content is counted for
+  saying it. `spell` and `unknown` ids never match: spells are client DBC data
+  the world DB has no table for, so its silence about one is no evidence, and an
+  `unknown` id is a number whose kind the page did not state. The prose is the
+  newest revision and the era and out-of-world cuts run over it exactly as they
+  do for a `post_cutoff_wrath_signal` page. This is the one thing the build
+  reads off the server, once and offline, and it changes nothing the agent sees
+  (ADR-0042, FOLLOW-UPS 62).
 - `pages_dropped_post_cutoff` — no prose from before the cutoff, and not admitted
   by the explicit Wrath signal above. Whether the page also names a later
   expansion does not change the reason: this world's wiki does not have the page

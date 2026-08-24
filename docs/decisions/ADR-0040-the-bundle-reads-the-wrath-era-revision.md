@@ -120,7 +120,9 @@ reach the unlabelled 18,717 is a **server-side id cross-check** — admit a
 post-cutoff quest, NPC or item page whose stated id exists in the world DB — and
 it is deliberately **not implemented**. The wiki tooling reads nothing from the
 server by design, and crossing that line is an operator decision, not an
-implementer's (FOLLOW-UPS 62).
+implementer's (FOLLOW-UPS 62). *(Superseded on this point the same day: the
+operator approved it and ADR-0042 implements it as a build-time existence
+oracle. It admits 145 pages, not the thousands the census suggested.)*
 
 ## Consequences
 - The reference surface changes for every lane at once, so this is a harness

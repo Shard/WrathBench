@@ -30,6 +30,7 @@ import { admitPage, titleIsPostWrathCoinage, type AdmitReason } from "./post-wra
 import { assertCanaries } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
+import { loadWorldIds } from "./world-ids";
 import { redirectTarget, stripWikitext } from "./strip";
 
 /**
@@ -143,6 +144,13 @@ interface Args {
    * page set cannot contain the capitals except by luck.
    */
   canary: boolean;
+  /**
+   * Path to a world-id export (`infra/export-world-ids.sh`), or "" for none.
+   * Absent, the build behaves exactly as it did before the id door existed and
+   * `meta.world_ids` records the absence; present, a late page whose stated id
+   * exists on this server is admitted as `post_cutoff_id_match` (ADR-0042).
+   */
+  worldIds: string;
 }
 
 /**
@@ -159,11 +167,13 @@ export function parseArgs(argv: string[]): Args {
   let maxPages = Infinity;
   let eraCutoff = DEFAULT_ERA_CUTOFF;
   let canary: boolean | null = null;
+  let worldIds = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--out") out = argv[++i] ?? out;
     else if (arg === "--max-pages") maxPages = Number.parseInt(argv[++i] ?? "0", 10);
     else if (arg === "--era-cutoff") eraCutoff = argv[++i] ?? eraCutoff;
+    else if (arg === "--world-ids") worldIds = argv[++i] ?? worldIds;
     else if (arg === "--no-canary") canary = false;
     else if (arg === "--canary") canary = true;
     else if (arg.startsWith("--")) throw new Error(`unknown flag ${arg}`);
@@ -172,7 +182,7 @@ export function parseArgs(argv: string[]): Args {
   if (dump === "") {
     throw new Error(
       "usage: bun wiki/src/build.ts <dump.7z|dump.xml> [--out path] [--max-pages n] " +
-        "[--era-cutoff YYYY-MM-DDTHH:MM:SSZ] [--no-canary]",
+        "[--era-cutoff YYYY-MM-DDTHH:MM:SSZ] [--world-ids path] [--no-canary]",
     );
   }
   if (!ISO_INSTANT.test(eraCutoff)) {
@@ -180,7 +190,14 @@ export function parseArgs(argv: string[]): Args {
       `--era-cutoff must be a full ISO-8601 UTC instant like ${DEFAULT_ERA_CUTOFF}, got ${eraCutoff}`,
     );
   }
-  return { dump, out, maxPages, eraCutoff, canary: canary ?? !Number.isFinite(maxPages) };
+  return {
+    dump,
+    out,
+    maxPages,
+    eraCutoff,
+    canary: canary ?? !Number.isFinite(maxPages),
+    worldIds,
+  };
 }
 
 /** Byte stream of the dump XML, decompressing on the fly when needed. */
@@ -227,6 +244,18 @@ async function main(): Promise<void> {
   const probe = new Database(":memory:");
   assertFts5(probe);
   probe.close();
+
+  // Same reason: a malformed world-id export stops the build here rather than
+  // producing a bundle that quietly ignored the flag it was given.
+  const worldIds = args.worldIds === "" ? undefined : await loadWorldIds(args.worldIds);
+  if (worldIds !== undefined) {
+    console.log(
+      `world ids:   ${args.worldIds} (exported ${worldIds.exportedAt || "?"}, ` +
+        `${Object.entries(worldIds.counts)
+          .map(([k, n]) => `${k} ${n}`)
+          .join(", ")})`,
+    );
+  }
 
   const outDir = dirname(args.out);
   mkdirSync(outDir, { recursive: true });
@@ -296,10 +325,11 @@ async function main(): Promise<void> {
   let redirectsRecoveredNewest = 0;
   /** Redirects generated from an `(original)`/`(old)` sibling of a moved page. */
   let redirectsOriginalSibling = 0;
-  /** One counter per `admitPage` reason; the two admitting reasons are the kept pages. */
+  /** One counter per `admitPage` reason; the three admitting reasons are the kept pages. */
   const reasons: Record<AdmitReason, number> = {
     pre_cutoff: 0,
     post_cutoff_wrath_signal: 0,
+    post_cutoff_id_match: 0,
     dropped_post_cutoff: 0,
     dropped_post_wrath: 0,
     dropped_meta: 0,
@@ -477,12 +507,16 @@ async function main(): Promise<void> {
       } else if (!page.hasEraRevision) {
         // No revision before the cutoff. It may still be a page about this
         // world, written late; `admitPage` decides on the newest revision.
+        // This is the one call site the world-id oracle is handed to: the page
+        // has no pre-cutoff revision at all, which is the case the id door
+        // exists for.
         const decision = admitPage({
           title: page.title,
           ns: page.ns,
           eraWikitext: null,
           newestWikitext: page.wikitext,
           firstRevisionAt: page.firstRevisionAt,
+          ...(worldIds !== undefined ? { worldIds } : {}),
         });
         if (!decision.admit) {
           reasons[decision.reason]++;
@@ -491,6 +525,9 @@ async function main(): Promise<void> {
           keep(page, page.wikitext, decision.reason);
         }
       } else {
+        // Deliberately without the oracle: this page *has* a pre-cutoff
+        // revision, and if all of them failed the parser's hygiene rules it has
+        // no prose to index, which an id cannot supply.
         const decision = admitPage({
           title: page.title,
           ns: page.ns,
@@ -689,10 +726,22 @@ async function main(): Promise<void> {
     // `pages_pre_cutoff`, like the counter above: do not add them to the sum.
     pages_stepped_back: String(steppedBack),
     pages_step_back_refused: String(stepBackRefused),
+    // Which world-id export the id door read, if any. Recorded so a bundle
+    // built against a different export is visible on the comparability tuple:
+    // the door's answer is a function of this file (ADR-0042).
+    world_ids:
+      worldIds === undefined
+        ? "none"
+        : JSON.stringify({
+            source: basename(args.worldIds),
+            exported_at: worldIds.exportedAt,
+            counts: worldIds.counts,
+          }),
     // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
-    // These five plus `empty_pages` account for every non-redirect page seen.
+    // These six plus `empty_pages` account for every non-redirect page seen.
     pages_pre_cutoff: String(reasons.pre_cutoff),
     pages_post_cutoff_wrath_signal: String(reasons.post_cutoff_wrath_signal),
+    pages_post_cutoff_id_match: String(reasons.post_cutoff_id_match),
     pages_dropped_post_cutoff: String(reasons.dropped_post_cutoff),
     pages_dropped_post_wrath: String(reasons.dropped_post_wrath),
     pages_dropped_meta: String(reasons.dropped_meta),
@@ -764,6 +813,9 @@ async function main(): Promise<void> {
       `${stepBackRefused} refused (that revision was a stub)`,
   );
   console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
+  console.log(
+    `  late+id:   ${reasons.post_cutoff_id_match} (no pre-cutoff revision, states an id this server has)`,
+  );
   console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
   console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);
   console.log(`trimmed:     ${sectionsTrimmed} out-of-world sections`);
