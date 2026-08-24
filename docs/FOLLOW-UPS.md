@@ -73,22 +73,6 @@ status.
       dimension withheld from scored runs (ADR-0028); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
-## Quests, combat, economy (SDK surface)
-
-9b. **A wait/until primitive, and the error taxonomy behind it** (absorbs item 17,
-    2026-08-23: both are one parked decision about how failure and waiting are named).
-    About 20 of opus's 85 turns (roster-opus-20260822) were pure 25–28s sleep-polls of a
-    background routine. A `sdk.waitUntil(predicate, timeout)`, or letting a snippet
-    declare "wake me on event X", would cut turn counts for every model. Held: it smells
-    like the convenience middle tier ADR-0015 forbids; decide deliberately with the
-    operator, not inline. Item 17's `sdk.wait` alias was the same decision and is folded
-    in here. Also still parked from 17: a **machine-readable error class taxonomy** — its
-    tiers 1 and 2 shipped 2026-08-22, ADR-0017 settled the BigInt question and
-    `events.off` shipped 2026-08-23, but nothing yet gives a snippet a stable class to
-    branch on. Partial movement 2026-08-23: ambient `sleep()` now wakes early on attack
-    or death with a reason (worklogs/2026-08-23), which covers the two observed reasons
-    for polling without adding a predicate API. Unblocks on one ADR covering both halves.
-
 ## Fleet and gate
 
 
@@ -162,32 +146,6 @@ status.
     talent and the firsts are still unwritten; the dashboard reads none of them yet.
 
 
-61. **Browser back into a replay restarts it from the beginning** (2026-08-24, a
-    consequence of making `/map` and `/map?run=<id>` the only two URL states).
-    The cursor is deliberately not in the URL — putting it there would rewrite
-    history four times a second under the play slider — so returning to a replay
-    by any route reloads its track and drops the cursor at the first recorded
-    sample. An operator who scrubbed to hour four, clicked into the run page and
-    pressed back gets hour zero. The fix is a per-run cursor remembered in memory
-    for the life of the page (a `Map<runId, ts>` consulted when a track loads),
-    not a URL parameter. Unblocked by a run long enough for the scrub to be work
-    worth not losing; today's tracks are minutes.
-
-
-74. **Freeplay rows show no episode progress even when their run recorded a real
-    watchdog** (2026-08-24, deliberate; re-scoped 2026-08-24 by ADR-0041).
-    `rowProgress` in `dashboard/src/lib/fleet.ts` returns null for
-    `episode === "freeplay"` because the id is uncapped (docs/EPISODES.md) and a
-    percentage would read as a tier fact. The example that motivated this —
-    `nav-probe` recording `episodeMs: 21600000` — is a `probing` run now, and
-    `probing` is deliberately NOT in that predicate: a campaign sets a real
-    enforced clock and the run ends on it, so the percentage means something.
-    What remains is the narrower original question: whether a *freeplay* run
-    carrying an explicit `episodeMs` should show one too. If the operator wants
-    it, deleting one predicate is the whole change, and the freeplay test in
-    `dashboard/test/fleet.test.ts` is what would have to say the opposite.
-
-
 67. **Freeplay characters do not persist between sessions, which is what the
     "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0043
     conversation). `idle: "unlimited"` now gives a model repeated six-hour
@@ -200,21 +158,6 @@ status.
     rather than a run. Out of scope for ADR-0043 deliberately; the six-hour cap
     there is what makes the sessions restartable in the first place.
 
-
-## Module
-
-72. **`SMSG_INITIAL_SPELLS` declares a cooldown count it does not carry** (2026-08-24,
-    found while disproving issue #11, which was item 47). `Player::_LoadSpells`' packet builder writes
-    `uint16(m_spellCooldowns.size())` as the entry count (`Player.cpp:2852`) and only
-    *then* skips rows whose `needSendToClient` is false — unlike the spell count two
-    lines above, which is fixed up with a `data.put` after the loop. A character with
-    a category cooldown therefore gets a packet declaring 2 entries and carrying 1.
-    Measured: our Hearthstone probe hit exactly that (spell 8690 `needSend 1`, the
-    category-1176 row `needSend 0`). The module's decoder tolerated it cleanly — one
-    row, no `decodeError` — but **that tolerance is currently proven by one manual
-    observation and by no test**, and it is C++ decode, so nothing in `bun test` can
-    reach it. Upstream bug, not ours; the risk is that a future decoder tightening
-    trusts the count. Worth a comment at the decode site at minimum. Blocks nothing.
 
 ## Wiki
 
