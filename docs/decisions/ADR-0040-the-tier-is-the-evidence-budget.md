@@ -94,6 +94,21 @@ after a series bump the re-armed targets queue behind it forever. Six hours is
 comparability changes. Long-horizon continuity is meant to come from **resuming
 the character**, not from one run that never ends (FOLLOW-UPS 67).
 
+**`idle: "characters"` is a designation, not a default for free models.** The
+cycle is indexed by the model's own extras count (`chars[n % chars.length]`),
+so it walks the eight race/class cells one model at a time. Turning it on for
+every free entry therefore does not sample the matrix — it gives each model its
+first cell, and eight models produce eight Human Warriors. The matrix only
+exists if one model stays on it long enough to reach cell eight.
+
+So the shipped 0.5 config names one per rate-limit lane: **`ox-alpha`** on
+OpenRouter and **`x-preview-f`** on OpenCode. Both have met their e90 targets
+and both already have extras on the board, so neither pick is speculative; and
+because `maxConcurrent` is 1 on each lane, one per lane is also the most that
+can ever run at once. Every other free entry is `none`. This costs nothing
+already recorded: extras counts come from run facts on disk (`f.extra`), not
+from the config, so the history of a model moved to `none` stays on its row.
+
 **The retired keys are refused by name**, not ignored: `policy.runsPerEpisode`,
 `policy.paid.runsPerEpisode`, `policy.extras`, per-entry `runsPerEpisode`, and
 `roster.<name>.tiers`. A file still carrying one meant something specific by it,
