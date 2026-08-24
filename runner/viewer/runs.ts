@@ -69,6 +69,8 @@ interface MetaShape {
     class?: number;
     apiBase?: string;
     objective?: string;
+    campaign?: string;
+    cell?: string;
   };
 }
 
@@ -155,6 +157,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     harness: null,
     shakeout: null,
     objective: null,
+    campaign: null,
+    cell: null,
     extra: false,
     comparability: null,
     character: null,
@@ -188,6 +192,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.shakeout = str(meta.shakeout);
     row.model = str(meta.config?.model);
     row.objective = str(meta.config?.objective);
+    row.campaign = str(meta.config?.campaign);
+    row.cell = str(meta.config?.cell);
     row.extra = meta.config?.extra === true;
     row.driver = str(meta.config?.driver);
     row.character = str(meta.config?.character);

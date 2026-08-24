@@ -181,7 +181,8 @@ const E90_MS = 90 * 60_000;
  * Derivation happens **in the reader** and nothing is written back (ADR-0026:
  * stamped, never recomputed). Two rules, both narrow on purpose:
  *
- * - a run with an operator objective was steered, which is what freeplay is;
+ * - a run naming a campaign is a probe (ADR-0041); a steered run naming none is
+ *   freeplay;
  * - a run whose stamped budget is exactly ninety minutes, with no objective, is
  *   the tier the whole fleet has been running since before it had a name.
  *
@@ -195,6 +196,11 @@ export function episodeOf(run: RunRow): EpisodeOf {
   if (stamped !== undefined && stamped !== null) {
     return { episode: stamped, source: "stamped", override: run.comparability?.episodeOverride === true };
   }
+  // A campaign says which steered id this is; without one, a steered run is
+  // freeplay. Probe runs are always launched stamped, so this branch is for a
+  // run whose tuple went missing rather than the normal path — but deriving it
+  // to `freeplay` would file a commissioned run in the sandbox.
+  if (run.campaign !== null) return { episode: "probing", source: "derived", override: false };
   if (run.objective !== null) return { episode: "freeplay", source: "derived", override: false };
   if (run.comparability?.budget.episodeMs === E90_MS) {
     return { episode: "e90", source: "derived", override: false };
