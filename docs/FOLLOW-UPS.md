@@ -232,21 +232,6 @@ and status.
     it, deleting one predicate is the whole change, and the freeplay test in
     `dashboard/test/fleet.test.ts` is what would have to say the opposite.
 
-64. **An open viewer tab keeps running the bundle it loaded, and a rebuild
-    deletes the one it might still ask for** (2026-08-24, after a bug report
-    against code that had already been fixed). Vite hashes chunk names and
-    empties `dist/` on every build, so an operator watching a live run through
-    `/map` is running whatever JavaScript their tab loaded — possibly hours and
-    several commits old — while any lazy chunk they have not yet fetched is now
-    a 404. The cost is not a crash: it is that a report of "X is broken" can
-    describe a bug that no longer exists, and half an hour goes into
-    establishing that. Two cheap halves to a fix, both in `runner/viewer`: serve
-    `index.html` with `no-store` so a reload always gets the current build, and
-    put the build id in the served page so the SPA can notice it is stale and
-    say so rather than failing quietly. Unblocked by nothing; it is small, it is
-    just not in `dashboard/`.
-
-
 
 67. **Freeplay characters do not persist between sessions, which is what the
     "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0040
@@ -403,3 +388,4 @@ One line per number so citations resolve; the day file carries the detail.
 - 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 was withdrawn the same day — see its own ledger line
 - 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
 - 70 — 2026-08-24 — withdrawn, not fixed: the item described intentional behaviour on a premise the code contradicts. The ladder is per roster entry (`matchesRoster` is model + effort), so no model's failure can cool another. It is climbed ONLY by a stillborn launch or `adapter-error` (`NO_PROGRESS_REASONS`), both endpoint properties — a probe that runs its full episode and achieves nothing ends `episode-limit` or `idle` and does not climb it at all. So the item's own revisit trigger, "a campaign with a harder task starts retiring models that were fine on e90", cannot occur: task difficulty is invisible to the ladder. Sharing it across lanes is correct and needs no lane key
+- 64 — 2026-08-24 — 6287b0a — `/api/info` carries `dashboardBuild` (Vite's fingerprinted entry name, parsed from index.html, cached on mtime); the SPA keeps the first id it sees — its own, since index.html is `no-store` — and shows a `new build — reload` button beside the status badge when a later poll disagrees. The item's other half was ALREADY true: `staticFile` has served index.html `no-store` all along, verified against the live viewer
