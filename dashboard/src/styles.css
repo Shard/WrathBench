@@ -14,6 +14,9 @@
   --accent: #7aa2f7;
   --err: #f7768e;
   --ok: #9ece6a;
+  /* A finished thing, not a live one: green enough to still mean "fine",
+     pulled back toward the background so it does not compete with --ok. */
+  --ok-muted: #7a9460;
   --warn: #e0af68;
   --grid: #1a1d22;
   --gridline: #23272e;
@@ -32,6 +35,8 @@
     --accent: #2f5fd0;
     --err: #b3283c;
     --ok: #3f7a24;
+    /* Muted means "toward the page" in both schemes, so on white it lightens. */
+    --ok-muted: #6e8f57;
     --warn: #8a5d00;
     --grid: #e9ebef;
     --gridline: #d5d9e0;
@@ -97,6 +102,8 @@ main.flush { overflow: hidden; }
 .dim { color: var(--dim); }
 .err { color: var(--err); }
 .ok { color: var(--ok); }
+/* Done rather than going: a campaign that has finished its sweep. */
+.ok-muted { color: var(--ok-muted); }
 .warn { color: var(--warn); }
 .mono { font-variant-numeric: tabular-nums; }
 .right { text-align: right; }
