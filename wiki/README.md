@@ -16,7 +16,9 @@ bun wiki/src/build.ts data/wiki/<dump>.7z [--out data/wiki/bundle.sqlite]
 
 The archive is streamed through `7z x -so`; the 24 GB XML is never written to disk.
 A plain `.xml` path also works. `--max-pages n` stops early, which is useful for a
-quick smoke build. `--era-cutoff` moves the revision line the bundle is taken at
+quick smoke build — with the caveat that redirects are resolved against the pages
+actually seen, so a truncated run drops every redirect whose target sits past the
+stopping point and its `redirects` count means nothing. `--era-cutoff` moves the revision line the bundle is taken at
 (below); it must be a full ISO-8601 UTC instant, and a malformed one is rejected
 before the stream starts rather than quietly dropping every page.
 

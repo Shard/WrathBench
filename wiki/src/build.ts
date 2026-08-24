@@ -165,7 +165,9 @@ async function main(): Promise<void> {
   /**
    * Redirects are written after the stream, not during: a redirect whose target
    * did not survive the Wrath cutoff points at nothing, and whether the target
-   * survived is not known until every page has been seen.
+   * survived is not known until every page has been seen. With `--max-pages`
+   * the stream stops early, so a smoke build drops every redirect whose target
+   * it never reached; its `redirects` count is not comparable to a full build's.
    */
   const pendingRedirects: { source: string; target: string; ns: number }[] = [];
   const keptTitles = new Set<string>();
