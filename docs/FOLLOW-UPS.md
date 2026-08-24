@@ -263,17 +263,6 @@ and status.
 
 
 
-70. **A probe failure cools the model out of evals too** (2026-08-24,
-    deliberate, ADR-0041). The defer ladder is not split per lane: a probe that
-    fails to launch climbs the same ladder an eval would. That is the right
-    default — the ladder backs off from endpoint failures (stillborn launches,
-    adapter errors), which are properties of the model's endpoint and equally
-    relevant to both lanes, and splitting it would keep firing probes at a dead
-    key. It costs no eval throughput today because probes only run for models
-    that owe no evidence. Revisit only if a campaign with a genuinely harder
-    task starts retiring models that were fine on `e90`; the fix would be a
-    lane-keyed ladder, which is a real change to `projectModel`, not a flag.
-
 
 ## Module
 
@@ -411,5 +400,6 @@ One line per number so citations resolve; the day file carries the detail.
 - 65 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
 - 66 — 2026-08-24 — 4eb455d, 64319d9 — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. 64319d9 fixed a regression in the first commit: a refused pin is disabled, and `diffJobs` drains a running job whose spawn is disabled, so a refusal would have SIGTERMed a live campaign probe where the whole-file rejection left it alone — a refusal now suppresses scheduling only, and the tick spares (and records) any live run under a refused pin. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
 - 62 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
-- 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 is deliberate: the defer ladder is not split per lane
+- 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 was withdrawn the same day — see its own ledger line
 - 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
+- 70 — 2026-08-24 — withdrawn, not fixed: the item described intentional behaviour on a premise the code contradicts. The ladder is per roster entry (`matchesRoster` is model + effort), so no model's failure can cool another. It is climbed ONLY by a stillborn launch or `adapter-error` (`NO_PROGRESS_REASONS`), both endpoint properties — a probe that runs its full episode and achieves nothing ends `episode-limit` or `idle` and does not climb it at all. So the item's own revisit trigger, "a campaign with a harder task starts retiring models that were fine on e90", cannot occur: task difficulty is invisible to the ladder. Sharing it across lanes is correct and needs no lane key
