@@ -39,6 +39,9 @@ export function Layout(props: ParentProps) {
           <A href="/models" activeClass="on">
             models
           </A>
+          <A href="/campaigns" activeClass="on">
+            campaigns
+          </A>
         </nav>
         <span class="spacer" />
         <StatusBadge />
