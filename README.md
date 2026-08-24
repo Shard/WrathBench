@@ -52,6 +52,34 @@ Then run an episode (put model API keys in `.env` first — see
 Trajectories land under `data/runs/<run-id>/`. Details, uid caveats, and the
 service graph: `infra/README.md`.
 
+## Developing without game data
+
+Harness development needs none of the above. From a bare clone with no `data/`
+directory: `bun install` once at the root (Bun 1.4.0, pinned in
+`.bun-version` — an older Bun rejects the lockfile), then
+
+```sh
+bun test                     # every workspace's suite; all fixture-based
+bunx tsc --noEmit -p <dir>   # sdk, runner, wiki, minimap, dashboard, infra
+bun run docs:api:check       # the generated SDK reference is in sync
+bun run dashboard:build      # the SPA, no data involved
+bun run viewer               # serves labelled empty states; creates data/runs
+```
+
+What stays out of reach without operator-supplied data — by design, since
+nothing Blizzard-derived may enter git (`docs/DATA-AND-LEGAL.md`):
+
+- the worldserver, and with it every smoke script in `infra/smoke/` and any
+  live episode — needs `data/client` plus the AzerothCore submodule and a
+  Docker build;
+- the wiki reference bundle — built from a local dump under `data/wiki`;
+  absent, `search_reference` reports itself unavailable and runs proceed
+  without it;
+- minimap tiles — extracted from a licensed client's archives; the map view
+  draws labelled grid squares instead;
+- `module/` — compiles only inside the worldserver image; its verification is
+  the smoke scripts, which need the live stack.
+
 ## Licence
 
 `module/` is GPL-2.0-or-later; see `module/LICENSE`. All other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT under the root `LICENSE`. This boundary does not relicense AzerothCore itself, Blizzard assets, or third-party dependencies; see `THIRD-PARTY-NOTICES.md` and `docs/DATA-AND-LEGAL.md`.

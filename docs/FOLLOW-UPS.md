@@ -81,6 +81,16 @@ and status.
     or death with a reason (worklogs/2026-08-23), which covers the two observed reasons
     for polling without adding a predicate API. Unblocks on one ADR covering both halves.
 
+66. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
+    audit). `openSocket()` (`sdk/src/events.ts`) puts no timeout of its own around the
+    WebSocket construction, so one stalled TCP/WS handshake during a reconnect silently
+    consumes the caller's whole wait budget with no fallback — the reconnect ladder
+    only reschedules on close/error, never on "still opening". Observed once as the
+    events.test.ts reconnect test timing out at 5s in a loaded container (2026-08-24,
+    under the wrong Bun; not reproduced since — 25+ runs incl. under CPU stress), so
+    this stays parked per the earned-by-need rule. Unblocks on a second observation,
+    in CI or a live run's reconnect logs.
+
 ## Fleet and gate
 
 
@@ -140,6 +150,16 @@ and status.
 
 ## Episodes and results
 
+67. **run.sqlite is opened everywhere with busy_timeout 0** (2026-08-24, bare-clone
+    audit). No connection to a run.sqlite anywhere in the codebase sets
+    `PRAGMA busy_timeout` (or WAL), so any overlap — the runner writing while the
+    viewer, fleet supervisor or models.ts reads — throws SQLITE_BUSY immediately
+    instead of retrying. Never yet observed failing (the 2026-08-24 endRuns test
+    failure that first pointed here turned out to be a root-container path quirk,
+    fixed in 5b65568), which is why this is an item and not a change: one line in
+    `Trajectory`'s constructor plus the read-only opens, when an actual SQLITE_BUSY
+    shows up in a log. Unblocks on first observation.
+
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
    not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
    of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is
@@ -195,6 +215,16 @@ and status.
 
 
 ## Module
+
+68. **module/ has no host-side checks at all** (2026-08-24, bare-clone audit). ~5,900
+    lines of C++ with no unit tests, no lint, no static analysis in the repo — the
+    smoke scripts are the verification and they need the live stack, so every
+    non-live environment (CI, web sessions, this audit) sees module/ as a blind spot.
+    Deliberate so far (the module stays thin; game semantics live in TypeScript), but
+    the boundary deserves a decision rather than a default: even a `clang-format
+    --dry-run` or a syntax-only compile in the image build would catch mechanical
+    breakage before a deploy window. Unblocks on deciding what, if anything, runs
+    without the stack; record it either way.
 
 37. **World-level log, via achievements** (2026-08-22; later, when the freeplay server
     has more than one agent). Per-session trajectories cannot answer "who was near whom
