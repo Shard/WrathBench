@@ -218,17 +218,6 @@ and status.
     not a URL parameter. Unblocked by a run long enough for the scrub to be work
     worth not losing; today's tracks are minutes.
 
-62. **`playtimeMs`'s comment says the episode watchdog resets on every resume; it
-    no longer does** (2026-08-24, found while putting a progress percentage on the
-    fleet page). `runner/viewer/tail.ts` states that `Watchdogs` is built with
-    `startedAt = now()` per process, so `episodeMs` is per-process uptime and
-    playtime is a superset of it. Commit 08cd691 (2026-08-23) made run.ts pass
-    `elapsedBeforeMs` from the persisted `episodeElapsedMs`, so the episode clock
-    now carries across a pause — the same *kind* of clock playtime is, both
-    excluding paused stretches, differing only by how each is accumulated. The
-    fleet page's percentage is written against the new behaviour; the comment is
-    the only thing left saying otherwise. A comment-only fix, held back because a
-    live run was in flight through the viewer when it was found.
 
 63. **Freeplay rows show no episode progress even when their run recorded a real
     watchdog** (2026-08-24, deliberate; re-scoped 2026-08-24 by ADR-0041).
@@ -257,31 +246,7 @@ and status.
     say so rather than failing quietly. Unblocked by nothing; it is small, it is
     just not in `dashboard/`.
 
-65. **`paidPoolOf` spills paid picks into the free pool when neither
-    `accounts.paid` nor `policy.paid` is set** (2026-08-24, from the fanout that
-    preceded ADR-0040). `infra/run-fleet.ts:337` only creates the paid class
-    when one of those is present; without them a paid pick takes whatever pool
-    account is free. `fleet.json`'s `_notes` state the rule unconditionally ("a
-    paid pick lands only here, never in the pool"), and ADR-0034's account-class
-    amendment exists precisely to remove spilling — so the code is conditional
-    where the record is absolute. It is not live today (the shipped config sets
-    both), which is why it is an item and not a fix: the failure mode is a
-    future config that drops `policy.paid` and quietly starts spending on pool
-    accounts. Either make the class unconditional like `local`, or refuse a
-    config with paid-billed models and no paid class.
 
-66. **The disabled-pinned-job coexistence rule is enforced at parse time, so
-    flipping one job takes the whole file down** (2026-08-24, same fanout;
-    nearly walked into it on 2026-08-23). `run-fleet.ts:613-631` fails the
-    ENTIRE config when an enabled job sits on a listed account. Since a bad
-    re-read keeps the last good config, flipping `sub-opus-low` to `enabled:
-    true` without also editing `accounts.paid` makes every other `enabled:` flag
-    in the file inert until someone reads the REJECTED banner — a config-wide
-    outage from a one-line edit whose intent was local. The rule itself is
-    right; the blast radius is not. Refuse the job, name it, and keep the rest
-    of the file. Related: the preflight check at `:637-650` reads only enabled
-    pinned jobs, so a disabled job may share an account with preflight and
-    validation says nothing.
 
 67. **Freeplay characters do not persist between sessions, which is what the
     "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0040
@@ -452,4 +417,7 @@ One line per number so citations resolve; the day file carries the detail.
 - 56 — 2026-08-23 — ac539d3 — `CMSG_AREATRIGGER` fires once on crossing into a volume (per-session inside set, cleared on exit/teleport), not every 1.5s while inside; live as harness-0.4-66
 - 68 — 2026-08-24 — found and fixed the same hour — the `--status` accounts table named a finished job where `--live-runs` named the running one. `state.jobs` is keyed by job NAME, stable across attempts, so it is a cumulative record; `printStatus` keyed a map by account and let the last write win, which reads the object's INSERTION order (first-spawn order), so a job that exited at noon masked the run holding the account. Display only — every scheduling path leases by `accountHeldBy` — but it made the board unreadable at exactly the moment a deploy needed reading. Now `jobsByAccount` in `infra/run-fleet.ts` ranks live-before-dead then newest-first, shares one liveness verdict with the row's own note, and reports two live jobs on one account as a `!!` clash instead of picking silently. The comment claiming `--live-runs` was "the same signal --status shows" is corrected: they are two sources, and that claim is how this hid
 - 69 — 2026-08-24 — `infra/` had no tsconfig, so nothing ever typechecked the 3.6k-line supervisor: `bun test` strips types without checking them, and four `fleet.test.ts` fixtures were silently missing the `idle` and `local` fields that ADR-0040 made required. `infra/tsconfig.json` added, the 17 errors it found fixed (4 fixtures, 12 index/group assertions in `infra/smoke/`, 1 import extension), and `bun run typecheck` now covers all six projects — cited in CLAUDE.md next to `bun test` so the next agent runs both
+- 65 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
+- 66 — 2026-08-24 — 4eb455d — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
+- 62 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
 - 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 and 71 are new, both deliberate: the defer ladder is not split per lane, and the sweep is recomputed per tick
