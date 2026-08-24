@@ -187,15 +187,18 @@ export interface FleetRow {
  * the percentage then over-reads by whatever those segments held. That is the
  * accuracy claimed here.
  *
- * **Freeplay.** No percentage and no ETA, whatever a `freeplay` run recorded.
- * The id is uncapped (docs/EPISODES.md): a six-hour session is that one
- * experiment's watchdog, not a budget the tier gives runs to be measured
- * against, and "72% of freeplay" would read as a tier fact it is not. The gate
- * is capped-ness, not scored-ness, which is why `probing` is deliberately not
- * here: a campaign sets an enforced clock and its run ends on it (ADR-0041), so
- * the percentage is a fact about that run. Whether a `freeplay` run carrying an
- * explicit `episodeMs` should show one too is the operator's call (FOLLOW-UPS
- * 74); until it is made, silence is the honest answer.
+ * **Freeplay and the rest: the run's own clock decides, not the id.** The thing
+ * that must never appear is a percentage against a TIER's nominal budget, and
+ * `budgetMs` is never that — it is the `episodeMs` this run recorded and a
+ * watchdog will actually end it on. So no episode is gated by name. `freeplay`
+ * used to be, on the grounds that its id is uncapped (docs/EPISODES.md); that
+ * was measured wrong in a way worth keeping written down. Four of the eight
+ * freeplay runs on disk carry an enforced 21_600_000 — every session launched
+ * under `idle: "unlimited"` does — and four carry null. Gating on the id hid a
+ * real, enforced clock for half of them while adding nothing for the other half,
+ * because a run with no recorded budget already falls out below. `probing` was
+ * never gated for the same reason: a campaign sets an enforced clock and its run
+ * ends on it (ADR-0041).
  *
  * **Past the budget.** The real figure, over 100%. A run that overruns its
  * watchdog is a signal (`fleet-deepseek-flash-e90-…-a3` ran 114 minutes against
@@ -218,7 +221,14 @@ function advancing(state: FleetRowState): boolean {
 
 export function rowProgress(row: Pick<FleetRow, "state" | "episode" | "elapsedMs" | "budgetMs">): FleetProgress | null {
   if (!advancing(row.state)) return null;
-  if (row.episode === "freeplay") return null;
+  // No episode-name gate. The question is whether THIS RUN recorded an enforced
+  // clock, and the `budget` check below already answers it: a freeplay session
+  // launched under `idle: "unlimited"` records a real six-hour `episodeMs` that a
+  // watchdog ends it on, while an uncapped one records none and still shows
+  // nothing. Measured on the runs to hand — four of eight freeplay runs carry
+  // 21_600_000 and four carry null — so gating on the id would hide a real clock
+  // for half of them. What must never appear is a percentage against a TIER
+  // target, and none exists here: this is elapsed against the run's own budget.
   const budget = row.budgetMs;
   const elapsed = row.elapsedMs;
   if (budget === null || budget <= 0 || elapsed === null || elapsed < 0) return null;

@@ -374,15 +374,30 @@ describe("episode progress in the state cell", () => {
     expect(progressLabel(rowProgress(row))).toBe("33%");
   });
 
-  test("a freeplay row shows nothing, whatever watchdog its experiment recorded", () => {
-    // A freeplay experiment may record a real six-hour episodeMs, but the id is
-    // uncapped: a percentage here would read as a tier fact it is not
-    // (docs/EPISODES.md).
+  test("a freeplay row with a real recorded clock shows progress against it", () => {
+    // The discriminator is the RUN's recorded budget, not the episode id. A
+    // session launched under `idle: "unlimited"` records an enforced six hours
+    // and a watchdog ends it there, so the percentage is a fact about this run.
+    // Measured: four of the eight freeplay runs on disk carry 21_600_000.
     const row = rowFor(
       fleet({ jobs: [job({ episode: "freeplay" })] }),
       [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
     );
     expect(row.budgetMs).toBe(21_600_000);
+    expect(rowProgress(row)).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
+    expect(progressLabel(rowProgress(row))).toBe("50%");
+    expect(progressTitle(rowProgress(row), row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
+  });
+
+  test("a freeplay row with no recorded clock still shows nothing", () => {
+    // The other four. Genuinely uncapped: there is no budget to be a percentage
+    // OF, and inventing one from a tier nominal is the thing this must never do
+    // (docs/EPISODES.md). Deleting the `budget === null` guard turns this red.
+    const row = rowFor(
+      fleet({ jobs: [job({ episode: "freeplay" })] }),
+      [budgeted(null, { playtimeMs: 3 * 3_600_000 })],
+    );
+    expect(row.budgetMs).toBeNull();
     expect(rowProgress(row)).toBeNull();
     expect(progressLabel(rowProgress(row))).toBe("");
     expect(progressTitle(rowProgress(row), row)).toBe("");
