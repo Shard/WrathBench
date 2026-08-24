@@ -80,6 +80,7 @@ import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
 import { watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
+import { parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
   ACCOUNT_CLASSES,
   LADDER_MS,
@@ -87,6 +88,7 @@ import {
   accountClassOf,
   concurrencyKeyOf,
   inSeries,
+  isCounted,
   isStalePause,
   modelStates,
   outstandingWork,
@@ -325,6 +327,8 @@ export interface FleetConfig {
   roster: Record<string, FleetRosterEntry>;
   /** Every job the file names, pinned and pool, in file order. */
   jobs: FleetJob[];
+  /** The `campaigns` block (ADR-0041), in declaration order; empty when the file has none. */
+  campaigns: Campaign[];
   /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
@@ -392,6 +396,31 @@ export function poolJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
  */
 export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
   return pinnedRefsOf(config.jobs);
+}
+
+/**
+ * The campaigns the policy may schedule: enabled, and unpinned. A pinned
+ * campaign is a pinned job in every way that matters here — its account is by
+ * definition not one the policy draws from — so it is built into a pinned
+ * job elsewhere and never reaches this list.
+ */
+export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campaign[] {
+  return config.campaigns.filter((c) => c.enabled && c.account === undefined);
+}
+
+/**
+ * Counted probe runs, in the shape `campaignWork` reads them: `ref` is the
+ * roster name whose credentials the run used. Recovered by matching the
+ * fact's model and effort against the roster the way `matchesRoster`
+ * (models.ts, not exported) does — over every roster entry, catalog-only ones
+ * included, since a campaign may name a model that carries no tier.
+ */
+export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): ProbeRun[] {
+  const entries = Object.entries(roster);
+  return runs.filter(isCounted).map((f) => {
+    const match = entries.find(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null));
+    return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null };
+  });
 }
 
 /**
@@ -596,6 +625,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     roster?: unknown;
     queue?: unknown;
     policy?: unknown;
+    campaigns?: unknown;
   };
   if (o.lanes !== undefined) {
     fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (ADR-0034)");
@@ -603,6 +633,12 @@ export function parseFleet(raw: unknown): FleetConfig {
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
+  let campaigns: Campaign[];
+  try {
+    campaigns = parseCampaigns(o.campaigns);
+  } catch (err) {
+    fail(`campaigns: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -642,6 +678,35 @@ export function parseFleet(raw: unknown): FleetConfig {
     const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === job.account!.toUpperCase()) ?? job.account;
     if (accounts.pinned[key] === undefined || job.enabled) accounts.pinned[key] = job.name;
   }
+  // A campaign with `account` set is pinned exactly like a pinned job (see
+  // campaigns.ts): the same account-sharing and parking rules apply, with the
+  // campaign's name standing in for the job's.
+  for (const c of campaigns) {
+    if (c.account === undefined || !c.enabled) continue;
+    const key = c.account.toUpperCase();
+    const other = byAccount.get(key);
+    if (other !== undefined) fail(`account ${c.account} is shared by enabled jobs ${other} and campaign ${c.name} — one job per account`);
+    byAccount.set(key, `campaign ${c.name}`);
+  }
+  for (const c of campaigns) {
+    if (c.account === undefined) continue;
+    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS
+    // it, and only an enabled campaign holds. So a disabled pinned campaign
+    // may park on a listed account; an enabled one may not, or the pin and
+    // the scheduler would fight over the session.
+    if (c.enabled && accounts.pool.some((a) => a.toUpperCase() === c.account!.toUpperCase())) {
+      fail(`accounts.pool: ${c.account} is also pinned to campaign ${c.name} — only a disabled campaign may park on a listed account`);
+    }
+    for (const cls of ["paid", "local"] as const) {
+      if (c.enabled && accounts[cls].some((a) => a.toUpperCase() === c.account!.toUpperCase())) {
+        fail(`accounts.${cls}: ${c.account} is also pinned to campaign ${c.name} — only a disabled campaign may park on a listed account`);
+      }
+    }
+    // Derived, enabled first so a disabled stand-in on a running campaign's
+    // account never hides the live one.
+    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === c.account!.toUpperCase()) ?? c.account;
+    if (accounts.pinned[key] === undefined || c.enabled) accounts.pinned[key] = `campaign ${c.name}`;
+  }
   const preflight = parsePreflight(o.preflight);
   // The smokes hold a live session for their whole arc. Sharing an account with
   // an enabled job (or the pool) would mean the gate and the job reclaiming
@@ -665,7 +730,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
-  return { notes, preflight, accounts, roster, jobs, policy, maxConcurrent };
+  return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
@@ -1058,6 +1123,10 @@ export function planPolicy(opts: {
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
   paidRunning?: number;
+  /** The enabled, unpinned campaigns the policy may schedule (ADR-0041). */
+  campaigns?: readonly Campaign[];
+  /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
+  probeRuns?: readonly ProbeRun[];
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
@@ -1136,6 +1205,8 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
       ) as Partial<Record<AccountClass, BusyAccount[]>>,
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
       ...(reserved !== undefined ? { poolHeld: reserved } : {}),
+      ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
+      ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
     });
   if (opts.concurrency === undefined) {
     const plan = next(opts.states, free, []);
@@ -2946,7 +3017,7 @@ function printStatus(configPath: string): void {
  * pool accounts the queue and then the policy would take. Pure over the
  * projection; used by --dry-run and by the startup fail-fast.
  */
-export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = []): {
+export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = [], probeRuns: readonly ProbeRun[] = []): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
   policy: PolicyPick[];
@@ -2988,6 +3059,8 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     concurrency: { keyOf, max: config.maxConcurrent, running: keyCount },
     policy: config.policy,
     paidRunning: 0,
+    campaigns: unpinnedCampaigns(config),
+    probeRuns,
   });
   return { pinned, queue, policy, heldPicks };
 }
@@ -3005,7 +3078,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
-  const plan = planTick(config, states, held, stampToday, resumes.resume);
+  const plan = planTick(config, states, held, stampToday, resumes.resume, probeRunsOf(runs, config.roster));
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
   const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
@@ -3423,6 +3496,8 @@ async function main(): Promise<void> {
         concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount },
         policy: cfg.policy,
         paidRunning,
+        campaigns: unpinnedCampaigns(cfg),
+        probeRuns: probeRunsOf(runs, cfg.roster),
       });
       for (const { job, account, why } of picks) {
         pending.set(job.name, job);
