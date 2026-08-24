@@ -64,6 +64,6 @@ filtering its rows client-side would make the counts and the list disagree.
 Giving either an honest series filter is a server-side change, and nothing has
 asked for one yet.
 
-`/results` is unfiltered for a third reason, and a temporary one: it is being
-replaced by `/runs` (ADR-0047), and the filter goes over with that page rather
-than being fitted to one on its way out.
+`/results` was left unfiltered while it was being replaced by `/runs`
+(ADR-0047); `/runs` reads the selector the way the episodes page does, and
+`/results` now only redirects there.

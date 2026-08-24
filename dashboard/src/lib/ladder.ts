@@ -1,19 +1,17 @@
 /**
- * The maths behind the results charts and the ladder. Pure, so what the release
+ * The ladder's derivation (ADR-0018): the rung rules, the row order, and the
+ * character helpers it shares with nothing else now. Pure, so what the release
  * page claims is testable without a browser or a server.
  *
- * The one rule this module exists to enforce: **a chart never mixes runs that
+ * The one rule this module exists to enforce: **a row never mixes runs that
  * are not comparable.** Scorability comes from the server's own `unscored`
- * predicate, and everything below groups by (model, harness series) — ADR-0004
- * makes scores comparable only within a harness version, and ADR-0034 names
- * the *series* (major.minor) as that group: a fix commit does not start a new
- * row, a minor bump does. The exact versions a row holds are listed on it.
+ * predicate; the harness series is the shell's filter (ADR-0046) and is
+ * applied before rows reach here. Until ADR-0047 this file also held the
+ * results page's cost-per-level grouping; that page is now the runs table
+ * and the grouping went with it.
  */
 
-import type { ResultRun, LevelMark } from "@viewer/api-types";
-
-/** Levels the charts offer. Chosen to line up with the ladder's rungs. */
-export const CHART_LEVELS = [5, 10, 20, 40, 60, 80] as const;
+import type { ResultRun } from "@viewer/api-types";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
@@ -44,161 +42,6 @@ export function byCharacter(runs: readonly ResultRun[], label: string | null): R
 /** The distinct characters in a set of runs, sorted — a row's label. */
 function charactersOf(runs: readonly ResultRun[]): string[] {
   return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
-}
-
-/** The first mark at or above `level`, or null when the run never got there. */
-export function markAtLeast(run: ResultRun, level: number): LevelMark | null {
-  for (const m of run.levels) if (m.level >= level) return m;
-  return null;
-}
-
-export interface Reach {
-  runId: string;
-  /** Turn at first observation of the level. Null when the run recorded none. */
-  turn: number | null;
-  /** Active time to that observation. Null when the run's segments are unknown. */
-  ms: number | null;
-}
-
-/** One row of the charts: a model on a harness series, and what it managed. */
-export interface ResultGroup {
-  key: string;
-  model: string;
-  /**
-   * The series the row is keyed on (`"0.3"`), or the exact version when the
-   * run carried no recognisable series (it then groups alone, never guessed in).
-   */
-  harnessVersion: string;
-  /** Every exact version stamp in the row, sorted — the label's detail. */
-  harnessVersions: string[];
-  effort: string | null;
-  /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
-  wikiCoords: boolean | null;
-  /**
-   * The starting characters the group's runs were played on, sorted. A *label*,
-   * not part of the key: the baseline character is the comparison set, and an
-   * extras run (ADR-0034) is compared against it rather than charted apart.
-   * More than one entry means the group mixes characters, and the row says so.
-   */
-  characters: string[];
-  /**
-   * The harness tags present in the group (ADR-0035), sorted. Not part of the
-   * key: the operator chose to tag rather than partition, so a group may hold
-   * both loops and the column says so.
-   */
-  harnesses: string[];
-  /** Runs in the group that reached the level, fastest first by turns. */
-  reached: Reach[];
-  /** How many runs of this group were considered at all. */
-  attempts: number;
-  bestTurn: number | null;
-  bestMs: number | null;
-  medianTurn: number | null;
-  medianMs: number | null;
-  /**
-   * Median tool calls across the group's runs, whether or not they reached the
-   * level. The episode ceiling is a runaway guard, not a task budget, and this
-   * is the number it has to be sized against — a group whose median approaches
-   * its tier's ceiling is being ended by the guard rather than by the clock.
-   */
-  medianToolCalls: number | null;
-  /** The largest single run's tool calls, which is what a ceiling must clear. */
-  maxToolCalls: number | null;
-}
-
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 1 ? s[mid]! : Math.round((s[mid - 1]! + s[mid]!) / 2);
-}
-
-/**
- * Group scored runs by (model, harness series, effort, server build) and
- * report what each group cost to reach `level`.
- *
- * Effort is part of the key rather than averaged over: ADR-0024 calls it a
- * dimension, so `opus at low` and `opus at high` are two rows, not one blurred
- * one. A group with no run that reached the level is still returned — "twelve
- * attempts, none reached L10" is a result, and dropping it would flatter the
- * chart. Server build folds in the same way (ADR-0026): the worldserver
- * commit is pinned and changed deliberately, same as the harness version, so
- * two runs on different builds are two rows, and a run with no recorded build
- * groups on its own rather than silently joining one it may not have run
- * against. The wiki-coordinates tier (ADR-0028) is a dimension the same way:
- * a names-first run and a coords run are not the same task, and a run that
- * never recorded the field groups on its own.
- */
-export function groupsForLevel(runs: readonly ResultRun[], level: number): ResultGroup[] {
-  const byKey = new Map<string, ResultGroup>();
-  /** Per-group tool-call counts, kept aside so the group stays a plain shape. */
-  const calls = new Map<string, number[]>();
-  for (const run of scored(runs)) {
-    const model = run.model ?? "(unnamed)";
-    const harness = run.harnessSeries ?? run.harnessVersion ?? "(unversioned)";
-    const coordsKey = run.wikiCoords === null ? "coords?" : run.wikiCoords ? "coords" : "names";
-    const key = `${model} ${harness} ${run.effort ?? ""} ${run.serverBuild ?? ""} ${coordsKey}`;
-    let g = byKey.get(key);
-    if (g === undefined) {
-      g = {
-        key,
-        model,
-        harnessVersion: harness,
-        harnessVersions: [],
-        effort: run.effort,
-        wikiCoords: run.wikiCoords,
-        characters: [],
-        harnesses: [],
-        reached: [],
-        attempts: 0,
-        bestTurn: null,
-        bestMs: null,
-        medianTurn: null,
-        medianMs: null,
-        medianToolCalls: null,
-        maxToolCalls: null,
-      };
-      byKey.set(key, g);
-      calls.set(key, []);
-    }
-    g.attempts += 1;
-    const exact = run.harnessVersion ?? "(unversioned)";
-    if (!g.harnessVersions.includes(exact)) g.harnessVersions.push(exact);
-    const tag = run.harness ?? "harness?";
-    if (!g.harnesses.includes(tag)) g.harnesses.push(tag);
-    if (run.characterLabel !== null && !g.characters.includes(run.characterLabel)) {
-      g.characters.push(run.characterLabel);
-    }
-    if (run.toolCalls !== null) calls.get(g.key)!.push(run.toolCalls);
-    const mark = markAtLeast(run, level);
-    if (mark !== null) g.reached.push({ runId: run.runId, turn: mark.turn, ms: mark.playtimeMs });
-  }
-  const out = [...byKey.values()];
-  for (const g of out) {
-    g.harnesses.sort();
-    g.characters.sort();
-    g.harnessVersions.sort();
-    g.reached.sort((a, b) => (a.turn ?? Infinity) - (b.turn ?? Infinity));
-    const turns = g.reached.map((r) => r.turn).filter((v): v is number => v !== null);
-    const times = g.reached.map((r) => r.ms).filter((v): v is number => v !== null);
-    g.bestTurn = turns.length > 0 ? Math.min(...turns) : null;
-    g.bestMs = times.length > 0 ? Math.min(...times) : null;
-    g.medianTurn = median(turns);
-    g.medianMs = median(times);
-    const used = calls.get(g.key) ?? [];
-    g.medianToolCalls = median(used);
-    g.maxToolCalls = used.length > 0 ? Math.max(...used) : null;
-  }
-  // Groups that got there first lead; groups that never did sort to the bottom
-  // in attempt order, so a model with many failed attempts is still visible.
-  out.sort(
-    (a, b) =>
-      (a.bestTurn ?? Infinity) - (b.bestTurn ?? Infinity) ||
-      (a.bestMs ?? Infinity) - (b.bestMs ?? Infinity) ||
-      b.attempts - a.attempts ||
-      a.model.localeCompare(b.model),
-  );
-  return out;
 }
 
 /* ------------------------------------------------------------------ ladder */

@@ -20,8 +20,9 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
+import { runsHref } from "../lib/runs";
 
 /** The roster moves when a run ends or an operator edits the config. */
 const POLL_MS = 30_000;
@@ -125,7 +126,7 @@ export default function Models() {
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
                                 <A
-                                  href={resultsHref({ model: row.model, effort: row.effort, episode: t })}
+                                  href={runsHref({ model: row.model, effort: row.effort, episode: t })}
                                 >
                                   {countedOf(st())}
                                 </A>

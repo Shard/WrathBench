@@ -1,10 +1,9 @@
 /**
- * The results grouping and the ladder derivation.
+ * The ladder derivation.
  *
  * What matters here is what the release page is allowed to claim: unscorable
- * runs never enter a group, effort splits a model into two rows rather than
- * being averaged away, a group with zero successes still appears, and a rung
- * nothing records reads as "not instrumented" instead of being approximated.
+ * runs never enter a row, and a rung nothing records reads as "not
+ * instrumented" instead of being approximated.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -14,11 +13,9 @@ import {
   RUNGS,
   byCharacter,
   characterOptions,
-  groupsForLevel,
   ladderRows,
-  markAtLeast,
   scored,
-} from "../src/lib/results";
+} from "../src/lib/ladder";
 import { episodeParam } from "../src/lib/episodes";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
@@ -70,102 +67,10 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
   };
 }
 
-describe("scored / markAtLeast", () => {
+describe("scored", () => {
   test("anything with a reason is out", () => {
     const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "unscored (scripted stub)" })];
     expect(scored(rows).map((r) => r.runId)).toEqual(["a"]);
-  });
-
-  test("a level is credited by the first mark at or above it", () => {
-    const r = run({ levels: [mark(2, 1, 10), mark(7, 9, 90)] });
-    expect(markAtLeast(r, 5)?.level).toBe(7);
-    expect(markAtLeast(r, 8)).toBeNull();
-  });
-});
-
-describe("groupsForLevel", () => {
-  test("groups by model, harness and effort, and reports best and median", () => {
-    const rows = [
-      run({ runId: "a", levels: [mark(5, 10, 1000)] }),
-      run({ runId: "b", levels: [mark(5, 20, 3000)] }),
-      run({ runId: "c", levels: [mark(5, 30, 5000)] }),
-      run({ runId: "d", model: "other", levels: [mark(5, 4, 400)] }),
-    ];
-    const groups = groupsForLevel(rows, 5);
-    expect(groups.map((g) => g.model)).toEqual(["other", "m"]); // fastest leads
-    const m = groups.find((g) => g.model === "m")!;
-    expect(m.attempts).toBe(3);
-    expect(m.bestTurn).toBe(10);
-    expect(m.medianTurn).toBe(20);
-    expect(m.bestMs).toBe(1000);
-    expect(m.reached[0]!.runId).toBe("a");
-  });
-
-  test("effort is a dimension, not an average (ADR-0024)", () => {
-    const groups = groupsForLevel(
-      [
-        run({ runId: "lo", effort: "low", levels: [mark(5, 50, 5)] }),
-        run({ runId: "hi", effort: "high", levels: [mark(5, 5, 1)] }),
-      ],
-      5,
-    );
-    expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.effort)).toEqual(["high", "low"]);
-  });
-
-  test("the wiki-coordinates tier is a dimension (ADR-0028)", () => {
-    const groups = groupsForLevel(
-      [
-        run({ runId: "names", wikiCoords: false, levels: [mark(5, 50, 5)] }),
-        run({ runId: "coords", wikiCoords: true, levels: [mark(5, 5, 1)] }),
-        run({ runId: "old", wikiCoords: null, levels: [mark(5, 7, 2)] }),
-      ],
-      5,
-    );
-    expect(groups).toHaveLength(3);
-    expect(groups.map((g) => g.wikiCoords)).toEqual([true, null, false]);
-  });
-
-  test("the harness is a tag on the group, not part of its key (ADR-0035)", () => {
-    const groups = groupsForLevel(
-      [
-        run({ runId: "w", harness: "wrathbench", levels: [mark(5, 10, 5)] }),
-        run({ runId: "c", harness: "claude-code", levels: [mark(5, 2, 1)] }),
-        run({ runId: "u", harness: null, levels: [mark(5, 7, 2)] }),
-      ],
-      5,
-    );
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.attempts).toBe(3);
-    expect(groups[0]!.harnesses).toEqual(["claude-code", "harness?", "wrathbench"]);
-    const rows = ladderRows([
-      run({ runId: "w", harness: "wrathbench", levels: [mark(5, 10, 5)] }),
-      run({ runId: "c", harness: "claude-code", levels: [mark(5, 2, 1)] }),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.harnesses).toEqual(["claude-code", "wrathbench"]);
-  });
-
-  test("a group that never reached the level is still reported", () => {
-    const groups = groupsForLevel([run({ levels: [mark(3, 4, 40)] })], 10);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.attempts).toBe(1);
-    expect(groups[0]!.reached).toEqual([]);
-    expect(groups[0]!.bestTurn).toBeNull();
-  });
-
-  test("unscorable runs never enter a group", () => {
-    const groups = groupsForLevel(
-      [run({ unscored: "unscored (operator objective)", levels: [mark(5, 1, 1)] })],
-      5,
-    );
-    expect(groups).toEqual([]);
-  });
-
-  test("a run with no turn index still contributes its time", () => {
-    const g = groupsForLevel([run({ levels: [mark(5, null, 900)] })], 5)[0]!;
-    expect(g.bestTurn).toBeNull();
-    expect(g.bestMs).toBe(900);
   });
 });
 
@@ -203,24 +108,6 @@ describe("ladderRows", () => {
   });
 });
 
-describe("series grouping (ADR-0034)", () => {
-  test("two builds in one series share a row and the row lists both; a minor bump is its own row", () => {
-    const rows = [
-      run({ runId: "a", harnessVersion: "harness-0.3-10-gaaa", harnessSeries: "0.3", levels: [mark(5, 10, 1000)] }),
-      run({ runId: "b", harnessVersion: "harness-0.3-12-gbbb-dirty", harnessSeries: "0.3", levels: [mark(5, 8, 900)] }),
-      run({ runId: "c", harnessVersion: "harness-0.2-33-gccc", harnessSeries: "0.2", levels: [mark(5, 4, 400)] }),
-      run({ runId: "d", harnessVersion: "gdead", harnessSeries: null }),
-    ];
-    const groups = groupsForLevel(rows, 5).sort((x, y) => x.harnessVersion.localeCompare(y.harnessVersion));
-    expect(groups.map((g) => [g.harnessVersion, g.attempts, g.harnessVersions])).toEqual([
-      ["0.2", 1, ["harness-0.2-33-gccc"]],
-      ["0.3", 2, ["harness-0.3-10-gaaa", "harness-0.3-12-gbbb-dirty"]],
-      ["gdead", 1, ["gdead"]],
-    ]);
-    expect(groups[1]!.bestTurn).toBe(8);
-  });
-});
-
 describe("the character filter (ADR-0034's extras cycle)", () => {
   const rows = [
     run({ runId: "base", levels: [mark(5, 10, 1000)] }),
@@ -239,17 +126,6 @@ describe("the character filter (ADR-0034's extras cycle)", () => {
   test("a chip narrows to that character and drops the unrecorded ones rather than guessing", () => {
     expect(byCharacter(rows, "Dwarf Hunter").map((r) => r.runId)).toEqual(["extra"]);
     expect(byCharacter(rows, "Human Paladin").map((r) => r.runId)).toEqual(["base"]);
-  });
-
-  test("character is a label, never a group key: one row holds both, and says which", () => {
-    const groups = groupsForLevel(rows, 5);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.attempts).toBe(3);
-    expect(groups[0]!.characters).toEqual(["Dwarf Hunter", "Human Paladin"]);
-    // Filtered, the same call yields the one character's row alone.
-    const dwarf = groupsForLevel(byCharacter(rows, "Dwarf Hunter"), 5);
-    expect(dwarf[0]!.characters).toEqual(["Dwarf Hunter"]);
-    expect(dwarf[0]!.bestTurn).toBe(4);
   });
 
   test("a ladder row labels the characters its model was played on", () => {

@@ -37,26 +37,26 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 | route | what |
 | --- | --- |
 | `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
-| `/episodes` | the tiers, and every run recorded against one — the per-run grain |
-| `/results` | what a level costs, per model per harness series |
+| `/episodes` | the tiers: what each id fixes, and how many runs sit against it |
+| `/runs` | every run, as a sortable table — the per-run grain (ADR-0047); `/results` redirects here |
 | `/ladder` | the rungs each model has reached (ADR-0018) |
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models (ADR-0041) |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 
-One page per grain (ADR-0022 amendment, 2026-08-23): the fleet page is what is
-running *now* and links to a run, never listing them; `/episodes` is the runs;
-`/results` and `/ladder` are aggregates over them, and a results row links to
-the runs behind it.
+One page per grain (ADR-0022 amendment, ADR-0047): the fleet page is what is
+running *now* and links to a run, never listing them; `/runs` is the runs;
+`/episodes` is the tiers; `/ladder` is aggregates over runs, and a tier's count
+links to the runs behind it.
 
 ## The series selector
 
 The harness series (`major.minor`) is the comparability group, so every page
 that shows runs is a view of one. There is one selector for all of them, in the
 top bar (ADR-0046) — `all`, `latest`, then each series with runs, descending —
-and it filters `/episodes`, `/ladder` and the live agents on `/map` (the runs
-grain inherits it when `/runs` lands). `latest` is stored as the token, so it
+and it filters `/runs`, `/ladder` and the live agents on `/map`; `/episodes`
+lists no runs, so it has nothing to filter. `latest` is stored as the token, so it
 follows a minor bump. The choice
 rides in `?series=` and in `localStorage`; the URL wins, so a shared link means
 what its sender saw.

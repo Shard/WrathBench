@@ -34,8 +34,8 @@ export function Layout(props: ParentProps) {
           <A href="/map" activeClass="on">
             map
           </A>
-          <A href="/results" activeClass="on">
-            results
+          <A href="/runs" activeClass="on">
+            runs
           </A>
           <A href="/ladder" activeClass="on">
             ladder

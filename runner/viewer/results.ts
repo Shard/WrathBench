@@ -298,6 +298,8 @@ export function resultRunOf(
     episodeOverride: ep.override,
     unscored: unscoredReason(run),
     startedAt: run.startedAt,
+    endedAt: run.endedAt,
+    live: run.live,
     terminationReason: run.terminationReason,
     levels,
     maxLevel,

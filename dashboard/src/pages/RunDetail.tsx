@@ -13,7 +13,7 @@
  * docs/FOLLOW-UPS.md).
  */
 
-import { A, useParams } from "@solidjs/router";
+import { A, useLocation, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
@@ -66,6 +66,7 @@ const DETAIL_POLL_MS = 10_000;
 
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
+  const location = useLocation();
 
   /* Which worldserver the viewer can see, for the footer (FOLLOW-UPS 42). */
   const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
@@ -231,6 +232,10 @@ export default function RunDetail() {
             <>
               <h2 class="section">
                 <A href="/">fleet</A> / {run().runId}
+                {/* Back to the runs table, with the sort and filters the reader came from. */}
+                <A class="dim" style={{ "margin-left": "12px", "font-size": "13px", "font-weight": "normal" }} href={`/runs${location.search}`}>
+                  ← runs
+                </A>
               </h2>
 
               {/* Cumulative XP with level bands — full page width, above both columns. */}

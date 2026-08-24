@@ -141,6 +141,11 @@ tbody tr:hover { background: var(--panel); }
 .progress { font-size: 11px; margin-left: 6px; }
 
 tbody tr.clickable { cursor: pointer; }
+/* The runs spreadsheet: every header sorts, and the sorted one says which way. */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--fg); }
+th.sorted { color: var(--fg); }
+.sortmark { margin-left: 4px; font-size: 9px; }
 
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
