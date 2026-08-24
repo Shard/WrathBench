@@ -228,6 +228,9 @@ describe("resultRunOf", () => {
   test("the listing facts ride on the row, and default to null when not supplied", () => {
     const bare = resultRunOf(run({ character: "Fixturely", pauseReason: "quota-exhausted" }), [], []);
     expect(bare.character).toBe("Fixturely");
+    // The runs page's status column reads these; they are the listing's own, not recomputed.
+    expect(bare.live).toBe(false);
+    expect(bare.endedAt).toBe(run().endedAt);
     expect(bare.pauseReason).toBe("quota-exhausted");
     expect(bare.playtimeMs).toBeNull();
     expect(bare.tokens).toBeNull();

@@ -849,7 +849,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     if (path === "/api/campaigns") return await campaignsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
-     * derivation stays client-side (`dashboard/src/lib/results.ts`, where its rung
+     * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its rung
      * rules and their tests already live); the route exists so the episode
      * filter has one spelling per page rather than the ladder page having to
      * know it is really asking the results endpoint.

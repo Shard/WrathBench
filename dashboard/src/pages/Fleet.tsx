@@ -113,7 +113,7 @@ export default function Fleet() {
                 </table>
               </div>
               <p class="dim">
-                <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
+                <A href="/runs">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
                 <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
 

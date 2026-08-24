@@ -825,6 +825,14 @@ export interface ResultRun {
   /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
   unscored: string | null;
   startedAt: number | null;
+  /**
+   * The listing's own reading of whether the file is still being written, and
+   * when the run ended (ADR-0047's status column). Optional: a dashboard built
+   * against a viewer that predates them must still work, and reads the
+   * recorded reasons instead.
+   */
+  endedAt?: number | null;
+  live?: boolean;
   terminationReason: string | null;
   levels: LevelMark[];
   maxLevel: number | null;

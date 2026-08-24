@@ -1,0 +1,272 @@
+/**
+ * Runs: every run the viewer knows about, as a spreadsheet (ADR-0047).
+ *
+ * One page per grain (ADR-0022 amendment): the fleet page is what is running
+ * *now*, the ladder is aggregates over runs, and this is the runs — probe,
+ * campaign, freeplay, scored, live, paused, ended, on any harness series the
+ * shell's selector admits. It opens on all of them, newest first, and the
+ * reader sorts by clicking a header. The sort and every filter live in the URL
+ * so a view can be handed to someone else; a row links to the run page, which
+ * links back here with the same query.
+ *
+ * Nothing is decided here. Scorability, tier membership and the series arrive
+ * decided on each row from `/api/results`, asked for with every filter lifted
+ * (`episode=all`, overrides included) because an inventory that hides a run is
+ * not an inventory. The only narrowing left is the shell's series selector,
+ * which says what it removed, and the URL's own filters, which say the same.
+ *
+ * Filters are not a picker wall: a value in the table is a link that narrows
+ * to it, and one line says what the view is narrowed to and how to clear it.
+ */
+
+import { A, useSearchParams } from "@solidjs/router";
+import { For, Show, createMemo } from "solid-js";
+import { api, type ResultRun, type ResultsResponse } from "../api/client";
+import { HarnessTag } from "../components/EpisodePicker";
+import { SeriesFilterNote } from "../components/SeriesSelect";
+import { useFeeds } from "../lib/feeds";
+import { fmtDuration, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
+import { filterBySeries, pageSeries } from "../lib/harness";
+import {
+  COLUMN_TITLES,
+  RUN_COLUMNS,
+  columnClass,
+  costOf,
+  filterLabel,
+  filterParams,
+  filterRuns,
+  isFiltered,
+  kindOf,
+  nextSort,
+  sortParam,
+  sortQuery,
+  sortRuns,
+  statusOf,
+  statusText,
+  turnsOf,
+  type RunColumn,
+  type RunSort,
+} from "../lib/runs";
+import { poll } from "../lib/poll";
+
+/** A live run's level and duration move; the roster of runs moves when one starts or ends. */
+const POLL_MS = 15_000;
+
+export default function Runs() {
+  const [params, setParams] = useSearchParams();
+  const sort = (): RunSort => sortParam(params.sort, params.dir);
+  const filter = createMemo(() => filterParams(params));
+  const feed = poll(() => api.results("all", true, "all"), POLL_MS);
+  const body = (): ResultsResponse | undefined => feed.latest;
+
+  // The shell's harness series (ADR-0046): the one filter this page does not own.
+  const feeds = useFeeds();
+  const served = (): ResultRun[] => body()?.runs ?? [];
+  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
+  const inSeries = (): ResultRun[] => filterBySeries(served(), series());
+  const rows = createMemo(() => sortRuns(filterRuns(inSeries(), filter()), sort()));
+
+  const setSort = (column: RunColumn): void => setParams(sortQuery(nextSort(sort(), column)), { replace: true });
+  const clear = (): void =>
+    setParams({ model: null, effort: null, episode: null, harness: null, character: null, campaign: null }, { replace: true });
+  /*
+   * The query a row carries to the run page, so its "← runs" comes back to this
+   * exact view. The location's own search string, verbatim: the run page reads
+   * no params of its own, and rebuilding the query here would be a second
+   * spelling of it.
+   */
+  const query = (): string => (typeof window === "undefined" ? "" : window.location.search);
+  const live = createMemo(() => rows().filter((r) => statusOf(r) === "live").length);
+
+  return (
+    <div class="page">
+      <Show when={feed.error !== undefined}>
+        <div class="banner bad">{String(feed.error)}</div>
+      </Show>
+
+      <h2 class="section">runs</h2>
+      <p class="dim">
+        Every recorded run, newest first. Click a header to sort; click a model, tier, character or
+        kind to narrow to it. Aggregates are the <A href="/ladder">ladder</A>; what the tiers mean
+        is on <A href="/episodes">episodes</A>. A launch that never produced a model response is
+        archived by the runner as it exits and never reaches this table.
+      </p>
+
+      <SeriesFilterNote series={series()} filteredOut={served().length - inSeries().length} />
+
+      <Show when={isFiltered(filter())}>
+        <p class="dim">
+          Filtered to <span class="mono">{filterLabel(filter())}</span> ({rows().length} of{" "}
+          {inSeries().length} runs){" "}
+          <button class="toggle" onClick={clear}>
+            clear
+          </button>
+        </p>
+      </Show>
+
+      <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+        <p class="dim">
+          {rows().length} run{rows().length === 1 ? "" : "s"}
+          <Show when={live() > 0}> · {live()} live</Show>
+          {" · sorted by "}
+          <span class="mono">
+            {sort().column} {sort().dir}
+          </span>
+        </p>
+        <div class="scroller">
+          <table class="runs">
+            <thead>
+              <tr>
+                <For each={RUN_COLUMNS}>
+                  {(c) => (
+                    <th
+                      class={`sortable ${columnClass(c)}${sort().column === c ? " sorted" : ""}`}
+                      title={COLUMN_TITLES[c] ?? `sort by ${c}`}
+                      onClick={() => setSort(c)}
+                    >
+                      {c}
+                      <Show when={sort().column === c}>
+                        <span class="sortmark">{sort().dir === "asc" ? "▲" : "▼"}</span>
+                      </Show>
+                    </th>
+                  )}
+                </For>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={rows()}>{(r) => <RunRowView row={r} query={query()} />}</For>
+              <Show when={rows().length === 0}>
+                <tr>
+                  <td colSpan={RUN_COLUMNS.length} class="dim">
+                    No runs match.
+                  </td>
+                </tr>
+              </Show>
+            </tbody>
+          </table>
+        </div>
+        <p class="dim">
+          Duration is active time: stretches between a pause and its resume are not charged. Cost is
+          the <em>actual</em> figure — what the provider reported billing — and is blank wherever
+          nothing was reported rather than showing the price table's estimate; the estimate is on
+          the run page, next to the actual. Turns are the driver turns the provider reported usage
+          for, or model responses where it reported none.
+        </p>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * One run. Every cell is rendered off `RUN_COLUMNS`, so a column cannot exist
+ * in the header and not here: that drift is what the constant exists to stop.
+ */
+function RunRowView(props: { row: ResultRun; query: string }) {
+  const r = (): ResultRun => props.row;
+  const href = (): string => `/run/${encodeURIComponent(r().runId)}${props.query}`;
+  const narrow = (patch: Record<string, string>): string => {
+    const q = new URLSearchParams(props.query);
+    q.delete("effort");
+    for (const [k, v] of Object.entries(patch)) q.set(k, v);
+    return `/runs?${q.toString()}`;
+  };
+  const cell = (c: RunColumn) => {
+    switch (c) {
+      case "started":
+        return (
+          <td class="dim" title={stamp(r().startedAt)}>
+            {fmtWhen(r().startedAt)}
+          </td>
+        );
+      case "run":
+        return (
+          <td>
+            <A href={href()}>{r().runId}</A>
+          </td>
+        );
+      case "model":
+        return (
+          <td>
+            <Show when={r().model !== null} fallback="—">
+              <A
+                href={narrow(r().effort === null ? { model: r().model! } : { model: r().model!, effort: r().effort! })}
+                title="narrow to this model"
+              >
+                {r().model}
+              </A>
+            </Show>
+          </td>
+        );
+      case "harness":
+        return (
+          <td>
+            <HarnessTag harness={r().harness} />
+            <Show when={r().harnessVersion !== null}>
+              {" "}
+              <span class="dim mono" title={r().harnessVersion ?? ""}>
+                {r().harnessSeries ?? shortHarness(r().harnessVersion)}
+              </span>
+            </Show>
+          </td>
+        );
+      case "effort":
+        return <td class="dim">{r().effort ?? "—"}</td>;
+      case "kind":
+        return (
+          <td class="dim" title={r().unscored ?? ""}>
+            <Show when={r().campaign !== null} fallback={kindOf(r())}>
+              <A href={narrow({ campaign: r().campaign! })} title="narrow to this campaign">
+                {kindOf(r())}
+              </A>
+            </Show>
+          </td>
+        );
+      case "episode":
+        return (
+          <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled (ADR-0030)" : ""}>
+            <Show when={r().episode !== null} fallback="—">
+              <A href={narrow({ episode: r().episode! })} title="narrow to this tier">
+                {r().episode}
+              </A>
+            </Show>
+            <Show when={r().episodeSource === "derived"}> (labeled)</Show>
+            <Show when={r().episodeOverride}>
+              {" "}
+              <span class="warn" title="stamped with this tier but given a leash it does not describe">
+                overridden
+              </span>
+            </Show>
+          </td>
+        );
+      case "character":
+        return (
+          <td class="dim" title={r().character ?? "character name not recorded"}>
+            <Show when={r().characterLabel !== null} fallback={r().character ?? "—"}>
+              <A href={narrow({ character: r().characterLabel! })} title="narrow to this race and class">
+                {r().characterLabel}
+              </A>
+            </Show>
+          </td>
+        );
+      case "status":
+        return (
+          <td class={statusOf(r()) === "ended" ? "dim" : statusOf(r()) === "live" ? "ok" : "warn"}>
+            {statusText(r())}
+          </td>
+        );
+      case "level":
+        return <td class="right mono">{num(r().maxLevel)}</td>;
+      case "turns":
+        return <td class="right mono dim">{num(turnsOf(r()))}</td>;
+      case "duration":
+        return <td class="right mono dim">{fmtDuration(r().playtimeMs)}</td>;
+      case "cost":
+        return (
+          <td class="right mono dim" title={r().actualCost?.note ?? "no cost recorded for this run"}>
+            {costOf(r()) === null ? "—" : fmtUsd(costOf(r()))}
+          </td>
+        );
+    }
+  };
+  return <tr>{RUN_COLUMNS.map(cell)}</tr>;
+}

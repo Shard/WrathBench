@@ -7,7 +7,7 @@
  * page, not in a footnote.
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
- * derivation over recorded signals, versioned with `lib/results.ts` (ADR-0018
+ * derivation over recorded signals, versioned with `lib/ladder.ts` (ADR-0018
  * amendment). The two tie-breaks are printed in their own columns so the order
  * is legible rather than mysterious, and neither is added to anything: there is
  * no aggregate score.
@@ -23,11 +23,9 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
-import { SeriesFilterNote } from "../components/SeriesSelect";
+import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { episodeParam, harnessParam } from "../lib/episodes";
-import { useFeeds } from "../lib/feeds";
-import { filterBySeries, pageSeries } from "../lib/harness";
-import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/results";
+import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/ladder";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -39,16 +37,16 @@ export default function Ladder() {
   const overrides = (): boolean => params.overrides === "1";
   const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
-  // client-side, in `lib/results.ts`, where their tests are.
+  // client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode(), overrides(), harness()), POLL_MS);
   createEffect(on([episode, overrides, harness], () => feed.refresh(), { defer: true }));
   const body = (): ResultsResponse | undefined => feed.latest;
   // The shell's harness series (ADR-0046), applied before anything else reads
   // the rows: a rung reached on 0.4 is not evidence about 0.5.
-  const feeds = useFeeds();
   const served = (): ResultRun[] => body()?.runs ?? [];
-  const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
-  const all = (): ResultRun[] => filterBySeries(served(), series());
+  const seriesFilter = useSeriesFilter(served);
+  const series = seriesFilter.series;
+  const all = seriesFilter.kept;
   /*
    * The starting character (ADR-0034's extras cycle) narrows the rungs; it is
    * never a row key. A model's row is its best run whatever it was played on,
@@ -80,7 +78,7 @@ export default function Ladder() {
         onOverridesChange={(v) => setParams({ overrides: v ? "1" : null }, { replace: true })}
       />
       <HarnessPicker value={harness()} onChange={(v) => setParams({ harness: v === "all" ? null : v }, { replace: true })} />
-      <SeriesFilterNote series={series()} filteredOut={served().length - all().length} />
+      <SeriesFilterNote series={series()} filteredOut={seriesFilter.filteredOut()} />
 
       <Show when={characters().length > 0}>
         <div class="chips">
