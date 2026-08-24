@@ -169,16 +169,6 @@ status.
     openai-compatible path (or hoist it into the loop so both drivers share it).
     Matters most for the local box, whose turns are inference-bound and slow.
 
-78. **deepseek's prompt-cache hits thrash on the paid lane** (2026-08-24, same
-    sweep). `usage.cached_tokens` alternates 0 <-> 5-13k across near-identical
-    ~13-17k-token prompts, and `prompt_tokens` drops mid-run consistent with a
-    context trim resetting the prefix — a ~2x per-call cost swing. Absolute cost
-    is small today (~$0.05/35min, on the ~$0.07 episode estimate), which is why
-    this is a follow-up: measure whether the trim boundary can preserve the
-    prefix before the next paid tier expansion. The cache-review note assumed
-    "OpenAI lane prefix stable"; this run says otherwise for deepseek via
-    OpenRouter (provider routing may also explain it — distinguish first).
-
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
     audit). `openSocket()` (`sdk/src/events.ts`) puts no timeout of its own around the
     WebSocket construction, so one stalled TCP/WS handshake during a reconnect silently

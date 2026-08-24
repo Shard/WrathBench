@@ -443,7 +443,7 @@ describe("OpenAiChatAdapter budget pauses", () => {
     const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
     await expect(
       adapterPlaying([status(200, errBody), status(200, errBody)]).complete(req),
-    ).rejects.toThrow(/after 2 attempts/);
+    ).rejects.toThrow(/after 2 attempt\(s\)/);
   });
 
   test("persistent HTTP 500s pause as rate-limited instead of terminating", async () => {
@@ -471,6 +471,38 @@ describe("OpenAiChatAdapter budget pauses", () => {
       status(429, "slow down"),
     ]).complete(req);
     expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
+  });
+
+  test("the retry budget stops the loop long before the idle watchdog could blame the model", async () => {
+    // Ten attempts is the right patience for FAST failures; with each attempt
+    // eating a 60s request timeout it would spend 10+ minutes inside one
+    // complete(), where no watchdog can see it, and the idle watchdog would
+    // then kill the run as the model's fault. The wall-clock budget cuts it
+    // off: two 60s timeouts and ~1s of backoff blow a 100s budget, so the
+    // third attempt never starts and the outcome is the same resumable pause.
+    let t = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: 10,
+      retryBudgetMs: 100_000,
+      now: () => t,
+      sleep: (ms) => {
+        t += ms;
+        return Promise.resolve();
+      },
+      fetchImpl: Object.assign(
+        (): Promise<Response> => {
+          t += 60_000; // the request timeout, spent on the wire
+          return Promise.reject(new Error("The operation timed out."));
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+    });
+    const out = await adapter.complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.detail).toContain("persistent network failure after 2 attempt(s)");
   });
 
   // "network failures with no 4xx anywhere are still a hard error" was pinned
