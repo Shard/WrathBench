@@ -17,6 +17,9 @@
   --warn: #e0af68;
   --grid: #1a1d22;
   --gridline: #23272e;
+  /* Claude's own orange, so the claude-code harness tag reads as itself rather
+     than as one more accent-coloured badge. */
+  --claude: #da7756;
 }
 
 @media (prefers-color-scheme: light) {
@@ -32,6 +35,8 @@
     --warn: #8a5d00;
     --grid: #e9ebef;
     --gridline: #d5d9e0;
+    /* Darkened for a light background: #da7756 is too pale for an 11px badge. */
+    --claude: #b4522f;
   }
 }
 
@@ -123,7 +128,7 @@ tbody tr:hover { background: var(--panel); }
 .badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
 /* Harness tags (ADR-0035): a label, not a verdict. */
 .badge.harness-wrathbench { color: var(--dim); }
-.badge.harness-claude-code { color: var(--accent); border-color: var(--accent); }
+.badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
 .badge.harness-unknown { opacity: .6; }
 /* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
 .progress { font-size: 11px; margin-left: 6px; }
