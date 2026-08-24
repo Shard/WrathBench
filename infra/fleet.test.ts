@@ -1116,7 +1116,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     jobs,
     roster,
     policy: DEFAULT_POLICY,
-    accounts: { pinned: Object.fromEntries(jobs.filter((j) => j.account !== undefined).map((j) => [j.account!, j.name])), pool: ["RUNNER3", "RUNNER4"], paid: [] },
+    accounts: { pinned: Object.fromEntries(jobs.filter((j) => j.account !== undefined).map((j) => [j.account!, j.name])), pool: ["RUNNER3", "RUNNER4"], paid: [], local: [] },
   });
   const held = (): string | undefined => undefined;
 

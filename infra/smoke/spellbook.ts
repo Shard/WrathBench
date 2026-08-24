@@ -34,7 +34,7 @@ const BASE = `http://${HOST}:${PORT}`;
 const WS = `ws://${HOST}:${PORT}`;
 
 const TOKEN = `probe-spellbook-${crypto.randomUUID()}`;
-const CHARACTER = "Bp" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]).slice(-8);
+const CHARACTER = "Bp" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const SEAL_OF_RIGHTEOUSNESS = 21084;
