@@ -92,6 +92,20 @@ export function resolveSeries(choice: SeriesChoice, available: readonly string[]
   return available.includes(choice) ? choice : latestSeries(available);
 }
 
+/**
+ * The choice the control should *display*, which is not always the one stored.
+ *
+ * A link to `?series=0.3` opened when no run carries 0.3 resolves to `latest`
+ * (see `resolveSeries`), and a control still reading "0.3" over a page showing
+ * 0.5 would be lying about what the reader is looking at. An empty list is
+ * "availability not known yet", where the link is taken at its word.
+ */
+export function displayedChoice(choice: SeriesChoice, available: readonly string[]): SeriesChoice {
+  if (choice === SERIES_ALL || choice === SERIES_LATEST) return choice;
+  if (available.length === 0) return choice;
+  return available.includes(choice) ? choice : SERIES_LATEST;
+}
+
 export interface SeriesOption {
   value: SeriesChoice;
   label: string;

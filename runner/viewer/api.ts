@@ -213,8 +213,15 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
   return id;
 }
 
-/** How long one series census stands in for the next. */
-export const SERIES_CACHE_MS = 30_000;
+/**
+ * How long one series census stands in for the next.
+ *
+ * Minutes, not seconds: a new series appears on a deploy, never on a tick, and
+ * the census opens the run metadata for every run on disk. `/api/info` is the
+ * route every open tab polls — the one whose build id is already memoised for
+ * exactly that reason.
+ */
+export const SERIES_CACHE_MS = 300_000;
 
 /**
  * The harness series present in the run directory, newest first, with counts.

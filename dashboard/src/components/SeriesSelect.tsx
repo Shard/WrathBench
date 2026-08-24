@@ -12,22 +12,34 @@
 
 import { For, Show } from "solid-js";
 import { useFeeds } from "../lib/feeds";
-import { type SeriesChoice, seriesOptions } from "../lib/harness";
+import { type SeriesChoice, displayedChoice, seriesOptions } from "../lib/harness";
 
 export function SeriesSelect() {
   const feeds = useFeeds();
+  // What the control shows: a stale link naming a series no run carries
+  // resolves to `latest`, and the control has to say so rather than the number.
+  const shown = (): SeriesChoice => displayedChoice(feeds.seriesChoice(), feeds.seriesAvailable());
   return (
     <label
       class="series"
       title="Harness series (ADR-0034): the comparability group every page filters to. `latest` follows the newest series rather than pinning to it."
     >
       <span class="dim">series</span>
-      <select
-        value={feeds.seriesChoice()}
-        onChange={(e) => feeds.setSeriesChoice(e.currentTarget.value as SeriesChoice)}
-      >
-        <For each={seriesOptions(feeds.seriesAvailable(), feeds.seriesChoice())}>
-          {(o) => <option value={o.value}>{o.label}</option>}
+      {/*
+        * `selected` on each option rather than `value` on the select alone:
+        * `<For>` disposes and recreates every option when the series list
+        * arrives on a poll, and a select whose options are all replaced resets
+        * to the first one — the choice has not changed, so nothing re-runs to
+        * put it back. The attribute makes the DOM say which one is current, and
+        * makes it checkable without a scripted browser.
+        */}
+      <select onChange={(e) => feeds.setSeriesChoice(e.currentTarget.value as SeriesChoice)}>
+        <For each={seriesOptions(feeds.seriesAvailable(), shown())}>
+          {(o) => (
+            <option value={o.value} selected={o.value === shown()}>
+              {o.label}
+            </option>
+          )}
         </For>
       </select>
     </label>

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   compareSeriesDesc,
+  displayedChoice,
   filterBySeries,
   latestSeries,
   pageSeries,
@@ -161,6 +162,25 @@ describe("pageSeries — degrading against a viewer that predates /api/info's li
 
   test("with neither source there is nothing to filter to", () => {
     expect(pageSeries("latest", [], [])).toBeNull();
+  });
+});
+
+describe("displayedChoice — the control may not say 0.3 over a page showing 0.5", () => {
+  test("all and latest display themselves", () => {
+    expect(displayedChoice("all", ["0.5"])).toBe("all");
+    expect(displayedChoice("latest", ["0.5"])).toBe("latest");
+  });
+
+  test("an available series displays itself", () => {
+    expect(displayedChoice("0.4", ["0.5", "0.4"])).toBe("0.4");
+  });
+
+  test("a series no run carries displays as latest — which is what it resolves to", () => {
+    expect(displayedChoice("0.3", ["0.5", "0.4"])).toBe("latest");
+  });
+
+  test("an empty list is `not known yet`, and the link is taken at its word", () => {
+    expect(displayedChoice("0.3", [])).toBe("0.3");
   });
 });
 
