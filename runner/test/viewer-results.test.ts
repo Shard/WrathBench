@@ -17,6 +17,7 @@ import {
   trackFrom,
   turnsUsable,
   unscoredReason,
+  xpEarned,
 } from "../viewer/results";
 
 function state(p: Partial<StatePoint> & { ts: number }): StatePoint {
@@ -243,6 +244,25 @@ describe("resultRunOf", () => {
     });
     expect(listed.playtimeMs).toBe(60_000);
     expect(listed.actualCost?.usd).toBe(0.5);
+    // The expected figure is its own field, and null from a caller that predates it.
+    expect(listed.expectedCost).toBeNull();
+    const priced = resultRunOf(run(), [], [], null, {
+      playtimeMs: null,
+      tokens: null,
+      actualCost: null,
+      expectedCost: { usd: 0, basis: "list-price", asIfMetered: true, breakdown: null, priceId: "free", asOf: "2026-08-22", note: "free tier" },
+    });
+    expect(priced.expectedCost?.usd).toBe(0);
+    expect(priced.expectedCost?.asIfMetered).toBe(true);
+  });
+
+  test("xpEarned rides on the row as the run page's lower bound", () => {
+    const e = resultRunOf(run(), [
+      state({ ts: 1000, level: 1, xp: 300 }),
+      state({ ts: 2000, level: 2, xp: 50 }),
+    ], []);
+    expect(e.xpEarned).toBe(350);
+    expect(resultRunOf(run(), [], []).xpEarned).toBeNull();
   });
 
   test("falls back to the run's own level when no sample carried one", () => {
@@ -268,5 +288,25 @@ describe("resultRunOf", () => {
     expect(e.maxLevel).toBe(3);
     expect(e.xp).toBe(55);
     expect(resultRunOf(run({ level: 2, xp: 55 }), [state({ ts: 1000, level: 3 })], []).xp).toBeNull();
+  });
+});
+
+describe("xpEarned", () => {
+  test("sums the last observed xp of every level below, plus the xp within the top one", () => {
+    const states = [
+      state({ ts: 1, level: 1, xp: 100 }),
+      state({ ts: 2, level: 1, xp: 350 }),
+      state({ ts: 3, level: 2, xp: 20 }),
+      state({ ts: 4, level: 2, xp: 400 }),
+      state({ ts: 5, level: 4, xp: 10 }), // a two-level jump between samples: one fold, never an invented level
+    ];
+    expect(xpEarned(states)).toBe(350 + 400 + 10);
+  });
+
+  test("reads level and xp off the same sample, sorts by time, and never dips", () => {
+    expect(xpEarned([state({ ts: 2, level: 2, xp: 5 }), state({ ts: 1, level: 1, xp: 90 })])).toBe(95);
+    expect(xpEarned([state({ ts: 1, level: 1, xp: 90 }), state({ ts: 2, level: 1, xp: 40 })])).toBe(90);
+    expect(xpEarned([state({ ts: 1, level: 1 }), state({ ts: 2, xp: 40 })])).toBeNull();
+    expect(xpEarned([])).toBeNull();
   });
 });

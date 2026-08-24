@@ -152,6 +152,37 @@ export function xpAtLevel(states: readonly StatePoint[], level: number): number 
 }
 
 /**
+ * XP earned over a run, as a lower bound (`ResultRun.xpEarned`).
+ *
+ * The within-level xp resets at every ding, so the total carried into a level
+ * is reconstructed as the sum of the *last observed* xp of every level below
+ * it — the same rule the run page's cumulative chart applies
+ * (`dashboard/src/lib/runview.ts`), so the two never disagree. Samples are
+ * sorted by time and read only where level and xp ride on the same sample;
+ * the running total is clamped monotonic. Null when no sample qualifies.
+ */
+export function xpEarned(states: readonly StatePoint[]): number | null {
+  const samples = states
+    .filter((s): s is StatePoint & { level: number; xp: number } => s.level !== null && s.level > 0 && s.xp !== null)
+    .sort((a, b) => a.ts - b.ts);
+  if (samples.length === 0) return null;
+  let base = 0;
+  let prevLevel: number | null = null;
+  let lastXp = 0;
+  let cum = 0;
+  for (const s of samples) {
+    if (prevLevel !== null && s.level > prevLevel) {
+      base += lastXp;
+      lastXp = 0;
+    }
+    prevLevel = s.level;
+    lastXp = s.xp;
+    cum = Math.max(cum, base + s.xp);
+  }
+  return cum;
+}
+
+/**
  * Whether a run is a *member* of its episode tier's comparability group.
  *
  * Membership is stamped and un-overridden, and nothing else. ADR-0030: a run
@@ -257,6 +288,8 @@ export function resultRunOf(
     playtimeMs: number | null;
     tokens: TokenTotals | null;
     actualCost: CostFigure | null;
+    /** `CostView.expected`; see `ResultRun.expectedCost`. Absent from older callers. */
+    expectedCost?: CostFigure | null;
   } | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
@@ -304,6 +337,7 @@ export function resultRunOf(
     levels,
     maxLevel,
     xp,
+    xpEarned: xpEarned(states),
     money: run.money,
     questsCompleted: run.questsCompleted,
     maps: mapsOf(states),
@@ -311,6 +345,7 @@ export function resultRunOf(
     playtimeMs: listing?.playtimeMs ?? null,
     tokens: listing?.tokens ?? null,
     actualCost: listing?.actualCost ?? null,
+    expectedCost: listing?.expectedCost ?? null,
     pauseReason: run.pauseReason,
   };
 }

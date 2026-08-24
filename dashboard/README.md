@@ -37,9 +37,9 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 | route | what |
 | --- | --- |
 | `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
-| `/episodes` | the tiers: what each id fixes, and how many runs sit against it |
+| `/episodes` | the tiers: what each id fixes, and how many runs sit against it; a tier's member count leads to its ladder |
 | `/runs` | every run, as a sortable table — the per-run grain (ADR-0047); `/results` redirects here |
-| `/ladder` | the rungs each model has reached (ADR-0018) |
+| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached (ADR-0018) |
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models (ADR-0041) |
 | `/run/:id` | one run, turn by turn, following the file live |
@@ -47,8 +47,9 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 
 One page per grain (ADR-0022 amendment, ADR-0047): the fleet page is what is
 running *now* and links to a run, never listing them; `/runs` is the runs;
-`/episodes` is the tiers; `/ladder` is aggregates over runs, and a tier's count
-links to the runs behind it.
+`/episodes` is the tiers; `/ladder` is aggregates over runs. A tier's member
+count on `/episodes` leads to that tier's ladder, and a point on the ladder's
+chart leads to the runs behind it.
 
 ## The series selector
 
@@ -62,8 +63,11 @@ rides in `?series=` and in `localStorage`; the URL wins, so a shared link means
 what its sender saw.
 
 It is not the `?harness=` filter of ADR-0035, which selects which *loop* owned a
-run (`wrathbench` or `claude-code`). Different dimension, same word; both
-controls exist and compose.
+run (`wrathbench` or `claude-code`). Different dimension, same word. `/runs`
+still filters on it by clicking a cell; the ladder no longer offers it as a
+control (the harness is a tag on each row and a colour on each point, not a
+partition), and offers neither `all` nor overridden runs as an episode choice —
+a rung and a scatter are claims about one comparability group.
 
 `/` and `/models` are not filtered: the fleet is what is running now, and the
 models page is the scheduler's verdict computed against the current series

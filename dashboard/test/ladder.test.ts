@@ -13,10 +13,15 @@ import {
   RUNGS,
   byCharacter,
   characterOptions,
+  ladderChartLayout,
+  ladderPoints,
   ladderRows,
+  niceTicks,
+  runCostReading,
   scored,
+  xpEarnedOf,
 } from "../src/lib/ladder";
-import { episodeParam } from "../src/lib/episodes";
+import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
   return { level, ts: level * 1000, turn, playtimeMs: ms };
@@ -173,12 +178,137 @@ describe("ladder row order", () => {
 });
 
 describe("the shared episode param", () => {
-  test("the default is the page's, so an inventory opens on all and a chart on one tier", () => {
+  test("one tier at a time: e90 by default, a typo or the old `all` falls back visibly", () => {
     expect(episodeParam(undefined)).toBe("e90");
-    expect(episodeParam(undefined, "all")).toBe("all");
-    // A typo in a shared link falls back visibly rather than being sent to the
-    // API, which would answer 400 and blank the page.
-    expect(episodeParam("e42", "all")).toBe("all");
-    expect(episodeParam("e360", "all")).toBe("e360");
+    expect(episodeParam("e360")).toBe("e360");
+    // A typo in a shared link falls back rather than being sent to the API,
+    // which would answer 400 and blank the page.
+    expect(episodeParam("e42")).toBe("e90");
+    // `all` was a choice once; a link that still carries it lands on the default.
+    expect(episodeParam("all")).toBe("e90");
+    expect(EPISODE_CHOICES).not.toContain("all");
+  });
+});
+
+/* ---------------------------------------------------------------- scatter */
+
+const fig = (usd: number | null, basis: "reported" | "list-price" | "none", asIfMetered = false) => ({
+  usd,
+  basis,
+  asIfMetered,
+  breakdown: null,
+  priceId: null,
+  asOf: null,
+  note: "",
+});
+
+describe("runCostReading", () => {
+  test("the provider's figure first, the list price only where there is none", () => {
+    expect(runCostReading({ actualCost: fig(0.5, "reported"), expectedCost: fig(0.4, "list-price") })).toEqual({ usd: 0.5, basis: "reported", asIfMetered: false });
+    expect(runCostReading({ actualCost: fig(null, "none"), expectedCost: fig(0, "list-price", true) })).toEqual({ usd: 0, basis: "list-price", asIfMetered: true });
+    // A reported $0 (a free tier that reports) is a reading, not a blank.
+    expect(runCostReading({ actualCost: fig(0, "reported"), expectedCost: fig(1, "list-price") })?.usd).toBe(0);
+    expect(runCostReading({ actualCost: null, expectedCost: null })).toBeNull();
+    // A viewer that predates `expectedCost`.
+    expect(runCostReading({ actualCost: fig(null, "none") })).toBeNull();
+  });
+});
+
+describe("xpEarnedOf", () => {
+  test("the viewer's lower bound; without it, only a run still on L1 has a known total", () => {
+    expect(xpEarnedOf({ xpEarned: 1234, maxLevel: 3, xp: 4 })).toBe(1234);
+    expect(xpEarnedOf({ xpEarned: null, maxLevel: 1, xp: 40 })).toBeNull();
+    expect(xpEarnedOf({ maxLevel: 1, xp: 40 })).toBe(40);
+    expect(xpEarnedOf({ maxLevel: 3, xp: 40 })).toBeNull();
+  });
+});
+
+describe("ladderPoints", () => {
+  const priced = (p: Partial<ResultRun>): ResultRun =>
+    run({ actualCost: fig(null, "none"), expectedCost: fig(0, "list-price", true), xpEarned: 100, ...p });
+
+  test("one point per (model, effort), both coordinates means over the runs that carry them", () => {
+    const { points, omitted } = ladderPoints([
+      priced({ runId: "a", model: "sonnet", effort: "low", actualCost: fig(1, "reported"), xpEarned: 200 }),
+      priced({ runId: "b", model: "sonnet", effort: "low", actualCost: fig(3, "reported"), xpEarned: null }),
+      priced({ runId: "c", model: "sonnet", effort: null, actualCost: fig(5, "reported"), xpEarned: 50 }),
+      priced({ runId: "d", model: "hy3-free", xpEarned: 30 }),
+      priced({ runId: "e", model: "hy3-free", xpEarned: 10 }),
+    ]);
+    expect(omitted).toEqual([]);
+    expect(points.map((p) => p.key)).toEqual(["hy3-free", "sonnet", "sonnet (low)"]);
+    const low = points.find((p) => p.key === "sonnet (low)")!;
+    expect(low.x).toBe(2);
+    expect(low.y).toBe(200);
+    expect(low.runs).toBe(2);
+    expect(low.costRuns).toBe(2);
+    expect(low.xpRuns).toBe(1);
+    expect(low.basis).toBe("reported");
+    const free = points.find((p) => p.key === "hy3-free")!;
+    expect(free.x).toBe(0);
+    expect(free.y).toBe(20);
+    expect(free.basis).toBe("list-price");
+    expect(free.asIfMetered).toBe(true);
+  });
+
+  test("a mixed basis is named, an unpriced or unmeasured entry is omitted and said, unscored runs never enter", () => {
+    const { points, omitted } = ladderPoints([
+      priced({ runId: "a", model: "m", actualCost: fig(1, "reported") }),
+      priced({ runId: "b", model: "m" }),
+      priced({ runId: "c", model: "nocost", actualCost: null, expectedCost: null }),
+      priced({ runId: "d", model: "noxp", xpEarned: null }),
+      priced({ runId: "e", model: "stub", unscored: "unscored (scripted stub)" }),
+    ]);
+    expect(points.map((p) => p.key)).toEqual(["m"]);
+    expect(points[0]!.basis).toBe("mixed");
+    expect(omitted).toEqual([
+      { key: "nocost", why: "no cost reading" },
+      { key: "noxp", why: "no xp reading" },
+    ]);
+  });
+});
+
+describe("niceTicks", () => {
+  test("1/2/5 steps from zero, the top tick at or past the max, and an axis even for all-free", () => {
+    expect(niceTicks(0)).toEqual([0, 1]);
+    expect(niceTicks(6.5)).toEqual([0, 2, 4, 6, 8]);
+    expect(niceTicks(1.27)).toEqual([0, 0.5, 1, 1.5]);
+    expect(niceTicks(2052)).toEqual([0, 500, 1000, 1500, 2000, 2500]);
+    for (const m of [0.003, 0.9, 42, 99_999]) {
+      const t = niceTicks(m);
+      expect(t[0]).toBe(0);
+      expect(t[t.length - 1]!).toBeGreaterThanOrEqual(m);
+      expect(t.length).toBeLessThanOrEqual(7);
+    }
+  });
+});
+
+describe("ladderChartLayout", () => {
+  const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
+  const pt = (key: string, x: number, y: number) => ({
+    key, model: key, effort: null, x, y, runs: 1, costRuns: 1, xpRuns: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
+  });
+
+  test("zero cost sits on the y axis, the top-right point sits at the plot's top-right tick", () => {
+    const l = ladderChartLayout([pt("free", 0, 0), pt("paid", 8, 2500)], box);
+    const free = l.placed.find((d) => d.point.key === "free")!;
+    expect(free.cx).toBe(box.x0);
+    expect(free.cy).toBe(box.y0);
+    expect(l.xMax).toBe(8);
+    expect(l.yMax).toBe(2500);
+    const paid = l.placed.find((d) => d.point.key === "paid")!;
+    expect(paid.cx).toBe(box.x1);
+    expect(paid.cy).toBe(box.y1);
+  });
+
+  test("labels of coincident points do not share a slot", () => {
+    const l = ladderChartLayout([pt("one", 1, 100), pt("two", 1, 100), pt("three", 1, 100), pt("far", 2, 200)], box);
+    const slots = new Set(l.placed.map((d) => `${d.anchor}:${d.labelY.toFixed(1)}`));
+    expect(slots.size).toBe(4);
+  });
+
+  test("a label at the plot's right edge is anchored to its left", () => {
+    const l = ladderChartLayout([pt("a-fairly-long-model-name", 8, 2500), pt("other", 0, 0)], box);
+    expect(l.placed.find((d) => d.point.key.startsWith("a-fairly"))!.anchor).toBe("end");
   });
 });

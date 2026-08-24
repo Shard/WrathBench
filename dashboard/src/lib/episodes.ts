@@ -1,46 +1,34 @@
 /**
- * The episode and harness filter values, as pure functions of a URL.
+ * The ladder's episode choice, as a pure function of a URL.
  *
- * Apart from the picker that renders them so they can be tested without a DOM
- * (dashboard/README.md) — the ladder page parses these two query parameters,
- * and any future page reading the same ones must not be able to disagree
- * about what a shared link means.
+ * Kept apart from the page so it can be tested without a DOM
+ * (dashboard/README.md), and so any future page reading `?episode=` cannot
+ * disagree with the ladder about what a shared link means.
+ *
+ * Only the four tier ids are offered. There is no `all` and no "+ overridden":
+ * a rung reached in six hours is not the same claim as one reached in ninety
+ * minutes, and a run whose leash was overridden is not a member of the tier
+ * it is stamped with (ADR-0030) — so neither can share a chart, and a choice
+ * the chart cannot honour is not a choice. The runs page is where every run
+ * is listed regardless.
  */
 
-import type { EpisodeIdView, HarnessView } from "../api/client";
+import type { EpisodeIdView } from "../api/client";
 
-export type EpisodeChoice = EpisodeIdView | "all";
+export type EpisodeChoice = EpisodeIdView;
 
-export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "probing", "freeplay", "all"];
+export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "probing", "freeplay"];
 
 /**
  * The `?episode=` search param, defaulted and validated.
  *
- * Anything unrecognised falls back to the page's own default rather than being
- * sent to the API, which would answer 400 and blank the page over a typo in a
- * shared link. The chips always show what is actually selected, so the fallback
- * is visible. The default is per page on purpose: a chart must not silently mix
- * tiers, so the aggregate pages open on `e90`; the episodes page is an
- * inventory of runs rather than a comparison, so it opens on `all`.
+ * Anything unrecognised — including the `all` older links carried — falls
+ * back to the default rather than being sent to the API, which would answer
+ * 400 and blank the page over a typo in a shared link. The chips always show
+ * what is actually selected, so the fallback is visible. `e90` is the scored
+ * tier and the one the fleet runs first, so it is the default.
  */
-export function episodeParam(
-  raw: string | string[] | undefined,
-  fallback: EpisodeChoice = "e90",
-): EpisodeChoice {
+export function episodeParam(raw: string | string[] | undefined, fallback: EpisodeChoice = "e90"): EpisodeChoice {
   const v = Array.isArray(raw) ? raw[0] : raw;
   return EPISODE_CHOICES.includes(v as EpisodeChoice) ? (v as EpisodeChoice) : fallback;
-}
-
-export type HarnessChoice = HarnessView | "all";
-
-export const HARNESS_CHOICES: readonly HarnessChoice[] = ["all", "wrathbench", "claude-code"];
-
-/**
- * The `?harness=` search param (ADR-0035). Defaults to `all`: the harness is
- * a tag on every row, and the operator chose not to partition on it, so the
- * filter is an optional narrowing rather than the default view.
- */
-export function harnessParam(raw: string | string[] | undefined): HarnessChoice {
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  return HARNESS_CHOICES.includes(v as HarnessChoice) ? (v as HarnessChoice) : "all";
 }

@@ -4,8 +4,9 @@
  * One page per grain (ADR-0022 amendment, ADR-0047). This page is the
  * *episodes* — the rulesets, how many runs sit against each and how they came
  * to (members, overridden, labeled), and a link to those runs. It lists no
- * runs of its own: that is the runs page, and a tier's count here is the link
- * that lands on exactly those rows there.
+ * runs of its own: a tier's id and its member count link to the ladder for
+ * that tier — the members are exactly what the ladder compares — and the
+ * overridden count, which the ladder has no view of, links to the runs table.
  *
  * Three counts per tier, kept apart on purpose. **Members** are runs stamped
  * with the id and given the leash the id describes — the only ones a chart may
@@ -24,6 +25,11 @@ import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
+
+/** The ladder for one tier — the page a tier's member count leads to. */
+function ladderHref(id: string): string {
+  return `/ladder?episode=${encodeURIComponent(id)}`;
+}
 
 /** Tier definitions never move; the counts move when a run ends. */
 const POLL_MS = 30_000;
@@ -65,10 +71,12 @@ export default function Episodes() {
                 <th class="right">tool calls</th>
                 <th>objective</th>
                 <th>scoring</th>
-                <th class="right" title="stamped with the id and never overridden; the number links to the runs">
+                <th class="right" title="stamped with the id and never overridden; the number links to the tier's ladder">
                   members
                 </th>
-                <th class="right">overridden</th>
+                <th class="right" title="stamped with the id but run on another leash; never on the ladder, so the number links to the runs">
+                  overridden
+                </th>
                 <th class="right">labeled</th>
               </tr>
             </thead>
@@ -77,7 +85,7 @@ export default function Episodes() {
                 {(t) => (
                   <tr>
                     <td>
-                      <A href={runsHref({ episode: t.id })}>{t.id}</A>
+                      <A href={ladderHref(t.id)}>{t.id}</A>
                     </td>
                     <td class="right mono">{mins(t.minutes)}</td>
                     <td class="right mono">{mins(t.idleMinutes)}</td>
@@ -86,11 +94,17 @@ export default function Episodes() {
                     <td class="dim">{t.objectiveAllowed ? "allowed" : "none"}</td>
                     <td class={t.scored ? "" : "warn"}>{t.scored ? "scored" : "unscored"}</td>
                     <td class="right mono">
-                      <A href={runsHref({ episode: t.id })} title="the runs of this tier">
+                      <A href={ladderHref(t.id)} title="the ladder for this tier">
                         {t.members}
                       </A>
                     </td>
-                    <td class="right mono dim">{t.overrides}</td>
+                    <td class="right mono dim">
+                      <Show when={t.overrides > 0} fallback={t.overrides}>
+                        <A href={runsHref({ episode: t.id })} title="every run stamped with this tier, overridden ones included">
+                          {t.overrides}
+                        </A>
+                      </Show>
+                    </td>
                     <td class="right mono dim">{t.derived}</td>
                   </tr>
                 )}
@@ -110,7 +124,7 @@ export default function Episodes() {
                 <Show when={t.derived > 0}> · {t.derived} older run(s) labeled, never enrolled</Show>
                 {" · "}
                 <A href={runsHref({ episode: t.id })}>runs</A> ·{" "}
-                <A href={`/ladder?episode=${t.id}`}>ladder</A>
+                <A href={ladderHref(t.id)}>ladder</A>
               </p>
             </>
           )}
