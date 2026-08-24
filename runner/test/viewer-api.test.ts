@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { UNBUILT_NOTICE, createApi, readFleet } from "../viewer/api";
+import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 
 const SENTINEL = "sentinel-bearer-2f9c1a";
@@ -230,6 +230,32 @@ describe("routes", () => {
     const runs = fixture();
     const res = await api(runs)(new Request("http://x/api/run/..%2F..%2Fetc"));
     expect(res.status).toBe(404);
+  });
+
+  test("/api/info lists the harness series that have runs, newest first (ADR-0046)", async () => {
+    const runs = fixture();
+    const res = await api(runs)(new Request("http://x/api/info"));
+    const b = (await res.json()) as { harnessSeries: { series: string; runs: number }[] };
+    // The fixture's stamp (`harness-test`) names no series, and a run in no
+    // group is never listed — only the selector's "all" shows it.
+    expect(b.harnessSeries).toEqual([]);
+  });
+
+  test("the series census counts per series and orders numerically", () => {
+    expect(
+      harnessSeriesCensus([
+        { harnessVersion: "harness-0.4-1-gaaa" },
+        { harnessVersion: "harness-0.10-2-gbbb" },
+        { harnessVersion: "harness-0.4-9-gccc" },
+        { harnessVersion: "harness-0.9-1-gddd" },
+        { harnessVersion: "0.0.0-phase0-unversioned" },
+        { harnessVersion: null },
+      ]),
+    ).toEqual([
+      { series: "0.10", runs: 1 },
+      { series: "0.9", runs: 1 },
+      { series: "0.4", runs: 2 },
+    ]);
   });
 
   test("/api/info reports the mode the viewer is in", async () => {
