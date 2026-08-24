@@ -218,6 +218,28 @@ and status.
     not a URL parameter. Unblocked by a run long enough for the scrub to be work
     worth not losing; today's tracks are minutes.
 
+62. **`playtimeMs`'s comment says the episode watchdog resets on every resume; it
+    no longer does** (2026-08-24, found while putting a progress percentage on the
+    fleet page). `runner/viewer/tail.ts` states that `Watchdogs` is built with
+    `startedAt = now()` per process, so `episodeMs` is per-process uptime and
+    playtime is a superset of it. Commit 08cd691 (2026-08-23) made run.ts pass
+    `elapsedBeforeMs` from the persisted `episodeElapsedMs`, so the episode clock
+    now carries across a pause — the same *kind* of clock playtime is, both
+    excluding paused stretches, differing only by how each is accumulated. The
+    fleet page's percentage is written against the new behaviour; the comment is
+    the only thing left saying otherwise. A comment-only fix, held back because a
+    live run was in flight through the viewer when it was found.
+
+63. **Freeplay rows show no episode progress even when their run recorded a real
+    watchdog** (2026-08-24, deliberate). `rowProgress` in
+    `dashboard/src/lib/fleet.ts` returns null for `episode === "freeplay"`
+    because the id is uncapped (docs/EPISODES.md) and a percentage would read as
+    a tier fact. But `nav-probe` records `episodeMs: 21600000` and runs six hours
+    against it, so there *is* an honest number to show for that job and the page
+    withholds it. If the operator wants it, deleting one predicate is the whole
+    change — and the freeplay test in `dashboard/test/fleet.test.ts` is what
+    would have to be rewritten to say the opposite.
+
 
 
 ## Module

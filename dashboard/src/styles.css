@@ -125,6 +125,8 @@ tbody tr:hover { background: var(--panel); }
 .badge.harness-wrathbench { color: var(--dim); }
 .badge.harness-claude-code { color: var(--accent); border-color: var(--accent); }
 .badge.harness-unknown { opacity: .6; }
+/* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
+.progress { font-size: 11px; margin-left: 6px; }
 
 tbody tr.clickable { cursor: pointer; }
 
