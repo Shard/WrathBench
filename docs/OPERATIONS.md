@@ -89,12 +89,14 @@ roster      name -> entry, the exact run-roster per-entry schema (model, driver,
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
               one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
               (`TIER_TABLE`, runner/src/models.ts) — a bespoke volume is a NAMED tier added there,
-              not a number edited into one entry. REFUSED on an entry carrying an `objective`:
-              that entry is outside the policy and states no budget.
+              not a number edited into one entry. On EVERY entry: the roster is a model catalog
+              (ADR-0041), so there is no unscheduled entry to make an exception for.
+            `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
+              under `models` and supplies its own task shape.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
-              what a paid model wants), `characters` (another scored run, next race/class in
-              IDLE_CHARACTERS), `unlimited` (one freeplay session at a time, capped at 6h on
-              every class). Never bought by omission.
+              what a paid model wants) or `unlimited` (one freeplay session at a time, capped at
+              6h on every class). Never bought by omission. A race/class sweep is a campaign now,
+              not an idle mode.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -110,6 +112,16 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             billing says only WHERE a run may execute — the account class and the rate-limit key.
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
+campaigns   probe campaigns (ADR-0041): { <name>: { enabled, models "all"|[refs], runsPerCell,
+            cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,
+            wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
+            episode; the campaign owns its whole task shape, so a catalog entry's own objective
+            or leash never leaks into one. Precedence: episode defaults < campaign < cell.
+            With `account` the campaign is PINNED to it and follows the pinned-job account rules;
+            without, the policy schedules it between the evals and the idle work. Completion is
+            DERIVED (cells x models x runsPerCell against the counted probe runs on disk) — set
+            `enabled: false` when a sweep is done and its results stay visible. Progress is on
+            the /campaigns page.
 queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? }. With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
@@ -120,9 +132,10 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
             is named in --status.
 ```
 
-A roster entry referenced by a pinned job, or carrying an `objective`, is never
-policy-scheduled: the account is spoken for, and a probe's runs are not the
-model's evidence. Everything else in the roster is the policy's (below). This
+A roster entry referenced by a pinned job is never policy-scheduled: the account
+is spoken for. Nothing else takes an entry out of the policy — a campaign
+BORROWS a catalog entry rather than removing it from the schedule. Everything
+else in the roster is the policy's (below). This
 is the only shape: a file that still says `lanes` or `accounts.pinned` is
 refused by name, with the message naming the 0.4 keys.
 
