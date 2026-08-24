@@ -99,8 +99,8 @@ ADR-0040.
   read when the Wrath-snapshot one does not answer: a snapshot redirect whose
   target was itself renamed retries the newest revision's target, and a page
   that has no article here at all becomes a name when its newest revision is a
-  `#REDIRECT` (`redirects_recovered_newest`). Second, a bare title with no page
-  and no redirect whose **`(original)` or `(old)` sibling** is in the bundle
+  `#REDIRECT` (`redirects_recovered_newest`). Second, a bare title that does not
+  already answer, whose **`(original)` or `(old)` sibling** is in the bundle,
   becomes a redirect to it, `(original)` winning when a page has both
   (`redirects_original_sibling`). Both are candidate generation only: every
   candidate goes into the same pending list and is resolved by the same bounded
@@ -109,6 +109,15 @@ ADR-0040.
   nowhere is dropped as dangling like any other. Out-of-game titles are the one
   exclusion — a patch archive is dropped, not demoted, so its name does not come
   back either.
+  Which is why the two rules run in that order and not together: whether a title
+  answers is only known once its chain has been walked, so the sibling rule runs
+  after every other candidate has been resolved, over the titles that are still
+  unanswered — a kept page, or a redirect that actually landed. Reading "is a
+  redirect source" as "answers" is what once hid this world's Scarlet Monastery:
+  a lower-cased spelling of the title redirected to the dropped bare title, that
+  redirect dangled and was never written, and on the strength of it the sibling
+  rule left the bare title alone. The held-back candidates are then retried
+  against the siblings, so the alternate spelling lands too.
 - **Sections that are trimmed.** A concise reference is one a character can act
   on, so a fixed set of headings is dropped at build time, on the raw wikitext,
   heading line and body together: `external links`, `references`, `see also`,

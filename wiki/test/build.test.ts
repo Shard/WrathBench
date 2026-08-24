@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
 import { parseArgs, siblingRedirects } from "../src/build";
 import { DEFAULT_ERA_CUTOFF } from "../src/wrath-only";
-import { searchReference } from "../src/search";
+import { EMPTY_PAGE_SNIPPET, searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
 
 const dir = mkdtempSync(join(tmpdir(), "wrathbench-wiki-"));
@@ -339,7 +339,9 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const kappa = searchReference(db, "Example Item Kappa")[0]!;
   expect(kappa.title).toBe("Example Item Kappa");
   expect(kappa.exactTitle).toBe(true);
-  expect(kappa.snippet).toBe("");
+  // Kappa states an item id and nothing else, so the whole snippet is the
+  // literal: the page says what it states, and does not pretend to prose.
+  expect(kappa.snippet).toBe(EMPTY_PAGE_SNIPPET);
   expect(kappa.snippet).not.toContain("Example Kappa entry");
   const byItemId = searchReference(db, "item 7311")[0]!;
   expect(byItemId.title).toBe("Example Item Kappa");
@@ -678,6 +680,72 @@ test("a name survives the page move that emptied its title", async () => {
           { id: 11, timestamp: "2017-01-01T00:00:00Z", text: "#REDIRECT [[Example Gone]]" },
         ],
       },
+      // The shape that hid this world's article behind a title nobody types.
+      // The bare title is a late article, so it is dropped and generates no
+      // candidate at all — but a lower-cased spelling of it is a redirect, and
+      // that redirect's own chain ends at the dropped page. A rule that reads
+      // "is a redirect source" as "answers" leaves the bare title alone and the
+      // `(original)` sibling is never reached.
+      {
+        title: "Example Chapel (original)",
+        ns: 0,
+        id: 10,
+        revisions: [
+          {
+            id: 12,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Example Chapel''' is a chapel of tempor north of the example ford.",
+          },
+        ],
+      },
+      {
+        title: "Example Chapel",
+        ns: 0,
+        id: 11,
+        revisions: [
+          {
+            id: 13,
+            timestamp: "2013-01-01T00:00:00Z",
+            text: "The rebuilt chapel, incididunt ut labore.",
+          },
+        ],
+      },
+      {
+        title: "Example chapel",
+        ns: 0,
+        id: 12,
+        revisions: [
+          { id: 14, timestamp: "2016-01-01T00:00:00Z", text: "#REDIRECT [[Example Chapel]]" },
+        ],
+      },
+      // The same defect through the other door: the bare title's own newest
+      // revision is a redirect, and it points at a title this bundle does not
+      // have. The candidate is dead, so it must not stand in the way of the
+      // `(original)` sibling that is right there.
+      {
+        title: "Example Spire (original)",
+        ns: 0,
+        id: 13,
+        revisions: [
+          {
+            id: 15,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Example Spire''' is a tower of magna above the example vale.",
+          },
+        ],
+      },
+      {
+        title: "Example Spire",
+        ns: 0,
+        id: 14,
+        revisions: [
+          {
+            id: 16,
+            timestamp: "2015-01-01T00:00:00Z",
+            text: "#REDIRECT [[Example Spire (rebuilt)]]",
+          },
+        ],
+      },
     ]),
   );
 
@@ -696,6 +764,11 @@ test("a name survives the page move that emptied its title", async () => {
   expect(searchReference(db, "Example Warren")[0]!.title).toBe("Example Warren (dungeon)");
   expect(searchReference(db, "Example Hold")[0]!.title).toBe("The Hold (original)");
   expect(searchReference(db, "Example Old Spelling")[0]!.title).toBe("Example Warren (dungeon)");
+  // A dangling candidate for the bare title — an alternate spelling's redirect,
+  // or the title's own newest revision — no longer shadows the sibling.
+  expect(searchReference(db, "Example Chapel")[0]!.title).toBe("Example Chapel (original)");
+  expect(searchReference(db, "Example chapel")[0]!.title).toBe("Example Chapel (original)");
+  expect(searchReference(db, "Example Spire")[0]!.title).toBe("Example Spire (original)");
 
   // Written targets resolve: a row pointing at a title with neither a page nor
   // a redirect of its own would be a dead row.
@@ -703,11 +776,16 @@ test("a name survives the page move that emptied its title", async () => {
     .query<{ source: string; target: string }, []>("SELECT source, target FROM redirects ORDER BY source")
     .all();
   expect(rows).toEqual([
+    { source: "Example Chapel", target: "Example Chapel (original)" },
     { source: "Example Delve", target: "Example Delve (original)" },
     { source: "Example Hold", target: "Example Hold (original)" },
     { source: "Example Hold (original)", target: "The Hold (original)" },
     { source: "Example Old Spelling", target: "Example Warren (dungeon)" },
+    { source: "Example Spire", target: "Example Spire (original)" },
     { source: "Example Warren", target: "Example Warren (dungeon)" },
+    // The alternate spelling lands too, and through the sibling: its own
+    // candidate pointed at the dropped bare title, which now answers.
+    { source: "Example chapel", target: "Example Chapel" },
     // The destination of the chain is a moved page too, and its own bare title
     // was free: the rule does not care how the sibling got into the bundle.
     { source: "The Hold", target: "The Hold (original)" },
@@ -717,18 +795,20 @@ test("a name survives the page move that emptied its title", async () => {
   expect(searchReference(db, "Patch 4.0.1").some((h) => h.title === "Patch 4.0.1")).toBe(false);
   expect(metaValue("pages_dropped_meta")).toBe("1");
 
-  // Three through the newest revision — the late page, the renamed target, and
-  // the sibling that is itself only a redirect — and three through an
-  // `(original)` sibling.
-  expect(metaValue("redirects_recovered_newest")).toBe("3");
-  expect(metaValue("redirects_original_sibling")).toBe("3");
-  expect(metaValue("redirects")).toBe("6");
+  // Four through the newest revision — the late page, the renamed target, the
+  // sibling that is itself only a redirect, and the alternate spelling — and
+  // five through an `(original)` sibling.
+  expect(metaValue("redirects_recovered_newest")).toBe("4");
+  expect(metaValue("redirects_original_sibling")).toBe("5");
+  expect(metaValue("redirects")).toBe("9");
   // One page in this dump was a redirect at the cutoff. Everything else here is
   // a name recovered afterwards, which is why the accounting identity counts
   // this and not the rows written.
   expect(metaValue("pages_era_redirect")).toBe("1");
-  // `Example Nowhere (original)` leads nowhere, and neither does the sibling
-  // candidate generated from it.
+  // `Example Nowhere (original)` leads nowhere, and no sibling is generated
+  // from it any more: a sibling is only made from a page or from a redirect
+  // that landed, so it can never point into a dead row. The other dangling one
+  // is `Example Spire`'s own newest revision, whose title the sibling claimed.
   expect(metaValue("redirects_dropped_dangling")).toBe("2");
   // The bare `Example Delve` is still a dropped page, counted under its reason:
   // recovering the name does not put the page back.
