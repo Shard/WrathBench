@@ -159,6 +159,21 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
+78. **Four 2026-08-24 runs played their predecessor's character and are still on
+    the record** (2026-08-24, worklog "Scored runs starting on a used character").
+    The hygiene defect is fixed in the runner, but the runs it let through are
+    unchanged: `fleet-sonnet-e90-sonnet-20260824-a5` (`manual`, already
+    uncounted), `fleet-qwen3-8-27b-e90-qwen3-8-27b-20260824-a7` (`no-xp`, L3 —
+    counts as a qwen3 t1 e90 today), and the two that were live at the time,
+    `fleet-sonnet-e90-sonnet-20260824-a8` and
+    `fleet-qwen3-8-27b-e360-qwen3-8-27b-20260824` (operator decides whether to
+    kill them; either way they must not count). Next action, once each has
+    ended: `bun runner/src/classify.ts <run-id> stale-character started on the
+    previous episode's character` for all four — `stale-character` is in
+    `NOT_THE_MODELS_FAULT`, so the policy reruns the slot. Then a fleet recreate
+    (and a viewer restart) at a moment with no live runs, so the long-running
+    supervisor and viewer pick up the new reason sets.
+
 77. **The openai-compatible adapter samples state only between turns** (2026-08-24,
     log sweep of the first 0.5 runs). A 485s LM Studio call left the qwen3 run an
     8.1-minute observability blackout: no state row, no XP signal, ~9% of the

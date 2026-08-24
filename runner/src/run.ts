@@ -31,6 +31,7 @@
 
 import { join } from "node:path";
 import { archiveIfNoResponses } from "./archive";
+import { clearAccountCharacters } from "./hygiene";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
@@ -497,83 +498,45 @@ async function main(): Promise<void> {
     // ~10 character slots and every character on it is disposable between
     // episodes. Clear them so the model can always create its assigned one.
     //
-    // Mostly best-effort — EXCEPT for the assigned name. On 2026-08-24 a
-    // delete timed out (the previous episode's character was still mid-logout
-    // save), the run proceeded anyway, and the model's `createSession` reused
-    // the level-6 character it found: a scored e90 that started at level 6.
-    // So deletion is confirmed by re-listing (a timed-out delete may still
-    // have landed) and retried with backoff, and if the ASSIGNED name is
-    // still standing at the end, the run refuses to start: it terminates as a
-    // zero-response `harness-error`, which the stillborn path below archives
-    // and the scheduler's defer ladder retries in a minute — after the save
-    // has landed. Any other survivor only eats a slot, and is logged.
-    try {
-      // Derived from the session secret, as `deleteCharacter` does: these are
-      // throwaway tokens for one call each, but they still have to clear the
-      // module's `weak_token` floor.
-      const listNames = async (i: number): Promise<string[]> => {
-        const res = await fetch(`${config.moduleUrl}/characters`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: `${config.token}-hygiene-${i}`, account: config.account }),
-        });
-        const j = (await res.json()) as { ok?: boolean; enum?: { characters?: { name?: string }[] } };
-        return (j.enum?.characters ?? []).map((c) => c.name).filter((n): n is string => !!n);
-      };
-      let names = await listNames(0);
-      const initial = names.length;
-      for (let attempt = 0; names.length > 0; attempt++) {
-        for (const name of names) {
-          const del = await fetch(`${config.moduleUrl}/character-delete`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              token: `${config.token}-hygiene-del-${attempt}-${name}`,
-              account: config.account,
-              character: name,
-            }),
-          });
-          const dj = (await del.json()) as { deleted?: boolean; error?: string };
-          if (dj.deleted !== true) {
-            console.error(`[wrathbench] hygiene: could not delete leftover character ${name} (${dj.error ?? del.status})`);
-          }
-        }
-        names = await listNames(attempt + 1);
-        if (names.length === 0 || attempt >= 3) break;
-        const waitMs = 5000 * (attempt + 1);
-        console.error(
-          `[wrathbench] hygiene: ${names.length} character(s) survived delete — retrying in ${waitMs / 1000}s (a logout save may still be landing)`,
-        );
-        await Bun.sleep(waitMs);
+    // Best-effort for slot-eaters, strict for the assigned name: the run
+    // starts only once an OK listing shows the name gone (hygiene.ts has the
+    // 2026-08-24 history — a refused listing during the core's post-logout
+    // linger used to read as "clear", and three scored e90s started on their
+    // predecessor's character). A refusal terminates the run as a
+    // zero-response `stale-character`, which the stillborn path below
+    // archives and the scheduler's defer ladder retries in a minute — after
+    // the core has released the account. The guids hygiene saw arm the
+    // watchdogs' first-observation tripwire, the belt to this braces.
+    const hygiene = await clearAccountCharacters({
+      moduleUrl: config.moduleUrl,
+      token: config.token,
+      account: config.account,
+      character: config.character,
+      log: (line) => console.error(`[wrathbench] ${line}`),
+    });
+    if (!hygiene.ok) {
+      console.error(`[wrathbench] ${hygiene.reason}`);
+      trajectory.setTermination(config.runId, "stale-character", hygiene.reason);
+      trajectory.close();
+      try {
+        const moved = archiveIfNoResponses(config.runsDir, config.runId);
+        if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
+      } catch (err) {
+        console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
       }
-      const cleared = initial - names.length;
-      if (cleared > 0) {
-        console.error(`[wrathbench] hygiene: cleared ${cleared} leftover character(s)`);
-        trajectory.append({ t: "harness", kind: "hygiene", cleared });
-      }
-      const survivor = names.find((n) => n.toLowerCase() === config.character.toLowerCase());
-      if (survivor !== undefined) {
-        const detail = `hygiene: assigned character ${survivor} survived deletion — a scored run must not start on a used character`;
-        console.error(`[wrathbench] ${detail}`);
-        trajectory.setTermination(config.runId, "harness-error", detail);
-        trajectory.close();
-        try {
-          const moved = archiveIfNoResponses(config.runsDir, config.runId);
-          if (moved !== null) console.error(`[wrathbench] no model response — archived to ${moved}`);
-        } catch (err) {
-          console.error(`[wrathbench] could not archive ${config.runId}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        wiki?.close();
-        process.exit(1);
-      }
-      if (names.length > 0) {
-        console.error(
-          `[wrathbench] hygiene: ${names.length} leftover character(s) not cleared (${names.join(", ")}) — proceeding, the assigned name is free`,
-        );
-      }
-    } catch (err) {
-      console.error(`[wrathbench] hygiene: skipped (${err instanceof Error ? err.message : String(err)})`);
+      wiki?.close();
+      process.exit(1);
     }
+    if (hygiene.cleared > 0) {
+      console.error(`[wrathbench] hygiene: cleared ${hygiene.cleared} leftover character(s)`);
+      trajectory.append({ t: "harness", kind: "hygiene", cleared: hygiene.cleared });
+    }
+    if (hygiene.leftover.length > 0) {
+      console.error(
+        `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the assigned name is free`,
+      );
+    }
+    watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
   }
 
   /*

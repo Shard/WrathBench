@@ -841,7 +841,7 @@ export function stillbornOf(f: RunFact): boolean | null {
  * harness itself failed. They still number attempts (run ids) but never count
  * toward the per-episode target, so the policy reruns them.
  */
-export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error"]);
+export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error", "stale-character"]);
 
 /**
  * A pause nobody came back for: older than twice the run's own budget (a run
