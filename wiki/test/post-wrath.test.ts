@@ -13,6 +13,7 @@ import {
   hasPostWrathSignal,
   hasWrathSignal,
   isPreAnnouncementPage,
+  titleIsPostWrathCoinage,
 } from "../src/post-wrath";
 
 const PROSE = "Example Zone Beta is a starting region full of lorem ipsum.";
@@ -425,5 +426,65 @@ describe("a subpage named for a later expansion", () => {
     ]) {
       expect(hasPostWrathSignal(title, PROSE)).toBe(false);
     }
+  });
+});
+
+/**
+ * Titles a later expansion coined outright. Real names, invented prose: the
+ * rule *is* a list of names, and the same names are already in `verify.ts`.
+ */
+describe("a main-namespace title that is a Cataclysm coinage", () => {
+  const drops = [
+    "Southern Barrens",
+    "Northern Barrens",
+    "Twilight Highlands",
+    "Vashj'ir",
+    "Kelp'thar Forest",
+    "Shimmering Expanse",
+    "Abyssal Depths",
+    "The Lost Isles",
+    "Lost Isles",
+    "Molten Front",
+    "Tol Barad Peninsula",
+  ];
+  for (const title of drops) {
+    test(`${title} is dropped even though the page predates the announcement`, () => {
+      expect(titleIsPostWrathCoinage(0, title)).toBe(true);
+      // Plain prose, no signal on the revision, and a page older than the
+      // announcement: every other rule would keep this.
+      expect(
+        admitPage({
+          ns: 0,
+          title,
+          eraWikitext: PROSE,
+          newestWikitext: PROSE,
+          firstRevisionAt: EARLY,
+        }),
+      ).toEqual({ admit: false, reason: "dropped_post_wrath" });
+    });
+  }
+
+  test("a name older than the expansion that took it is not on the list", () => {
+    for (const title of [
+      "Deepholm",
+      "Uldum",
+      "Kezan",
+      "Gilneas",
+      "Mount Hyjal",
+      "Tol Barad",
+      "Grim Batol",
+      "The Barrens",
+    ]) {
+      expect(titleIsPostWrathCoinage(0, title)).toBe(false);
+    }
+  });
+
+  test("it is a main-namespace rule; the category rule reads its own list", () => {
+    expect(titleIsPostWrathCoinage(14, "Southern Barrens")).toBe(false);
+    expect(titleIsPostWrathCoinage(118, "Southern Barrens")).toBe(false);
+  });
+
+  test("underscores and case are the same title", () => {
+    expect(titleIsPostWrathCoinage(0, "southern_barrens")).toBe(true);
   });
 });

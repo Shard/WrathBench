@@ -292,3 +292,119 @@ describe("the Wrath snapshot decides redirect-ness", () => {
     expect(got!.eraRedirectTarget).toBe("Example Zone Beta");
   });
 });
+
+/**
+ * The third slot: the newest pre-cutoff revision with no post-Wrath signal on
+ * it (ADR-0040, "a protected page is the page before the beta touched it").
+ */
+describe("the signal-free revision slot", () => {
+  test("the beta rewrite takes the era slot; the revision before it takes the free one", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Elemental Plane",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 4, timestamp: "2016-01-01T00:00:00Z", text: "The modern article, lorem." },
+          {
+            id: 3,
+            timestamp: "2010-09-26T00:00:00Z",
+            text: "{{zonebox|patch=4.0.1}}The rewritten zone article, lorem.\n[[Category:Cataclysm]]",
+          },
+          { id: 2, timestamp: "2009-05-01T00:00:00Z", text: "The lore page, lorem ipsum." },
+          { id: 1, timestamp: "2006-02-17T00:00:00Z", text: "The first stub, lorem." },
+        ],
+      },
+    ]);
+    for (const size of CHUNK_SIZES) {
+      const [got] = await parse(xml, size);
+      expect(`${size}:${got!.eraWikitext}`).toContain("rewritten zone article");
+      expect(`${size}:${got!.eraFreeWikitext}`).toBe(`${size}:The lore page, lorem ipsum.`);
+      expect(got!.eraFreeTimestamp).toBe("2009-05-01T00:00:00Z");
+    }
+  });
+
+  test("a page no beta touched has both slots on the same revision", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 2, timestamp: "2010-09-01T00:00:00Z", text: "The era lorem." },
+          { id: 1, timestamp: "2007-01-01T00:00:00Z", text: "The first stub, lorem." },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraFreeWikitext).toBe(got!.eraWikitext);
+    expect(got!.eraFreeTimestamp).toBe(got!.eraTimestamp);
+  });
+
+  test("every pre-cutoff revision signalled leaves the slot empty", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 1,
+        revisions: [
+          {
+            id: 2,
+            timestamp: "2010-09-01T00:00:00Z",
+            text: "{{stub/Cataclysm}}A beta stub, lorem.",
+          },
+          {
+            id: 1,
+            timestamp: "2010-08-01T00:00:00Z",
+            text: "{{Cataclysm}}An earlier beta stub, lorem.",
+          },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraWikitext).toContain("A beta stub");
+    expect(got!.eraFreeWikitext).toBeNull();
+    expect(got!.eraFreeTimestamp).toBe("");
+  });
+
+  test("a title that is itself the signal leaves the slot empty without reading a body", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Zone Beta (Cataclysm)",
+        ns: 0,
+        id: 1,
+        revisions: [
+          { id: 1, timestamp: "2010-09-01T00:00:00Z", text: "Plain prose, lorem ipsum." },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraWikitext).toBe("Plain prose, lorem ipsum.");
+    expect(got!.eraFreeWikitext).toBeNull();
+  });
+
+  test("a reverted signal-free revision loses the slot to the one below it", async () => {
+    const xml = renderDump([
+      {
+        title: "Example Elemental Plane",
+        ns: 0,
+        id: 1,
+        revisions: [
+          {
+            id: 4,
+            timestamp: "2010-10-01T00:00:00Z",
+            text: "{{Cataclysm}}The rewrite, lorem.",
+            sha1: "ee",
+          },
+          // Restores the sha1 revision 1 had, so revision 2's edit was undone.
+          // A redirect revision, so it is not a candidate itself.
+          { id: 3, timestamp: "2009-07-01T00:00:00Z", text: "#REDIRECT [[Example Other]]", sha1: "cc" },
+          { id: 2, timestamp: "2009-06-01T00:00:00Z", text: "Inserted nonsense, lorem.", sha1: "bb" },
+          { id: 1, timestamp: "2009-05-01T00:00:00Z", text: "The lore page, lorem ipsum.", sha1: "cc" },
+        ],
+      },
+    ]);
+    const [got] = await parse(xml);
+    expect(got!.eraFreeWikitext).toBe("The lore page, lorem ipsum.");
+  });
+});

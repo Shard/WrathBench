@@ -212,6 +212,57 @@ export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
 }
 
 /**
+ * Zone names Cataclysm **coined**, as a main-namespace page's whole title.
+ *
+ * A separate list from `POST_WRATH_TITLE_SUBJECTS` above, and deliberately a
+ * shorter one, because it is read a different way: that list is a word-bounded
+ * substring on a ns-14 *grouping* page, where naming a later zone is enough;
+ * this one is an **exact title** in ns 0, where the page is the zone. Only
+ * names with no pre-Cataclysm meaning at all are here.
+ *
+ * Absent on purpose, and each for the same reason — the name existed in this
+ * world's lore before the expansion took it for a zone: **Deepholm** (the
+ * elemental plane), **Uldum** (the titan complex Tanaris points at),
+ * **Kezan**, **Gilneas**, **Mount Hyjal**, **Tol Barad**, **Grim Batol**. Their
+ * pages are Wrath pages that the beta rewrote, which is what the step-back in
+ * `parse.ts` is for, not pages to delete. `verify.ts` asserts what they must not
+ * say instead.
+ *
+ * `The Lost Isles` and `Lost Isles` are both spelled out rather than reached by
+ * a leading-"the" rule: a rule that strips the article would also reach
+ * `The Barrens`.
+ */
+const POST_WRATH_TITLES: ReadonlySet<string> = new Set([
+  "southern barrens",
+  "northern barrens",
+  "twilight highlands",
+  "vashj'ir",
+  "kelp'thar forest",
+  "shimmering expanse",
+  "abyssal depths",
+  "the lost isles",
+  "lost isles",
+  "molten front",
+  "tol barad peninsula",
+]);
+
+/**
+ * Is this main-namespace title a Cataclysm-or-later coinage outright?
+ *
+ * Deliberately **not** part of `hasPostWrathSignal`. A signal is read per
+ * revision and a page whose every revision carries one lands in the
+ * pre-announcement protection — kept, which is the opposite of what these
+ * titles want. This is an unconditional veto in `admitPage`, and the same
+ * predicate vetoes recovering the name as a redirect source in `build.ts`: a
+ * name that resolves is a name search can return, and `Ruins of Gilneas` →
+ * `Gilneas` was exactly that leak (FOLLOW-UPS 62).
+ */
+export function titleIsPostWrathCoinage(ns: number, title: string): boolean {
+  if (ns !== 0) return false;
+  return POST_WRATH_TITLES.has(title.replace(/_/g, " ").trim().toLowerCase());
+}
+
+/**
  * Category names that place the page in a later expansion.
  *
  * Substring for the multi-word expansion names, which cannot mean anything else
@@ -439,7 +490,8 @@ export function isPreAnnouncementPage(firstRevisionAt: string): boolean {
  * The one page-level admission decision.
  *
  * Order matters and is: out-of-game first (a hotfix archive is out whatever era
- * it names), then the post-Wrath signal (a Cataclysm beta stub written in
+ * it names), then a title that is a later expansion's own coinage (which no
+ * protection outranks), then the post-Wrath signal (a Cataclysm beta stub written in
  * September 2010 has a pre-cutoff revision and is still not this world) —
  * unless the page predates the Cataclysm announcement, which makes it a Wrath page
  * whatever it later acquired — then the cutoff, then the explicit-Wrath-signal
@@ -452,6 +504,13 @@ export function isPreAnnouncementPage(firstRevisionAt: string): boolean {
  */
 export function admitPage(page: AdmitInput): AdmitDecision {
   if (classifyMetaPage(page.title) !== null) return { admit: false, reason: "dropped_meta" };
+
+  // Before the protection, not after it: these titles are Cataclysm's own
+  // coinages, so a page under one is about a later world however old the page
+  // is and whatever its revisions say.
+  if (titleIsPostWrathCoinage(page.ns, page.title)) {
+    return { admit: false, reason: "dropped_post_wrath" };
+  }
 
   if (page.eraWikitext === null) {
     // No prose from before the cutoff. The only door is an explicit

@@ -16,9 +16,10 @@
  *   under that name is proof the era rules let a later world through. Every
  *   entry was checked against the dump: a name that also existed pre-2010 as
  *   lore — Mount Hyjal, Tol Barad, Grim Batol, Kul Tiras, Zandalar, Worgen,
- *   Goblin, Gilneas City, Uldum, Pandaria and a dozen more — is **not** here,
- *   because its presence proves nothing and a gate that cries wolf is a gate
- *   that gets skipped.
+ *   Goblin, Gilneas City, Uldum, Deepholm, Kezan, Gilneas, Pandaria and a dozen
+ *   more — is **not** here, because its presence proves nothing and a gate that
+ *   cries wolf is a gate that gets skipped. Those pages are gated on what they
+ *   **say** instead, in the phrase pairs below.
  * - **Phrase pairs**: a phrase that must not appear on a named page (the
  *   Cataclysm rewrite of a zone that still stands in 3.3.5) and one that must.
  *   Each pair was checked against the dump's own pre-cutoff revisions, which is
@@ -43,11 +44,17 @@ import { MUST_EXIST, resolveCanary } from "./canary";
 export const MUST_NOT_EXIST: readonly string[] = [
   // Cataclysm split or renamed these; the pre-Cataclysm names are in MUST_EXIST.
   "Northern Barrens",
+  "Southern Barrens",
   "Ruins of Gilneas",
   // Cataclysm zones with no pre-2010 lore page under this name.
   "Kelp'thar Forest",
   "Abyssal Depths",
   "Shimmering Expanse",
+  "Vashj'ir",
+  "Twilight Highlands",
+  "The Lost Isles",
+  "Lost Isles",
+  "Tol Barad Peninsula",
   "Molten Front",
   // Cataclysm raids and dungeons, under the exact name the expansion gave them.
   "Throne of the Four Winds",
@@ -94,6 +101,21 @@ export const FORBIDDEN_PHRASES: readonly (readonly [string, string])[] = [
   ["Zandalar", "Cataclysm"],
   ["Goblin", "playable race"],
   ["Grim Batol", "Twilight's Hammer"],
+  // Names Cataclysm took for a zone that this world's wiki already used for
+  // something else, so the page is right to be here and its 2010 rewrite is
+  // not. Each phrase was checked absent from the revision the bundle now
+  // indexes (the dump scan of 2026-08-24) and is a coinage of the expansion:
+  // Deepholm's Cataclysm geography, Uldum's Cataclysm inhabitants, the goblin
+  // and worgen starting stories. Bare `Therazane`, `Tol'vir`, `Trade Prince`
+  // and `Greymane Wall` are deliberately absent from this list — all four are
+  // in the pre-2010 text, because all four are older than the expansion.
+  ["Deepholm", "Therazane's Throne"],
+  ["Deepholm", "Stonecore"],
+  ["Uldum", "Ramkahen"],
+  ["Uldum", "Halls of Origination"],
+  ["Kezan", "Lost Isles"],
+  ["Gilneas", "Ruins of Gilneas"],
+  ["Gilneas", "Forsaken invasion"],
 ];
 
 /**

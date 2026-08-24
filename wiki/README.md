@@ -51,7 +51,9 @@ bun wiki/src/verify.ts [--db data/wiki/bundle.sqlite]
 
 Every entry in both lists was checked against the dump before it was added. A
 title that also existed pre-2010 as lore — Mount Hyjal, Tol Barad, Grim Batol,
-Kul Tiras, Zandalar, Worgen, Goblin — is deliberately not a forbidden title, and
+Kul Tiras, Zandalar, Worgen, Goblin, Deepholm, Uldum, Kezan, Gilneas — is
+deliberately not a forbidden title (what those pages may *say* is gated by the
+phrase pairs instead), and
 a phrase pair the wiki's own 2010 editors had already broken is not a pair: a
 gate that cries wolf is a gate that gets skipped.
 
@@ -77,6 +79,17 @@ ADR-0040.
   reverted — the revision right after it restored a sha1 the page already had —
   is not what the page said. Otherwise the newest pre-cutoff revision wins,
   whatever order the dump lists revisions in.
+- A **protected** page — one that predates the Cataclysm announcement, so a
+  post-Wrath signal never drops it — takes its prose one step further back: the
+  newest pre-cutoff revision that carries no post-Wrath signal of its own. The
+  cutoff sits eight months into the Cataclysm beta, and the beta is when the
+  wiki rewrote a Wrath lore page into a Cataclysm zone article; the last
+  signal-free revision is the page before that happened. The parser holds it as
+  a third slot, testing each candidate body against the same rules `admitPage`
+  reads. Stepping back is **refused** when the older revision is under a quarter
+  of the newer one's length — a stub or a blanking is worse than a rewrite — and
+  a page with no signal-free pre-cutoff revision at all keeps the one it has.
+  `pages_stepped_back` and `pages_step_back_refused`.
 - The dump is full history, so most of its bulk is revisions that never reach
   the bundle. A page with more than 50 revisions is exported as several
   consecutive `<page>` blocks of 50, so a block is not a page: the parser holds
@@ -193,7 +206,10 @@ still a dropped page, and recovering its name does not put the page back.
   `pages_era_swapped` counts how many of these took their prose from an older
   timestamp than their structured fields, and
   `pages_pre_announcement_protected` how many were kept by the protection — a subset of this counter, deliberately outside the accounting
-  identity, never a bucket of its own.
+  identity, never a bucket of its own. `pages_stepped_back` and
+  `pages_step_back_refused` are subsets of the protected pages in the same way:
+  the ones whose prose came from an earlier signal-free revision, and the ones
+  where that trade was refused as a stub.
 - `pages_post_cutoff_wrath_signal` — **no** pre-cutoff revision, but the newest
   revision says outright that its subject is Wrath-or-earlier: an infobox
   `|patch=` below 4.0, an `|expansion=` naming Wrath, the Burning Crusade or
@@ -224,7 +240,18 @@ still a dropped page, and recovering its name does not put the page back.
   never applied to ns 0 — Mount Hyjal, Tol Barad, Gilneas and Uldum all have
   Wrath-era lore pages under those names, which is why `verify.ts` refuses to
   list them as forbidden titles — and `Category:Burning Legion` is this world's,
-  by the same `Legion`-exactly rule as everywhere else. Also counts a page whose
+  by the same `Legion`-exactly rule as everywhere else. In **ns 0** a much
+  shorter list of **exact titles** counts, and unconditionally — before the
+  pre-announcement protection, which it outranks: names Cataclysm coined with no
+  pre-Cataclysm meaning at all (`Southern Barrens`, `Northern Barrens`,
+  `Twilight Highlands`, `Vashj'ir`, `Kelp'thar Forest`, `Shimmering Expanse`,
+  `Abyssal Depths`, `The Lost Isles`, `Lost Isles`, `Molten Front`,
+  `Tol Barad Peninsula`). Deepholm, Uldum, Kezan, Gilneas, Mount Hyjal, Tol
+  Barad and Grim Batol are deliberately **not** on it — all seven are this
+  world's own lore under those names, and what they may *say* is gated by
+  `verify.ts` instead. The same list also vetoes recovering the title as a
+  redirect **source**: a name that resolves is a name search can return, and
+  `Ruins of Gilneas` → `Gilneas` was the shape of the leak (FOLLOW-UPS 62). Also counts a page whose
   prose the **era cuts** took in full — a page whose every paragraph was about a
   later world is a page about a later world, whatever its infobox says. Only the
   era cuts: a page the out-of-world trim emptied is kept, see `empty_pages`
@@ -277,11 +304,26 @@ about whether the section is about the world at all:
   `== In Cataclysm ==`-style heading drops the heading and everything under it,
   down to the next heading of the same or a shallower level. `sections_dropped`.
   Pre-Wrath eras (`{{bc-section}}`, `== The Burning Crusade ==`) are untouched.
+  The April 2010 Cataclysm class previews are in this set too: Blizzard posted
+  one per class and the wiki pasted each into the class page under standardised
+  headings, so `new … abilities`, `changes to abilities and mechanics`,
+  `new talents and talent changes`, `mastery` (with the optional
+  `passive`/`talent`/`tree`/`bonuses` words), `cataclysm class preview…` and
+  `cataclysm changes`/`cataclysm preview` are era cuts. Measured over the era
+  revision of every page in the kept namespaces (2026-08-24): 46 pages carry one
+  — 7, 9, 8, 9, 0 and 13 respectively, and the first four are the class pages
+  and nothing else. `mastery` is the narrow one, since Stance Mastery and
+  Tactical Mastery are 3.3.5 talents; anchored at both ends it reaches neither,
+  and a plain `== Talents ==` is untouched. Headings are matched on their
+  normalised form, so a trailing colon or bold markup does not hide one.
 - **Paragraphs.** A blank-line-separated block whose prose (its templates
   removed first, so an infobox field never decides) matches a narrow phrase rule
   goes: `in Cataclysm`, `with Cataclysm`, `World of Warcraft: Cataclysm`,
   `after the Shattering`, `upcoming`/`beta` beside Cataclysm, Deathwing or the
-  Shattering, and `will` within 60 characters of `Cataclysm`. An adversarial
+  Shattering, `will` within 60 characters of `Cataclysm`, and the class
+  preview's own framing (`development on Cataclysm continues`,
+  `Cataclysm class preview`), which reaches a talent page that quoted one
+  paragraph of the post rather than the whole of it. An adversarial
   read of a built bundle added the rules for prose that describes the later
   world **without** naming the expansion: `rated battleground(s)`, an inline
   `(Expansion: …)` tag, `playable` beside `worgen` or `goblin`, `Archaeology`

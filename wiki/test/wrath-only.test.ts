@@ -571,3 +571,82 @@ describe("paragraphs that never name the expansion", () => {
     }
   });
 });
+
+/**
+ * The April 2010 Cataclysm class previews, which the wiki pasted into every
+ * class page under standardised headings. Real headings, invented prose.
+ */
+describe("class-preview sections", () => {
+  const LEAD = "'''Example Class''' is one of the example callings.";
+  const PREVIEW = "An ability that no trainer of this world teaches, lorem ipsum.";
+  const TALENT = "Example Talent Alpha reduces the cost of the example strike.";
+
+  const headings = [
+    "New Rogue Abilities",
+    "New Mage Abilities",
+    "Changes to Abilities and Mechanics",
+    "New Talents and Talent Changes",
+    "Mastery",
+    "Mastery Passive Talent Tree Bonuses",
+    "Cataclysm Class Preview: Rogue",
+    "Cataclysm Changes",
+    "Cataclysm Preview",
+  ];
+  for (const heading of headings) {
+    test(`== ${heading} == is an era cut, not an out-of-world trim`, () => {
+      const page = [LEAD, "", `== ${heading} ==`, PREVIEW, "", "== Talents ==", TALENT].join("\n");
+      const cut = dropPostWrath(page);
+      const text = stripWikitext(cut.text);
+      expect(text).not.toContain("no trainer of this world");
+      expect(text).not.toContain(heading);
+      // The Wrath talent section beside it is untouched.
+      expect(text).toContain("Example Talent Alpha");
+      expect(text).toContain("Talents");
+      // Counted as an era cut. The out-of-world trim is a different question
+      // and a different counter.
+      expect(cut.sectionsDropped).toBe(1);
+      expect(cut.sectionsTrimmed).toBe(0);
+    });
+  }
+
+  test("a heading written with a colon or bold markup still matches", () => {
+    const page = [LEAD, "", "== '''New Rogue Abilities''': ==", PREVIEW].join("\n");
+    expect(stripWikitext(dropPostWrath(page).text)).not.toContain("no trainer of this world");
+  });
+
+  test("headings a 3.3.5 class page really has are left alone", () => {
+    for (const heading of [
+      "Talents",
+      "Abilities",
+      "Rogue abilities",
+      "Talent trees",
+      "Stance Mastery",
+      "Tactical Mastery",
+      "Mastery of the elements",
+      "Mastery bonus of the example tree",
+    ]) {
+      const cut = dropPostWrath([LEAD, "", `== ${heading} ==`, TALENT].join("\n"));
+      expect(`${heading}: ${cut.sectionsDropped}`).toBe(`${heading}: 0`);
+      expect(stripWikitext(cut.text)).toContain("Example Talent Alpha");
+    }
+  });
+
+  test("the preview's own framing sentence goes even without its heading", () => {
+    const page = [
+      TALENT,
+      "",
+      "As development on Cataclysm continues, the example strike is being reworked.",
+      "",
+      "The Cataclysm class preview said the example strike would be a talent.",
+      "",
+      "Example Talent Beta shortens the example recovery.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(2);
+    const text = stripWikitext(cut.text);
+    expect(text).toContain("Example Talent Alpha");
+    expect(text).toContain("Example Talent Beta");
+    expect(text).not.toContain("being reworked");
+    expect(text).not.toContain("would be a talent");
+  });
+});
