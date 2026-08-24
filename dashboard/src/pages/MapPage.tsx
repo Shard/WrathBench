@@ -34,7 +34,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
-import { createMapState } from "../lib/mapstate";
+import { clearReplayState, createMapState } from "../lib/mapstate";
 import {
   STALE_MS,
   TILE_MIN_PX,
@@ -50,7 +50,7 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
-import { nextSampleAfter, positionsAt, routeUpTo, trackSpan } from "../lib/replay";
+import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
 const PLAY_MS = 250;
@@ -62,9 +62,14 @@ interface TileEntry {
 }
 
 export default function MapPage() {
+  /*
+   * The route is the page's mode, and the only mode it has: `/map` is live,
+   * `/map?run=<id>` is that run's replay. Everything else the page holds —
+   * cursor, playback, the pinned map, the selection, pan and zoom — is
+   * per-frame state that would make the URL churn, so none of it goes here.
+   */
   const [params] = useSearchParams();
-  const replayId = (): string | undefined =>
-    typeof params.run === "string" && params.run.length > 0 ? params.run : undefined;
+  const replayId = (): string | undefined => runParam(params.run);
 
   /* --- sources: the only writable state on the page --- */
   const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
@@ -304,26 +309,45 @@ export default function MapPage() {
   });
 
   /*
-   * Loading a run's track. Reads the route parameter, writes the track and the
-   * cursor; a token guards the response because `?run=a` → `?run=b` in quick
-   * succession can land out of order, and the loser must not win.
+   * The route change *is* the state swap, and this is the only place that
+   * performs it. Live → replay, replay → live, and one replay straight to
+   * another all arrive here, whether from the controls below, browser
+   * back/forward, or a deep link opened cold: `replayId` reads the search
+   * params, so every one of those is the same code path.
+   *
+   * The clear is unconditional and comes before the fetch. Doing it in the
+   * response, as this used to, layers rather than swaps — run A's pips stay on
+   * screen under run B's identity until B's track lands. A blank moment is the
+   * honest picture of "we are between two states".
    */
   let trackToken = 0;
   createEffect(() => {
     const id = replayId();
     const mine = ++trackToken;
+    clearReplayState({
+      setTrack: (t) => setTrack(() => t),
+      setCursor,
+      setPlaying,
+      setPinned: setPinnedMap,
+      setSelectedId,
+      setFeed: (list) => setFeedList(() => list),
+      setError: setReplayError,
+    });
+    pips.clear();
+    route = [];
+    pendingFit = true;
+    needsDraw = true;
     if (id === undefined) {
-      setTrack(undefined);
-      setPlaying(false);
+      // The live poll answers with nothing while a replay owns the map, so its
+      // last value is empty and the next tick is up to POLL_MS away. Ask now,
+      // or returning to live shows an empty world for five seconds.
+      feed.refresh();
       return;
     }
-    setReplayError(undefined);
     void api
       .track(id)
       .then((t) => {
         if (mine !== trackToken) return;
-        pips.clear();
-        setPinnedMap(null);
         setTrack(t);
         setCursor(trackSpan(t.points)?.from ?? 0);
         pendingFit = true;
@@ -488,6 +512,15 @@ export default function MapPage() {
             <div class="map-chips" style={{ top: "auto", bottom: "34px", right: "10px" }}>
               <div class="scrub">
                 <button onClick={() => setPlaying(!playing())}>{playing() ? "pause" : "play"}</button>
+                {/*
+                  A link rather than a button with a handler: the swap is owned
+                  by the route effect above, so this control needs no logic of
+                  its own and an anchor keeps what an anchor gives — a real
+                  history entry, middle-click, and the focus ring.
+                */}
+                <A class="btn" href="/map" title="back to the live map">
+                  live
+                </A>
                 <input
                   type="range"
                   min={span()?.from ?? 0}
@@ -499,7 +532,6 @@ export default function MapPage() {
                   }}
                 />
                 <span class="dim mono">{stamp(cursor())}</span>
-                <A href="/map">live</A>
               </div>
               <Show when={t().points.length === 0}>
                 <span class="dim">no recorded positions</span>

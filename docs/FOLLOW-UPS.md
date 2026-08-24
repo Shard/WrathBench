@@ -207,6 +207,17 @@ and status.
     fraction of the path. Unblocked by a run long enough to feel it; the tracks we
     have are minutes, not hours.
 
+61. **Browser back into a replay restarts it from the beginning** (2026-08-24, a
+    consequence of making `/map` and `/map?run=<id>` the only two URL states).
+    The cursor is deliberately not in the URL — putting it there would rewrite
+    history four times a second under the play slider — so returning to a replay
+    by any route reloads its track and drops the cursor at the first recorded
+    sample. An operator who scrubbed to hour four, clicked into the run page and
+    pressed back gets hour zero. The fix is a per-run cursor remembered in memory
+    for the life of the page (a `Map<runId, ts>` consulted when a track loads),
+    not a URL parameter. Unblocked by a run long enough for the scrub to be work
+    worth not losing; today's tracks are minutes.
+
 
 
 ## Module
