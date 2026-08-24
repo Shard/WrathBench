@@ -3,7 +3,7 @@
  * that a reported figure always beats a reconstructed one.
  *
  * The golden case is the one run in the corpus that carries a real
- * `total_cost_usd` (`fleet-nav-probe-sonnet-20260822-c2`, docs/COSTS.md §3):
+ * `total_cost_usd` (`fleet-nav-probe-sonnet-20260822-c2`, §3 of `git show d752ef7:docs/COSTS.md` — the snapshot sections left the live doc on 2026-08-24):
  * its `usageRaw` priced at the Sonnet intro rates comes to $43.23 against a
  * reported $43.90. That is the pin that says the table's rates — and the
  * cache-read multiplier in particular — are the ones actually billing.
@@ -132,7 +132,7 @@ describe("costOf", () => {
     expect(b.cacheWrite).toBe(0);
   });
 
-  test("the COSTS.md §3 golden case reproduces the reported figure within 2%", () => {
+  test("the archived COSTS.md cross-check golden case reproduces the reported figure within 2%", () => {
     // usageRaw of fleet-nav-probe-sonnet-20260822-c2, reported $43.90307.
     const t = tokens({
       promptTokens: 1_810 + 451_039 + 201_137_815,

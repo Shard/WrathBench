@@ -18,7 +18,7 @@
  * cannot be checked. Prices are data, each row dated and sourced, so a stale
  * one is visible rather than buried in an expression.
  *
- * Figures come from `docs/COSTS.md` §3, which cross-checked the Sonnet row
+ * Figures come from the 2026-08-23 COSTS.md cross-check (§3 of `git show d752ef7:docs/COSTS.md`; the snapshot sections left the live doc on 2026-08-24), which checked the Sonnet row
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
  */
 
@@ -53,7 +53,7 @@ export interface PriceRow {
  * The named models.
  *
  * Anthropic rows only: they are the ones with a non-zero price in this fleet,
- * and they are the ones `docs/COSTS.md` §3 verified. Everything else the fleet
+ * and they are the ones that cross-check verified. Everything else the fleet
  * runs today is free-tier or local, handled by the two rules below; paid open
  * models are priced from the synced OpenRouter table (`SYNCED_PRICES`).
  *
