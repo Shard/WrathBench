@@ -71,7 +71,7 @@ import {
 } from "./run-fleet";
 import { DEFAULT_POLICY, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
@@ -1247,8 +1247,11 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(row["termination_detail"]).toBe(detail);
     expect(row["pause_reason"]).toBeNull();
     expect(typeof row["ended_at"]).toBe("number");
-    // A directory that is not there is reported, not thrown.
-    expect(endRuns("/nonexistent/runs", [{ runId: "x", model: "m", ref: "r", detail }])[0]!.error).toBeDefined();
+    // A runsDir that cannot be reached is reported, not thrown. A path under a
+    // plain file fails for every uid — `/nonexistent` is creatable by root.
+    const blocked = join(runsDir, "not-a-dir");
+    writeFileSync(blocked, "");
+    expect(endRuns(join(blocked, "runs"), [{ runId: "x", model: "m", ref: "r", detail }])[0]!.error).toBeDefined();
   });
 
   test("withResume puts the paused entry first so a rotation-mate's fresh launch cannot wipe its character", () => {
