@@ -23,6 +23,7 @@
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type FleetResponse } from "../api/client";
+import { Collapsible } from "../components/Collapsible";
 import {
   FLEET_COLUMNS,
   fleetRows,
@@ -116,33 +117,48 @@ export default function Fleet() {
                 <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
 
-              {/* Paused runs the supervisor is not resuming, and why (ADR-0036); the ones it ended instead. */}
+              {/*
+                Paused runs the supervisor is not resuming, and why (ADR-0036); the
+                ones it ended instead. Both fold away: they are worth having on the
+                page and not worth reading every time, and the count in the heading
+                is the whole of what a closed pane has to say.
+              */}
               <Show when={f().paused.length > 0}>
-                <p class="dim">paused runs not resumed ({f().paused.length}):</p>
-                <ul class="dim">
-                  <For each={f().paused}>
-                    {(p) => (
-                      <li>
-                        <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
-                        <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
-                        {fmtDuration(p.elapsedMs)} elapsed
-                        <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
-                      </li>
-                    )}
-                  </For>
-                </ul>
+                <Collapsible
+                  title="paused runs not resumed"
+                  summary={`${f().paused.length} run(s)`}
+                  storageKey="wrathbench.fleet.paused"
+                >
+                  <ul class="dim">
+                    <For each={f().paused}>
+                      {(p) => (
+                        <li>
+                          <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
+                          <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
+                          {fmtDuration(p.elapsedMs)} elapsed
+                          <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Collapsible>
               </Show>
               <Show when={f().ended.length > 0}>
-                <p class="dim">ended by the supervisor this session ({f().ended.length}):</p>
-                <ul class="dim">
-                  <For each={f().ended}>
-                    {(e) => (
-                      <li>
-                        <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
-                      </li>
-                    )}
-                  </For>
-                </ul>
+                <Collapsible
+                  title="ended by the supervisor this session"
+                  summary={`${f().ended.length} run(s)`}
+                  storageKey="wrathbench.fleet.ended"
+                >
+                  <ul class="dim">
+                    <For each={f().ended}>
+                      {(e) => (
+                        <li>
+                          <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Collapsible>
               </Show>
             </>
           );

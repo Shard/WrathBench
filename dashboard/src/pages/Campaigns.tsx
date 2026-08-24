@@ -16,6 +16,7 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type CampaignRowView, type CampaignsResponse } from "../api/client";
+import { Collapsible } from "../components/Collapsible";
 import { fmtWhen } from "../lib/format";
 import { poll } from "../lib/poll";
 
@@ -66,16 +67,31 @@ export default function Campaigns() {
 
         <For each={rows()}>
           {(row) => (
-            <section class="detail">
-              <h3>
-                {row.campaign}{" "}
-                <span class={stateOf(row).cls}>{stateOf(row).label}</span>{" "}
-                <span class="dim">
-                  · {coverage(row)}
+            /*
+              One pane per campaign, closed until asked for: a sweep's cell table
+              is a detail, and the page's question — which sweeps exist and how far
+              along they are — is answered by the headings alone. The state word and
+              the coverage counts stay in the header row for that reason.
+
+              The storage key is not a nicety here. `poll()` hands back fresh objects
+              every tick and `<For>` is keyed on reference, so without it every open
+              pane would shut itself once a minute.
+            */
+            <Collapsible
+              title={
+                <>
+                  {row.campaign} <span class={stateOf(row).cls}>{stateOf(row).label}</span>
+                </>
+              }
+              summary={
+                <>
+                  {coverage(row)}
                   <Show when={row.live > 0}> · {row.live} live</Show>
                   <Show when={row.config?.account != null}> · pinned to {row.config!.account}</Show>
-                </span>
-              </h3>
+                </>
+              }
+              storageKey={`wrathbench.campaigns.${row.campaign}`}
+            >
               <p class="dim">
                 <Show
                   when={row.config !== null}
@@ -133,7 +149,7 @@ export default function Campaigns() {
                   </tbody>
                 </table>
               </div>
-            </section>
+            </Collapsible>
           )}
         </For>
 
