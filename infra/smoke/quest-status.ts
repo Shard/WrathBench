@@ -37,7 +37,9 @@ const WS = `ws://${HOST}:${PORT}`;
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `probe-qstatus-${crypto.randomUUID()}`;
-const CHARACTER = "Bs" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]!).slice(-8);
+import { probeName } from "./lib/name";
+
+const CHARACTER = probeName("Bs");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)

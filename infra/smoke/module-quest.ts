@@ -27,7 +27,9 @@ const TOKEN = `probe-quest-${crypto.randomUUID()}`;
 // Fresh character every run (the whole point: the arc starts at level 1 with a
 // clean quest log). Deleted at the end through /character-delete, which is
 // itself part of what this probe proves.
-const CHARACTER = "Bq" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d]!).slice(-8);
+import { probeName } from "./lib/name";
+
+const CHARACTER = probeName("Bq");
 
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account). Created by
