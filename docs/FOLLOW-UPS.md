@@ -274,15 +274,6 @@ and status.
     task starts retiring models that were fine on `e90`; the fix would be a
     lane-keyed ladder, which is a real change to `projectModel`, not a flag.
 
-71. **`campaignWork` recomputes the whole sweep on every tick** (2026-08-24).
-    `campaignWork` walks every enabled campaign × model × cell and tallies the
-    probe runs on disk each time `planNextJobs` is called, which is once a
-    minute. At 2 campaigns × 3 models × 8 cells it is nothing. It is O(campaigns
-    × models × cells + probe runs) with a `find` over the campaign list per
-    work item, so a board with a dozen campaigns and thousands of probe runs
-    would notice. Nothing to do yet; the shape to reach for is memoising the
-    tally by (campaign, ref, cell) across ticks keyed on the newest run mtime,
-    the way `readRunFactsCached` already does for the projection.
 
 ## Module
 
@@ -420,4 +411,5 @@ One line per number so citations resolve; the day file carries the detail.
 - 65 — 2026-08-24 — 1685dac — the paid account class is split unconditionally, like `local`; `paidPoolOf` deleted, `policy.paid` is only the cap now. An unconfigured paid class HOLDS its picks and names them instead of spilling them onto free pool accounts
 - 66 — 2026-08-24 — 4eb455d, 64319d9 — an account-rule violation refuses the PIN, not the file: the offending job or campaign is disabled in place and named in `config.refusals` (a `!` block in `--status`, a `config-refusal` event in the supervisor), and the rest of the file takes effect. Jobs and campaigns are one `Pin` list checked in file order; shape errors and duplicate names still fail. 64319d9 fixed a regression in the first commit: a refused pin is disabled, and `diffJobs` drains a running job whose spawn is disabled, so a refusal would have SIGTERMed a live campaign probe where the whole-file rejection left it alone — a refusal now suppresses scheduling only, and the tick spares (and records) any live run under a refused pin. The preflight-vs-disabled-job gap the item also raised is NOT closed — the clash check still reads only enabled pins, so a disabled job may still park on the gate's account unremarked. It is harmless now rather than fixed: enabling it later refuses that job instead of taking the file down
 - 62 — 2026-08-24 — 2b0b968 — comment only: `playtimeMs` no longer claims the episode watchdog resets on every resume (08cd691 gave it `elapsedBeforeMs`); it now says where the two clocks still diverge
-- 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 and 71 are new, both deliberate: the defer ladder is not split per lane, and the sweep is recomputed per tick
+- 63 (re-scoped), 70, 71 — 2026-08-24 — see the day file — probe campaigns landed as the third lane (ADR-0041, commits 8cfabb1..9cf583b). Not a resolution of 63: it is narrower now, because the `nav-probe` example that motivated it is a `probing` run and `probing` is deliberately outside the predicate. 70 is deliberate: the defer ladder is not split per lane
+- 71 — 2026-08-24 — closed as not a problem, measured rather than argued — `campaignWork` costs 0.063 ms/tick on the shipped board and 2.1 ms/tick on the twelve-campaign, 5000-probe-run board the item said "would notice", against a 60s tick. The memoisation it proposed would have bought nothing and cost a cache to invalidate. The one repeated search — a `campaigns.find` inside the sort comparator — is precomputed instead (6fbc72c)
