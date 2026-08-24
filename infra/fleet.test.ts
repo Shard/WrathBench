@@ -613,9 +613,9 @@ describe("the shipped fleet files", () => {
     }
   };
 
-  test("fleet.next.json: every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
+  test("fleet.json: every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
     const NOW = Date.parse("2027-01-15T08:00:00.000Z");
-    const raw = (await Bun.file(new URL("./fleet.next.json", import.meta.url).pathname).json()) as unknown;
+    const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
     const config = parseFleet(raw);
 
     /*

@@ -74,7 +74,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
@@ -3439,25 +3439,7 @@ function parseArgs(argv: string[]): {
         config = isAbsolute(a) ? a : join(process.cwd(), a);
     }
   }
-  return { config: preferNextConfig(config), dryRun, status, liveRuns, until, clearModel };
-}
-
-/**
- * The 0.5 shape ships as a SIBLING file, the way 0.4's two shape changes did
- * (ADR-0034): whoever asks for `fleet.json` gets `fleet.next.json` when one is
- * beside it, so the running supervisor keeps its old config until it restarts,
- * this build reads the new one wherever it is pointed — compose still passes
- * the old path — and the restart and the eventual rename commute.
- *
- * Without it the deploy meets a config it cannot parse, keeps its last good
- * one, and flies the REJECTED banner with nothing wrong except the order the
- * two halves landed in. Delete this once `fleet.next.json` is renamed over
- * `fleet.json` and no supervisor from before 0.5 can come back.
- */
-export function preferNextConfig(path: string): string {
-  if (basename(path) !== "fleet.json") return path;
-  const next = join(dirname(path), "fleet.next.json");
-  return existsSync(next) ? next : path;
+  return { config, dryRun, status, liveRuns, until, clearModel };
 }
 
 /**
