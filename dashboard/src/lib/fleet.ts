@@ -14,6 +14,7 @@
  */
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
+import { fmtDuration } from "./format";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -144,8 +145,99 @@ export interface FleetRow {
   costNote: string;
   /** Active time in the episode, from the runs feed; null when there is no run. */
   elapsedMs: number | null;
+  /**
+   * The run's own recorded wall-clock watchdog (`comparability.budget.episodeMs`,
+   * or the supervisor's `budgetMs` on a paused run). Never derived from the tier
+   * name: a roster entry may override a tier's watchdogs, so the nominal 90/360
+   * minutes is a claim about the tier and not about this run. Null when nothing
+   * recorded one, which is the honest reading for a run assembled flag-by-flag.
+   */
+  budgetMs: number | null;
   /** Why an idle or paused row is what it is. */
   note: string | null;
+}
+
+/**
+ * How far a row is through its episode, and how long is left.
+ *
+ * Two numbers an operator will believe, so they are shown only where they are
+ * true and are absent otherwise — a wrong percentage here is worse than none.
+ *
+ * **Which rows.** Only a row whose episode clock is advancing right now:
+ * `running`, and `draining` (a job finishing the episode it is on, taking
+ * nothing new — its run is still being driven). Everything else is silent, and
+ * on purpose: `paused` and `paused-deploy` hold a run that is not moving, so a
+ * countdown against them would tick while nothing happens; `resuming` has not
+ * picked its run back up yet (and note it *does* carry a runId, so the gate is
+ * on the state and not on the absence of one); `idle` holds nothing; `exited`
+ * is over.
+ *
+ * **Which clocks.** The denominator is the run's own recorded `episodeMs`
+ * watchdog, never a nominal budget read off the tier name. The numerator is
+ * `playtimeMs` from the runs feed — and because only running/draining rows get
+ * here, that is its single provenance (the paused rows' `elapsedMs` never
+ * reaches this). Both clocks exclude paused stretches: the `episode-limit`
+ * watchdog carries `elapsedBeforeMs` across a resume (runner/src/run.ts, commit
+ * 08cd691), so it measures active time just as playtime does. They are computed
+ * differently — playtime sums trajectory segments, the watchdog sums process
+ * uptime from the persisted `episodeElapsedMs` — so they agree to within a
+ * segment boundary, not to the millisecond. That is the accuracy claimed here.
+ *
+ * **Freeplay.** No percentage and no ETA, whatever a `freeplay` run recorded.
+ * The id is uncapped (docs/EPISODES.md): nav-probe's six hours is that one
+ * experiment's watchdog, not a budget the tier gives runs to be measured
+ * against, and "72% of freeplay" would read as a tier fact it is not.
+ *
+ * **Past the budget.** The real figure, over 100%. A run that overruns its
+ * watchdog is a signal (`fleet-deepseek-flash-e90-…-a3` ran 114 minutes against
+ * 90 and ended on `episode-limit`), and clamping to 100% would hide exactly the
+ * thing worth seeing.
+ */
+export interface FleetProgress {
+  /** Percent of the episode budget spent, rounded; may exceed 100. */
+  pct: number;
+  /** Time left before the watchdog fires; null once it is past due. */
+  remainingMs: number | null;
+  /** How far past the budget it has run; null while it is still inside it. */
+  overMs: number | null;
+}
+
+/** The states whose episode clock is advancing; see `rowProgress`. */
+function advancing(state: FleetRowState): boolean {
+  return state === "running" || state === "draining";
+}
+
+export function rowProgress(row: Pick<FleetRow, "state" | "episode" | "elapsedMs" | "budgetMs">): FleetProgress | null {
+  if (!advancing(row.state)) return null;
+  if (row.episode === "freeplay") return null;
+  const budget = row.budgetMs;
+  const elapsed = row.elapsedMs;
+  if (budget === null || budget <= 0 || elapsed === null || elapsed < 0) return null;
+  const left = budget - elapsed;
+  return {
+    pct: Math.round((elapsed / budget) * 100),
+    remainingMs: left > 0 ? left : null,
+    overMs: left > 0 ? null : -left,
+  };
+}
+
+/** The state cell's percentage, next to the badge. "" where there is none to show. */
+export function progressLabel(p: FleetProgress | null): string {
+  return p === null ? "" : `${p.pct}%`;
+}
+
+/**
+ * The state cell's title: the ETA the operator asked for, with the two clocks
+ * behind it so the percentage is checkable rather than taken on faith. A run
+ * past its budget has no ETA to give, so it says how far past it is instead of
+ * counting down through zero.
+ */
+export function progressTitle(p: FleetProgress | null, row: Pick<FleetRow, "elapsedMs" | "budgetMs">): string {
+  if (p === null) return "";
+  const of = `${fmtDuration(row.elapsedMs)} of ${fmtDuration(row.budgetMs)}`;
+  return p.remainingMs === null
+    ? `ETA: past due — ${of}, over by ${fmtDuration(p.overMs)}`
+    : `ETA: ${fmtDuration(p.remainingMs)} — ${of}`;
 }
 
 /** How many models a job names before the rest become a count. */
@@ -272,6 +364,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: run?.playtimeMs ?? null,
+      budgetMs: run?.comparability?.budget.episodeMs ?? null,
       note:
         state === "paused-deploy"
           ? "paused for the deploy window; the supervisor resumes it when the fleet starts"
@@ -304,6 +397,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,
+      budgetMs: here?.budgetMs ?? run?.comparability?.budget.episodeMs ?? null,
       note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,
     });
   }
