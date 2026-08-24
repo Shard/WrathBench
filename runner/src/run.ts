@@ -156,6 +156,9 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     wikiCoords: flag(args["wiki-coords"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
+    // A probe campaign's identity (ADR-0041), both or neither.
+    campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
+    cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
     maxTurns: num(args["max-turns"]),
     maxToolCallsPerEpisode: num(args["max-tool-calls"]),

@@ -80,7 +80,7 @@ import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
 import { watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
-import { parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
+import { campaignWork, parseCampaigns, workDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
   ACCOUNT_CLASSES,
   LADDER_MS,
@@ -293,7 +293,12 @@ export interface FleetJob {
    * named here, on the account it was on, before anything fresh is launched.
    * `model`/`effort` pick the entry that carries the run id.
    */
-  resume?: { runId: string; model: string; effort?: string | undefined };
+  resume?: { runId: string; model: string; effort?: string | undefined };  /**
+   * Set when this job is a probe campaign's work (ADR-0041): which campaign
+   * commissioned it and which cell it is. The campaign's own dimensions are
+   * looked up from the config at spawn time; only the identity travels here.
+   */
+  probe?: { campaign: string; cell: string };
 }
 
 export interface FleetAccounts {
@@ -384,6 +389,44 @@ export function pinnedJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
   return config.jobs.filter((j) => j.account !== undefined);
 }
 
+/**
+ * The pinned campaigns' work, as jobs.
+ *
+ * A pinned campaign's account is by definition not one the policy may draw
+ * from, so its work cannot go through `planNextJobs` — it goes through the same
+ * path a pinned job does, which is also what keeps `nav-probe`'s behaviour
+ * identical across its migration from a roster entry to a campaign.
+ *
+ * One job per campaign, not per work item: an account runs one live session, so
+ * offering it the whole sweep at once would only queue behind itself. A
+ * campaign with nothing left returns nothing, and the caller's usual
+ * disabled-stand-in path drains whatever was on the account.
+ */
+export function pinnedCampaignJobs(
+  config: Pick<FleetConfig, "campaigns" | "roster">,
+  probeRuns: readonly ProbeRun[],
+): FleetJob[] {
+  const catalog = Object.keys(config.roster);
+  const out: FleetJob[] = [];
+  for (const c of config.campaigns) {
+    if (c.account === undefined || !c.enabled) continue;
+    const next = campaignWork([c], catalog, probeRuns)[0];
+    if (next === undefined) continue;
+    out.push({
+      refs: [next.model],
+      ref: next.model,
+      episode: "probing",
+      repeat: 1,
+      name: `${c.name}-${next.cell.id}`,
+      account: c.account,
+      enabled: true,
+      source: "pinned",
+      probe: { campaign: c.name, cell: next.cell.id },
+    });
+  }
+  return out;
+}
+
 /** The manual pool queue: jobs with no account, in file order. */
 export function poolJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
   return config.jobs.filter((j) => j.account === undefined);
@@ -417,7 +460,11 @@ export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campa
  */
 export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): ProbeRun[] {
   const entries = Object.entries(roster);
-  return runs.filter(isCounted).map((f) => {
+  // Probe runs only. Every counted run would be correct — `campaignWork`
+  // ignores a null campaign — but it would also walk the roster once per run in
+  // the whole history on every tick, to learn nothing about the runs that are
+  // not campaign work.
+  return runs.filter((f) => f.campaign !== null && isCounted(f)).map((f) => {
     const match = entries.find(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null));
     return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null };
   });
@@ -1064,11 +1111,15 @@ export function policyJob(pick: NextJob): FleetJob {
     ref: pick.name,
     episode: pick.episode,
     repeat: 1,
-    name: `${pick.name}-${pick.episode}`,
+    // A probe names its cell: the job name is what run ids, log paths and the
+    // defer sidecar hang off, so without it every cell of one sweep would
+    // accumulate under one name and a run id would not say which cell it was.
+    name: pick.probe !== undefined ? `${pick.name}-${pick.probe.campaign}-${pick.probe.cell}` : `${pick.name}-${pick.episode}`,
     enabled: true,
     source: "policy",
     attempt: pick.attempt,
     ...(pick.extra !== undefined ? { extra: pick.extra } : {}),
+    ...(pick.probe !== undefined ? { probe: pick.probe } : {}),
   };
 }
 
@@ -1262,13 +1313,38 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
  * `repeat: "loop"` as run-roster's own --loop. `tier` and `idle` never reach
  * the roster file: they are the fleet's bookkeeping, not a run dimension.
  */
-export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): JobSpawn {
+export function jobSpawn(
+  job: FleetJob,
+  roster: Record<string, FleetRosterEntry>,
+  account: string,
+  stamp: string,
+  eligible?: Eligible,
+  campaigns: readonly Campaign[] = [],
+): JobSpawn {
   const dims = episodeDimensions(job.episode);
+  /*
+   * A probe's task shape comes from its campaign and nothing else (ADR-0041).
+   * The catalog entry supplies credentials and a model, so its own `objective`,
+   * `watchdogs`, `maxToolCalls` and `wikiCoords` are dropped rather than merged:
+   * a campaign that says "no objective" must not inherit one from whichever
+   * entry it borrowed, or two cells of one sweep would be running different
+   * experiments. Precedence is episode table < campaign < cell, which is what
+   * `workDimensions` already resolves.
+   */
+  const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign);
+  const cell = campaign?.cells.find((x) => x.id === job.probe!.cell);
+  const probeDims = campaign !== undefined && cell !== undefined ? workDimensions(campaign, cell) : undefined;
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
-    const { tier: _tier, idle: _idle, billing: _billing, ...spec } = roster[r]!;
+    const { tier: _tier, idle: _idle, billing: _billing, ...entry } = roster[r]!;
+    // A probe keeps only what identifies the model; the campaign owns the rest.
+    const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, ...credentials } = entry;
+    const isProbe = probeDims !== undefined;
+    const spec: RosterSpec = isProbe ? credentials : entry;
+    // The entry's own leash, kept only when the entry is the authority on it.
+    const own = isProbe ? {} : { watchdogs: entry.watchdogs, maxToolCalls: entry.maxToolCalls };
     // An `idle: "unlimited"` session is the one freeplay run the policy makes,
     // and it carries a wall clock the tier does not pin: a class governs the
     // next pick and never a run in flight, so a session ended only by the idle
@@ -1278,8 +1354,10 @@ export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>
     const base: RosterSpec = {
       ...spec,
       ...dims,
-      watchdogs: { ...dims.watchdogs, ...unlimited, ...spec.watchdogs },
-      ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
+      watchdogs: { ...dims.watchdogs, ...unlimited, ...(own.watchdogs ?? {}), ...(probeDims?.watchdogs ?? {}) },
+      ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
+      ...(probeDims ?? {}),
+      ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's character, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
@@ -3028,7 +3106,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
   const resumed = new Set(resumes.map((r) => r.job.name));
   const pinned = pinnedJobs(config)
     .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
-    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible) }));
+    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.
   const running = new Map(resumes.map((r) => [r.job.name, r.account]));
   const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs)]);
@@ -3097,7 +3175,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const resumeRow = (r: ResumePlan, kind: AccountKind): AccountRow => ({
     account: r.account,
     kind,
-    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
+    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday, undefined, config.campaigns)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
   });
   const listedInDryRun = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
@@ -3118,8 +3196,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       const holder = held(account);
       const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
       if (rs !== undefined) rows.push(resumeRow(rs, kind));
-      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
-      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
+      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states), config.campaigns)) });
+      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday, undefined, config.campaigns)), name: `${pp.job.name} (policy: ${pp.why})` } });
       else rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
     }
   }
@@ -3367,8 +3445,11 @@ async function main(): Promise<void> {
     const countKey = (refs: readonly string[]): void => {
       for (const r of refs) keyCount.set(keyOf(r), (keyCount.get(keyOf(r)) ?? 0) + 1);
     };
-    // Pinned jobs: from the file, on their own accounts.
-    for (const job of pinnedJobs(cfg)) {
+    // Pinned jobs: from the file, on their own accounts — plus a pinned
+    // campaign's next cell, which is a pinned job in everything but where it
+    // was written down (ADR-0041).
+    const probes = probeRunsOf(runs, cfg.roster);
+    for (const job of [...pinnedJobs(cfg), ...pinnedCampaignJobs(cfg, probes)]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
@@ -3376,7 +3457,7 @@ async function main(): Promise<void> {
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      out.push(jobSpawn(job, cfg.roster, job.account!, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
         // An enabled pinned job spawns this tick if it is not already running,
@@ -3394,7 +3475,7 @@ async function main(): Promise<void> {
         if (cfg.roster[running.ref] === undefined) {
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         } else {
-          out.push(jobSpawn(running, cfg.roster, account, stampToday));
+          out.push(jobSpawn(running, cfg.roster, account, stampToday, undefined, cfg.campaigns));
           runningRefs.add(running.ref);
           countKey(running.refs);
           if (billingOf.get(running.ref) === "paid") paidRunning++;
@@ -3407,7 +3488,7 @@ async function main(): Promise<void> {
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible, cfg.campaigns));
       for (const r of fromFile.refs) runningRefs.add(r);
       countKey(fromFile.refs);
       // A manual pool job on a paid model holds a paid slot too: the cap is
@@ -3440,7 +3521,7 @@ async function main(): Promise<void> {
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
-      const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday);
+      const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday, undefined, cfg.campaigns);
       if (r.job.account !== undefined) {
         pending.set(name, r.job);
         const idx = out.findIndex((l) => l.name === name);
@@ -3479,7 +3560,7 @@ async function main(): Promise<void> {
     lastPlan.skipped.unshift(...pinnedSkips);
     for (const { job, account } of lastPlan.assign) {
       pending.set(job.name, job);
-      out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible, cfg.campaigns));
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
@@ -3497,7 +3578,7 @@ async function main(): Promise<void> {
         policy: cfg.policy,
         paidRunning,
         campaigns: unpinnedCampaigns(cfg),
-        probeRuns: probeRunsOf(runs, cfg.roster),
+        probeRuns: probes,
       });
       for (const { job, account, why } of picks) {
         pending.set(job.name, job);
@@ -3511,7 +3592,7 @@ async function main(): Promise<void> {
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
-        out.push(jobSpawn(job, cfg.roster, account, stampToday));
+        out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
       const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
