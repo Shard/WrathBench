@@ -269,6 +269,41 @@ describe("OpenAiChatAdapter usage", () => {
     expect(out.kind === "ok" && out.turn.usage).toEqual({ cached_tokens: 40 });
   });
 
+  test("cache_write_tokens is flattened from prompt_tokens_details — the shape OpenRouter sends", async () => {
+    // Follow-up 59: OpenRouter nests writes and never sends the flat key, so
+    // reading only the top level found nothing and every write priced at zero.
+    const out = await adapterReturning({
+      choices,
+      usage: {
+        prompt_tokens: 100,
+        prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 25 },
+      },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({
+      prompt_tokens: 100,
+      cached_tokens: 60,
+      cache_write_tokens: 25,
+    });
+  });
+
+  test("a top-level cache_write_tokens wins and details are the fallback", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { cache_write_tokens: 7, prompt_tokens_details: { cache_write_tokens: 999 } },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({ cache_write_tokens: 7 });
+  });
+
+  test("a provider that reports no cache writes stays absent, never zero", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 10 } },
+    }).complete({ messages: [], tools: [] });
+    const u = out.kind === "ok" ? out.turn.usage : undefined;
+    expect(u).toEqual({ prompt_tokens: 100, cached_tokens: 10 });
+    expect(u && "cache_write_tokens" in u).toBe(false);
+  });
+
   test("the provider's own cost survives into the turn — it is the actual bill", async () => {
     const out = await adapterReturning({
       choices,

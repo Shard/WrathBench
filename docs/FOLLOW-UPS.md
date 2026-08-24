@@ -281,6 +281,7 @@ and status.
 
 One line per number so citations resolve; the day file carries the detail.
 
+- 59 — 2026-08-24 — (this commit) — cache-write tokens flattened from `prompt_tokens_details` in `toUsage`
 - 45 — 2026-08-23 — 96214db, 614cb08, afd352c, f1c76fb — scenario fixtures (`infra/fixtures`), `travel.ts --from`, tram gate 3/3
 - 9 — 2026-08-22 — b3d6c7a, 9ed564d — trainers (`trainer_list`/`trainer_buy_spell`, `trainerList`/`buySpell`)
 - 9a — 2026-08-22 — 9ed564d — `questsAvailableFrom`

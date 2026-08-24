@@ -58,6 +58,11 @@ export interface TokenUsage {
    * `prompt_tokens_details.cached_tokens` (OpenAI-compat) or a top-level
    * `cached_tokens`. Absent when the provider reports nothing. */
   cached_tokens?: number;
+  /** Prompt tokens written INTO the provider's cache, flattened from
+   * `prompt_tokens_details.cache_write_tokens` (what OpenRouter sends) or a
+   * top-level `cache_write_tokens`. A subset of the prompt, like the reads, and
+   * priced at its own tier by `costOf`. Absent when the provider says nothing. */
+  cache_write_tokens?: number;
   /** Reasoning tokens, flattened from `completion_tokens_details`. The only
    * counter that shows whether an effort level actually moved anything. */
   reasoning_tokens?: number;
@@ -138,8 +143,11 @@ const completionSchema = z.looseObject({
       completion_tokens: z.number().nullish(),
       total_tokens: z.number().nullish(),
       cached_tokens: z.number().nullish(),
+      cache_write_tokens: z.number().nullish(),
       cost: z.number().nullish(),
-      prompt_tokens_details: z.looseObject({ cached_tokens: z.number().nullish() }).nullish(),
+      prompt_tokens_details: z
+        .looseObject({ cached_tokens: z.number().nullish(), cache_write_tokens: z.number().nullish() })
+        .nullish(),
       completion_tokens_details: z.looseObject({ reasoning_tokens: z.number().nullish() }).nullish(),
     })
     .nullish(),
@@ -154,6 +162,14 @@ function toUsage(u: z.infer<typeof completionSchema>["usage"]): TokenUsage | und
   if (typeof u.total_tokens === "number") usage.total_tokens = u.total_tokens;
   const cached = typeof u.cached_tokens === "number" ? u.cached_tokens : u.prompt_tokens_details?.cached_tokens;
   if (typeof cached === "number") usage.cached_tokens = cached;
+  // Cache WRITES. OpenRouter sends these nested under `prompt_tokens_details`,
+  // never at the top level, so reading only the flat key found nothing and the
+  // viewer's `expected` priced every write at zero (follow-up 59). Models that
+  // quote a write tier — gpt-5.6-luna at 1.25x input, gemini-3.7-flash at a
+  // storage-only rate — were the ones it got wrong.
+  const written =
+    typeof u.cache_write_tokens === "number" ? u.cache_write_tokens : u.prompt_tokens_details?.cache_write_tokens;
+  if (typeof written === "number") usage.cache_write_tokens = written;
   const reasoning = u.completion_tokens_details?.reasoning_tokens;
   if (typeof reasoning === "number") usage.reasoning_tokens = reasoning;
   // The provider's own charge for this call, in credits (OpenRouter credits are

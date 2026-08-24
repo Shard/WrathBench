@@ -42,6 +42,8 @@ const PIN: readonly string[] = [
   "deepseek/deepseek-v4-flash-0731",
   "deepseek/deepseek-v4-flash",
   "stealth/ox-alpha",
+  "openai/gpt-5.6-luna",
+  "google/gemini-3.7-flash",
 ];
 
 export interface SyncedPrice {
