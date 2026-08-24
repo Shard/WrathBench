@@ -1,57 +1,67 @@
 {
   "_notes": [
-    "Fleet config (ADR-0034): one concept, the JOB. Hot-reloaded every 60s; history in docs/worklogs.",
-    "accounts: three classes (ADR-0034, \"Account classes\"). An account belongs to exactly one.",
-    "accounts.pool: accounts the pool and the policy may use, in preference order. FREE models only. Never PROBE, never SMOKE*.",
-    "accounts.paid: the paid class (ADR-0034 amendment 2026-08-23). A paid pick lands only here, never in the pool;",
-    "  with policy.paid present and this list empty, paid picks are HELD (\"no paid account configured\"), not spilled.",
-    "  Coexistence: listing an account says who may SCHEDULE it, `enabled` says who HOLDS it — only an enabled job holds.",
-    "  So a DISABLED pinned job may park on a listed account (SHAKEOUT2 below); an enabled one may not.",
-    "  The split governs the POLICY: a manual queue job with no account draws from the pool whatever its billing.",
-    "accounts.local: the local class. A model whose apiBase is on the LAN or loopback (isLocalBase, runner/src/model-cost.ts)",
-    "  lands only here — the LM Studio box serves one runner at a time, so its account IS the limit. Unlike paid there is no",
-    "  policy block to switch it on: the split is always live, and a local model with no accounts.local is HELD",
-    "  (\"no local account configured\"), never spilled into the pool. Free and paid picks never take a local account.",
-    "roster: name -> roster entry (exact run-roster schema; may carry objective/watchdogs/maxToolCalls/wikiCoords).",
-    "  Optional: tiers (manual FORCE, normally absent), runsPerEpisode { e90, e360 } (per-entry target).",
-    "policy: runsPerEpisode targets (default 3/3); maxConcurrent { <key>: n } caps streams per rate-limit key (concurrencyKeyOf).",
-    "  A key is a driver (claude-code/openai/stub) EXCEPT free models on a shared free pool, which key on their platform:",
-    "  \"openrouter\" (the :free slugs + the no-apiBase openai default) and \"opencode\" (the opencode.ai zen entries). OpenRouter and",
-    "  OpenCode meter their free tiers per provider, so 1 each keeps the daily budget intact. Paid (deepseek-flash, governed by",
-    "  policy.paid) and local (qwen3-8-27b, its one box is its limit) stay on their driver key and are NOT capped by these free keys.",
-    "  Optional (ADR-0034 amendment 2026-08-23; absent = off): paid { runsPerEpisode {e90 3, e360 1}, maxConcurrent 1 } gives paid models",
-    "  hard targets and one-in-flight; extras { characters [{race,class}...] } gives free models extra runs when the pool is idle.",
-    "  extras.local says how the LOCAL class takes its extras: \"freeplay\" (default) is one unbounded freeplay run at a time, restarted",
-    "  when it ends — the box is inference-bound, so speed comparisons are meaningless but a model that keeps playing is long-horizon",
-    "  data; \"characters\" puts it on the same race/class cycle the free models run. Either way an extra never counts toward e90/e360.",
-    "  Billing is derived (free slug / LAN / claude-code / allowlist -> free; else paid); roster.<name>.billing overrides.",
-    "  Counting keys on the harness SERIES (major.minor) of the running checkout; other series are shown, not counted.",
+    "Fleet config 0.5 (ADR-0043). One concept, the JOB; one axis for evidence, the TIER; one axis for idle work, IDLE.",
+    "Hot-reloaded every 60s; history in docs/worklogs. Shipped as a sibling file so the rename and the restart commute.",
+    "",
+    "roster.<name>.tier — how much evidence this model gets. THE only thing that sets a run count.",
+    "  t0 trial     e90 x1, promotion HELD — it can never climb out on its own.",
+    "  t1 standard  e90 x3, promotes to t2 on one counted e90 that reached level 5.",
+    "  t2 long      e90 x3 + e360 x1.",
+    "  Required on EVERY entry: the roster is a model CATALOG (ADR-0041), so there is no",
+    "  unscheduled entry left to make an exception for. objective and wikiCoords are REFUSED here —",
+    "  steering is a campaign, which names the entry under `models` and owns its own task shape.",
+    "  There is no per-entry override and no per-billing table: a bespoke volume is a NAMED tier in",
+    "  runner/src/models.ts, reviewed like an episode id, never a number edited into one entry.",
+    "  A t0 model that earns rung 1 KEEPS the witness (--status shows `t0*`): move it to t1 and it",
+    "  promotes immediately on evidence it already has, with nothing re-run. Moving a model by hand is",
+    "  always allowed and never records a promotion — `promoted` is only ever said of a climb.",
+    "",
+    "roster.<name>.idle — what it does with an account once its tier is spent. Absent = none.",
+    "  none        nothing. What a paid model wants, and the default so idle work is never bought by omission.",
+    "  unlimited   one freeplay session at a time, unscored, up to 6h on EVERY class (UNLIMITED_SESSION_MS).",
+    "              The clock is deliberate: a class governs the next pick, never a run in flight, so an endless",
+    "              session ended only by a 20m idle watchdog holds its account forever.",
+    "",
+    "billing — free or paid, derived (free slug / LAN / claude-code / allowlist -> free; else paid); roster.<name>.billing overrides.",
+    "  Since 0.5 it says ONLY where a run may physically execute: the account class, and the rate-limit key.",
+    "  It buys a model no runs and costs it none. Trial a paid model by giving it t0, not by editing a target.",
+    "",
+    "accounts: three classes. An account belongs to exactly one; listing says who may SCHEDULE it, `enabled` says who HOLDS it.",
+    "  pool  free models, in preference order. Never PROBE, never SMOKE*.",
+    "  paid  paid picks land only here; with policy.paid present and this empty they are HELD, never spilled.",
+    "  local a model on the operator's own hardware (isLocalBase) lands only here — the box serves one runner at a time.",
+    "  A DISABLED pinned job may park on a listed account; an ENABLED one may not — THAT JOB is refused and left",
+    "  disabled, named in --status and the fleet log, and the rest of the file stays in effect (item 66). Same for a",
+    "  pinned campaign, and for two enabled pins on one account (the first in file order keeps it). A LIVE run under a",
+    "  refused pin is left alone — it finishes and does not respawn. Shape errors still",
+    "  take the whole file down: a file that does not parse has no rest to keep.",
+    "",
+    "policy: only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n } (concurrencyKeyOf);",
+    "  paid { maxConcurrent } is the paid throttle. runsPerEpisode and extras are NOT 0.5 keys and are refused by name.",
+    "",
+    "campaigns: probe campaigns, the third lane (ADR-0041). { <name>: { enabled, models \"all\"|[refs],",
+    "  runsPerCell, cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,",
+    "  wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing` episode, so a",
+    "  campaign is never re-armed by a harness bump — that is what separates a probe from an eval.",
+    "  Precedence: episode-table defaults < campaign < cell. account set = PINNED (same rules as a",
+    "  pinned job); absent = the policy schedules it, between the evals and the idle work.",
+    "  Completion is DERIVED (cells x models x runsPerCell vs counted probe runs on disk). A finished",
+    "  campaign gets enabled:false and KEEPS its results — see the /campaigns page.",
+    "",
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
-    "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy.",
-    "  Name is <first ref>-<episode>; one job per (ref, episode). A job with no account and nothing eligible is skipped.",
-    "Roster policy: claude models only via driver claude-code; shared free pools carry free ids only; local apiBase exempt.",
+    "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy for a pool account.",
+    "  A waiting manual job reserves the POOL only — the paid and local classes still pick (a226bbb).",
     "preflight: ADR-0023; its accounts may not be in the pool or on a job."
   ],
   "preflight": {
     "enabled": true,
     "account": "SMOKE",
     "smokes": [
-      {
-        "script": "infra/smoke/quest-accept-status.ts",
-        "account": "SMOKE"
-      },
-      {
-        "script": "infra/smoke/kill-credit.ts",
-        "account": "SMOKE2"
-      }
+      { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
+      { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" }
     ],
     "timeoutMs": 130000,
-    "deploySmokes": [
-      {
-        "script": "infra/smoke/module-quest.ts",
-        "account": "SMOKE"
-      }
-    ],
+    "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
     "deployTimeoutMs": 600000
   },
   "accounts": {
@@ -60,38 +70,58 @@
     "local": ["RUNNER4"]
   },
   "roster": {
+    "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2, "tier": "t0"},
+    "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "tier": "t0"},
+    "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2, "tier": "t1"},
+    "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "tier": "t1"},
+    "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "none"},
+    "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tier": "t1", "idle": "none"},
+    "north-mini-code": {"model": "cohere/north-mini-code:free", "tier": "t1", "idle": "none"},
+    "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "none"},
+    "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free", "tier": "t1", "idle": "none"},
+    "deepseek-flash": {"model": "deepseek/deepseek-v4-flash-0731", "billing": "paid", "character": "Deepflash", "race": 1, "class": 2, "tier": "t0"},
+    "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "character": "Gptluna", "race": 1, "class": 2, "tier": "t0"},
+    "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "character": "Gemflash", "race": 1, "class": 2, "tier": "t0"},
+    "laguna-or": {"model": "poolside/laguna-s-2.1:free", "tier": "t1", "idle": "none"},
+    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "tier": "t1", "idle": "unlimited"}
+  },
+  "policy": {
+    "maxConcurrent": {"claude-code": 2, "openrouter": 1, "opencode": 1},
+    "paid": {"maxConcurrent": 1}
+  },
+  "campaigns": {
     "nav-probe": {
-      "model": "sonnet", "driver": "claude-code", "character": "Navprobe", "race": 3, "class": 2,
+      "enabled": true,
+      "account": "SHAKEOUT",
+      "models": ["sonnet"],
       "objective": "Travel from Coldridge Valley to Ironforge, then take the Deeprun Tram from Ironforge to Stormwind. Use roads and the game's own transport (the tram; flight masters once discovered). Keep a travel log in the scratchpad: destination chosen, route chosen, what worked, what failed and why. In each city, find the flight master and a trainer and note them in the log. Once in Stormwind, keep exploring and questing there.",
       "watchdogs": {"episodeMs": 21600000, "noXpMs": null, "idleMs": 1200000},
       "maxToolCalls": 2500,
-      "wikiCoords": true
+      "wikiCoords": true,
+      "runsPerCell": 1,
+      "cells": [{ "id": "coldridge", "character": "Navprobe", "race": 3, "class": 2 }]
     },
-    "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2},
-    "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2},
-    "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2},
-    "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnetlo", "race": 3, "class": 2},
-    "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2},
-    "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
-    "north-mini-code": {"model": "cohere/north-mini-code:free"},
-    "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free"},
-    "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free"},
-    "deepseek-flash": {"model": "deepseek/deepseek-v4-flash-0731", "billing": "paid", "character": "Deepflash", "race": 1, "class": 2},
-    "laguna-or": {"model": "poolside/laguna-s-2.1:free"},
-    "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
-    "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
-    "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
-    "x-preview-f": {"model": "x-preview-f-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY"},
-    "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2}
-  },
-  "policy": {
-    "runsPerEpisode": {"e90": 3, "e360": 3},
-    "maxConcurrent": {"claude-code": 2, "openrouter": 1, "opencode": 1},
-    "paid": {"runsPerEpisode": {"e90": 3, "e360": 1}, "maxConcurrent": 1},
-    "extras": { "local": "freeplay" }
+    "class-probe": {
+      "enabled": true,
+      "models": ["ox-alpha", "x-preview-f", "muse-spark"],
+      "runsPerCell": 1,
+      "cells": [
+        { "id": "human-warrior", "race": 1, "class": 1 },
+        { "id": "dwarf-rogue", "race": 3, "class": 4 },
+        { "id": "nightelf-druid", "race": 4, "class": 11 },
+        { "id": "gnome-mage", "race": 7, "class": 8 },
+        { "id": "human-warlock", "race": 1, "class": 9 },
+        { "id": "dwarf-paladin", "race": 3, "class": 2 },
+        { "id": "nightelf-hunter", "race": 4, "class": 4 },
+        { "id": "human-priest", "race": 1, "class": 5 }
+      ]
+    }
   },
   "queue": [
-    { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": 1, "enabled": true },
-    { "ref": ["sub-opus", "sub-opus-low"], "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
+    { "ref": "sub-opus-low", "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
   ]
 }

@@ -45,6 +45,27 @@ on the same network read pages, and reaches nothing else — the module stays
 loopback regardless. Public hosting is intended eventually and is not this;
 ADR-0022 carries what has to be settled first.
 
+Opting in takes two steps, and the second is the one that gets forgotten:
+
+```
+WRATHBENCH_VIEWER_LAN=1 \
+  WRATHBENCH_MODULE_URL=http://<worldserver container ip>:8086 \
+  WRATHBENCH_FLEET_CONFIG=infra/fleet.json \
+  bun runner/viewer/serve.ts            # now binds 0.0.0.0:8090
+
+# and the host firewall, scoped to the LAN — NOT a bare --add-port, which
+# would open 8090 to every network in the zone:
+sudo firewall-cmd --permanent --zone=public --add-rich-rule=\
+  'rule family="ipv4" source address="192.168.1.0/24" port port="8090" protocol="tcp" accept'
+sudo firewall-cmd --reload
+```
+
+`--permanent` matters: a runtime-only rule is lost on the next reload or reboot,
+which is how this was set up the first time and why it stopped working. Note that
+`curl http://<lan-ip>:8090` **from the host itself** succeeds even with the port
+firewalled — that traffic is delivered over `lo` and never crosses the zone — so
+verify from another machine, or the check proves nothing.
+
 It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
 written by the harness inside the container is never disturbed, and an old run
 directory never gains a schema it did not have.

@@ -694,7 +694,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
         members: number; overrides: number; derived: number }[];
       untiered: number;
     };
-    expect(body.episodes.map((e) => e.id)).toEqual(["e90", "e360", "freeplay"]);
+    expect(body.episodes.map((e) => e.id)).toEqual(["e90", "e360", "probing", "freeplay"]);
     const e90 = body.episodes[0]!;
     expect(e90.minutes).toBe(90);
     expect(e90.toolCalls).toBe(3000);

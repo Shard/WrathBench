@@ -34,7 +34,7 @@ export interface EpisodeBudgetView {
  * The episode tiers (`runner/src/episodes.ts`). Spelled out as a literal union
  * rather than imported, because this module is import-free by construction.
  */
-export type EpisodeIdView = "e90" | "e360" | "freeplay";
+export type EpisodeIdView = "e90" | "e360" | "probing" | "freeplay";
 
 /** One episode tier as `/api/episodes` serves it. Mirrors `EpisodeTier`. */
 export interface EpisodeTierView {
@@ -47,6 +47,60 @@ export interface EpisodeTierView {
   objectiveAllowed: boolean;
   scored: boolean;
   summary: string;
+}
+
+/**
+ * One probe campaign as `/api/campaigns` serves it (ADR-0041).
+ *
+ * Built from the RUN DIRECTORY, not from the config, which is the whole point:
+ * a campaign that has been completed, switched off and deleted from the file
+ * still has a row here, because its runs are what happened. `config` is the
+ * config's side of the story when the entry is still present, and null when it
+ * is not — a row with runs and no config is a finished campaign, not an error.
+ */
+export interface CampaignRowView {
+  campaign: string;
+  /** The config entry, when the file still names this campaign. */
+  config: {
+    enabled: boolean;
+    runsPerCell: number;
+    /** Cell ids the config declares, in declaration order. */
+    cells: string[];
+    /** How many catalog entries the campaign sweeps, as resolved right now. */
+    models: number;
+    /** Whether every (model, cell) has its runs: derived, never recorded. */
+    complete: boolean;
+    /** The account it is pinned to, or null when it draws from the pool. */
+    account: string | null;
+  } | null;
+  /** Counted probe runs recorded against this campaign. */
+  runs: number;
+  /** Runs still in flight. */
+  live: number;
+  /** Distinct models that have run a cell of it. */
+  models: string[];
+  /** Per cell, what has happened — including a cell the config no longer declares. */
+  cells: {
+    cell: string;
+    /** Null when the config no longer declares this cell but runs of it exist. */
+    declared: boolean;
+    runs: number;
+    models: string[];
+    /** Best level any run of this cell reached, or null. */
+    bestLevel: number | null;
+  }[];
+  newestRunId: string | null;
+  newestAt: number | null;
+}
+
+/** `/api/campaigns`: the probe lane, grouped by what commissioned each run. */
+export interface CampaignsResponse {
+  campaigns: CampaignRowView[];
+  /** Probe runs that recorded no campaign at all — a launch that should not exist. */
+  orphans: number;
+  /** Where the fleet config was read from, so a missing `config` can be explained. */
+  configPath: string | null;
+  now: number;
 }
 
 /** `/api/episodes`: the table, plus how many runs are tagged against each tier. */
@@ -132,6 +186,14 @@ export interface RunRow {
   shakeout: string | null;
   /** The operator objective this run was steered with (ADR-0024), or null. */
   objective: string | null;
+  /**
+   * The probe campaign that commissioned this run and which of its cells it is
+   * (ADR-0041), or null on anything else. Read off the run's own config, which
+   * is what lets a campaign's results outlive the deletion of its config entry:
+   * this page is built from the run directory, not from the roster.
+   */
+  campaign: string | null;
+  cell: string | null;
   /** An extra run (ADR-0034): past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
@@ -645,6 +707,20 @@ export interface ApiInfoResponse {
   /** True when a built dashboard is being served from disk. */
   dashboard: boolean;
   /**
+   * An id for the dashboard build currently on disk, or null when none is.
+   *
+   * An open tab keeps running whatever JavaScript it loaded, possibly hours and
+   * several commits old, while a rebuild has already replaced the files behind
+   * it — so a bug report can describe code that no longer exists (item 64). The
+   * SPA remembers the first value it sees, which IS its own build (index.html
+   * is served `no-store`, so a loaded tab was served the build that was current
+   * at the time), and says so when a later poll disagrees.
+   *
+   * It is Vite's own fingerprinted entry filename rather than a new stamp:
+   * it already changes exactly when the bundle does, and costs no build step.
+   */
+  dashboardBuild: string | null;
+  /**
    * The worldserver as its module's /health reports it: the build stamp the
    * image was compiled with and its process start. `null` when the module is
    * unreachable from the viewer or predates the field (cached briefly).
@@ -697,6 +773,13 @@ export interface ResultRun {
   className: string | null;
   /** "Dwarf Hunter", or null when neither id was recorded. */
   characterLabel: string | null;
+  /**
+   * The probe campaign that commissioned this run and its cell (ADR-0041), or
+   * null. A grouping key for the campaigns page and nothing else: a probe is
+   * unscored, so these never reach a chart.
+   */
+  campaign: string | null;
+  cell: string | null;
   effort: string | null;
   /** The harness tag (ADR-0035). A tag on the row, not a partition. */
   harness: HarnessView | null;
@@ -826,6 +909,12 @@ export interface ApiError {
  */
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
+/** A rung of the evidence ladder (ADR-0043); mirrors `TIERS` in `runner/src/models.ts`. */
+export type TierView = "t0" | "t1" | "t2";
+
+/** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
+export type IdleModeView = "none" | "unlimited";
+
 /** One tier's counts for one model, plus the runs behind them. */
 export interface ModelEpisodeView {
   /** Stamped, un-overridden runs that produced at least one model response. */
@@ -900,8 +989,24 @@ export interface ModelRowView {
   platform: string | null;
   /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
   harness: HarnessView;
-  /** Free or paid (`runner/src/model-cost.ts`): what the policy's targets, cap and extras key on. */
+  /**
+   * Free or paid (`runner/src/model-cost.ts`). Since ADR-0043 this says only
+   * where a run may physically execute — the account class and the rate-limit
+   * key. It buys no runs and costs none: that is the tier.
+   */
   billing: "free" | "paid";
+  /** The tier the config admitted this model to (ADR-0043). */
+  declaredTier: TierView;
+  /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
+  tier: TierView;
+  /**
+   * A counted e90 in this series reached the promotion level. What the model
+   * EARNED, kept apart from where it was ADMITTED: a `t0` model can hold this
+   * without spending it, and a hand-promoted model never shows it falsely.
+   */
+  earnedRung1: boolean;
+  /** What it does with an account once its tier is spent. */
+  idle: IdleModeView;
   status: ModelStatusView;
   /** Tiers the model may be scheduled on, in policy order. */
   eligible: EpisodeIdView[];
@@ -939,14 +1044,13 @@ export interface ModelsResponse {
     excluded: { name: string; reason: string }[];
   };
   policy: {
-    runsPerEpisode: { e90: number; e360: number };
     promoteAtLevel: number;
     /** The series the counts are keyed on (this checkout's); null when unversioned, which counts every run. */
     series: string | null;
-    /** The paid policy when the file turns it on (ADR-0034); null is no split. */
-    paid: { runsPerEpisode: { e90: number; e360: number }; maxConcurrent: number } | null;
-    /** The extras policy when on: how many characters the cycle holds. */
-    extras: { characters: number } | null;
+    /** The paid throttle when the file turns it on; null is no split. Only a cap — never a budget. */
+    paid: { maxConcurrent: number } | null;
+    /** The ladder itself (ADR-0043), so a page can name a tier's budget without hardcoding it. */
+    tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per
      * key (`concurrencyKeyOf`), counting every run on that key. An absent

@@ -34,6 +34,7 @@ import {
   parsePolicyBlock,
   policyExclusion,
   schedulability,
+  schedulableView,
   readRunFact,
   type ModelState,
   type PolicyJob,
@@ -41,9 +42,13 @@ import {
   type SchedulingPolicy,
   type RunFact,
   type ClassAccountCounts,
+  TIERS,
+  TIER_TABLE,
+  IDLE_MODES,
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
+import { parseCampaigns, type Campaign } from "../src/campaigns";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { isArchiveDir } from "./archive-dir";
@@ -73,8 +78,16 @@ const rosterEntrySchema = z
     billing: z.enum(["free", "paid"]).optional(),
     /** An objective puts the entry outside the policy (`policyExclusion`). */
     objective: z.string().min(1).optional(),
-    tiers: z.array(z.string()).optional(),
-    runsPerEpisode: z.record(z.string(), z.number()).optional(),
+    // The evidence budget and the idle axis (ADR-0043). Validated against the
+    // projection's own exported key sets, so the two parsers cannot drift on
+    // what a tier IS even while they stay deliberate twins on everything else.
+    // Optional HERE and required in the supervisor's own parser, deliberately:
+    // the viewer does not validate the fleet's config, it reads it. An entry
+    // with no tier is one the policy does not schedule — a steered probe, or a
+    // mistake the supervisor is already refusing by name — so it is skipped
+    // below rather than rowed with a tier nobody wrote.
+    tier: z.enum(TIERS).optional(),
+    idle: z.enum(IDLE_MODES).optional(),
   })
   .loose();
 
@@ -112,6 +125,7 @@ const fleetRosterSchema = z
     queue: z.array(fleetJobSchema).optional(),
     policy: z.unknown().optional(),
     accounts: fleetAccountsSchema.optional(),
+    campaigns: z.unknown().optional(),
   })
   .loose();
 
@@ -139,8 +153,21 @@ export interface RosterRead {
    * than beside a model whose counts they would duplicate (FOLLOW-UPS 52).
    */
   excluded: { name: string; reason: string }[];
+  /**
+   * Every entry the roster names — rowed or not. `models` holds only the ones
+   * the policy can schedule (a steered entry carries no tier and owns no
+   * budget), so this is what the page means by "the roster has N entries".
+   */
+  count: number;
   /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
   accounts: ClassAccountCounts;
+  /**
+   * The `campaigns` block (ADR-0041), or empty when the file names none or names
+   * them unreadably. The viewer reports what a file says and never adjudicates
+   * it — a campaigns block the supervisor would refuse simply reads as absent
+   * here rather than taking the whole roster down with it.
+   */
+  campaigns: Campaign[];
 }
 
 /** The series this viewer runs from — what the projection counts against (ADR-0034). */
@@ -156,7 +183,7 @@ export function currentSeries(): string | null {
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], accounts: {} };
+  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [] };
   if (path === undefined || path.length === 0) {
     return { ...empty, shape: "missing", path: null };
   }
@@ -178,11 +205,7 @@ export function readFleetRoster(path: string | undefined, series: string | null 
   }
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
-    const tiers = (e.tiers ?? []).filter(isEpisodeId);
-    const runs = e.runsPerEpisode ?? {};
-    const per: Partial<Record<"e90" | "e360", number>> = {};
-    if (typeof runs["e90"] === "number") per.e90 = runs["e90"];
-    if (typeof runs["e360"] === "number") per.e360 = runs["e360"];
+    if (e.tier === undefined) continue;
     models.push({
       name,
       model: e.model,
@@ -190,8 +213,8 @@ export function readFleetRoster(path: string | undefined, series: string | null 
       ...(e.driver !== undefined ? { driver: e.driver } : {}),
       ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
       ...(e.billing !== undefined ? { billing: e.billing } : {}),
-      ...(tiers.length > 0 ? { tiers } : {}),
-      ...(Object.keys(per).length > 0 ? { runsPerEpisode: per } : {}),
+      tier: e.tier,
+      ...(e.idle !== undefined ? { idle: e.idle } : {}),
     });
   }
   /* The exclusion, from the supervisor's own predicate, over the queue. */
@@ -203,17 +226,26 @@ export function readFleetRoster(path: string | undefined, series: string | null 
       name: `${refs[0] ?? "job"}-${typeof j.episode === "string" ? j.episode : "e90"}`,
     };
   });
+  // Over every roster NAME. One reason is left — a pinned job holds this
+  // account — since a catalog entry can no longer carry an objective (ADR-0041)
+  // and a campaign borrows a model rather than removing it from the schedule.
   const excluded: { name: string; reason: string }[] = [];
-  for (const m of models) {
-    const reason = policyExclusion(jobs, parsed.roster, m.name);
-    if (reason !== undefined) excluded.push({ name: m.name, reason });
+  for (const name of Object.keys(parsed.roster)) {
+    const reason = policyExclusion(jobs, {}, name);
+    if (reason !== undefined) excluded.push({ name, reason });
   }
   const accounts: ClassAccountCounts = {
     pool: parsed.accounts?.pool?.length ?? 0,
     paid: parsed.accounts?.paid?.length ?? 0,
     local: parsed.accounts?.local?.length ?? 0,
   };
-  return { models, shape: "roster", path, policy, maxConcurrent, excluded, accounts };
+  let campaigns: Campaign[] = [];
+  try {
+    campaigns = parseCampaigns(parsed.campaigns);
+  } catch {
+    // See `campaigns` on RosterRead: unreadable reads as absent.
+  }
+  return { models, shape: "roster", path, policy, maxConcurrent, excluded, count: Object.keys(parsed.roster).length, accounts, campaigns };
 }
 
 // ------------------------------------------------------------- run facts
@@ -449,7 +481,11 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     ...(state.cooling !== undefined ? { cooling: state.cooling } : {}),
     ...(state.retired !== undefined ? { retired: state.retired } : {}),
     ladder: state.ladder,
-    schedulable: schedulability(state, running, policy),
+    declaredTier: state.declaredTier,
+    tier: state.tier,
+    earnedRung1: state.earnedRung1,
+    idle: state.idle,
+    schedulable: schedulableView(schedulability(state, running, policy), state),
     runs: mine.map(runView),
     newestRunId: mine.length > 0 ? mine[0]!.runId : null,
     lastError,
@@ -484,15 +520,14 @@ export function modelsResponse(opts: {
     roster: {
       path: opts.roster.path,
       shape: opts.roster.shape,
-      count: opts.roster.models.length,
+      count: opts.roster.count,
       excluded: opts.roster.excluded,
     },
     policy: {
-      runsPerEpisode: opts.roster.policy.runsPerEpisode,
       promoteAtLevel: opts.roster.policy.promoteAtLevel,
       series: opts.roster.policy.series,
       paid: opts.roster.policy.paid,
-      extras: opts.roster.policy.extras === null ? null : { characters: opts.roster.policy.extras.characters.length },
+      tiers: TIER_TABLE,
       maxConcurrent: opts.roster.maxConcurrent,
     },
     ladderMs: [...LADDER_MS],

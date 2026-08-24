@@ -42,7 +42,9 @@ const WS = `ws://${HOST}:${PORT}`;
 const TOKEN = `probe-trainer-${crypto.randomUUID()}`;
 
 // Fresh character every run, deleted at the end.
-const CHARACTER = "Bt" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+import { probeName } from "./lib/name";
+
+const CHARACTER = probeName("Bt");
 
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account).

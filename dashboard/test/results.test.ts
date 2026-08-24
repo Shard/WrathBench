@@ -34,6 +34,8 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
     harnessVersion: "harness-0.2",
     harnessSeries: "0.2",
     extra: false,
+    campaign: null,
+    cell: null,
     effort: null,
     race: 1,
     raceName: "Human",

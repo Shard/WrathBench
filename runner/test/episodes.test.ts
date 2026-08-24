@@ -21,7 +21,7 @@ const M = 60_000;
 function runRow(over: Partial<RunRow> = {}): RunRow {
   return {
     runId: "r", model: "m", driver: "openai", harness: "wrathbench", shakeout: null,
-    objective: null, extra: false, character: "c", race: 1, raceName: "Human", class: 2,
+    objective: null, campaign: null, cell: null, extra: false, character: "c", race: 1, raceName: "Human", class: 2,
     className: "Paladin", characterLabel: "Human Paladin", platform: "p", apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,
     terminationDetail: null, pauseReason: null, level: null, xp: null, money: null,
@@ -34,6 +34,7 @@ function resultRun(over: Partial<ResultRun> = {}): ResultRun {
   return {
     runId: "r", model: "m", platform: null, harnessVersion: "v", harnessSeries: null, extra: false, effort: null,
     race: 1, raceName: "Human", class: 2, className: "Paladin", characterLabel: "Human Paladin",
+    campaign: null, cell: null,
     harness: null, promptHash: null, serverBuild: null, wikiCoords: null,
     toolCalls: null, snippets: null, modelResponses: null,
     episode: null, episodeSource: "none", episodeOverride: false, unscored: null,
@@ -60,6 +61,13 @@ describe("the table", () => {
     expect(EPISODES.freeplay.toolCalls).toBeNull();
     expect(EPISODES.freeplay).toMatchObject({
       minutes: null, noXpMinutes: null, objectiveAllowed: true, scored: false,
+    });
+    // probing's ninety minutes is the default a campaign inherits when it names
+    // no clock, not a leash the tier enforces — which is why it pins no ceiling
+    // and why `matchesTier` never reads a probe run as overridden.
+    expect(EPISODES.probing).toMatchObject({
+      minutes: 90, idleMinutes: 20, noXpMinutes: null, toolCalls: null,
+      objectiveAllowed: true, scored: false,
     });
   });
 
@@ -181,6 +189,17 @@ describe("the reader labels, it does not enroll", () => {
 
   test("a run with no tuple at all is labeled nothing — never guessed at", () => {
     expect(episodeOf(runRow())).toEqual({ episode: null, source: "none", override: false });
+  });
+
+  test("a run naming a campaign derives to probing, not to the sandbox", () => {
+    // Probe runs are always launched stamped, so this is the tuple-went-missing
+    // path — but deriving a commissioned run to `freeplay` would file it in the
+    // sandbox, and the campaign name is right there saying otherwise.
+    expect(episodeOf(runRow({ campaign: "class-probe", cell: "human-warrior", objective: "play a warrior" }))).toEqual({
+      episode: "probing",
+      source: "derived",
+      override: false,
+    });
     const sixHours = comparabilityOf(loadRunConfig({}), "v");
     expect(episodeOf(runRow({ comparability: sixHours })).episode).toBeNull();
   });

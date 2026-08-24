@@ -269,6 +269,41 @@ describe("OpenAiChatAdapter usage", () => {
     expect(out.kind === "ok" && out.turn.usage).toEqual({ cached_tokens: 40 });
   });
 
+  test("cache_write_tokens is flattened from prompt_tokens_details — the shape OpenRouter sends", async () => {
+    // Follow-up 59: OpenRouter nests writes and never sends the flat key, so
+    // reading only the top level found nothing and every write priced at zero.
+    const out = await adapterReturning({
+      choices,
+      usage: {
+        prompt_tokens: 100,
+        prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 25 },
+      },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({
+      prompt_tokens: 100,
+      cached_tokens: 60,
+      cache_write_tokens: 25,
+    });
+  });
+
+  test("a top-level cache_write_tokens wins and details are the fallback", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { cache_write_tokens: 7, prompt_tokens_details: { cache_write_tokens: 999 } },
+    }).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usage).toEqual({ cache_write_tokens: 7 });
+  });
+
+  test("a provider that reports no cache writes stays absent, never zero", async () => {
+    const out = await adapterReturning({
+      choices,
+      usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 10 } },
+    }).complete({ messages: [], tools: [] });
+    const u = out.kind === "ok" ? out.turn.usage : undefined;
+    expect(u).toEqual({ prompt_tokens: 100, cached_tokens: 10 });
+    expect(u && "cache_write_tokens" in u).toBe(false);
+  });
+
   test("the provider's own cost survives into the turn — it is the actual bill", async () => {
     const out = await adapterReturning({
       choices,
@@ -392,6 +427,18 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.detail).toContain("persistent 5xx");
   });
 
+  test("attempts exhausted on pure network errors pause instead of terminating", async () => {
+    // The other half of the 2026-08-22 fix: a timeout/reset/DNS failure never
+    // has an HTTP status, so it fell past the persistent-5xx branch and three
+    // episodes died as adapter-error on 2026-08-24 ("network error: The
+    // operation timed out.", two different platforms). Provider-down weather
+    // either way — the run is resumable, the roster defers it.
+    const out = await adapterPlaying([new Error("The operation timed out."), new Error("The operation timed out.")]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && out.reason).toBe("rate-limited");
+    expect(out.kind === "pause" && out.detail).toContain("persistent network failure");
+  });
+
   test("a 2xx error body without any status shape still hard-errors", async () => {
     const errBody = JSON.stringify({ error: { message: "something odd, no code" } });
     await expect(
@@ -426,11 +473,14 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
   });
 
-  test("network failures with no 4xx anywhere are still a hard error", async () => {
-    await expect(
-      adapterPlaying([new Error("boom"), new Error("boom")]).complete(req),
-    ).rejects.toThrow(/failed after 2 attempts/);
-  });
+  // "network failures with no 4xx anywhere are still a hard error" was pinned
+  // here (af7e4aa) without a defence, and 2026-08-24 overturned it the same
+  // way 2026-08-22 overturned it for 5xx: three live episodes died to pure
+  // timeouts. The boundary now pauses — see "attempts exhausted on pure
+  // network errors pause instead of terminating" above. What still hard-errors
+  // on exhausted attempts is a failure that is neither an HTTP status nor a
+  // socket error, which no longer has a test to itself because no such shape
+  // has been observed.
 
   test("a non-retryable 4xx is fatal immediately", async () => {
     await expect(adapterPlaying([status(400, "bad request")]).complete(req)).rejects.toThrow(

@@ -78,8 +78,9 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
-import { watchdogOverrideSchema } from "../runner/src/config";
+import { CHARACTER_NAME_RULE, isValidCharacterName, watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
+import { campaignWork, parseCampaigns, workDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
   ACCOUNT_CLASSES,
   LADDER_MS,
@@ -87,13 +88,20 @@ import {
   accountClassOf,
   concurrencyKeyOf,
   inSeries,
+  isCounted,
   isStalePause,
   modelStates,
   outstandingWork,
   formatOutstanding,
   readRunFacts,
   parsePolicyBlock,
-  parseRunsPerEpisode,
+  parseTier,
+  parseIdle,
+  TIERS,
+  TIER_TABLE,
+  UNLIMITED_SESSION_MS,
+  type Tier,
+  type IdleMode,
   parseModelsSidecar,
   planNextJobs,
   pinnedRefs as pinnedRefsOf,
@@ -115,6 +123,7 @@ import {
   type SchedulingPolicy,
   type StartingCharacter,
 } from "../runner/src/models";
+import { isScoredEpisode } from "../runner/src/episodes";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT } from "../runner/src/models";
 
@@ -218,23 +227,24 @@ export interface PreflightRecord {
 // free when its turn comes; the policy's own picks are jobs too, made up each
 // tick.
 
-/** Episode tiers (ADR-0033). `freeplay` is unscored and bypasses the tiers gate. */
-export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
+/** Episode tiers (ADR-0033). The unscored ids bypass the tiers gate entirely. */
+export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
- * A roster entry as named in the `roster` map: the exact per-entry schema
- * plus two optional scheduling fields. `tiers` is a manual FORCE — tiers
- * listed here are eligible regardless of history (ADR-0034: every model is
- * e90-eligible on arrival and e360 is earned from run history, so the field
- * is normally absent). `runsPerEpisode` overrides the policy's per-episode
- * target for this entry. An entry may carry the run dimensions (`objective`,
- * `watchdogs`, `maxToolCalls`, `wikiCoords`): a probe with an objective is
- * a roster entry like any other, referenced by a pinned job.
+ * A roster entry as named in the `roster` map: the exact per-entry schema plus
+ * its scheduling axes (ADR-0043). `tier` is the whole answer to how much this
+ * model runs, and it is required — except on a steered entry (one carrying an
+ * `objective`), which is outside the policy and has no budget to state, where
+ * it is refused instead. `idle` says what the model does with an account once
+ * its tier is spent; absent is `none`. An entry may carry the run dimensions
+ * (`objective`, `watchdogs`, `maxToolCalls`, `wikiCoords`): a probe with an
+ * objective is a roster entry like any other, referenced by a pinned job.
  */
 export interface FleetRosterEntry extends RosterSpec {
-  tiers: EpisodeId[];
-  runsPerEpisode?: Partial<Record<"e90" | "e360", number>>;
+  /** Required: since ADR-0041 there is no such thing as an entry outside the policy. */
+  tier: Tier;
+  idle: IdleMode;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: Billing;
 }
@@ -282,7 +292,12 @@ export interface FleetJob {
    * named here, on the account it was on, before anything fresh is launched.
    * `model`/`effort` pick the entry that carries the run id.
    */
-  resume?: { runId: string; model: string; effort?: string | undefined };
+  resume?: { runId: string; model: string; effort?: string | undefined };  /**
+   * Set when this job is a probe campaign's work (ADR-0041): which campaign
+   * commissioned it and which cell it is. The campaign's own dimensions are
+   * looked up from the config at spawn time; only the identity travels here.
+   */
+  probe?: { campaign: string; cell: string };
 }
 
 export interface FleetAccounts {
@@ -316,6 +331,14 @@ export interface FleetConfig {
   roster: Record<string, FleetRosterEntry>;
   /** Every job the file names, pinned and pool, in file order. */
   jobs: FleetJob[];
+  /** The `campaigns` block (ADR-0041), in declaration order; empty when the file has none. */
+  campaigns: Campaign[];
+  /**
+   * Pins refused at parse time (item 66), one line each. The rest of the file
+   * IS in effect — that is the whole point of a refusal over a `fail()`. Empty
+   * on a clean config; `--status` and the supervisor log name every entry.
+   */
+  refusals: ConfigRefusal[];
   /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
@@ -329,29 +352,24 @@ export interface FleetConfig {
 }
 
 /**
- * The accounts a paid pick may use, or undefined when this file has no paid
- * class at all (pre-split behaviour: paid picks share the pool). A `policy.paid`
- * block with no `accounts.paid` is the configured-but-empty case: the split is
- * on and every paid pick is held, rather than spilling into the free pool.
- */
-export function paidPoolOf(config: Pick<FleetConfig, "accounts" | "policy">): string[] | undefined {
-  return config.accounts.paid.length > 0 || config.policy.paid !== null ? config.accounts.paid : undefined;
-}
-
-/**
- * The accounts each split-out class may use, for `planNextJobs`. A class absent
- * from the map is not split and shares the pool.
+ * The accounts each split-out class may use, for `planNextJobs`. `pool` is the
+ * base class and is never in the map.
  *
- * The two classes are deliberately asymmetric. **Paid** is split only when the
- * file says so: without `accounts.paid` and without a `policy.paid` block the
- * paid picks share the pool. **Local** has no such block to key on — the split
- * is always on, so a roster with a local model and no `accounts.local` is a
- * config gap that holds those picks rather than putting the box's model on a
- * shared account.
+ * Both split classes are unconditional. `paid` used to be split only when the
+ * file said so — `accounts.paid` non-empty, or a `policy.paid` block present —
+ * which left exactly one configuration where a paid pick took a free pool
+ * account and spent real money on it: neither of those set. The file's own
+ * `_notes` and ADR-0034's account-class amendment state the rule with no such
+ * exception, so the code was conditional where the record was absolute. An
+ * unconfigured paid class now HOLDS its picks and names them in --status,
+ * exactly as `local` has since ADR-0034: the failure of an incomplete config is
+ * a model that does not run, never an account that quietly bills.
+ *
+ * That leaves `policy.paid` with its one real job, the concurrency cap. It no
+ * longer doubles as the switch deciding whether the class exists.
  */
-export function classPoolsOf(config: Pick<FleetConfig, "accounts" | "policy">): Partial<Record<AccountClass, string[]>> {
-  const paid = paidPoolOf(config);
-  return { ...(paid !== undefined ? { paid } : {}), local: config.accounts.local };
+export function classPoolsOf(config: Pick<FleetConfig, "accounts">): Partial<Record<AccountClass, string[]>> {
+  return { paid: config.accounts.paid, local: config.accounts.local };
 }
 
 /** The accounts of one class, in file order. `pool` is the base class. */
@@ -359,6 +377,108 @@ export function classAccountsOf(config: Pick<FleetConfig, "accounts">, cls: Acco
   // `?? []`: a hand-built config (a test, a state file read back) may predate a
   // class. An absent list is an empty one, never a crash in the scheduler.
   return (cls === "pool" ? config.accounts.pool : cls === "paid" ? config.accounts.paid : config.accounts.local) ?? [];
+}
+
+/**
+ * A PIN: a queue job or a campaign with an `account`, reduced to what the
+ * account rules need. Jobs and campaigns are pinned by the same rules with the
+ * same consequences, so they are checked as one list rather than as two nearly
+ * identical loops.
+ */
+interface Pin {
+  /** `accounts.pinned`'s value: a job's name, or `campaign <name>`. */
+  readonly label: string;
+  readonly account: string | undefined;
+  /** Mutable: a refused pin is DISABLED in place, which is the enforcement. */
+  enabled: boolean;
+  /**
+   * Every job name this pin can spawn under. A job is itself; a campaign is one
+   * job per declared cell (`pinnedCampaignJobs` names them `<campaign>-<cell>`).
+   * The tick uses these to tell a run that is live under a REFUSED pin apart
+   * from one the operator deliberately disabled — the first must not be drained.
+   */
+  readonly jobNames: readonly string[];
+}
+
+/** Jobs then campaigns, in file order — the order a refusal picks its loser by. */
+function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[] {
+  return [
+    ...jobs.map((j) => ({
+      get label() { return j.name; },
+      get account() { return j.account; },
+      get enabled() { return j.enabled; },
+      set enabled(v: boolean) { j.enabled = v; },
+      jobNames: [j.name],
+    })),
+    ...campaigns.map((c) => ({
+      get label() { return `campaign ${c.name}`; },
+      get account() { return c.account; },
+      get enabled() { return c.enabled; },
+      set enabled(v: boolean) { c.enabled = v; },
+      jobNames: c.cells.map((cell) => `${c.name}-${cell.id}`),
+    })),
+  ];
+}
+
+/**
+ * A pin the account rules refused. `jobs` is what it could have spawned under,
+ * so the tick can leave a live one alone instead of draining it.
+ */
+export interface ConfigRefusal {
+  /** The pin: a job's name, or `campaign <name>`. */
+  pin: string;
+  /** Why. The operator's only notice that their `enabled: true` did not take. */
+  why: string;
+  /** Job names this refusal suppresses (`Pin.jobNames`). */
+  jobs: string[];
+}
+
+/** Disable one pin and say why. The message is the operator's only notice. */
+function refuse(pin: Pin, refusals: ConfigRefusal[], why: string): void {
+  pin.enabled = false;
+  refusals.push({ pin: pin.label, why, jobs: [...pin.jobNames] });
+}
+
+/**
+ * The account rules that are LOCAL to one pin, enforced by refusing that pin
+ * rather than the whole file.
+ *
+ * They used to `fail()`. Since a rejected re-read keeps the last good config,
+ * that meant one bad `enabled: true` made every other flag in the file inert
+ * until somebody read the REJECTED banner — a config-wide outage from a
+ * one-line edit whose intent was local (item 66). The rules themselves are
+ * right: two enabled pins on one account starve each other, and an enabled pin
+ * on a listed account fights the scheduler for the session. So the violating
+ * pin is disabled and named, and the rest of the file takes effect. Shape
+ * errors still fail, because a file that does not parse has no rest to keep.
+ */
+export function applyPinAccountRules(pins: readonly Pin[], accounts: FleetAccounts, refusals: ConfigRefusal[]): void {
+  const byAccount = new Map<string, string>();
+  for (const pin of pins) {
+    if (pin.account === undefined || !pin.enabled) continue;
+    const key = pin.account.toUpperCase();
+    // One live session per account: two enabled pins on one account means one
+    // of them spends the whole window waiting behind the other. The FIRST in
+    // file order keeps the account, so which pin loses does not move when an
+    // unrelated entry is added above it.
+    const other = byAccount.get(key);
+    if (other !== undefined) {
+      refuse(pin, refusals, `account ${pin.account} is already ${other}'s — one enabled job per account`);
+      continue;
+    }
+    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS it,
+    // and only an enabled pin holds. So a DISABLED pin may park on a listed
+    // account (the burn switch on the paid account); an enabled one may not, or
+    // the pin and the scheduler would fight over the session.
+    const listed = ACCOUNT_CLASSES.find((c) =>
+      classAccountsOf({ accounts }, c).some((a) => a.toUpperCase() === key),
+    );
+    if (listed !== undefined) {
+      refuse(pin, refusals, `account ${pin.account} is in accounts.${listed} — only a disabled job may park on a listed account`);
+      continue;
+    }
+    byAccount.set(key, pin.label);
+  }
 }
 
 /** Every account the scheduler may hand out, whatever its class. */
@@ -369,6 +489,44 @@ export function scheduledAccounts(config: Pick<FleetConfig, "accounts">): string
 /** The jobs pinned to an account, in file order. */
 export function pinnedJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
   return config.jobs.filter((j) => j.account !== undefined);
+}
+
+/**
+ * The pinned campaigns' work, as jobs.
+ *
+ * A pinned campaign's account is by definition not one the policy may draw
+ * from, so its work cannot go through `planNextJobs` — it goes through the same
+ * path a pinned job does, which is also what keeps `nav-probe`'s behaviour
+ * identical across its migration from a roster entry to a campaign.
+ *
+ * One job per campaign, not per work item: an account runs one live session, so
+ * offering it the whole sweep at once would only queue behind itself. A
+ * campaign with nothing left returns nothing, and the caller's usual
+ * disabled-stand-in path drains whatever was on the account.
+ */
+export function pinnedCampaignJobs(
+  config: Pick<FleetConfig, "campaigns" | "roster">,
+  probeRuns: readonly ProbeRun[],
+): FleetJob[] {
+  const catalog = Object.keys(config.roster);
+  const out: FleetJob[] = [];
+  for (const c of config.campaigns) {
+    if (c.account === undefined || !c.enabled) continue;
+    const next = campaignWork([c], catalog, probeRuns)[0];
+    if (next === undefined) continue;
+    out.push({
+      refs: [next.model],
+      ref: next.model,
+      episode: "probing",
+      repeat: 1,
+      name: `${c.name}-${next.cell.id}`,
+      account: c.account,
+      enabled: true,
+      source: "pinned",
+      probe: { campaign: c.name, cell: next.cell.id },
+    });
+  }
+  return out;
 }
 
 /** The manual pool queue: jobs with no account, in file order. */
@@ -386,6 +544,35 @@ export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
 }
 
 /**
+ * The campaigns the policy may schedule: enabled, and unpinned. A pinned
+ * campaign is a pinned job in every way that matters here — its account is by
+ * definition not one the policy draws from — so it is built into a pinned
+ * job elsewhere and never reaches this list.
+ */
+export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campaign[] {
+  return config.campaigns.filter((c) => c.enabled && c.account === undefined);
+}
+
+/**
+ * Counted probe runs, in the shape `campaignWork` reads them: `ref` is the
+ * roster name whose credentials the run used. Recovered by matching the
+ * fact's model and effort against the roster the way `matchesRoster`
+ * (models.ts, not exported) does — over every roster entry, catalog-only ones
+ * included, since a campaign may name a model that carries no tier.
+ */
+export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): ProbeRun[] {
+  const entries = Object.entries(roster);
+  // Probe runs only. Every counted run would be correct — `campaignWork`
+  // ignores a null campaign — but it would also walk the roster once per run in
+  // the whole history on every tick, to learn nothing about the runs that are
+  // not campaign work.
+  return runs.filter((f) => f.campaign !== null && isCounted(f)).map((f) => {
+    const match = entries.find(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null));
+    return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null };
+  });
+}
+
+/**
  * What an episode id means in the flags the runner has today (mirrors
  * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
  * owns the id. e90: 90m, idle 20m, no-xp 20m, 3000 calls. e360: 6h, idle 20m,
@@ -398,6 +585,10 @@ export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 };
     case "e360":
       return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 12000 };
+    case "probing":
+      // The campaign's own clock wins over this; ninety minutes is what a
+      // campaign that names none inherits (`EPISODES.probing`).
+      return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
     case "freeplay":
       return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
   }
@@ -506,6 +697,14 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
           `a local/self-hosted apiBase is exempt`,
       );
     }
+    // The game's naming rules, enforced where the name is written so a bad
+    // one is a config refusal at load, not a ZodError the roster retries
+    // every tick: `Fleetsonnetlo` (13 chars) respawn-looped for two hours on
+    // 2026-08-24 because nothing between the file and the runner ever looked
+    // at the name. One predicate for every boundary (runner/src/config.ts).
+    if (e.character !== undefined && (typeof e.character !== "string" || !isValidCharacterName(e.character))) {
+      fail(`${where}: entry ${e.model}: ${CHARACTER_NAME_RULE} (got ${JSON.stringify(e.character)})`);
+    }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
       if (!parsed.success) {
@@ -583,6 +782,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     roster?: unknown;
     queue?: unknown;
     policy?: unknown;
+    campaigns?: unknown;
   };
   if (o.lanes !== undefined) {
     fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (ADR-0034)");
@@ -590,6 +790,12 @@ export function parseFleet(raw: unknown): FleetConfig {
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
+  let campaigns: Campaign[];
+  try {
+    campaigns = parseCampaigns(o.campaigns);
+  } catch (err) {
+    fail(`campaigns: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -600,34 +806,15 @@ export function parseFleet(raw: unknown): FleetConfig {
     jobs.push(job);
   };
   for (const job of parseQueue(o.queue, roster)) add(job);
-  // One live session per account: two enabled jobs on one account means one
-  // of them spends the whole window waiting behind the other.
-  const byAccount = new Map<string, string>();
-  for (const job of jobs) {
-    if (job.account === undefined || !job.enabled) continue;
-    const key = job.account.toUpperCase();
-    const other = byAccount.get(key);
-    if (other !== undefined) fail(`account ${job.account} is shared by enabled jobs ${other} and ${job.name} — one job per account`);
-    byAccount.set(key, job.name);
-  }
-  for (const job of jobs) {
-    if (job.account === undefined) continue;
-    // Listing an account says who may SCHEDULE it; `enabled` says who HOLDS
-    // it, and only an enabled job holds. So a disabled pinned job may park on
-    // a listed account (the burn switch on the paid account); an enabled one
-    // may not, or the pin and the scheduler would fight over the session.
-    if (job.enabled && accounts.pool.some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-      fail(`accounts.pool: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
-    }
-    for (const cls of ["paid", "local"] as const) {
-      if (job.enabled && accounts[cls].some((a) => a.toUpperCase() === job.account!.toUpperCase())) {
-        fail(`accounts.${cls}: ${job.account} is also pinned to job ${job.name} — only a disabled job may park on a listed account`);
-      }
-    }
-    // Derived, enabled first so a disabled stand-in on a running job's
-    // account (the burn switch) never hides the live one.
-    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === job.account!.toUpperCase()) ?? job.account;
-    if (accounts.pinned[key] === undefined || job.enabled) accounts.pinned[key] = job.name;
+  const refusals: ConfigRefusal[] = [];
+  applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
+  for (const pin of pinsOf(jobs, campaigns)) {
+    if (pin.account === undefined) continue;
+    // Derived, enabled first so a disabled stand-in on a running pin's account
+    // (the burn switch) never hides the live one. Every pin is listed here,
+    // refused ones included: `accounts.pinned` says who is parked, not who holds.
+    const key = Object.keys(accounts.pinned).find((a) => a.toUpperCase() === pin.account!.toUpperCase()) ?? pin.account;
+    if (accounts.pinned[key] === undefined || pin.enabled) accounts.pinned[key] = pin.label;
   }
   const preflight = parsePreflight(o.preflight);
   // The smokes hold a live session for their whole arc. Sharing an account with
@@ -636,8 +823,16 @@ export function parseFleet(raw: unknown): FleetConfig {
   // to discover live.
   if (preflight.enabled) {
     for (const account of preflightAccounts(preflight)) {
-      const clash = byAccount.get(account.toUpperCase());
-      if (clash !== undefined) fail(`preflight account ${account} is also job ${clash}'s — the gate needs its own account`);
+      // A pin on the gate's account is refused like any other local violation:
+      // there is one pin to name and disable, and the gate outranks it (ADR-0023
+      // runs before anything else does). The two rules below have no pin to
+      // refuse — the loser would be an account list — so they still fail.
+      const clash = pinsOf(jobs, campaigns).find(
+        (pin) => pin.enabled && pin.account?.toUpperCase() === account.toUpperCase(),
+      );
+      if (clash !== undefined) {
+        refuse(clash, refusals, `account ${account} is the preflight gate's — the gate needs its own account`);
+      }
       if (accounts.pool.some((a) => a.toUpperCase() === account.toUpperCase())) {
         fail(`preflight account ${account} is also in accounts.pool — the gate needs its own account`);
       }
@@ -652,7 +847,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
-  return { notes, preflight, accounts, roster, jobs, policy, maxConcurrent };
+  return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent, refusals };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
@@ -703,20 +898,48 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as { tiers?: unknown; runsPerEpisode?: unknown; billing?: unknown } & Record<string, unknown>;
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as {
+      tier?: unknown;
+      idle?: unknown;
+      tiers?: unknown;
+      runsPerEpisode?: unknown;
+      billing?: unknown;
+    } & Record<string, unknown>;
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
-    // Absent means "no force": eligibility comes from run history (ADR-0034).
-    const tiers = rawTiers === undefined ? [] : rawTiers;
-    if (!Array.isArray(tiers) || !tiers.every((t) => (EPISODE_IDS as readonly string[]).includes(t as string))) {
-      fail(`roster ${name}: tiers must be an array of ${EPISODE_IDS.join("|")}`);
-    }
-    const runsPerEpisode = parseRunsPerEpisode(rawRuns, `roster ${name}: runsPerEpisode`);
+    // The retired 0.4 spellings, refused by name. Both said how much a model
+    // runs, which is its tier now; dropping them silently would re-scope a
+    // budget an operator wrote on purpose.
+    if (rawTiers !== undefined) fail(`roster ${name}: tiers is not a 0.5 key — force a longer episode by setting tier: "t2"`);
+    if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
+    // An entry carrying an objective is outside the policy entirely
+    // The roster is a CATALOG (ADR-0041): an entry describes a model and says
+    // how much evidence it gets, and nothing else. Steering belongs to a
+    // campaign, which owns its whole task shape — an entry that could carry an
+    // objective is what used to make the roster two kinds of thing, and every
+    // scored surface then needed a branch to tell them apart.
+    if (rest["objective"] !== undefined) {
+      fail(`roster ${name}: an entry must not carry an objective — steering is a campaign now (ADR-0041), which names this entry under "models"`);
+    }
+    if (rest["wikiCoords"] !== undefined) {
+      fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them (ADR-0041)`);
+    }
+    // Required, with no exception left to make: every entry is now something
+    // the policy can schedule, so an absent tier is always a mistake.
+    if (rawTier === undefined) fail(`roster ${name}: every entry states its tier (${TIERS.join(", ")})`);
+    let tier: Tier;
+    let idle: IdleMode = "none";
+    try {
+      tier = parseTier(rawTier, `roster ${name}`);
+      idle = parseIdle(rawIdle, `roster ${name}`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
     const [validated] = validateEntries(`roster:${name}`, [rawBilling === undefined ? rest : { ...rest, billing: rawBilling }]);
     out[name] = {
       ...validated!,
-      tiers: tiers as EpisodeId[],
-      ...(runsPerEpisode !== undefined ? { runsPerEpisode } : {}),
+      tier,
+      idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
     };
   }
@@ -724,28 +947,42 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
 }
 
 /**
- * The file's `policy` block: targets, the per-driver concurrency cap, the
- * paid policy and the extras policy are configurable (`parsePolicyBlock` in
- * runner/src/models.ts is the one parser; the viewer reads the same); the
- * ladder and the promotion level are code. The series is this checkout's.
+ * The file's `policy` block: what is left in it is the per-key concurrency cap
+ * and the paid throttle — where runs may execute and how many at once
+ * (`parsePolicyBlock` in runner/src/models.ts is the one parser; the viewer
+ * reads the same). The tier table, the idle character cycle, the defer ladder
+ * and the promotion level are code. The series is this checkout's.
  */
 function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: Record<string, number> } {
   const { maxConcurrent, ...policy } = parsePolicyBlock(raw, currentSeries());
   return { policy, maxConcurrent };
 }
 
-/** The roster as the projection reads it: ordered, named, with the two overrides. */
+/**
+ * The roster as the projection reads it: ordered, named, with its tier and
+ * idle axis.
+ *
+ * Every entry projects. It used to drop the tierless ones, which were the
+ * steered probes — and since ADR-0041 there are none: an entry cannot carry an
+ * objective, so it cannot be outside the policy, so it always states a tier.
+ */
 export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterModel[] {
-  return Object.entries(roster).map(([name, e]) => ({
-    name,
-    model: e.model,
-    ...(e.effort !== undefined ? { effort: e.effort } : {}),
-    ...(e.driver !== undefined ? { driver: e.driver } : {}),
-    ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
-    ...(e.tiers.length > 0 ? { tiers: e.tiers } : {}),
-    ...(e.runsPerEpisode !== undefined ? { runsPerEpisode: e.runsPerEpisode } : {}),
-    ...(e.billing !== undefined ? { billing: e.billing } : {}),
-  }));
+  return Object.entries(roster).flatMap(([name, e]) =>
+    e.tier === undefined
+      ? []
+      : [
+          {
+            name,
+            model: e.model,
+            ...(e.effort !== undefined ? { effort: e.effort } : {}),
+            ...(e.driver !== undefined ? { driver: e.driver } : {}),
+            ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
+            tier: e.tier,
+            idle: e.idle,
+            ...(e.billing !== undefined ? { billing: e.billing } : {}),
+          },
+        ],
+  );
 }
 
 /** The roster names the policy may schedule (`policyRefsOf`, models.ts). */
@@ -782,7 +1019,12 @@ export type Eligible = (ref: string, episode: EpisodeId) => boolean;
 
 export function eligibleFrom(states: readonly ModelState[]): Eligible {
   const by = new Map(states.map((s) => [s.name, s]));
-  return (ref, ep) => ep === "freeplay" || (by.get(ref)?.eligible.includes(ep) ?? false);
+  // Asked of scored-ness, not of a name: `eligible` is the tier's own budget, so
+  // an episode no tier can buy is not something a model is admitted TO. It was
+  // the freeplay name check here, which is the same landmine 8cfabb1 closed in
+  // `targetFor` and `runnableRefs` — dead for probing only because every caller
+  // happens to short-circuit first, which is not a property worth relying on.
+  return (ref, ep) => !isScoredEpisode(ep) || (by.get(ref)?.eligible.includes(ep) ?? false);
 }
 
 function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): FleetJob[] {
@@ -865,7 +1107,7 @@ export function planQueue(opts: {
   held: (account: string) => string | undefined;
   cooling: (job: FleetJob) => string | undefined;
   /**
-   * Who may run what. Default: the roster's `tiers` (a manual force). The
+   * Who may run what. Default: only what needs no promotion. The
    * supervisor passes `eligibleFrom(modelStates(...))`, which adds what run
    * history has earned (ADR-0034).
    */
@@ -889,7 +1131,7 @@ export function planQueue(opts: {
         reason:
           gated.length === 0
             ? `ref ${job.ref} is not in roster`
-            : `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)`,
+            : `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)`,
       });
       continue;
     }
@@ -916,7 +1158,7 @@ export function planQueue(opts: {
 
 /**
  * The refs of a job that may run in its episode: in the roster and promoted
- * into the tier (`freeplay` is unscored and needs no promotion). A job runs
+ * into the tier (an unscored episode needs no promotion). A job runs
  * with whatever subset passes; a ref gated out is dropped from that job's
  * roster, and the skip reason names it only when nothing is left.
  */
@@ -926,8 +1168,14 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     if (e === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
-    // e90 is every model's on arrival (ADR-0034); freeplay is unscored and needs no promotion.
-    if (job.episode === "freeplay" || job.episode === "e90" || e.tiers.includes(job.episode)) return true;
+    // An unscored episode needs no promotion: no tier buys one, so there is no
+    // rung to have climbed. Otherwise the entry's own DECLARED tier is the
+    // static floor — every tier buys e90, and a `t2` entry buys an e360 without
+    // any run history, which is what the retired `tiers` force used to spell.
+    // The projection is asked only for what a model has EARNED on top of that,
+    // so a climb opens e360 for a `t1` entry.
+    if (!isScoredEpisode(job.episode)) return true;
+    if (e.tier !== undefined && TIER_TABLE[e.tier].runsPerEpisode[job.episode] > 0) return true;
     return eligible !== undefined && eligible(r, job.episode);
   });
 }
@@ -943,11 +1191,15 @@ export function policyJob(pick: NextJob): FleetJob {
     ref: pick.name,
     episode: pick.episode,
     repeat: 1,
-    name: `${pick.name}-${pick.episode}`,
+    // A probe names its cell: the job name is what run ids, log paths and the
+    // defer sidecar hang off, so without it every cell of one sweep would
+    // accumulate under one name and a run id would not say which cell it was.
+    name: pick.probe !== undefined ? `${pick.name}-${pick.probe.campaign}-${pick.probe.cell}` : `${pick.name}-${pick.episode}`,
     enabled: true,
     source: "policy",
     attempt: pick.attempt,
     ...(pick.extra !== undefined ? { extra: pick.extra } : {}),
+    ...(pick.probe !== undefined ? { probe: pick.probe } : {}),
   };
 }
 
@@ -989,9 +1241,11 @@ export function planPolicy(opts: {
   pool: string[];
   /**
    * The accounts each split-out class may use (`classPoolsOf`): `accounts.paid`
-   * when the paid class is configured, `accounts.local` always. Picks of that
-   * class draw from here and never from `pool`; a class absent is the pre-split
-   * behaviour (its picks share the pool), an empty array holds them.
+   * and `accounts.local`, both unconditional. Picks of that class draw from
+   * here and never from `pool`; an EMPTY array holds them and reports them.
+   * A class ABSENT from the map shares the pool — a shape `classPoolsOf` no
+   * longer produces, kept because hand-built configs (tests, a state file read
+   * back) may predate a class.
    */
   classPools?: Partial<Record<AccountClass, string[]>>;
   running: Map<string, string>;
@@ -1002,16 +1256,31 @@ export function planPolicy(opts: {
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
   paidRunning?: number;
+  /** The enabled, unpinned campaigns the policy may schedule (ADR-0041). */
+  campaigns?: readonly Campaign[];
+  /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
+  probeRuns?: readonly ProbeRun[];
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
 
 /** `planPolicy` plus what it held back and why. */
 export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
-  if (opts.queuePlan.waiting.length > 0) return { picks: [], held: [] };
+  // A waiting manual job reserves the POOL, and nothing else. Such a job has no
+  // account, and a job with no account can only ever take a pool one (ADR-0034:
+  // the class split governs the policy; a manual queue job draws from the
+  // pool), so vetoing every class starved paid and local picks on accounts the
+  // queue could never have used — a queue job stuck behind a busy RUNNER would
+  // hold the local box idle. Returning no `held` with it also broke this file's
+  // own rule that a held pick is always named. Reserve the pool, let the other
+  // classes pick, and say what the reservation was for.
+  const reserved =
+    opts.queuePlan.waiting.length > 0
+      ? `pool reserved for waiting manual job(s): ${opts.queuePlan.waiting.map((j) => j.name).join(", ")}`
+      : undefined;
   const taken = new Set([...opts.running.values(), ...opts.queuePlan.assign.map((a) => a.account)].map((a) => a.toUpperCase()));
   const usable = (list: readonly string[]): string[] => list.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
-  const free = usable(opts.pool);
+  const free = reserved === undefined ? usable(opts.pool) : [];
   // Per split-out class: the accounts of that class still free right now.
   const splitFree: Partial<Record<AccountClass, string[]>> = {};
   for (const cls of ACCOUNT_CLASSES) {
@@ -1022,7 +1291,10 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   // still has held picks to report — whether it is unconfigured or merely all
   // busy — so it does not short-circuit here.
   const gap = ACCOUNT_CLASSES.some((c) => c !== "pool" && opts.classPools?.[c] !== undefined && splitFree[c]!.length === 0);
-  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap) return { picks: [], held: [] };
+  // A reserved pool still has something to report, so it does not short-circuit
+  // either: the held rows are the whole point of naming the reservation.
+  if (free.length === 0 && Object.values(splitFree).every((l) => l.length === 0) && !gap && reserved === undefined)
+    return { picks: [], held: [] };
   const running = new Set(opts.runningRefs);
   for (const a of opts.queuePlan.assign) for (const r of a.job.refs) running.add(r);
   const wrap = (pick: NextJob): PolicyPick => ({ job: policyJob(pick), account: pick.account, why: pick.why });
@@ -1065,6 +1337,9 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
         ACCOUNT_CLASSES.filter((c) => splitFree[c] !== undefined).map((c) => [c, busy(c, also)]),
       ) as Partial<Record<AccountClass, BusyAccount[]>>,
       paidRunning: (opts.paidRunning ?? 0) + also.filter((p) => billingOf.get(p.name) === "paid").length,
+      ...(reserved !== undefined ? { poolHeld: reserved } : {}),
+      ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
+      ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
     });
   if (opts.concurrency === undefined) {
     const plan = next(opts.states, free, []);
@@ -1117,21 +1392,59 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
  * A job materialised for the spawner: the roster entries with the episode's
  * dimensions folded in, `repeat: n` as n copies with their own run ids
  * (`-r2`, `-r3`, ...) so one roster process runs them in sequence,
- * `repeat: "loop"` as run-roster's own --loop. `tiers` never reaches the
- * roster file.
+ * `repeat: "loop"` as run-roster's own --loop. `tier` and `idle` never reach
+ * the roster file: they are the fleet's bookkeeping, not a run dimension.
  */
-export function jobSpawn(job: FleetJob, roster: Record<string, FleetRosterEntry>, account: string, stamp: string, eligible?: Eligible): JobSpawn {
+export function jobSpawn(
+  job: FleetJob,
+  roster: Record<string, FleetRosterEntry>,
+  account: string,
+  stamp: string,
+  eligible?: Eligible,
+  campaigns: readonly Campaign[] = [],
+): JobSpawn {
   const dims = episodeDimensions(job.episode);
+  /*
+   * A probe's task shape comes from its campaign and nothing else (ADR-0041).
+   * The catalog entry supplies credentials and a model, so its own `objective`,
+   * `watchdogs`, `maxToolCalls` and `wikiCoords` are dropped rather than merged:
+   * a campaign that says "no objective" must not inherit one from whichever
+   * entry it borrowed, or two cells of one sweep would be running different
+   * experiments. Precedence is episode table < campaign < cell, which is what
+   * `workDimensions` already resolves.
+   */
+  const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign);
+  const cell = campaign?.cells.find((x) => x.id === job.probe!.cell);
+  const allProbeDims = campaign !== undefined && cell !== undefined ? workDimensions(campaign, cell) : undefined;
+  // Watchdogs are merged into their own key below, so they are held apart here:
+  // spreading them with the rest would replace that merge with the campaign's
+  // partial override and silently drop the episode's idle and no-XP thresholds.
+  const probeWatchdogs = allProbeDims?.watchdogs;
+  const probeDims = allProbeDims === undefined ? undefined : (({ watchdogs: _w, ...rest }) => rest)(allProbeDims);
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
-    const { tiers: _tiers, runsPerEpisode: _runs, billing: _billing, ...spec } = roster[r]!;
+    const { tier: _tier, idle: _idle, billing: _billing, ...entry } = roster[r]!;
+    // A probe keeps only what identifies the model; the campaign owns the rest.
+    const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, ...credentials } = entry;
+    const isProbe = probeDims !== undefined;
+    const spec: RosterSpec = isProbe ? credentials : entry;
+    // The entry's own leash, kept only when the entry is the authority on it.
+    const own = isProbe ? {} : { watchdogs: entry.watchdogs, maxToolCalls: entry.maxToolCalls };
+    // An `idle: "unlimited"` session is the one freeplay run the policy makes,
+    // and it carries a wall clock the tier does not pin: a class governs the
+    // next pick and never a run in flight, so a session ended only by the idle
+    // watchdog would hold its account for as long as the model kept playing.
+    // The entry's own watchdogs still win — this is a default, not a ceiling.
+    const unlimited = isExtraJob(job) && job.episode === "freeplay" ? { episodeMs: UNLIMITED_SESSION_MS } : {};
     const base: RosterSpec = {
       ...spec,
       ...dims,
-      watchdogs: { ...dims.watchdogs, ...spec.watchdogs },
-      ...(spec.maxToolCalls !== undefined ? { maxToolCalls: spec.maxToolCalls } : {}),
+      watchdogs: { ...dims.watchdogs, ...unlimited, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
+      ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
+      ...(probeDims ?? {}),
+      ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's character, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
@@ -1475,6 +1788,29 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
 }
 
 /**
+ * The refused pins (item 66), printed under the rejection banner.
+ *
+ * A refusal is quieter than the outage it replaces, which is the point — and
+ * also the risk. The file IS in effect, so nothing else looks wrong; the only
+ * way an operator learns their `enabled: true` did not take is this block and
+ * the supervisor's log line. `!` rather than the banner's `!!`: the fleet is
+ * running, one pin is not.
+ */
+export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = true): string[] {
+  if (refusals.length === 0) return [];
+  // `inForce` false means the banner above already said the file is NOT what
+  // the supervisor is running — a fixed file within a tick of being re-read, or
+  // a whole-file failure. Saying "the rest IS in effect" under that banner
+  // would contradict it at exactly the moment a board needs reading.
+  return [
+    `! ${refusals.length} pin(s) refused by the account rules` +
+      (inForce ? " — the rest of the file IS in effect:" : " IN THE FILE — see the banner above for what is actually running:"),
+    ...refusals.map((r) => `   ${r.pin} REFUSED and left disabled: ${r.why}`),
+    "   a live run under a refused pin is left alone; it just will not respawn",
+  ];
+}
+
+/**
  * Load a config for a read-only reader (`--status`), which must survive a file
  * the supervisor already rejected instead of dying on it.
  */
@@ -1515,6 +1851,26 @@ export function jobJsonlPath(job: string, stamp: string): string {
 }
 export function jobLogPath(job: string, stamp: string): string {
   return join(RUNS_DIR, `fleet-${job}-${stamp}.log`);
+}
+
+/**
+ * Respawn circuit breaker (2026-08-24). A job whose process keeps dying
+ * within seconds of spawning leaves no run artifact, so nothing else cools
+ * it: the defer ladder reads runs from disk, and a launch that failed before
+ * `run.sqlite` existed is invisible to it. `sonnet-low` respawned every 60s
+ * tick for two hours on a character name the runner refuses — the name is
+ * validated at config load now, but the MECHANISM outlives any one cause
+ * (a bad flag, a broken driver binary, the next config gap). Three
+ * short-lived exits inside the window hold the job for one window, named in
+ * the log with a pointer at the job log that says why it is dying. In-memory
+ * only, deliberately: a supervisor restart forgets everything, and a real
+ * crash loop re-trips the breaker within three ticks.
+ */
+export const BREAKER_SHORT_LIVED_MS = 90_000;
+export const BREAKER_WINDOW_MS = 10 * 60_000;
+export const BREAKER_TRIPS = 3;
+export function tripsBreaker(shortLivedExits: readonly number[], now: number): boolean {
+  return shortLivedExits.filter((t) => now - t <= BREAKER_WINDOW_MS).length >= BREAKER_TRIPS;
 }
 
 /**
@@ -1893,6 +2249,12 @@ export interface JobRow {
    * class governs the next pick, not a run already in flight.
    */
   offClass?: string;
+  /**
+   * Another job's process is live on this account too. One session per account
+   * is the invariant the whole scheduler rests on, so this is a real fault,
+   * not a rendering choice: say both names rather than pick one quietly.
+   */
+  clash?: string;
 }
 
 /** What an account is doing right now, for the accounts table. */
@@ -1937,7 +2299,7 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
     const run = j.runId !== undefined ? `${j.runId} — ${prog}` : "no run launched yet";
     out.push(
       `${head}${what} — ${run}${j.elapsedMs !== undefined ? `, ${fmtElapsed(j.elapsedMs)}` : ""}${j.cooling !== undefined ? ` — ${j.cooling}` : ""}` +
-        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}`,
+        `${j.offClass !== undefined ? ` [${j.offClass}]` : ""}${j.clash !== undefined ? ` !! ${j.clash}` : ""}`,
     );
   }
   return out;
@@ -1959,12 +2321,21 @@ export function formatModels(
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
   const out: string[] = [
-    `models: ${states.length} in roster (policy: ADR-0034; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
-      `${policy.paid !== null ? `; paid ${policy.paid.runsPerEpisode.e90}/${policy.paid.runsPerEpisode.e360}, at most ${policy.paid.maxConcurrent} in flight` : "; no paid/free split"}` +
-      `${policy.extras !== null ? `; extras cycle ${policy.extras.characters.length} character(s), local: ${policy.extras.local}` : "; no extras"})`,
-    `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
+    `models: ${states.length} in roster (policy: ADR-0043; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
+      `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
+      `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
+      `; idle unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
+    `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
+  /**
+   * The tier column. A climb is shown as the move it was (`t1>t2`); a held
+   * witness is shown as a held witness (`t0*`), because a trial model that has
+   * earned rung 1 is exactly the row an operator is looking for when deciding
+   * what to promote — and the old table could only say `promoted, 0/0`.
+   */
+  const tierCell = (s: ModelState): string =>
+    s.tier !== s.declaredTier ? `${s.declaredTier}>${s.tier}` : s.earnedRung1 ? `${s.tier}*` : s.tier;
   const cell = (s: ModelState, ep: "e90" | "e360"): string => {
     const st = s.perEpisode[ep]!;
     if (!s.eligible.includes(ep)) return "-";
@@ -1975,16 +2346,28 @@ export function formatModels(
     // Freeplay is in the walk: a local model past its targets has nothing but
     // freeplay extras, and "last ... never" would be wrong about it.
     const last = STATS_EPISODES.map((ep) => s.perEpisode[ep]).filter((st) => st !== undefined && st.lastEnded !== null).sort((a, b) => b!.lastEnded! - a!.lastEnded!)[0];
-    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${v.ok ? "yes" : "no"}: ${v.why}`)(schedulability(s, running, policy));
+    // Three words, not two. "no" used to mean both "cannot run" and "has
+    // nothing owed but would take a spare account", and telling those apart is
+    // the whole reason the verdict stopped being a pair of booleans: `free` is
+    // where probe campaigns and idle work draw from.
+    const verdictWord = { eval: "yes", free: "free", blocked: "no" } as const;
+    const sched = ex !== undefined ? `no: ${ex}` : ((v) => `${verdictWord[v.verdict]}: ${v.why}`)(schedulability(s, running, policy));
     const extras = extrasSoFar(s);
     const other = (["e90", "e360"] as const).reduce((n, ep) => n + (s.perEpisode[ep]?.otherSeries ?? 0), 0);
     out.push(
-      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
+      `  ${s.name.padEnd(w)} ${s.billing.padEnd(7)} ${tierCell(s).padEnd(9)} ${(ex !== undefined ? "pinned" : s.status).padEnd(8)} ${cell(s, "e90").padEnd(12)} ${cell(s, "e360").padEnd(12)} ${String(extras).padEnd(6)} ${sched}` +
         (last !== undefined && ex === undefined ? ` — last ${last.lastReason ?? "unterminated"} ${ago(last.lastEnded)}` : "") +
         (s.ladder > 0 ? ` — ladder ${s.ladder}` : "") +
         (other > 0 ? ` — ${other} run(s) from other series not counted` : ""),
     );
   }
+  // A steered entry carries no tier and so has no row: it is not evidence, and
+  // the table is the evidence table. It is still named here, because vanishing
+  // from `--status` entirely is how an operator loses track of a probe that is
+  // very much running (the accounts block above shows it on its account).
+  const rowed = new Set(states.map((s) => s.name));
+  const offBook = [...excluded].filter(([name]) => !rowed.has(name));
+  for (const [name, why] of offBook) out.push(`  ${name.padEnd(w)} ${"—".padEnd(7)} ${"steered".padEnd(9)} ${"—".padEnd(8)} ${"—".padEnd(12)} ${"—".padEnd(12)} ${"—".padEnd(6)} no: ${why}`);
   return out;
 }
 
@@ -2002,13 +2385,24 @@ export function formatAccountClasses(config: Pick<FleetConfig, "accounts" | "pol
   return [...formatPaidClass(config), ...formatLocalClass(config)];
 }
 
-/** The paid class line. Silent on a file that predates the split entirely. */
-export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy">): string[] {
-  if (config.policy.paid === null) return config.accounts.paid.length === 0 ? [] : [`paid class: ${config.accounts.paid.join(", ")} (no policy.paid block — no cap, no paid targets)`];
+/**
+ * The paid class line — the same shape as the local one, now that the split is
+ * unconditional. It says what the roster wants, what the file provides, and the
+ * cap when there is one, and stays quiet only when there is neither a paid
+ * account nor a paid model to put on one.
+ */
+export function formatPaidClass(config: Pick<FleetConfig, "accounts" | "policy" | "roster">): string[] {
+  const models = rosterModels(config.roster).filter((r) => rosterClass(r) === "paid");
   if (config.accounts.paid.length === 0) {
-    return ["paid class: NO PAID ACCOUNT CONFIGURED — paid picks are held, never spilled into the pool; add one to accounts.paid"];
+    if (models.length === 0) return [];
+    return [
+      `paid class: NO PAID ACCOUNT CONFIGURED — ${models.map((m) => m.name).join(", ")} held, never spilled into the pool; add one to accounts.paid`,
+    ];
   }
-  return [`paid class: ${config.accounts.paid.join(", ")} — paid picks only, at most ${config.policy.paid.maxConcurrent} in flight; the pool stays free-only`];
+  const cap = config.policy.paid === null ? "no policy.paid block, so no cap" : `at most ${config.policy.paid.maxConcurrent} in flight`;
+  return [
+    `paid class: ${config.accounts.paid.join(", ")} — paid models only (${models.length === 0 ? "none in the roster" : models.map((m) => m.name).join(", ")}); ${cap}; the pool stays free-only`,
+  ];
 }
 
 /**
@@ -2242,6 +2636,15 @@ let preflightInFlight: { identity: string; since: number } | undefined;
 let configRejected: ConfigRejection | undefined;
 /** When the config actually in force was parsed. Set on load and on re-read. */
 let configLoadedAt: number | undefined;
+/**
+ * The refusals last logged, joined. Deduping on the SET rather than a count
+ * means a swap — one pin fixed and another broken in the same edit — is still
+ * announced. `undefined` until the first tick, so a file that boots with
+ * refusals says so once rather than never.
+ */
+let lastRefusals: string | undefined;
+/** Live jobs spared a drain because their pin was refused — logged once each. */
+const spared = new Set<string>();
 
 /** Live job bookkeeping, published into the state file every tick. */
 interface PoolView {
@@ -2501,10 +2904,18 @@ function jobDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
 
 /**
  * Live episodes across every job account, for an operator (or a script) that
- * wants to know whether the world is busy. Same signal --status shows: the
- * roster's own account-busy inference over the trajectory stores. Exit code
- * carries the answer so bash never parses this text. The deploy script does
- * not use it any more: it stops the fleet for its window (runs pause).
+ * wants to know whether the world is busy: the roster's own account-busy
+ * inference over the trajectory stores, which is what the scheduler leases by.
+ *
+ * This is a DIFFERENT source than the --status accounts table, which reports
+ * the supervisor's own `jobs` record — and saying the two were "the same
+ * signal" is how a stale row there went unnoticed (FOLLOW-UPS 68). They should
+ * now agree on every fleet-managed account; where they cannot, this one is the
+ * truth about the world and that one is the truth about the supervisor.
+ *
+ * Exit code carries the answer so bash never parses this text. The deploy
+ * script does not use it any more: it stops the fleet for its window, and a
+ * live episode pauses as `operator-pause` and resumes on the far side.
  */
 function printLiveRuns(configPath: string): number {
   const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
@@ -2533,6 +2944,59 @@ export function liveJobsFromState(state: Pick<FleetState, "jobs"> | undefined): 
   return out;
 }
 
+/**
+ * Which job is on each account, out of every job the supervisor has spawned.
+ *
+ * `state.jobs` is keyed by job NAME — stable across attempts — so it is a
+ * cumulative record, not a live set: over a long night a dozen entries name
+ * the same pool account and all but one of them exited hours ago. Keying a map
+ * by account and letting the last write win therefore reads the object's
+ * insertion order, which is FIRST-spawn order, and a job that finished at noon
+ * can mask the run holding the account now. That is what made the accounts
+ * table disagree with --live-runs (FOLLOW-UPS 68).
+ *
+ * So rank rather than overwrite: a live job beats a dead one, and among live
+ * ones the most recently spawned wins. `alive` is passed in so the selection
+ * and the row's own liveness note are the same verdict — with the supervisor
+ * down, `j.alive` is stale on every job and only the caller knows that.
+ *
+ * Two live jobs on one account is a double-lease. It is reported, never
+ * resolved silently: the scheduler leases by `accountHeldBy`, so this table is
+ * the only place such a fault would ever surface.
+ */
+export function jobsByAccount(
+  live: ReadonlyMap<string, StateJob>,
+  alive: (j: StateJob) => boolean,
+): Map<string, { name: string; j: StateJob; clash?: string }> {
+  const groups = new Map<string, { name: string; j: StateJob }[]>();
+  for (const [name, j] of live) {
+    const key = j.account.toUpperCase();
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, [{ name, j }]);
+    else g.push({ name, j });
+  }
+  const out = new Map<string, { name: string; j: StateJob; clash?: string }>();
+  for (const [key, g] of groups) {
+    const ranked = [...g].sort((a, b) => {
+      const la = alive(a.j) ? 1 : 0;
+      const lb = alive(b.j) ? 1 : 0;
+      // A state file from another supervisor build carries no spawnedAt; it
+      // sorts last rather than throwing the comparison.
+      if (la !== lb) return lb - la;
+      return (typeof b.j.spawnedAt === "number" ? b.j.spawnedAt : 0) - (typeof a.j.spawnedAt === "number" ? a.j.spawnedAt : 0);
+    });
+    const pick = ranked[0]!;
+    const alsoLive = ranked.slice(1).filter((o) => alive(o.j));
+    out.set(
+      key,
+      alive(pick.j) && alsoLive.length > 0
+        ? { ...pick, clash: `also live here: ${alsoLive.map((o) => o.name).join(", ")} — one session per account` }
+        : pick,
+    );
+  }
+  return out;
+}
+
 function printStatus(configPath: string): void {
   // State first, and the banner before anything else: the file may not parse
   // here either, and even when it does, this reader can be a different code
@@ -2555,6 +3019,7 @@ function printStatus(configPath: string): void {
         " — rows below are what the supervisor last ran, not the file's",
     );
   }
+  for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
   // in another PID namespace — it either says "no such process" for a healthy
@@ -2597,6 +3062,14 @@ function printStatus(configPath: string): void {
           now: Date.now(),
         })
       : { resume: [], listed: [], end: [] };
+  /**
+   * The one liveness verdict for this printing. A heartbeat is the only honest
+   * signal across a container boundary; without one (a host supervisor) the pid
+   * is. Shared with `jobsByAccount` so the job a row picks and the note that
+   * row prints can never contradict each other.
+   */
+  const isAlive = (j: StateJob): boolean =>
+    typeof j.pid !== "number" ? false : hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
   const jobRow = (name: string, j: StateJob): JobRow => {
     const row: JobRow = {
       name,
@@ -2611,7 +3084,7 @@ function printStatus(configPath: string): void {
       row.cooling = "state file from another supervisor build — restart the fleet service";
       return row;
     }
-    const alive = hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
+    const alive = isAlive(j);
     const stdoutLog = resolveStatePath(j.log, jobLogPath(name, state!.stamp));
     const jsonl = resolveStatePath(j.jsonl, jobJsonlPath(name, state!.stamp));
     const runId = lastLaunchedRunId(stdoutLog);
@@ -2634,8 +3107,7 @@ function printStatus(configPath: string): void {
     if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${j.exitCode !== null ? `exited ${j.exitCode}` : "dead"}`;
     return row;
   };
-  const byAccount = new Map<string, { name: string; j: StateJob }>();
-  for (const [name, j] of live) byAccount.set(j.account.toUpperCase(), { name, j });
+  const byAccount = jobsByAccount(live, isAlive);
   // With the config in hand the classes come from the file; without it (an
   // older or foreign checkout) from whatever the state file published.
   const classAccounts = (cls: AccountClass): string[] =>
@@ -2658,8 +3130,12 @@ function printStatus(configPath: string): void {
         // A class governs the next pick, never a run in flight: a job that
         // landed before the classes did keeps its account and says so.
         const entry = config?.roster[on.j.ref];
-        const want = entry === undefined ? undefined : rosterClass(rosterModels({ [on.j.ref]: entry })[0]!);
+        // A steered entry carries no tier and so projects to no model: it is a
+        // probe on a pinned account, and it has no class to be off.
+        const projected = entry === undefined ? [] : rosterModels({ [on.j.ref]: entry });
+        const want = projected[0] === undefined ? undefined : rosterClass(projected[0]);
         const row = jobRow(on.name, on.j);
+        if (on.clash !== undefined) row.clash = on.clash;
         if (want !== undefined && on.j.source === "policy" && want !== classOfAccount(account)) {
           row.offClass = `${want} model on a ${classOfAccount(account)} account — left alone; the class applies to the next pick`;
         }
@@ -2770,7 +3246,7 @@ function printStatus(configPath: string): void {
  * pool accounts the queue and then the policy would take. Pure over the
  * projection; used by --dry-run and by the startup fail-fast.
  */
-export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = []): {
+export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = [], probeRuns: readonly ProbeRun[] = []): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
   policy: PolicyPick[];
@@ -2779,9 +3255,14 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
 } {
   const eligible = eligibleFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
-  const pinned = pinnedJobs(config)
+  // A pinned campaign's next cell is a pinned job, and it has to be one HERE
+  // too: `planTick` is what `--status` and `--dry-run` print, and a probe the
+  // live loop would spawn but this planner never mentions is exactly the kind
+  // of quiet disagreement between the supervisor and its own report that has
+  // cost a night before.
+  const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns)]
     .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
-    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible) }));
+    .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.
   const running = new Map(resumes.map((r) => [r.job.name, r.account]));
   const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs)]);
@@ -2812,6 +3293,8 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     concurrency: { keyOf, max: config.maxConcurrent, running: keyCount },
     policy: config.policy,
     paidRunning: 0,
+    campaigns: unpinnedCampaigns(config),
+    probeRuns,
   });
   return { pinned, queue, policy, heldPicks };
 }
@@ -2829,12 +3312,17 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
-  const plan = planTick(config, states, held, stampToday, resumes.resume);
+  const plan = planTick(config, states, held, stampToday, resumes.resume, probeRunsOf(runs, config.roster));
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
   const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
     const entries = fillEntries(spawn, stampToday);
-    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil }).join(" ")}`);
+    // The same resume decision the live spawn makes (see the spawn path):
+    // without it the plan showed a fresh launch for a job whose day jsonl was
+    // on disk, which read as "the paused probe gets clobbered" when the real
+    // spawn would have resumed it.
+    const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
+    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
     return {
       name: job.name,
       models: [...new Set(entries.map((e) => e.model))],
@@ -2848,7 +3336,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const resumeRow = (r: ResumePlan, kind: AccountKind): AccountRow => ({
     account: r.account,
     kind,
-    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
+    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday, undefined, config.campaigns)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
   });
   const listedInDryRun = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
@@ -2869,8 +3357,8 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
       const holder = held(account);
       const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
       if (rs !== undefined) rows.push(resumeRow(rs, kind));
-      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states))) });
-      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday)), name: `${pp.job.name} (policy: ${pp.why})` } });
+      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states), config.campaigns)) });
+      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday, undefined, config.campaigns)), name: `${pp.job.name} (policy: ${pp.why})` } });
       else rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
     }
   }
@@ -3062,6 +3550,10 @@ async function main(): Promise<void> {
   let policyIdle: string | undefined;
   const session = { finished: 0, ok: 0, retried: 0 };
   const spawnedNames = new Set<string>();
+  /** Exit timestamps of short-lived job processes, per name (the breaker's memory). */
+  const shortLivedExits = new Map<string, number[]>();
+  /** name -> hold-until, so a held job logs once per hold, not once per tick. */
+  const breakerHolds = new Map<string, number>();
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
@@ -3081,6 +3573,12 @@ async function main(): Promise<void> {
    * deleted drains); the manual jobs the queue just handed a free account;
    * and the policy's picks for what is left. Jobs with nothing free wait.
    */
+  /**
+   * The pinned-campaign jobs the newest tick generated. Published rather than
+   * re-derived because `spawnJob` needs the job a spawn came from, and a
+   * campaign's jobs exist only for the tick that planned them.
+   */
+  let campaignJobs: FleetJob[] = [];
   const effectiveJobs = (cfg: FleetConfig): JobSpawn[] => {
     const out: JobSpawn[] = [];
     // The run facts once a tick, shared by the projection and the resume
@@ -3100,16 +3598,20 @@ async function main(): Promise<void> {
     const countKey = (refs: readonly string[]): void => {
       for (const r of refs) keyCount.set(keyOf(r), (keyCount.get(keyOf(r)) ?? 0) + 1);
     };
-    // Pinned jobs: from the file, on their own accounts.
-    for (const job of pinnedJobs(cfg)) {
+    // Pinned jobs: from the file, on their own accounts — plus a pinned
+    // campaign's next cell, which is a pinned job in everything but where it
+    // was written down (ADR-0041).
+    const probes = probeRunsOf(runs, cfg.roster);
+    campaignJobs = pinnedCampaignJobs(cfg, probes);
+    for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
         // with the reason said once, exactly like a gated queue job.
-        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (no e90 run reached level 5 yet; force it with roster.<name>.tiers)` });
+        pinnedSkips.push({ job, reason: `${job.ref} is not eligible for ${job.episode} (its tier buys no ${job.episode} runs — earn it with a level-5 e90, or set a tier that includes it)` });
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      out.push(jobSpawn(job, cfg.roster, job.account!, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
         // An enabled pinned job spawns this tick if it is not already running,
@@ -3127,7 +3629,7 @@ async function main(): Promise<void> {
         if (cfg.roster[running.ref] === undefined) {
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         } else {
-          out.push(jobSpawn(running, cfg.roster, account, stampToday));
+          out.push(jobSpawn(running, cfg.roster, account, stampToday, undefined, cfg.campaigns));
           runningRefs.add(running.ref);
           countKey(running.refs);
           if (billingOf.get(running.ref) === "paid") paidRunning++;
@@ -3140,12 +3642,30 @@ async function main(): Promise<void> {
         out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         continue;
       }
-      out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(fromFile, cfg.roster, account, stampToday, eligible, cfg.campaigns));
       for (const r of fromFile.refs) runningRefs.add(r);
       countKey(fromFile.refs);
       // A manual pool job on a paid model holds a paid slot too: the cap is
       // about what is billing at once, not about who asked for it.
       for (const r of fromFile.refs) if (billingOf.get(r) === "paid") paidRunning++;
+    }
+    // Live processes the file no longer YIELDS still hold a session on their
+    // driver: a completed campaign cell draining to its episode boundary, a
+    // job whose config entry vanished. The pinned loop above walks what the
+    // config yields, so such a process silently stopped occupying a slot —
+    // which is how a third claude-code stream spilled onto a cap of 2 while
+    // nav-probe-coldridge (cell quota met, draining) was still alive
+    // (2026-08-24). Count every live job the loops above did not.
+    {
+      const yielded = new Set([...pinnedJobs(cfg), ...campaignJobs].map((j) => j.name));
+      for (const name of sets.running) {
+        if (yielded.has(name) || assigned.has(name)) continue;
+        const job = liveJobs.get(name);
+        if (job === undefined) continue;
+        for (const r of job.refs) runningRefs.add(r);
+        countKey(job.refs);
+        for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
+      }
     }
     const held = (a: string): string | undefined => accountHeldBy(a, "");
     // Resumes before anything fresh (ADR-0036): a paused run goes back onto
@@ -3173,7 +3693,7 @@ async function main(): Promise<void> {
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
-      const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday);
+      const spawn = jobSpawn(r.job, cfg.roster, r.account, stampToday, undefined, cfg.campaigns);
       if (r.job.account !== undefined) {
         pending.set(name, r.job);
         const idx = out.findIndex((l) => l.name === name);
@@ -3212,7 +3732,7 @@ async function main(): Promise<void> {
     lastPlan.skipped.unshift(...pinnedSkips);
     for (const { job, account } of lastPlan.assign) {
       pending.set(job.name, job);
-      out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible));
+      out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible, cfg.campaigns));
     }
     // The policy fills what the queue left free. A gated spawn is not a
     // problem: the pick is re-made next tick from the same projection.
@@ -3229,6 +3749,8 @@ async function main(): Promise<void> {
         concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount },
         policy: cfg.policy,
         paidRunning,
+        campaigns: unpinnedCampaigns(cfg),
+        probeRuns: probes,
       });
       for (const { job, account, why } of picks) {
         pending.set(job.name, job);
@@ -3242,7 +3764,7 @@ async function main(): Promise<void> {
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
-        out.push(jobSpawn(job, cfg.roster, account, stampToday));
+        out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
       const free = scheduledAccounts(cfg).filter((a) => !taken.has(a.toUpperCase()) && held(a) === undefined);
@@ -3288,6 +3810,26 @@ async function main(): Promise<void> {
   });
 
   const spawnJob = (spawn: JobSpawn): void => {
+    {
+      // The breaker, before anything is written or spawned. Handing the
+      // account back via `pending` is what makes a hold a hold: the planner
+      // re-picks next tick, lands here again, and stays quiet until the
+      // window lapses.
+      const now = Date.now();
+      const exits = (shortLivedExits.get(spawn.name) ?? []).filter((t) => now - t <= BREAKER_WINDOW_MS);
+      shortLivedExits.set(spawn.name, exits);
+      if (tripsBreaker(exits, now)) {
+        const until = breakerHolds.get(spawn.name);
+        if (until === undefined || now >= until) {
+          breakerHolds.set(spawn.name, now + BREAKER_WINDOW_MS);
+          const detail = `${exits.length} spawns died within ${Math.round(BREAKER_SHORT_LIVED_MS / 1000)}s of launch in the last ${Math.round(BREAKER_WINDOW_MS / 60_000)}m`;
+          say(`job ${spawn.name}: crash loop — ${detail}; holding ${Math.round(BREAKER_WINDOW_MS / 60_000)}m (${jobLogPath(spawn.name, stampToday)} says why)`);
+          record({ job: spawn.name, event: "breaker-hold", detail });
+        }
+        pending.delete(spawn.name);
+        return;
+      }
+    }
     const entries = fillEntries(spawn, stampToday);
     const rosterPath = jobRosterPath(spawn.name, stampToday);
     mkdirSync(RUNS_DIR, { recursive: true });
@@ -3307,11 +3849,25 @@ async function main(): Promise<void> {
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
-    const pj = pending.get(spawn.name) ?? pinnedJobs(config).find((j) => j.name === spawn.name);
+    // A pinned CAMPAIGN's job is not in `config.jobs` — it is generated from the
+    // campaigns block each tick — so looking only at `pinnedJobs` left its
+    // process with no job at all, and every state row for it read "episode
+    // unknown" through `stateJobFacts`' fallback. `campaignJobs` is what the
+    // tick that planned this spawn generated, so the lookup finds it without
+    // re-deriving the sweep here.
+    const pj =
+      pending.get(spawn.name) ??
+      [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
     const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
+      // The breaker's input: a process that died this fast launched nothing.
+      if (Date.now() - lp.spawnedAt < BREAKER_SHORT_LIVED_MS) {
+        const arr = shortLivedExits.get(spawn.name) ?? [];
+        arr.push(Date.now());
+        shortLivedExits.set(spawn.name, arr);
+      }
     });
     procs.set(spawn.name, lp);
     sets.running.add(spawn.name);
@@ -3497,7 +4053,37 @@ async function main(): Promise<void> {
     }
     config = next;
 
+    // Refused pins (item 66). Deduped on the joined set, the way the rejection
+    // is deduped on its message: a config that keeps refusing the same pin says
+    // so once, not every 60s, but a NEW refusal always speaks.
+    const refusals = config.refusals.map((r) => `${r.pin}: ${r.why}`).join("\n");
+    if (refusals !== lastRefusals) {
+      lastRefusals = refusals;
+      for (const r of config.refusals) {
+        say(`config: ${r.pin} REFUSED and left disabled: ${r.why}`);
+        record({ job: "-", event: "config-refusal", detail: `${r.pin}: ${r.why}` });
+      }
+    }
+
     const actions = diffJobs(effectiveJobs(config), sets);
+    // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
+    // normally means the operator parked it, so `diffJobs` drains its live run
+    // at the next episode boundary — but a refused pin was not parked, it was
+    // overruled, and under the old whole-file rejection the live run was never
+    // touched at all. Without this, adding one queue job on an account a
+    // campaign already holds would SIGTERM a probe hours into its episode:
+    // strictly worse than the outage this replaced, because it destroys work
+    // rather than confusing someone. The run finishes and does not respawn.
+    const refusedJobs = new Set(config.refusals.flatMap((r) => r.jobs));
+    for (const name of actions.drain.filter((n) => refusedJobs.has(n))) {
+      if (spared.has(name)) continue;
+      spared.add(name);
+      say(`job ${name}: its pin was refused by the account rules — the live run is left alone, and will not respawn`);
+      record({ job: name, event: "refusal-spared" });
+    }
+    actions.drain = actions.drain.filter((n) => !refusedJobs.has(n));
+    // A pin that stops being refused may be drained again like any other.
+    for (const name of [...spared]) if (!refusedJobs.has(name)) spared.delete(name);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
       say(`job ${name}: re-enabled before it drained — keeping it running`);

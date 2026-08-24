@@ -12,6 +12,7 @@
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/one-quest.ts
  */
 
+import { probeName } from "./lib/name";
 import { connect, pointOf, type NearbyObject } from "../../sdk/src/index";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
@@ -23,7 +24,7 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-quest-${crypto.randomUUID()}`;
 // Fresh name per run: the arc starts at level 1 with an empty quest log, and
 // the realm caps characters per account at ten.
-const CHARACTER = "Sq" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+const CHARACTER = probeName("Sq");
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)
 const QUEST_KILL = 7; //   Kobold Camp Cleanup (kill 8, entry 6)

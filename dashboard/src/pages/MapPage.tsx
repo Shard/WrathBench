@@ -20,40 +20,50 @@
  * toward their newest reading every frame, so the draw loop is a
  * requestAnimationFrame with its own mutable state; Solid owns the sidebar, the
  * chips and the header, which change once per poll.
+ *
+ * That seam is now enforced rather than intended. The signals below are the
+ * only writable state; everything the page displays is derived from them in
+ * `mapstate.ts`, which computes and never writes. Effects here go one way too —
+ * they read signals and write only renderer state (`pips`, `view`, `route`,
+ * `needsDraw`) or a signal nothing upstream of them reads. The rule is that no
+ * signal is read and written in the same reactive scope, which is the shape the
+ * page had before and the reason it recursed.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { cursorMemory } from "../lib/cursormemory";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
+import {
+  clearReplayState,
+  createLeftReplay,
+  createMapState,
+  replayHrefFor,
+} from "../lib/mapstate";
 import {
   STALE_MS,
   TILE_MIN_PX,
+  type Pip,
+  type View,
   colorOf,
+  decimateRoute,
   fitTo,
   hitTest,
+  latticeLines,
   project,
+  stepPips,
+  syncPips,
   visibleGrid,
+  worldPerPixel,
   zoomAt,
-  type View,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
-import { mapsVisited, positionsAt, routeUpTo, trackSpan } from "../lib/replay";
+import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
+const PLAY_MS = 250;
 const TILE_CACHE_MAX = 512;
-
-interface Pip {
-  runId: string;
-  data: AgentPosition;
-  /**
-   * Where the pip is *drawn*, in world yards — walking toward `data.x/y` rather
-   * than jumping to it. One coordinate system throughout: `project()` and
-   * `hitTest()` both read these, so what the eye picks is what the click gets.
-   */
-  x: number;
-  y: number;
-}
 
 interface TileEntry {
   img: HTMLImageElement;
@@ -61,36 +71,61 @@ interface TileEntry {
 }
 
 export default function MapPage() {
+  /*
+   * The route is the page's mode, and the only mode it has: `/map` is live,
+   * `/map?run=<id>` is that run's replay. Everything else the page holds —
+   * cursor, playback, the pinned map, the selection, pan and zoom — is
+   * per-frame state that would make the URL churn, so none of it goes here.
+   * The cursor is remembered per run beside the route instead, so coming back
+   * to a replay does not restart it: `lib/cursormemory.ts` (item 61).
+   */
   const [params] = useSearchParams();
-  const replayId = (): string | undefined =>
-    typeof params.run === "string" && params.run.length > 0 ? params.run : undefined;
+  const replayId = (): string | undefined => runParam(params.run);
 
+  /* --- sources: the only writable state on the page --- */
   const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
   const [cursor, setCursor] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
+  const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
+  const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
+  const [selectedId, setSelectedId] = createSignal<string | null>(null);
+  const [ageTick, setAgeTick] = createSignal(Date.now());
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
-  // owns the map — one feed reaches `ingest`, never two.
+  // owns the map — one feed reaches the renderer, never two.
   const feed = poll(
     () => (replayId() === undefined ? api.positions().then((p) => p.positions) : Promise.resolve([])),
     POLL_MS,
   );
 
+  const { maps, count, cursorMap, activeMap, selected } = createMapState({
+    feed: feedList,
+    track,
+    pinned: pinnedMap,
+    selectedId,
+  });
+
+  const span = createMemo(() => {
+    const t = track();
+    return t === undefined ? null : trackSpan(t.points);
+  });
+
   let canvas!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
-
-  const [maps, setMaps] = createSignal<[number, number][]>([]);
-  const [activeMap, setActiveMap] = createSignal<number | null>(null);
-  const [selected, setSelected] = createSignal<AgentPosition | null>(null);
-  const [count, setCount] = createSignal(0);
-  const [ageTick, setAgeTick] = createSignal(Date.now());
 
   /* Mutable render state — read every frame, never through a signal. */
   const pips = new Map<string, Pip>();
   const tiles = new Map<string, TileEntry>();
   let view: View = { scale: 0.25, ox: 0, oy: 0 };
-  let fitted = false;
+  let route: { x: number; y: number }[] = [];
+  let routeColor = "";
+  /* The decimation of `route` last handed to the canvas, and what it was for. */
+  let routeDrawn: { x: number; y: number }[] = [];
+  let routeSrc: { x: number; y: number }[] | null = null;
+  let routeScale = 0;
+  /* Fitting is deliberate, not reactive — see the fit effect for why. */
+  let pendingFit = true;
   let needsDraw = true;
   let W = 0;
   let H = 0;
@@ -153,45 +188,10 @@ export default function MapPage() {
     needsDraw = true;
   }
 
-  const onMap = (): Pip[] => [...pips.values()].filter((p) => p.data.map === activeMap());
-
-  function ingest(list: AgentPosition[], snap = false): void {
-    const seen = new Set<string>();
-    for (const p of list) {
-      seen.add(p.runId);
-      const existing = pips.get(p.runId);
-      if (existing === undefined) {
-        pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y });
-      } else {
-        existing.data = p;
-        // Scrubbing: the pip belongs where the cursor says, now. Walking there
-        // at 0.18/frame would trail every drag of the slider.
-        if (snap) {
-          existing.x = p.x;
-          existing.y = p.y;
-        }
-      }
-    }
-    for (const id of [...pips.keys()]) if (!seen.has(id)) pips.delete(id);
-
-    const counts = new Map<number, number>();
-    for (const pip of pips.values()) counts.set(pip.data.map, (counts.get(pip.data.map) ?? 0) + 1);
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
-    setMaps(sorted);
-    setCount(pips.size);
-    const active = activeMap();
-    if (active === null || !counts.has(active)) setActiveMap(sorted.length > 0 ? sorted[0]![0] : null);
-    const sel = selected();
-    if (sel !== null) {
-      const still = pips.get(sel.runId);
-      setSelected(still === undefined ? null : still.data);
-    }
-    if (!fitted && pips.size > 0) {
-      view = fitTo({ w: W, h: H }, onMap().map((p) => p.data));
-      fitted = true;
-    }
-    needsDraw = true;
-  }
+  const onMap = (): Pip[] => {
+    const map = activeMap();
+    return [...pips.values()].filter((p) => p.data.map === map);
+  };
 
   function drawGrid(ctx: CanvasRenderingContext2D, map: number): void {
     ctx.fillStyle = theme.grid;
@@ -207,27 +207,73 @@ export default function MapPage() {
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";
+    ctx.strokeStyle = theme.gridline;
+    ctx.fillStyle = theme.dim;
+    if (!useTiles) {
+      /*
+       * Below the threshold nothing is drawn into a cell, so nothing can be
+       * covered and the lattice is one path rather than one rect per cell: the
+       * whole world on screen was up to 4096 `strokeRect` calls, and a pan made
+       * that per frame (FOLLOW-UPS 60). Shared boundaries now carry one line
+       * where the inset rects carried two, which reads thinner and is the only
+       * visible change.
+       */
+      const l = latticeLines(view, { w: W, h: H });
+      ctx.beginPath();
+      for (const x of l.xs) {
+        ctx.moveTo(x, l.y0);
+        ctx.lineTo(x, l.y1);
+      }
+      for (const y of l.ys) {
+        ctx.moveTo(l.x0, y);
+        ctx.lineTo(l.x1, y);
+      }
+      ctx.stroke();
+      // Labels stay per cell and stay bounded: they need a cell wider than 64px,
+      // which caps them at a screenful.
+      if (g.size > 64) {
+        for (let row = g.row0; row <= g.row1; row++) {
+          for (let col = g.col0; col <= g.col1; col++) {
+            ctx.fillText(`${row}_${col}`, col * g.size + view.ox + 6, row * g.size + view.oy + 5);
+          }
+        }
+      }
+      return;
+    }
     for (let row = g.row0; row <= g.row1; row++) {
       for (let col = g.col0; col <= g.col1; col++) {
         const x = col * g.size + view.ox;
         const y = row * g.size + view.oy;
-        const t = useTiles ? tile(map, row, col) : null;
-        if (t !== null && t.ok) {
+        const t = tile(map, row, col);
+        if (t.ok) {
           // A hair of overdraw: neighbouring tiles must not show a seam when
           // the scale puts their edges on a fractional device pixel.
           ctx.drawImage(t.img, x, y, g.size + 1, g.size + 1);
           continue;
         }
-        ctx.strokeStyle = theme.gridline;
         ctx.strokeRect(x + 0.5, y + 0.5, g.size - 1, g.size - 1);
         // The label is the file name the extraction would write: it is how an
         // operator checks orientation the moment real tiles land.
-        if (g.size > 64) {
-          ctx.fillStyle = theme.dim;
-          ctx.fillText(`${row}_${col}`, x + 6, y + 5);
-        }
+        if (g.size > 64) ctx.fillText(`${row}_${col}`, x + 6, y + 5);
       }
     }
+  }
+
+  /**
+   * The prefix decimated to screen resolution, cached across frames.
+   *
+   * The tolerance comes from the scale alone, so the result is independent of
+   * the offset: a pan — the gesture that redraws every frame — reuses it, and
+   * only a zoom or a freshly built prefix rebuilds. Identity is enough to spot
+   * the latter because the effect that owns `route` assigns a new array every
+   * time, including the empty one on a mode swap.
+   */
+  function drawnRoute(): { x: number; y: number }[] {
+    if (route === routeSrc && view.scale === routeScale) return routeDrawn;
+    routeSrc = route;
+    routeScale = view.scale;
+    routeDrawn = decimateRoute(route, worldPerPixel(view.scale));
+    return routeDrawn;
   }
 
   /** The path walked so far on this map, behind the pip. Replay only. */
@@ -241,14 +287,13 @@ export default function MapPage() {
     }
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.65;
-    ctx.strokeStyle = colorOf(replayId() ?? "");
+    ctx.strokeStyle = routeColor;
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  function drawPips(ctx: CanvasRenderingContext2D, list: Pip[]): void {
+  function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null): void {
     const now = Date.now();
-    const sel = selected();
     ctx.textBaseline = "middle";
     ctx.font = "12px ui-monospace, monospace";
     for (const pip of list) {
@@ -280,24 +325,6 @@ export default function MapPage() {
     }
   }
 
-  /* A plain lerp toward the newest reading: a pip walks rather than teleports. */
-  function step(list: Pip[]): boolean {
-    let moving = false;
-    for (const pip of list) {
-      const dx = pip.data.x - pip.x;
-      const dy = pip.data.y - pip.y;
-      if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) {
-        pip.x = pip.data.x;
-        pip.y = pip.data.y;
-        continue;
-      }
-      pip.x += dx * 0.18;
-      pip.y += dy * 0.18;
-      moving = true;
-    }
-    return moving;
-  }
-
   onMount(() => {
     readTheme();
     resize();
@@ -312,16 +339,20 @@ export default function MapPage() {
       const ctx = canvas.getContext("2d");
       if (ctx !== null) {
         const list = onMap();
-        const moving = step(list);
+        const moving = stepPips(list);
         if (needsDraw || moving) {
           needsDraw = false;
           ctx.clearRect(0, 0, W, H);
           const map = activeMap();
           if (map !== null) {
             drawGrid(ctx, map);
-            const t = track();
-            if (t !== undefined) drawRoute(ctx, routeUpTo(t.points, map, cursor()));
-            drawPips(ctx, list);
+            // The route is cached twice over: the effect that owns it rebuilds
+            // the prefix only when the cursor or map moves, and `drawnRoute`
+            // decimates that to screen resolution only when the zoom changes.
+            // Recomputing either per pointer-move frame is the one thing in this
+            // loop that scales with the length of a run.
+            drawRoute(ctx, drawnRoute());
+            drawPips(ctx, list, selected());
           } else {
             ctx.fillStyle = theme.grid;
             ctx.fillRect(0, 0, W, H);
@@ -342,66 +373,143 @@ export default function MapPage() {
     });
   });
 
-  /* Loading a run's track: the replay's own fit, and the cursor at the start. */
+  /*
+   * The route change *is* the state swap, and this is the only place that
+   * performs it. Live → replay, replay → live, and one replay straight to
+   * another all arrive here, whether from the controls below, browser
+   * back/forward, or a deep link opened cold: `replayId` reads the search
+   * params, so every one of those is the same code path.
+   *
+   * The clear is unconditional and comes before the fetch. Doing it in the
+   * response, as this used to, layers rather than swaps — run A's pips stay on
+   * screen under run B's identity until B's track lands. A blank moment is the
+   * honest picture of "we are between two states".
+   */
+  let trackToken = 0;
+  const leftReplay = createLeftReplay();
   createEffect(() => {
     const id = replayId();
+    const returningToLive = leftReplay(id);
+    const mine = ++trackToken;
+    clearReplayState({
+      setTrack: (t) => setTrack(() => t),
+      setCursor,
+      setPlaying,
+      setPinned: setPinnedMap,
+      setSelectedId,
+      setFeed: (list) => setFeedList(() => list),
+      setError: setReplayError,
+    });
+    pips.clear();
+    route = [];
+    pendingFit = true;
+    needsDraw = true;
     if (id === undefined) {
-      setTrack(undefined);
-      setPlaying(false);
+      // Only when leaving a replay, never on a cold load — see createLeftReplay.
+      if (returningToLive) feed.refresh();
       return;
     }
-    setReplayError(undefined);
     void api
       .track(id)
       .then((t) => {
+        if (mine !== trackToken) return;
         setTrack(t);
-        const span = trackSpan(t.points);
-        setCursor(span?.from ?? 0);
-        pips.clear();
-        fitted = false;
-        setMaps(mapsVisited(t.points).map((m) => [m, 1] as [number, number]));
-        setActiveMap(t.points[0]?.map ?? null);
+        // Where this run was last left off, if it was — see cursormemory.ts.
+        // The route effect above has just cleared the cursor, so this is the
+        // one place a loaded track's cursor is chosen.
+        setCursor(cursorMemory.resume(t));
+        pendingFit = true;
         needsDraw = true;
       })
-      .catch((e: unknown) => setReplayError(String(e)));
+      .catch((e: unknown) => {
+        if (mine === trackToken) setReplayError(String(e));
+      });
   });
 
-  /* The one place a feed reaches the renderer, live or replayed. */
+  /*
+   * The one place a feed reaches the renderer, live or replayed.
+   *
+   * Reads: track, cursor, feed.latest. Writes: the feed signal, and the pip map
+   * the canvas owns. Nothing it reads is downstream of what it writes, which is
+   * the property the old version violated — it wrote a freshly built position
+   * into a signal it read in the same scope, so every tick re-entered itself.
+   */
   createEffect(() => {
     const t = track();
     if (t !== undefined) {
       const list = positionsAt(t, cursor());
-      ingest(list, true);
-      const here = list[0];
-      // Following the cursor across a continent is the honest behaviour: the
-      // character is not on the map the user was looking at any more.
-      if (here !== undefined && here.map !== activeMap()) {
-        setActiveMap(here.map);
-        view = fitTo({ w: W, h: H }, [here]);
-      }
-      setSelected(here ?? null);
-      return;
+      syncPips(pips, list, true);
+      setFeedList(list);
+    } else {
+      const list = feed.latest ?? [];
+      syncPips(pips, list);
+      setFeedList(list);
     }
-    const list = feed.latest;
-    if (list !== undefined) ingest(list);
+    needsDraw = true;
   });
 
-  /* Playback: one recorded sample per tick, so a 6h run scrubs in ~30s. */
+  /*
+   * Following the cursor across a continent is the honest behaviour: the
+   * character is not on the map the operator was looking at any more, so the
+   * chip they pinned stops applying and the view refits.
+   *
+   * Terminates: cursorMap changes → this writes pinnedMap → activeMap
+   * recomputes from maps/pinned/cursorMap → writes nothing.
+   */
+  createEffect(
+    on(cursorMap, (map) => {
+      if (map === null) return;
+      setPinnedMap(null);
+      pendingFit = true;
+    }),
+  );
+
+  /*
+   * Fitting the view, on the three occasions someone asked for it: the first
+   * map to appear, a track load, and a chip click. Deliberately *not* on every
+   * change of `activeMap` — an unrelated agent logging out can flip which map
+   * is busiest, and yanking a panned view out from under an operator for that
+   * would be hostile.
+   */
+  createEffect(() => {
+    const map = activeMap();
+    const list = feedList();
+    if (map === null || !pendingFit || list.length === 0) return;
+    pendingFit = false;
+    view = fitTo(
+      { w: W, h: H },
+      list.filter((p) => p.map === map),
+    );
+    needsDraw = true;
+  });
+
+  /* The drawn route, recomputed when its inputs move rather than per frame. */
+  createEffect(() => {
+    const t = track();
+    const map = activeMap();
+    const ts = cursor();
+    route = t === undefined || map === null ? [] : routeUpTo(t.points, map, ts);
+    routeColor = colorOf(t?.runId ?? "");
+    needsDraw = true;
+  });
+
+  /*
+   * Playback: one recorded sample per tick, so a 6h run scrubs in ~30s. The
+   * successor is a binary search rather than a scan — at four ticks a second
+   * over a long track the scan was the page's largest repeated cost.
+   */
   createEffect(() => {
     if (!playing()) return;
     const t = track();
     if (t === undefined) return;
     const timer = setInterval(() => {
-      const points = t.points;
-      const span = trackSpan(points);
-      if (span === null) return;
-      const next = points.find((p) => p.ts > cursor());
-      if (next === undefined) {
-        setPlaying(false);
-        return;
+      const next = nextSampleAfter(t.points, cursor());
+      if (next === undefined) setPlaying(false);
+      else {
+        setCursor(next.ts);
+        cursorMemory.remember(t.runId, next.ts);
       }
-      setCursor(next.ts);
-    }, 250);
+    }, PLAY_MS);
     onCleanup(() => clearInterval(timer));
   });
 
@@ -428,7 +536,7 @@ export default function MapPage() {
     if (wasDrag) return;
     const r = canvas.getBoundingClientRect();
     const hit = hitTest(view, onMap(), e.clientX - r.left, e.clientY - r.top);
-    setSelected(hit === null ? null : hit.data);
+    setSelectedId(hit === null ? null : hit.runId);
     needsDraw = true;
   };
   const onWheel = (e: WheelEvent): void => {
@@ -440,10 +548,9 @@ export default function MapPage() {
 
   const pickMap = (map: number): void => {
     if (map === activeMap()) return;
-    setActiveMap(map);
-    setSelected(null);
-    view = fitTo({ w: W, h: H }, onMap().map((p) => p.data));
-    needsDraw = true;
+    setPinnedMap(map);
+    setSelectedId(null);
+    pendingFit = true;
   };
 
   return (
@@ -472,28 +579,41 @@ export default function MapPage() {
           </Show>
         </div>
         <Show when={track()}>
-          {(t) => {
-            const span = (): { from: number; to: number } | null => trackSpan(t().points);
-            return (
-              <div class="map-chips" style={{ top: "auto", bottom: "34px", right: "10px" }}>
-                <div class="scrub">
-                  <button onClick={() => setPlaying(!playing())}>{playing() ? "pause" : "play"}</button>
-                  <input
-                    type="range"
-                    min={span()?.from ?? 0}
-                    max={span()?.to ?? 0}
-                    value={cursor()}
-                    onInput={(e) => {
-                      setPlaying(false);
-                      setCursor(Number(e.currentTarget.value));
-                    }}
-                  />
-                  <span class="dim mono">{stamp(cursor())}</span>
-                  <A href="/map">live</A>
-                </div>
+          {(t) => (
+            <div class="map-chips" style={{ top: "auto", bottom: "34px", right: "10px" }}>
+              <div class="scrub">
+                <button onClick={() => setPlaying(!playing())}>{playing() ? "pause" : "play"}</button>
+                {/*
+                  A link rather than a button with a handler: the swap is owned
+                  by the route effect above, so this control needs no logic of
+                  its own and an anchor keeps what an anchor gives — a real
+                  history entry, middle-click, and the focus ring.
+                */}
+                <A class="btn" href="/map" title="back to the live map">
+                  live
+                </A>
+                <input
+                  type="range"
+                  min={span()?.from ?? 0}
+                  max={span()?.to ?? 0}
+                  value={cursor()}
+                  onInput={(e) => {
+                    setPlaying(false);
+                    const ts = Number(e.currentTarget.value);
+                    setCursor(ts);
+                    // Remembered at the two places the cursor is deliberately
+                    // moved, never from a signal effect: the route swap sets it
+                    // to 0 on the way out, and an effect would record that.
+                    cursorMemory.remember(t().runId, ts);
+                  }}
+                />
+                <span class="dim mono">{stamp(cursor())}</span>
               </div>
-            );
-          }}
+              <Show when={t().points.length === 0}>
+                <span class="dim">no recorded positions</span>
+              </Show>
+            </div>
+          )}
         </Show>
         <div class="map-hint">
           {replayError() !== undefined ? (
@@ -544,7 +664,25 @@ export default function MapPage() {
               <div class="v">{fmtAge(ageTick() - p().ts)}</div>
               <div class="k">harness</div>
               <div class="v">{shortHarness(p().harnessVersion)}</div>
-              <A href={`/run/${encodeURIComponent(p().runId)}`}>open run →</A>
+              {/*
+                Both ways out of a selected pip, as one row of controls rather
+                than two bare links stacked in the panel's key/value flow — the
+                same `.side-controls` shape the run page uses, so the pair reads
+                as controls. The replay link is absent rather than inert when it
+                would point at the run already on screen.
+              */}
+              <div class="side-controls">
+                <A class="btn" href={`/run/${encodeURIComponent(p().runId)}`}>
+                  open run →
+                </A>
+                <Show when={replayHrefFor(track(), p())}>
+                  {(href) => (
+                    <A class="btn" href={href()}>
+                      replay →
+                    </A>
+                  )}
+                </Show>
+              </div>
             </>
           )}
         </Show>

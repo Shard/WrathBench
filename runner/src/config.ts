@@ -97,6 +97,22 @@ export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config
 
+/**
+ * The game's own character-name rules, checked before the server gets to:
+ * 2-12 letters, and no three identical consecutive letters — the core refuses
+ * that as CHAR_NAME_THREE_CONSECUTIVE (create result 98). One predicate for
+ * every boundary that accepts or invents a name (this config, the fleet
+ * roster, a campaign cell, the smokes' probeName), so a bad name is a named
+ * error where it is WRITTEN, not a create-failure loop where it is played.
+ * Both failure shapes happened on 2026-08-24: a 13-char roster name
+ * respawn-looped the policy for two hours, and a generated triple
+ * (`Bqeee…`) rolled back a worldserver deploy.
+ */
+export const CHARACTER_NAME_RULE = "character must be 2-12 letters with no three identical in a row (the game's own naming rules)";
+export function isValidCharacterName(name: string): boolean {
+  return /^[A-Za-z]{2,12}$/.test(name) && !/(.)\1\1/i.test(name);
+}
+
 /** Every driver a run can be started with. `stub` never scores. */
 export const DRIVERS = ["openai", "claude-code", "stub"] as const;
 export type Driver = (typeof DRIVERS)[number];
@@ -163,7 +179,10 @@ export const runConfigSchema = z.object({
   token: z.string().min(1).optional(),
 
   // Character (PHASE-0: run config, default forgiving solo class — Human Paladin).
-  character: z.string().min(2).max(12).default("Benchy"),
+  character: z
+    .string()
+    .refine(isValidCharacterName, { message: CHARACTER_NAME_RULE })
+    .default("Benchy"),
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
   account: z.string().min(2).max(16).default("RUNNER"),
@@ -212,6 +231,22 @@ export const runConfigSchema = z.object({
    * the projection can report it apart and never count it toward a target.
    */
   extra: z.boolean().default(false),
+
+  /**
+   * The probe campaign that commissioned this run, and which of its cells this
+   * is (ADR-0041). Both present or both absent; set only on a `probing` run.
+   *
+   * Recorded on the run rather than derived, for two reasons. It is what the
+   * scheduler counts to know what a sweep still owes, so it has to survive a
+   * restart. And it is what lets a campaign's results outlive the deletion of
+   * its config entry — the results surfaces read the run directory, so a
+   * campaign that has been switched off and removed from the file still groups.
+   *
+   * Deliberately NOT `extra: true`, which means "past-target idle work" and
+   * would put a commissioned run in the same bucket as a spare-account one.
+   */
+  campaign: z.string().min(1).max(64).optional(),
+  cell: z.string().min(1).max(64).optional(),
 
   /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).

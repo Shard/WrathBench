@@ -81,6 +81,7 @@
  * the same command without `--from` (and needs no DB env at all).
  */
 
+import { probeName } from "./lib/name";
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 
@@ -125,7 +126,7 @@ const FROM = (() => {
 // runs; the legacy walk keeps its throwaway name, which it deletes at the end.
 const CHARACTER = FROM
   ? (flag("--character") ?? "Smoketram")
-  : "Tr" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+  : probeName("Tr");
 
 const started = Date.now();
 const log = (m: string) =>

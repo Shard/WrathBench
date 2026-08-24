@@ -43,7 +43,9 @@ const TOKEN = `probe-death-${crypto.randomUUID()}`;
 // infra/bootstrap/bootstrap.ts with WRATHBENCH_ACCOUNT_USER=PROBE.
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Fresh character every run: the arc needs a level 1 that kobolds can kill.
-const CHARACTER = "Bd" + Date.now().toString(26).replace(/[0-9]/g, (d) => "ghijklmnop"[+d] ?? "g").slice(-8);
+import { probeName } from "./lib/name";
+
+const CHARACTER = probeName("Bd");
 
 const ENTRY_VERMIN = 6; // Kobold Vermin, Northshire vineyards
 const VINEYARDS = { x: -8790, y: -160, z: 82.5 };

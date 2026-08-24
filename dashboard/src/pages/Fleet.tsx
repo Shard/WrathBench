@@ -23,7 +23,19 @@
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type FleetResponse } from "../api/client";
-import { FLEET_COLUMNS, fleetRows, gateVerdict, pausedLabel, rowStateLabel, runHref, serverBanner, type FleetRow } from "../lib/fleet";
+import {
+  FLEET_COLUMNS,
+  fleetRows,
+  gateVerdict,
+  pausedLabel,
+  progressLabel,
+  progressTitle,
+  rowProgress,
+  rowStateLabel,
+  runHref,
+  serverBanner,
+  type FleetRow,
+} from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtTokens, fmtUsd, num, stamp } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -159,11 +171,22 @@ function FleetRowView(props: { row: FleetRow }) {
     navigate(to);
   };
   const dot = (): string => (r().state === "exited" ? "dead" : r().state === "running" ? "live" : "");
+  /*
+    Both numbers come off the 10s poll of /api/runs, which charges a live run's
+    playtime up to request time — so the cell refreshes on the page's own
+    cadence, and numerator and denominator come from one snapshot and cannot
+    tear. No second timer: a figure up to ten seconds stale is fine here.
+  */
+  const prog = () => rowProgress(r());
   return (
     <tr onClick={onClick} class={href() === null ? undefined : "clickable"}>
-      <td>
+      {/* The percentage rides beside the badge, and the ETA is the cell's title; both absent on a row that is not advancing (see `rowProgress`). */}
+      <td title={progressTitle(prog(), r())}>
         <span class={`dot ${dot()}`} />
         <span class={`badge ${r().state}`}>{rowStateLabel(r().state)}</span>
+        <Show when={prog() !== null}>
+          <span class="dim mono progress">{progressLabel(prog())}</span>
+        </Show>
       </td>
       <td title={r().note ?? ""}>{r().job ?? "—"}</td>
       <td class="dim" title={r().modelsTitle}>
