@@ -25,6 +25,7 @@ import { z } from "zod";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
+import type { WikiBundleMeta } from "./wiki";
 
 /**
  * Harness as the tuple records it (ADR-0035): which machinery decided what the
@@ -59,6 +60,22 @@ export const serverBuildSchema = z
   .nullable();
 export type ServerBuild = z.infer<typeof serverBuildSchema>;
 
+/**
+ * The reference bundle's identity as the tuple annotates it (ADR-0033, "The
+ * wiki bundle's identity"). Every field nullable: this is evidence about the
+ * file the run read, and a bundle that cannot describe itself must read as
+ * "not recorded" rather than making the whole tuple unparseable.
+ */
+export const wikiBundleSchema = z
+  .object({
+    schemaVersion: z.string().nullable(),
+    builtAt: z.string().nullable(),
+    source: z.string().nullable(),
+    eraCutoff: z.string().nullable(),
+  })
+  .nullable();
+export type WikiBundle = z.infer<typeof wikiBundleSchema>;
+
 export const comparabilitySchema = z.object({
   /** `git describe` of the harness, as `version.ts` resolved it. */
   harnessVersion: z.string(),
@@ -83,6 +100,18 @@ export const comparabilitySchema = z.object({
    * "unrecorded", never as either side.
    */
   wikiCoords: z.boolean().optional(),
+  /**
+   * Which reference bundle the run read, off its `meta` table: schema version,
+   * build time, dump, and the era cutoff its prose was taken at. An
+   * *annotation*, not a grouping key of its own — a bundle whose page text
+   * changes is a behaviour change, and behaviour changes are already grouped by
+   * the harness series, so a text-changing rebuild is paired with a harness
+   * minor bump and this field is the evidence of what that bump was about
+   * (ADR-0033). Note that `sameComparability` is whole-tuple equality and so is
+   * stricter: a rebuild between launch and resume restamps. Null when there was
+   * no bundle; absent on tuples stamped before the field existed.
+   */
+  wikiBundle: wikiBundleSchema.optional(),
   /**
    * The episode tier the run was launched under (`episodes.ts`), or null for a
    * run assembled flag-by-flag. Absent on tuples stamped before the field
@@ -162,11 +191,13 @@ export function promptHash(text: string): string {
  * pure projection of `config`, testable without a network, and the caller
  * (`run.ts`) is the one place that actually has a launch or resume to gate on
  * `fetchServerBuild`'s timeout. Omit it (or pass `null`) for "not recorded".
+ * `wikiBundle` arrives the same way, read off the bundle `run.ts` just opened.
  */
 export function comparabilityOf(
   config: RunConfig,
   harnessVersion: string,
   serverBuild: ServerBuild = null,
+  wikiBundle: WikiBundleMeta | null = null,
 ): Comparability {
   const prompt = buildSystemPrompt(config.objective, config.episode);
   return {
@@ -185,6 +216,7 @@ export function comparabilityOf(
     },
     objective: config.objective !== undefined,
     wikiCoords: config.wikiCoords,
+    wikiBundle,
     episode: config.episode ?? null,
     episodeOverride: episodeOverrideOf(config),
     serverBuild,

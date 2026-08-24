@@ -41,3 +41,58 @@ export function openWikiBundle(path: string): Database | undefined {
     );
   }
 }
+
+/**
+ * The bundle's own identity, read from its `meta` table (wiki/src/bundle.ts).
+ *
+ * A run records the bundle *path* in its config, which says nothing about what
+ * was in the file: the same path holds a different reference surface after
+ * every rebuild, and a rebuild that changes page text changes what a model
+ * could read. This record is the evidence, annotated onto the comparability
+ * tuple (ADR-0033, "The wiki bundle's identity").
+ *
+ * Everything is nullable on purpose. `era_cutoff` is written only by bundles
+ * built with an era cutoff, `schema_version` is TEXT in the bundle and stays a
+ * string here, and a bundle whose meta table is empty (or absent) reads as all
+ * nulls rather than as an error: this is annotation, and it never fails closed.
+ */
+export interface WikiBundleMeta {
+  /** `schema_version` as written — a string, never parsed into a number. */
+  schemaVersion: string | null;
+  /** ISO timestamp of the build. Moves on every rebuild, even of one dump. */
+  builtAt: string | null;
+  /** The dump file's basename. */
+  source: string | null;
+  /**
+   * The era cutoff the prose was taken at, when the build applied one: only
+   * bundles built after the cutoff channel exists write this key, and an older
+   * bundle reads `null` — never back-labelled as "no cutoff was applied".
+   */
+  eraCutoff: string | null;
+}
+
+/**
+ * Read `meta` off an open bundle. `null` when there is no bundle, and all-null
+ * fields when the table is empty or unreadable — a run with no reference is a
+ * supported configuration, and a bundle that cannot describe itself must not
+ * take a launch down with it.
+ */
+export function wikiBundleMeta(db: Database | undefined): WikiBundleMeta | null {
+  if (db === undefined) return null;
+  let rows: { key: string; value: string }[] = [];
+  try {
+    rows = db.query<{ key: string; value: string }, []>("SELECT key, value FROM meta").all();
+  } catch {
+    rows = [];
+  }
+  const at = (key: string): string | null => {
+    const row = rows.find((r) => r.key === key);
+    return typeof row?.value === "string" ? row.value : null;
+  };
+  return {
+    schemaVersion: at("schema_version"),
+    builtAt: at("built_at"),
+    source: at("source"),
+    eraCutoff: at("era_cutoff"),
+  };
+}
