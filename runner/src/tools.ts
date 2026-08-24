@@ -36,17 +36,16 @@ export const WIKI_COORDS_SENTENCE = {
 } as const;
 
 /**
- * The standing era warning on `search_reference`, fixed for every run.
+ * The standing era sentence on `search_reference`, fixed for every run.
  *
- * The reference wiki was dumped in 2020 and describes the world several
- * expansions past the one this server runs. Its explicitly labelled
- * post-Wrath sections are flagged in the text at bundle-build time, but a
- * page's lead is written present-tense with no label at all — which is how a
- * nav-probe run concluded that Coldridge Pass was collapsed and burned a
- * session on a Cataclysm quest chain that does not exist here.
+ * The bundle is built from the Wrath-era revisions of a 2020 dump and drops
+ * what it can identify as later (ADR-0040), so the tool no longer warns about
+ * labels in the result text — there are none. What it still cannot catch is a
+ * 2010 page describing an announced expansion without naming it, which is why
+ * "prefer what you can observe in game" stays.
  */
 export const WIKI_ERA_SENTENCE =
-  "This world runs patch 3.3.5a (Wrath of the Lich King): anything the wiki says about Cataclysm, the Shattering, or a later expansion describes a different world and does not apply here, so prefer what you can observe in game, and treat a wiki statement that some place is destroyed, collapsed, rebuilt or changed as post-3.3.5 unless it says otherwise; paragraphs the wiki itself labels as a later era are marked in the result text.";
+  "The reference bundle is a snapshot of the wiki from the Wrath of the Lich King era (patch 3.3.5a) and describes this world, so prefer what you can observe in game.";
 
 /**
  * The tool list for a run: `TOOLS` with the `search_reference` description

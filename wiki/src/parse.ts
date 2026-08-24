@@ -17,7 +17,12 @@
  *   the newest revision saved before the era cutoff, which is what the prose
  *   index reads: the dump is from 2020 and this world is patch 3.3.5a
  *   (ADR-0040). A page with no pre-cutoff revision has `eraWikitext` null and
- *   the build labels it.
+ *   the build drops it.
+ * - The newest pre-cutoff revision also decides whether the page is a redirect,
+ *   reported as `eraRedirectTarget`: the bundle is a snapshot of the Wrath-era
+ *   wiki, so a page that was a redirect then is one here whatever it became
+ *   later, and a page that was an article then is an article here even if it
+ *   was merged away in 2014.
  * - Selection is by (timestamp, revision id), so it does not depend on the
  *   dump's revision ordering. This dump happens to be newest-first; others are
  *   oldest-first.
@@ -49,7 +54,7 @@
  */
 
 import { decodeEntities } from "./entities";
-import { DEFAULT_ERA_CUTOFF } from "./era";
+import { DEFAULT_ERA_CUTOFF } from "./wrath-only";
 import { redirectTarget } from "./strip";
 
 export interface WikiPage {
@@ -67,6 +72,18 @@ export interface WikiPage {
   eraWikitext: string | null;
   /** Timestamp of that revision, or "" when there is none. */
   eraTimestamp: string;
+  /**
+   * True when the page has any revision before the cutoff at all, whether or
+   * not one survived the hygiene rules. `eraWikitext` null with this true is a
+   * page whose whole pre-cutoff history was redirects or reverted edits.
+   */
+  hasEraRevision: boolean;
+  /**
+   * Target of the newest pre-cutoff revision when that revision was a
+   * `#REDIRECT`, else null. This, not `redirectAttr`, is what decides whether
+   * the bundle treats the page as a redirect.
+   */
+  eraRedirectTarget: string | null;
   /** Target of a `<redirect title="..."/>` element, when the dump emits one. */
   redirectAttr: string | null;
 }
@@ -124,6 +141,12 @@ interface PageAccum {
   eraCands: EraCandidate[];
   /** Every revision seen, for the revert test at page finish. */
   revs: RevMeta[];
+  /**
+   * The newest pre-cutoff revision seen, redirect or not. The era slot skips
+   * redirect revisions, so it cannot answer "was this page a redirect in 2010";
+   * this can. No body is held, only the redirect target if it was one.
+   */
+  eraTop: { ts: string; id: number; redirect: string | null } | null;
 }
 
 function tagNameOf(tag: string): string {
@@ -261,6 +284,8 @@ export async function* parsePages(
       timestamp: p.bestTimestamp,
       eraWikitext: era === null ? null : decodeEntities(era.text),
       eraTimestamp: era === null ? "" : era.ts,
+      hasEraRevision: p.eraTop !== null,
+      eraRedirectTarget: p.eraTop === null ? null : p.eraTop.redirect,
       redirectAttr: p.redirectAttr,
     };
   };
@@ -288,6 +313,7 @@ export async function* parsePages(
             bestText: null,
             eraCands: [],
             revs: [],
+            eraTop: null,
           };
           state = State.InPage;
           continue;
@@ -366,15 +392,19 @@ export async function* parsePages(
                 // Era slot: pre-cutoff, and not a revision where the page was a
                 // redirect. The revert test needs revisions that have not
                 // arrived yet, so it waits until the page is finished.
-                if (
-                  revTs !== "" &&
-                  revTs < eraCutoff &&
-                  eraWants(block.eraCands, revTs, revId) &&
+                if (revTs !== "" && revTs < eraCutoff && eraWants(block.eraCands, revTs, revId)) {
                   // Decoded, so this reads the same string the build's own
                   // redirect decision reads.
-                  redirectTarget(decodeEntities(value)) === null
-                ) {
-                  eraOffer(block.eraCands, { ts: revTs, id: revId, text: value });
+                  const target = redirectTarget(decodeEntities(value));
+                  // The newest pre-cutoff revision always reaches here: it
+                  // beats whatever is in the window, so its body is captured
+                  // whether or not it is a redirect.
+                  if (block.eraTop === null || beats(revTs, revId, block.eraTop.ts, block.eraTop.id)) {
+                    block.eraTop = { ts: revTs, id: revId, redirect: target };
+                  }
+                  if (target === null) {
+                    eraOffer(block.eraCands, { ts: revTs, id: revId, text: value });
+                  }
                 }
                 break;
               }

@@ -26,9 +26,10 @@ import {
 import { extractCoords } from "./coords";
 import { extractIds } from "./ids";
 import { extractQuest } from "./quests";
-import { DEFAULT_ERA_CUTOFF, markEraSections, markPostEraPage } from "./era";
-import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats } from "./parse";
-import { redirectTarget, stripWikitext } from "./strip";
+import { admitPage, type AdmitReason } from "./post-wrath";
+import { DEFAULT_ERA_CUTOFF, dropPostWrath } from "./wrath-only";
+import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
+import { stripWikitext } from "./strip";
 
 const NS_NAMES: Record<number, string> = {
   0: "main",
@@ -149,8 +150,25 @@ async function main(): Promise<void> {
   let coordRows = 0;
   let idRows = 0;
   let questRows = 0;
-  let eraFallback = 0;
   let eraSwapped = 0;
+  let sectionsDropped = 0;
+  let paragraphsDropped = 0;
+  let redirectsDangling = 0;
+  /** One counter per `admitPage` reason; the two admitting reasons are the kept pages. */
+  const reasons: Record<AdmitReason, number> = {
+    pre_cutoff: 0,
+    post_cutoff_wrath_signal: 0,
+    dropped_post_cutoff: 0,
+    dropped_post_wrath: 0,
+    dropped_meta: 0,
+  };
+  /**
+   * Redirects are written after the stream, not during: a redirect whose target
+   * did not survive the Wrath cutoff points at nothing, and whether the target
+   * survived is not known until every page has been seen.
+   */
+  const pendingRedirects: { source: string; target: string; ns: number }[] = [];
+  const keptTitles = new Set<string>();
   let stoppedEarly = false;
   let distinctKeys = 0;
   const parseStats: ParseStats = { pagesSkipped: 0, blocksSeen: 0 };
@@ -176,48 +194,115 @@ async function main(): Promise<void> {
     bytes = total;
   });
 
+  /**
+   * Write one admitted page. `source` is the revision its prose comes from —
+   * the pre-cutoff one, or the newest for a page admitted on an explicit Wrath
+   * signal. Structured fields always come off the newest revision, where a
+   * decade of corrections lives and where 30% of the coordinates only exist.
+   */
+  const keep = (page: WikiPage, source: string, reason: AdmitReason): void => {
+    // Coords and ids come off the RAW wikitext before the strip destroys the
+    // templates that carry them.
+    const coords = extractCoords(page.wikitext);
+    const ids = extractIds(page.wikitext);
+    const quest = extractQuest(page.wikitext);
+    // Post-Wrath sections and paragraphs go before the strip, which would
+    // otherwise remove the templates and headings that identify them.
+    const cut = dropPostWrath(source);
+    sectionsDropped += cut.sectionsDropped;
+    paragraphsDropped += cut.paragraphsDropped;
+    const text = stripWikitext(cut.text);
+    if (text.length === 0) {
+      // Prose that existed before the cut and not after it is a page the cut
+      // emptied — a page about a later world, counted as one. A page that never
+      // had prose (a bare infobox, a category stub) is just empty.
+      if (stripWikitext(source).length === 0) empties++;
+      else reasons.dropped_post_wrath++;
+      return;
+    }
+    writer.addPage(page.title, page.ns, text, coords, ids, quest);
+    reasons[reason]++;
+    keptTitles.add(page.title.toLowerCase());
+    pagesKept++;
+    charsKept += text.length;
+    coordRows += coords.length;
+    idRows += ids.length;
+    if (quest !== null) questRows++;
+    // Only meaningful for a pre-cutoff admission: a page admitted on a Wrath
+    // signal has one revision to read, so its prose is never "swapped".
+    if (reason === "pre_cutoff" && page.eraTimestamp !== page.timestamp) eraSwapped++;
+    perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
+  };
+
   console.log(`building ${args.out} from ${args.dump}`);
   try {
     for await (const page of parsePages(chunks, DEFAULT_NAMESPACES, parseStats, args.eraCutoff)) {
       pagesSeen++;
-      const target = page.redirectAttr ?? redirectTarget(page.wikitext);
+      // Redirect-ness is decided by the Wrath snapshot: the newest pre-cutoff
+      // revision. A page that redirects today but was an article in 2010 is an
+      // article here, and one that was a redirect then stays one whatever it
+      // became later. A page with no pre-cutoff revision at all is not in this
+      // world's wiki, redirect or not.
+      const target = page.eraRedirectTarget;
       if (target !== null) {
-        redirects++;
-        writer.addRedirect(page.title, target, page.ns);
-      } else {
-        // Coords and ids come off the RAW wikitext before the strip destroys
-        // the templates that carry them.
-        const coords = extractCoords(page.wikitext);
-        const ids = extractIds(page.wikitext);
-        const quest = extractQuest(page.wikitext);
-        // The prose comes from the newest revision written before the era
-        // cutoff, so the index describes this world rather than the 2020 one
-        // (ADR-0040). A page with no such revision keeps its newest text and
-        // says so, in the same place a reader of the snippet will see it.
-        const fallback = page.eraWikitext === null;
-        const source = page.eraWikitext ?? markPostEraPage(page.wikitext);
-        // Era sections are marked in the wikitext, before the strip removes the
-        // templates and headings that identify them (era.ts). A pre-cutoff
-        // revision can still carry them: the wiki wrote about the future.
-        const text = stripWikitext(markEraSections(source));
-        if (text.length === 0) {
-          empties++;
+        pendingRedirects.push({ source: page.title, target, ns: page.ns });
+      } else if (!page.hasEraRevision) {
+        // No revision before the cutoff. It may still be a page about this
+        // world, written late; `admitPage` decides on the newest revision.
+        const decision = admitPage({
+          title: page.title,
+          eraWikitext: null,
+          newestWikitext: page.wikitext,
+        });
+        if (!decision.admit) {
+          reasons[decision.reason]++;
         } else {
-          writer.addPage(page.title, page.ns, text, coords, ids, quest);
-          pagesKept++;
-          charsKept += text.length;
-          coordRows += coords.length;
-          idRows += ids.length;
-          if (quest !== null) questRows++;
-          if (fallback) eraFallback++;
-          else if (page.eraTimestamp !== page.timestamp) eraSwapped++;
-          perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
+          keep(page, page.wikitext, decision.reason);
+        }
+      } else {
+        const decision = admitPage({
+          title: page.title,
+          eraWikitext: page.eraWikitext,
+          newestWikitext: page.wikitext,
+        });
+        if (!decision.admit) {
+          reasons[decision.reason]++;
+        } else {
+          // A page with pre-cutoff revisions that all failed hygiene has no
+          // prose to index; it is not a Wrath page for our purposes.
+          const source = page.eraWikitext;
+          if (source === null) reasons.dropped_post_cutoff++;
+          else keep(page, source, decision.reason);
         }
       }
       logProgress();
       if (pagesSeen >= args.maxPages) {
         stoppedEarly = true;
         break;
+      }
+    }
+    // Redirects, now that the surviving titles are known. A chain is walked
+    // with the same bound `resolveTitle` uses, so a redirect to a redirect to a
+    // page still lands; one that ends at a dropped page is dropped with it.
+    const targets = new Map<string, string>();
+    for (const r of pendingRedirects) targets.set(r.source.toLowerCase(), r.target);
+    for (const r of pendingRedirects) {
+      let current = r.target.toLowerCase();
+      let landed = false;
+      for (let hop = 0; hop < 6; hop++) {
+        if (keptTitles.has(current)) {
+          landed = true;
+          break;
+        }
+        const next = targets.get(current);
+        if (next === undefined) break;
+        current = next.toLowerCase();
+      }
+      if (landed) {
+        writer.addRedirect(r.source, r.target, r.ns);
+        redirects++;
+      } else {
+        redirectsDangling++;
       }
     }
     writer.flush();
@@ -259,9 +344,18 @@ async function main(): Promise<void> {
     quest_rows: String(questRows),
     era_cutoff: args.eraCutoff,
     // Kept pages whose prose came from an older revision than the structured
-    // fields did, and kept pages that had no pre-cutoff revision at all.
+    // fields did.
     pages_era_swapped: String(eraSwapped),
-    pages_era_fallback: String(eraFallback),
+    // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
+    // These five plus `empty_pages` account for every non-redirect page seen.
+    pages_pre_cutoff: String(reasons.pre_cutoff),
+    pages_post_cutoff_wrath_signal: String(reasons.post_cutoff_wrath_signal),
+    pages_dropped_post_cutoff: String(reasons.dropped_post_cutoff),
+    pages_dropped_post_wrath: String(reasons.dropped_post_wrath),
+    pages_dropped_meta: String(reasons.dropped_meta),
+    sections_dropped: String(sectionsDropped),
+    paragraphs_dropped: String(paragraphsDropped),
+    redirects_dropped_dangling: String(redirectsDangling),
     bytes_read: String(bytes),
     build_ms: String(elapsedMs),
     schema_version: "5",
@@ -281,10 +375,12 @@ async function main(): Promise<void> {
   console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
   console.log(`era cutoff:  ${args.eraCutoff}`);
   console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
-  console.log(`  fallback:  ${eraFallback} (no pre-cutoff revision, labelled)`);
+  console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
+  console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
+  console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);
   console.log(`coord rows:  ${coordRows}`);
   console.log(`id rows:     ${idRows}`);
-  console.log(`redirects:   ${redirects}`);
+  console.log(`redirects:   ${redirects} (${redirectsDangling} dropped, target not in the bundle)`);
   console.log(`empty:       ${empties}`);
   for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {
     console.log(`  ns ${String(ns).padStart(3)} ${(NS_NAMES[ns] ?? "?").padEnd(9)} ${perNamespace[ns]}`);

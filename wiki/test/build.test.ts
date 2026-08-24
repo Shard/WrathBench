@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
 import { parseArgs } from "../src/build";
-import { DEFAULT_ERA_CUTOFF, POST_ERA_PAGE_NOTE } from "../src/era";
+import { DEFAULT_ERA_CUTOFF } from "../src/wrath-only";
 import { searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
 
@@ -37,9 +37,21 @@ test("build.ts turns a dump into a searchable bundle", async () => {
         id: 2,
         revisions: [
           {
-            id: 3,
+            id: 4,
             timestamp: "2016-01-01T00:00:00Z",
-            text: "{{coords|48.2|42.1|Example Zone Beta}}'''Example Zone Beta''' is a starting region full of consectetur.",
+            text: "{{coords|48.2|42.1|Example Zone Beta}}The rewritten lorem.",
+          },
+          {
+            id: 3,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: [
+              "{{coords|48.2|42.1|Example Zone Beta}}'''Example Zone Beta''' is a starting region full of consectetur.",
+              "",
+              "In Cataclysm the region is rearranged and the road runs south instead.",
+              "",
+              "== In Cataclysm ==",
+              "The whole section describes a world this server does not run.",
+            ].join("\n"),
           },
         ],
       },
@@ -48,14 +60,70 @@ test("build.ts turns a dump into a searchable bundle", async () => {
         ns: 0,
         id: 3,
         revisions: [
-          { id: 4, timestamp: "2016-01-01T00:00:00Z", text: "#REDIRECT [[Example Zone Beta]]" },
+          { id: 5, timestamp: "2009-01-01T00:00:00Z", text: "#REDIRECT [[Example Zone Beta]]" },
         ],
+      },
+      {
+        // A redirect whose target does not survive the cutoff points at nothing.
+        title: "Example Dangling Name",
+        ns: 0,
+        id: 4,
+        revisions: [
+          { id: 6, timestamp: "2009-01-01T00:00:00Z", text: "#REDIRECT [[Example Late Page]]" },
+        ],
+      },
+      {
+        // Written after the cutoff and silent about which world it describes.
+        title: "Example Late Page",
+        ns: 0,
+        id: 5,
+        revisions: [{ id: 7, timestamp: "2016-01-01T00:00:00Z", text: "A late page, lorem ipsum." }],
+      },
+      {
+        // Written after the cutoff, but says outright that it is this world.
+        title: "Example Item Zeta",
+        ns: 0,
+        id: 6,
+        revisions: [
+          {
+            id: 8,
+            timestamp: "2014-01-01T00:00:00Z",
+            text: "{{itembox|patch=3.0.2}}Example Item Zeta is a trinket, lorem dolor.",
+          },
+        ],
+      },
+      {
+        // Written *before* the cutoff, about the expansion that was coming.
+        title: "Example Zone Theta",
+        ns: 0,
+        id: 7,
+        revisions: [
+          {
+            id: 9,
+            timestamp: "2010-09-01T00:00:00Z",
+            text: "{{stub/Cataclysm}}Example Zone Theta, lorem ipsum dolor sit.",
+          },
+        ],
+      },
+      {
+        // Out-of-game: classified by title, never emitted.
+        title: "Hotfixes/2015 Archive",
+        ns: 0,
+        id: 8,
+        revisions: [{ id: 10, timestamp: "2009-01-01T00:00:00Z", text: "Archive of notes, lorem." }],
+      },
+      {
+        // Nothing but an infobox: no prose to index, and none was cut either.
+        title: "Example Empty Page",
+        ns: 0,
+        id: 9,
+        revisions: [{ id: 11, timestamp: "2009-01-01T00:00:00Z", text: "{{zonebox|level=5}}" }],
       },
       {
         title: "Talk:Example Quest Alpha",
         ns: 1,
-        id: 4,
-        revisions: [{ id: 5, timestamp: "2016-01-01T00:00:00Z", text: "chatter, lorem." }],
+        id: 10,
+        revisions: [{ id: 12, timestamp: "2016-01-01T00:00:00Z", text: "chatter, lorem." }],
       },
     ]),
   );
@@ -70,11 +138,16 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   const db = new Database(outPath, { readonly: true });
 
   const pages = db.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!;
-  expect(pages.n).toBe(2); // the redirect and the talk page are not pages
+  // Alpha, Beta and Zeta. The talk page is out of namespace; the late page, the
+  // Cataclysm stub and the hotfix archive are dropped; the infobox-only page is
+  // empty; the two redirects are not pages.
+  expect(pages.n).toBe(3);
   const redirects = db.query<{ n: number }, []>("SELECT count(*) AS n FROM redirects").get()!;
-  expect(redirects.n).toBe(1);
+  expect(redirects.n).toBe(1); // the dangling one went with its target
   const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
-  expect(meta.get("pages_kept")!.value).toBe("2");
+  const metaValue = (key: string): string => meta.get(key)!.value;
+  const metaNumber = (key: string): number => Number.parseInt(metaValue(key), 10);
+  expect(metaValue("pages_kept")).toBe("3");
 
   // The prose came from the pre-cutoff revision and the templates are gone from
   // the indexed text; the id below still comes off the newest revision.
@@ -83,40 +156,78 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(alpha.snippet).not.toContain("questbox");
   expect(alpha.snippet).not.toContain("the beta zone");
 
-  // Redirects resolve.
+  // Redirects resolve, and one whose target is not in the bundle is not either.
   const viaRedirect = searchReference(db, "Example Old Name")[0]!;
   expect(viaRedirect.title).toBe("Example Zone Beta");
+  const redirectSources = db
+    .query<{ source: string }, []>("SELECT source FROM redirects ORDER BY source")
+    .all()
+    .map((r) => r.source);
+  expect(redirectSources).toEqual(["Example Old Name"]);
 
   // Full text search works over the stripped text.
   const beta = searchReference(db, "consectetur")[0]!;
   expect(beta.title).toBe("Example Zone Beta");
-  // Beta has no revision older than the cutoff, so its prose is the newest text
-  // carrying the page-level label.
-  expect(beta.snippet).toContain(POST_ERA_PAGE_NOTE);
+  // Its Cataclysm paragraph and its Cataclysm section were cut before the strip,
+  // and nothing was left in their place.
+  expect(beta.snippet).not.toContain("Cataclysm");
+  expect(beta.snippet).not.toContain("road runs south");
+  expect(searchReference(db, "does not run")).toEqual([]);
+  expect(metaValue("sections_dropped")).toBe("1");
+  expect(metaValue("paragraphs_dropped")).toBe("1");
   // Coords were lifted off the raw wikitext before the strip and persisted.
   expect(beta.coords).toEqual([{ zone: "Example Zone Beta", x: 48.2, y: 42.1 }]);
   expect(beta.snippet).not.toContain("coords"); // the template is gone from text
   const coordRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_coords").get()!;
   expect(coordRows.n).toBe(1);
-  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("schema_version")!.value).toBe("5");
+  expect(metaValue("schema_version")).toBe("5");
 
   // Ids were lifted off the raw wikitext too, and an id query finds the page
   // through the id table rather than through body prose.
   const idRows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM page_ids").get()!;
   expect(idRows.n).toBe(1);
-  expect(db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key=?").get("id_rows")!.value).toBe("1");
+  expect(metaValue("id_rows")).toBe("1");
   const byId = searchReference(db, "quest 4242")[0]!;
   expect(byId.title).toBe("Example Quest Alpha");
   expect(byId.matchedId).toEqual({ kind: "quest", id: 4242 });
 
-  // The era channel records what it did: the cutoff it used, one page whose
-  // prose came from an older revision, one page with no pre-cutoff revision.
-  expect(meta.get("era_cutoff")!.value).toBe(DEFAULT_ERA_CUTOFF);
-  expect(meta.get("pages_era_swapped")!.value).toBe("1");
-  expect(meta.get("pages_era_fallback")!.value).toBe("1");
+  // The era channel records what it did: the cutoff, the pages whose prose came
+  // from an older revision, and one reason per page for being in or out.
+  expect(metaValue("era_cutoff")).toBe(DEFAULT_ERA_CUTOFF);
+  expect(metaValue("pages_era_swapped")).toBe("2"); // alpha and beta
+  expect(metaValue("pages_pre_cutoff")).toBe("2");
+  expect(metaValue("pages_post_cutoff_wrath_signal")).toBe("1"); // the trinket
+  expect(metaValue("pages_dropped_post_cutoff")).toBe("1");
+  expect(metaValue("pages_dropped_post_wrath")).toBe("1");
+  expect(metaValue("pages_dropped_meta")).toBe("1");
+  expect(metaValue("empty_pages")).toBe("1");
+  expect(metaValue("redirects_dropped_dangling")).toBe("1");
 
-  // The dropped namespace is really absent.
+  // Every non-redirect page the parser yielded is accounted for exactly once.
+  // Nothing else here catches a page counted twice or lost silently.
+  const accounted =
+    metaNumber("pages_pre_cutoff") +
+    metaNumber("pages_post_cutoff_wrath_signal") +
+    metaNumber("pages_dropped_post_cutoff") +
+    metaNumber("pages_dropped_post_wrath") +
+    metaNumber("pages_dropped_meta") +
+    metaNumber("empty_pages");
+  expect(accounted).toBe(
+    metaNumber("pages_in_namespaces") - metaNumber("redirects") - metaNumber("redirects_dropped_dangling"),
+  );
+
+  // The dropped namespace is really absent, and so are the dropped pages: a
+  // dropped title is not a page, not an exact-title hit, and not in the index.
   expect(searchReference(db, "chatter")).toEqual([]);
+  const titles = db
+    .query<{ title: string }, []>("SELECT title FROM pages ORDER BY title")
+    .all()
+    .map((r) => r.title);
+  expect(titles).toEqual(["Example Item Zeta", "Example Quest Alpha", "Example Zone Beta"]);
+  for (const gone of ["Example Late Page", "Example Zone Theta", "Hotfixes/2015 Archive"]) {
+    expect(searchReference(db, gone).some((h) => h.title === gone)).toBe(false);
+  }
+  expect(searchReference(db, "Example Item Zeta")[0]!.title).toBe("Example Item Zeta");
 
   db.close();
 
@@ -127,7 +238,7 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   );
   expect(await again.exited).toBe(0);
   const db2 = new Database(outPath, { readonly: true });
-  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(2);
+  expect(db2.query<{ n: number }, []>("SELECT count(*) AS n FROM pages").get()!.n).toBe(3);
   db2.close();
 }, 30_000);
 
@@ -163,7 +274,10 @@ test("a page split into 50-revision blocks builds as one row", async () => {
         title: "Example Zone Beta",
         ns: 0,
         id: 2,
-        revisions: [{ id: 40, timestamp: "2016-01-01T00:00:00Z", text: "Example Zone Beta is a region." }],
+        revisions: [
+          { id: 41, timestamp: "2016-01-01T00:00:00Z", text: "Example Zone Beta is a rewritten region." },
+          { id: 40, timestamp: "2009-01-01T00:00:00Z", text: "Example Zone Beta is a region." },
+        ],
       },
     ]),
   );
@@ -193,7 +307,8 @@ test("a page split into 50-revision blocks builds as one row", async () => {
   expect(hit.snippet).toContain("oldest stub");
   // "consectetur" appears only in the post-cutoff text, so it is not indexed.
   expect(searchReference(db, "consectetur")).toEqual([]);
-  expect(meta.get("pages_era_swapped")!.value).toBe("1");
+  // Both pages here have a newer revision than the one their prose came from.
+  expect(meta.get("pages_era_swapped")!.value).toBe("2");
   db.close();
 }, 30_000);
 
@@ -222,7 +337,7 @@ test("--era-cutoff overrides the default and is validated before the stream", ()
     "2009-01-01T00:00:00Z",
   );
   // A date without a time would compare wrongly against the dump's timestamps
-  // and quietly send every page down the fallback path.
+  // and quietly drop every page in the bundle.
   expect(() => parseArgs(["dump.xml", "--era-cutoff", "2010-10-12"])).toThrow(/ISO-8601/);
   expect(() => parseArgs(["dump.xml", "--era-cutoff", "yesterday"])).toThrow(/ISO-8601/);
 });
