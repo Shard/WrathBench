@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "../src/bundle";
 import {
+  EMPTY_PAGE_SNIPPET,
   EXACT_TITLE_RANK,
   normaliseTitle,
   parseIdQuery,
@@ -354,6 +355,77 @@ describe("searchReference coords channel", () => {
     expect(body.coords).toBeUndefined();
     expect(body.snippet).not.toMatch(/\d+\.\d+, \d+/);
     expect(JSON.stringify(searchReference(db, "Example Person Delta", { coords: false }))).not.toContain("coords\"");
+  });
+});
+
+describe("a page with no article text", () => {
+  /**
+   * Infobox-only pages: rows kept for their title and their structured fields,
+   * with nothing to quote. The bug pinned here is an exact-title hit that used
+   * to arrive at rank 1 with a blank snippet, ahead of a page that has prose.
+   */
+  const emptyBundle = (): Database => {
+    const empty = createMemoryBundle();
+    const writer = makeWriter(empty, 2);
+    writer.addPage("Example Quest Silent", 118, "", undefined, [{ kind: "quest", id: 5150 }], {
+      start: "Example Person Gamma",
+      end: "Example Person Delta",
+      category: "Example Zone Beta",
+    });
+    writer.addPage("Example Barren Stub", 0, "");
+    writer.addPage(
+      "Example Barren Stub (disambiguation)",
+      0,
+      "Example Barren Stub is described here, with lorem prose about the barren stub.",
+    );
+    writer.flush();
+    return empty;
+  };
+
+  test("an exact title says so in words and still states its quest infobox", () => {
+    const empty = emptyBundle();
+    const hit = searchReference(empty, "Example Quest Silent")[0]!;
+    expect(hit.title).toBe("Example Quest Silent");
+    expect(hit.exactTitle).toBe(true);
+    expect(hit.snippet).toBe(
+      `${EMPTY_PAGE_SNIPPET}\n[quest infobox: starts at Example Person Gamma; ` +
+        "turn in to Example Person Delta; category Example Zone Beta]",
+    );
+    expect(hit.quest).toEqual({
+      start: "Example Person Gamma",
+      end: "Example Person Delta",
+      category: "Example Zone Beta",
+    });
+    empty.close();
+  });
+
+  test("with nothing to state it is skipped and the query falls through", () => {
+    const empty = emptyBundle();
+    const hits = searchReference(empty, "Example Barren Stub");
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((h) => h.title === "Example Barren Stub")).toBe(false);
+    expect(hits[0]!.title).toBe("Example Barren Stub (disambiguation)");
+    empty.close();
+  });
+
+  test("an id query reaches it and reads the same way", () => {
+    const empty = emptyBundle();
+    const hit = searchReference(empty, "quest 5150")[0]!;
+    expect(hit.title).toBe("Example Quest Silent");
+    expect(hit.matchedId).toEqual({ kind: "quest", id: 5150 });
+    expect(hit.snippet).toContain(EMPTY_PAGE_SNIPPET);
+    expect(hit.snippet).toContain("turn in to Example Person Delta");
+    empty.close();
+  });
+
+  test("is not an FTS document, so no text band can reach it", () => {
+    const empty = emptyBundle();
+    const count = empty.query<{ n: number }, [string]>(
+      "SELECT count(*) AS n FROM pages_fts WHERE pages_fts MATCH ?",
+    );
+    expect(count.get(`"silent"`)!.n).toBe(0);
+    expect(count.get(`"barren"`)!.n).toBe(1); // only the page that has prose
+    empty.close();
   });
 });
 
