@@ -122,6 +122,7 @@ import {
   type SchedulingPolicy,
   type StartingCharacter,
 } from "../runner/src/models";
+import { isScoredEpisode } from "../runner/src/episodes";
 import { harnessVersion } from "../runner/src/version";
 import { DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT } from "../runner/src/models";
 
@@ -225,8 +226,8 @@ export interface PreflightRecord {
 // free when its turn comes; the policy's own picks are jobs too, made up each
 // tick.
 
-/** Episode tiers (ADR-0033). `freeplay` is unscored and bypasses the tiers gate. */
-export const EPISODE_IDS = ["e90", "e360", "freeplay"] as const;
+/** Episode tiers (ADR-0033). The unscored ids bypass the tiers gate entirely. */
+export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
@@ -406,6 +407,10 @@ export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 };
     case "e360":
       return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 12000 };
+    case "probing":
+      // The campaign's own clock wins over this; ninety minutes is what a
+      // campaign that names none inherits (`EPISODES.probing`).
+      return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
     case "freeplay":
       return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
   }
@@ -956,7 +961,7 @@ export function planQueue(opts: {
 
 /**
  * The refs of a job that may run in its episode: in the roster and promoted
- * into the tier (`freeplay` is unscored and needs no promotion). A job runs
+ * into the tier (an unscored episode needs no promotion). A job runs
  * with whatever subset passes; a ref gated out is dropped from that job's
  * roster, and the skip reason names it only when nothing is left.
  */
@@ -966,12 +971,13 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
     if (e === undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
-    // freeplay is unscored and needs no promotion. Otherwise the entry's own
-    // DECLARED tier is the static floor — every tier buys e90, and a `t2`
-    // entry buys an e360 without any run history, which is what the retired
-    // `tiers` force used to spell. The projection is asked only for what a
-    // model has EARNED on top of that, so a climb opens e360 for a `t1` entry.
-    if (job.episode === "freeplay") return true;
+    // An unscored episode needs no promotion: no tier buys one, so there is no
+    // rung to have climbed. Otherwise the entry's own DECLARED tier is the
+    // static floor — every tier buys e90, and a `t2` entry buys an e360 without
+    // any run history, which is what the retired `tiers` force used to spell.
+    // The projection is asked only for what a model has EARNED on top of that,
+    // so a climb opens e360 for a `t1` entry.
+    if (!isScoredEpisode(job.episode)) return true;
     if (e.tier !== undefined && TIER_TABLE[e.tier].runsPerEpisode[job.episode] > 0) return true;
     return eligible !== undefined && eligible(r, job.episode);
   });

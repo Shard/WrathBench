@@ -10,7 +10,7 @@ import type { EpisodeIdView, HarnessView } from "../api/client";
 
 export type EpisodeChoice = EpisodeIdView | "all";
 
-export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "freeplay", "all"];
+export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "probing", "freeplay", "all"];
 
 /**
  * The `?episode=` search param, defaulted and validated.
