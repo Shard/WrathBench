@@ -71,7 +71,8 @@
       "maxToolCalls": 2500,
       "wikiCoords": true
     },
-    "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2},
+    "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2,
+      "runsPerEpisode": {"e90": 1, "e360": 0}},
     "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnetlo", "race": 3, "class": 2},
@@ -100,6 +101,7 @@
   },
   "queue": [
     { "ref": "nav-probe", "episode": "freeplay", "account": "SHAKEOUT", "repeat": 1, "enabled": true },
-    { "ref": ["sub-opus", "sub-opus-low"], "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
+    { "ref": "sub-opus", "episode": "e90", "repeat": 1, "enabled": true },
+    { "ref": "sub-opus-low", "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
   ]
 }
