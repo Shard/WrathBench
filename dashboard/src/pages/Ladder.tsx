@@ -16,11 +16,13 @@
  * is legible rather than mysterious, and neither is added to anything: there is
  * no aggregate score.
  *
- * Three of the eight rungs cannot be answered by anything the harness records
- * today — zone and area changes, flight paths, and group joins are not in the
- * trajectory (FOLLOW-UPS 35). Those read "not instrumented" rather than being
- * approximated by a level threshold, and every derived rung prints the exact
- * rule it applied so a reader can disagree with the derivation.
+ * One of the eight rungs cannot be answered by anything the harness records
+ * today — group joins and instance clears are not in the trajectory, and the
+ * harness runs one character per session. It reads "not instrumented" rather
+ * than being approximated by a level threshold. Rungs 2 and 4 read the
+ * zone/area milestone records (FOLLOW-UPS 35), partially: the flight-master
+ * half of 4 is still unrecorded. Every derived rung prints the exact rule it
+ * applied so a reader can disagree with the derivation.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -128,7 +130,9 @@ export default function Ladder() {
           <div class="card">
             <div class="k">rungs not instrumented</div>
             <div class="v">{RUNGS.filter((r) => r.test === null).length}</div>
-            <div class="sub">2, 4 and 6 — see FOLLOW-UPS 35</div>
+            <div class="sub">
+              {RUNGS.filter((r) => r.test === null).map((r) => r.n).join(", ")} — see FOLLOW-UPS 35
+            </div>
           </div>
         </div>
 

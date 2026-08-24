@@ -601,6 +601,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           totals === null
             ? null
             : listingFacts(row, totals, now),
+          totals?.areas ?? null,
         ),
       );
     }

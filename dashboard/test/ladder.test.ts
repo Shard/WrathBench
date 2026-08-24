@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { ResultRun, LevelMark } from "../../runner/viewer/api-types";
+import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
   RUNGS,
@@ -24,6 +24,10 @@ import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
   return { level, ts: level * 1000, turn, playtimeMs: ms };
+}
+
+function areas(p: Partial<AreaFacts> = {}): AreaFacts {
+  return { startArea: 9, distinctAreas: 1, leftStartArea: false, capitalZone: null, zoneMarks: 1, areaMarks: 1, ...p };
 }
 
 function run(p: Partial<ResultRun> = {}): ResultRun {
@@ -79,12 +83,41 @@ describe("scored", () => {
 });
 
 describe("ladderRows", () => {
-  test("rungs 2, 4 and 6 are never claimed", () => {
+  test("rung 6 is never claimed, and rungs 2 and 4 are no longer blanks", () => {
     const row = ladderRows([run({ levels: [mark(80, 1, 1)], maxLevel: 80 })])[0]!;
-    for (const n of [2, 4, 6]) {
-      expect(row.cells.find((c) => c.n === n)!.status).toBe("not-instrumented");
-    }
+    expect(row.cells.find((c) => c.n === 6)!.status).toBe("not-instrumented");
+    // No milestone records on this run: answered, and answered "no".
+    for (const n of [2, 4]) expect(row.cells.find((c) => c.n === n)!.status).toBe("not-reached");
     expect(row.highest).toBe(8);
+  });
+
+  test("a run that predates the milestone producer never claims rung 2 or 4", () => {
+    const row = ladderRows([run({ areas: null }), run({ runId: "older" })])[0]!;
+    for (const n of [2, 4]) expect(row.cells.find((c) => c.n === n)!.status).toBe("not-reached");
+  });
+
+  test("leaving the first-observed area reaches rung 2, staying in it does not", () => {
+    const stayed = ladderRows([
+      run({ model: "stayer", areas: areas({ leftStartArea: false }) }),
+    ])[0]!;
+    expect(stayed.cells.find((c) => c.n === 2)!.status).toBe("not-reached");
+    const left = ladderRows([run({ model: "walker", areas: areas({ leftStartArea: true, distinctAreas: 3 }) })])[0]!;
+    expect(left.cells.find((c) => c.n === 2)!.status).toBe("reached");
+    expect(left.highest).toBe(2);
+  });
+
+  test("a capital zone reaches rung 4; a zone that is not one does not", () => {
+    const cap = ladderRows([run({ model: "cap", areas: areas({ capitalZone: 1519 }) })])[0]!;
+    expect(cap.cells.find((c) => c.n === 4)!.status).toBe("reached");
+    const not = ladderRows([run({ model: "field", areas: areas({ capitalZone: null }) })])[0]!;
+    expect(not.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
+  });
+
+  test("a hole at rung 2 does not lower the highest rung reached", () => {
+    // The model got to L10 without a milestone record ever showing it moved.
+    const row = ladderRows([run({ levels: [mark(10, 1, 1)], maxLevel: 10, areas: areas({ leftStartArea: false }) })])[0]!;
+    expect(row.cells.find((c) => c.n === 2)!.status).toBe("not-reached");
+    expect(row.highest).toBe(3);
   });
 
   test("the highest derivable rung is reported per model, best run counting", () => {

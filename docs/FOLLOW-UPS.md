@@ -143,7 +143,13 @@ status.
     from the state cache's `self.zone` / `self.area` on every change, including the
     first observation (`from` undefined), alongside `quest_complete`
     (`runner/src/loop.ts`, `Trajectory.recordMilestone`). Death, level-up, spell,
-    talent and the firsts are still unwritten; the dashboard reads none of them yet.
+    talent and the firsts are still unwritten. **First consumer (2026-08-25):**
+    `scanRunTotals` reads the zone/area marks in its existing streaming pass and
+    `ResultRun.areas` carries `{ startArea, distinctAreas, leftStartArea,
+    capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
+    `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
+    (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
+    `false`. Rung 6 and every other kind are still nobody's.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the

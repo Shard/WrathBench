@@ -762,6 +762,32 @@ export interface LevelMark {
   playtimeMs: number | null;
 }
 
+/**
+ * What a run's zone/area milestones say about where it went.
+ *
+ * A **lower bound in every field**: the producer reads the state cache on
+ * `stateIntervalMs` (60s) alongside `recordState`, not on the movement itself,
+ * so an excursion that began and ended between two samples leaves no record at
+ * all. Same convention as `results.ts`: first observation, not first reach.
+ *
+ * Null fields are "never recorded", never zero or false — a run from before the
+ * producer existed has no `AreaFacts` at all, and `leftStartArea: null` is a run
+ * whose zone was seen and whose area never was.
+ */
+export interface AreaFacts {
+  /** The first area observed. Null when no `area` milestone was written. */
+  startArea: number | null;
+  /** Distinct area ids over the whole run, `startArea` included. */
+  distinctAreas: number;
+  /** Whether any area other than `startArea` was observed. Null when none was. */
+  leftStartArea: boolean | null;
+  /** The first capital zone entered, or null when none was. */
+  capitalZone: number | null;
+  /** How many records of each kind fed the above. */
+  zoneMarks: number;
+  areaMarks: number;
+}
+
 /** One run as the results charts read it: identity, comparability, level marks. */
 export interface ResultRun {
   runId: string;
@@ -891,6 +917,14 @@ export interface ResultRun {
    * so. Optional for the reason `xpEarned` is.
    */
   expectedCost?: CostFigure | null;
+  /**
+   * Where the run went, from its zone/area milestone records (FOLLOW-UPS 35):
+   * the ladder's rungs 2 and 4 read this. `null` is a run that wrote no such
+   * record — everything before the producer shipped on 2026-08-23 — and must
+   * not be read as "never left"; `undefined` is a viewer that predates the
+   * field, the same convention `xpEarned` and `expectedCost` use.
+   */
+  areas?: AreaFacts | null;
   /** Why a run is suspended, when it ended for no other reason (ADR-0036). */
   pauseReason: string | null;
 }

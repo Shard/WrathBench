@@ -7,6 +7,7 @@ import { platformOf, readRun } from "../viewer/runs";
 import {
   TrajectoryTail,
   playtimeMs,
+  areaFactsFrom,
   scanRunTotals,
   segmentsFrom,
   splitLines,
@@ -543,5 +544,84 @@ describe("readRun", () => {
     expect(row.error).toBeUndefined();
     // The rest of the row still reads normally against the older schema.
     expect(row.level).toBe(2);
+  });
+});
+
+describe("zone and area milestones (FOLLOW-UPS 35)", () => {
+  const ms = (kind: "zone" | "area", to: number, from?: number) =>
+    JSON.stringify({ t: "milestone", ts: 2000, kind, to: { id: to }, ...(from === undefined ? {} : { from: { id: from } }), turn: 1 });
+
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-milestone-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+
+  test("a run that never left its first area records that, and it is not a blank", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      ms("zone", 12),
+      ms("area", 9),
+      ms("area", 9),
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas).not.toBeNull();
+    expect(areas!.startArea).toBe(9);
+    expect(areas!.distinctAreas).toBe(1);
+    expect(areas!.leftStartArea).toBe(false);
+    expect(areas!.capitalZone).toBeNull();
+  });
+
+  test("a capital zone and a departed start area are both seen", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      ms("area", 9),
+      ms("area", 24, 9),
+      ms("zone", 12),
+      ms("zone", 1519, 12), // Stormwind
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas!.leftStartArea).toBe(true);
+    expect(areas!.distinctAreas).toBe(2);
+    expect(areas!.capitalZone).toBe(1519);
+  });
+
+  test("a trajectory from before the producer yields null, never false", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      JSON.stringify({ t: "state", ts: 1100, level: 3 }),
+      JSON.stringify({ t: "quest_complete", ts: 1200, questId: 7 }),
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas).toBeNull();
+  });
+
+  test("a resume re-emits a `from`-less mark, and the FIRST one is the start", () => {
+    // `lastAreaId` is per process, so a resumed run opens with no `from` again.
+    const facts = areaFactsFrom([
+      { kind: "area", to: 9, from: null },
+      { kind: "area", to: 24, from: 9 },
+      { kind: "area", to: 24, from: null }, // the resumed process, still in 24
+      { kind: "zone", to: 12, from: null },
+      { kind: "zone", to: 12, from: null },
+    ])!;
+    expect(facts.startArea).toBe(9);
+    expect(facts.leftStartArea).toBe(true);
+    expect(facts.distinctAreas).toBe(2);
+    expect(facts.areaMarks).toBe(3);
+    expect(facts.zoneMarks).toBe(2);
+  });
+
+  test("zone marks with no area mark leave `leftStartArea` unanswered", () => {
+    const facts = areaFactsFrom([{ kind: "zone", to: 1637, from: null }])!;
+    expect(facts.startArea).toBeNull();
+    expect(facts.leftStartArea).toBeNull();
+    expect(facts.distinctAreas).toBe(0);
+    expect(facts.capitalZone).toBe(1637); // Orgrimmar
+  });
+
+  test("no marks at all is null, not an empty reading", () => {
+    expect(areaFactsFrom([])).toBeNull();
   });
 });
