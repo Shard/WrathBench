@@ -32,8 +32,26 @@ export { extractIds } from "./ids";
 export type { WikiId, IdKind } from "./ids";
 export { extractQuest, cleanQuestValue } from "./quests";
 export type { WikiQuest } from "./quests";
-export { markEraSections, eraNote, REMOVED_LATER_NOTE } from "./era";
+export {
+  dropPostWrath,
+  dropPostWrathSections,
+  dropPostWrathParagraphs,
+  dropEmptySections,
+  normaliseHeading,
+  EMPTY_SECTION_KEY,
+  DEFAULT_ERA_CUTOFF,
+} from "./wrath-only";
+export type { WrathOnlyResult } from "./wrath-only";
+export {
+  admitPage,
+  hasPostWrathSignal,
+  hasWrathSignal,
+  hasClassic2019Signal,
+} from "./post-wrath";
+export type { AdmitReason, AdmitInput, AdmitDecision } from "./post-wrath";
 export { parsePages, decodeUtf8, chunked, DEFAULT_NAMESPACES } from "./parse";
 export type { WikiPage, ParseStats } from "./parse";
 export { stripWikitext, redirectTarget } from "./strip";
 export { decodeEntities } from "./entities";
+export { classifyMetaPage } from "./meta-pages";
+export type { MetaReason } from "./meta-pages";

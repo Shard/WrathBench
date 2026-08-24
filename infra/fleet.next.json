@@ -1,6 +1,6 @@
 {
   "_notes": [
-    "Fleet config 0.5 (ADR-0040). One concept, the JOB; one axis for evidence, the TIER; one axis for idle work, IDLE.",
+    "Fleet config 0.5 (ADR-0043). One concept, the JOB; one axis for evidence, the TIER; one axis for idle work, IDLE.",
     "Hot-reloaded every 60s; history in docs/worklogs. Shipped as a sibling file so the rename and the restart commute.",
     "",
     "roster.<name>.tier — how much evidence this model gets. THE only thing that sets a run count.",

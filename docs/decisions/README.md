@@ -46,7 +46,7 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0026 | The comparability tuple is stamped, never recomputed | superseded by 0033 | — |
 | 0027 | Navigation is the module's: typed causes, triggers, transports | proposed (gate run pending) | Pathing recovery, areatriggers and transports are what a client does locally, so the module does them. |
 | 0028 | Wiki coordinates are a run dimension, withheld in scored runs | superseded by 0033 | — |
-| 0029 | The reference bundle states the quest's ender and the wiki's era | current | The facts were in the wikitext and the strip destroyed them; lift, label, never infer or delete. |
+| 0029 | The reference bundle states the quest's ender and the wiki's era | current, non-deletion rule retracted by 0040 | The facts were in the wikitext and the strip destroyed them; lift them, and never infer the ender from the giver. |
 | 0030 | Episode tiers and promotion | superseded by 0033, 0034 | — |
 | 0031 | Runner pool and job queue | superseded by 0034 | — |
 | 0032 | Scheduling policy from run history | superseded by 0034 | — |
@@ -57,5 +57,7 @@ the file was last edited; an amendment folded into a record is noted at its top.
 | 0037 | SDK-side move outcomes and the caller budget | current | The SDK may answer before the wire when nothing was dispatched, and a passed-in deadline explains a result without ever capping a wait. |
 | 0038 | The deploy owns the window | current | One command drains (runs pause), swaps, verifies, resumes — and publishes its phase so the page states what the server is doing instead of guessing. |
 | 0039 | Run data storage | proposed | Files stay the record; Parquet + DuckDB next for analysis and a snapshot publisher for the dashboard; ClickHouse only on a named trigger. |
-| 0040 | The tier is the evidence budget | current | How much a model runs is one word in the config; the four blocks that could disagree about it are refused by name. |
+| 0040 | The bundle is a Wrath snapshot | current | Nothing is labelled by era because what is not 3.3.5 is not in the bundle: the cutoff, the page rules and the section rules drop it, with counts in meta. |
 | 0041 | Probe campaigns are the third lane | current | Commissioned exploration gets its own episode and its own scheduling loop; what separates it from an eval is that a harness bump never re-arms it. |
+| 0042 | The build may ask the world DB whether an id exists | current | A late page that states an id this server has, under the name this server gives it, is a Wrath page; the export stays under `data/` and the agent still reads only wiki text. |
+| 0043 | The tier is the evidence budget | current | How much a model runs is one word in the config; the four blocks that could disagree about it are refused by name. Was ADR-0040 locally until the merge of 2026-08-24 gave that number to the wiki decision already on the trunk. |

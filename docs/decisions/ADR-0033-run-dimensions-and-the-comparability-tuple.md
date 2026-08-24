@@ -97,3 +97,41 @@ flag, objective presence, `wikiCoords`. Rules that follow from "stamped, never r
   `e90` member.
 - Long-running lanes materialize their roster at spawn, so a changed dimension
   reaches only new episodes.
+
+## Addendum (2026-08-24): the wiki bundle's identity
+
+A run recorded the reference bundle's *path* and nothing about its contents.
+The path is a constant (`data/wiki/bundle.sqlite`); the file behind it is not.
+The era-cutoff rebuild — prose taken from pre-4.0.1 revisions, FOLLOW-UPS 49 —
+changes what `search_reference` returns for the same query, which is a change
+to what the model could read and therefore to what the score means. Before and
+after that swap were indistinguishable in run metadata.
+
+**A bundle whose page text changes is a behaviour change, and behaviour changes
+are already grouped: by the harness series.** ADR-0034 and docs/EPISODES.md
+make `major.minor` of the harness version the comparability floor — a minor
+bump restarts the evidence, a fix commit does not. Adding a second grouping key
+for the bundle would give one concept two vocabularies and split charts twice
+for one event. So the rule is operational, not structural: **a bundle rebuild
+that changes page text ships with a harness minor bump**, the same as any other
+change to what the run measures. A rebuild of the same dump that changes no
+prose (a re-index, a new derived channel) does not.
+
+`comparability.wikiBundle` is then the *annotation* that makes the bump
+falsifiable: `{schemaVersion, builtAt, source, eraCutoff}`, read off the
+bundle's own `meta` table when the run opens it. It answers "which bundle was
+this run actually reading" — the question the series bump asserts an answer to
+but does not carry. Two consequences worth stating:
+
+- `sameComparability` is whole-tuple equality, so it is stricter than series
+  grouping: any rebuild between a launch and its resume — including a rebuild
+  of the same dump, since `built_at` moves — now trips a
+  `comparability_restamped` record. That is the honest reading of a resume that
+  is reading a different file than the launch did.
+- Every field is nullable and the whole record is optional. `era_cutoff` is
+  written only by builds that apply one; a bundle without it reads `null` and
+  is never back-labelled "no cutoff applied", by the same rule as any other
+  field a run predates. A bundle that cannot describe itself — empty `meta`, no
+  `meta` — annotates as nulls rather than failing a launch. This is evidence,
+  not a gate; the gate is `openWikiBundle`'s schema check, and it stays the
+  only place that fails closed.

@@ -54,4 +54,4 @@ service graph: `infra/README.md`.
 
 ## Licence
 
-`module/` is AGPL-3.0 (it is an AzerothCore module). `sdk/`, `runner/`, `wiki/`, and `infra/` are MIT. No Blizzard-owned material is included or distributed; see `docs/DATA-AND-LEGAL.md`.
+`module/` is GPL-2.0-or-later; see `module/LICENSE`. All other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT under the root `LICENSE`. This boundary does not relicense AzerothCore itself, Blizzard assets, or third-party dependencies; see `THIRD-PARTY-NOTICES.md` and `docs/DATA-AND-LEGAL.md`.

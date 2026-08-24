@@ -9,7 +9,9 @@
               data/runs/<id>/  (trajectory JSONL, sqlite)                 AzerothCore worldserver + DBs
 ```
 
-### module/ (C++, AGPL, in-process with worldserver)
+### module/ (C++, GPL-2.0-or-later, in-process with worldserver)
+
+The licensing boundary follows this layout: `module/` is GPL-2.0-or-later; all other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT. The build copies this module into the pinned AzerothCore tree; that relationship does not relicense AzerothCore itself or any other dependency.
 
 A thin bridge. It does two things and should never learn to do a third.
 
@@ -70,6 +72,10 @@ the SPA owns everything that is UI.
 ### wiki/ (Bun/TypeScript, MIT)
 
 Tooling to turn a locally held wiki dump into a searchable bundle the runner can serve. The dump and the bundle live in `data/` and are never committed.
+
+### minimap/ (Bun/TypeScript, MIT)
+
+Tooling for local map assets used by the viewer. The assets themselves are supplied outside the repository under `data/` and are not part of the MIT-licensed WrathBench source.
 
 ### infra/
 

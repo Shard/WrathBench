@@ -1,14 +1,14 @@
 # ADR-0034: Account pool and a scheduling policy from run history
 
-Status: Partly superseded by ADR-0040 (2026-08-24), which replaces this
+Status: Partly superseded by ADR-0043 (2026-08-24), which replaces this
 record's targets, promotion rule, per-entry overrides and extras with one
 per-model `tier` plus an `idle` axis. What still stands here: the job as the
 unit of work, the account classes, the defer/retirement ladder, series keying,
-and `policy.paid` as a throttle. Read ADR-0040 for how much a model runs.
+and `policy.paid` as a throttle. Read ADR-0043 for how much a model runs.
 
 Original status: Accepted. Date: 2026-08-23. Consolidates ADR-0031 and ADR-0032 (both
 superseded by this record). Amended the same day, twice: one job concept, then
-series keying with the paid/free split (both below). It *was* the single statement of the promotion rule; ADR-0040 is now, and
+series keying with the paid/free split (both below). It *was* the single statement of the promotion rule; ADR-0043 is now, and
 docs/EPISODES.md, docs/OPERATIONS.md and docs/COSTS.md point there.
 
 ## Context

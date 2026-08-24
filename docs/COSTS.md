@@ -293,7 +293,7 @@ two-run rule of ADR-0030 — now one counted `e90` episode reaching rung 1 / lev
    with a best run of **level 3**, short of the rung-1 gate, so it earned no e360.
    `openai/gpt-5.6-luna` and `google/gemini-3.7-flash` joined beside it. The
    Both sit on **`tier: "t0"`** — the trial rung: one e90, and the ladder is held
-   so a good run cannot promote them into an e360 nobody approved (ADR-0040; this
+   so a good run cannot promote them into an e360 nobody approved (ADR-0043; this
    started as a per-entry `runsPerEpisode {e90: 1, e360: 0}` cap, which said the
    same thing in a way the board then contradicted with `promoted 1/1 0/0`).
    Measuring luna in flight had moved the estimate by 3.5x. Two constraints, and
@@ -304,7 +304,7 @@ two-run rule of ADR-0030 — now one counted `e90` episode reaching rung 1 / lev
    One scored e90 each first; move a model that earns it to `t1`, and the rung it
    already earned on trial promotes it to `t2` at once, with nothing re-run.
 
-   Note the deliberate boundary (ADR-0040): a tier is denominated in **runs**, not
+   Note the deliberate boundary (ADR-0043): a tier is denominated in **runs**, not
    dollars. The reasoning above is in dollars and run counts are the proxy; hard
    cost control is external to the fleet by decision (2026-08-24), and a money
    budget, if one is ever wanted in-fleet, belongs beside `policy.paid.maxConcurrent`

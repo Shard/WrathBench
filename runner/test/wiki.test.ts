@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSchema } from "@wrathbench/wiki/bundle";
-import { openWikiBundle } from "../src/wiki";
+import { openWikiBundle, wikiBundleMeta } from "../src/wiki";
 
 describe("openWikiBundle", () => {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-runner-wiki-"));
@@ -48,5 +48,81 @@ describe("openWikiBundle", () => {
     expect(tables).toContain("page_ids");
     expect(() => db!.run("INSERT INTO pages VALUES (1, 'x', 0, 'y', 1)")).toThrow();
     db!.close();
+  });
+});
+
+/**
+ * The bundle's identity, for the comparability tuple (ADR-0033). Annotation,
+ * never a gate: every failure mode here reads as "not recorded".
+ */
+describe("wikiBundleMeta", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wrathbench-runner-wikimeta-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  function bundle(name: string, meta: Record<string, string>): string {
+    const path = join(dir, name);
+    const w = new Database(path, { create: true });
+    createSchema(w);
+    const stmt = w.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+    for (const [k, v] of Object.entries(meta)) stmt.run(k, v);
+    w.close();
+    return path;
+  }
+
+  test("no bundle reads as not-recorded, not as an error", () => {
+    expect(wikiBundleMeta(undefined)).toBeNull();
+  });
+
+  test("an empty meta table reads all-null rather than throwing", () => {
+    const db = openWikiBundle(bundle("empty.sqlite", {}));
+    expect(wikiBundleMeta(db)).toEqual({
+      schemaVersion: null,
+      builtAt: null,
+      source: null,
+      eraCutoff: null,
+    });
+    db!.close();
+  });
+
+  test("a pre-era bundle keeps working: eraCutoff is null, the rest is read", () => {
+    const db = openWikiBundle(
+      bundle("pre-era.sqlite", {
+        schema_version: "4",
+        built_at: "2026-08-20T00:00:00.000Z",
+        source: "example-dump.7z",
+        pages_kept: "12",
+      }),
+    );
+    expect(wikiBundleMeta(db)).toEqual({
+      schemaVersion: "4", // TEXT in the bundle, a string here
+      builtAt: "2026-08-20T00:00:00.000Z",
+      source: "example-dump.7z",
+      eraCutoff: null,
+    });
+    db!.close();
+  });
+
+  test("an era-cut bundle carries its cutoff", () => {
+    const db = openWikiBundle(
+      bundle("era.sqlite", {
+        schema_version: "5",
+        built_at: "2026-08-24T12:00:00.000Z",
+        source: "example-dump.7z",
+        era_cutoff: "2010-10-12",
+      }),
+    );
+    expect(wikiBundleMeta(db)?.eraCutoff).toBe("2010-10-12");
+    db!.close();
+  });
+
+  test("a bundle with no meta table at all reads all-null, never throws", () => {
+    const path = join(dir, "no-meta.sqlite");
+    const w = new Database(path, { create: true });
+    createSchema(w);
+    w.run("DROP TABLE meta");
+    w.close();
+    const db = new Database(path, { readonly: true });
+    expect(wikiBundleMeta(db)?.builtAt).toBeNull();
+    db.close();
   });
 });

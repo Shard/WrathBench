@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { chunked, parsePages, type WikiPage } from "../src/parse";
-import { renderDump, type FixturePage } from "./fixtures";
+import { renderDump, type FixturePage, type FixtureRevision } from "./fixtures";
 
 async function collect(xml: string, chunkSize: number): Promise<WikiPage[]> {
   const out: WikiPage[] = [];
@@ -145,5 +145,104 @@ describe("parsePages", () => {
   test("an empty stream yields nothing", async () => {
     expect(await collect("", 16)).toEqual([]);
     expect(await collect(renderDump([]), 16)).toEqual([]);
+  });
+});
+
+describe("a page split into 50-revision blocks", () => {
+  // The dump exports a long history as consecutive <page> blocks of 50
+  // revisions each, all carrying the same title and ns. A block is not a page.
+  const block = (title: string, ns: number, id: number, revisions: FixtureRevision[]): FixturePage =>
+    ({ title, ns, id, revisions });
+  const rev = (id: number, year: number, text: string): FixtureRevision =>
+    ({ id, timestamp: `${year}-04-04T04:04:04Z`, text });
+
+  test("becomes one page holding the newest text, at any chunk size", async () => {
+    const xml = renderDump([
+      block("Example Long History", 0, 1, [rev(30, 2018, "newest lorem"), rev(29, 2017, "b1 older")]),
+      block("Example Long History", 0, 1, [rev(20, 2013, "b2 lorem"), rev(19, 2012, "b2 older")]),
+      block("Example Long History", 0, 1, [rev(10, 2006, "b3 lorem"), rev(9, 2005, "oldest lorem")]),
+    ]);
+    for (const size of CHUNK_SIZES) {
+      const got = await collect(xml, size);
+      expect(`${size}:${got.length}`).toBe(`${size}:1`);
+      expect(`${size}:${got[0]!.wikitext}`).toBe(`${size}:newest lorem`);
+      expect(got[0]!.timestamp).toBe("2018-04-04T04:04:04Z");
+    }
+  });
+
+  test("merges the same way when the blocks arrive oldest-first", async () => {
+    const xml = renderDump([
+      block("Example Long History", 0, 1, [rev(9, 2005, "oldest lorem"), rev(10, 2006, "b3 lorem")]),
+      block("Example Long History", 0, 1, [rev(19, 2012, "b2 older"), rev(20, 2013, "b2 lorem")]),
+      block("Example Long History", 0, 1, [rev(29, 2017, "b1 older"), rev(30, 2018, "newest lorem")]),
+    ]);
+    for (const size of [1, 23, 4096]) {
+      const got = await collect(xml, size);
+      expect(got).toHaveLength(1);
+      expect(got[0]!.wikitext).toBe("newest lorem");
+    }
+  });
+
+  test("leaves the pages around it alone", async () => {
+    const xml = renderDump([
+      block("Example Zone Beta", 0, 1, [rev(40, 2016, "beta lorem")]),
+      block("Example Long History", 0, 2, [rev(30, 2018, "newest lorem")]),
+      block("Example Long History", 0, 2, [rev(10, 2006, "older lorem")]),
+      block("Example Quest Alpha", 118, 3, [rev(50, 2015, "alpha lorem")]),
+      block("Example Zone Gamma", 0, 4, [rev(60, 2014, "gamma lorem")]),
+    ]);
+    for (const size of [1, 31, 8192]) {
+      const got = await collect(xml, size);
+      expect(got.map((p) => p.title)).toEqual([
+        "Example Zone Beta",
+        "Example Long History",
+        "Example Quest Alpha",
+        "Example Zone Gamma",
+      ]);
+      expect(got[1]!.wikitext).toBe("newest lorem");
+    }
+  });
+
+  test("a dropped namespace between two blocks does not split the page", async () => {
+    const xml = renderDump([
+      block("Example Long History", 0, 1, [rev(30, 2018, "newest lorem")]),
+      block("Talk:Example Long History", 1, 2, [rev(31, 2019, "chatter")]),
+      block("Example Long History", 0, 1, [rev(10, 2006, "older lorem")]),
+    ]);
+    for (const size of [1, 37, 8192]) {
+      const got = await collect(xml, size);
+      expect(got).toHaveLength(1);
+      expect(got[0]!.wikitext).toBe("newest lorem");
+    }
+  });
+
+  test("the same title in another namespace stays a separate page", async () => {
+    const xml = renderDump([
+      block("Example Shared Name", 0, 1, [rev(30, 2018, "main lorem")]),
+      block("Example Shared Name", 14, 2, [rev(10, 2006, "category lorem")]),
+    ]);
+    for (const size of [1, 29, 8192]) {
+      const got = await collect(xml, size);
+      expect(got.map((p) => [p.ns, p.wikitext])).toEqual([
+        [0, "main lorem"],
+        [14, "category lorem"],
+      ]);
+    }
+  });
+
+  test("a redirect attribute on one block survives the merge", async () => {
+    const first: FixturePage = {
+      ...block("Example Old Name", 0, 1, [rev(30, 2018, "#REDIRECT [[Example New Name]]")]),
+      redirectAttr: "Example New Name",
+    };
+    const xml = renderDump([
+      first,
+      block("Example Old Name", 0, 1, [rev(10, 2006, "an article, once")]),
+    ]);
+    for (const size of [1, 41, 8192]) {
+      const got = await collect(xml, size);
+      expect(got).toHaveLength(1);
+      expect(got[0]!.redirectAttr).toBe("Example New Name");
+    }
   });
 });

@@ -88,7 +88,7 @@ export interface StartingCharacter {
 }
 
 /**
- * The ladder a model climbs, named once here (ADR-0040). A tier is a statement
+ * The ladder a model climbs, named once here (ADR-0043). A tier is a statement
  * of **how much evidence** a model gets, denominated in runs, and it is the
  * only thing that sets a run count: there is no per-entry override and no
  * per-billing table, so "how many runs does this model get" has exactly one
@@ -207,7 +207,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
  * What is left here is only ever about **where a run may physically execute
  * and how many at once**: `maxConcurrent` per rate-limit key, and `paid` as
  * the paid class's throttle. How much evidence a model gets is its tier
- * (ADR-0040) and is not expressible in this block at all.
+ * (ADR-0043) and is not expressible in this block at all.
  *
  * The removed keys are refused BY NAME rather than ignored. A file still
  * carrying `policy.runsPerEpisode` meant something specific by it, and
@@ -1199,7 +1199,7 @@ export function rosterClass(r: RosterModel): AccountClass {
  * other class was assumed to want characters — so the same model meant
  * different things depending on which account it landed on, and a non-local
  * model could not take unlimited sessions at all. One axis, stated per model,
- * replaces both spellings (ADR-0040).
+ * replaces both spellings (ADR-0043).
  */
 export function idleModeOf(s: Pick<ModelState, "idle">): IdleMode {
   return s.idle;

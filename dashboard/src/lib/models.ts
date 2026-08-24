@@ -17,7 +17,7 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/ap
  * episodes, extras, the verdict — plus where the model is served and its
  * newest run.
  *
- * On the word "tier": since ADR-0040 it means a rung of the EVIDENCE ladder
+ * On the word "tier": since ADR-0043 it means a rung of the EVIDENCE ladder
  * (t0/t1/t2), never an episode. The episode columns are named by their ids.
  */
 export const MODEL_COLUMNS = ["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;

@@ -7,8 +7,8 @@ version; the exact build is recorded and listed, the series is the group —
 ADR-0034). The decision and its reasoning
 are in `docs/decisions/ADR-0033-run-dimensions-and-the-comparability-tuple.md`;
 this page is the definition an operator tags against. Who gets scheduled on
-which episode, including promotion, is ADR-0040 — it is stated there and only
-there. Note that **tier** is not a word for an episode: since ADR-0040 a tier is
+which episode, including promotion, is ADR-0043 — it is stated there and only
+there. Note that **tier** is not a word for an episode: since ADR-0043 a tier is
 a rung of the evidence ladder (`t0`/`t1`/`t2`) — how many runs a model gets —
 and an episode is the ruleset a run happens under. This page is about episodes.
 
@@ -41,9 +41,9 @@ everything else is derived from it — no list of names decides what counts.
 - **Scoring.** Scored.
 - **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
   climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
-  witness and stays. The rule, the budgets and what counts are in ADR-0040.
+  witness and stays. The rule, the budgets and what counts are in ADR-0043.
 - **Extras.** A free model past its target may be given extra `e90` runs with
-  a different starting race/class (ADR-0040). An extra is this episode — scored,
+  a different starting race/class (ADR-0043). An extra is this episode — scored,
   same prompt and leash — stamped `extra: true`; it is never counted toward a
   target and never a promotion witness.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
@@ -72,11 +72,11 @@ because that would silently re-scope every score already carrying this label.
 - **Scoring.** Scored, in its own group. An `e360` row never shares a chart with
   an `e90` row: four times the budget is four times the opportunity, and putting
   them on one axis would rank the schedule rather than the models.
-- **Promotion in.** Earned on `e90` per ADR-0040: a `t1` model that reaches rung
+- **Promotion in.** Earned on `e90` per ADR-0043: a `t1` model that reaches rung
   1 climbs to `t2`, and `t2` is the tier that buys an `e360`. **Out:** none; a
   model that stalls its `e360` runs meets its target and is simply not scheduled
   here again. Every tier's budget is the same whoever is paying — billing says
-  where a run may execute, never how many (ADR-0040).
+  where a run may execute, never how many (ADR-0043).
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
   `wikiCoords: false`, and the tool-call ceiling.

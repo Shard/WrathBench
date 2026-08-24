@@ -1,4 +1,4 @@
-# ADR-0040: The tier is the evidence budget
+# ADR-0043: The tier is the evidence budget
 
 Status: Accepted. Date: 2026-08-24. Supersedes the scheduling half of ADR-0034
 (account classes, the defer ladder, series keying and the paid throttle stand;

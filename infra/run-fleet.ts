@@ -233,7 +233,7 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
  * A roster entry as named in the `roster` map: the exact per-entry schema plus
- * its scheduling axes (ADR-0040). `tier` is the whole answer to how much this
+ * its scheduling axes (ADR-0043). `tier` is the whole answer to how much this
  * model runs, and it is required — except on a steered entry (one carrying an
  * `objective`), which is outside the policy and has no budget to state, where
  * it is refused instead. `idle` says what the model does with an account once
@@ -2293,7 +2293,7 @@ export function formatModels(
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
   const out: string[] = [
-    `models: ${states.length} in roster (policy: ADR-0040; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
+    `models: ${states.length} in roster (policy: ADR-0043; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
       `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
       `; idle unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
