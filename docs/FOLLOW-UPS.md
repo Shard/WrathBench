@@ -201,24 +201,6 @@ status.
     image build would catch mechanical breakage before a deploy window. Next action:
     decide what, if anything, runs without the stack; record it either way.
 
-## Wiki
-
-65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
-    the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
-    states every one of its ~28 metrics three times: a `let`/`Record` in the
-    build loop, a `meta` key in the `setMeta` call, and a line in the console
-    summary. Nothing ties the three together, so a new counter is added in three
-    places and is silently absent from the bundle or the summary if one is
-    missed, and the ones that are deliberately *not* part of the accounting
-    identity (`pages_pre_announcement_protected`, `pages_id_name_mismatch`,
-    `empty_pages`) say so only in a comment beside each of the three. What it
-    costs today is small — the comments are good and the meta diff of a rebuild
-    catches a drift — which is why this is a follow-up and not a fix: it is worth
-    doing when the next counter goes in, as one metric table (name, help text,
-    whether it is in the identity, how it prints) that the loop increments, the
-    meta write reads and the summary renders. Watch for it the next time a
-    counter is added to `build.ts`.
-
 ## Docs and release
 
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
