@@ -1,6 +1,7 @@
 {
   "name": "wrathbench",
   "private": true,
+  "license": "MIT",
   "workspaces": ["sdk", "runner", "wiki", "minimap", "dashboard"],
   "engines": {
     "bun": "1.4.0"

@@ -18,17 +18,19 @@ Phase 0: build the control surface and get any model to liftoff. See `docs/PHASE
 - The agent loop is model-agnostic. No per-model prompts, retries, or tuning.
 - SDK surface is simple by default, flexible via the raw-action escape hatch: helpers are earned by observed need in trajectories, never speculative, and there is no convenience middle tier (ADR-0015).
 - Pinned versions are pinned. AzerothCore commit, Bun version, and the module build are changed deliberately and documented.
+- Original WrathBench material outside `module/` is MIT-licensed under the root `LICENSE`. `module/` is GPL-2.0-or-later under `module/LICENSE`. Third-party works retain their own terms; see `THIRD-PARTY-NOTICES.md`.
 
 ## Repository layout
 
 ```
-module/        C++ AzerothCore module: HTTP/WS bridge into WorldSession (AGPL-3.0)
+module/        C++ AzerothCore module: HTTP/WS bridge into WorldSession (GPL-2.0-or-later)
 sdk/           Bun/TypeScript SDK over the module (MIT)
 runner/        Agent loop, snippet sandbox, MCP server, trajectory logging (MIT)
 dashboard/     SolidJS SPA over the viewer's read-only /api; see ADR-0022 (MIT)
 wiki/          Tooling to build the wiki bundle from a local dump (MIT); the dump itself is in data/
-infra/         Compose files, Dockerfiles, fleet and smoke scripts
-docs/          Documentation
+minimap/       Local minimap extraction tooling; generated assets stay in data/ (MIT)
+infra/         Compose files, Dockerfiles, fleet and smoke scripts (original WrathBench portions MIT)
+docs/          Documentation (MIT)
 data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 ```
 
