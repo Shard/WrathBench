@@ -128,7 +128,9 @@ describe("parseFleet", () => {
       fleetJson([{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }]),
     );
     expect(config.jobs.map((j) => [j.name, j.enabled])).toEqual([["glm-e90", true], ["ox-e90", false]]);
-    expect(config.refusals).toEqual([`ox-e90 REFUSED and left disabled: account s is already glm-e90's — one enabled job per account`]);
+    expect(config.refusals).toEqual([
+      { pin: "ox-e90", why: "account s is already glm-e90's — one enabled job per account", jobs: ["ox-e90"] },
+    ]);
   });
 
   test("a disabled job may sit on a running job's account — that is the burn switch", () => {
@@ -147,19 +149,45 @@ describe("parseFleet", () => {
       }),
     );
     expect(onGate.jobs[0]!.enabled).toBe(false);
-    expect(onGate.refusals[0]).toMatch(/glm-e90 REFUSED and left disabled: account SMOKE is the preflight gate's/);
+    expect(onGate.refusals[0]).toMatchObject({ pin: "glm-e90", jobs: ["glm-e90"] });
+    expect(onGate.refusals[0]!.why).toMatch(/account SMOKE is the preflight gate's/);
     expect(() =>
       parseFleet(fleetJson([], { accounts: { pool: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } })),
     ).toThrow(/also in accounts.pool/);
   });
 
+  test("a refused pin names the jobs it suppresses, so a live run is not drained for it", () => {
+    // The regression that mattered. A refused pin is `enabled: false`, and
+    // `diffJobs` drains a running job whose spawn is gone or disabled — so
+    // adding one queue job on an account a campaign already holds would have
+    // SIGTERMed that campaign's probe at the next episode boundary. Under the
+    // whole-file rejection it replaced, the live run was never touched. A
+    // refusal must suppress SCHEDULING only, so the tick needs to tell a run
+    // under a refused pin apart from one the operator parked: that is `jobs`.
+    const config = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
+        campaigns: { probe1: { cells: [{ id: "c1" }, { id: "c2" }], account: "s" } },
+      }),
+    );
+    expect(config.refusals[0]!.jobs).toEqual(["probe1-c1", "probe1-c2"]);
+    // What the tick does with them: the live probe survives the diff.
+    const live = { running: new Set(["probe1-c1"]), draining: new Set<string>(), finished: new Set<string>() };
+    const drain = diffJobs(pinnedJobs(config).map((j) => ({ ...j, refs: j.refs })) as never, live).drain;
+    expect(drain).toEqual(["probe1-c1"]);
+    const refused = new Set(config.refusals.flatMap((r) => r.jobs));
+    expect(drain.filter((n) => !refused.has(n))).toEqual([]);
+  });
+
   test("a clean config refuses nothing, and the refusal block stays silent", () => {
     expect(parseFleet(fleetJson([{ ref: "glm", episode: "e90" }])).refusals).toEqual([]);
     expect(formatRefusals([])).toEqual([]);
-    expect(formatRefusals(["a-e90 REFUSED and left disabled: because"])).toEqual([
+    expect(formatRefusals([{ pin: "a-e90", why: "because", jobs: ["a-e90"] }])).toEqual([
       "! 1 pin(s) refused by the account rules — the rest of the file IS in effect:",
       "   a-e90 REFUSED and left disabled: because",
+      "   a live run under a refused pin is left alone; it just will not respawn",
     ]);
+    // Under a REJECTED banner the block must not claim the file is in effect.
+    expect(formatRefusals([{ pin: "a-e90", why: "because", jobs: ["a-e90"] }], false)[0]).toMatch(/IN THE FILE — see the banner above/);
   });
 
   test("pre-0.4 keys are refused by name, naming the 0.4 shape", () => {
@@ -191,7 +219,9 @@ describe("campaigns (ADR-0041)", () => {
     );
     expect(config.jobs[0]!.enabled).toBe(true);
     expect(config.campaigns[0]!.enabled).toBe(false);
-    expect(config.refusals[0]).toMatch(/^campaign probe1 REFUSED and left disabled: account s is already glm-e90's/);
+    // A campaign's `jobs` are one per declared cell — what a live probe runs under.
+    expect(config.refusals[0]).toMatchObject({ pin: "campaign probe1", jobs: ["probe1-c1"] });
+    expect(config.refusals[0]!.why).toMatch(/^account s is already glm-e90's/);
   });
 
   test("a disabled pinned campaign may park on a listed account", () => {
@@ -833,7 +863,7 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     expect(parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s", enabled: false }] })).accounts.pinned).toEqual({ S: "glm-e90" });
     const parked = parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "RUNNER" }] }));
     expect(parked.jobs[0]!.enabled).toBe(false);
-    expect(parked.refusals[0]).toMatch(/glm-e90 REFUSED and left disabled: account RUNNER is in accounts.pool/);
+    expect(parked.refusals[0]!.why).toMatch(/account RUNNER is in accounts.pool/);
     expect(() => parseFleet(pin({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name glm-e90/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { warp: 1 } } }))).toThrow(/unknown concurrency key warp/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { openai: 0 } } }))).toThrow(/positive integer/);
@@ -845,7 +875,7 @@ describe("jobs, pinned and pool (ADR-0034)", () => {
     // Not a throw since item 66: the pin is refused, the rest of the file loads.
     const overlap = parseFleet(nextShape({ accounts: { pool: ["SHAKEOUT"] } }));
     expect(overlap.jobs.every((j) => !j.enabled || j.account?.toUpperCase() !== "SHAKEOUT")).toBe(true);
-    expect(overlap.refusals[0]).toMatch(/account SHAKEOUT is in accounts.pool/);
+    expect(overlap.refusals[0]!.why).toMatch(/account SHAKEOUT is in accounts.pool/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "nope", episode: "e90" }] }))).toThrow(/ref nope is not in roster/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e9000" }] }))).toThrow(/episode must be one of/);
     expect(() => parseFleet(nextShape({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", tiers: ["e45"] } }, queue: [] }))).toThrow(/tiers is not a 0.5 key/);
@@ -1446,7 +1476,7 @@ describe("scheduling policy (ADR-0032)", () => {
     // Since item 66 the enforcement is a refusal of that job, not of the file.
     const onBox = parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] }, queue: [{ ref: "local", episode: "e90", account: "LOCALBOX" }] });
     expect(onBox.jobs[0]!.enabled).toBe(false);
-    expect(onBox.refusals[0]).toMatch(/local-e90 REFUSED and left disabled: account LOCALBOX is in accounts.local/);
+    expect(onBox.refusals[0]!.why).toMatch(/account LOCALBOX is in accounts.local/);
     // Coexistence: a DISABLED pinned job may park on a listed account, and says
     // nothing; an ENABLED one is disabled on the spot and named.
     const parked = { ...raw, accounts: { pool: ["RUNNER"], paid: ["PAID"] }, queue: [{ ref: "big", episode: "e90", account: "PAID", enabled: false }] };
@@ -1454,7 +1484,7 @@ describe("scheduling policy (ADR-0032)", () => {
     expect(parseFleet(parked).refusals).toEqual([]);
     const onPaid = parseFleet({ ...parked, queue: [{ ref: "big", episode: "e90", account: "PAID" }] });
     expect(onPaid.jobs[0]!.enabled).toBe(false);
-    expect(onPaid.refusals[0]).toMatch(/big-e90 REFUSED and left disabled: account PAID is in accounts.paid/);
+    expect(onPaid.refusals[0]!.why).toMatch(/account PAID is in accounts.paid/);
     // Without the blocks, today's behaviour: no cap, 3/3 for everyone, no extras.
     const plain = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] }, policy: {} });
     const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
