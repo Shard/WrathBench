@@ -117,6 +117,12 @@ ADR-0040.
   links are removed, `[[link|label]]` becomes `label`, headings become plain lines,
   whitespace is collapsed. Most infobox data lives in templates and is therefore
   lost. The consumer is a model reading search results, not a browser.
+  Brace-matching is a run at a time and by kind — `{{{param|default}}}` is a
+  parameter, `}}` closes a template and `|}` a table — and an opener that is
+  never closed costs its own paragraph, not the page: the strip resumes at the
+  next blank line after it. Reading braces two characters at a time, and a
+  repeated `<ref name="x" />` swallowed as if it opened a footnote, used to
+  empty whole articles (FOLLOW-UPS 63).
 - Coordinates are the exception: before the strip runs, `extractCoords` lifts
   wiki-recorded map positions off the raw wikitext (`{{coords|x|y|zone}}`
   templates and infobox `loc`/`location` fields) into the `page_coords` table.
@@ -150,10 +156,10 @@ non-redirect page the parser yields, which the build test asserts as an identity
 so a page cannot be counted twice or lost quietly.
 
 - `pages_pre_cutoff` — has pre-cutoff prose, and either no post-Wrath signal or
-  the pre-beta protection below. Its prose is that revision. `pages_era_swapped`
-  counts how many of these took their prose from an older timestamp than their
-  structured fields, and `pages_pre_beta_protected` how many were kept by the
-  protection — a subset of this counter, deliberately outside the accounting
+  the pre-announcement protection below. Its prose is that revision.
+  `pages_era_swapped` counts how many of these took their prose from an older
+  timestamp than their structured fields, and
+  `pages_pre_announcement_protected` how many were kept by the protection — a subset of this counter, deliberately outside the accounting
   identity, never a bucket of its own.
 - `pages_post_cutoff_wrath_signal` — **no** pre-cutoff revision, but the newest
   revision says outright that its subject is Wrath-or-earlier: an infobox
@@ -174,9 +180,9 @@ so a page cannot be counted twice or lost quietly.
   expansion in its title parenthetical, a `[[Category:…]]`, a page-banner
   template (`{{stub/Cataclysm}}`, `{{Legion-article}}`, `{{DraenorZone}}`,
   `{{Pandaria}}`), an infobox `|patch=` at 4.0 or later, or an `|expansion=`
-  naming one — **and the page was created after the Cataclysm beta started**.
-  That is now the whole of what this reason means: the beta stubs written before
-  the cutoff about the expansion that was coming. Also counts a page that had
+  naming one — **and the page was created on or after the day Cataclysm was
+  announced**. That is now the whole of what this reason means: the stubs
+  written before the cutoff about the expansion that was coming. Also counts a page that had
   prose and has none after the cuts — the era rules or the section trim above,
   which is a wording debt rather than a lie: a page that was nothing but an
   external-link list is not a page about this world either.
@@ -185,16 +191,21 @@ so a page cannot be counted twice or lost quietly.
   the title alone and the build does not emit what it classifies (see Search,
   below).
 
-**A page that predates the Cataclysm beta is a Wrath page, and a signal never
-drops it.** Stormwind City picked up `|patch=4.0.1` and a `[[Category:Cataclysm]]`
-in its own pre-cutoff history, and the city is standing in this world: 588 pages
-are in that pocket — capitals, starting zones, the zones Cataclysm reshaped —
-against 4,859 genuine beta stubs, a mid-2010 bot import that created its pages
-from scratch. What separates the two is not the wikitext but the page's age, so
-`admitPage` reads the page's **first** revision timestamp and treats
-`2010-06-01` (`CATACLYSM_BETA_START`) as the line. The section and paragraph
-rules still strip what they strip, so the Cataclysm paragraph that arrived with
-the category still goes; the page stays. Counted as `pages_pre_beta_protected`.
+**A page that predates the Cataclysm announcement is a Wrath page, and a signal
+never drops it.** Stormwind City picked up `|patch=4.0.1` and a
+`[[Category:Cataclysm]]` in its own pre-cutoff history, and the city is standing
+in this world: 588 pages were in that pocket when it was measured at a
+2010-06-01 line — capitals, starting zones, the zones Cataclysm reshaped —
+against 4,859 pages the beta ramp created from scratch. What separates the two
+is not the wikitext but the page's age, so `admitPage` reads the page's
+**first** revision timestamp and treats `2009-08-21` (`CATACLYSM_ANNOUNCED`),
+the day Cataclysm was announced at BlizzCon, as the line. It is the
+announcement and not the beta because the wiki started stubbing the new
+expansion the same week: 119 of that 588 were created on or after it, and most
+of them were Cataclysm content sitting in a Wrath bundle (FOLLOW-UPS 64). The
+section and paragraph rules still strip what they strip, so the Cataclysm
+paragraph that arrived with the category still goes; the page stays. Counted as
+`pages_pre_announcement_protected`.
 
 The signals are read on the revision the prose comes from, **never** on a later
 one: a Wrath zone that Cataclysm rearranged had its Cataclysm category added in

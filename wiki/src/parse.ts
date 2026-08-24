@@ -76,7 +76,7 @@ export interface WikiPage {
    * Timestamp of the page's *oldest* revision, ISO 8601, or "" when no revision
    * carried one. This is when the page was created, and `admitPage` reads it as
    * the deterministic proxy for "this page existed in Wrath" — see
-   * `CATACLYSM_BETA_START` in `post-wrath.ts`.
+   * `CATACLYSM_ANNOUNCED` in `post-wrath.ts`.
    */
   firstRevisionAt: string;
   /**
