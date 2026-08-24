@@ -295,7 +295,7 @@ describe("the Wrath snapshot decides redirect-ness", () => {
 
 /**
  * The third slot: the newest pre-cutoff revision with no post-Wrath signal on
- * it (ADR-0040, "a protected page is the page before the beta touched it").
+ * it (ADR-0040).
  */
 describe("the signal-free revision slot", () => {
   test("the beta rewrite takes the era slot; the revision before it takes the free one", async () => {
