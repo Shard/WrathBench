@@ -25,7 +25,7 @@ import {
   type RunDetailResponse,
   type TokenTotals,
 } from "../api/client";
-import { HarnessTag } from "../components/EpisodePicker";
+import { HarnessTag } from "../components/HarnessTag";
 import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";

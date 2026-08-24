@@ -26,7 +26,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
-import { HarnessTag } from "../components/EpisodePicker";
+import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";

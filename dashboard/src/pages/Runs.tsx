@@ -22,7 +22,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import { api, type ResultRun, type ResultsResponse } from "../api/client";
-import { HarnessTag } from "../components/EpisodePicker";
+import { HarnessTag } from "../components/HarnessTag";
 import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
