@@ -375,8 +375,9 @@ describe("episode progress in the state cell", () => {
   });
 
   test("a freeplay row shows nothing, whatever watchdog its experiment recorded", () => {
-    // nav-probe records a real six-hour episodeMs, but the id is uncapped: a
-    // percentage here would read as a tier fact it is not (docs/EPISODES.md).
+    // A freeplay experiment may record a real six-hour episodeMs, but the id is
+    // uncapped: a percentage here would read as a tier fact it is not
+    // (docs/EPISODES.md).
     const row = rowFor(
       fleet({ jobs: [job({ episode: "freeplay" })] }),
       [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
@@ -385,6 +386,21 @@ describe("episode progress in the state cell", () => {
     expect(rowProgress(row)).toBeNull();
     expect(progressLabel(rowProgress(row))).toBe("");
     expect(progressTitle(rowProgress(row), row)).toBe("");
+  });
+
+  test("a probing row shows real progress: unscored is not uncapped", () => {
+    // The gate is capped-ness, not scored-ness. A campaign sets an enforced
+    // clock and the run ends on it (ADR-0041), so the percentage is a fact
+    // about that run — nav-probe's six hours is this row, not the freeplay one.
+    const row = rowFor(
+      fleet({ jobs: [job({ episode: "probing" })] }),
+      [budgeted(6 * 3_600_000, { playtimeMs: 3 * 3_600_000 })],
+    );
+    expect(row.budgetMs).toBe(21_600_000);
+    const p = rowProgress(row);
+    expect(p).toEqual({ pct: 50, remainingMs: 3 * 3_600_000, overMs: null });
+    expect(progressLabel(p)).toBe("50%");
+    expect(progressTitle(p, row)).toBe("ETA: 3h00m — 3h00m of 6h00m");
   });
 
   test("a run past its budget shows the real figure over 100 and says how far past it is", () => {
