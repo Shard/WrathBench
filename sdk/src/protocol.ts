@@ -505,6 +505,13 @@ export const updateFieldsSchema = z.looseObject({
   level: z.number().optional(),
   faction: z.number().optional(),
   unitFlags: z.number().optional(),
+  /**
+   * `UNIT_FLAG_TAXI_FLIGHT` read off `unitFlags` by the module and named
+   * (PROTOCOL.md, ADR-0048). Served alongside `unitFlags`, never instead of it;
+   * the state cache derives `self.taxiFlight` from the bit itself, so this is
+   * here for the schema to be a full account of what the module sends.
+   */
+  taxiFlight: z.boolean().optional(),
   displayId: z.number().optional(),
   dynamicFlags: z.number().optional(),
   npcFlags: z.number().optional(),
@@ -1247,6 +1254,61 @@ export const talentsInfoDataSchema = z.looseObject({
 });
 export type TalentsInfoData = z.infer<typeof talentsInfoDataSchema>;
 
+/**
+ * One achievement as the module serves it (ADR-0048, issue #8): the id and the
+ * wire's packed time, plus `name`/`points`/`categoryId` when the module could
+ * read `Achievement.dbc` — client-cache knowledge, the same class as item and
+ * spell names. Absent DBC means ids only, never a guessed name.
+ */
+export const achievementSchema = z.looseObject({
+  achievementId: z.number(),
+  /** The wire's packed bitfield (`AppendPackedTime`). */
+  date: z.number(),
+  /** The module's reading of `date`, `YYYY-MM-DD HH:MM`. */
+  time: z.string().optional(),
+  name: z.string().optional(),
+  points: z.number().optional(),
+  categoryId: z.number().optional(),
+});
+export type Achievement = z.infer<typeof achievementSchema>;
+
+/**
+ * `SMSG_ACHIEVEMENT_EARNED`. The core broadcasts this in **say range**, so the
+ * event routinely describes another player: `self` is the equality with our own
+ * guid and is the only thing that makes it ours. Never key on the opcode alone.
+ */
+export const achievementEarnedDataSchema = z.looseObject({
+  guid: guidSchema,
+  self: z.boolean(),
+  achievement: achievementSchema,
+});
+export type AchievementEarnedData = z.infer<typeof achievementEarnedDataSchema>;
+
+/**
+ * `SMSG_ALL_ACHIEVEMENT_DATA`: everything already earned, sent to self once
+ * during login. Only the completed block is decoded (the criteria-progress
+ * block is consumed unserved, ADR-0048), so `count` is the completed count.
+ */
+export const allAchievementDataSchema = z.looseObject({
+  count: z.number(),
+  achievements: z.array(achievementSchema),
+});
+export type AllAchievementData = z.infer<typeof allAchievementDataSchema>;
+
+/**
+ * `SMSG_ACTIVATETAXIREPLY`: the server's answer to `CMSG_ACTIVATETAXI` (raw —
+ * there is no flight helper, ADR-0015/0048). `reply` is `ActivateTaxiReply`
+ * (0 ok, 1 server error, 2 no such path, 3 not enough money, 4 too far away,
+ * 5 no vendor nearby, 6 not visited, 7 busy, 8 mounted, 9 shapeshifted,
+ * 10 moving, 11 same node, 12 not standing); `ok` is `reply === 0`. The flight
+ * itself has no event — it is `taxiFlight` on self.
+ */
+export const activateTaxiReplyDataSchema = z.looseObject({
+  reply: z.number(),
+  ok: z.boolean(),
+});
+export type ActivateTaxiReplyData = z.infer<typeof activateTaxiReplyDataSchema>;
+
 /** `result` is an InventoryResult code; the SDK does not name them. */
 export const inventoryChangeFailureDataSchema = z.looseObject({
   result: z.number(),
@@ -1408,6 +1470,10 @@ export const eventDataSchemas = {
   SMSG_COOLDOWN_EVENT: cooldownEventDataSchema,
   SMSG_CLEAR_COOLDOWN: cooldownEventDataSchema,
   SMSG_TALENTS_INFO: talentsInfoDataSchema,
+  // achievements and flight paths (ADR-0048)
+  SMSG_ACHIEVEMENT_EARNED: achievementEarnedDataSchema,
+  SMSG_ALL_ACHIEVEMENT_DATA: allAchievementDataSchema,
+  SMSG_ACTIVATETAXIREPLY: activateTaxiReplyDataSchema,
   // death
   SMSG_DEATH_RELEASE_LOC: deathReleaseLocDataSchema,
   SMSG_CORPSE_RECLAIM_DELAY: corpseReclaimDelayDataSchema,

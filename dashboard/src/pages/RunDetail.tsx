@@ -65,6 +65,19 @@ const SILENT_MS = 120_000;
  */
 const DETAIL_POLL_MS = 10_000;
 
+/**
+ * "achievements: 12 (95 pts) · flights: 2", or "not recorded" for either half
+ * the run has no records for. Null means the run wrote nothing of that kind,
+ * which the page must not print as a zero (`AchievementFacts` / `TaxiFacts`).
+ */
+function achievementLine(d: RunDetailResponse | undefined): string {
+  const ach = d?.achievements ?? null;
+  const taxi = d?.taxi ?? null;
+  const left = ach === null ? "achievements: not recorded" : `achievements: ${ach.earned} (${ach.points} pts)`;
+  const right = taxi === null ? "flights: not recorded" : `flights: ${taxi.flights}`;
+  return `${left} · ${right}`;
+}
+
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
   const location = useLocation();
@@ -321,6 +334,14 @@ export default function RunDetail() {
                       {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
                       <div class="sub">carrying: {fmtItems(run().items, false)}</div>
                       <div class="sub">equipped: {fmtItems(run().items, true)}</div>
+                      {/*
+                        Achievements and flights from this run's milestone records
+                        (ADR-0048). "not recorded" is not zero: a run from before the
+                        taps wrote neither kind of record, and nothing here guesses a
+                        number for it. Points are a displayed signal only — no ranking
+                        reads them (ADR-0018/0043).
+                      */}
+                      <div class="sub">{achievementLine(detail())}</div>
                     </div>
                     <div class="card">
                       <div class="k">context / total tokens</div>

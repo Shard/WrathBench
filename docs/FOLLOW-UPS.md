@@ -19,8 +19,9 @@ status.
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
    ADR-0027 flips to accepted on that run.
-2. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
-   they exist.
+2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
+   grouping and instance records exist, and death/level-up/spell/talent are still
+   unwritten.
 3. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
@@ -163,7 +164,18 @@ status.
     capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
     `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
     (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
-    `false`. Rung 6 and every other kind are still nobody's.
+    `false`. **Achievements and flights (2026-08-25, ADR-0048, issue #8):** the
+    loop also writes `{ kind: "achievement", id, name?, points?, categoryId? }`
+    per own earn, `{ kind: "achievements_at_login", ids, points }` once per
+    process (written even when the backlog is empty — it is what says the taps
+    were live for the run), and `{ kind: "taxi", from: { areaId } }` /
+    `{ kind: "taxi_landed", to: { areaId } }` from `self.taxiFlight` flipping
+    after an accepted reply. `ResultRun.achievements` / `.taxi` and
+    `RunDetailResponse` carry them (`achievementFactsFrom`, `taxiFactsFrom`),
+    rung 4 now derives fully (capital **and** a flight), and achievement points
+    are displayed only — no ordering reads them. Death, level-up, spell learned,
+    talent spent and the remaining firsts are still unwritten, and rung 6 is
+    still nobody's.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the

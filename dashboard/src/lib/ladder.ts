@@ -72,11 +72,17 @@ export const EXPANSION_MAPS = [530, 571];
  * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to
  * the zone/area milestone records the loop has written since 2026-08-23
  * (FOLLOW-UPS 35): `run.areas` carries the first area observed, whether the run
- * ever left it, and the first capital zone it entered. Both are *partial* in
- * the way rung 3 is — the flight-master half of rung 4 is still unrecorded —
- * and both say so in their rule text. A run that predates the producer carries
- * no `areas` at all and reads as not-reached, the same way a run with no level
- * reading does; nothing invents a result from a level threshold.
+ * ever left it, and the first capital zone it entered. Rung 4 stopped being
+ * partial later the same day (ADR-0048, issue #8): the module now taps
+ * `SMSG_ACTIVATETAXIREPLY` and the taxi flag on self, the loop records a `taxi`
+ * milestone per flight, and `run.taxi.flights` answers the flight-master half,
+ * so the rung tests both clauses of its own title.
+ *
+ * A run that predates a producer carries no `areas` / `taxi` at all and reads
+ * as not-reached, the same way a run with no level reading does; nothing
+ * invents a result from a level threshold, and a rung's cell is "reached" as
+ * soon as *any* of the model's runs passes, so an old run cannot make a
+ * derivation look false — it simply says nothing.
  *
  * Rung 6 stays not instrumented: grouping and instance records do not exist,
  * and the harness runs one character per session anyway.
@@ -103,8 +109,10 @@ export const RUNGS: Rung[] = [
   {
     n: 4,
     title: "Reach a capital city; use a flight master",
-    rule: "entered a capital zone (milestone records) — the flight-master half is not recorded",
-    test: (r) => (r.areas?.capitalZone ?? null) !== null,
+    rule:
+      "entered a capital zone AND took at least one flight (milestone records); " +
+      "runs before the achievement/flight taps have no flight record and cannot pass",
+    test: (r) => (r.areas?.capitalZone ?? null) !== null && (r.taxi?.flights ?? 0) >= 1,
   },
   {
     n: 5,
@@ -176,7 +184,9 @@ export interface LadderRow {
  * lets the gaps speak. Since rungs 2 and 4 became derivable a gap at either is
  * an observation rather than a blank: a model at rung 3 whose runs never left
  * their starting area now shows "not reached" at 2, which is a finding about
- * the model and not about the instrumentation. `highest` stays the maximum
+ * the model and not about the instrumentation. Achievement points are not in
+ * this ordering and are not added to anything (ADR-0018/0043: highest rung,
+ * then XP, then gold); they are a signal a run page displays. `highest` stays the maximum
  * reached rung, so it is unaffected by the holes below it.
  *
  * The row order is a stated derivation, versioned with this file (ADR-0018

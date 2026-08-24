@@ -9,7 +9,7 @@ The agent may observe exactly what a real 3.3.5a game client connected to this c
 The test for any field is: which `SMSG_*` packet would carry this to a client? If there is no such packet, the agent does not get it.
 
 Allowed, with the client's limits:
-- Own character: level, XP, health, power, position, buffs and debuffs, cooldowns, inventory, equipment, gold, quest log with objective progress text, known spells, skills, reputation as the client shows it.
+- Own character: level, XP, health, power, position, buffs and debuffs, cooldowns, inventory, equipment, gold, quest log with objective progress text, known spells, skills, reputation as the client shows it, achievements earned (the login list plus each own earn, with the names and points a client reads from its own DBC), and whether a flight is in progress (`taxiFlight`, the `UNIT_FLAG_TAXI_FLIGHT` bit on self) with the server's reply to the last flight request.
 - World objects: creatures, players, game objects, and items within update range, with the fields a client receives (name, level, health as the client sees it, faction, position, hostile/neutral/friendly, target). Objects outside update range or not yet sent by the server are not visible.
 - Target: what the client shows for the current target.
 - Events: combat log entries, spell results, loot windows, quest updates, gossip menus, vendor lists, chat, death and release, zone changes, errors the client would display.

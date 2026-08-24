@@ -500,6 +500,14 @@ export interface RunDetailResponse {
   cost: CostView;
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
+  /**
+   * Achievements and flights from this run's milestone records (ADR-0048),
+   * accumulated by the same incremental tail the entry feed rides, so a live
+   * run's line grows with it. Null on a run that recorded none — never zero.
+   * Optional for the reason `ResultRun.areas` is: an older viewer has neither.
+   */
+  achievements?: AchievementFacts | null;
+  taxi?: TaxiFacts | null;
 }
 
 export interface EntriesResponse {
@@ -788,6 +796,44 @@ export interface AreaFacts {
   areaMarks: number;
 }
 
+/**
+ * What a run's achievement milestones say it holds (ADR-0048, issue #8).
+ *
+ * `earned` is the union of the login backlog and the run's own earns, so on a
+ * resumed run it is what the character holds, not what it earned this episode.
+ * `points` is the last backlog record's total plus the points of every earn
+ * outside that backlog — a **lower bound**, because the module serves points
+ * only where it could read `Achievement.dbc`.
+ *
+ * Null (no `AchievementFacts` at all) is "no achievement record in this run":
+ * every run before the taps were deployed, and any run whose login packet the
+ * cache missed. It is never zero.
+ */
+export interface AchievementFacts {
+  earned: number;
+  points: number;
+  /** The ids behind `earned`, ascending. */
+  ids: number[];
+}
+
+/**
+ * Flights taken, from the `taxi` milestone records.
+ *
+ * `flights` counts takeoffs — a `taxi` record, i.e. an accepted reply followed
+ * by the taxi flag turning on — not landings, and it is a lower bound: the
+ * producer samples on `stateIntervalMs`, so a hop that began and ended between
+ * two samples leaves nothing behind, the same convention as `AreaFacts`.
+ *
+ * Null is "flights were not recorded for this run", which is not the same fact
+ * as `{ flights: 0 }`. The two are told apart by the achievement records: a run
+ * on a worldserver with the taps writes an `achievements_at_login` milestone
+ * even when the backlog is empty, so achievement records **or** taxi records
+ * prove the taps were live and zero becomes representable.
+ */
+export interface TaxiFacts {
+  flights: number;
+}
+
 /** One run as the results charts read it: identity, comparability, level marks. */
 export interface ResultRun {
   runId: string;
@@ -925,6 +971,20 @@ export interface ResultRun {
    * field, the same convention `xpEarned` and `expectedCost` use.
    */
   areas?: AreaFacts | null;
+  /**
+   * Achievements the run's records account for (ADR-0048). `null` is a run that
+   * wrote none — everything before the achievement taps were deployed — and
+   * must not be read as zero; `undefined` is a viewer that predates the field.
+   * A displayed signal only: nothing in the ladder's ordering reads it
+   * (ADR-0018/0043 — highest rung, then XP, then gold).
+   */
+  achievements?: AchievementFacts | null;
+  /**
+   * Flights taken, from the same records; `null` when flights were not recorded
+   * for this run. Rung 4's second half. See `TaxiFacts` for why null and zero
+   * are different facts.
+   */
+  taxi?: TaxiFacts | null;
   /** Why a run is suspended, when it ended for no other reason (ADR-0036). */
   pauseReason: string | null;
 }

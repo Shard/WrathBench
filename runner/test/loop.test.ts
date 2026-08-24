@@ -147,6 +147,103 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("achievements: the login backlog is one record and own earns are firsts (ADR-0048)", async () => {
+    const adapter = new StubAdapter([
+      { content: "t1", toolCalls: [] },
+      { content: "t2", toolCalls: [] },
+    ]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      {
+        self: {
+          achievements: {
+            loginSeen: true,
+            points: 35,
+            entries: [
+              { achievementId: 6, name: "Level 10", points: 10, categoryId: 92, source: "login" },
+              { achievementId: 7, points: 15, source: "login" },
+              { achievementId: 12, name: "Explore Elwynn Forest", points: 10, source: "earned" },
+            ],
+          },
+        },
+      },
+    );
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
+    const backlog = ms.filter((r) => r["kind"] === "achievements_at_login");
+    // Once, however many samples the run took: a resumed run's history is
+    // visible without its past being re-emitted as fresh firsts.
+    expect(backlog).toHaveLength(1);
+    expect(backlog[0]!["ids"]).toEqual([6, 7]);
+    expect(backlog[0]!["points"]).toBe(25);
+    const earns = ms.filter((r) => r["kind"] === "achievement");
+    expect(earns).toHaveLength(1);
+    expect(earns[0]!["id"]).toBe(12);
+    expect(earns[0]!["name"]).toBe("Explore Elwynn Forest");
+    expect(earns[0]!["points"]).toBe(10);
+    options.trajectory.close();
+  });
+
+  test("an empty login backlog is still recorded: it is what says the taps were live", async () => {
+    const adapter = new StubAdapter([{ content: "t1", toolCalls: [] }]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      { self: { achievements: { loginSeen: true, points: 0, entries: [] } } },
+    );
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "achievements_at_login");
+    expect(ms).toHaveLength(1);
+    expect(ms[0]!["ids"]).toEqual([]);
+    expect(ms[0]!["points"]).toBe(0);
+    options.trajectory.close();
+  });
+
+  test("a flight is the flag flipping on after an accepted reply; a first sight of it is not a takeoff", async () => {
+    const ok = { value: { reply: 0, ok: true }, seq: 5, ts: 5 };
+    const snapshots: Record<string, unknown>[] = [
+      // Already flying when the process opened (a resume mid-flight): seeded,
+      // never a takeoff — nothing said this flight began here.
+      { self: { taxiFlight: { value: true, seq: 1, ts: 1 }, taxiReply: ok } },
+      // The landing IS an observation, even though the takeoff was not seen.
+      { self: { taxiFlight: { value: false, seq: 2, ts: 2 }, area: { value: { id: 24 } }, taxiReply: ok } },
+      // On without an accepted reply: no packet said a flight was accepted.
+      { self: { taxiFlight: { value: true, seq: 3, ts: 3 } } },
+      { self: { taxiFlight: { value: false, seq: 4, ts: 4 } } },
+      // Accepted, then the flag on: the flight a client would see start.
+      { self: { taxiFlight: { value: true, seq: 5, ts: 5 }, area: { value: { id: 9 } }, taxiReply: ok } },
+    ];
+    let i = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () =>
+        Promise.resolve({ lastSeq: -1, eventCount: 0, ...snapshots[Math.min(i++, snapshots.length - 1)]! }),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    const adapter = new StubAdapter(
+      Array.from({ length: snapshots.length }, (_, n) => ({ content: `t${n}`, toolCalls: [] })),
+    );
+    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    let clock = 0;
+    (options as { now?: () => number }).now = () => (clock += 1000);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter(
+      (r) => r.t === "milestone" && (r["kind"] === "taxi" || r["kind"] === "taxi_landed"),
+    );
+    expect(ms.map((r) => [r["kind"], r["from"], r["to"]])).toEqual([
+      ["taxi_landed", undefined, { areaId: 24 }],
+      ["taxi_landed", undefined, undefined],
+      ["taxi", { areaId: 9 }, undefined],
+    ]);
+    options.trajectory.close();
+  });
+
   test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
     // Three samples: the completion list grows [7,9], stays, then SHRINKS to
     // [11] — the sandbox-restart/cache-rebuild case. Without the reset at

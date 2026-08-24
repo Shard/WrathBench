@@ -602,6 +602,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
             ? null
             : listingFacts(row, totals, now),
           totals?.areas ?? null,
+          totals?.achievements ?? null,
+          totals?.taxi ?? null,
         ),
       );
     }
@@ -1001,6 +1003,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           coverage: responseCostCoverage(entries),
         }),
         playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
+        // Same incremental path as tokens and cost: the tail accumulates the
+        // milestone marks as it indexes, so a live run's line grows with it.
+        achievements: tail.achievements,
+        taxi: tail.taxi,
       };
       return json(body);
     }

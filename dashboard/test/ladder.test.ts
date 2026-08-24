@@ -106,11 +106,42 @@ describe("ladderRows", () => {
     expect(left.highest).toBe(2);
   });
 
-  test("a capital zone reaches rung 4; a zone that is not one does not", () => {
-    const cap = ladderRows([run({ model: "cap", areas: areas({ capitalZone: 1519 }) })])[0]!;
-    expect(cap.cells.find((c) => c.n === 4)!.status).toBe("reached");
-    const not = ladderRows([run({ model: "field", areas: areas({ capitalZone: null }) })])[0]!;
-    expect(not.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
+  test("rung 4 needs both halves: a capital zone AND a recorded flight (ADR-0048)", () => {
+    const both = ladderRows([
+      run({ model: "cap", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
+    ])[0]!;
+    expect(both.cells.find((c) => c.n === 4)!.status).toBe("reached");
+    // Walked to Stormwind, never flew: the rung says "and", so it says no.
+    const walked = ladderRows([
+      run({ model: "walker", areas: areas({ capitalZone: 1519 }), taxi: { flights: 0 } }),
+    ])[0]!;
+    expect(walked.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
+    const flewNoCapital = ladderRows([
+      run({ model: "flier", areas: areas({ capitalZone: null }), taxi: { flights: 2 } }),
+    ])[0]!;
+    expect(flewNoCapital.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
+  });
+
+  test("a run from before the flight taps cannot pass rung 4, and says nothing about one that can", () => {
+    // `taxi: null` is "not recorded", not "flew nowhere" — the pre-deploy run
+    // simply fails to answer, and a cell is reached as soon as ANY run does.
+    const pre = run({ runId: "pre", areas: areas({ capitalZone: 1519 }), taxi: null });
+    expect(ladderRows([pre])[0]!.cells.find((c) => c.n === 4)!.status).toBe("not-reached");
+    const row = ladderRows([
+      pre,
+      run({ runId: "post", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
+    ])[0]!;
+    const cell = row.cells.find((c) => c.n === 4)!;
+    expect(cell.status).toBe("reached");
+    expect(cell.runId).toBe("post");
+  });
+
+  test("achievement points are a displayed signal and change no ordering (ADR-0018/0043)", () => {
+    const rows = ladderRows([
+      run({ model: "decorated", maxLevel: 4, achievements: { earned: 40, points: 400, ids: [1] } }),
+      run({ model: "plain", maxLevel: 12, achievements: null }),
+    ]);
+    expect(rows.map((r) => r.model)).toEqual(["plain", "decorated"]);
   });
 
   test("a hole at rung 2 does not lower the highest rung reached", () => {

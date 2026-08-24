@@ -8,6 +8,8 @@ import {
   TrajectoryTail,
   playtimeMs,
   areaFactsFrom,
+  achievementFactsFrom,
+  taxiFactsFrom,
   scanRunTotals,
   segmentsFrom,
   splitLines,
@@ -623,5 +625,79 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
 
   test("no marks at all is null, not an empty reading", () => {
     expect(areaFactsFrom([])).toBeNull();
+  });
+});
+
+describe("achievement and flight milestones (ADR-0048, issue #8)", () => {
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-achievement-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+  const meta = JSON.stringify({ t: "meta", ts: 1000 });
+  const login = (ids: number[], points: number) =>
+    JSON.stringify({ t: "milestone", ts: 1100, kind: "achievements_at_login", ids, points, turn: 1 });
+  const earn = (id: number, points?: number) =>
+    JSON.stringify({ t: "milestone", ts: 1200, kind: "achievement", id, ...(points === undefined ? {} : { points }), turn: 2 });
+  const takeoff = JSON.stringify({ t: "milestone", ts: 1300, kind: "taxi", from: { areaId: 9 }, turn: 3 });
+  const landed = JSON.stringify({ t: "milestone", ts: 1400, kind: "taxi_landed", to: { areaId: 1519 }, turn: 4 });
+
+  test("a run from before the taps has neither reading — null, never zero", async () => {
+    const { achievements, taxi } = await scanRunTotals(
+      fileWith([meta, JSON.stringify({ t: "milestone", ts: 1100, kind: "area", to: { id: 9 } })]),
+    );
+    expect(achievements).toBeNull();
+    expect(taxi).toBeNull();
+  });
+
+  test("a login backlog plus one earn: the union is what the character holds", async () => {
+    const { achievements, taxi } = await scanRunTotals(fileWith([meta, login([6, 7], 25), earn(12, 10)]));
+    expect(achievements).toEqual({ earned: 3, points: 35, ids: [6, 7, 12] });
+    // The backlog record proves the taps were live, so zero flights is a
+    // reading rather than a blank.
+    expect(taxi).toEqual({ flights: 0 });
+  });
+
+  test("an earn whose points the module could not name adds none rather than a guess", async () => {
+    const { achievements } = await scanRunTotals(fileWith([meta, login([], 0), earn(12)]));
+    expect(achievements).toEqual({ earned: 1, points: 0, ids: [12] });
+  });
+
+  test("a resumed run's second backlog is a superset, and its points are not added twice", () => {
+    const facts = achievementFactsFrom([
+      { kind: "login", ids: [6], points: 10 },
+      { kind: "earned", id: 12, points: 10 },
+      { kind: "login", ids: [6, 12], points: 20 }, // the resumed process's backlog
+      { kind: "earned", id: 15, points: 5 },
+    ])!;
+    expect(facts).toEqual({ earned: 3, points: 25, ids: [6, 12, 15] });
+  });
+
+  test("flights count takeoffs; a landing only witnesses that the taps were live", async () => {
+    const { taxi } = await scanRunTotals(fileWith([meta, takeoff, landed, takeoff]));
+    expect(taxi).toEqual({ flights: 2 });
+  });
+
+  test("landings alone still read as a recording, at zero takeoffs", () => {
+    expect(taxiFactsFrom(["taxi_landed"], false)).toEqual({ flights: 0 });
+    expect(taxiFactsFrom([], false)).toBeNull();
+    expect(taxiFactsFrom([], true)).toEqual({ flights: 0 });
+  });
+
+  test("no achievement mark at all is null, not an empty reading", () => {
+    expect(achievementFactsFrom([])).toBeNull();
+  });
+
+  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+    const path = fileWith([meta, login([6], 10), earn(12, 10), takeoff]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    const totals = await scanRunTotals(path);
+    expect(tail.achievements).toEqual(totals.achievements);
+    expect(tail.taxi).toEqual(totals.taxi);
+    // A second scan of an unchanged file adds nothing.
+    await tail.scan();
+    expect(tail.achievements).toEqual(totals.achievements);
   });
 });

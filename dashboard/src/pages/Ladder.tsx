@@ -19,10 +19,11 @@
  * One of the eight rungs cannot be answered by anything the harness records
  * today — group joins and instance clears are not in the trajectory, and the
  * harness runs one character per session. It reads "not instrumented" rather
- * than being approximated by a level threshold. Rungs 2 and 4 read the
- * zone/area milestone records (FOLLOW-UPS 35), partially: the flight-master
- * half of 4 is still unrecorded. Every derived rung prints the exact rule it
- * applied so a reader can disagree with the derivation.
+ * than being approximated by a level threshold. Rung 2 reads the zone/area
+ * milestone records (FOLLOW-UPS 35) and rung 4 reads those plus the flight
+ * milestones (ADR-0048), so 4 now tests both clauses of its title. Every
+ * derived rung prints the exact rule it applied so a reader can disagree with
+ * the derivation.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -131,7 +132,8 @@ export default function Ladder() {
             <div class="k">rungs not instrumented</div>
             <div class="v">{RUNGS.filter((r) => r.test === null).length}</div>
             <div class="sub">
-              {RUNGS.filter((r) => r.test === null).map((r) => r.n).join(", ")} — see FOLLOW-UPS 35
+              {RUNGS.filter((r) => r.test === null).map((r) => r.n).join(", ")} — grouping and
+              instance clears are not recorded
             </div>
           </div>
         </div>
