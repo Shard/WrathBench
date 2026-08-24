@@ -42,7 +42,7 @@ import {
 const solid = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => solid);
 const { createComputed, createRoot, createSignal } = solid;
-const { createMapState } = await import("../src/lib/mapstate");
+const { createMapState, clearReplayState } = await import("../src/lib/mapstate");
 
 const SCREEN = { w: 800, h: 600 };
 
@@ -375,6 +375,127 @@ describe("createMapState", () => {
     g.setFeed([agent("b", 0, 2, 2)]);
     expect(g.state.selected()).toBeNull();
     expect(g.state.count()).toBe(1);
+    g.dispose();
+  });
+});
+
+describe("returning to live", () => {
+  /*
+   * `/map?run=<id>` → `/map` is a state swap, not a layer. What makes it worth
+   * a test on the real graph is that `activeMap` is a reducer memo: its
+   * stickiness lives inside the memo rather than in any source, so clearing the
+   * sources is only a reset if the empty feed goes through and the memo gets a
+   * chance to reject its own previous answer. This is the assertion that fails
+   * if that one line in `clearReplayState` is ever tidied away.
+   */
+  const TRACK: TrackResponse = {
+    runId: "run-1",
+    character: "Benchy",
+    model: "test/model",
+    harnessVersion: "harness-0.2",
+    points: [
+      { ts: 100, map: 0, x: 1, y: 1, level: 1, xp: 0, money: null, questsCompleted: null, turn: 1 },
+      { ts: 200, map: 530, x: 9, y: 9, level: 2, xp: 5, money: null, questsCompleted: null, turn: 2 },
+    ],
+  };
+
+  function replaying() {
+    return createRoot((dispose) => {
+      const [feed, setFeed] = createSignal<readonly AgentPosition[]>([]);
+      const [track, setTrackSig] = createSignal<TrackResponse | undefined>(undefined);
+      const [pinned, setPinned] = createSignal<number | null>(null);
+      const [selectedId, setSelectedId] = createSignal<string | null>(null);
+      const [cursor, setCursor] = createSignal(0);
+      const [playing, setPlaying] = createSignal(false);
+      const [error, setError] = createSignal<string | undefined>(undefined);
+      const state = createMapState({ feed, track, pinned, selectedId });
+      createComputed(() => {
+        state.maps();
+        state.activeMap();
+        state.selected();
+        state.count();
+      });
+      const writables = {
+        setTrack: (t: TrackResponse | undefined): void => {
+          setTrackSig(() => t);
+        },
+        setCursor,
+        setPlaying,
+        setPinned,
+        setSelectedId,
+        setFeed: (list: readonly AgentPosition[]): void => {
+          setFeed(() => list);
+        },
+        setError,
+      };
+      const sources = { track, pinned, selectedId, cursor, playing, error };
+      return { state, setFeed, writables, sources, dispose };
+    });
+  }
+
+  test("the swap leaves nothing of the replay behind", () => {
+    const g = replaying();
+    /* Mid-replay: a track loaded, the cursor on the second continent, a pinned
+       chip, a selection, a cursor and a failed sibling load still on screen. */
+    g.writables.setTrack(TRACK);
+    g.setFeed(positionsAt(TRACK, 200));
+    g.writables.setPinned(530);
+    g.writables.setSelectedId("run-1");
+    g.writables.setCursor(200);
+    g.writables.setPlaying(true);
+    g.writables.setError("Error: no such run");
+    // Read it, so the reducer memo has cached 530 as its previous answer.
+    expect(g.state.activeMap()).toBe(530);
+    expect(g.state.selected()?.runId).toBe("run-1");
+
+    clearReplayState(g.writables);
+
+    expect(g.sources.track()).toBeUndefined();
+    expect(g.sources.cursor()).toBe(0);
+    expect(g.sources.playing()).toBe(false);
+    expect(g.sources.pinned()).toBeNull();
+    expect(g.sources.selectedId()).toBeNull();
+    expect(g.sources.error()).toBeUndefined();
+    expect(g.state.count()).toBe(0);
+    expect(g.state.maps()).toEqual([]);
+    expect(g.state.selected()).toBeNull();
+    // The continent the replay ended on is forgotten, not merely unpinned.
+    expect(g.state.activeMap()).toBeNull();
+    g.dispose();
+  });
+
+  test("the live feed then chooses its own map, not the replay's", () => {
+    const g = replaying();
+    g.writables.setTrack(TRACK);
+    g.setFeed(positionsAt(TRACK, 200));
+    expect(g.state.activeMap()).toBe(530);
+
+    clearReplayState(g.writables);
+    /* A straggler stands where the replay ended; the crowd is elsewhere. Under
+       a leaked `prev` the map would sit on 530 with one pip on it. */
+    g.setFeed([agent("a", 0, 1, 1), agent("b", 0, 2, 2), agent("c", 530, 9, 9)]);
+    expect(g.state.activeMap()).toBe(0);
+    expect(g.state.count()).toBe(3);
+    g.dispose();
+  });
+
+  test("a replay swapped straight for another keeps none of the first", () => {
+    const g = replaying();
+    g.writables.setTrack(TRACK);
+    g.setFeed(positionsAt(TRACK, 200));
+    g.writables.setSelectedId("run-1");
+    expect(g.state.activeMap()).toBe(530);
+
+    /* The route effect clears before it fetches, so the second run's track
+       lands on an empty page rather than on the first run's pips and chips. */
+    clearReplayState(g.writables);
+    expect(g.state.maps()).toEqual([]);
+    const other: TrackResponse = { ...TRACK, runId: "run-2", points: [TRACK.points[0]!] };
+    g.writables.setTrack(other);
+    g.setFeed(positionsAt(other, 100));
+    expect(g.state.maps()).toEqual([[0, 1]]);
+    expect(g.state.activeMap()).toBe(0);
+    expect(g.state.selected()?.runId).toBe("run-2");
     g.dispose();
   });
 });

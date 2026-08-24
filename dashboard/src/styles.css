@@ -135,7 +135,10 @@ button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
 }
-button:hover { border-color: var(--accent); }
+button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
+/* An anchor sitting in a row of buttons — the map's "live" control is a real
+   link, and has to read as a control next to play. */
+.btn { display: inline-block; color: var(--accent); line-height: 1.4; }
 button.on { border-color: var(--accent); font-weight: 700; }
 
 .banner { border: 1px solid var(--line); border-left-width: 3px; border-radius: 4px;

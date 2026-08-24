@@ -107,3 +107,14 @@ export function mapsVisited(points: readonly TrackPoint[]): number[] {
   for (const p of points) if (!out.includes(p.map)) out.push(p.map);
   return out;
 }
+
+/**
+ * The `?run=` search parameter as a run id.
+ *
+ * A URL is an external boundary: the parameter can be absent, empty (`?run=`),
+ * or repeated, and only a non-empty single value names a run. Empty means live
+ * rather than "a run called nothing", so the map shows the live feed.
+ */
+export function runParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}

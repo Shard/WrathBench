@@ -266,8 +266,18 @@ export default function RunDetail() {
 
                 {/* Right column: controls and everything about the run, always in view. */}
                 <aside class="runview-side">
-                  <Show when={live()}>
-                    <div class="side-controls">
+                  {/*
+                    The controls row heads the sidebar whether the run is live or
+                    over, because the way into this run's replay belongs with the
+                    other controls rather than buried in a section heading — which
+                    is where it used to sit, under "comparability", where nobody
+                    looks for navigation. The map has the return leg (`open run →`).
+                  */}
+                  <div class="side-controls">
+                    <A class="btn" href={`/map?run=${encodeURIComponent(run().runId)}`}>
+                      replay on map
+                    </A>
+                    <Show when={live()}>
                       {/* Manual toggle; it reflects and overrides the scroll-driven auto state. */}
                       <button class={follow() ? "on" : ""} onClick={toggleFollow}>
                         auto-scroll
@@ -282,8 +292,8 @@ export default function RunDetail() {
                           <Show when={disconnected()}> · <span class="err">stream disconnected</span></Show>
                         </span>
                       </Show>
-                    </div>
-                  </Show>
+                    </Show>
+                  </div>
 
                   <div class="cards">
                     <div class="card">
@@ -389,10 +399,7 @@ export default function RunDetail() {
                     </div>
                   </div>
 
-                  <h2 class="section">
-                    comparability{" "}
-                    <A href={`/map?run=${encodeURIComponent(run().runId)}`}>replay on map</A>
-                  </h2>
+                  <h2 class="section">comparability</h2>
                   <Tuple run={run()} />
 
                   <Show when={run().terminationReason !== null}>

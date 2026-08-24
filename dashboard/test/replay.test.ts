@@ -15,6 +15,7 @@ import {
   nextSampleAfter,
   positionsAt,
   routeUpTo,
+  runParam,
   trackSpan,
 } from "../src/lib/replay";
 
@@ -112,5 +113,22 @@ describe("degenerate tracks", () => {
     expect(positionsAt({ ...TRACK, points: [] }, 0)).toEqual([]);
     expect(routeUpTo([], 0, 0)).toEqual([]);
     expect(mapsVisited([])).toEqual([]);
+  });
+});
+
+describe("runParam", () => {
+  /*
+   * `/map` and `/map?run=<id>` are the page's two states, so this is the whole
+   * of the mapping between a URL and a mode. A repeated parameter arrives as an
+   * array and an empty one as "": neither names a run, and both mean live.
+   */
+  test("a non-empty single value is the run id", () => {
+    expect(runParam("run-1")).toBe("run-1");
+  });
+
+  test("absent, empty and repeated all mean the live map", () => {
+    expect(runParam(undefined)).toBeUndefined();
+    expect(runParam("")).toBeUndefined();
+    expect(runParam(["run-1", "run-2"])).toBeUndefined();
   });
 });

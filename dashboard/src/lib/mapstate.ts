@@ -84,3 +84,45 @@ export function createMapState(src: MapSources): MapState {
 
   return { maps, count, cursorMap, activeMap, selected };
 }
+
+/**
+ * The writable half of the page, as the one thing that can clear it.
+ *
+ * `/map` and `/map?run=<id>` are two states, not two layers: moving between
+ * them — the live control, browser back, a deep link, or one run's replay
+ * straight to another's — has to leave nothing of the state it came from. The
+ * setters arrive as arguments so this stays a pure writer with no signals of
+ * its own, which is also what keeps it testable against the real graph.
+ */
+export interface MapWritables {
+  setTrack: (track: TrackResponse | undefined) => void;
+  setCursor: (ts: number) => void;
+  setPlaying: (on: boolean) => void;
+  setPinned: (map: number | null) => void;
+  setSelectedId: (id: string | null) => void;
+  setFeed: (list: readonly AgentPosition[]) => void;
+  setError: (message: string | undefined) => void;
+}
+
+/** Everything a replay leaves behind, unwound in one place. */
+export function clearReplayState(w: MapWritables): void {
+  w.setTrack(undefined);
+  w.setCursor(0);
+  w.setPlaying(false);
+  w.setPinned(null);
+  w.setSelectedId(null);
+  /*
+   * Load-bearing, and it does not look it: the next feed overwrites this
+   * anyway. But `activeMap` is a reducer memo whose stickiness lives *inside*
+   * the memo, not in any source here, so the only way to forget the continent
+   * the replay ended on is to let it recompute over an empty map list once and
+   * reject its own previous answer. Drop this and returning to live can sit on
+   * the replay's map because one straggler happens to be standing there.
+   */
+  w.setFeed([]);
+  /*
+   * A failed `?run=<bad id>` otherwise keeps its error banner over a perfectly
+   * healthy live map — the hint bar checks the error before anything else.
+   */
+  w.setError(undefined);
+}
