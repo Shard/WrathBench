@@ -412,19 +412,26 @@ export class WrathTransportError extends Error {
 const CHAR_RESPONSE_HINTS: Record<number, string> = {
   0x30: "character creation error",
   0x31: "character creation failed",
-  0x32: "that name is already in use",
+  // The name is the model's own choice, so this one code is not a
+  // dead end but a retry: say what to do about it, in the game's own rules.
+  0x32:
+    "that name is already in use — choose a different character name and call createSession again " +
+    "(2-12 letters, no spaces, no three identical letters in a row; be creative, it is yours for the episode)",
   0x33: "character creation disabled",
   0x35: "the account has reached its character limit on this realm",
   0x36: "the account has reached its character limit",
   0x3a: "class requires an expansion the account lacks",
   0x3e: "that race/class combination is not allowed",
-  0x59: "no name given",
-  0x5a: "name too short",
-  0x5b: "name too long",
-  0x5c: "name contains an invalid character",
-  0x5d: "name mixes languages (letters only, one language)",
-  0x5e: "name is profane",
-  0x5f: "name is reserved",
+  // The name is the caller's own, so every naming refusal is a
+  // retry: it says what the server objected to AND that another name is the
+  // way out. Unreachable while the harness assigned the name; not any more.
+  0x59: "no name given — choose a character name (2-12 letters, no spaces) and pass it to createSession",
+  0x5a: "name too short — choose a longer name (2-12 letters) and call createSession again",
+  0x5b: "name too long — choose a shorter name (2-12 letters) and call createSession again",
+  0x5c: "name contains an invalid character — letters only, no spaces, digits or punctuation; choose another and call createSession again",
+  0x5d: "name mixes languages (letters only, one language) — choose another and call createSession again",
+  0x5e: "name is profane — choose another and call createSession again",
+  0x5f: "name is reserved — choose another and call createSession again",
 };
 
 /**

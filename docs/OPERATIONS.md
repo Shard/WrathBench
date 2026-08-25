@@ -85,8 +85,11 @@ accounts    { pool: [...], paid: [...], local: [...] } — the account classes, 
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The
-            tier is the evidence budget"):
+            `character` is only the SUGGESTION the launch note offers: the model names its own
+            character, and the name it chose is what the run row, meta.json and the runs page
+            carry. `race` and `class` are not the model's — they are the episode's comparability
+            dimensions. Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The tier is
+            the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
               one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
@@ -147,9 +150,7 @@ refused by name, with the message naming the 0.4 keys.
 docker compose -f infra/compose.yml stop fleet
 ```
 
-A stop **pauses** the live runs, it does not cost them — a six-hour episode
-forty minutes from its wall clock must never be thrown away for a one-line
-fix. SIGTERM
+A stop **pauses** the live runs. SIGTERM
 reaches the supervisor, which SIGTERMs each job's roster, which SIGTERMs the
 runner; the runner pauses its run as `operator-pause`: the episode clock stops
 (the minutes spent so far are written to meta.json and the budget resumes from
@@ -157,7 +158,11 @@ there), the request or tool call in flight is abandoned, the game session is
 logged out so the account is free, and the run is marked paused — not
 terminated, not counted, not a ladder failure. The roster records
 `paused-operator` and exits; the supervisor waits for every roster (polling
-every 2s while stopping) and exits. The runner's own backstop is 60s, the
+every 2s while stopping) and exits. For a **scored** run the pause is where it
+ends: a stop no longer costs a run its *place*, but it does cost it that
+attempt — the run is ended `manual`, the model is not blamed for it,
+and the scheduler gives it a fresh attempt with a full clock. Freeplay, and a
+probe campaign that asked to resume, come back where they left off. The runner's own backstop is 60s, the
 roster's SIGKILL grace 90s, the service's `stop_grace_period` 180s, in that
 order. The next `up -d` resumes the paused runs before it launches anything
 fresh (below). Ctrl-C on a hand-started `infra/run-episode.sh` still ends the
@@ -188,7 +193,8 @@ docker compose -f infra/compose.yml build fleet         # only if the image chan
 docker compose -f infra/compose.yml up -d --no-deps fleet   # runs resume, then the pool fills
 ```
 
-The restart procedure is therefore **stop → (runs pause) → start → (runs
+The restart procedure is therefore **stop → (runs pause) → start → (scored runs
+are ended as failed attempts and reattempted; freeplay and opted-in campaigns
 resume)**. On boot, before the queue or the policy spawns anything, the
 supervisor finds every paused run whose model and episode are still in
 `fleet.json`, maps it back to its job (a pinned or queued job from the file,
@@ -209,17 +215,42 @@ Note that `restart: unless-stopped` also rolls the epoch on its own after a
 crash or a machine reboot, so run ids change there too; resumes do not care
 about the epoch (the run id is read from disk).
 
-### Paused runs
+### Lapsed runs: paused, and stale
 
-`--status` shows a paused run on its account as `paused (reason, Xm elapsed
-of Ym) — <run id> Lx xp`, then a `paused runs not resumed` block for every
-paused run the supervisor is not resuming right now, with why:
+A run that stops without a verdict is handled by its **lane**
+(docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
+
+A **scored** run (`e90`, `e360`) — and a probe campaign that did not set
+`resume: true` — does not resume. `--status` shows it on its account as
+`failed attempt: quota-exhausted: not resumed … , retry 2/3` and lists it under
+`lapsed runs the supervisor ends on its next tick`. The supervisor writes the
+termination through the runner's own writer, releases the session so the
+account and character go back, and the policy schedules a fresh attempt on the
+tick after. Three counted failures on one (model, episode, series) and the
+model is **tainted** for that episode: `--status` says
+`tainted on e90 (3 failed attempts)` and the model is blocked — not "free", so
+it takes no idle work either — until `run-fleet.sh --clear-model <name>`. A
+fleet stop (`manual`) and an offline gap (`stale`) do not count toward those
+three: they are the harness's doing. Do not confuse this taint with the
+roster's own `tainted` in a job's defer sidecar, which is one process backing
+off a model whose launches keep failing.
+
+**Stale** runs are swept on boot and on every tick: any run with no termination
+whose last activity (its pause mark, else its trajectory) is older than **its
+own** episode budget — 12h for a run with no wall clock — is ended. That is the
+half-day outage case: the host slept, and every run left live or paused had its
+budget elapse in wall clock while nobody was playing it. A stale freeplay
+session is ended too, and the next tick starts a fresh one. A run the fleet did
+not launch (no `fleet-` prefix) is never ended by the supervisor: it is listed
+for the operator.
+
+For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
+`--status` shows `paused (reason, Xm elapsed of Ym) — <run id> Lx xp` and a
+`paused runs not resumed` block with why:
 
 - **not in config** — the model or episode is gone from the fleet config (or the
   pinned job is disabled, or on another account). Resume it by hand
   (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
-- **stale** — paused longer than twice its own budget (a run with no wall
-  clock uses 6h). Not auto-resumed; by hand or archive.
 - **cooling** — a provider pause on the roster's defer ladder
   (`1m/3m/5m/10m/15m/30m/1h/3h/6h`), indexed by how many times *that run* has
   paused. This is how FOLLOW-UPS 43 is answered: the roster retries a
@@ -231,9 +262,10 @@ paused run the supervisor is not resuming right now, with why:
   hand-started run. A resume never moves to another account.
 
 While a run is paused its model is held: the projection reports `no: paused
-run … — resumed by the supervisor, never rescheduled`, so no second attempt
-starts for that model. A paused run counts toward nothing until it finally
-ends.
+run … — resumed by the supervisor, never rescheduled` for a lane that resumes,
+and `… — ended as a failed attempt on the next tick, then reattempted fresh`
+for one that does not. Either way no second attempt starts for that model, and
+a paused run counts toward nothing until it finally ends.
 
 ### Deploy window (worldserver changes)
 
@@ -349,9 +381,10 @@ output. Then:
 4. **failed, "could not verify it"** — the rollback happened but the old build
    failed the gate smokes too, which means the failure is not in the build
    (auth, the database, the smoke accounts, the runner image). The fleet is up
-   and gated shut. Run a smoke by hand (`docker compose exec -e
-   MODULE_ACCOUNT=SMOKE runner bun infra/smoke/quest-accept-status.ts`) and
-   read its output.
+   and gated shut. Run a smoke by hand (`docker compose -f infra/compose.yml
+   exec runner bun infra/smoke/quest-accept-status.ts`, which logs in as PROBE;
+   add `-e MODULE_ACCOUNT=SMOKE` to reproduce the gate's account) and read its
+   output.
 5. **failed, "the fleet service did not start"** — the one case with a command
    for you: `docker compose -f infra/compose.yml up -d fleet`, after reading
    why compose refused (`docker compose logs fleet`).

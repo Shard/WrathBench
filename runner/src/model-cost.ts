@@ -17,6 +17,12 @@
  *
  * A roster entry may override the verdict with `billing` for the case the
  * rules cannot see (a key on a paid plan for a free-looking id, say).
+ *
+ * This is the SCHEDULER's verdict — "does this consume the paid concurrency
+ * budget". The reader's verdict, "did we pay for this run", is `runBilling` in
+ * `runner/src/billing.ts`, and it puts `claude-code` on the paid side because a
+ * subscription is a bill. The two share the predicates below and disagree on
+ * that one clause on purpose; changing either does not change the other.
  */
 
 

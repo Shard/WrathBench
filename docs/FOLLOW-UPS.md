@@ -1,6 +1,6 @@
 # Follow-ups
 
-Open items only, grouped by area. Numbers are stable — commits, worklogs and older records
+Open items only, grouped by area. Numbers are stable — ADRs, commits and the worklog
 cite them — so gaps are normal and nothing is renumbered.
 
 When an item ships or is rejected it leaves this file entirely: the day file in
@@ -18,9 +18,10 @@ status.
 ## Next up
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
-   the navigation decision is confirmed on that run.
-2. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
-   they exist.
+   navigation N1 is proven on that run.
+2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
+   grouping and instance records exist, and death/level-up/spell/talent are still
+   unwritten.
 3. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
@@ -38,10 +39,10 @@ status.
       transport-relative movement. **Gate passed 2026-08-23** on `harness-0.4-73-gafd352c`:
       `travel.ts --from tram-ironforge --rides 3` (item 45 fixture) rode IF→SW three
       times with typed success on every leg, boarding on attempt 1 each time, rides
-      60s; the navigation surface is accepted. One residual left: triggers are only tested while a
+      60s; N1 is proven. One residual left: triggers are only tested while a
       `move_to` is active.
     - **N2 — field-level observations**, each small, each earned, each logged.
-      **Shipped 2026-08-23 (built to `:next`, awaiting the deploy
+      **Shipped 2026-08-23 (an N1 amendment, built to `:next`, awaiting the deploy
       window):** zone and area name on self (`WB_AREA` from the server's zone/area pair
       named by the client's `AreaTable.dbc`; `state.self.zone` / `state.self.area`; HUD
       `position: Elwynn Forest / Northshire Valley — map 0 (x, y, z)`; `milestone`
@@ -67,10 +68,11 @@ status.
       arrival at server-confirmed map+xyz). Never "ended near the coordinate"; that
       scores `move_to`.
     - **Not in 0.3, by decision:** a `here()` / `goTo(name)` helper, a rendered minimap
-      as model observation (the map view stays operator-only), the TaxiPath /
+      as model observation (the map stays operator-only), the TaxiPath /
       areatrigger_teleport tables, walkability masks, a persistent map notebook (a
       labelled context-engine change under 8b if ever). Wiki coordinates are a run
-      dimension withheld from scored runs (docs/METHODOLOGY.md); pull back to a labelled coords
+      dimension withheld from scored runs (docs/METHODOLOGY.md, "Episodes, lanes,
+      and evidence"); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
 ## Fleet and gate
@@ -91,10 +93,30 @@ status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
+79. **Second track for the achievement/taxi taps** (2026-08-25, issue #8).
+    The module half is deployed (`harness-0.5-34-g9be594e`) and gated:
+    `infra/smoke/achievements-taxi.ts` PASS on PROBE 2026-08-25 (login list
+    named from Achievement.dbc, reply 0, `taxiFlight` flips on a values-only
+    update for self's guid). What remains: SDK schemas for the three opcodes,
+    runner milestone records (achievements only for `self: true`; flight start
+    = reply 0 then `taxiFlight` true on self's guid, landing = the flip back),
+    and the dashboard's rung 4 and achievement-points derivations. Unblocked;
+    the SDK derivation is in hand with another agent.
+
+83. **The fleet has to restart before the resolved model id is stamped**
+    (2026-08-25). The write-time half — `meta.resolved`, the
+    two `run.sqlite` columns, `comparability.resolvedModel` — only reaches runs
+    launched by a supervisor running this code. The live fleet predates it, so
+    every run it launches until the next drain/deploy still records the alias
+    alone and is read through the viewer's back-fill instead. Nothing is lost
+    (the trajectory carries the answer either way); the stamp is what makes the
+    id survive without a whole-file scan. Trigger: the next fleet restart.
+
 ## Episodes and results
 
-8. **Context policy is not applied on the claude-code harness** (recorded,
-   not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
+8. **Context policy is not applied on the claude-code harness** (recorded, not
+   penalised: the harness is a tag on every row, docs/METHODOLOGY.md, "What
+   WrathBench measures"). No trim; one CLI conversation grows linearly (~200k tokens by the end
    of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is
    mostly cache-read replays of a growing prefix and a `quota-exhausted` pause loses the
    context on resume. Either the driver applies a policy or the prompt stops promising
@@ -116,7 +138,6 @@ status.
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
 
-
 32. **Dashboard parity gaps against the deleted pages** (2026-08-22; the
     pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
     `runner/viewer/pricing.ts`, priced from dated, sourced rows rather than the old
@@ -127,8 +148,8 @@ status.
     them; neither blocks release.
 
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
-    The signal vector (docs/METHODOLOGY.md, Scoring) lists deaths, zones, spells learned and talents spent
-    and none is recorded (the `state` table has level, xp, map+xyz, money,
+    The signal vector lists deaths, zones, spells learned and talents spent
+    (docs/METHODOLOGY.md, "Scoring") and none is recorded (the `state` table has level, xp, map+xyz, money,
     quests_completed, turn; `quest_complete` is the only event-shaped record). Add a
     `milestone` trajectory record `{ t: "milestone", kind, ... }` emitted from the loop
     the way `quest_complete` is: death (and spirit-healer/corpse recovery), zone and
@@ -143,20 +164,38 @@ status.
     from the state cache's `self.zone` / `self.area` on every change, including the
     first observation (`from` undefined), alongside `quest_complete`
     (`runner/src/loop.ts`, `Trajectory.recordMilestone`). Death, level-up, spell,
-    talent and the firsts are still unwritten; the dashboard reads none of them yet.
+    talent and the firsts are still unwritten. **First consumer (2026-08-25):**
+    `scanRunTotals` reads the zone/area marks in its existing streaming pass and
+    `ResultRun.areas` carries `{ startArea, distinctAreas, leftStartArea,
+    capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
+    `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
+    (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
+    `false`. **Achievements and flights (2026-08-25, issue #8):** the
+    loop also writes `{ kind: "achievement", id, name?, points?, categoryId? }`
+    per own earn, `{ kind: "achievements_at_login", ids, points }` once per
+    process (written even when the backlog is empty — it is what says the taps
+    were live for the run), and `{ kind: "taxi", from: { areaId } }` /
+    `{ kind: "taxi_landed", to: { areaId } }` from `self.taxiFlight` flipping
+    after an accepted reply. `ResultRun.achievements` / `.taxi` and
+    `RunDetailResponse` carry them (`achievementFactsFrom`, `taxiFactsFrom`),
+    rung 4 now derives fully (capital **and** a flight), and achievement points
+    are displayed only — no ordering reads them. Death, level-up, spell learned,
+    talent spent and the remaining firsts are still unwritten, and rung 6 is
+    still nobody's.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the
-    "ultra long-term sandbox" actually needs** (2026-08-24, from the tier-budget
-    conversation). `idle: "unlimited"` now gives a model repeated six-hour
+    "ultra long-term sandbox" actually needs** (2026-08-24, from the
+    evidence-budget conversation). `idle: "unlimited"` now gives a model repeated six-hour
     freeplay sessions, but every episode still deletes and recreates a fresh
-    level-1 character (the fresh-reset rule), so session N+1 starts where session 1 did and
+    level-1 character (docs/METHODOLOGY.md, "Episodes, lanes, and evidence"), so
+    session N+1 starts where session 1 did and
     the long horizon is six hours, not a week. Carry-over is exactly what the
     scored episodes forbid, so this is not a knob — it needs its own record:
     what identity a resumable freeplay character has, how its run ids and
     trajectory relate across sessions, and how the viewer shows a character
-    rather than a run. Out of scope for the tier-budget decision deliberately; the six-hour cap
-    there is what makes the sessions restartable in the first place.
+    rather than a run. Out of scope for the tier rule deliberately; the six-hour
+    cap there is what makes the sessions restartable in the first place.
 
 
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone

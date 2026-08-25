@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { comparabilityOf } from "../src/comparability";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { SYSTEM_PROMPT } from "../src/prompt";
@@ -182,6 +183,38 @@ describe("claude-code driver", () => {
       JSON.parse(String(low.trajectory.runRow("run-test")?.["config_json"])).effort,
     ).toBe("low");
     low.trajectory.close();
+  }, 30_000);
+
+  test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
+    // Launched with a stamped tuple, the way run.ts launches one: the resolved
+    // id is an annotation on it as well as a run field.
+    trajectory.writeMeta({
+      runId: "run-test",
+      harnessVersion: "t",
+      startedAt: Date.now(),
+      config: options.config,
+      comparability: comparabilityOf(options.config, "t"),
+    });
+    await runClaudeEpisode({
+      ...options,
+      extraEnv: { WB_FAKE_RESOLVED_MODEL: "claude-opus-5", WB_FAKE_CLI_VERSION: "2.1.239" },
+    });
+
+    // The run asked for the alias and was served an id: that is the fact no
+    // page could read before, so it lands on all three of the run's records.
+    const meta = readMeta(runDir);
+    expect(meta?.config.model).toBe("opus");
+    expect(meta?.resolved).toEqual({ model: "claude-opus-5", cliVersion: "2.1.239" });
+    expect(meta?.comparability?.resolvedModel).toBe("claude-opus-5");
+    const row = trajectory.runRow("run-test");
+    expect(row?.["model"]).toBe("opus");
+    expect(row?.["resolved_model"]).toBe("claude-opus-5");
+    expect(row?.["resolved_cli_version"]).toBe("2.1.239");
+    // ...and exactly once, however many `system` envelopes the CLI sends.
+    const promotions = readTrajectory(runDir).filter((r) => r["kind"] === "resolved_model");
+    expect(promotions).toHaveLength(1);
+    trajectory.close();
   }, 30_000);
 
   test("a CLI that ignores SIGTERM is killed with its MCP child, not orphaned", async () => {
@@ -409,6 +442,11 @@ describe("childEnv", () => {
         GOOGLE_APPLICATION_CREDENTIALS: "/g.json",
         CLAUDE_CODE_USE_BEDROCK: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+        // Not a billing credential, dropped for a different reason: the runner
+        // and fleet services carry it for the gate's fixture staging, and root
+        // on acore_characters is the shortcut docs/CONTRACTS.md forbids.
+        WRATHBENCH_DB_PASSWORD: "must-not-leak",
+        WRATHBENCH_TOKEN: "keep",
         UNRELATED: "keep",
       },
       { configDir: "/runs/x/claude-config" },
@@ -420,6 +458,8 @@ describe("childEnv", () => {
     expect(env["GOOGLE_APPLICATION_CREDENTIALS"]).toBeUndefined();
     expect(env["CLAUDE_CODE_USE_BEDROCK"]).toBeUndefined();
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
+    expect(env["WRATHBENCH_DB_PASSWORD"]).toBeUndefined();
+    expect(env["WRATHBENCH_TOKEN"]).toBe("keep");
     expect(env["UNRELATED"]).toBe("keep");
     expect(env["CLAUDE_CONFIG_DIR"]).toBe("/runs/x/claude-config");
   });

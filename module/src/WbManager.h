@@ -74,6 +74,15 @@ namespace WrathBench
         std::string name;           // enUS column
     };
 
+    // One Achievement.dbc record (3.3.5a). Client-side knowledge: the client
+    // names an earned achievement and its points from this table.
+    struct AchievementRec
+    {
+        std::string name;           // enUS column
+        uint32 points{0};
+        uint32 categoryId{0};       // Achievement_Category.dbc id
+    };
+
     // Per-session synthesized-movement state. Touched only on the
     // world thread (DoMoveTo/DoStop/DoFace and the Update tick), so unlocked.
     struct MoveState
@@ -97,7 +106,7 @@ namespace WrathBench
         float dropDz{0};
     };
 
-    // Per-token headless session. See docs/ARCHITECTURE.md (module section)
+    // Per-token headless session. See docs/METHODOLOGY.md ("Client fidelity")
     // for the parked-socket design.
     struct BenchSession
     {
@@ -305,6 +314,16 @@ namespace WrathBench
         bool LoadAreaTableDbc(std::string const& path);
         std::unordered_map<uint32, AreaTableRec> _areaTable;
         bool _areaTableLoaded{false};
+
+        // Achievement.dbc as the client ships it (issue #8): name,
+        // points and category for the ids SMSG_ACHIEVEMENT_EARNED and
+        // SMSG_ALL_ACHIEVEMENT_DATA carry. Ids only when the file is absent.
+        bool LoadAchievementDbc(std::string const& path);
+        std::unordered_map<uint32, AchievementRec> _achievements;
+        bool _achievementsLoaded{false};
+        // One `{ achievementId, date, time, name?, points?, categoryId? }`
+        // object; `date` is the wire's packed bitfield, `time` its reading.
+        std::string AchievementJson(uint32 id, uint32 packedDate) const;
         // Per tick, every in-world session: emit WB_AREA on login and whenever
         // zone or area id changes (walking, teleport, transfer). World thread only.
         void TickAreas();
@@ -312,7 +331,7 @@ namespace WrathBench
         // position to a writer (WB_AREA and WB_SESSION_STATE share it).
         void AddAreaFields(Json::Writer& w, Player* player);
 
-        // Mover: synthesized client movement (world thread only).
+        // Mover (world thread only).
         void TickMovers(int64_t nowMs);
         void TickMover(BenchSession& s, int64_t nowMs);
         void TickRiders(int64_t nowMs);
@@ -354,8 +373,9 @@ namespace WrathBench
 
         // Tap helpers (world/map thread).
         void EmitEvent(BenchSession& s, std::string const& opcodeName, uint16_t opcodeId, std::string const& dataJson);
-        // Emit one synthetic WB_SESSION_STATE for an in-world session:
-        // the client-visible self state a fresh SMSG_LOGIN_VERIFY_WORLD carries.
+        // Emit one synthetic WB_SESSION_STATE for an in-world session (see
+        // module/PROTOCOL.md): the client-visible self state a fresh
+        // SMSG_LOGIN_VERIFY_WORLD carries.
         // World thread only (reads Player). Reused by the WS-reattach path and by
         // an idempotent same-token createSession so the caller re-syncs state.
         void EmitSessionState(std::shared_ptr<BenchSession> const& s);

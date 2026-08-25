@@ -202,6 +202,7 @@ const STATE_ROWS: readonly Row[] = [
  * the prototype, so they are described in prose in the state section, not here.
  */
 const STATE_INTERNAL = new Set([
+  "addAchievement",
   "apply",
   "applyQuestGiverStatus",
   "questObjectives",
@@ -216,6 +217,7 @@ const STATE_INTERNAL = new Set([
   "isSelfGuid",
   "joinName",
   "mergeFields",
+  "rebuildAchievements",
   "upsertNearby",
 ]);
 

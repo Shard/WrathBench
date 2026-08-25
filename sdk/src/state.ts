@@ -50,6 +50,9 @@ import {
   type SpellCooldownData,
   type SupersededSpellData,
   type TalentsInfoData,
+  type AchievementEarnedData,
+  type AllAchievementData,
+  type ActivateTaxiReplyData,
   type TransportProgressData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
@@ -60,6 +63,9 @@ import {
   type UpdateFields,
 } from "./protocol";
 import { STREAM_GAP, type StreamEvent } from "./events";
+
+/** `UNIT_FLAG_TAXI_FLIGHT` — the bit a client reads to know it is being flown. */
+const UNIT_FLAG_TAXI_FLIGHT = 0x0010_0000;
 
 /** A value together with the event that carried it. */
 export interface Observed<T> {
@@ -187,6 +193,48 @@ export interface AreaRef {
   readonly name: string;
 }
 
+/**
+ * One achievement the character holds, as the packets said it.
+ *
+ * `source` is which packet carried it: `login` is the `SMSG_ALL_ACHIEVEMENT_DATA`
+ * backlog a client receives once during login, `earned` is an
+ * `SMSG_ACHIEVEMENT_EARNED` for our own guid. The distinction is the whole
+ * point — a backlog entry is history, an earn is a thing that just happened —
+ * and it is what keeps the runner from re-reporting a resumed run's past as
+ * fresh milestones.
+ *
+ * `name`, `points` and `categoryId` are present only when the module could read
+ * `Achievement.dbc`; nothing is invented for an id it could not name.
+ */
+export interface AchievementEntry {
+  readonly achievementId: number;
+  readonly name: string | undefined;
+  readonly points: number | undefined;
+  readonly categoryId: number | undefined;
+  /** The wire's packed time bitfield, and the module's reading of it. */
+  readonly date: number | undefined;
+  readonly time: string | undefined;
+  readonly source: "login" | "earned";
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * Every achievement observed for our own character, in observation order:
+ * the login backlog first, then each earn as it landed.
+ *
+ * `points` is the sum of the entries whose points the module could name — a
+ * lower bound when `Achievement.dbc` is absent, never a guess. `loginSeen` is
+ * whether `SMSG_ALL_ACHIEVEMENT_DATA` was observed at all, which is a different
+ * fact from the list being empty: a fresh character's backlog is genuinely
+ * empty, and a session the cache joined late has no backlog to show.
+ */
+export interface AchievementsState {
+  readonly entries: readonly AchievementEntry[];
+  readonly points: number;
+  readonly loginSeen: boolean;
+}
+
 export interface SelfState extends UnitFieldsState {
   guid: GuidKey | undefined;
   name: string | undefined;
@@ -226,6 +274,24 @@ export interface SelfState extends UnitFieldsState {
   transfer: Observed<{ readonly toMap: number }> | undefined;
   /** `UNIT_FIELD_TARGET` on our own block: what the client shows as selected. */
   targetGuid: Observed<GuidKey> | undefined;
+  /**
+   * Achievements held, from the login backlog and our own earns.
+   * `undefined` until an achievement packet has been observed at all.
+   */
+  achievements: AchievementsState | undefined;
+  /**
+   * `UNIT_FLAG_TAXI_FLIGHT` on our own `unitFlags`: true while the character is
+   * being flown. There is no flight event — a `taxiReply` of `ok` followed by
+   * this turning true is the flight starting, and the flip back is the landing,
+   * exactly as a client reads it.
+   */
+  taxiFlight: Observed<boolean> | undefined;
+  /**
+   * The last `SMSG_ACTIVATETAXIREPLY` (the answer to a raw `CMSG_ACTIVATETAXI`).
+   * Kept because it is the only thing that says a flight was *accepted*; the
+   * ride itself shows on `taxiFlight`.
+   */
+  taxiReply: Observed<{ readonly reply: number; readonly ok: boolean }> | undefined;
 }
 
 /**
@@ -883,6 +949,9 @@ export class StateCache {
     reclaimDelay: undefined,
     transfer: undefined,
     targetGuid: undefined,
+    achievements: undefined,
+    taxiFlight: undefined,
+    taxiReply: undefined,
     health: undefined,
     power: undefined,
     fields: new Map<string, Observed<number>>(),
@@ -957,6 +1026,18 @@ export class StateCache {
   private readonly cooldownMap = new Map<number, SpellCooldown>();
 
   private talentState: TalentState | undefined;
+
+  /**
+   * achievementId -> the entry, in observation order (Map preserves it).
+   *
+   * First writer wins: a login backlog entry is not overwritten by a later
+   * earn of the same id, because the backlog is what made it history. The
+   * derived `self.achievements` is rebuilt from this map on every change.
+   */
+  private readonly achievementMap = new Map<number, AchievementEntry>();
+
+  /** Whether `SMSG_ALL_ACHIEVEMENT_DATA` has been observed at all. */
+  private achievementsLoginSeen = false;
 
   /** The one input that did not come from an event. */
   readonly seed: StateSeed;
@@ -1614,6 +1695,30 @@ export class StateCache {
         };
         return;
       }
+      /*
+       * Achievements and flight paths (issue #8). The earn is a
+       * say-range broadcast, so `self` — not the opcode — is what makes it
+       * ours; another player's achievement is not an observation about this
+       * character and is dropped here rather than filtered downstream.
+       */
+      case "SMSG_ACHIEVEMENT_EARNED": {
+        const d = event.data as AchievementEarnedData;
+        if (d.self !== true) return;
+        this.addAchievement(d.achievement, "earned", event.seq, event.ts);
+        return;
+      }
+      case "SMSG_ALL_ACHIEVEMENT_DATA": {
+        const d = event.data as AllAchievementData;
+        this.achievementsLoginSeen = true;
+        for (const a of d.achievements) this.addAchievement(a, "login", event.seq, event.ts);
+        this.rebuildAchievements();
+        return;
+      }
+      case "SMSG_ACTIVATETAXIREPLY": {
+        const d = event.data as ActivateTaxiReplyData;
+        this.self.taxiReply = { value: { reply: d.reply, ok: d.ok }, seq: event.seq, ts: event.ts };
+        return;
+      }
       case "SMSG_NAME_QUERY_RESPONSE": {
         const d = event.data as { guid: GuidKey; found: boolean; name?: string };
         if (d.found && d.name !== undefined) {
@@ -2186,6 +2291,39 @@ export class StateCache {
   }
 
   /**
+   * Record one achievement, first writer wins. `rebuildAchievements` is the
+   * caller's job for the login batch so a backlog of hundreds rebuilds once.
+   */
+  private addAchievement(
+    a: { achievementId: number; date?: number; time?: string; name?: string; points?: number; categoryId?: number },
+    source: "login" | "earned",
+    seq: number,
+    ts: number,
+  ): void {
+    if (this.achievementMap.has(a.achievementId)) return;
+    this.achievementMap.set(a.achievementId, {
+      achievementId: a.achievementId,
+      name: a.name,
+      points: a.points,
+      categoryId: a.categoryId,
+      date: a.date,
+      time: a.time,
+      source,
+      seq,
+      ts,
+    });
+    if (source === "earned") this.rebuildAchievements();
+  }
+
+  /** Replace `self.achievements` wholesale; the snapshot's shallow copy relies on it. */
+  private rebuildAchievements(): void {
+    const entries = [...this.achievementMap.values()];
+    let points = 0;
+    for (const e of entries) points += e.points ?? 0;
+    this.self.achievements = { entries, points, loginSeen: this.achievementsLoginSeen };
+  }
+
+  /**
    * Merge one block's named fields, per field, with that block's provenance.
    * `targetGuid` is a guid rather than a number, so it gets its own group.
    */
@@ -2218,6 +2356,14 @@ export class StateCache {
     if (entry && "entry" in target) target.entry = entry;
     this.deriveGauges(target);
     if (target === this.self) {
+      // `taxiFlight` rides `unitFlags` in every block that carries it
+      // (PROTOCOL.md), and the module names the bit; the bit is read here
+      // rather than the named boolean because `fields` holds numbers only.
+      // Derived only from a block that *carried* unitFlags, so the observation
+      // keeps the provenance of the packet that made it.
+      if (typeof fields.unitFlags === "number") {
+        this.self.taxiFlight = { value: (fields.unitFlags & UNIT_FLAG_TAXI_FLIGHT) !== 0, seq, ts };
+      }
       const healthAfter = target.fields.get("health")?.value;
       const pos = this.self.position?.value;
       // The died transition: own health reaching 0 from a living value. Until

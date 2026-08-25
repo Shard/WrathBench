@@ -13,6 +13,7 @@
 
 import { For, Show, createMemo } from "solid-js";
 import type { StatePoint } from "@viewer/api-types";
+import { scaleLinear } from "../lib/chart";
 import { xpChartModel } from "../lib/runview";
 
 /** Elapsed wall-clock label for an x tick: "mm:ss", or "Hh Mm" past an hour. */
@@ -45,15 +46,8 @@ export function XpChart(props: {
   );
 
   const plot = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
-  const px = (ts: number): number => {
-    const m = model();
-    const span = m.t1 - m.t0 || 1;
-    return plot.x0 + ((ts - m.t0) / span) * (plot.x1 - plot.x0);
-  };
-  const py = (cum: number): number => {
-    const m = model();
-    return plot.y0 - (cum / m.yMax) * (plot.y0 - plot.y1);
-  };
+  const px = (ts: number): number => scaleLinear([model().t0, model().t1], [plot.x0, plot.x1])(ts);
+  const py = (cum: number): number => scaleLinear([0, model().yMax], [plot.y0, plot.y1])(cum);
 
   const path = createMemo(() =>
     model()

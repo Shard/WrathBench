@@ -39,6 +39,25 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("setCharacter records the name the model actually created", () => {
+    // The launch config carries only the harness's suggestion. Three readers,
+    // three places: the runs page and the positions feed read `run.character`,
+    // a resumed runner reads meta.json before any database is open, and the
+    // trajectory is the record of when it changed.
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({ runId: "run-c", driver: "stub", model: "irrelevant", character: "Fleetsonnet" });
+    traj.writeMeta({ runId: "run-c", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    traj.setCharacter("run-c", "Grimjaw");
+    expect(traj.runRow("run-c")?.["character"]).toBe("Grimjaw");
+    expect(readMeta(dir)?.config.character).toBe("Grimjaw");
+    // The rest of the stored config is untouched, and startedAt is not restamped.
+    expect(readMeta(dir)?.startedAt).toBe(5);
+    expect(readMeta(dir)?.config.driver).toBe("stub");
+    expect(readTrajectory(dir).some((r) => r.t === "character" && r["character"] === "Grimjaw")).toBe(true);
+    traj.close();
+  });
+
   // FOLLOW-UPS 36: both were derivable from config_json; a column means the
   // listing reads a fact rather than re-deriving a rule that could drift.
   test("writes the character and the platform as run columns", () => {

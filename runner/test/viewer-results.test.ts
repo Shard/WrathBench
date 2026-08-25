@@ -17,6 +17,7 @@ import {
   trackFrom,
   turnsUsable,
   unscoredReason,
+  xpEarned,
 } from "../viewer/results";
 
 function state(p: Partial<StatePoint> & { ts: number }): StatePoint {
@@ -52,6 +53,8 @@ function run(p: Partial<RunRow> = {}): RunRow {
     className: "Paladin",
     characterLabel: "Human Paladin",
     platform: "openrouter",
+    resolvedModel: null,
+    cliVersion: null,
     apiBase: null,
     harnessVersion: "harness-0.2",
     comparability: null,
@@ -186,6 +189,21 @@ describe("unscoredReason", () => {
     // A claude-code run is a tagged row, not an excluded one.
     expect(unscoredReason(run({ driver: "claude-code", harness: "claude-code", shakeout: null }))).toBeNull();
   });
+
+  test("a lapsed run is an attempt, never a recorded episode", () => {
+    // It is on the runs page with its reason, and out of every chart over
+    // episodes — the ladder reads exactly this predicate.
+    expect(unscoredReason(run({ terminationReason: "attempt-failed" }))).toBe("unscored (attempt-failed)");
+    expect(unscoredReason(run({ terminationReason: "stale" }))).toBe("unscored (stale)");
+    // The same predicate the scheduler writes runs off with, so an operator cut
+    // and a harness defect are partial episodes here too — they used to reach
+    // the ladder with whatever level they had at the moment they were stopped.
+    expect(unscoredReason(run({ terminationReason: "manual" }))).toBe("unscored (manual)");
+    expect(unscoredReason(run({ terminationReason: "harness-error" }))).toBe("unscored (harness-error)");
+    expect(unscoredReason(run({ terminationReason: "stale-character" }))).toBe("unscored (stale-character)");
+    // A run that ended on its own clock is untouched.
+    expect(unscoredReason(run({ terminationReason: "episode-limit" }))).toBeNull();
+  });
 });
 
 describe("resultRunOf", () => {
@@ -228,6 +246,9 @@ describe("resultRunOf", () => {
   test("the listing facts ride on the row, and default to null when not supplied", () => {
     const bare = resultRunOf(run({ character: "Fixturely", pauseReason: "quota-exhausted" }), [], []);
     expect(bare.character).toBe("Fixturely");
+    // The runs page's status column reads these; they are the listing's own, not recomputed.
+    expect(bare.live).toBe(false);
+    expect(bare.endedAt).toBe(run().endedAt);
     expect(bare.pauseReason).toBe("quota-exhausted");
     expect(bare.playtimeMs).toBeNull();
     expect(bare.tokens).toBeNull();
@@ -240,6 +261,25 @@ describe("resultRunOf", () => {
     });
     expect(listed.playtimeMs).toBe(60_000);
     expect(listed.actualCost?.usd).toBe(0.5);
+    // The expected figure is its own field, and null from a caller that predates it.
+    expect(listed.expectedCost).toBeNull();
+    const priced = resultRunOf(run(), [], [], null, {
+      playtimeMs: null,
+      tokens: null,
+      actualCost: null,
+      expectedCost: { usd: 0, basis: "list-price", asIfMetered: true, breakdown: null, priceId: "free", asOf: "2026-08-22", note: "free tier" },
+    });
+    expect(priced.expectedCost?.usd).toBe(0);
+    expect(priced.expectedCost?.asIfMetered).toBe(true);
+  });
+
+  test("xpEarned rides on the row as the run page's lower bound", () => {
+    const e = resultRunOf(run(), [
+      state({ ts: 1000, level: 1, xp: 300 }),
+      state({ ts: 2000, level: 2, xp: 50 }),
+    ], []);
+    expect(e.xpEarned).toBe(350);
+    expect(resultRunOf(run(), [], []).xpEarned).toBeNull();
   });
 
   test("falls back to the run's own level when no sample carried one", () => {
@@ -265,5 +305,25 @@ describe("resultRunOf", () => {
     expect(e.maxLevel).toBe(3);
     expect(e.xp).toBe(55);
     expect(resultRunOf(run({ level: 2, xp: 55 }), [state({ ts: 1000, level: 3 })], []).xp).toBeNull();
+  });
+});
+
+describe("xpEarned", () => {
+  test("sums the last observed xp of every level below, plus the xp within the top one", () => {
+    const states = [
+      state({ ts: 1, level: 1, xp: 100 }),
+      state({ ts: 2, level: 1, xp: 350 }),
+      state({ ts: 3, level: 2, xp: 20 }),
+      state({ ts: 4, level: 2, xp: 400 }),
+      state({ ts: 5, level: 4, xp: 10 }), // a two-level jump between samples: one fold, never an invented level
+    ];
+    expect(xpEarned(states)).toBe(350 + 400 + 10);
+  });
+
+  test("reads level and xp off the same sample, sorts by time, and never dips", () => {
+    expect(xpEarned([state({ ts: 2, level: 2, xp: 5 }), state({ ts: 1, level: 1, xp: 90 })])).toBe(95);
+    expect(xpEarned([state({ ts: 1, level: 1, xp: 90 }), state({ ts: 2, level: 1, xp: 40 })])).toBe(90);
+    expect(xpEarned([state({ ts: 1, level: 1 }), state({ ts: 2, xp: 40 })])).toBeNull();
+    expect(xpEarned([])).toBeNull();
   });
 });

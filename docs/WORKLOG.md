@@ -30,25 +30,28 @@ Convention:
 - [2026-08-22](worklogs/2026-08-22.md) — most of the 0.3 surface: four overnight
   post-mortems (death, sandbox crash, loot, turnInQuest), failure-surface audit,
   trainers, the ergonomics passes, questgiver markers and quest objectives deployed,
-  dashboard SPA, preflight gate and verified deploys, run dimensions (ADR-0024/0026),
-  spellbook and raw escape hatch (ADR-0025), navigation N1 (ADR-0027), cooperative
+  dashboard SPA, preflight gate and verified deploys, run dimensions,
+  spellbook and raw escape hatch, navigation N1, cooperative
   abort. Bundle rebuilt to schema 3; deploy script and roster scheduler fixed.
 - [2026-08-23](worklogs/2026-08-23.md) — `harness-0.3-68` deployed behind a 62s gate;
-  wiki coords withheld from scored runs (ADR-0028); night-report SDK softenings
+  wiki coords withheld from scored runs; night-report SDK softenings
   (`equipItem`, `reclaimCorpse`, `moveTo(unit)`, `sleep` reasons, `events.off`); bundle
-  schema 4 (ADR-0029); episode tiers, runner pool, scheduling policy, stillborn runs,
-  Models page, COSTS.md (ADR-0030/0031/0032); fleet on the pool/queue shape.
+  schema 4; episode tiers, runner pool, scheduling policy, stillborn runs,
+  Models page, COSTS.md; fleet on the pool/queue shape.
 - [2026-08-24](worklogs/2026-08-24.md) — run view redesign: two-column layout (feed
   left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
   the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
   bands on the y-axis, inventory folded into the sidebar.
-- [2026-08-25](worklogs/2026-08-25.md) — the 44 ADRs consolidated into
-  `docs/METHODOLOGY.md`; `docs/decisions/` deleted; every ADR citation outside
-  the worklogs replaced or removed, user-facing surfaces first.
+- [2026-08-25](worklogs/2026-08-25.md) — ladder scatter: cost per run against xp earned,
+  one point per model per tier; `all`/overridden/harness controls and the filter note
+  dropped from the ladder; episodes counts lead to the ladder; viewer `xpEarned` and
+  `expectedCost` on `ResultRun` (restart owed). The 50 ADRs consolidated into
+  `docs/METHODOLOGY.md` and the owning component docs; `docs/decisions/` deleted;
+  every ADR citation outside the worklogs replaced or removed.
 
 ## Where the former ADRs went
 
-The first four days of the project recorded decisions as numbered ADRs under
+The first five days of the project recorded decisions as numbered ADRs under
 `docs/decisions/`; on 2026-08-25 they were consolidated into
 `docs/METHODOLOGY.md` and the owning component docs, and the directory was
 deleted. The day files above, commits and old branches still cite the
@@ -80,14 +83,19 @@ history of `docs/decisions/`.
 | 0021 | Client-parity queries in the SDK | METHODOLOGY.md — Client fidelity |
 | 0022 | Dashboard SPA over read-only viewer API | docs/ARCHITECTURE.md (dashboard) |
 | 0023 | Deploy-window smoke as a supervisor gate | docs/OPERATIONS.md (preflight gate) |
-| 0024, 0026, 0028, 0030, 0031, 0032 | superseded same-day by 0033/0034 | retired |
+| 0024 | Objective and watchdog overrides are run dimensions | superseded same-day by 0033 — METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0026 | The comparability tuple | superseded same-day by 0033 — METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0028 | Wiki coordinates are a run dimension | superseded same-day by 0033 — METHODOLOGY.md — Episodes, lanes, and evidence (`wikiCoords`) |
+| 0030 | Episode tiers and promotion | superseded same-day by 0033/0034 — METHODOLOGY.md — Episodes, lanes, and evidence; docs/EPISODES.md |
+| 0031 | Runner pool and job queue | superseded same-day by 0034 — docs/OPERATIONS.md (scheduling) |
+| 0032 | Scheduling policy from run history | superseded same-day by 0034 — docs/OPERATIONS.md (scheduling) |
 | 0025 | Raw escape hatch as an opcode allowlist | METHODOLOGY.md — The model surface; module/PROTOCOL.md |
 | 0027 | Navigation is the module's | METHODOLOGY.md — Client fidelity; docs/CONTRACTS.md, module/PROTOCOL.md |
 | 0029 | Bundle states the ender and the era | METHODOLOGY.md — The reference bundle; wiki/README.md |
-| 0033 | Run dimensions and the comparability tuple | METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0033 | Run dimensions and the comparability tuple | METHODOLOGY.md — Episodes, lanes, and evidence (incl. the 2026-08-25 `resolvedModel` addendum) |
 | 0034 | Account pool, scheduling from run history | docs/OPERATIONS.md (scheduling) |
 | 0035 | Harness and driver are separate words | METHODOLOGY.md — What WrathBench measures |
-| 0036 | A fleet stop pauses runs | docs/OPERATIONS.md |
+| 0036 | A fleet stop pauses runs | METHODOLOGY.md — Episodes, lanes, and evidence (what a lapse means for evidence); docs/OPERATIONS.md (the pause mechanics) |
 | 0037 | SDK-side outcomes, caller budget | METHODOLOGY.md — The model surface |
 | 0038 | The deploy owns the window | docs/OPERATIONS.md (deploy window) |
 | 0039 | Run data storage (proposed) | docs/ARCHITECTURE.md (persistence) |
@@ -96,3 +104,8 @@ history of `docs/decisions/`.
 | 0042 | The build may ask the world DB about ids | METHODOLOGY.md — The reference bundle; wiki/README.md |
 | 0043 | The tier is the evidence budget | METHODOLOGY.md — Episodes, lanes, and evidence |
 | 0044 | Cache misses are provider weather | docs/COSTS.md |
+| 0046 | The harness series is one shell-wide filter | docs/ARCHITECTURE.md (dashboard) |
+| 0047 | The runs page is the runs grain, episodes the episodes | docs/ARCHITECTURE.md (dashboard) |
+| 0048 | Achievements and flight use are observed, not inferred | METHODOLOGY.md — Client fidelity, Scoring; module/PROTOCOL.md |
+| 0049 | A scored run that pauses is a failed attempt | METHODOLOGY.md — Episodes, lanes, and evidence; docs/OPERATIONS.md, docs/EPISODES.md (the mechanics) |
+| 0050 | The model names its character | METHODOLOGY.md — Episodes, lanes, and evidence; docs/CONTRACTS.md, docs/OPERATIONS.md |

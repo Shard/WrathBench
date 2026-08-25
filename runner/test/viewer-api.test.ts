@@ -10,10 +10,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { UNBUILT_NOTICE, createApi, readFleet } from "../viewer/api";
+import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 
 const SENTINEL = "sentinel-bearer-2f9c1a";
@@ -161,6 +161,74 @@ function pausedFixture(now: number): string {
   return runs;
 }
 
+/**
+ * Two runs, one of each era: a run launched since the id is stamped, and a
+ * backlog run whose only record of it is inside the trajectory.
+ */
+function resolvedFixture(): string {
+  const runs = mkdtempSync(join(tmpdir(), "viewer-resolved-"));
+  const write = (id: string, meta: object, lines: object[]): void => {
+    const dir = join(runs, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: id, startedAt: 1000, ...meta }));
+    writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  };
+  // Stamped at write time, and the trajectory disagrees — a later segment
+  // resolved elsewhere. The stamp is the run's answer and must win.
+  write(
+    "stamped-run",
+    { config: { model: "sonnet", driver: "claude-code" }, resolved: { model: "claude-sonnet-5", cliVersion: "2.1.239" } },
+    [
+      { ts: 1000, t: "meta", runId: "stamped-run" },
+      { ts: 1100, t: "claude_system", type: "system", subtype: "init", model: "claude-opus-5", claude_code_version: "9.9.9" },
+      { ts: 1200, t: "response", turn: 1, message: { role: "assistant", content: "hi" } },
+    ],
+  );
+  // The backlog: nothing on meta, the answer only in the trajectory.
+  write("backlog-run", { config: { model: "opus", driver: "claude-code" } }, [
+    { ts: 1000, t: "meta", runId: "backlog-run" },
+    { ts: 1100, t: "claude_system", type: "system", subtype: "init", model: "claude-opus-5", claude_code_version: "2.1.239" },
+    { ts: 1200, t: "response", turn: 1, message: { role: "assistant", content: "hi" } },
+  ]);
+  return runs;
+}
+
+describe("the resolved model id", () => {
+  test("a stamped run keeps its own answer; a backlog run is back-filled from its trajectory", async () => {
+    const runs = resolvedFixture();
+    const handle = api(runs);
+    const listed = (await (await handle(new Request("http://x/api/runs"))).json()) as {
+      runs: { runId: string; model: string | null; resolvedModel: string | null; cliVersion: string | null }[];
+    };
+    const by = new Map(listed.runs.map((r) => [r.runId, r]));
+    // Stamped beats derived: the trajectory's later `claude-opus-5` is ignored.
+    expect(by.get("stamped-run")).toMatchObject({
+      model: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      cliVersion: "2.1.239",
+    });
+    // Nothing was written back — the run directory is read differently, not rewritten.
+    expect(JSON.parse(readFileSync(join(runs, "backlog-run", "meta.json"), "utf8"))["resolved"]).toBeUndefined();
+    expect(by.get("backlog-run")).toMatchObject({
+      model: "opus",
+      resolvedModel: "claude-opus-5",
+      cliVersion: "2.1.239",
+    });
+
+    // The same answer on the results surface and on the run page, off the one
+    // derivation: a chart and a run page may not disagree about what ran.
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; resolvedModel?: string | null }[];
+    };
+    expect(new Map(results.runs.map((r) => [r.runId, r.resolvedModel])).get("backlog-run")).toBe("claude-opus-5");
+    const detail = (await (await handle(new Request("http://x/api/run/backlog-run"))).json()) as {
+      run: { resolvedModel: string | null; cliVersion: string | null };
+    };
+    expect(detail.run).toMatchObject({ resolvedModel: "claude-opus-5", cliVersion: "2.1.239" });
+    rmSync(runs, { recursive: true, force: true });
+  });
+});
+
 describe("playtime", () => {
   test("the listing reports active time, not the span the trajectory covers", async () => {
     const now = Date.now();
@@ -230,6 +298,32 @@ describe("routes", () => {
     const runs = fixture();
     const res = await api(runs)(new Request("http://x/api/run/..%2F..%2Fetc"));
     expect(res.status).toBe(404);
+  });
+
+  test("/api/info lists the harness series that have runs, newest first", async () => {
+    const runs = fixture();
+    const res = await api(runs)(new Request("http://x/api/info"));
+    const b = (await res.json()) as { harnessSeries: { series: string; runs: number }[] };
+    // The fixture's stamp (`harness-test`) names no series, and a run in no
+    // group is never listed — only the selector's "all" shows it.
+    expect(b.harnessSeries).toEqual([]);
+  });
+
+  test("the series census counts per series and orders numerically", () => {
+    expect(
+      harnessSeriesCensus([
+        { harnessVersion: "harness-0.4-1-gaaa" },
+        { harnessVersion: "harness-0.10-2-gbbb" },
+        { harnessVersion: "harness-0.4-9-gccc" },
+        { harnessVersion: "harness-0.9-1-gddd" },
+        { harnessVersion: "0.0.0-phase0-unversioned" },
+        { harnessVersion: null },
+      ]),
+    ).toEqual([
+      { series: "0.10", runs: 1 },
+      { series: "0.9", runs: 1 },
+      { series: "0.4", runs: 2 },
+    ]);
   });
 
   test("/api/info reports the mode the viewer is in", async () => {
@@ -540,6 +634,46 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(d.states[0]!.turn).toBeNull();
   });
 
+  test("achievement and flight milestones cross the wire on both the results row and the run page", async () => {
+    const runs = fixture();
+    // Appended, not rewritten: this is what the loop adds to a live file.
+    appendFileSync(
+      join(runs, RUN_ID, "trajectory.jsonl"),
+      [
+        { ts: 1300, t: "milestone", kind: "achievements_at_login", ids: [6], points: 10, turn: 1 },
+        { ts: 1400, t: "milestone", kind: "achievement", id: 12, name: "Explore Elwynn Forest", points: 10, turn: 1 },
+        { ts: 1500, t: "milestone", kind: "taxi", from: { areaId: 9 }, turn: 2 },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const handle = api(runs);
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; achievements: unknown; taxi: unknown }[];
+    };
+    const row = results.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.achievements).toEqual({ earned: 2, points: 20, ids: [6, 12] });
+    expect(row.taxi).toEqual({ flights: 1 });
+    // The run page reads the same facts off the incremental tail, so the two
+    // views of one run cannot disagree.
+    const detail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      achievements: unknown;
+      taxi: unknown;
+    };
+    expect(detail.achievements).toEqual(row.achievements);
+    expect(detail.taxi).toEqual(row.taxi);
+  });
+
+  test("a run with no milestone records reads not-recorded on both, never zero", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; achievements: unknown; taxi: unknown }[];
+    };
+    const row = body.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.achievements).toBeNull();
+    expect(row.taxi).toBeNull();
+  });
+
   test("/api/results projects each run with its level marks and scorability", async () => {
     const runs = fixture();
     stamped(runs, TUPLE);
@@ -691,7 +825,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     stamped(runs, { ...TUPLE, episode: "e90", episodeOverride: true });
     const body = (await (await api(runs)(new Request("http://x/api/episodes"))).json()) as {
       episodes: { id: string; minutes: number | null; toolCalls: number | null; summary: string;
-        members: number; overrides: number; derived: number }[];
+        members: number; overrides: number; derived: number; lapsed: number }[];
       untiered: number;
     };
     expect(body.episodes.map((e) => e.id)).toEqual(["e90", "e360", "probing", "freeplay"]);
@@ -699,7 +833,10 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e90.minutes).toBe(90);
     expect(e90.toolCalls).toBe(3000);
     expect(e90.summary.length).toBeGreaterThan(80);
-    expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0 });
+    // `lapsed` is the attempt-not-episode bucket: stamped with the id, never
+    // a recorded episode. Nothing in the fixture ended that way, so it is
+    // zero here.
+    expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0, lapsed: 0 });
     expect(body.untiered).toBe(0);
   });
 

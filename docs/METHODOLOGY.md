@@ -1,7 +1,7 @@
 # Methodology
 
 The decisions that shape what a WrathBench result means, and the principles
-behind them. This is the successor to the numbered ADR series (44 records,
+behind them. This is the successor to the numbered ADR series (50 records,
 consolidated 2026-08-25; the full texts are in git history under
 `docs/decisions/`, and `docs/WORKLOG.md` holds the table mapping each old
 number to where its decision lives now). It is edited in place: a change to
@@ -125,6 +125,19 @@ every navigation and observation question, and is the test for the next one:
 - *Client-cache knowledge is fair.* Reading the client's own DBC files from
   the data volume (areatriggers, area names, spell names) is rendering what
   a client renders, not new observation.
+- *Achievements and flight use are observed, never inferred.* The packets a
+  client is sent carry both — each achievement as it lands, the completed
+  block of the login dump, and the server's reply to a flight request — and
+  being flown is a named bit of the unit flags the observation stream already
+  served. The module never asks the server's achievement manager anything: a
+  run's achievements are what its own packets said, and a flight "ends" when
+  the runner sees the flag flip, because no packet says so and inventing an
+  event for it would be the SDK asserting an outcome the wire never gave.
+  Names, points and categories come from the client's own achievement table
+  on the data volume, the same client-cache knowledge as the area tables.
+  Progress *toward* an achievement is deliberately not tapped: it is not a
+  milestone, and the criteria stream is chatter a client renders and a
+  benchmark has no derivation for.
 
 **Widening either contract is a major harness version; narrowing is at least
 a minor one.**
@@ -215,6 +228,22 @@ smoke-fixture tool that pre-places gate characters writes only to smoke and
 probe accounts, outside the observation contract rather than an exception to
 it (the operator arranging the world before a run, like choosing an account).
 
+**The model names its own character; race and class are the episode's.** The
+launch note invites a name inside the game's own rule — 2–12 letters, no
+spaces, no letter three times running — and says it is the model's for the
+episode; the roster's name survives only as the suggestion offered to a model
+that would rather not choose. Race and class are stated in the same note as
+*not* the model's to choose, and why: they are dimensions every run is read
+against. Nothing about the name is a measurement — no tuple field carries it,
+no chart groups on it — and a fixed one was actively harmful, because a
+character name is realm-wide unique while the hygiene that clears it is
+per-account, so a fresh attempt scheduled elsewhere met a name it could not
+use and no way to pick another. Letting the thing being driven be named by the
+thing driving it costs nothing measured and is the more honest shape. The
+freshness belt does not read names and did not change: it arms on every
+character guid hygiene listed for the account, so a model that names a
+survivor is caught by its guid and its level, never by its spelling.
+
 **A knob is legitimate as a run dimension**: set per run, recorded in run
 metadata, identical in shape for every model. Effort, operator objective,
 watchdog overrides, `wikiCoords`, and the episode id are dimensions; `opus at
@@ -223,8 +252,27 @@ Everything is stamped into one comparability tuple at launch
 (`runner/src/comparability.ts`) — harness version and series, prompt hash of
 the *rendered* bytes, harness tag, effort, episode id and budget, objective
 presence, `wikiCoords`, wiki-bundle identity — and never recomputed. A run
-written before a field existed reads `null` forever. A resume re-stamps for
-the leash actually enforced and records that it did.
+written before a field existed reads `null` forever. A resume, where a lane
+still allows one, re-stamps for the leash actually enforced and records that
+it did.
+
+**One field of the tuple is observed rather than stamped, and it is an
+annotation, not a grouping key.** A run is launched with the string the roster
+named, which under the claude-code harness is usually an alias the CLI resolves
+minutes later to a real id — so no page could say which model a run had
+actually been on, and the aliases cannot simply be replaced in the roster
+because renaming a ref's model ends its runs. The resolved id is therefore
+recorded on first observation, never revised (a later segment that resolves
+elsewhere does not overwrite the id a score was earned under), and excluded
+from the tuple's equality test, so an aliased run's resume does not emit a
+restamp record that says nothing. It is back-filled at *read* time for runs
+that predate it, from their own trajectories, and never written back to disk —
+an old run is read differently, not relabelled. The pages show it only where it
+differs from what was asked for, and flag a roster model that resolved to more
+than one id across its runs, because that drift is the thing the field exists
+to make visible. The wiki bundle's identity has the same standing: it says
+which file a run was reading, while the thing that actually groups is the
+harness minor bump a text-changing rebuild ships with.
 
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the fixed prompt at one fixed place; with no
@@ -247,6 +295,33 @@ comparability group — scores never mix across ids, nor across series within
 one — and a wrong default is replaced by a *new id*, never widened in place,
 because widening silently re-scopes every existing score. Definitions:
 `docs/EPISODES.md`.
+
+**A lapsed run is evidence only if its lane says so; everywhere else it is a
+failed attempt.** A run that pauses — for a deploy, for a provider's refusal —
+or that goes quiet because the host slept, stops without a verdict, and what
+happens to it is a property of the lane and not of the operator's mood. On the
+scored lanes it is ended: the account and character go back, and the model gets
+a fresh attempt with a new run id and a full clock. Resuming was the old rule
+and it was right for a sandbox and wrong for a measurement — an `e90` is ninety
+minutes of *play*, and a run that paused at minute 41, sat out a two-hour quota
+window and came back is not that in any sense a reader of the ladder would
+recognise. Nothing about its tuple is false; the episode is. Freeplay resumes,
+because it never finishes and never counts; a probe campaign resumes only if it
+says so, because a swept cell is usually better re-swept than continued.
+
+A failed attempt numbers a run id and is visible with its reason, but it is
+never a recorded episode: the same predicate that keeps steered runs off the
+scored surfaces keeps it off them, and the episode grain counts it as an
+attempt spent rather than a member. Three counted failures on one model,
+episode and series stop the scheduler trying — evidence about a model's
+endpoint, not about the model — and what counts is the termination reason and
+nothing else. A fleet stop is the harness's own doing and an offline gap is
+harness weather, so both spend the attempt and neither is a strike. Reading a
+reason rather than parsing a detail string is what keeps that distinction from
+being rediscovered as a bug, and one shared list of the reasons that are not
+the model's fault is what keeps a run written off by the scheduler from still
+being drawn on the ladder. Mechanics — the sweep, the strike ladder, the
+per-lane table — are `docs/OPERATIONS.md` and `docs/EPISODES.md`.
 
 **The tier is the evidence budget.** How much a model runs is one word on its
 roster entry, denominated in runs, and it is the only thing that sets a run
@@ -273,9 +348,13 @@ nowhere to reach max level standing still, so the broad goal has a real
 gradient. Its wording changes only at a harness boundary.
 
 **The harness records a signal vector, not a score**: level curve, XP, quests
-with ids, money, deaths, position, spells, playtime, event and turn counts.
-Recording is cheap and additive; anything derivable later need not be decided
-now.
+with ids, money, deaths, position, spells, playtime, achievements earned with
+their points, flights taken, and event and turn counts. Recording is cheap and
+additive; anything derivable later need not be decided now — but the converse
+binds, so a claim the ladder wants to make later has to be in the recording
+first, which is why the achievement and flight taps were added before any rung
+read them. A run that predates a signal carries no reading for it, and a
+derivation must treat that as *not recorded* rather than as zero.
 
 **Scores are derived offline, versioned, recomputable.** Any leaderboard
 number is a derivation over recorded signals, recomputable over every past

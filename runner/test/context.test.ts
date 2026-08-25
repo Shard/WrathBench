@@ -114,6 +114,34 @@ describe("formatStateSummary", () => {
     expect(none).toContain("position: map 0 (1, 2, 3)");
   });
 
+  test("achievements are a count and a points total, never the list", () => {
+    const text = formatStateSummary(
+      {
+        self: {
+          name: "Benchy",
+          guid: "1",
+          achievements: {
+            loginSeen: true,
+            points: 20,
+            entries: [
+              { achievementId: 6, name: "Level 10", points: 10, source: "login" },
+              { achievementId: 12, name: "Explore Elwynn Forest", points: 10, source: "earned" },
+            ],
+          },
+        },
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("achievements: 2 (20 pts)");
+    // The list is prompt every turn for something a snippet can read.
+    expect(text).not.toContain("Explore Elwynn Forest");
+  });
+
+  test("no achievement packet reads unobserved, never a zero", () => {
+    const text = formatStateSummary({ self: { name: "Benchy", guid: "1" } }, { sessionLive: true });
+    expect(text).toContain("achievements: unobserved");
+  });
+
   test("nearby appends NPC roles compactly: spaced words, gossip dropped, sub-kinds folded", () => {
     const text = formatStateSummary(
       {

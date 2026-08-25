@@ -106,6 +106,16 @@ export interface UiOpenWindows {
   vendor?: boolean;
 }
 
+/** One row of `state.self.achievements.entries`, as the rpc JSON carries it. */
+interface AchievementLike {
+  achievementId?: unknown;
+  name?: unknown;
+  points?: unknown;
+  categoryId?: unknown;
+  /** `login` (the backlog a client gets at login) or `earned` (our own earn). */
+  source?: unknown;
+}
+
 /** JSON-safe snapshot as produced by the sandbox rpc (StateCache.snapshot()). */
 export interface SnapshotLike {
   self?: {
@@ -130,6 +140,17 @@ export interface SnapshotLike {
     graveyard?: ObservedLike;
     /** `{ delayMs, readyAt }` — when a reclaim becomes legal (wall-clock ms). */
     reclaimDelay?: ObservedLike;
+    /**
+     * `state.self.achievements`: every achievement observed for this
+     * character, the login backlog first. The HUD prints a **count and a points
+     * total only** — the list is tens of rows a turn of prompt for a fact the
+     * agent can read with a snippet, and the ids ride the trajectory instead.
+     */
+    achievements?: { entries?: AchievementLike[]; points?: unknown; loginSeen?: unknown };
+    /** `value` is a bool: `UNIT_FLAG_TAXI_FLIGHT` on self — the character is being flown. */
+    taxiFlight?: ObservedLike;
+    /** `value` is `{ reply, ok }` — the last `SMSG_ACTIVATETAXIREPLY`. */
+    taxiReply?: ObservedLike;
   };
   /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
   xp?: ObservedLike;
@@ -394,6 +415,20 @@ export function formatStateSummary(
     lines.push(
       `quests: ${ql.map((q) => `${fmt(q.questId, "?")} ${q.complete === true ? "complete" : "progress"}`).join(", ")}`,
     );
+  }
+
+  // achievements — count and points only. The full list is tens of lines of
+  // prompt every turn for something a snippet can read
+  // (`state.self.achievements`), and the ids are on the trajectory. Unobserved
+  // when no achievement packet has arrived: a zero here would be a guess, and a
+  // run on a worldserver that predates achievement tracking never sees one.
+  const ach = s.achievements;
+  if (ach === undefined) {
+    lines.push("achievements: unobserved");
+  } else {
+    const n = ach.entries?.length ?? 0;
+    const pts = typeof ach.points === "number" ? ach.points : 0;
+    lines.push(`achievements: ${n} (${pts} pts)`);
   }
 
   // target

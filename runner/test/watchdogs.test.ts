@@ -113,3 +113,35 @@ describe("Watchdogs episode clock across a pause", () => {
     expect(w.check()).toBeNull();
   });
 });
+
+describe("Watchdogs fresh-character precondition", () => {
+  test("not armed: a level-6 first sight is fine (resumed run)", () => {
+    const w = new Watchdogs(cfg, clock().now);
+    w.noteFirstLive({ guid: "294", level: 6 });
+    expect(w.check()).toBeNull();
+  });
+
+  test("armed: a guid hygiene listed trips stale-character whatever the level", () => {
+    const w = new Watchdogs(cfg, clock().now);
+    w.expectFreshCharacter(new Set(["294"]));
+    w.noteFirstLive({ guid: "294", level: 1 });
+    expect(w.check()?.reason).toBe("stale-character");
+    expect(w.check()?.detail).toContain("294");
+  });
+
+  test("armed: level > 1 on first sight trips even with an unknown guid", () => {
+    const w = new Watchdogs(cfg, clock().now);
+    w.expectFreshCharacter(new Set());
+    w.noteFirstLive({ guid: "301", level: 6 });
+    expect(w.check()?.reason).toBe("stale-character");
+  });
+
+  test("armed: a fresh level-1 character passes, and later sightings are not re-judged", () => {
+    const w = new Watchdogs(cfg, clock().now);
+    w.expectFreshCharacter(new Set(["294"]));
+    w.noteFirstLive({ guid: "301", level: 1 });
+    expect(w.check()).toBeNull();
+    w.noteFirstLive({ guid: "301", level: 4 });
+    expect(w.check()).toBeNull();
+  });
+});

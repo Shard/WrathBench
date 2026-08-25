@@ -8,14 +8,14 @@
  * pool's free accounts. The fleet supervisor (`infra/run-fleet.ts`) calls both
  * every tick; `--status`, `--dry-run` and the viewer's `/api/models` read the
  * same projection, so there is exactly one answer to "why is this model not
- * running". The scheduling policy is written up in docs/OPERATIONS.md ("The
- * scheduling policy"); the tiers in docs/EPISODES.md.
+ * running". The policy lives in docs/OPERATIONS.md; the tiers in
+ * docs/METHODOLOGY.md ("Episodes, lanes, and evidence") / docs/EPISODES.md.
  *
  * Rules the projection holds to:
  *
  * - **Only stamped runs exist.** A run directory with no `comparability.episode`
- *   in its meta.json predates the tiers and is never back-labeled, so it is
- *   invisible here — it neither counts toward a target nor climbs the
+ *   in its meta.json predates the tiers and is never back-labeled,
+ *   so it is invisible here — it neither counts toward a target nor climbs the
  *   ladder. Every fleet run since the tiers landed is stamped.
  * - **A zero-response run is a launch that did not happen** — no model
  *   `response` record in the trajectory, and not live. The runner archives it
@@ -60,6 +60,7 @@ import { harnessSeries } from "./comparability";
 import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
+import { NOT_THE_MODELS_FAULT, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -150,8 +151,8 @@ export function effectiveTier(declared: Tier, earnedRung1: boolean): Tier {
  * wrong shape for what it was doing: sampling start states is exploration, so
  * putting it in a SCORED episode meant an unscored question was being asked in
  * the scored lane, with the cell chosen by a counter that meant something else
- * (how many extras this model had made). It is a probe campaign now, where the
- * cells are named in the config and the runs are unscored.
+ * (how many extras this model had made). It is a probe campaign now, where
+ * the cells are named in the config and the runs are unscored.
  *
  * - `none` — nothing. The default, and what a paid model wants.
  * - `unlimited` — a freeplay session, unscored, up to `UNLIMITED_SESSION_MS`.
@@ -220,13 +221,18 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown };
   const out = { ...base };
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
   if (o.extras !== undefined) {
-    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign (see docs/EPISODES.md)');
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
+  }
+  if (o.resume !== undefined) {
+    throw new Error(
+      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in with campaigns.<name>.resume",
+    );
   }
   if (o.maxConcurrent !== undefined) {
     if (typeof o.maxConcurrent !== "object" || o.maxConcurrent === null || Array.isArray(o.maxConcurrent)) {
@@ -342,9 +348,8 @@ export interface PolicyJob {
  * A roster as the two predicates below need it: the NAMES, and nothing else.
  *
  * It used to need each entry's `objective`, because an entry carrying one was
- * outside the policy. Since steering moved into probe campaigns a catalog
- * entry cannot carry one, so
- * nothing about an entry excludes it any more — only a pinned job holding its
+ * outside the policy. A catalog entry cannot carry one any more, so nothing
+ * about an entry excludes it — only a pinned job holding its
  * account does, and that is a property of the queue.
  */
 export type PolicyRoster = Readonly<Record<string, unknown>>;
@@ -358,8 +363,8 @@ export function pinnedRefs(jobs: readonly PolicyJob[]): Set<string> {
  * The roster names the policy may schedule: every name not referenced by a
  * pinned job, whose account is spoken for.
  *
- * It used to also exclude an entry carrying an objective. An entry can no
- * longer carry one — steering is a campaign, which BORROWS a catalog
+ * It used to also exclude an entry carrying an objective. An entry cannot
+ * carry one any more — steering is a campaign, which BORROWS a catalog
  * entry rather than taking it out of the schedule — so that clause described a
  * state the parser now refuses.
  */
@@ -438,6 +443,13 @@ export interface RunFact {
   pause: { reason: string; at: number; count: number; episodeElapsedMs: number | null } | null;
   /** The game account the run was launched on; a resume must go back to it. */
   account: string | null;
+  /**
+   * The character the run actually played (the model names it, and
+   * `run.ts` rewrites the config's suggestion at the first sight of it). What
+   * account affinity keys on: a fresh attempt prefers the account this
+   * character is still standing on, so the name does not collide elsewhere.
+   */
+  character: string | null;
   /** The run's wall-clock budget (`watchdogs.episodeMs`), null when disabled. */
   episodeMs: number | null;
   /**
@@ -465,6 +477,18 @@ export interface EpisodeStats {
   extras: number;
   /** Runs from another harness series: shown and numbered as attempts, never counted. */
   otherSeries: number;
+  /**
+   * Attempts spent on a run that lapsed and was not resumed:
+   * `attempt-failed` terminations in this series. An operator-pause (`manual`)
+   * and an offline gap (`stale`) are the harness's doing and are not here.
+   */
+  failed: number;
+  /**
+   * `failed` reached `TAINT_AFTER`: the model gets no further
+   * attempts on this episode in this series. Distinct from the roster's own
+   * `isTainted`, which is a per-process defer ladder over launch failures.
+   */
+  tainted: boolean;
   target: number;
   bestLevel: number | null;
   /** A counted, un-overridden run reached `promoteAtLevel` — the promotion witness on e90. */
@@ -524,7 +548,7 @@ export interface ModelState {
    * model — nothing new is scheduled for it — until the supervisor resumes
    * the run or the run goes stale (`isStalePause`).
    */
-  paused?: { runId: string; reason: string; at: number; episodeElapsedMs: number | null; episodeMs: number | null };
+  paused?: { runId: string; episode: EpisodeId; reason: string; at: number; episodeElapsedMs: number | null; episodeMs: number | null };
 }
 
 export interface NextJob {
@@ -630,6 +654,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
       effort?: unknown;
       extra?: unknown;
       account?: unknown;
+      character?: unknown;
       campaign?: unknown;
       cell?: unknown;
       watchdogs?: { episodeMs?: unknown };
@@ -664,6 +689,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     live: false,
     pause: null,
     account: str(meta.config?.account),
+    character: str(meta.config?.character),
     episodeMs: num(meta.config?.watchdogs?.episodeMs),
     campaign: str(meta.config?.campaign),
     cell: str(meta.config?.cell),
@@ -838,24 +864,51 @@ export function stillbornOf(f: RunFact): boolean | null {
 }
 
 /** A run that counts toward a target: a member of its tier's group that got off the ground. */
-/**
- * Terminations that say nothing about the model: an operator cut the run, or the
- * harness itself failed. They still number attempts (run ids) but never count
- * toward the per-episode target, so the policy reruns them.
- */
-export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error"]);
+// The set of "not the model's fault" terminations lives with the lapse rule,
+// because the viewer's scored-ness predicate reads it too and the two must
+// not drift. Re-exported here so every existing importer is unchanged.
+export { NOT_THE_MODELS_FAULT } from "./lapse";
 
 /**
- * A pause nobody came back for: older than twice the run's own budget (a run
- * with no wall clock uses the long tier's six hours). Not auto-resumed; listed
- * for the operator to resume by hand or archive. Measured from the pause, not
- * the launch — a run that paused three times over a night is still current.
+ * When a run last showed a sign of life: its pause mark when it has one, else
+ * the trajectory's own mtime (`endedAt` on a run with no termination row).
+ *
+ * The pause mark WINS over the mtime rather than being maxed with it. A paused
+ * run does nothing after it pauses, but its directory can still be touched —
+ * meta.json is written after the pause record, and the roster frees its
+ * session afterwards — so a max() would read a five-second-newer file as five
+ * hours of life.
  */
-export const STALE_PAUSE_FALLBACK_BUDGET_MS = 6 * 60 * 60_000;
+export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt">): number {
+  return f.pause !== null ? f.pause.at : Math.max(f.endedAt ?? 0, f.startedAt);
+}
 
-export function isStalePause(f: Pick<RunFact, "pause" | "episodeMs">, now: number): boolean {
-  if (f.pause === null) return false;
-  return now - f.pause.at > 2 * (f.episodeMs ?? STALE_PAUSE_FALLBACK_BUDGET_MS);
+/**
+ * A run nothing came back for: no termination, and no activity for
+ * longer than its own episode budget (a run with no wall clock gets
+ * `STALE_FALLBACK_MS`). The host slept, or the fleet was down; either way the
+ * run is cooked and is ended rather than resumed. A live process is excluded
+ * by `f.live`, which the caller must have computed against the same clock.
+ */
+export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "episodeMs" | "live" | "terminationReason">, now: number): boolean {
+  if (f.terminationReason !== null || f.live) return false;
+  return now - lastActivityOf(f) > staleAfterMs(f.episodeMs);
+}
+
+/** How long a stale run has been silent, or null when it is current. */
+export function staleForMs(f: Parameters<typeof isStaleRun>[0], now: number): number | null {
+  return isStaleRun(f, now) ? now - lastActivityOf(f) : null;
+}
+
+/**
+ * A failed attempt that counts toward the model's three strikes on an
+ * episode. One predicate, and it reads the termination reason and nothing
+ * else: `manual` (an operator-pause or a cut) and `stale` (an offline gap) are
+ * the harness's doing and are deliberately not here. Only a run the fleet
+ * launched spends a policy attempt.
+ */
+export function isFailedAttempt(f: RunFact): boolean {
+  return f.terminationReason === "attempt-failed" && f.runId.startsWith("fleet-");
 }
 
 export function isCounted(f: RunFact): boolean {
@@ -931,6 +984,8 @@ export function projectModel(
       attempts: 0,
       extras: 0,
       otherSeries: all.filter((f) => f.episode === ep && !inSeries(f, policy)).length,
+      failed: 0,
+      tainted: false,
       // Filled below: a target depends on the effective tier, which depends on
       // whether the e90 walk found a rung-1 witness. Two passes, not a guess.
       target: 0,
@@ -944,6 +999,9 @@ export function projectModel(
       if (f.episode !== ep) continue;
       if (f.extra) stats.extras++;
       if (stillbornOf(f) === true) stats.stillborn++;
+      // A clear forgives the ladder and the strikes alike: `--clear-model` is
+      // the operator saying the endpoint is worth trying again.
+      if (isFailedAttempt(f) && (opts.clearedAt === undefined || (f.endedAt ?? 0) > opts.clearedAt)) stats.failed++;
       if (isCounted(f)) {
         stats.counted++;
         if (f.bestLevel !== null && f.bestLevel >= policy.promoteAtLevel) stats.reachedL5 = true;
@@ -961,6 +1019,8 @@ export function projectModel(
   // to, advanced once if it earned rung 1 and its tier promotes. `t0` holds the
   // ladder, so a trial model keeps its witness and gains nothing from it until
   // an operator moves it up — which is what makes that move cost no re-runs.
+  for (const ep of STATS_EPISODES) perEpisode[ep]!.tainted = perEpisode[ep]!.failed >= TAINT_AFTER;
+
   const earnedRung1 = perEpisode.e90!.reachedL5;
   const tier = effectiveTier(r.tier, earnedRung1);
   for (const ep of STATS_EPISODES) perEpisode[ep]!.target = targetFor(tier, ep);
@@ -1000,10 +1060,11 @@ export function projectModel(
     ladder,
   };
   // The newest paused run that is not stale holds the model.
-  const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStalePause(f, opts.now));
+  const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStaleRun(f, opts.now));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
       runId: pausedRun.runId,
+      episode: pausedRun.episode,
       reason: pausedRun.pause.reason,
       at: pausedRun.pause.at,
       episodeElapsedMs: pausedRun.pause.episodeElapsedMs,
@@ -1114,14 +1175,28 @@ export function schedulability(
   if (s.paused !== undefined) {
     const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
     const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
-    return blocked(
-      `paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — resumed by the supervisor, never rescheduled`,
-    );
+    // A scored run that paused is not coming back: it holds the model only
+    // until the next tick ends it as a failed attempt, and the fresh attempt
+    // is scheduled the tick after. Unscored lanes still resume.
+    const fate = resumesOnPause(s.paused.episode)
+      ? "resumed by the supervisor, never rescheduled"
+      : "ended as a failed attempt on the next tick, then reattempted fresh";
+    return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
+  // Three failed attempts on an episode stop the spending. The
+  // model is blocked rather than "free": idle work is not the reward for
+  // burning three evals, and the taint is a stop signal, not a target met.
+  const tainted = s.eligible.filter((ep) => s.perEpisode[ep]?.tainted === true);
   const open = s.eligible.filter((ep) => {
     const st = s.perEpisode[ep];
-    return st !== undefined && st.counted < st.target;
+    return st !== undefined && !st.tainted && st.counted < st.target;
   });
+  if (open.length === 0 && tainted.length > 0) {
+    return blocked(
+      `tainted on ${tainted.map((ep) => `${ep} (${s.perEpisode[ep]!.failed} failed attempts)`).join(", ")} — ` +
+        `clear with --clear-model ${s.name} once the endpoint is back`,
+    );
+  }
   if (open.length === 0) {
     // Idle work is the model's own axis now, not a consequence of its billing
     // or its account class: what it does with a spare account is what its entry
@@ -1165,10 +1240,10 @@ function episodeOrder(ep: EpisodeId): number {
 }
 
 /**
- * The account class a pick belongs to (docs/OPERATIONS.md, "The scheduling
- * policy"): which of
- * `accounts.pool` / `accounts.paid` / `accounts.local` it may land on. `pool`
- * is the base class — every account that is not split out belongs to it.
+ * The account class a pick belongs to (docs/OPERATIONS.md, "Account
+ * classes"): which of `accounts.pool` / `accounts.paid` / `accounts.local`
+ * it may land on. `pool` is the base class — every account that is not
+ * split out belongs to it.
  */
 export type AccountClass = "pool" | "paid" | "local";
 
@@ -1214,7 +1289,7 @@ export interface NextJobsOptions {
   policy?: Pick<SchedulingPolicy, "paid">;
   /**
    * The accounts each SPLIT-OUT class may use (`accounts.paid`,
-   * `accounts.local` — the account classes). A class missing from this
+   * `accounts.local`; the account classes). A class missing from this
    * map is not split: its picks share `freeAccounts`, which is what every
    * caller did before the split. A class present takes its accounts from here
    * and never from `freeAccounts`; an empty array is therefore "this class has
@@ -1293,9 +1368,9 @@ export function planNextJobs(
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
       // One candidate, not one per tier: `unlimited` is the only idle mode left
-      // (the race/class cycle moved to a probe campaign, where an
-      // unscored question belongs), an unlimited session has no tier, and there
-      // is only ever one of them in flight.
+      // (the race/class cycle moved to a probe campaign, where an unscored
+      // question belongs), an unlimited session has no tier, and there is
+      // only ever one of them in flight.
       extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
       return;
     }
@@ -1456,8 +1531,8 @@ export function nextJobs(
  *
  * The fleet page's one forward-looking number: everything else on it says what
  * is happening now, this says how much of the schedule is left. Two bounds,
- * because the biggest unknown is promotion (a model enters e360 by
- * reaching `promoteAtLevel` on e90, which has not happened yet for most of the
+ * because the biggest unknown is promotion (a model enters e360 by reaching
+ * `promoteAtLevel` on e90, which has not happened yet for most of the
  * roster):
  *
  * - **lower** assumes nobody else promotes: every schedulable model's unmet

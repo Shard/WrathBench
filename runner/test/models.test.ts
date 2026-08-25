@@ -10,7 +10,7 @@ import {
   countModelResponses,
   isCounted,
   isNoProgress,
-  isStalePause,
+  isStaleRun,
   stillbornOf,
   modelStates,
   nextJobs,
@@ -243,6 +243,7 @@ describe("the ladder", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -284,7 +285,7 @@ describe("the ladder", () => {
     const s = projectModel(m, runs, DEFAULT_POLICY, { now: NOW });
     expect(s.perEpisode.e90).toMatchObject({ attempts: 3, counted: 0, stillborn: 2 });
     expect(s.ladder).toBe(2);
-    expect(s.paused).toMatchObject({ runId: "f-9", reason: "operator-pause", episodeElapsedMs: 41 * 60_000, episodeMs: 90 * 60_000 });
+    expect(s.paused).toMatchObject({ runId: "f-9", episode: "e90", reason: "operator-pause", episodeElapsedMs: 41 * 60_000, episodeMs: 90 * 60_000 });
     const v = schedulability(s);
     expect(v.verdict).toBe("blocked");
     expect(v.why).toContain("paused run f-9 (operator-pause, 41m of 90m elapsed)");
@@ -294,22 +295,58 @@ describe("the ladder", () => {
     expect(stillbornOf(paused)).toBeNull();
   });
 
-  test("a stale pause (older than twice the budget) no longer holds the model", () => {
+  test("a stale pause (older than its own budget) no longer holds the model", () => {
     const stale: RunFact = {
       ...fail(9, NOW - 4 * HOUR, null, 30),
       pause: { reason: "rate-limited", at: NOW - 4 * HOUR, count: 3, episodeElapsedMs: 5 * 60_000 },
       episodeMs: 90 * 60_000,
       account: "RUNNER3",
     };
-    expect(isStalePause(stale, NOW)).toBe(true);
-    expect(isStalePause({ ...stale, pause: { ...stale.pause!, at: NOW - 2 * HOUR } }, NOW)).toBe(false);
-    // No wall clock: the long tier's budget stands in.
-    expect(isStalePause({ ...stale, episodeMs: null }, NOW)).toBe(false);
+    expect(isStaleRun(stale, NOW)).toBe(true);
+    expect(isStaleRun({ ...stale, pause: { ...stale.pause!, at: NOW - 30 * 60_000 } }, NOW)).toBe(false);
+    // No wall clock: twice the long tier's budget stands in.
+    expect(isStaleRun({ ...stale, episodeMs: null }, NOW)).toBe(false);
     const s = projectModel(m, [stale], DEFAULT_POLICY, { now: NOW });
     expect(s.paused).toBeUndefined();
     expect(schedulability(s).verdict).toBe("eval");
     // Still not counted: it has not ended.
     expect(s.perEpisode.e90).toMatchObject({ attempts: 1, counted: 0 });
+  });
+
+  test("three failed attempts taint the model for that episode; an operator-pause is not one of them", () => {
+    const failed = (i: number, reason: string): RunFact => ({
+      ...fail(i, NOW - (10 - i) * HOUR, reason, 12),
+      runId: `fleet-m-e90-m-2026082${i}`,
+      bestLevel: 3,
+    });
+    // Two provider failures and a deploy: two strikes, still schedulable.
+    const two = projectModel(m, [failed(1, "attempt-failed"), failed(2, "manual"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
+    expect(two.perEpisode.e90).toMatchObject({ failed: 2, tainted: false, counted: 0, attempts: 3 });
+    expect(schedulability(two).verdict).toBe("eval");
+    // The third counted failure stops the spending.
+    const three = projectModel(m, [failed(1, "attempt-failed"), failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
+    expect(three.perEpisode.e90).toMatchObject({ failed: 3, tainted: true });
+    const v = schedulability(three);
+    expect(v.verdict).toBe("blocked");
+    expect(v.why).toContain("tainted on e90 (3 failed attempts)");
+    // Blocked, not free: three burnt evals do not buy idle work.
+    expect(nextJobs([three], ["A"])).toEqual([]);
+    // An offline gap is not a strike either.
+    const offline = projectModel(m, [failed(1, "attempt-failed"), failed(2, "stale"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW });
+    expect(offline.perEpisode.e90!.failed).toBe(2);
+    // Neither reason is ever counted or scored, and both still number attempts.
+    expect(isCounted(failed(1, "attempt-failed"))).toBe(false);
+    expect(isCounted(failed(2, "stale"))).toBe(false);
+    // A hand-launched run spends no policy attempt.
+    const hand = { ...failed(1, "attempt-failed"), runId: "roster-m-20260821" };
+    expect(projectModel(m, [hand, failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, { now: NOW }).perEpisode.e90!.failed).toBe(2);
+    // A clear forgives the strikes the way it forgives the ladder.
+    expect(
+      projectModel(m, [failed(1, "attempt-failed"), failed(2, "attempt-failed"), failed(3, "attempt-failed")], DEFAULT_POLICY, {
+        now: NOW,
+        clearedAt: NOW - 8.5 * HOUR,
+      }).perEpisode.e90,
+    ).toMatchObject({ failed: 2, tainted: false });
   });
 
   test("at the ceiling one more no-progress attempt retires the model; a clear forgives it", () => {
@@ -367,6 +404,7 @@ describe("nextJobs", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -435,6 +473,7 @@ describe("paid and free", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -667,6 +706,7 @@ describe("outstandingWork", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -796,6 +836,7 @@ describe("probe campaigns in the schedule", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -814,6 +855,7 @@ describe("probe campaigns in the schedule", () => {
     objective: "play this class",
     models: "all" as const,
     excludeUnhealthy: true,
+    resume: false,
     runsPerCell: 1,
     cells: [{ id: "human-warrior" }, { id: "dwarf-rogue" }],
   };

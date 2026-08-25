@@ -80,7 +80,10 @@ export const TERMINATION_REASONS = [
   "stub-complete", // the scripted stub adapter played its last response
   "adapter-error", // fatal, non-retryable model API error
   "harness-error", // an unexpected error in the runner itself
+  "stale-character", // a fresh episode found a used character (precondition violated); never the model's fault
   "manual", // operator stopped the run (SIGINT / classify CLI)
+  "attempt-failed", // a scored run paused and was not resumed; the model's attempt, spent
+  "stale", // nothing came back for it: the fleet was down or the host slept past its budget
   "environment-defect", // manually assigned after reading the trajectory
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];

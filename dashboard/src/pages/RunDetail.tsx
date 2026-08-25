@@ -13,8 +13,8 @@
  * docs/FOLLOW-UPS.md).
  */
 
-import { A, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { A, useLocation, useParams } from "@solidjs/router";
+import { For, Show, createEffect, createMemo, createSignal, getOwner, on, onCleanup, onMount, runWithOwner } from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
   api,
@@ -25,11 +25,12 @@ import {
   type RunDetailResponse,
   type TokenTotals,
 } from "../api/client";
-import { HarnessTag } from "../components/EpisodePicker";
-import { Sparkline } from "../components/Sparkline";
+import { HarnessTag } from "../components/HarnessTag";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
+import { poll } from "../lib/poll";
+import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 
 const WINDOW = 200;
@@ -44,18 +45,10 @@ const FOLLOW_THRESHOLD = 32;
  */
 const FOLLOW_KEY = "wrathbench.runview.follow";
 function readFollowPref(): boolean {
-  try {
-    return localStorage.getItem(FOLLOW_KEY) !== "0";
-  } catch {
-    return true;
-  }
+  return readBoolPref(FOLLOW_KEY, true);
 }
 function writeFollowPref(keep: boolean): void {
-  try {
-    localStorage.setItem(FOLLOW_KEY, keep ? "1" : "0");
-  } catch {
-    /* private mode, blocked storage: the toggle still works, it just won't persist */
-  }
+  writeBoolPref(FOLLOW_KEY, keep);
 }
 
 /** Past this much silence a live run is more likely stopped than thinking. */
@@ -71,8 +64,34 @@ const SILENT_MS = 120_000;
  */
 const DETAIL_POLL_MS = 10_000;
 
+/**
+ * "achievements: 12 (95 pts) · flights: 2", or "not recorded" for either half
+ * the run has no records for. Null means the run wrote nothing of that kind,
+ * which the page must not print as a zero (`AchievementFacts` / `TaxiFacts`).
+ */
+function achievementLine(d: RunDetailResponse | undefined): string {
+  const ach = d?.achievements ?? null;
+  const taxi = d?.taxi ?? null;
+  const left = ach === null ? "achievements: not recorded" : `achievements: ${ach.earned} (${ach.points} pts)`;
+  const right = taxi === null ? "flights: not recorded" : `flights: ${taxi.flights}`;
+  return `${left} · ${right}`;
+}
+
+/**
+ * The token card's speed line: how fast the model is producing, recently and
+ * over the run. Recent first, for the reason the fleet column shows it: on a
+ * live run the rate now is the question. "no reply yet" rather than a zero — a
+ * run whose first request is still in flight has not been slow.
+ */
+function tpsLine(d: RunDetailResponse | undefined): string {
+  const tps = d?.tps ?? null;
+  if (tps === null || tps.recent === null) return "tok/s: no reply measured yet";
+  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} over ${tps.replies}`;
+}
+
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
+  const location = useLocation();
 
   /* Which worldserver the viewer can see, for the footer (FOLLOW-UPS 42). */
   const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
@@ -137,11 +156,10 @@ export default function RunDetail() {
      */
     let stop: (() => void) | undefined;
     onCleanup(() => stop?.());
-    // Same reason as `stop`: registered here, filled in after the first await.
-    let resummarise: ReturnType<typeof setInterval> | undefined;
-    onCleanup(() => {
-      if (resummarise !== undefined) clearInterval(resummarise);
-    });
+    // `poll()` (lib/poll.ts) registers its own `onCleanup`, which has the same
+    // owner requirement as `stop` above; captured now so it can be started
+    // from inside the async continuation below.
+    const owner = getOwner();
 
     void api.info().then(setInfo).catch(() => undefined);
     void api
@@ -160,14 +178,13 @@ export default function RunDetail() {
         setTotal(page.total);
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
-        resummarise = setInterval(() => {
-          void api
-            .run(params.id)
-            .then((next) => setDetail(next))
-            .catch(() => {
-              /* a failed poll keeps the last good summary, like `poll()` does */
-            });
-        }, DETAIL_POLL_MS);
+        runWithOwner(owner, () => {
+          const detailPoll = poll(() => api.run(params.id), DETAIL_POLL_MS);
+          createEffect(() => {
+            const next = detailPoll.latest;
+            if (next !== undefined) setDetail(next);
+          });
+        });
         // Only a live run needs the tail; a finished one never grows again.
         stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {
@@ -194,10 +211,6 @@ export default function RunDetail() {
       setFrom(page.from);
     });
   };
-
-  const levels = createMemo(() =>
-    (detail()?.states ?? []).map((s) => s.level).filter((v): v is number => v !== null && v > 0),
-  );
 
   /**
    * A plain-language guess at what the session is doing, from the newest entry
@@ -238,6 +251,10 @@ export default function RunDetail() {
             <>
               <h2 class="section">
                 <A href="/">fleet</A> / {run().runId}
+                {/* Back to the runs table, with the sort and filters the reader came from. */}
+                <A class="dim" style={{ "margin-left": "12px", "font-size": "13px", "font-weight": "normal" }} href={`/runs${location.search}`}>
+                  ← runs
+                </A>
               </h2>
 
               {/* Cumulative XP with level bands — full page width, above both columns. */}
@@ -308,6 +325,24 @@ export default function RunDetail() {
                       <div class="sub">
                         {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
                       </div>
+                      {/* The id the provider actually served, plus the CLI that
+                          drove it: `sonnet` is a roster alias the Claude Code CLI
+                          resolves at launch, and this is where the run says to what. */}
+                      <Show when={resolvedLabel(run().model, run().resolvedModel) ?? run().cliVersion}>
+                        <div class="sub">
+                          <Show when={resolvedLabel(run().model, run().resolvedModel)}>
+                            {(id) => <>served as {id()}</>}
+                          </Show>
+                          <Show when={run().cliVersion}>
+                            {(v) => (
+                              <>
+                                <Show when={resolvedLabel(run().model, run().resolvedModel)}> · </Show>
+                                cli {v()}
+                              </>
+                            )}
+                          </Show>
+                        </div>
+                      </Show>
                     </div>
                     <div class="card">
                       <div class="k">character</div>
@@ -318,12 +353,27 @@ export default function RunDetail() {
                           <span class="dim"> · {run().characterLabel}</span>
                         </Show>
                       </div>
+                      {/*
+                        `xp in level` lives here since the level/xp card was
+                        retired: the XP chart above plots CUMULATIVE xp with the
+                        levels as bands, which is a different number from
+                        progress toward the next ding, and that progress is on
+                        no other surface of this page.
+                      */}
                       <div class="sub">
-                        level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
+                        level {num(run().level)} · {num(run().xp)} xp in level · {fmtMoney(run().money)} ·{" "}
+                        {num(run().questsCompleted)} quests
                       </div>
                       {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
                       <div class="sub">carrying: {fmtItems(run().items, false)}</div>
                       <div class="sub">equipped: {fmtItems(run().items, true)}</div>
+                      {/*
+                        Achievements and flights from this run's milestone records.
+                        "not recorded" is not zero: a run from before the taps wrote
+                        neither kind of record, and nothing here guesses a number for
+                        it. Points are a displayed signal only — no ranking reads them.
+                      */}
+                      <div class="sub">{achievementLine(detail())}</div>
                     </div>
                     <div class="card">
                       <div class="k">context / total tokens</div>
@@ -333,6 +383,16 @@ export default function RunDetail() {
                       <div class="sub">
                         {tokens()?.source === "reported" ? "provider-reported" : "estimated (chars ÷ 4)"} ·{" "}
                         {tokens()?.turns ?? 0} turns
+                      </div>
+                      {/*
+                        Speed, in the same unit the tokens above are counted in.
+                        The clock is the model's own replies — what it was
+                        waiting on, to the last record of the reply — never the
+                        run's elapsed time, most of which the harness spends
+                        driving the game.
+                      */}
+                      <div class="sub" title="output tokens ÷ wall time of model replies (the wait it answered, plus the reply)">
+                        {tpsLine(detail())}
                       </div>
                     </div>
                     <div class="card">
@@ -384,17 +444,6 @@ export default function RunDetail() {
                         {detail()?.cost.expected.basis === "none"
                           ? (detail()?.cost.expected.note ?? "")
                           : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
-                      </div>
-                    </div>
-                    <div class="card">
-                      <div class="k">level / xp</div>
-                      <div class="v">
-                        {/* The prominent XP curve is the full-width chart above; this is a
-                            glanceable level trace. */}
-                        <Sparkline values={levels()} title="level over time" height={22} width={140} />
-                      </div>
-                      <div class="sub">
-                        L{num(run().level)} · xp {num(run().xp)} in level
                       </div>
                     </div>
                   </div>
