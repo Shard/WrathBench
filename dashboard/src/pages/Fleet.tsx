@@ -24,6 +24,7 @@ import { A, useNavigate } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type FleetResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
+import { ModelIcon } from "../components/ModelIcon";
 import {
   FLEET_COLUMNS,
   fleetRows,
@@ -41,6 +42,7 @@ import {
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtTokens, fmtUsd, num, stamp } from "../lib/format";
+import { iconModels } from "../lib/lineup";
 import { poll } from "../lib/poll";
 
 export default function Fleet() {
@@ -135,7 +137,9 @@ export default function Fleet() {
                     <For each={f().paused}>
                       {(p) => (
                         <li>
-                          <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
+                          <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> —{" "}
+                          <ModelIcon model={p.model} />
+                          {p.model}
                           <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
                           {fmtDuration(p.elapsedMs)} elapsed
                           <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
@@ -207,7 +211,13 @@ function FleetRowView(props: { row: FleetRow }) {
         </Show>
       </td>
       <td title={r().note ?? ""}>{r().job ?? "—"}</td>
+      {/*
+        One mark per family (ADR-0045), so a job rotating two Claude models
+        shows one Claude icon rather than the same logo twice; the cell's own
+        "+N" already says how many more there are.
+      */}
       <td class="dim" title={r().modelsTitle}>
+        <For each={iconModels(r().modelList)}>{(m) => <ModelIcon model={m} />}</For>
         {r().models}
       </td>
       {/*

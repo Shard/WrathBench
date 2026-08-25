@@ -31,6 +31,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
+import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
@@ -218,6 +219,7 @@ export default function Ladder() {
                 {(row) => (
                   <tr>
                     <td>
+                      <ModelIcon model={row.model} />
                       {row.model}
                       {/* The ids the row's runs actually resolved to. Two of
                           them is one alias that resolved two ways across the
