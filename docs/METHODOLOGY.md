@@ -330,13 +330,17 @@ falsifiable.
 
 ## Changing this document
 
-A change to anything above is a change to what the benchmark measures.
-Surface, prompt, context policy, contract, or bundle-text changes move the
-harness version (minor at least; contract widenings are major). Scheduling
-and derivation changes do not bump the version but are still edits to this
-page or the owning doc, dated in the worklog. Keep this document
-consolidated: fold a new decision into the section it belongs to, prune what
-it obsoletes, and let git history hold the past — no append-only records.
+A change to anything above is a change to what the benchmark measures, and it
+is made only on the operator's explicit direction — never on an agent's own
+initiative. An edit here records a decision the operator made; work that
+would require changing or contradicting one stops and puts the question to
+the operator first. Surface, prompt, context policy, contract, or bundle-text
+changes move the harness version (minor at least; contract widenings are
+major). Scheduling and derivation changes do not bump the version but are
+still edits to this page or the owning doc, dated in the worklog. Keep this
+document consolidated: fold a new decision into the section it belongs to,
+prune what it obsoletes, and let git history hold the past — no append-only
+records.
 
 ## Where the former ADRs went
 
