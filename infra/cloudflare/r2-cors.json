@@ -1,0 +1,12 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://wrathbench.example.org",
+      "http://localhost:5180"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["range", "if-match", "if-none-match"],
+    "ExposeHeaders": ["etag", "content-length", "cf-cache-status"],
+    "MaxAgeSeconds": 86400
+  }
+]
