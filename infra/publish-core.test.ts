@@ -12,6 +12,7 @@ import {
   LIVE_PATH,
   loadState,
   MANIFEST_PATH,
+  needsPut,
   parseState,
   planPrune,
   publish,
@@ -98,17 +99,23 @@ interface RunSpec {
  * A full artifact set: two aggregates under the generation, a detail and a
  * track per run, plus the two mutable files. Shaped like the layout in
  * `docs/PUBLIC-DASHBOARD.md`.
+ *
+ * Every body carries a `generatedAt` envelope, exactly as the renderer's do —
+ * which is the whole reason key-addressed diffing exists. Pass `stamp` to
+ * re-render the same logical snapshot a minute later: same generation, same run
+ * versions, every body different.
  */
-function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate"): SnapshotResult {
+function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate", stamp: string = gen): SnapshotResult {
+  const env = { generatedAt: stamp };
   const artifacts: SnapshotArtifact[] = [];
   for (const r of runs) {
-    artifacts.push(json(`v1/run/${r.id}/${r.ver}/detail.json`, r.payload ?? r.ver));
-    artifacts.push(json(`v1/run/${r.id}/${r.ver}/track.json`, r.payload ?? r.ver));
+    artifacts.push(json(`v1/run/${r.id}/${r.ver}/detail.json`, { ...env, body: r.payload ?? r.ver }));
+    artifacts.push(json(`v1/run/${r.id}/${r.ver}/track.json`, { ...env, body: r.payload ?? r.ver }));
   }
-  artifacts.push(json(`v1/snap/${gen}/runs.json`, { gen, aggregate, runs: runs.map((r) => r.id) }));
-  artifacts.push(json(`v1/snap/${gen}/ladder.json`, { gen, aggregate }));
-  artifacts.push(json(LIVE_PATH, { gen }, MUTABLE));
-  artifacts.push(json(MANIFEST_PATH, { gen, generatedAt: gen }, MUTABLE));
+  artifacts.push(json(`v1/snap/${gen}/runs.json`, { ...env, gen, aggregate, runs: runs.map((r) => r.id) }));
+  artifacts.push(json(`v1/snap/${gen}/ladder.json`, { ...env, gen, aggregate }));
+  artifacts.push(json(LIVE_PATH, { ...env, gen }, MUTABLE));
+  artifacts.push(json(MANIFEST_PATH, { ...env, gen }, MUTABLE));
   return { gen, artifacts };
 }
 
@@ -279,6 +286,157 @@ describe("diffing", () => {
   test("hashing is by body, so a re-render that produced the same bytes is free", () => {
     expect(hashBody('{"a":1}')).toBe(hashBody('{"a":1}'));
     expect(hashBody('{"a":1}')).not.toBe(hashBody('{"a":2}'));
+  });
+});
+
+// ------------------------------------------------------- path-addressed skipping
+
+describe("needsPut", () => {
+  test("an immutable key already in the bucket is skipped whatever its body says", () => {
+    const state = emptyState();
+    state.uploaded["v1/run/runA/v1/detail.json"] = "old-hash";
+    state.uploaded["v1/snap/gen1/runs.json"] = "old-hash";
+    expect(needsPut("v1/run/runA/v1/detail.json", "new-hash", state, "gen1")).toBe(false);
+    expect(needsPut("v1/snap/gen1/runs.json", "new-hash", state, "gen1")).toBe(false);
+  });
+
+  test("an immutable key the bucket has never held is always written", () => {
+    const state = emptyState();
+    expect(needsPut("v1/run/runA/v1/detail.json", "h", state, "gen1")).toBe(true);
+    expect(needsPut("v1/snap/gen1/runs.json", "h", state, "gen1")).toBe(true);
+  });
+
+  test("the manifest is skipped when the generation it advertises is already this one", () => {
+    const state = emptyState();
+    state.uploaded[MANIFEST_PATH] = "old-hash";
+    state.lastGen = "gen1";
+    expect(needsPut(MANIFEST_PATH, "new-hash", state, "gen1")).toBe(false);
+    expect(needsPut(MANIFEST_PATH, "new-hash", state, "gen2")).toBe(true);
+  });
+
+  test("a manifest we have no record of writing is written even at an unchanged gen", () => {
+    const state = emptyState();
+    state.lastGen = "gen1";
+    expect(needsPut(MANIFEST_PATH, "h", state, "gen1")).toBe(true);
+  });
+
+  test("live.json and unrecognized keys stay on body-hash diffing", () => {
+    const state = emptyState();
+    state.uploaded[LIVE_PATH] = "h";
+    state.uploaded["v1/attribution.json"] = "h";
+    state.lastGen = "gen1";
+    expect(needsPut(LIVE_PATH, "h", state, "gen1")).toBe(false);
+    expect(needsPut(LIVE_PATH, "moved-on", state, "gen1")).toBe(true);
+    expect(needsPut("v1/attribution.json", "h", state, "gen1")).toBe(false);
+    expect(needsPut("v1/attribution.json", "moved-on", state, "gen1")).toBe(true);
+  });
+});
+
+describe("immutable keys are addressed by path, not by body", () => {
+  test("a re-render with a fresh generatedAt envelope re-PUTs nothing under run/ or snap/", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const runs = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }];
+    await publish(snapshot("gen1", runs, "agg", "12:00:00"), store, state);
+
+    store.reset();
+    // A minute later: identical content, every body different because the
+    // envelope moved. Hash-only diffing would re-upload all six objects.
+    const later = snapshot("gen1", runs, "agg", "12:01:00");
+    expect(later.artifacts.every((a) => hashBody(a.body) !== state.uploaded[a.path])).toBe(true);
+
+    const report = await publish(later, store, state);
+    expect(store.puts()).toEqual([LIVE_PATH]);
+    expect(report.unchanged).toBe(later.artifacts.length - 1);
+  });
+
+  test("an idle fleet costs exactly one PUT per pass — live.json and nothing else", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const runs = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v2" }];
+    await publish(snapshot("gen1", runs, "agg", "t0"), store, state);
+
+    store.reset();
+    for (let pass = 1; pass <= 10; pass++) await publish(snapshot("gen1", runs, "agg", `t${pass}`), store, state);
+    expect(store.puts()).toEqual(Array.from({ length: 10 }, () => LIVE_PATH));
+  });
+
+  test("an unchanged generation skips the manifest but still counts as flipped, and still prunes", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    for (let i = 1; i <= 6; i++) await publish(snapshot(`gen${i}`, [], `agg${i}`), store, state);
+    // gen1 is now out of the keep window and was pruned on the sixth pass.
+    expect(state.gens).toEqual(["gen2", "gen3", "gen4", "gen5", "gen6"]);
+
+    // Hold the delete back so the seventh pass has something left to prune
+    // even though its generation did not move.
+    store.failDeletes.add("v1/snap/gen2/runs.json");
+    await publish(snapshot("gen7", [], "agg7"), store, state);
+    store.failDeletes.clear();
+    store.reset();
+
+    const report = await publish(snapshot("gen7", [], "agg7", "later"), store, state);
+    expect(store.puts()).toEqual([LIVE_PATH]);
+    expect(report.flipped).toBe(true);
+    expect(state.lastGen).toBe("gen7");
+    // The flip being a no-op does not make the pass one: the deferred delete
+    // was retried and the generation history is still bounded.
+    expect(store.deletes()).toEqual(["v1/snap/gen2/runs.json"]);
+    expect(state.pendingDeletes).toEqual([]);
+  });
+
+  test("the manifest is written again the moment the generation moves", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", []), store, state);
+    await publish(snapshot("gen1", [], "agg", "later"), store, state);
+
+    store.reset();
+    await publish(snapshot("gen2", []), store, state);
+    const puts = store.puts();
+    expect(puts).toContain(MANIFEST_PATH);
+    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
+    expect(store.objects.get(MANIFEST_PATH)).toContain("gen2");
+  });
+
+  test("a manifest whose PUT failed is retried on the next pass at the same generation", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    store.failPuts.add(MANIFEST_PATH);
+    await expect(publish(snapshot("gen1", []), store, state)).rejects.toThrow(PublishError);
+    expect(state.lastGen).toBeUndefined();
+
+    store.failPuts.clear();
+    store.reset();
+    await publish(snapshot("gen1", [], "agg", "later"), store, state);
+    // Not skipped: nothing ever recorded a manifest for gen1.
+    expect(store.puts()).toContain(MANIFEST_PATH);
+    expect(state.lastGen).toBe("gen1");
+  });
+
+  test("discarding the state file is the repair path for a bad immutable object", async () => {
+    // First write wins on an immutable key, so a bad body is only repairable by
+    // forgetting that the key was ever written.
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "wrong"), store, state);
+
+    store.reset();
+    const fresh = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "right"), store, fresh);
+    expect(store.puts()).toHaveLength(6);
+    expect(store.objects.get("v1/snap/gen1/runs.json")).toContain("right");
+  });
+
+  test("an immutable key that pruning deleted is uploaded again if it comes back", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    for (let i = 1; i <= 7; i++) await publish(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }], `agg${i}`), store, state);
+    expect(store.objects.has("v1/run/runA/v1/detail.json")).toBe(false);
+
+    store.reset();
+    await publish(snapshot("gen8", [{ id: "runA", ver: "v1" }], "agg8"), store, state);
+    expect(store.puts()).toContain("v1/run/runA/v1/detail.json");
   });
 });
 

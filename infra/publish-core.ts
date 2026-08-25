@@ -16,11 +16,18 @@
  * old generation or the whole new one — never a torn mix. Waves are barriers:
  * per-run objects, then aggregates, then the two mutable files.
  *
- * **Diffing is by body hash, not by mtime.** The renderer is free to re-render
- * everything every minute; only what actually changed costs a PUT. `uploaded`
- * is the memory of that, and it is the reason pruning must also *forget* a path
- * it deletes — a path still remembered with a matching hash would never be
- * re-uploaded after the object behind it was removed.
+ * **Diffing is by key first, body hash second.** The renderer is free to
+ * re-render everything every minute; almost none of it should cost a PUT. A
+ * `v1/run/<id>/<ver>/` or `v1/snap/<gen>/` key is immutable by construction —
+ * the key embeds the content version — so a key the bucket already holds is
+ * skipped outright, whatever its body hashes to. That distinction is not
+ * pedantry: every artifact carries a fresh `generatedAt` envelope, so bodies
+ * differ on every pass and a hash-only diff would re-upload the entire corpus
+ * every minute (hundreds of runs × 1,440 passes a day, straight through R2's
+ * free Class A tier). Only the two mutable keys, and anything unrecognized, are
+ * diffed by hash. `uploaded` is the memory of all this, and it is the reason
+ * pruning must also *forget* a key it deletes — a key still remembered would
+ * never be re-uploaded after the object behind it was removed.
  *
  * **Pruning is bounded and best-effort.** Immutable objects accumulate forever
  * otherwise. We keep the last few generations and the last couple of versions
@@ -376,7 +383,7 @@ export interface PublishReport {
   gen: string;
   /** Keys PUT this pass, in the order they were written. */
   put: string[];
-  /** Artifacts whose body was already in the bucket. */
+  /** Artifacts the bucket already held — by immutable key, or by body hash. */
   unchanged: number;
   /** Bytes uploaded — what the pass actually cost. */
   bytes: number;
@@ -386,6 +393,43 @@ export interface PublishReport {
   deleteFailures: string[];
   /** Whether the bucket's manifest now advertises `gen`. */
   flipped: boolean;
+}
+
+/**
+ * Whether an artifact has to be written at all, given what the bucket already
+ * holds. The whole cost model of the publisher lives in this function.
+ *
+ * Three regimes, and which one a key falls into is decided by `classifyPath`:
+ *
+ * - **Immutable keys** (`v1/run/<id>/<ver>/…`, `v1/snap/<gen>/…`) are
+ *   *path-addressed*: the key names the content version, so the same key means
+ *   the same logical content and first write wins. Present in the bucket ⇒
+ *   never rewritten. This is what makes an idle fleet cost nothing: the bodies
+ *   still differ every pass, because each carries a fresh `generatedAt`
+ *   envelope, and honouring that difference would re-PUT the whole corpus every
+ *   minute for a timestamp nobody reads off an immutable object.
+ * - **The manifest** is the flip, and the flip is a generation. Re-writing it
+ *   for a generation the bucket already advertises buys nothing and costs a PUT
+ *   every pass forever, so an unchanged `gen` skips it. (Guarded on the key
+ *   actually being in state: if we have no record of ever writing the manifest,
+ *   write it.)
+ * - **Everything else** — `live.json`, and any key the layout does not
+ *   recognize — is diffed by body hash. `live.json` genuinely changes every
+ *   pass: it carries the fleet clock the client reads staleness from, and it is
+ *   deliberately outside the generation chain. An unrecognized key has no
+ *   immutability guarantee to lean on, so it gets the conservative treatment.
+ *
+ * First write wins on an immutable key, which means a bad body written to one
+ * is never repaired by a later pass. The repair is to delete the state file: an
+ * empty state remembers no keys, so the next pass re-uploads everything. That
+ * is the only recovery path, and it is why the state file is a cache the
+ * operator may throw away rather than a record they must keep.
+ */
+export function needsPut(path: string, bodyHash: string, state: PublishState, gen: string): boolean {
+  const kind = classifyPath(path).kind;
+  if (kind === "run" || kind === "gen") return state.uploaded[path] === undefined;
+  if (path === MANIFEST_PATH && gen === state.lastGen && state.uploaded[path] !== undefined) return false;
+  return state.uploaded[path] !== bodyHash;
 }
 
 /**
@@ -437,7 +481,7 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
     // whole safety property (live.json, then manifest.json).
     inWave.sort((x, y) => (wave === "mutable" ? mutableRank(x.path) - mutableRank(y.path) : x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 
-    const todo = inWave.filter((a) => state.uploaded[a.path] !== hashes.get(a.path));
+    const todo = inWave.filter((a) => needsPut(a.path, hashes.get(a.path)!, state, result.gen));
     report.unchanged += inWave.length - todo.length;
 
     const { failed } = await pooled(
@@ -454,8 +498,10 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
     if (failed.length > 0) throw new PublishError(wave, failed.map(({ item, error }) => ({ path: item.path, error })));
   }
 
-  // The flip happened if the manifest this pass rendered is now the bucket's —
-  // whether we wrote it or it was already byte-identical.
+  // The flip happened if the bucket's manifest now advertises this generation —
+  // whether we wrote it this pass, or skipped it because it already did. The
+  // skip is not a lesser outcome: pruning still proceeds, because the objects
+  // the live manifest names are exactly the ones this pass just guaranteed.
   const manifest = result.artifacts.find((a) => a.path === MANIFEST_PATH);
   if (manifest === undefined) {
     log(`publish: gen ${result.gen} rendered no ${MANIFEST_PATH} — nothing was flipped and nothing was pruned`);
