@@ -115,7 +115,14 @@ the SPA owns everything that is UI.
   pattern matches, file order being precedence — and an id no family matches
   gets a neutral monogram rather than a special case in code, which is the
   per-model override the harness forbids. Recognizing a new model is a data
-  edit, never a code change. Logos are fetched rather than drawn:
+  edit, never a code change. The mark appears wherever a model is the row —
+  the runs table's model column, the ladder table's rungs rows, the fleet
+  page's model cells and paused list, the models page's roster names, the run
+  page's model card, the map's pips and sidebar, and the ladder scatter, whose
+  marks are logo pucks. The scatter shipped first with plain dots to keep the
+  harness colour legend; the logo arrived by moving that colour to the puck's
+  ring, so the legend reads as a ring rather than a fill and still says exactly
+  what it said. Logos are fetched rather than drawn:
   `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
   at the version pinned in the lineup's own `icons` block and extracts exactly
   the icons the lineup names; the SVGs are committed, because they are a few
