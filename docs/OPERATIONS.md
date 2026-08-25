@@ -1046,6 +1046,10 @@ VITE_WRATHBENCH_SNAPSHOT_BASE=/ bun run --cwd dashboard build
 bunx wrangler deploy --config dashboard/wrangler.jsonc
 ```
 
+`wrangler` is a pinned devDependency (root `package.json`), so `bunx wrangler`
+resolves to the version the lockfile names rather than whatever npm serves that
+day — the same reason every other version here is pinned.
+
 In the **Open** shape it is the data hostname, and the deploy is only ever a UI
 change because data never moves through it:
 

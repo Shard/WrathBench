@@ -2,7 +2,13 @@
   "name": "wrathbench",
   "private": true,
   "license": "MIT",
-  "workspaces": ["sdk", "runner", "wiki", "minimap", "dashboard"],
+  "workspaces": [
+    "sdk",
+    "runner",
+    "wiki",
+    "minimap",
+    "dashboard"
+  ],
   "engines": {
     "bun": "1.4.0"
   },
@@ -20,6 +26,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260825.1",
     "@types/bun": "1.4.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "wrangler": "4.125.0"
   }
 }
