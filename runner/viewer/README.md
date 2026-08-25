@@ -10,7 +10,8 @@ JSONL by hand.
 bun runner/viewer/serve.ts        # from the repo root, on the host
 ```
 
-Then open http://127.0.0.1:8090.
+Then open http://127.0.0.1:8090. A bare clone works: an absent runs directory
+is created empty, and every page serves its labelled empty state.
 
 - `WRATHBENCH_VIEWER_PORT` overrides the port (default 8090).
 - `WRATHBENCH_RUNS_DIR` overrides the runs directory (default `data/runs`).

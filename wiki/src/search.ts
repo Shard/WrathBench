@@ -28,6 +28,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
 import { DEFAULT_BUNDLE_PATH, bundleHasCoords, bundleHasIds, bundleHasQuest } from "./bundle";
 import { MAX_REDIRECT_HOPS } from "./canary";
 import type { IdKind } from "./ids";
@@ -596,6 +597,16 @@ export function searchReference(
  *   bun wiki/src/build.ts data/wiki/<dump>.7z --out data/wiki/bundle.sqlite
  */
 export function openBundle(path: string = DEFAULT_BUNDLE_PATH): Database {
+  // A missing file gets the same actionable answer as a stale schema — sqlite's
+  // own "unable to open" names neither the bundle nor the build command.
+  // (Consumers that support running without a bundle guard existence first and
+  // never reach this: see runner/src/wiki.ts.)
+  if (!existsSync(path)) {
+    throw new Error(
+      `no wiki bundle at ${path}. Build one from a local dump: ` +
+        `bun wiki/src/build.ts data/wiki/<dump>.7z --out ${path}`,
+    );
+  }
   const db = new Database(path, { readonly: true });
   if (!bundleHasCoords(db)) {
     db.close();
@@ -622,13 +633,21 @@ if (import.meta.main) {
     console.error("usage: bun wiki/src/search.ts [--db path] [--limit n] <query>");
     process.exit(2);
   }
-  const db = openBundle(dbPath);
-  const hits = searchReference(db, terms.join(" "), { limit });
-  if (hits.length === 0) console.log("(no results)");
-  for (const hit of hits) {
-    const via = hit.redirectedFrom !== undefined ? ` (via ${hit.redirectedFrom})` : "";
-    console.log(`\n# ${hit.title}  [ns ${hit.ns}, rank ${hit.rank.toFixed(3)}]${via}`);
-    console.log(hit.snippet);
+  // The same one-line failure the build and verify CLIs give: a missing or
+  // stale bundle is an expected state on a machine without the dump, not a
+  // stack trace.
+  try {
+    const db = openBundle(dbPath);
+    const hits = searchReference(db, terms.join(" "), { limit });
+    if (hits.length === 0) console.log("(no results)");
+    for (const hit of hits) {
+      const via = hit.redirectedFrom !== undefined ? ` (via ${hit.redirectedFrom})` : "";
+      console.log(`\n# ${hit.title}  [ns ${hit.ns}, rank ${hit.rank.toFixed(3)}]${via}`);
+      console.log(hit.snippet);
+    }
+    db.close();
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
   }
-  db.close();
 }

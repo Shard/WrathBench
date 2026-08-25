@@ -140,6 +140,345 @@ const NS_NAMES: Record<number, string> = {
   118: "Quest",
 };
 
+/**
+ * A metric's place in the page accounting identity. Every page the parser
+ * yields is either a name (`pages_era_redirect`) or lands in exactly one
+ * bucket, so the buckets sum to the total, and the `kept: true` buckets — the
+ * rows actually in the bundle — sum to `pages_kept`. A subset is a tag on some
+ * other counter's population and is deliberately outside both sums; `of` names
+ * the counter it tags. `none` is a number with no place in the accounting at
+ * all. The build test asserts both identities from this table, so a page
+ * cannot be counted twice or lost quietly.
+ */
+type Identity =
+  | { role: "none" }
+  | { role: "total" }
+  | { role: "bucket"; kept: boolean }
+  | { role: "subset"; of: string };
+
+export interface Metric {
+  /** What the number means — the one place that is written down. */
+  help: string;
+  identity: Identity;
+}
+
+/**
+ * Every number the build reports, stated once (FOLLOW-UPS 65 was three
+ * hand-synced lists). The key is the bundle's `meta` key: `newCounters` zeroes
+ * one counter per row for the build loop to increment, `metaCounters` writes
+ * every row to `meta`, and `SUMMARY` below decides how each prints. Adding a
+ * counter means adding a row — the meta write picks it up by itself, and the
+ * `SummaryCoverage` check refuses to compile until the new row is either on a
+ * summary line or deliberately listed in `UNPRINTED`.
+ */
+export const METRICS = {
+  page_blocks_seen: {
+    help:
+      "`<page>` blocks in the dump, dropped namespaces included. A block is not a page: " +
+      "a long history is several blocks of one page, so blocks seen exceeds pages seen.",
+    identity: { role: "none" },
+  },
+  page_blocks_skipped_namespace: {
+    help: "Blocks in namespaces the bundle does not carry.",
+    identity: { role: "none" },
+  },
+  pages_in_namespaces: {
+    help:
+      "Pages the parser yielded: blocks merged by title, in the kept namespaces. " +
+      "The accounting total every bucket sums to.",
+    identity: { role: "total" },
+  },
+  pages_kept: {
+    help: "Rows in the bundle. The sum of the `kept: true` buckets, empty rows included.",
+    identity: { role: "none" },
+  },
+  chars_kept: {
+    help: "Plain-text characters across every kept row.",
+    identity: { role: "none" },
+  },
+  pages_distinct_keys: {
+    help: "Distinct (title, ns) keys, asserted equal to the row count before the bundle lands.",
+    identity: { role: "none" },
+  },
+  redirects: {
+    help:
+      "Redirect rows written after the stream: only chains that end at a page the bundle " +
+      "has. Not a term of the identity — a redirect row can be generated for a title that " +
+      "is also a counted page; `pages_era_redirect` is the term that carries the names.",
+    identity: { role: "none" },
+  },
+  empty_pages: {
+    help:
+      "Rows with no prose: an infobox-only page, and a page the out-of-world trim " +
+      "emptied. Rows, not drops — the title, the ids, the coords and the quest infobox " +
+      "are still this world's — and counted here and nowhere else: the admitting buckets " +
+      "are about pages with prose, and the identity would double-count an empty row.",
+    identity: { role: "bucket", kept: true },
+  },
+  pages_emptied_by_trim: {
+    help:
+      "The subset of `empty_pages` that had prose before the out-of-world trim took it. " +
+      "A page emptied by the ERA cuts is not here: it is dropped as post-Wrath.",
+    identity: { role: "subset", of: "empty_pages" },
+  },
+  coord_rows: {
+    help: "Coordinates extracted from the newest revisions of kept pages.",
+    identity: { role: "none" },
+  },
+  id_rows: {
+    help: "Ids extracted from the newest revisions of kept pages.",
+    identity: { role: "none" },
+  },
+  quest_rows: {
+    help: "Kept pages with a quest infobox.",
+    identity: { role: "none" },
+  },
+  pages_era_swapped: {
+    help: "Kept pages whose prose came from an older revision than the structured fields did.",
+    identity: { role: "subset", of: "pages_pre_cutoff" },
+  },
+  pages_pre_announcement_protected: {
+    help:
+      "Kept pages that carried a post-Wrath signal and were kept anyway, because they " +
+      "predate the Cataclysm announcement (`CATACLYSM_ANNOUNCED`).",
+    identity: { role: "subset", of: "pages_pre_cutoff" },
+  },
+  pages_stepped_back: {
+    help:
+      "Protected pages whose prose came from an earlier, signal-free revision instead " +
+      "of the newest pre-cutoff one (`eraSource`).",
+    identity: { role: "subset", of: "pages_pre_cutoff" },
+  },
+  pages_step_back_refused: {
+    help: "Protected pages where that step back was refused because the earlier revision was a stub.",
+    identity: { role: "subset", of: "pages_pre_cutoff" },
+  },
+  pages_pre_cutoff: {
+    help: "Admitted on a surviving pre-cutoff revision (`admitPage`), which is where its prose comes from.",
+    identity: { role: "bucket", kept: true },
+  },
+  pages_post_cutoff_wrath_signal: {
+    help: "Admitted with no pre-cutoff revision, on an explicit Wrath signal in the newest one.",
+    identity: { role: "bucket", kept: true },
+  },
+  pages_post_cutoff_id_match: {
+    help:
+      "Admitted with no pre-cutoff revision, because an id the page states about itself " +
+      "exists on this server under an agreeing name (ADR-0042).",
+    identity: { role: "bucket", kept: true },
+  },
+  pages_id_name_mismatch: {
+    help:
+      "Late pages that stated an id this server has, under a name that is not what the " +
+      "page is about, and were dropped for it. The population the name rule exists for, " +
+      "and the number to watch if the rule is ever loosened or tightened.",
+    identity: { role: "subset", of: "pages_dropped_post_cutoff" },
+  },
+  pages_dropped_post_cutoff: {
+    help: "Dropped: no usable pre-cutoff prose, and neither the Wrath-signal nor the id door admitted it.",
+    identity: { role: "bucket", kept: false },
+  },
+  pages_dropped_post_wrath: {
+    help:
+      "Dropped as another world's page: `admitPage` said so, or the era cuts emptied " +
+      "everything the out-of-world trim would have kept.",
+    identity: { role: "bucket", kept: false },
+  },
+  pages_dropped_meta: {
+    help: "Dropped as out-of-game: a patch archive, the addon API, a real-world topic (ADR-0040).",
+    identity: { role: "bucket", kept: false },
+  },
+  sections_dropped: {
+    help: "Post-Wrath sections cut inside kept pages, before the strip.",
+    identity: { role: "none" },
+  },
+  paragraphs_dropped: {
+    help: "Post-Wrath paragraphs cut inside kept pages, before the strip.",
+    identity: { role: "none" },
+  },
+  sections_trimmed: {
+    help:
+      "Out-of-world sections cut inside surviving pages — a separate cut from the era " +
+      "one. The sum of `sections_trimmed_json`'s breakdown; nothing counts it twice.",
+    identity: { role: "none" },
+  },
+  redirects_dropped_dangling: {
+    help: "Redirect candidates whose chain ends at no page this bundle has.",
+    identity: { role: "none" },
+  },
+  pages_era_redirect: {
+    help:
+      "Pages whose Wrath-snapshot revision was a `#REDIRECT`. Names, not pages: the " +
+      "term that takes the redirects out of the reason identity.",
+    identity: { role: "bucket", kept: false },
+  },
+  redirects_recovered_newest: {
+    help:
+      "Redirect rows that exist only because the newest revision was read after the " +
+      "Wrath-snapshot one dangled, or because the page itself is gone and its newest " +
+      "revision says where the name went.",
+    identity: { role: "subset", of: "redirects" },
+  },
+  redirects_original_sibling: {
+    help: "Redirect rows generated from an `(original)`/`(old)` sibling: the bare title a page move emptied.",
+    identity: { role: "subset", of: "redirects" },
+  },
+  bytes_read: {
+    help: "XML bytes read off the dump stream.",
+    identity: { role: "none" },
+  },
+  build_ms: {
+    help: "Wall-clock build time.",
+    identity: { role: "none" },
+  },
+} satisfies Record<string, Metric>;
+
+export type MetricKey = keyof typeof METRICS;
+export type Counters = Record<MetricKey, number>;
+
+function newCounters(): Counters {
+  return Object.fromEntries(Object.keys(METRICS).map((key) => [key, 0])) as Counters;
+}
+
+/** Every metric, stringified for the bundle's `meta` table. */
+function metaCounters(n: Counters): Record<MetricKey, string> {
+  return Object.fromEntries(
+    (Object.keys(METRICS) as MetricKey[]).map((key) => [key, String(n[key])]),
+  ) as Record<MetricKey, string>;
+}
+
+/**
+ * The counter an `admitPage` reason increments. The return type is the index
+ * into `Counters`, so a reason with no row in `METRICS` fails to compile.
+ */
+const reasonKey = (reason: AdmitReason): `pages_${AdmitReason}` => `pages_${reason}`;
+
+/** What a summary line needs beyond the counters themselves. */
+interface SummaryCtx {
+  out: string;
+  size: number;
+  eraCutoff: string;
+  sectionsTrimmedBy: Readonly<Record<string, number>>;
+  perNamespace: Readonly<Record<number, number>>;
+}
+
+interface SummaryLine {
+  /** Every metric this line prints; the coverage check below reads it. */
+  uses: readonly MetricKey[];
+  render: (n: Counters, ctx: SummaryCtx) => string | readonly string[];
+}
+
+/** The console summary, in print order. */
+const SUMMARY = [
+  { uses: [], render: (_n, ctx) => `bundle:      ${ctx.out} (${fmtBytes(ctx.size)})` },
+  {
+    uses: ["bytes_read", "build_ms"],
+    render: (n) => `read:        ${fmtBytes(n.bytes_read)} of XML in ${fmtDuration(n.build_ms)}`,
+  },
+  { uses: ["page_blocks_seen"], render: (n) => `page blocks: ${n.page_blocks_seen}` },
+  {
+    uses: ["page_blocks_skipped_namespace"],
+    render: (n) => `  dropped:   ${n.page_blocks_skipped_namespace} (namespace)`,
+  },
+  {
+    uses: ["pages_in_namespaces"],
+    render: (n) => `pages seen:  ${n.pages_in_namespaces} (blocks merged by title)`,
+  },
+  {
+    uses: ["pages_kept", "chars_kept"],
+    render: (n) => `pages kept:  ${n.pages_kept} (${fmtBytes(n.chars_kept)} of plain text)`,
+  },
+  { uses: [], render: (_n, ctx) => `era cutoff:  ${ctx.eraCutoff}` },
+  {
+    uses: ["pages_era_swapped"],
+    render: (n) => `  swapped:   ${n.pages_era_swapped} (prose from an older revision)`,
+  },
+  {
+    uses: ["pages_pre_announcement_protected"],
+    render: (n) =>
+      `  protected: ${n.pages_pre_announcement_protected} (post-Wrath signal, kept: the page predates the announcement)`,
+  },
+  {
+    uses: ["pages_stepped_back", "pages_step_back_refused"],
+    render: (n) =>
+      `  stepped back: ${n.pages_stepped_back} (prose from the last signal-free revision), ` +
+      `${n.pages_step_back_refused} refused (that revision was a stub)`,
+  },
+  {
+    uses: ["pages_post_cutoff_wrath_signal"],
+    render: (n) =>
+      `  late+wrath: ${n.pages_post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`,
+  },
+  {
+    uses: ["pages_post_cutoff_id_match", "pages_id_name_mismatch"],
+    render: (n) =>
+      `  late+id:   ${n.pages_post_cutoff_id_match} (no pre-cutoff revision, states an id this ` +
+      `server has under this name; ${n.pages_id_name_mismatch} dropped, the id is something else here)`,
+  },
+  {
+    uses: ["pages_dropped_post_cutoff", "pages_dropped_post_wrath", "pages_dropped_meta"],
+    render: (n) =>
+      `dropped:     ${n.pages_dropped_post_cutoff} post-cutoff, ${n.pages_dropped_post_wrath} post-Wrath, ${n.pages_dropped_meta} out-of-game`,
+  },
+  {
+    uses: ["sections_dropped", "paragraphs_dropped"],
+    render: (n) => `  sections:  ${n.sections_dropped}, paragraphs: ${n.paragraphs_dropped}`,
+  },
+  {
+    uses: ["sections_trimmed"],
+    render: (n, ctx) => [
+      `trimmed:     ${n.sections_trimmed} out-of-world sections`,
+      ...Object.entries(ctx.sectionsTrimmedBy)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12)
+        .map(([heading, count]) => `  ${String(count).padStart(8)} ${heading}`),
+    ],
+  },
+  { uses: ["coord_rows"], render: (n) => `coord rows:  ${n.coord_rows}` },
+  { uses: ["id_rows"], render: (n) => `id rows:     ${n.id_rows}` },
+  {
+    uses: ["redirects", "redirects_dropped_dangling"],
+    render: (n) =>
+      `redirects:   ${n.redirects} (${n.redirects_dropped_dangling} dropped, target not in the bundle)`,
+  },
+  {
+    uses: ["redirects_recovered_newest", "redirects_original_sibling"],
+    render: (n) =>
+      `  recovered: ${n.redirects_recovered_newest} via the newest revision, ` +
+      `${n.redirects_original_sibling} via an (original) sibling`,
+  },
+  {
+    uses: ["empty_pages", "pages_emptied_by_trim"],
+    render: (n) =>
+      `empty:       ${n.empty_pages} rows with no prose (${n.pages_emptied_by_trim} emptied by the trim)`,
+  },
+  {
+    uses: [],
+    render: (_n, ctx) =>
+      Object.keys(ctx.perNamespace)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .map((ns) => `  ns ${String(ns).padStart(3)} ${(NS_NAMES[ns] ?? "?").padEnd(9)} ${ctx.perNamespace[ns]}`),
+  },
+] as const satisfies readonly SummaryLine[];
+
+/** Metrics deliberately absent from the summary, each with its reason. */
+const UNPRINTED = [
+  "quest_rows", // in meta; the summary has never printed it
+  "pages_distinct_keys", // an invariant (`assertUniquePages`), not a result
+  "pages_pre_cutoff", // the era-cutoff block prints its tags; "pages kept" carries the bulk
+  "pages_era_redirect", // the redirects lines tell the names story
+] as const satisfies readonly MetricKey[];
+
+/**
+ * Compile-time coverage: instantiating `AssertEmpty` with a non-`never` type
+ * is an error, so a metric that is neither on a summary line's `uses` nor in
+ * `UNPRINTED` names itself in a type error here.
+ */
+type Printed = (typeof SUMMARY)[number]["uses"][number] | (typeof UNPRINTED)[number];
+type AssertEmpty<T extends never> = T;
+export type SummaryCoverage = AssertEmpty<Exclude<MetricKey, Printed>>;
+
 interface Args {
   dump: string;
   out: string;
@@ -279,75 +618,11 @@ async function main(): Promise<void> {
   createSchema(db);
   const writer = makeWriter(db);
 
+  // Every counter is a `METRICS` row; what each number means lives there.
+  const n = newCounters();
   const perNamespace: Record<number, number> = {};
-  let pagesSeen = 0;
-  let pagesKept = 0;
-  let redirects = 0;
-  /**
-   * Pages in the bundle with no prose: an infobox-only page, and now a page the
-   * out-of-world trim emptied. They are rows, not drops — the title, the ids,
-   * the coords and the quest infobox are still this world's.
-   */
-  let empties = 0;
-  /**
-   * The subset of `empties` that had prose before the out-of-world trim took it.
-   * A page emptied by the ERA cuts is not here: it is dropped as post-Wrath.
-   */
-  let emptiedByTrim = 0;
-  let bytes = 0;
-  let charsKept = 0;
-  let coordRows = 0;
-  let idRows = 0;
-  let questRows = 0;
-  let eraSwapped = 0;
-  /**
-   * Kept pages that carried a post-Wrath signal and were kept anyway, because
-   * they predate the Cataclysm beta. A tag on a subset of `pre_cutoff`, never a
-   * sixth bucket: it is deliberately outside the accounting identity.
-   */
-  let preAnnouncementProtected = 0;
-  /**
-   * Protected pages whose prose came from an earlier, signal-free revision
-   * instead of the newest pre-cutoff one (`eraSource`), and those where that
-   * step back was refused because the earlier revision was a stub. Both are
-   * tags on a subset of `pre_cutoff`, like the protection counter itself, and
-   * neither is part of the accounting identity.
-   */
-  let steppedBack = 0;
-  let stepBackRefused = 0;
-  /**
-   * Late pages that stated an id this server has, under a name that is not what
-   * the page is about, and were dropped for it. A tag on a subset of
-   * `dropped_post_cutoff` and outside the accounting identity: it is the
-   * population the name rule exists for, and it is the number to watch if the
-   * rule is ever loosened or tightened.
-   */
-  let idNameMismatch = 0;
-  let sectionsDropped = 0;
-  let paragraphsDropped = 0;
   /** Out-of-world sections cut inside a surviving page, by heading. */
   const sectionsTrimmedBy: Record<string, number> = {};
-  let redirectsDangling = 0;
-  /**
-   * Pages the parser yielded whose Wrath-snapshot revision was a `#REDIRECT`.
-   * They are names, not pages, so they are the term that takes the redirects
-   * out of the reason identity — `redirects` no longer does, because a redirect
-   * row can now also be generated for a title that *is* a counted page.
-   */
-  let eraRedirectPages = 0;
-  /** Redirects that only landed because the newest revision was read too. */
-  let redirectsRecoveredNewest = 0;
-  /** Redirects generated from an `(original)`/`(old)` sibling of a moved page. */
-  let redirectsOriginalSibling = 0;
-  /** One counter per `admitPage` reason; the three admitting reasons are the kept pages. */
-  const reasons: Record<AdmitReason, number> = {
-    pre_cutoff: 0,
-    post_cutoff_wrath_signal: 0,
-    post_cutoff_id_match: 0,
-    dropped_post_cutoff: 0,
-    dropped_post_wrath: 0,
-    dropped_meta: 0,
-  };
   /**
    * Redirects are written after the stream, not during: a redirect whose target
    * did not survive the Wrath cutoff points at nothing, and whether the target
@@ -374,7 +649,6 @@ async function main(): Promise<void> {
   }[] = [];
   const keptTitles = new Set<string>();
   let stoppedEarly = false;
-  let distinctKeys = 0;
   const parseStats: ParseStats = { pagesSkipped: 0, blocksSeen: 0 };
 
   const started = Date.now();
@@ -384,18 +658,18 @@ async function main(): Promise<void> {
     if (!force && now - lastLog < 15_000) return;
     lastLog = now;
     const elapsed = (now - started) / 1000;
-    const rate = bytes / 1024 ** 2 / Math.max(elapsed, 0.001);
+    const rate = n.bytes_read / 1024 ** 2 / Math.max(elapsed, 0.001);
     console.log(
-      `[${fmtDuration(now - started)}] ${fmtBytes(bytes)} read (${rate.toFixed(0)} MiB/s), ` +
+      `[${fmtDuration(now - started)}] ${fmtBytes(n.bytes_read)} read (${rate.toFixed(0)} MiB/s), ` +
         `${parseStats.blocksSeen + parseStats.pagesSkipped} page blocks seen ` +
-        `(${parseStats.pagesSkipped} in dropped namespaces), ${pagesKept} kept, ` +
-        `${redirects} redirects`,
+        `(${parseStats.pagesSkipped} in dropped namespaces), ${n.pages_kept} kept, ` +
+        `${n.redirects} redirects`,
     );
   };
 
   const { bytes: stream, done, cancel } = openDump(args.dump);
   const chunks = decodeUtf8(stream, (total) => {
-    bytes = total;
+    n.bytes_read = total;
   });
 
   /**
@@ -449,8 +723,8 @@ async function main(): Promise<void> {
     // Post-Wrath sections and paragraphs go before the strip, which would
     // otherwise remove the templates and headings that identify them.
     const cut = dropPostWrath(source);
-    sectionsDropped += cut.sectionsDropped;
-    paragraphsDropped += cut.paragraphsDropped;
+    n.sections_dropped += cut.sectionsDropped;
+    n.paragraphs_dropped += cut.paragraphsDropped;
     for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
@@ -471,28 +745,25 @@ async function main(): Promise<void> {
       if (trimmedOnly.length > 0) return false;
       const hadProse = stripWikitext(source).length > 0;
       emptied = true;
-      empties++;
-      if (hadProse) emptiedByTrim++;
+      n.empty_pages++;
+      if (hadProse) n.pages_emptied_by_trim++;
     }
     writer.addPage(page.title, page.ns, text, coords, ids, quest);
     if (!emptied) {
-      // An empty row is counted under `empty_pages` and nowhere else: the
-      // admitting reasons are about pages with prose, and the accounting
-      // identity would double-count it.
-      reasons[reason]++;
+      n[reasonKey(reason)]++;
       // Counted here rather than at decision time: a protected page can still be
       // emptied by the cuts above, and the counter is a subset of `pre_cutoff`.
-      if (protectedPage) preAnnouncementProtected++;
+      if (protectedPage) n.pages_pre_announcement_protected++;
       // Only meaningful for a pre-cutoff admission: a page admitted on a Wrath
       // signal has one revision to read, so its prose is never "swapped".
-      if (reason === "pre_cutoff" && sourceTimestamp !== page.timestamp) eraSwapped++;
+      if (reason === "pre_cutoff" && sourceTimestamp !== page.timestamp) n.pages_era_swapped++;
     }
     keptTitles.add(page.title.toLowerCase());
-    pagesKept++;
-    charsKept += text.length;
-    coordRows += coords.length;
-    idRows += ids.length;
-    if (quest !== null) questRows++;
+    n.pages_kept++;
+    n.chars_kept += text.length;
+    n.coord_rows += coords.length;
+    n.id_rows += ids.length;
+    if (quest !== null) n.quest_rows++;
     perNamespace[page.ns] = (perNamespace[page.ns] ?? 0) + 1;
     return true;
   };
@@ -500,7 +771,7 @@ async function main(): Promise<void> {
   console.log(`building ${args.out} from ${args.dump}`);
   try {
     for await (const page of parsePages(chunks, DEFAULT_NAMESPACES, parseStats, args.eraCutoff)) {
-      pagesSeen++;
+      n.pages_in_namespaces++;
       // Redirect-ness is decided by the Wrath snapshot: the newest pre-cutoff
       // revision. A page that redirects today but was an article in 2010 is an
       // article here, and one that was a redirect then stays one whatever it
@@ -508,7 +779,7 @@ async function main(): Promise<void> {
       // world's wiki, redirect or not.
       const target = page.eraRedirectTarget;
       if (target !== null) {
-        eraRedirectPages++;
+        n.pages_era_redirect++;
         const newest = redirectTarget(page.wikitext);
         // A later expansion's own coinage is not a name this world answers to,
         // whatever the wiki later pointed it at (`Ruins of Gilneas` → `Gilneas`
@@ -542,8 +813,8 @@ async function main(): Promise<void> {
           ...(!page.hasEraRevision && worldIds !== undefined ? { worldIds } : {}),
         });
         if (!decision.admit) {
-          reasons[decision.reason]++;
-          if (decision.idNameMismatch === true) idNameMismatch++;
+          n[reasonKey(decision.reason)]++;
+          if (decision.idNameMismatch === true) n.pages_id_name_mismatch++;
           // A page dropped for having no usable pre-cutoff prose is not a name
           // a page move left behind, which is what the recovery below is for.
           if (decision.eraRevisionsRejected !== true) keepAsName(page, decision.reason);
@@ -551,21 +822,21 @@ async function main(): Promise<void> {
           // The only admitting reason with two revisions to choose between.
           const protectedPage = decision.preAnnouncementProtected === true;
           const src = eraSource(page, protectedPage);
-          if (src.steppedBack) steppedBack++;
-          if (src.refused) stepBackRefused++;
+          if (src.steppedBack) n.pages_stepped_back++;
+          if (src.refused) n.pages_step_back_refused++;
           const kept = keep(page, src.text, decision.reason, {
             protectedPage,
             sourceTimestamp: src.timestamp,
           });
-          if (!kept) reasons.dropped_post_wrath++;
+          if (!kept) n.pages_dropped_post_wrath++;
         } else if (!keep(page, page.wikitext, decision.reason, { ids: decision.ids })) {
           // Admitted late, on an explicit Wrath signal or on an id: the newest
           // revision is the only one there is.
-          reasons.dropped_post_wrath++;
+          n.pages_dropped_post_wrath++;
         }
       }
       logProgress();
-      if (pagesSeen >= args.maxPages) {
+      if (n.pages_in_namespaces >= args.maxPages) {
         stoppedEarly = true;
         break;
       }
@@ -619,9 +890,9 @@ async function main(): Promise<void> {
     const write = (r: Pending, res: { landed: string; viaNewest: boolean }): void => {
       writer.addRedirect(r.source, res.landed, r.ns);
       written.add(r.source);
-      redirects++;
-      if (res.viaNewest) redirectsRecoveredNewest++;
-      else if (r.origin === "sibling") redirectsOriginalSibling++;
+      n.redirects++;
+      if (res.viaNewest) n.redirects_recovered_newest++;
+      else if (r.origin === "sibling") n.redirects_original_sibling++;
     };
 
     // Pass one: every candidate the stream produced. One that leads nowhere is
@@ -677,7 +948,7 @@ async function main(): Promise<void> {
     for (const r of [...siblings, ...unresolved]) {
       const res = written.has(r.source) ? null : resolveCandidate(r);
       if (res === null) {
-        redirectsDangling++;
+        n.redirects_dropped_dangling++;
         continue;
       }
       write(r, res);
@@ -685,7 +956,7 @@ async function main(): Promise<void> {
     writer.flush();
     if (stoppedEarly) cancel();
     else await done();
-    distinctKeys = assertUniquePages(db);
+    n.pages_distinct_keys = assertUniquePages(db);
   } catch (err) {
     writer.flush();
     db.close();
@@ -702,42 +973,16 @@ async function main(): Promise<void> {
   createIndexes(db);
   db.run("INSERT INTO pages_fts(pages_fts) VALUES('optimize')");
 
-  const elapsedMs = Date.now() - started;
-  /** The trim total is the breakdown's sum; nothing counts it a second time. */
-  const sectionsTrimmed = Object.values(sectionsTrimmedBy).reduce((a, b) => a + b, 0);
+  n.build_ms = Date.now() - started;
+  n.page_blocks_seen = parseStats.blocksSeen + parseStats.pagesSkipped;
+  n.page_blocks_skipped_namespace = parseStats.pagesSkipped;
+  // The trim total is the breakdown's sum; nothing counts it a second time.
+  n.sections_trimmed = Object.values(sectionsTrimmedBy).reduce((a, b) => a + b, 0);
   setMeta(db, {
     source: basename(args.dump),
     built_at: new Date().toISOString(),
     namespaces: [...DEFAULT_NAMESPACES].join(","),
-    // A `<page>` block is not a page: a long history is several blocks of one
-    // page, so blocks seen exceeds pages seen.
-    page_blocks_seen: String(parseStats.blocksSeen + parseStats.pagesSkipped),
-    page_blocks_skipped_namespace: String(parseStats.pagesSkipped),
-    pages_in_namespaces: String(pagesSeen),
-    pages_kept: String(pagesKept),
-    pages_distinct_keys: String(distinctKeys),
-    redirects: String(redirects),
-    // Rows with no prose, and how many of them lost it to the out-of-world trim
-    // rather than never having had any. A subset of `empty_pages`, not a bucket
-    // of its own: do not add it to the sum below.
-    empty_pages: String(empties),
-    pages_emptied_by_trim: String(emptiedByTrim),
-    coord_rows: String(coordRows),
-    id_rows: String(idRows),
-    quest_rows: String(questRows),
     era_cutoff: args.eraCutoff,
-    // Kept pages whose prose came from an older revision than the structured
-    // fields did.
-    pages_era_swapped: String(eraSwapped),
-    // Kept pages that carried a post-Wrath signal and were kept because they
-    // predate the Cataclysm beta (`CATACLYSM_ANNOUNCED`). A subset of
-    // `pages_pre_cutoff`, not a bucket of its own: do not add it to the sum.
-    pages_pre_announcement_protected: String(preAnnouncementProtected),
-    // Protected pages whose prose came from an earlier signal-free revision,
-    // and those where that step back was refused as a stub trade. Subsets of
-    // `pages_pre_cutoff`, like the counter above: do not add them to the sum.
-    pages_stepped_back: String(steppedBack),
-    pages_step_back_refused: String(stepBackRefused),
     // Which world-id export the id door read, if any. Recorded so a bundle
     // built against a different export is visible on the comparability tuple:
     // the door's answer is a function of this file (ADR-0042).
@@ -749,44 +994,17 @@ async function main(): Promise<void> {
             exported_at: worldIds.exportedAt,
             counts: worldIds.counts,
           }),
-    // Why each non-redirect page is in the bundle or is not (`post-wrath.ts`).
-    // These six plus `empty_pages` account for every non-redirect page seen.
-    pages_pre_cutoff: String(reasons.pre_cutoff),
-    pages_post_cutoff_wrath_signal: String(reasons.post_cutoff_wrath_signal),
-    pages_post_cutoff_id_match: String(reasons.post_cutoff_id_match),
-    // Late pages that stated an id this server has under another name, and were
-    // dropped for it. A subset of `pages_dropped_post_cutoff`, not a bucket of
-    // its own: do not add it to the sum.
-    pages_id_name_mismatch: String(idNameMismatch),
-    pages_dropped_post_cutoff: String(reasons.dropped_post_cutoff),
-    pages_dropped_post_wrath: String(reasons.dropped_post_wrath),
-    pages_dropped_meta: String(reasons.dropped_meta),
-    sections_dropped: String(sectionsDropped),
-    paragraphs_dropped: String(paragraphsDropped),
-    // Out-of-world sections, a separate cut from the era one above. The
-    // breakdown is keyed by normalised heading, sorted so two builds from the
-    // same dump write the same string.
-    sections_trimmed: String(sectionsTrimmed),
+    // The out-of-world trim broken down by normalised heading, sorted so two
+    // builds from the same dump write the same string. `sections_trimmed` in
+    // the counters below is this breakdown's sum.
     sections_trimmed_json: JSON.stringify(
       Object.fromEntries(
         Object.entries(sectionsTrimmedBy).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
       ),
     ),
-    redirects_dropped_dangling: String(redirectsDangling),
-    // Pages whose Wrath-snapshot revision was a `#REDIRECT`. These are the
-    // pages that are names rather than pages, so this — not `redirects` — is
-    // what the five reasons plus `empty_pages` are counted against.
-    pages_era_redirect: String(eraRedirectPages),
-    // Redirect rows that exist only because the newest revision was read after
-    // the Wrath-snapshot one dangled, or because the page itself is gone and
-    // its newest revision says where the name went.
-    redirects_recovered_newest: String(redirectsRecoveredNewest),
-    // Redirect rows generated from an `(original)`/`(old)` sibling: the bare
-    // title a page move emptied.
-    redirects_original_sibling: String(redirectsOriginalSibling),
-    bytes_read: String(bytes),
-    build_ms: String(elapsedMs),
     schema_version: "5",
+    // Every `METRICS` row; what each number means is documented there.
+    ...metaCounters(n),
   });
   db.run("PRAGMA optimize");
 
@@ -812,45 +1030,17 @@ async function main(): Promise<void> {
   renameSync(tmpPath, args.out);
   const size = statSync(args.out).size;
 
+  const ctx: SummaryCtx = {
+    out: args.out,
+    size,
+    eraCutoff: args.eraCutoff,
+    sectionsTrimmedBy,
+    perNamespace,
+  };
   console.log("");
-  console.log(`bundle:      ${args.out} (${fmtBytes(size)})`);
-  console.log(`read:        ${fmtBytes(bytes)} of XML in ${fmtDuration(elapsedMs)}`);
-  console.log(`page blocks: ${parseStats.blocksSeen + parseStats.pagesSkipped}`);
-  console.log(`  dropped:   ${parseStats.pagesSkipped} (namespace)`);
-  console.log(`pages seen:  ${pagesSeen} (blocks merged by title)`);
-  console.log(`pages kept:  ${pagesKept} (${fmtBytes(charsKept)} of plain text)`);
-  console.log(`era cutoff:  ${args.eraCutoff}`);
-  console.log(`  swapped:   ${eraSwapped} (prose from an older revision)`);
-  console.log(
-    `  protected: ${preAnnouncementProtected} (post-Wrath signal, kept: the page predates the announcement)`,
-  );
-  console.log(
-    `  stepped back: ${steppedBack} (prose from the last signal-free revision), ` +
-      `${stepBackRefused} refused (that revision was a stub)`,
-  );
-  console.log(`  late+wrath: ${reasons.post_cutoff_wrath_signal} (no pre-cutoff revision, explicit Wrath signal)`);
-  console.log(
-    `  late+id:   ${reasons.post_cutoff_id_match} (no pre-cutoff revision, states an id this ` +
-      `server has under this name; ${idNameMismatch} dropped, the id is something else here)`,
-  );
-  console.log(`dropped:     ${reasons.dropped_post_cutoff} post-cutoff, ${reasons.dropped_post_wrath} post-Wrath, ${reasons.dropped_meta} out-of-game`);
-  console.log(`  sections:  ${sectionsDropped}, paragraphs: ${paragraphsDropped}`);
-  console.log(`trimmed:     ${sectionsTrimmed} out-of-world sections`);
-  for (const [heading, n] of Object.entries(sectionsTrimmedBy)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 12)) {
-    console.log(`  ${String(n).padStart(8)} ${heading}`);
-  }
-  console.log(`coord rows:  ${coordRows}`);
-  console.log(`id rows:     ${idRows}`);
-  console.log(`redirects:   ${redirects} (${redirectsDangling} dropped, target not in the bundle)`);
-  console.log(
-    `  recovered: ${redirectsRecoveredNewest} via the newest revision, ` +
-      `${redirectsOriginalSibling} via an (original) sibling`,
-  );
-  console.log(`empty:       ${empties} rows with no prose (${emptiedByTrim} emptied by the trim)`);
-  for (const ns of Object.keys(perNamespace).map(Number).sort((a, b) => a - b)) {
-    console.log(`  ns ${String(ns).padStart(3)} ${(NS_NAMES[ns] ?? "?").padEnd(9)} ${perNamespace[ns]}`);
+  for (const line of SUMMARY) {
+    const rendered = line.render(n, ctx);
+    for (const text of typeof rendered === "string" ? [rendered] : rendered) console.log(text);
   }
 }
 
