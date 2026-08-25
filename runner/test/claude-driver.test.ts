@@ -442,6 +442,7 @@ describe("childEnv", () => {
         GOOGLE_APPLICATION_CREDENTIALS: "/g.json",
         CLAUDE_CODE_USE_BEDROCK: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+        CLAUDE_CODE_OAUTH_TOKEN_2: "other-subscription",
         // Not a billing credential, dropped for a different reason: the runner
         // and fleet services carry it for the gate's fixture staging, and root
         // on acore_characters is the shortcut docs/CONTRACTS.md forbids.
@@ -458,10 +459,36 @@ describe("childEnv", () => {
     expect(env["GOOGLE_APPLICATION_CREDENTIALS"]).toBeUndefined();
     expect(env["CLAUDE_CODE_USE_BEDROCK"]).toBeUndefined();
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
+    // The other subscription's token is not in the child's environment at all.
+    expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
     expect(env["WRATHBENCH_DB_PASSWORD"]).toBeUndefined();
     expect(env["WRATHBENCH_TOKEN"]).toBe("keep");
     expect(env["UNRELATED"]).toBe("keep");
     expect(env["CLAUDE_CONFIG_DIR"]).toBe("/runs/x/claude-config");
+  });
+
+  test("a second subscription lane arrives under the one name the CLI knows", () => {
+    const parent = {
+      PATH: "/usr/bin",
+      CLAUDE_CODE_OAUTH_TOKEN: "first-subscription",
+      CLAUDE_CODE_OAUTH_TOKEN_2: "second-subscription",
+      OPENROUTER_KEY: "not-a-claude-credential",
+    };
+    const env = childEnv(parent, { configDir: "/runs/x/claude-config", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" });
+    expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("second-subscription");
+    expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
+    // Nothing about the lane changes the rest of the environment.
+    expect(env["OPENROUTER_KEY"]).toBe("not-a-claude-credential");
+    // And the default lane still means the default variable.
+    expect(childEnv(parent, { configDir: "/c" })["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("first-subscription");
+  });
+
+  test("an empty chosen lane leaves the CLI with no token to bill", () => {
+    const env = childEnv(
+      { CLAUDE_CODE_OAUTH_TOKEN: "first-subscription" },
+      { configDir: "/c", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" },
+    );
+    expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBeUndefined();
   });
 });
 
@@ -621,6 +648,37 @@ describe("driver selection and stamping", () => {
     expect(await proc.exited).toBe(2);
     expect(stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(stderr).toContain("claude setup-token");
+  }, 20_000);
+
+  test("the refusal names the chosen subscription lane, not the default one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-lane-"));
+    const env = { ...process.env };
+    // The DEFAULT lane is present and the chosen one is not: a run that read
+    // the wrong variable would launch here instead of refusing.
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = "first-subscription";
+    delete env["CLAUDE_CODE_OAUTH_TOKEN_2"];
+    const proc = Bun.spawn({
+      cmd: [
+        process.execPath,
+        join(import.meta.dir, "..", "src", "run.ts"),
+        "--driver",
+        "claude-code",
+        "--model",
+        "opus",
+        "--token-env",
+        "CLAUDE_CODE_OAUTH_TOKEN_2",
+        "--runs-dir",
+        dir,
+      ],
+      cwd: dir,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(2);
+    expect(stderr).toContain("$CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN_2=...");
   }, 20_000);
 });
 
