@@ -345,9 +345,10 @@ output. Then:
 4. **failed, "could not verify it"** — the rollback happened but the old build
    failed the gate smokes too, which means the failure is not in the build
    (auth, the database, the smoke accounts, the runner image). The fleet is up
-   and gated shut. Run a smoke by hand (`docker compose exec -e
-   MODULE_ACCOUNT=SMOKE runner bun infra/smoke/quest-accept-status.ts`) and
-   read its output.
+   and gated shut. Run a smoke by hand (`docker compose -f infra/compose.yml
+   exec runner bun infra/smoke/quest-accept-status.ts`, which logs in as PROBE;
+   add `-e MODULE_ACCOUNT=SMOKE` to reproduce the gate's account) and read its
+   output.
 5. **failed, "the fleet service did not start"** — the one case with a command
    for you: `docker compose -f infra/compose.yml up -d fleet`, after reading
    why compose refused (`docker compose logs fleet`).

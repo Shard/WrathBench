@@ -65,18 +65,13 @@
  * Run (this is N1 of ADR-0027 / FOLLOW-UPS 38). The module's HTTP port is not
  * published to the host, so the smoke runs inside the runner container:
  *
- *   docker compose -f infra/compose.yml exec \
- *     -e MODULE_ACCOUNT=PROBE \
- *     -e WRATHBENCH_DB_HOST=db -e WRATHBENCH_DB_PORT=3306 \
- *     -e WRATHBENCH_DB_USER=root -e WRATHBENCH_DB_PASSWORD=wrathbench \
- *     runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3
+ *   docker compose -f infra/compose.yml exec runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3
  *
- * — that is, `MODULE_ACCOUNT=PROBE bun infra/smoke/travel.ts --from
- * tram-ironforge --rides 3` as seen from inside that container. The four DB
- * vars are the bootstrap service's convention (compose.yml) and are what the
- * direct-bun branch below hands to `infra/fixtures/apply.ts`; use whatever
- * that tool documents if it differs, and note that branch assumes it can
- * reach MySQL from the runner image. How the fixture is applied is chosen by
+ * — that is, `bun infra/smoke/travel.ts --from tram-ironforge --rides 3` as
+ * seen from inside that container. No `-e` flags: MODULE_ACCOUNT defaults to
+ * PROBE and the four WRATHBENCH_DB_* vars the direct-bun branch below hands to
+ * `infra/fixtures/apply.ts` are on the `runner` service (compose.yml's *wb-db
+ * anchor). That branch assumes it can reach MySQL from the runner image. How the fixture is applied is chosen by
  * the environment; see `fixturesCmd()` in lib/fixture.ts. The legacy walk is
  * the same command without `--from` (and needs no DB env at all).
  */
