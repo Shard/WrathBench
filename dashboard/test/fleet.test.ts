@@ -104,6 +104,17 @@ describe("the model cell", () => {
   test("a job with no models resolved falls back to the ref it was called by", () => {
     expect(jobModelLabel(job({ ref: "a+b", models: [] }))).toBe("a+b");
   });
+
+  test("the ids travel beside the label, in roster order, for the cell's icons", () => {
+    // The pre-joined string is the truncated *label*; identity is read from the
+    // list, so a rotating job can show one mark per family (ADR-0045).
+    const row = fleetRows(fleet({ jobs: [job({ models: ["opus", "sonnet", "openai/gpt-5.6-luna"] })] }), [])[0]!;
+    expect(row.models).toBe("opus, sonnet +1");
+    expect(row.modelList).toEqual(["opus", "sonnet", "openai/gpt-5.6-luna"]);
+    // An idle account holds no model; a paused one holds exactly the run's.
+    const rows = fleetRows(fleet(), []);
+    expect(rows.find((r) => r.account === "RUNNER2")!.modelList).toEqual([]);
+  });
 });
 
 describe("row state", () => {
@@ -198,7 +209,7 @@ describe("the rows", () => {
       ],
     });
     const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
-    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
+    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", modelList: ["hy3-free"], runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
     expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
   });
 });

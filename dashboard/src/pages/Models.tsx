@@ -19,6 +19,7 @@ import { A } from "@solidjs/router";
 import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
+import { ModelIcon } from "../components/ModelIcon";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
 import { EPISODE_COLUMNS, countedOf, extrasOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
@@ -107,6 +108,8 @@ export default function Models() {
                         <span class={`badge ${statusClass(row.status)}`}>{row.status}</span>
                       </td>
                       <td>
+                        {/* The family's mark, from the model id rather than the roster name (ADR-0045). */}
+                        <ModelIcon model={row.model} />
                         {row.name}
                         <Show when={isPromoted(row)}>
                           {" "}

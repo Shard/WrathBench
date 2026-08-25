@@ -28,6 +28,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun, type ModelRowView } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { ModelIcon, logoSvgOf } from "../components/ModelIcon";
 import { episodeParam, harnessParam } from "../lib/episodes";
 import { CHART_LEVELS, byCharacter, characterOptions, groupsForLevel, scored, type ResultGroup } from "../lib/results";
 import { episodesHref, modelsHref, rosterNameFor } from "../lib/models";
@@ -41,6 +42,13 @@ const BAR_H = 18;
 const BAR_GAP = 6;
 const LABEL_W = 260;
 const CHART_W = 720;
+/**
+ * The logo column between the label gutter and the bars (ADR-0045): a row's
+ * mark is its model's, not an anonymous swatch. It comes out of the bars' own
+ * width rather than out of `CHART_W`, so the chart is the size it always was.
+ */
+const ICON_W = 20;
+const ICON_PX = 14;
 
 export default function Results() {
   // The tier lives in the URL so a link from the episodes page lands on the
@@ -237,6 +245,7 @@ export default function Results() {
                 {(g) => (
                   <tr>
                     <td>
+                      <ModelIcon model={g.model} />
                       <Show when={rosterNameFor(rosterRows(), g.model, g.effort)} fallback={g.model}>
                         {(name) => (
                           <A href={modelsHref(name())} title="the roster row for this model">
@@ -341,7 +350,7 @@ function Chart(props: { groups: ResultGroup[]; metric: "turns" | "time"; level: 
         <For each={rows()}>
           {(row, i) => {
             const y = (): number => i() * (BAR_H + BAR_GAP);
-            const w = (): number => Math.max(2, (row.value / max()) * (CHART_W - 90));
+            const w = (): number => Math.max(2, (row.value / max()) * (CHART_W - ICON_W - 90));
             return (
               <>
                 <text
@@ -355,8 +364,28 @@ function Chart(props: { groups: ResultGroup[]; metric: "turns" | "time"; level: 
                   {row.g.effort === null ? "" : ` (${row.g.effort})`}
                   {row.g.wikiCoords === true ? " +coords" : ""}
                 </text>
+                {/*
+                  A nested viewport rather than an <image>, so a mono icon's
+                  `currentColor` is the page's foreground in both themes. The
+                  font-size pins the inlined asset's `1em` box to this 24-unit
+                  viewBox; an unrecognised model leaves the slot empty, with its
+                  name already in the gutter beside it.
+                */}
+                <Show when={logoSvgOf(row.g.model)}>
+                  {(svg) => (
+                    <svg
+                      x={LABEL_W + 3}
+                      y={y() + (BAR_H - ICON_PX) / 2}
+                      width={ICON_PX}
+                      height={ICON_PX}
+                      viewBox="0 0 24 24"
+                      style={{ color: "var(--fg)", "font-size": "24px" }}
+                      innerHTML={svg()}
+                    />
+                  )}
+                </Show>
                 <rect
-                  x={LABEL_W}
+                  x={LABEL_W + ICON_W}
                   y={y()}
                   width={w()}
                   height={BAR_H}
@@ -370,7 +399,7 @@ function Chart(props: { groups: ResultGroup[]; metric: "turns" | "time"; level: 
                   </title>
                 </rect>
                 <text
-                  x={LABEL_W + w() + 8}
+                  x={LABEL_W + ICON_W + w() + 8}
                   y={y() + BAR_H - 5}
                   fill="currentColor"
                   font-size="12"

@@ -26,6 +26,7 @@ import {
   type TokenTotals,
 } from "../api/client";
 import { HarnessTag } from "../components/EpisodePicker";
+import { ModelIcon } from "../components/ModelIcon";
 import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
@@ -299,6 +300,7 @@ export default function RunDetail() {
                     <div class="card">
                       <div class="k">model</div>
                       <div class="v">
+                        <ModelIcon model={run().model} />
                         {/* The roster row this run's model belongs to, when it is on the roster:
                             a run records a model string, never the name that scheduled it. */}
                         <Show when={rosterName(run())} fallback={run().model ?? "—"}>

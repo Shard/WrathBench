@@ -23,6 +23,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { EpisodeFilterNote, EpisodePicker, HarnessPicker, HarnessTag } from "../components/EpisodePicker";
+import { ModelIcon } from "../components/ModelIcon";
 import { episodeParam, harnessParam } from "../lib/episodes";
 import { RUNGS, byCharacter, characterOptions, ladderRows, scored, type LadderCell, type LadderRow } from "../lib/results";
 import { fmtMoney } from "../lib/format";
@@ -146,7 +147,10 @@ export default function Ladder() {
               <For each={rows()}>
                 {(row) => (
                   <tr>
-                    <td>{row.model}</td>
+                    <td>
+                      <ModelIcon model={row.model} />
+                      {row.model}
+                    </td>
                     <td>
                       <For each={row.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
                     </td>
