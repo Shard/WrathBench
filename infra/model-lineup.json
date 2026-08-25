@@ -90,6 +90,13 @@
       "match": ["z-ai/*", "zhipuai/*", "zhipu/*", "glm*"]
     },
     {
+      "id": "minimax",
+      "name": "MiniMax",
+      "vendor": "MiniMax",
+      "icon": "minimax-color",
+      "match": ["minimax/*", "minimax*"]
+    },
+    {
       "id": "nvidia",
       "name": "Nemotron",
       "vendor": "NVIDIA",
