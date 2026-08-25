@@ -139,7 +139,13 @@ file.
 The preflight gate uses fixtures too: `kill-credit.ts` starts from
 `vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
 quest, which is why the `fleet` service carries the same `WRATHBENCH_DB_*` env
-as `fixtures`. `runner` deliberately does not.
+as `fixtures` — and so does `runner`, where the smokes are exec'd by hand, so
+
+    docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
+
+needs no `-e` flags at all. A benchmark episode cannot pass those credentials
+on: `sandboxChildEnv` in `runner/src/sandbox/host.ts` drops every
+`WRATHBENCH_DB_*` var from the snippet child's environment, on both services.
 
 This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
 agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only

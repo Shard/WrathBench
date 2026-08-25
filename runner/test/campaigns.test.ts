@@ -32,6 +32,7 @@ function campaign(over: Partial<Campaign> = {}): Campaign {
     objective: "play this class",
     models: "all",
     excludeUnhealthy: true,
+    resume: false,
     runsPerCell: 1,
     cells: CELLS,
     ...over,
@@ -51,7 +52,10 @@ describe("parsing", () => {
 
   test("defaults are the safe ones: enabled, all models, one run per cell, skip unhealthy", () => {
     const [c] = parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }] } });
-    expect(c).toMatchObject({ enabled: true, models: "all", runsPerCell: 1, excludeUnhealthy: true });
+    // `resume: false` with the rest: a probe that pauses is re-swept, not
+    // continued, unless the campaign says otherwise (ADR-0049).
+    expect(c).toMatchObject({ enabled: true, models: "all", runsPerCell: 1, excludeUnhealthy: true, resume: false });
+    expect(parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }], resume: true } })[0]!.resume).toBe(true);
   });
 
   test("an unknown key is refused rather than ignored", () => {

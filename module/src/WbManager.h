@@ -74,6 +74,15 @@ namespace WrathBench
         std::string name;           // enUS column
     };
 
+    // One Achievement.dbc record (3.3.5a). Client-side knowledge: the client
+    // names an earned achievement and its points from this table.
+    struct AchievementRec
+    {
+        std::string name;           // enUS column
+        uint32 points{0};
+        uint32 categoryId{0};       // Achievement_Category.dbc id
+    };
+
     // Per-session synthesized-movement state (ADR-0010). Touched only on the
     // world thread (DoMoveTo/DoStop/DoFace and the Update tick), so unlocked.
     struct MoveState
@@ -304,6 +313,16 @@ namespace WrathBench
         bool LoadAreaTableDbc(std::string const& path);
         std::unordered_map<uint32, AreaTableRec> _areaTable;
         bool _areaTableLoaded{false};
+
+        // Achievement.dbc as the client ships it (issue #8, ADR-0048): name,
+        // points and category for the ids SMSG_ACHIEVEMENT_EARNED and
+        // SMSG_ALL_ACHIEVEMENT_DATA carry. Ids only when the file is absent.
+        bool LoadAchievementDbc(std::string const& path);
+        std::unordered_map<uint32, AchievementRec> _achievements;
+        bool _achievementsLoaded{false};
+        // One `{ achievementId, date, time, name?, points?, categoryId? }`
+        // object; `date` is the wire's packed bitfield, `time` its reading.
+        std::string AchievementJson(uint32 id, uint32 packedDate) const;
         // Per tick, every in-world session: emit WB_AREA on login and whenever
         // zone or area id changes (walking, teleport, transfer). World thread only.
         void TickAreas();

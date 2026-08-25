@@ -16,16 +16,21 @@
  *   playtime comes from is what is integrated here, so the two agree.
  */
 
+import { runBilling } from "../src/billing";
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
+import { NOT_THE_MODELS_FAULT } from "../src/lapse";
 import { EPISODES } from "../src/episodes";
 import type {
+  AchievementFacts,
+  AreaFacts,
   CostFigure,
   EpisodeIdView,
   LevelMark,
   ResultRun,
   RunRow,
   StatePoint,
+  TaxiFacts,
   TokenTotals,
   TrackPoint,
 } from "./api-types";
@@ -152,6 +157,37 @@ export function xpAtLevel(states: readonly StatePoint[], level: number): number 
 }
 
 /**
+ * XP earned over a run, as a lower bound (`ResultRun.xpEarned`).
+ *
+ * The within-level xp resets at every ding, so the total carried into a level
+ * is reconstructed as the sum of the *last observed* xp of every level below
+ * it — the same rule the run page's cumulative chart applies
+ * (`dashboard/src/lib/runview.ts`), so the two never disagree. Samples are
+ * sorted by time and read only where level and xp ride on the same sample;
+ * the running total is clamped monotonic. Null when no sample qualifies.
+ */
+export function xpEarned(states: readonly StatePoint[]): number | null {
+  const samples = states
+    .filter((s): s is StatePoint & { level: number; xp: number } => s.level !== null && s.level > 0 && s.xp !== null)
+    .sort((a, b) => a.ts - b.ts);
+  if (samples.length === 0) return null;
+  let base = 0;
+  let prevLevel: number | null = null;
+  let lastXp = 0;
+  let cum = 0;
+  for (const s of samples) {
+    if (prevLevel !== null && s.level > prevLevel) {
+      base += lastXp;
+      lastXp = 0;
+    }
+    prevLevel = s.level;
+    lastXp = s.xp;
+    cum = Math.max(cum, base + s.xp);
+  }
+  return cum;
+}
+
+/**
  * Whether a run is a *member* of its episode tier's comparability group.
  *
  * Membership is stamped and un-overridden, and nothing else. ADR-0030: a run
@@ -236,6 +272,20 @@ export function unscoredReason(run: RunRow): string | null {
   if (ep.episode !== null && !EPISODES[ep.episode].scored) {
     return `unscored (episode ${ep.episode})`;
   }
+  /*
+   * An attempt that never became an episode (ADR-0049). It sat
+   * out an unknown share of its clock — a provider window, a deploy, a night
+   * the host slept — so the level it reached is not a reading of ninety
+   * minutes of play. It stays on the runs page with its reason; the ladder and
+   * every chart over episodes drop it here, through the predicate they already
+   * share. The set is the scheduler's own `NOT_THE_MODELS_FAULT`, so a run the
+   * policy has written off and a run the ladder shows can never be the same
+   * run: that covers an operator cut (`manual`) and a harness defect too, both
+   * of which are partial episodes the ladder used to read as finished ones.
+   */
+  if (run.terminationReason !== null && NOT_THE_MODELS_FAULT.has(run.terminationReason)) {
+    return `unscored (${run.terminationReason})`;
+  }
   return null;
 }
 
@@ -257,7 +307,24 @@ export function resultRunOf(
     playtimeMs: number | null;
     tokens: TokenTotals | null;
     actualCost: CostFigure | null;
+    /** `CostView.expected`; see `ResultRun.expectedCost`. Absent from older callers. */
+    expectedCost?: CostFigure | null;
   } | null = null,
+  /**
+   * Where the run went, from `scanRunTotals`' pass over the zone/area
+   * milestones. Its own parameter rather than a field of `listing` or `calls`:
+   * it is neither a cost nor a call count, and `null` here means the run wrote
+   * no milestone at all, which the ladder must be able to tell from `false`.
+   */
+  areas: AreaFacts | null = null,
+  /**
+   * Achievements and flights from the same pass (ADR-0048). Their own
+   * parameters for the same reason `areas` is one, and `null` in either means
+   * the run recorded none of that kind — the ladder's rung 4 must be able to
+   * tell that from "flew nowhere".
+   */
+  achievements: AchievementFacts | null = null,
+  taxi: TaxiFacts | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -274,6 +341,14 @@ export function resultRunOf(
   return {
     runId: run.runId,
     model: run.model,
+    /*
+     * Straight off the row, which is where the back-fill has already landed:
+     * the caller merges the trajectory-derived answer into the row before
+     * projecting, so this function stays a pure projection and there is one
+     * place that decides stamped-beats-derived.
+     */
+    resolvedModel: run.resolvedModel,
+    cliVersion: run.cliVersion,
     platform: run.platform,
     harnessVersion: run.harnessVersion,
     harnessSeries: harnessSeries(run.harnessVersion),
@@ -298,10 +373,13 @@ export function resultRunOf(
     episodeOverride: ep.override,
     unscored: unscoredReason(run),
     startedAt: run.startedAt,
+    endedAt: run.endedAt,
+    live: run.live,
     terminationReason: run.terminationReason,
     levels,
     maxLevel,
     xp,
+    xpEarned: xpEarned(states),
     money: run.money,
     questsCompleted: run.questsCompleted,
     maps: mapsOf(states),
@@ -309,6 +387,18 @@ export function resultRunOf(
     playtimeMs: listing?.playtimeMs ?? null,
     tokens: listing?.tokens ?? null,
     actualCost: listing?.actualCost ?? null,
+    expectedCost: listing?.expectedCost ?? null,
+    // Did we pay for this run? Not the scheduler's `billingOf` — see billing.ts.
+    billing: runBilling({
+      model: run.model,
+      apiBase: run.apiBase,
+      platform: run.platform,
+      harness: run.harness,
+      driver: run.driver,
+    }),
+    areas,
+    achievements,
+    taxi,
     pauseReason: run.pauseReason,
   };
 }

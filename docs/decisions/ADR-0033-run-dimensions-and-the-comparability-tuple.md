@@ -135,3 +135,42 @@ but does not carry. Two consequences worth stating:
   `meta` — annotates as nulls rather than failing a launch. This is evidence,
   not a gate; the gate is `openWikiBundle`'s schema check, and it stays the
   only place that fails closed.
+
+## Addendum (2026-08-25): the resolved model id
+
+A run recorded the *string it was launched with*. Under the claude-code harness
+that string is usually a roster alias — `sonnet`, `opus` — which the CLI
+resolves at launch to a real id (`claude-sonnet-5`) and names only inside its
+own `init` event. So no page, chart or ladder row could say which Claude a run
+had actually been on, and the aliases cannot simply be replaced in the roster:
+renaming a ref's model ends its paused runs.
+
+**The resolved id is a dimension of the tuple, and an annotation rather than a
+grouping key** — the same standing the wiki bundle has above. It is recorded as
+`comparability.resolvedModel`, and on the run itself as `meta.resolved`
+(`{model, cliVersion}`) and the `resolved_model` / `resolved_cli_version`
+columns of `run.sqlite`. The openai driver fills the same fields from the
+`model` on the provider's response, which is the served id an aggregator may
+have routed a slug to.
+
+Two properties follow, and they are the whole of the decision:
+
+- **Observed, not stamped.** Every other field of the tuple is a projection of
+  the config at launch. This one cannot be: the answer arrives minutes later,
+  from the driver. It is therefore filled in **once, on first observation, and
+  never revised** — a later segment that resolves elsewhere does not overwrite
+  the id the run's score was earned under — and it is **excluded from
+  `sameComparability`**. Including it would make every resume of an aliased run
+  emit a `comparability_restamped` record that says nothing, in a record whose
+  only job is signal.
+- **Back-filled at read time, never written back.** Runs that predate this carry
+  the answer only in their trajectory, and the viewer derives it there on the
+  same pass the listing already pays for (`scanRunTotals`). A stamped value
+  always wins over a derived one. Nothing rewrites an old run directory — the
+  same rule the episode tier follows: an old run is read differently, not
+  relabelled on disk.
+
+The pages show the id where they show the model, and only where it differs from
+what was asked for; a roster model that resolved to more than one id across its
+runs shows all of them and is flagged, because that drift is the thing this
+record exists to make visible.

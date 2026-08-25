@@ -103,13 +103,25 @@ export const BILLING_ENV_EXACT = [
 ];
 
 /**
+ * Not billing: the database. The `runner` and `fleet` services carry
+ * WRATHBENCH_DB_* so the gate's smokes can stage a fixture, and this CLI is the
+ * model's own process. It is launched with `--tools ""` and only our six MCP
+ * tools, so it has no Bash or Read to dump its environment with — but the
+ * credential has no business being in there either way, and the snippet sandbox
+ * drops it for the same reason (sandboxChildEnv in sandbox/host.ts). Root on
+ * acore_characters is the server-side shortcut docs/CONTRACTS.md forbids.
+ */
+const DB_ENV_PREFIX = "WRATHBENCH_DB_";
+
+/**
  * The child environment, constructed rather than inherited.
  *
  * `CLAUDE_CODE_OAUTH_TOKEN` is the only credential that survives: the CLI
  * reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is set,
  * so leaving it in place would spend API credits instead of the subscription.
  * `CLAUDE_CONFIG_DIR` is redirected into the run directory so no user-level
- * settings, skills, hooks, memory or `apiKeyHelper` are read.
+ * settings, skills, hooks, memory or `apiKeyHelper` are read. `WRATHBENCH_DB_*`
+ * is dropped too — see `DB_ENV_PREFIX`.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
@@ -120,6 +132,7 @@ export function childEnv(
     if (v === undefined) continue;
     if (BILLING_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
     if (BILLING_ENV_EXACT.includes(k)) continue;
+    if (k.startsWith(DB_ENV_PREFIX)) continue;
     out[k] = v;
   }
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
@@ -400,6 +413,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    */
   let pausedAs: { reason: PauseReason; detail: string } | null = null;
   let killClaude: () => void = () => undefined;
+  /** Whether the CLI's own `init` word has already been promoted onto the run. */
+  let promotedResolved = false;
   const endEpisode = (
     reason: TerminationReason,
     detail?: string,
@@ -729,15 +744,16 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   })();
 
   const stdin = proc.stdin;
-  // Coarse timer alongside the per-tool-call check: it samples the world on
-  // `stateIntervalMs` so a long turn still produces state rows (and so `no-xp`
-  // has data), and it catches a wall-clock watchdog during a turn that is
-  // making no tool calls at all.
-  const ticker = startStateTicker({
-    sample: () => builder.sampleState(),
-    intervalMs: o.watchdogTickMs ?? 5_000,
-    done,
-    afterSample: () => {
+  // The shared state ticker (loop.ts), alongside the per-tool-call check: it
+  // samples the world on `stateIntervalMs` so a long turn still produces state
+  // rows (and so `no-xp` has data). This driver additionally *enforces* on each
+  // sample — it can kill the CLI from outside the turn — which catches a
+  // wall-clock watchdog during a turn that is making no tool calls at all.
+  const stopTicker = startStateTicker({
+    builder,
+    tickMs: o.watchdogTickMs,
+    stopped: done,
+    onSample: () => {
       const verdict = watchdogs.check();
       if (verdict !== null) endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
     },
@@ -768,7 +784,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // A turn cut short mid-message still has its newest response entry held
     // back one envelope. It goes to the trajectory, usage and all.
     flushPendingResponse();
-    await ticker.stop();
+    await stopTicker();
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
       stdin.end();
@@ -856,6 +872,25 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         switch (msg["type"]) {
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
+            /*
+             * The CLI resolves the roster's alias (`sonnet`) to a real id
+             * (`claude-sonnet-5`) at launch and names it — with its own version —
+             * only here. Promoted onto the run the first time it is seen, so
+             * nothing downstream has to replay a trajectory to say which Claude
+             * a row was. First-wins is enforced by `recordResolved`; the local
+             * flag only keeps a second `system` envelope from re-reading meta.
+             */
+            if (!promotedResolved) {
+              const resolvedModel = msg["model"];
+              const cliVersion = msg["claude_code_version"];
+              if (typeof resolvedModel === "string" || typeof cliVersion === "string") {
+                promotedResolved = true;
+                trajectory.recordResolved(runId, {
+                  model: typeof resolvedModel === "string" ? resolvedModel : null,
+                  cliVersion: typeof cliVersion === "string" ? cliVersion : null,
+                });
+              }
+            }
             const servers = msg["mcp_servers"];
             if (Array.isArray(servers)) {
               const bad = (servers as { name?: string; status?: string }[]).filter(

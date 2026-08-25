@@ -60,6 +60,8 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
+import { useSeriesFilter } from "../components/SeriesSelect";
+import { useClock } from "../lib/clock";
 import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
@@ -91,7 +93,8 @@ export default function MapPage() {
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [ageTick, setAgeTick] = createSignal(Date.now());
+  // The sidebar's "last update" ages between polls, so it needs its own tick.
+  const ageTick = useClock();
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
   // owns the map — one feed reaches the renderer, never two.
@@ -100,8 +103,19 @@ export default function MapPage() {
     POLL_MS,
   );
 
+  /*
+   * The shell's harness series (ADR-0046) narrows the live feed, so the map
+   * agrees with every other page about which runs exist. Never during a replay:
+   * a replay is one named run the reader asked for by id, and hiding it because
+   * of a header control would look like a broken link.
+   */
+  const seriesFilter = useSeriesFilter(feedList, () => replayId() === undefined);
+  const liveSeries = seriesFilter.series;
+  const shownList = seriesFilter.kept;
+  const seriesHidden = seriesFilter.filteredOut;
+
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
-    feed: feedList,
+    feed: shownList,
     track,
     pinned: pinnedMap,
     selectedId,
@@ -396,14 +410,11 @@ export default function MapPage() {
     };
     raf = requestAnimationFrame(frame);
 
-    const ageTimer = setInterval(() => setAgeTick(Date.now()), 1000);
-
     onCleanup(() => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
       offLogo();
-      clearInterval(ageTimer);
     });
   });
 
@@ -660,7 +671,9 @@ export default function MapPage() {
             <span class="err">{String(feed.error)}</span>
           ) : (
             <>
-              {count()} {count() === 1 ? "agent" : "agents"} · drag to pan · scroll to zoom · click a pip
+              {count()} {count() === 1 ? "agent" : "agents"}
+              <Show when={seriesHidden() > 0}> · {seriesHidden()} hidden by series {liveSeries()}</Show>
+              {" "}· drag to pan · scroll to zoom · click a pip
             </>
           )}
         </div>
