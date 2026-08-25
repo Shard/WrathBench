@@ -68,6 +68,23 @@ const POLL_MS = 5000;
 const PLAY_MS = 250;
 const TILE_CACHE_MAX = 512;
 
+/*
+ * The pip's own geometry, half again the size it was drawn at until
+ * 2026-08-25: a logo legible enough to name the model at a glance is what the
+ * puck is for, and at a 9-unit radius it was a smudge. The fallback dot and the
+ * label's clearance are scaled with it so an unrecognised model still reads as
+ * the same kind of mark. Nothing here touches the sidebar, whose icons are
+ * `ModelIcon` and sized by CSS.
+ */
+const PUCK_R = 14;
+const PUCK_R_SEL = 17;
+const LOGO = 18;
+const LOGO_SEL = 21;
+const DOT_R = 8;
+const DOT_R_SEL = 11;
+/** The click radius, kept ahead of the puck it has to cover. */
+const PIP_HIT_R = 24;
+
 interface TileEntry {
   img: HTMLImageElement;
   ok: boolean;
@@ -329,7 +346,7 @@ export default function MapPage() {
        */
       const logo = logoImageOf(pip.data.model);
       if (logo !== null) {
-        const r = on ? 11 : 9;
+        const r = on ? PUCK_R_SEL : PUCK_R;
         ctx.beginPath();
         ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
         ctx.fillStyle = "#ffffff";
@@ -337,11 +354,11 @@ export default function MapPage() {
         ctx.lineWidth = on ? 2 : 1;
         ctx.strokeStyle = on ? theme.fg : theme.line;
         ctx.stroke();
-        const s = on ? 14 : 12;
+        const s = on ? LOGO_SEL : LOGO;
         ctx.drawImage(logo, p.sx - s / 2, p.sy - s / 2, s, s);
       } else {
         ctx.beginPath();
-        ctx.arc(p.sx, p.sy, on ? 7 : 5, 0, Math.PI * 2);
+        ctx.arc(p.sx, p.sy, on ? DOT_R_SEL : DOT_R, 0, Math.PI * 2);
         ctx.fillStyle = colorOf(pip.runId);
         ctx.fill();
         if (on) {
@@ -352,7 +369,7 @@ export default function MapPage() {
       }
       const name = pip.data.character ?? pip.runId;
       // Clear of whatever was drawn: the puck is wider than the dot it replaces.
-      const edge = logo !== null ? (on ? 12 : 10) : 9;
+      const edge = logo !== null ? (on ? PUCK_R_SEL + 2 : PUCK_R + 2) : DOT_R + 4;
       // The label chip takes the page's own background and foreground so it
       // stays legible when the viewer flips to the light scheme.
       ctx.fillStyle = theme.bg;
@@ -580,7 +597,7 @@ export default function MapPage() {
     canvas.classList.remove("drag");
     if (wasDrag) return;
     const r = canvas.getBoundingClientRect();
-    const hit = hitTest(view, onMap(), e.clientX - r.left, e.clientY - r.top);
+    const hit = hitTest(view, onMap(), e.clientX - r.left, e.clientY - r.top, PIP_HIT_R);
     setSelectedId(hit === null ? null : hit.runId);
     needsDraw = true;
   };

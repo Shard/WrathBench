@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
+  MARK_RING_R,
   RUNGS,
   billingKnown,
   classOptions,
@@ -441,6 +442,16 @@ describe("ladderChartLayout", () => {
     const l = ladderChartLayout([pt("one", 1, 100), pt("two", 1, 100), pt("three", 1, 100), pt("far", 2, 200)], box);
     const slots = new Set(l.placed.map((d) => `${d.anchor}:${d.labelY.toFixed(1)}`));
     expect(slots.size).toBe(4);
+  });
+
+  test("every label clears the mark it belongs to, both ways", () => {
+    const l = ladderChartLayout([pt("one", 1, 100), pt("two", 4, 1200), pt("three", 6, 2000)], box);
+    for (const d of l.placed) {
+      // Against the mark's outer edge, not the puck: a thicker separation ring
+      // has to move the labels too, and this is the test that says so.
+      expect(Math.abs(d.labelX - d.cx)).toBeGreaterThan(MARK_RING_R);
+      expect(Math.abs(d.labelY - d.cy)).toBeGreaterThan(MARK_RING_R);
+    }
   });
 
   test("a label at the plot's right edge is anchored to its left", () => {
