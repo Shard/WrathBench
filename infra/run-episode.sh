@@ -38,6 +38,10 @@ DRIVER=""
 RESUME=""
 MODEL=""
 LOCAL=0
+# The subscription lane, by env var NAME. The runner defaults to the same one;
+# it is read here only so the preflight below checks the var this run will
+# actually use, and names it when it is missing.
+TOKEN_ENV="CLAUDE_CODE_OAUTH_TOKEN"
 PASSTHROUGH=()
 
 while [ $# -gt 0 ]; do
@@ -55,6 +59,11 @@ while [ $# -gt 0 ]; do
     --resume)
       RESUME="${2:-}"
       PASSTHROUGH+=("--resume" "${2:-}")
+      shift 2
+      ;;
+    --token-env)
+      TOKEN_ENV="${2:-}"
+      PASSTHROUGH+=("--token-env" "${2:-}")
       shift 2
       ;;
     --local)
@@ -116,15 +125,17 @@ export WRATHBENCH_HARNESS_VERSION
 if [ "${DRIVER}" = "claude-code" ] || [ "${DRIVER}" = "claude-subscription" ]; then
   echo "run-episode.sh: driver claude-code — the Claude Code CLI is the harness for this run; it is tagged, not excluded (see docs/METHODOLOGY.md)." >&2
   token_help() {
-    cat >&2 <<'EOF'
-run-episode.sh: CLAUDE_CODE_OAUTH_TOKEN is not available to the runner.
+    cat >&2 <<EOF
+run-episode.sh: ${TOKEN_ENV} is not available to the runner.
   1. run:  claude setup-token
-  2. put the token in .env as CLAUDE_CODE_OAUTH_TOKEN=... (.env is gitignored)
+  2. put the token in .env as ${TOKEN_ENV}=... (.env is gitignored)
      — .env, not just your shell: inside the container Bun loads it from
      /wrathbench/.env, which is how the token reaches the runner at all.
+  (${TOKEN_ENV} is this run's subscription LANE; another subscription's
+   token in another variable does not stand in for it.)
 EOF
   }
-  if [ "${LOCAL}" -eq 1 ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  if [ "${LOCAL}" -eq 1 ] && [ -z "${!TOKEN_ENV:-}" ]; then
     token_help
     exit 2
   fi
@@ -146,8 +157,10 @@ EOF
       exit 2
     fi
     # The token must be visible *there*, not here: check it in the container.
-    if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" sh -c \
-      '[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || grep -q "^CLAUDE_CODE_OAUTH_TOKEN=." /wrathbench/.env' \
+    # The `=` anchor is load-bearing: without it CLAUDE_CODE_OAUTH_TOKEN would
+    # match a line that only sets CLAUDE_CODE_OAUTH_TOKEN_2.
+    if ! docker compose -f "${COMPOSE_FILE}" exec -T -e "WRATHBENCH_TOKEN_ENV=${TOKEN_ENV}" "${SERVICE}" sh -c \
+      '[ -n "$(eval echo "\${${WRATHBENCH_TOKEN_ENV}:-}")" ] || grep -q "^${WRATHBENCH_TOKEN_ENV}=." /wrathbench/.env' \
       >/dev/null 2>&1; then
       token_help
       exit 2

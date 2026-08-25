@@ -38,6 +38,7 @@ import {
   policyRefs,
   policyExclusion,
   planTick,
+  formatConcurrency,
   jobSpawn,
   planResumes,
   planStaleRuns,
@@ -96,6 +97,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
+import { episodeArgv, resolve } from "./run-roster";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -1233,6 +1235,120 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // The second free OpenRouter ref is held on the key cap, not scheduled.
     const heldRef = ["or1", "or2"].find((r) => !scheduled.includes(r))!;
     expect(plan.heldPicks.find((h) => h.name === heldRef)!.why).toMatch(/cap: openrouter <= 1/);
+  });
+
+  test("planTick: two subscriptions are two lanes — one claude session each, and the third pick is held", () => {
+    const base = {
+      accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
+      roster: {
+        son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+        sonlo: { tier: "t1", model: "sonnet", driver: "claude-code", effort: "low" },
+        hai: { tier: "t1", model: "claude-haiku-4-5", driver: "claude-code" },
+      },
+    };
+    // One subscription, one session: today's behaviour, unchanged.
+    const one = parseFleet({ ...base, policy: { maxConcurrent: { "claude-code": 1 } } });
+    const oneStates = modelStatesOf(rosterModels(one.roster));
+    const onePlan = planTick(one, oneStates, () => undefined, "20260101");
+    expect(onePlan.policy.map((p) => p.job.ref)).toEqual(["son"]);
+    // Nothing is stamped with a lane when there is only one.
+    expect(onePlan.policy[0]!.job.subscription).toBeUndefined();
+    expect(onePlan.heldPicks.find((h) => h.name === "sonlo")!.why).toMatch(/cap: claude-code <= 1/);
+
+    // Two subscriptions: the cap is per lane, and the second lane is named on
+    // the job so the spawn bills the right account.
+    const two = parseFleet({
+      ...base,
+      policy: { maxConcurrent: { "claude-code": 1 }, subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"] },
+    });
+    const twoStates = modelStatesOf(rosterModels(two.roster));
+    const twoPlan = planTick(two, twoStates, () => undefined, "20260101");
+    expect(twoPlan.policy.map((p) => [p.job.ref, p.job.subscription])).toEqual([
+      ["son", undefined],
+      ["sonlo", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+    ]);
+    // Both subscriptions busy: the third claude pick is held, and the reason
+    // names every lane rather than one key.
+    expect(twoPlan.heldPicks.find((h) => h.name === "hai")!.why).toMatch(
+      /every subscription is busy \(claude-code 1\/1, claude-code:CLAUDE_CODE_OAUTH_TOKEN_2 1\/1\)/,
+    );
+    // The lane reaches the runner as --token-env, on the claude entry only.
+    const spawn = jobSpawn(twoPlan.policy[1]!.job, two.roster, "RUNNER2", "20260101");
+    expect(spawn.entries[0]!.tokenEnv).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(episodeArgv({ ...resolve([spawn.entries[0]!], "s")[0]! }, false)).toContain("--token-env");
+
+    // An explicit per-lane cap still wins over the inherited one.
+    const wide = parseFleet({
+      ...base,
+      policy: {
+        maxConcurrent: { "claude-code": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2 },
+        subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+      },
+    });
+    const widePlan = planTick(wide, modelStatesOf(rosterModels(wide.roster)), () => undefined, "20260101");
+    expect(widePlan.policy.map((p) => p.job.subscription)).toEqual([
+      undefined,
+      "CLAUDE_CODE_OAUTH_TOKEN_2",
+      "CLAUDE_CODE_OAUTH_TOKEN_2",
+    ]);
+  });
+
+  test("planTick: a live run's own lane is what the count reads, so a restart does not double-book a subscription", () => {
+    const config = parseFleet({
+      accounts: { pool: ["RUNNER", "RUNNER2"] },
+      roster: {
+        son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+        sonlo: { tier: "t1", model: "sonnet", driver: "claude-code", effort: "low" },
+      },
+      policy: { maxConcurrent: { "claude-code": 1 }, subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"] },
+    });
+    const states = modelStatesOf(rosterModels(config.roster));
+    // A fresh supervisor knows nothing but what the runs say: `son` is live on
+    // the SECOND subscription, so the next pick must take the first.
+    const resumeJob = { refs: ["son"], ref: "son", episode: "e90" as const, repeat: 1 as const, name: "son-e90", enabled: true, source: "policy" as const };
+    const plan = planTick(
+      config,
+      states,
+      () => undefined,
+      "20260101",
+      [{ job: resumeJob, account: "RUNNER", runId: "r1", pauseCount: 1, why: "resumed" }],
+      [],
+      undefined,
+      new Map([["son", "CLAUDE_CODE_OAUTH_TOKEN_2"]]),
+    );
+    expect(plan.policy.map((p) => [p.job.ref, p.job.subscription])).toEqual([["sonlo", undefined]]);
+    // Without the recorded lane the live run reads as the default one, and the
+    // fresh pick is pushed onto the second — the same one-session-each rule.
+    const blind = planTick(config, states, () => undefined, "20260101", [{ job: resumeJob, account: "RUNNER", runId: "r1", pauseCount: 1, why: "resumed" }]);
+    expect(blind.policy.map((p) => p.job.subscription)).toEqual(["CLAUDE_CODE_OAUTH_TOKEN_2"]);
+  });
+
+  test("a queue job may pin a subscription, and refuses a token in place of the name", () => {
+    const config = parseFleet({
+      accounts: { pool: ["RUNNER"] },
+      roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code" } },
+      queue: [{ ref: "son", episode: "e90", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" }],
+    });
+    expect(config.jobs[0]!.subscription).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(jobSpawn(config.jobs[0]!, config.roster, "RUNNER", "s").entries[0]!.tokenEnv).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(() =>
+      parseFleet({
+        accounts: { pool: ["RUNNER"] },
+        roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code" } },
+        queue: [{ ref: "son", episode: "e90", subscription: "sk-ant-oat01-not-a-name" }],
+      }),
+    ).toThrow(/never the token/);
+  });
+
+  test("the concurrency line names the lanes only when there is more than one", () => {
+    const max = { "claude-code": 1, openrouter: 1 };
+    expect(formatConcurrency(max, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] })).toBe(
+      "concurrency: claude-code <= 1, openrouter <= 1 (every run on the key counts)",
+    );
+    const two = formatConcurrency(max, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"] })!;
+    expect(two).toContain("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2 <= 1");
+    expect(two).toContain("2 subscriptions: CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(formatConcurrency({}, { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN"] })).toBeUndefined();
   });
 
 });
