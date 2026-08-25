@@ -533,7 +533,31 @@ export interface LadderChartLayout {
 /** Label width estimate at the chart's 11px font: enough to avoid collisions, not a text measure. */
 const CHAR_W = 6.3;
 const LABEL_H = 12;
-const LABEL_GAP = 7;
+
+/**
+ * The radius of a plotted mark, in viewBox units — the one place that knows it.
+ *
+ * The chart draws each point as the model's logo on a puck (ADR-0045), so the
+ * mark is no longer the plain 5-unit dot the label placement was written
+ * against; exporting the radius is what keeps the drawing and the placement
+ * from drifting apart when one of them is retuned. It is barely wider than
+ * that dot on purpose: a puck sized to make the logo *comfortable* turned the
+ * scatter into a field of badges and buried the shape of the data, which is
+ * what the chart is for.
+ */
+export const MARK_R = 5.5;
+
+/** The mark's true outer edge: the separation ring outside the puck. */
+export const MARK_RING_R = MARK_R + 1.5;
+
+/**
+ * The clearance a label keeps from its point's centre, both ways.
+ *
+ * Derived from the mark rather than chosen: it has to leave the puck and its
+ * separation ring, which is why it is the outer radius plus a little and not a
+ * number of its own.
+ */
+export const LABEL_GAP = MARK_RING_R + 1.5;
 
 /**
  * Where everything goes. Points map linearly onto the plot; labels are placed

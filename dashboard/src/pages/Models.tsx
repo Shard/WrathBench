@@ -101,8 +101,16 @@ export default function Models() {
                         <span class={`badge ${statusClass(row.status)}`}>{row.status}</span>
                       </td>
                       <td>
-                        {/* The family's mark, from the model id rather than the roster name (ADR-0045). */}
-                        <ModelIcon model={row.model} />
+                        {/*
+                          The family's mark leads the cell, from the model id
+                          rather than the roster name (ADR-0045). It sits left
+                          of the whole name-and-ids block and centred against
+                          it, at twice the inline size: this page is the roster,
+                          and the mark is what a reader scans it by.
+                        */}
+                        <div class="model-idcell">
+                        <ModelIcon model={row.model} size="lg" />
+                        <div>
                         {row.name}
                         <Show when={isPromoted(row)}>
                           {" "}
@@ -131,6 +139,8 @@ export default function Models() {
                             </div>
                           )}
                         </Show>
+                        </div>
+                        </div>
                       </td>
                       <td class="mono" title={tierTitle(row)}>
                         {tierOf(row)}
