@@ -782,7 +782,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // A turn cut short mid-message still has its newest response entry held
     // back one envelope. It goes to the trajectory, usage and all.
     flushPendingResponse();
-    stopTicker();
+    await stopTicker();
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
       stdin.end();

@@ -376,21 +376,28 @@ export interface StateTickerOptions {
  * be called on every exit path — a live ticker outliving `runLoop` would write
  * to a closed trajectory.
  */
-export function startStateTicker(o: StateTickerOptions): () => void {
-  let sampling = false;
+export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
+  let sampling: Promise<unknown> | null = null;
   const timer = setInterval(() => {
-    if (sampling || o.stopped()) return;
-    sampling = true;
-    void o.builder
+    if (sampling !== null || o.stopped()) return;
+    sampling = o.builder
       .sampleState()
       .catch(() => null)
       .finally(() => {
-        sampling = false;
+        sampling = null;
         if (!o.stopped()) o.onSample?.();
       });
   }, o.tickMs ?? DEFAULT_STATE_TICK_MS);
   timer.unref?.();
-  return () => clearInterval(timer);
+  // Awaited, because `clearInterval` does not cancel a sample already waiting on
+  // the sandbox: the caller closes the trajectory as soon as the episode ends,
+  // and a sample landing after that would write to a closed handle. The trailing
+  // sample keeps its row — it is a real observation — but `stopped()` gates
+  // `onSample`, so it cannot enforce anything after the outcome is decided.
+  return async () => {
+    clearInterval(timer);
+    await sampling?.catch(() => undefined);
+  };
 }
 
 export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
@@ -594,7 +601,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   } finally {
     finished = true;
-    stopTicker();
+    await stopTicker();
   }
 }
 
