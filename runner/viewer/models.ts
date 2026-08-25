@@ -141,8 +141,9 @@ export interface RosterRead {
   policy: SchedulingPolicy;
   /**
    * `policy.maxConcurrent`: streams the policy may have in flight per key
-   * (`concurrencyKeyOf`). Absent key means unlimited; an empty object means
-   * the file names no cap.
+   * (`concurrencyKeyOf`, plus the `claude-code:<ENV NAME>` subscription lanes,
+   * which a claude run spends alongside the `claude-code` total). Absent key
+   * means unlimited; an empty object means the file names no cap.
    */
   maxConcurrent: Record<string, number>;
   /**

@@ -220,9 +220,21 @@ export default function Models() {
               {" "}
               At most{" "}
               {Object.entries(body()!.policy.maxConcurrent)
-                .map(([driver, n]) => `${n} on ${driver}`)
+                .map(([key, n]) => `${n} on ${key}`)
                 .join(", ")}{" "}
-              at a time, counting every job on the driver.
+              at a time, counting every run on the key.
+              {/*
+                A `claude-code:<VAR>` key is one Claude SUBSCRIPTION, and a run
+                spends both it and the `claude-code` total — without this the
+                two numbers read as a contradiction rather than a ceiling and
+                a per-account share of it.
+              */}
+              <Show when={Object.keys(body()!.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))}>
+                {" "}
+                A <code>claude-code:&lt;VAR&gt;</code> key is one Claude subscription (named by the env var
+                holding its token): a run needs a free slot on its own subscription <em>and</em> under the{" "}
+                <code>claude-code</code> total.
+              </Show>
             </Show>
           </p>
         </Show>
