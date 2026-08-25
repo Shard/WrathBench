@@ -346,6 +346,60 @@ services:
       worldserver:
         condition: service_started
 
+  # --------------------------------------------------------------- publisher
+  # The public dashboard's publisher (infra/publish-dashboard.ts): renders the
+  # viewer's own API to JSON, applies the public projection, and PUTs what
+  # changed to the R2 bucket. See docs/OPERATIONS.md ("Public dashboard") for
+  # the Cloudflare side and docs/PUBLIC-DASHBOARD.md for why the shape is
+  # push-based.
+  #
+  # `oven/bun:1.4.0`, not the runner image: this reads files and makes outbound
+  # HTTPS requests, so it needs neither git nor the Claude CLI, and pinning the
+  # plain Bun image keeps a runner-image rebuild from recreating the publisher.
+  #
+  # Only OUTBOUND traffic exists here — nothing listens, no port is published,
+  # and no public request ever reaches the lab. That is what lets the public
+  # dashboard ship ahead of the inbound-hardening work on the module port.
+  #
+  # `profiles` keeps a bare `docker compose up -d` from starting a second
+  # publisher against the same bucket and state file; naming the service
+  # activates it. Use --no-deps for the same reason the fleet does.
+  #
+  # No depends_on: the publisher reads `data/runs` off the bind mount and calls
+  # the viewer's handler in-process, so it is useful (and correct) while the
+  # worldserver is down — a deploy window should not stop the public site
+  # updating.
+  publisher:
+    image: oven/bun:1.4.0
+    profiles: [publish]
+    working_dir: /wrathbench
+    command: ["bun", "infra/publish-dashboard.ts", "--loop"]
+    environment:
+      # The runbook and this block must agree; both are the CLI's contract.
+      WRATHBENCH_RUNS_DIR: /wrathbench/data/runs
+      WRATHBENCH_FLEET_CONFIG: /wrathbench/infra/fleet.json
+      # What was uploaded last, so a pass PUTs only what changed. On the bind
+      # mount so a restart re-uploads nothing.
+      WRATHBENCH_PUBLISH_STATE: /wrathbench/data/publish/state.json
+      WRATHBENCH_PUBLISH_INTERVAL_MS: "60000"
+      # S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET and S3_ENDPOINT are
+      # Bun.S3Client's own variable names and are NOT set here: Bun autoloads
+      # /wrathbench/.env inside the container, which is where the R2 key pair
+      # lives (docs/OPERATIONS.md "Secrets" — `.env`, never argv, never compose).
+    volumes:
+      # Read-only: the publisher reads the repo and writes nothing but its state
+      # file, and the one credential it holds is scoped to one bucket.
+      - ..:/wrathbench:ro
+      - ../data/runs:/wrathbench/data/runs:ro
+      # The only writable path, and the only thing this service owns on disk.
+      - ../data/publish:/wrathbench/data/publish
+    networks: [wrathbench]
+    # An interrupted pass is safe by construction — the manifest is uploaded
+    # last, so a torn generation is never pointed at — but 30s lets a pass in
+    # flight finish rather than be killed mid-upload.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
 volumes:
   db-data:
 

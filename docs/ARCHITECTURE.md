@@ -139,6 +139,18 @@ the SPA owns everything that is UI.
   decided; the open question — tiles are Blizzard textures, and entry
   summaries carry model output and game text — is docs/DATA-AND-LEGAL.md's to
   settle, and the first public deployment is gated on it.
+- **Public hosting is push-based, so the lab is never an origin.**
+  `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
+  in-process, applies an allowlist projection, and PUTs generation-addressed
+  JSON to an R2 bucket on a ~60s timer, manifest last so a reader never
+  observes a torn generation; every public read is then a static asset or an
+  edge-cached object and no inbound path to the harness exists at all. The SPA
+  builds a second time in **snapshot mode** — a build-time
+  `VITE_WRATHBENCH_SNAPSHOT_BASE` selects a client implementing the same
+  `Client` interface over the bucket instead of `/api`, so the pages are the
+  same pages and the private build keeps its same-origin, CORS-free posture.
+  Design and cost model are docs/PUBLIC-DASHBOARD.md, the Cloudflare setup is
+  docs/OPERATIONS.md ("Public dashboard"), and the gate above still binds.
 
 ### wiki/ (Bun/TypeScript, MIT)
 
