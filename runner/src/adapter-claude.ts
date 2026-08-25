@@ -103,13 +103,25 @@ export const BILLING_ENV_EXACT = [
 ];
 
 /**
+ * Not billing: the database. The `runner` and `fleet` services carry
+ * WRATHBENCH_DB_* so the gate's smokes can stage a fixture, and this CLI is the
+ * model's own process. It is launched with `--tools ""` and only our six MCP
+ * tools, so it has no Bash or Read to dump its environment with — but the
+ * credential has no business being in there either way, and the snippet sandbox
+ * drops it for the same reason (sandboxChildEnv in sandbox/host.ts). Root on
+ * acore_characters is the server-side shortcut docs/CONTRACTS.md forbids.
+ */
+const DB_ENV_PREFIX = "WRATHBENCH_DB_";
+
+/**
  * The child environment, constructed rather than inherited.
  *
  * `CLAUDE_CODE_OAUTH_TOKEN` is the only credential that survives: the CLI
  * reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is set,
  * so leaving it in place would spend API credits instead of the subscription.
  * `CLAUDE_CONFIG_DIR` is redirected into the run directory so no user-level
- * settings, skills, hooks, memory or `apiKeyHelper` are read.
+ * settings, skills, hooks, memory or `apiKeyHelper` are read. `WRATHBENCH_DB_*`
+ * is dropped too — see `DB_ENV_PREFIX`.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
@@ -120,6 +132,7 @@ export function childEnv(
     if (v === undefined) continue;
     if (BILLING_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
     if (BILLING_ENV_EXACT.includes(k)) continue;
+    if (k.startsWith(DB_ENV_PREFIX)) continue;
     out[k] = v;
   }
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
