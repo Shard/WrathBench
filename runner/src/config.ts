@@ -125,6 +125,24 @@ export function isDriver(raw: string): raw is Driver {
 }
 
 /**
+ * The default subscription lane: the env var the Claude Code CLI itself knows,
+ * and the only one a run names when nothing says otherwise. A second
+ * subscription is a second variable (`CLAUDE_CODE_OAUTH_TOKEN_2`), never a
+ * second spelling of this one — see `RunConfig.subscription`.
+ */
+export const DEFAULT_CLAUDE_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/**
+ * Whether a string is usable as a subscription lane name. An env var name and
+ * nothing else: the fleet builds a concurrency key out of it and the runner
+ * looks it up in `process.env`, so a value that snuck in here would be a
+ * credential in a config file.
+ */
+export function isTokenEnvName(raw: string): boolean {
+  return /^[A-Z][A-Z0-9_]{0,63}$/.test(raw);
+}
+
+/**
  * The driver vocabulary is closed and has one spelling per driver. A value
  * outside it is refused by name, so an old file (`claude-subscription`, the
  * pre-0.4 spelling) fails loudly rather than parsing as something else.
@@ -211,6 +229,24 @@ export const runConfigSchema = z.object({
   apiBase: z.string().optional(),
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
+  /**
+   * `claude-code` only: the SUBSCRIPTION LANE this run bills, named by the env
+   * var holding its OAuth token — never the token itself, which is a secret and
+   * is redacted out of everything this run writes.
+   *
+   * A subscription is a lane, not a model dimension: the same roster entry may
+   * run on either account, so this says nothing about what was measured. It is
+   * recorded for two reasons. The fleet counts in-flight runs per lane to keep
+   * one live session per subscription, and that count has to survive a
+   * supervisor restart, so it is read back off the run rather than held in
+   * memory. And a resumed run must go back to the subscription it started on —
+   * `--resume` rebuilds the config from meta.json, so this field is how.
+   *
+   * Absent means the default lane (`CLAUDE_CODE_OAUTH_TOKEN`); `run.ts` fills
+   * it in for every claude-code run, so a run launched by this build always
+   * names its lane.
+   */
+  subscription: z.string().min(1).max(128).optional(),
   /**
    * An operator-set objective for this one run — a run dimension, not a
    * per-model prompt. The same text is rendered into the same
