@@ -282,6 +282,14 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     const at = clock();
     const hit = cache.get(url);
     if (hit !== undefined && at - hit.at < ttl) return hit.value as Promise<T>;
+    /*
+     * Sweep the expired on the way past. Every generation mints a fresh set of
+     * URLs — a new one a minute — and each entry holds a whole parsed payload,
+     * so a tab left open all day would otherwise accumulate every generation's
+     * bodies. Only entries past the window go; an in-flight promise is younger
+     * than that and a caller already holding one is unaffected either way.
+     */
+    for (const [k, e] of cache) if (at - e.at >= ttl) cache.delete(k);
     const value = fetchJson<T>(url);
     cache.set(url, { at, value });
     void value.catch(() => {
