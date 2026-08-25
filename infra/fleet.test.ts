@@ -372,6 +372,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
       episodeMs: null,
       campaign: "probe1",
       cell: "c1",
+      subscription: null,
       ...over,
     });
     const matched = fact({});
@@ -706,6 +707,7 @@ describe("the shipped fleet files", () => {
         episodeMs: null,
         campaign: null,
         cell: null,
+        subscription: null,
       };
       const st = modelStatesOf(rosterModels(config.roster), [witness], NOW, config.policy).find((x) => x.name === name)!;
       expect(st.earnedRung1).toBe(true);
@@ -1265,6 +1267,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
     ...over,
   });
   const roster: Record<string, FleetRosterEntry> = {
@@ -1650,6 +1653,7 @@ describe("pause and resume across a fleet stop", () => {
     episodeMs: 90 * 60_000,
     campaign: null,
     cell: null,
+    subscription: null,
     ...over,
   });
   const config = (jobs: FleetJob[] = []): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
@@ -1941,6 +1945,7 @@ describe("account affinity and cross-account name hygiene", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
     ...over,
   });
   const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
