@@ -302,6 +302,16 @@ export function jobModelLabel(job: Pick<FleetJobView, "ref" | "models">): string
   return `${models.slice(0, MODELS_SHOWN).join(", ")} +${models.length - MODELS_SHOWN}`;
 }
 
+/**
+ * A model cell's tooltip, with the id the provider actually served appended
+ * when it says something the label does not. Same rule as `resolvedLabel`:
+ * an id identical to what was asked for is not worth a second mention.
+ */
+export function withServed(title: string, resolved: string | null | undefined): string {
+  if (typeof resolved !== "string" || resolved.length === 0 || resolved === title) return title;
+  return title.length === 0 ? `served as ${resolved}` : `${title} · served as ${resolved}`;
+}
+
 /** Only a row with a run has somewhere to click through to. */
 export function runHref(runId: string | null): string | null {
   return runId === null ? null : `/run/${encodeURIComponent(runId)}`;
@@ -399,7 +409,13 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       state,
       job: job.name,
       models: jobModelLabel(job),
-      modelsTitle: job.models.join(", "),
+      /*
+       * The tooltip is where the resolved id lands on this page (the cell
+       * itself is already truncated): the roster's strings, then what the run
+       * on this account was actually served — which for an alias is the only
+       * place the strip says which Claude is in flight.
+       */
+      modelsTitle: withServed(job.models.join(", "), run?.resolvedModel),
       episode: job.episode ?? null,
       account: job.account,
       accountClass: job.accountClass,
@@ -433,7 +449,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       state: here === undefined ? "idle" : "paused",
       job: null,
       models: here?.model ?? "—",
-      modelsTitle: here?.model ?? "",
+      modelsTitle: withServed(here?.model ?? "", run?.resolvedModel),
       episode: null,
       account: a.account,
       accountClass: a.class,

@@ -25,7 +25,7 @@ import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtUsd, fmtWhen, num, shortHarness, stamp } from "../lib/format";
+import { fmtDuration, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import {
   COLUMN_TITLES,
@@ -194,6 +194,16 @@ function RunRowView(props: { row: ResultRun; query: string }) {
               >
                 {r().model}
               </A>
+            </Show>
+            {/* What the provider actually served, and only when it differs from
+                what was asked for: a roster alias resolves at launch, so this
+                is the one place a row says which Claude it really was. */}
+            <Show when={resolvedLabel(r().model, r().resolvedModel)}>
+              {(id) => (
+                <div class="dim" title="the id the provider actually served">
+                  {id()}
+                </div>
+              )}
             </Show>
           </td>
         );

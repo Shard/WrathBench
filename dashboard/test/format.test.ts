@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtItems, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, shortHarness } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtItems, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -156,5 +156,18 @@ describe("fmtTps", () => {
     expect(fmtTps(12.44)).toBe("12.4");
     expect(fmtTps(99.94)).toBe("99.9");
     expect(fmtTps(340.2)).toBe("340");
+  });
+});
+
+describe("resolvedLabel", () => {
+  test("says the served id only when it differs from what was asked for", () => {
+    // The case it exists for: an alias the CLI resolved at launch.
+    expect(resolvedLabel("sonnet", "claude-sonnet-5")).toBe("claude-sonnet-5");
+    // A slug served as itself is already printed; saying it twice is noise.
+    expect(resolvedLabel("z-ai/glm-5.2", "z-ai/glm-5.2")).toBeNull();
+    // Not recorded stays silent rather than echoing the config string.
+    expect(resolvedLabel("sonnet", null)).toBeNull();
+    expect(resolvedLabel("sonnet", undefined)).toBeNull();
+    expect(resolvedLabel(null, "claude-sonnet-5")).toBe("claude-sonnet-5");
   });
 });

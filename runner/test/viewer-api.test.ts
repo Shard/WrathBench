@@ -161,6 +161,74 @@ function pausedFixture(now: number): string {
   return runs;
 }
 
+/**
+ * Two runs, one of each era: a run launched since the id is stamped, and a
+ * backlog run whose only record of it is inside the trajectory.
+ */
+function resolvedFixture(): string {
+  const runs = mkdtempSync(join(tmpdir(), "viewer-resolved-"));
+  const write = (id: string, meta: object, lines: object[]): void => {
+    const dir = join(runs, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: id, startedAt: 1000, ...meta }));
+    writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  };
+  // Stamped at write time, and the trajectory disagrees — a later segment
+  // resolved elsewhere. The stamp is the run's answer and must win.
+  write(
+    "stamped-run",
+    { config: { model: "sonnet", driver: "claude-code" }, resolved: { model: "claude-sonnet-5", cliVersion: "2.1.239" } },
+    [
+      { ts: 1000, t: "meta", runId: "stamped-run" },
+      { ts: 1100, t: "claude_system", type: "system", subtype: "init", model: "claude-opus-5", claude_code_version: "9.9.9" },
+      { ts: 1200, t: "response", turn: 1, message: { role: "assistant", content: "hi" } },
+    ],
+  );
+  // The backlog: nothing on meta, the answer only in the trajectory.
+  write("backlog-run", { config: { model: "opus", driver: "claude-code" } }, [
+    { ts: 1000, t: "meta", runId: "backlog-run" },
+    { ts: 1100, t: "claude_system", type: "system", subtype: "init", model: "claude-opus-5", claude_code_version: "2.1.239" },
+    { ts: 1200, t: "response", turn: 1, message: { role: "assistant", content: "hi" } },
+  ]);
+  return runs;
+}
+
+describe("the resolved model id", () => {
+  test("a stamped run keeps its own answer; a backlog run is back-filled from its trajectory", async () => {
+    const runs = resolvedFixture();
+    const handle = api(runs);
+    const listed = (await (await handle(new Request("http://x/api/runs"))).json()) as {
+      runs: { runId: string; model: string | null; resolvedModel: string | null; cliVersion: string | null }[];
+    };
+    const by = new Map(listed.runs.map((r) => [r.runId, r]));
+    // Stamped beats derived: the trajectory's later `claude-opus-5` is ignored.
+    expect(by.get("stamped-run")).toMatchObject({
+      model: "sonnet",
+      resolvedModel: "claude-sonnet-5",
+      cliVersion: "2.1.239",
+    });
+    // Nothing was written back — the run directory is read differently, not rewritten.
+    expect(JSON.parse(readFileSync(join(runs, "backlog-run", "meta.json"), "utf8"))["resolved"]).toBeUndefined();
+    expect(by.get("backlog-run")).toMatchObject({
+      model: "opus",
+      resolvedModel: "claude-opus-5",
+      cliVersion: "2.1.239",
+    });
+
+    // The same answer on the results surface and on the run page, off the one
+    // derivation: a chart and a run page may not disagree about what ran.
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; resolvedModel?: string | null }[];
+    };
+    expect(new Map(results.runs.map((r) => [r.runId, r.resolvedModel])).get("backlog-run")).toBe("claude-opus-5");
+    const detail = (await (await handle(new Request("http://x/api/run/backlog-run"))).json()) as {
+      run: { resolvedModel: string | null; cliVersion: string | null };
+    };
+    expect(detail.run).toMatchObject({ resolvedModel: "claude-opus-5", cliVersion: "2.1.239" });
+    rmSync(runs, { recursive: true, force: true });
+  });
+});
+
 describe("playtime", () => {
   test("the listing reports active time, not the span the trajectory covers", async () => {
     const now = Date.now();

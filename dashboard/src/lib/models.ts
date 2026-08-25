@@ -184,3 +184,23 @@ export function rosterNameFor(
 export function modelsHref(name: string | null): string {
   return name === null ? "/models" : `/models#${encodeURIComponent(name)}`;
 }
+
+/**
+ * What a row should say about the ids its runs actually resolved to.
+ *
+ * A row is keyed on the model *string* — the roster's, or the one the run
+ * recorded — and that string can be an alias the CLI resolves at launch. Null
+ * when there is nothing to add: no run recorded an id, or the only id is the
+ * string already printed. `mixed` is the case worth flagging: one key whose
+ * runs were not all on the same model, which is drift a reader must see rather
+ * than a difference two rows quietly average together.
+ */
+export function resolvedSummary(
+  model: string | null,
+  ids: readonly string[] | undefined,
+): { ids: string[]; mixed: boolean } | null {
+  const seen = [...new Set((ids ?? []).filter((id) => id.length > 0))].sort();
+  if (seen.length === 0) return null;
+  if (seen.length === 1 && seen[0] === model) return null;
+  return { ids: seen, mixed: seen.length > 1 };
+}

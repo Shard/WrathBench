@@ -241,6 +241,14 @@ export interface LadderRow {
   harnesses: string[];
   /** Starting characters among those runs, sorted; a label, never a row key. */
   characters: string[];
+  /**
+   * Every id this row's runs actually resolved to, sorted — `claude-sonnet-5`
+   * for a row keyed on the alias `sonnet`. The row stays keyed on the recorded
+   * model string; more than one entry here is an alias that resolved two ways
+   * across the row's runs, which is drift the page must show rather than
+   * average. Empty when no run recorded one.
+   */
+  resolvedModels: string[];
 }
 
 /**
@@ -301,6 +309,13 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
       bestMoneyRunId: richest?.runId ?? null,
       harnesses: [...new Set(list.map((r) => r.harness ?? "harness?"))].sort(),
       characters: charactersOf(list),
+      resolvedModels: [
+        ...new Set(
+          list
+            .map((r) => r.resolvedModel)
+            .filter((m): m is string => typeof m === "string" && m.length > 0),
+        ),
+      ].sort(),
     });
   }
   rows.sort(

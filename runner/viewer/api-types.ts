@@ -180,6 +180,13 @@ export interface ComparabilityView {
    * that predates this field.
    */
   serverBuild: { build: string; startedAtMs: number } | null;
+  /**
+   * The model id the provider actually served (ADR-0033 amendment, 2026-08-25).
+   * An annotation like `wikiBundle`, and the one field here that is observed
+   * mid-episode rather than stamped at launch, so it is excluded from tuple
+   * equality. Absent on runs stamped before the field existed.
+   */
+  resolvedModel?: string | null;
 }
 
 /** One run, as the listing and the detail endpoint report it. */
@@ -219,6 +226,18 @@ export interface RunRow {
   characterLabel: string | null;
   /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
   platform: string | null;
+  /**
+   * The model id the provider actually served, where `model` is the string the
+   * run was launched with. The Claude Code CLI resolves a roster alias
+   * (`sonnet`) to a real id (`claude-sonnet-5`) at launch and names it only in
+   * its own `init` event; an OpenAI-compatible provider names the served id on
+   * each response. Stamped on the run since 2026-08-25 and back-filled by the
+   * reader from the trajectory for everything older. Null is "not recorded" —
+   * never the config string, which is the question this field exists to answer.
+   */
+  resolvedModel: string | null;
+  /** The Claude Code CLI's own version, from the same record. Null on any other driver. */
+  cliVersion: string | null;
   apiBase: string | null;
   harnessVersion: string | null;
   /**
@@ -889,6 +908,13 @@ export interface TaxiFacts {
 export interface ResultRun {
   runId: string;
   model: string | null;
+  /**
+   * The id the provider actually served, where `model` is what the run asked
+   * for; see `RunRow.resolvedModel`. Optional for the reason `xpEarned` is: a
+   * dashboard built against a viewer that predates the field must still render.
+   */
+  resolvedModel?: string | null;
+  cliVersion?: string | null;
   platform: string | null;
   harnessVersion: string | null;
   /**
@@ -1154,6 +1180,12 @@ export interface ModelRunView {
   class?: number | null;
   className?: string | null;
   characterLabel?: string | null;
+  /**
+   * The id the provider actually served for this run (`RunRow.resolvedModel`),
+   * attached by the route from the same run rows the listing reads. Optional
+   * for the reason `cost` is: the scheduler's projection does not carry it.
+   */
+  resolvedModel?: string | null;
   startedAt: number;
   endedAt: number | null;
   /** Wall clock, start to end — not active time; the run page owns that. */
@@ -1226,6 +1258,16 @@ export interface ModelRowView {
    * to run is an extra past the target.
    */
   schedulable: { ok: boolean; why: string; extras: boolean };
+  /**
+   * Every distinct id this roster entry's runs actually resolved to, sorted.
+   *
+   * The row stays keyed on the roster's `model` string — that is the unit the
+   * scheduler counts in — but an alias resolves at launch, so one row can hold
+   * runs from two different Claudes. More than one entry here is that drift,
+   * shown rather than averaged away. Empty when no run of this entry recorded
+   * one; optional for the reason `ModelRunView.cost` is.
+   */
+  resolvedModels?: string[];
   /** This model's stamped runs, newest first. */
   runs: ModelRunView[];
   newestRunId: string | null;

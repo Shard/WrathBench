@@ -27,7 +27,7 @@ import {
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, fmtTps, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -325,6 +325,24 @@ export default function RunDetail() {
                       <div class="sub">
                         {run().platform ?? "—"} · {shortHarness(run().harnessVersion)}
                       </div>
+                      {/* The id the provider actually served, plus the CLI that
+                          drove it: `sonnet` is a roster alias the Claude Code CLI
+                          resolves at launch, and this is where the run says to what. */}
+                      <Show when={resolvedLabel(run().model, run().resolvedModel) ?? run().cliVersion}>
+                        <div class="sub">
+                          <Show when={resolvedLabel(run().model, run().resolvedModel)}>
+                            {(id) => <>served as {id()}</>}
+                          </Show>
+                          <Show when={run().cliVersion}>
+                            {(v) => (
+                              <>
+                                <Show when={resolvedLabel(run().model, run().resolvedModel)}> · </Show>
+                                cli {v()}
+                              </>
+                            )}
+                          </Show>
+                        </div>
+                      </Show>
                     </div>
                     <div class="card">
                       <div class="k">character</div>

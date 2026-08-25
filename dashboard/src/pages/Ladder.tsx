@@ -46,6 +46,7 @@ import {
   type LadderCell,
   type LadderRow,
 } from "../lib/ladder";
+import { resolvedSummary } from "../lib/models";
 import { fmtMoney } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
@@ -216,7 +217,30 @@ export default function Ladder() {
               <For each={rows()}>
                 {(row) => (
                   <tr>
-                    <td>{row.model}</td>
+                    <td>
+                      {row.model}
+                      {/* The ids the row's runs actually resolved to. Two of
+                          them is one alias that resolved two ways across the
+                          row — drift the ladder must show, not average. */}
+                      <Show when={resolvedSummary(row.model, row.resolvedModels)}>
+                        {(seen) => (
+                          <div
+                            class="dim"
+                            title={
+                              seen().mixed
+                                ? "this row's runs were not all on the same model"
+                                : "the id the provider actually served"
+                            }
+                          >
+                            {seen().ids.join(", ")}
+                            <Show when={seen().mixed}>
+                              {" "}
+                              <span class="warn">mixed</span>
+                            </Show>
+                          </div>
+                        )}
+                      </Show>
+                    </td>
                     <td>
                       <For each={row.harnesses}>{(h) => <HarnessTag harness={h} />}</For>
                     </td>
