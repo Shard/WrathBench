@@ -70,6 +70,7 @@ const POISON = {
   configPath: "/home/operator/wrathbench/infra/fleet.json",
   rosterPath: "/home/operator/wrathbench/infra/roster.json",
   lastErrorMessage: "poison 401 unauthorized bearer sk-poison-123",
+  configRejectedError: "poison ENOENT open '/home/operator/wrathbench/infra/fleet.json'",
   preflightTail: "poison-smoke-tail: Fixturely says hello",
   wikiSource: "poison-wowdump-20100901.xml.bz2",
   smuggled: "poison-smuggled-value",
@@ -943,7 +944,7 @@ describe("projectFleet", () => {
       containerized: true,
       stamp: "20260825",
       configLoadedAt: 3,
-      configRejected: smuggle({ since: 9, error: "queue: bad" }),
+      configRejected: smuggle({ since: 9, error: POISON.configRejectedError }),
       preflight: smuggle({
         at: 5,
         serverIdentity: "build:x@1",
@@ -1066,6 +1067,9 @@ describe("projectFleet", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.preflight!.results[0]!.tail).toBe("");
+    // A rejection error is a raw exception message (paths, config values); only
+    // the fact and the time may survive.
+    expect(out.configRejected!.error).toBe("");
   });
 });
 
