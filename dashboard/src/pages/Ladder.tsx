@@ -1,14 +1,14 @@
 /**
  * The ladder of docs/VISION.md, with the highest rung each model has reached.
  *
- * Rungs are read from one episode tier at a time — e90 by default (ADR-0030) —
+ * Rungs are read from one episode tier at a time — e90 by default —
  * because a rung reached in six hours is not the same claim as the same rung
  * reached in ninety minutes. The count of what the filter removed is on the
  * page, not in a footnote.
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
- * derivation over recorded signals, versioned with `lib/results.ts` (ADR-0018
- * amendment). The two tie-breaks are printed in their own columns so the order
+ * derivation over recorded signals, versioned with `lib/results.ts`.
+ * The two tie-breaks are printed in their own columns so the order
  * is legible rather than mysterious, and neither is added to anything: there is
  * no aggregate score.
  *
@@ -42,7 +42,7 @@ export default function Ladder() {
   const body = (): ResultsResponse | undefined => feed.latest;
   const all = (): ResultRun[] => body()?.runs ?? [];
   /*
-   * The starting character (ADR-0034's extras cycle) narrows the rungs; it is
+   * The starting character (the extras cycle) narrows the rungs; it is
    * never a row key. A model's row is its best run whatever it was played on,
    * because the baseline character is the comparison set.
    */
@@ -91,7 +91,7 @@ export default function Ladder() {
         </div>
         <p class="dim">
           Race and class filter and label the rows; they are not a group key. The baseline character
-          (Human Paladin) is the comparison set — an extras run on another character (ADR-0034)
+          (Human Paladin) is the comparison set — an extras run on another character
           counts toward its model's row unless one character is picked here.
         </p>
       </Show>

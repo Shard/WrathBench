@@ -220,8 +220,8 @@ services:
       # exist in auth first: `docker compose -f infra/compose.yml run --rm
       # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2
       # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap` (done for all four).
-      # RUNNER7 is the intended PAID account (fleet.json accounts.paid, ADR-0034
-      # amendment 2026-08-23) once the next worldserver deploy window lands: env
+      # RUNNER7 is the intended PAID account (fleet.json accounts.paid; paid
+      # class split out 2026-08-23) once the next worldserver deploy window lands: env
       # only, the running worldserver does not pick it up, so until that recreate
       # the paid class stays on SHAKEOUT2. Bootstrap it in auth before the swap.
       AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
@@ -276,7 +276,7 @@ services:
   # ------------------------------------------------------------------- fleet
   # The fleet supervisor (infra/run-fleet.ts) as a long-lived service: up while
   # the dev machine is up, steered by editing infra/fleet.json, no deadline.
-  # See docs/decisions/ADR-0020-fleet-as-a-service.md and docs/OPERATIONS.md.
+  # See docs/OPERATIONS.md.
   #
   # Same image and mounts as `runner` by design: the supervisor's children are
   # run-roster processes whose children are `bun runner/src/run.ts` episodes, so

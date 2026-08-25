@@ -1,5 +1,5 @@
 /**
- * Probe campaigns: the commissioned middle lane (ADR-0041).
+ * Probe campaigns: the commissioned middle lane.
  *
  * A campaign is an objective swept over a set of **cells** by a set of models.
  * It is commissioned, runs to completion, and is then switched off — which is

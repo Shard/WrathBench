@@ -43,7 +43,7 @@ export interface SandboxHostOptions {
   token: string;
   /**
    * The game account this run occupies, forwarded to the child as
-   * `WRATHBENCH_ACCOUNT` and bound onto the SDK client (ADR-0016). Operator
+   * `WRATHBENCH_ACCOUNT` and bound onto the SDK client. Operator
    * infra like `token`: it makes `sdk.createSession`/`deleteCharacter` land on
    * the assigned account regardless of what a snippet passes. Undefined leaves
    * the client unbound (standalone behavior).

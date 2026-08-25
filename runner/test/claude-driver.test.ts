@@ -146,7 +146,7 @@ describe("claude-code driver", () => {
     expect(record["model"]).toBe("opus");
     // our MCP server really answered tools/list over the loopback bridge
     expect(record["mcpTools"]).toEqual(TOOLS.map((t) => t.name));
-    // the context message is the harness's, assembled by ADR-0012 machinery
+    // the context message is the harness's, assembled by the fixed context machinery
     const userMessages = record["userMessages"] as string[];
     expect(userMessages).toHaveLength(2);
     expect(userMessages[0]).toContain("[turn 1]");
@@ -521,7 +521,7 @@ describe("driver selection and stamping", () => {
     return { dir, runId: runId!, stderr };
   }
 
-  test("an externally delivered SIGTERM pauses the run as operator-pause (ADR-0036)", async () => {
+  test("an externally delivered SIGTERM pauses the run as operator-pause", async () => {
     const { dir, runId, stderr } = await stopMidTurn("SIGTERM");
     expect(stderr).toContain("SIGTERM: pausing run as `operator-pause`");
     const runDir = join(dir, runId);

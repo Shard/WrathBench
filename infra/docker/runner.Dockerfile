@@ -2,7 +2,7 @@
 # claude-subscription shakeout driver.
 #
 # git is here for one reason: the fleet supervisor now runs INSIDE this image
-# (compose service `fleet`, ADR-0020) and stamps every episode with
+# (compose service `fleet`) and stamps every episode with
 # `git describe` off the bind-mounted repo, exactly as infra/run-episode.sh
 # does on the host. Without it a containerised supervisor would have to trust a
 # stamp written at `up` time, which goes stale the moment a tracked file is

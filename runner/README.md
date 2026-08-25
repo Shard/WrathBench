@@ -1,10 +1,10 @@
 # @wrathbench/runner
 
-The fixed harness (ADR-0004): agent loop, snippet sandbox, MCP server,
+The fixed harness: agent loop, snippet sandbox, MCP server,
 watchdogs, trajectory. Everything here is model-agnostic — the only per-run
 variables are the adapter config (base URL, key env var, model id) and the
 character. The context policy is fixed in `src/context.ts` and explained in
-`docs/decisions/ADR-0012-context-policy.md`; changing it re-baselines results.
+`docs/METHODOLOGY.md` ("Context policy"); changing it re-baselines results.
 
 ## Entry points
 
@@ -53,7 +53,7 @@ for resume), `scratchpad.md`.
 ## Drivers
 
 `--driver` picks how the runner reaches the model; the **harness** — what owns
-the loop and the context — follows from it (ADR-0035). `--adapter` is the old
+the loop and the context — follows from it. `--adapter` is the old
 name for `--driver` and still works; so does `claude-subscription`, the old
 spelling of `claude-code`. Nothing new writes either.
 
@@ -65,7 +65,7 @@ spelling of `claude-code`. Nothing new writes either.
 
 The harness is stamped into the comparability tuple and shown on every run,
 results, ladder and models row. It is a tag, not a partition: claude-code rows sit
-in the same charts as wrathbench rows (the operator's choice for now, ADR-0035),
+in the same charts as wrathbench rows (the operator's choice for now),
 and `?harness=` on the API narrows to one when wanted. `harnessVersion` is a
 different word — the `git describe` of this repo, which applies to both
 harnesses, since the SDK, tools, prompt and sandbox Claude Code drives are ours.
@@ -76,7 +76,7 @@ Measured against claude 2.1.238 with a local capture proxy (no model calls):
 
 - **Claude Code keeps its own conversation history and compacts it itself.**
   Turn 2's request carries turn 1 verbatim plus its own `context_management`
-  edits. ADR-0012's 24-message window is therefore not in force, and an
+  edits. The context policy's 24-message window is therefore not in force, and an
   unversioned model-side summarizer sits inside the scaffold — which is why it
   is a different harness and not a `wrathbench` row (see COSTS.md for what
   that does to the token curve).
@@ -153,7 +153,8 @@ limit wording on stderr with a non-zero exit) is a **pause**
 (`quota-exhausted`) with the reset time in the detail, not a termination —
 resume with `--resume <run-id>` when the window resets. A resumed run starts a
 fresh `claude` process: the CLI's own accumulated history does not come back,
-only the scratchpad — which is the promise the harness makes anyway (ADR-0012).
+only the scratchpad — which is the promise the harness makes anyway: the
+scratchpad, not the chat history, is the durable memory.
 
 ### Billing: subscription or nothing
 

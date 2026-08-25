@@ -67,7 +67,7 @@ const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8
 // collide with — or be guessed alongside — a real run's session (FOLLOW-UPS 19).
 const TOKEN = process.env["WRATHBENCH_TOKEN"] ?? randomBytes(16).toString("hex");
 // The fleet-assigned game account, bound onto the client so a snippet cannot
-// pass (or omit) an account and land on the wrong one (ADR-0016). Empty means
+// pass (or omit) an account and land on the wrong one. Empty means
 // unbound (standalone / running this file by hand): the client keeps its prior
 // account behavior.
 const ACCOUNT_ENV = process.env["WRATHBENCH_ACCOUNT"];
@@ -402,7 +402,7 @@ export function renderError(err: unknown): string {
     if (pos != null && typeof pos.line === "number") {
       return `${err.name}: ${renderBuildMessage(err as { message?: string; position?: BuildPosition })}`;
     }
-    // SDK guids are plain strings (ADR-0017), so only a bigint the snippet
+    // SDK guids are plain strings, so only a bigint the snippet
     // itself conjured (a 123n literal) can reach this — still worth naming.
     if (err instanceof TypeError && BIGINT_STRINGIFY_RE.test(err.message)) {
       return (
@@ -451,9 +451,9 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     // never invoked it, so nothing it wrote actually ran: `north-mini-code`
     // wrapped all 120 of its snippets in `async () => { … }` and got a cheerful
     // `ok` plus `[AsyncFunction (anonymous)]` every time, never connecting to
-    // the world at all. The harness will not call it for the model (ADR-0016
-    // rule 1: repair only what has exactly one reading, and "define a callback
-    // for later" is a second one) — it says what it sees.
+    // the world at all. The harness will not call it for the model (repair
+    // only what has exactly one reading, and "define a callback for later" is
+    // a second one) — it says what it sees.
     if (typeof value === "function") {
       msg.hint =
         "the snippet returned a function it never called — call it (await fn()) or return its " +
@@ -464,7 +464,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     // An aborted eval's result is discarded host-side, and with it the one
     // thing the abort knew: how far the move it interrupted had got. The SDK
     // hangs that sentence on the error as `moveAbandon`; keep it for the pong,
-    // which is the only channel the model still sees (ADR-0016 rule 2).
+    // which is the only channel the model still sees.
     const carried = (err as { moveAbandon?: unknown }).moveAbandon;
     if (controller.signal.aborted && typeof carried === "string") abandonNote = carried;
     // An aborted eval's result is discarded host-side; its logs must not go

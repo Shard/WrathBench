@@ -1,5 +1,5 @@
 /**
- * Map replay as a position feed (FOLLOW-UPS 22, ADR-0019).
+ * Map replay as a position feed (FOLLOW-UPS 22).
  *
  * The live map draws `AgentPosition[]` and asks nothing about where they came
  * from. Replay is therefore not a second renderer: it is the same feed, filled

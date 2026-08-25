@@ -74,7 +74,7 @@ namespace WrathBench
         std::string name;           // enUS column
     };
 
-    // Per-session synthesized-movement state (ADR-0010). Touched only on the
+    // Per-session synthesized-movement state. Touched only on the
     // world thread (DoMoveTo/DoStop/DoFace and the Update tick), so unlocked.
     struct MoveState
     {
@@ -97,7 +97,8 @@ namespace WrathBench
         float dropDz{0};
     };
 
-    // Per-token headless session. See ADR-0009 for the parked-socket design.
+    // Per-token headless session. See docs/ARCHITECTURE.md (module section)
+    // for the parked-socket design.
     struct BenchSession
     {
         std::string token;
@@ -311,7 +312,7 @@ namespace WrathBench
         // position to a writer (WB_AREA and WB_SESSION_STATE share it).
         void AddAreaFields(Json::Writer& w, Player* player);
 
-        // Mover (world thread only; see ADR-0010).
+        // Mover: synthesized client movement (world thread only).
         void TickMovers(int64_t nowMs);
         void TickMover(BenchSession& s, int64_t nowMs);
         void TickRiders(int64_t nowMs);
@@ -353,7 +354,7 @@ namespace WrathBench
 
         // Tap helpers (world/map thread).
         void EmitEvent(BenchSession& s, std::string const& opcodeName, uint16_t opcodeId, std::string const& dataJson);
-        // Emit one synthetic WB_SESSION_STATE for an in-world session (ADR-0014):
+        // Emit one synthetic WB_SESSION_STATE for an in-world session:
         // the client-visible self state a fresh SMSG_LOGIN_VERIFY_WORLD carries.
         // World thread only (reads Player). Reused by the WS-reattach path and by
         // an idempotent same-token createSession so the caller re-syncs state.

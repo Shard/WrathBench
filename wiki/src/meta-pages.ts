@@ -12,7 +12,7 @@
  *
  * So: classify, and the build does not emit a classified page. This used to
  * label and demote at query time instead; the bundle is now a concise Wrath
- * reference and what is not in the world is not in it (ADR-0040). The
+ * reference and what is not in the world is not in it. The
  * carve-out that kept an exact-title hit at the top goes with the band — the
  * page is not there to return.
  *

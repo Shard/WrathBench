@@ -3,8 +3,8 @@
  *
  * One control in one place, because the two pages must not be able to disagree
  * about what "e90" selects. `all` is offered alongside the three tiers: a run
- * that predates the tiers is labeled but is not a member of any group
- * (ADR-0030), so the default view is deliberately narrow and the reader needs
+ * that predates the tiers is labeled but is not a member of any group,
+ * so the default view is deliberately narrow and the reader needs
  * an obvious way out of it.
  */
 
@@ -17,7 +17,7 @@ export function HarnessTag(props: { harness: string | null | undefined }) {
   return (
     <span
       class={`badge harness-${props.harness ?? "unknown"}`}
-      title="which loop owned the run (ADR-0035): wrathbench is the fixed loop, claude-code the Claude Code CLI scaffold. A tag, not a partition."
+      title="which loop owned the run: wrathbench is the fixed loop, claude-code the Claude Code CLI scaffold. A tag, not a partition."
     >
       {props.harness ?? "harness?"}
     </span>

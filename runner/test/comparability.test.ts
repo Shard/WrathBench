@@ -1,5 +1,5 @@
 /**
- * The comparability tuple (ADR-0026).
+ * The comparability tuple.
  *
  * The load-bearing claims: a scored run's prompt hash is the fixed prompt's, an
  * objective run's is not, the tuple survives a JSON round trip through
@@ -34,7 +34,7 @@ import type { ComparabilityView, EpisodeTierView } from "../viewer/api-types";
 
 /* The mirror must stay assignable in both directions; see api-types.ts. */
 const _toView: ComparabilityView = {} as Comparability;
-/* Same rule for the episode table `/api/episodes` serves (ADR-0030). */
+/* Same rule for the episode table `/api/episodes` serves. */
 const _tierToView: EpisodeTierView = {} as EpisodeTier;
 const _tierFromView: EpisodeTier = {} as EpisodeTierView;
 void _tierToView;
@@ -59,12 +59,12 @@ describe("comparabilityOf", () => {
     expect(c.promptHash).toBe(promptHash(SYSTEM_PROMPT));
     expect(c.promptChars).toBe(SYSTEM_PROMPT.length);
     expect(c.objective).toBe(false);
-    expect(c.wikiCoords).toBe(false); // names-first by default (ADR-0028)
+    expect(c.wikiCoords).toBe(false); // names-first by default
     expect(c.harness).toBe("wrathbench");
     expect(c.effort).toBeNull();
   });
 
-  test("wikiCoords is stamped and separates otherwise identical runs (ADR-0028)", () => {
+  test("wikiCoords is stamped and separates otherwise identical runs", () => {
     const base = loadRunConfig({ driver: "openai", model: "m" });
     const names = comparabilityOf(base, "v");
     const coords = comparabilityOf(loadRunConfig({ driver: "openai", model: "m", wikiCoords: true }), "v");
@@ -78,7 +78,7 @@ describe("comparabilityOf", () => {
     expect(parseComparability(legacy)?.wikiCoords).toBeUndefined();
   });
 
-  test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple (ADR-0033)", () => {
+  test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple", () => {
     const config = loadRunConfig({ driver: "openai", model: "m" });
     // No bundle at all: null, never an absent field on a fresh stamp.
     expect(comparabilityOf(config, "v").wikiBundle).toBeNull();
@@ -121,7 +121,7 @@ describe("comparabilityOf", () => {
     expect(c.promptChars).toBeGreaterThan(SYSTEM_PROMPT.length);
   });
 
-  test("the claude-code driver stamps the claude-code harness (ADR-0035)", () => {
+  test("the claude-code driver stamps the claude-code harness", () => {
     const c = comparabilityOf(loadRunConfig({ driver: "claude-code" }), "v");
     expect(c.harness).toBe("claude-code");
     expect(comparabilityOf(loadRunConfig({ driver: "stub", stubScript: "x" }), "v").harness).toBe("wrathbench");
@@ -270,7 +270,7 @@ describe("parseComparability", () => {
   });
 });
 
-describe("harnessSeries (ADR-0034: the schedule keys on major.minor)", () => {
+describe("harnessSeries (the schedule keys on major.minor)", () => {
   test("git-describe stamps, tagged or not, dirty or not, reduce to the series", () => {
     expect(harnessSeries("harness-0.3-114-gda93f0a-dirty")).toBe("0.3");
     expect(harnessSeries("harness-0.3-133-g6e4b5bb")).toBe("0.3");

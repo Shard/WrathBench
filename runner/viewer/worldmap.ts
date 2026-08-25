@@ -1,7 +1,7 @@
 /**
  * WoW world coordinates → ADT/minimap tile grid, and back.
  *
- * ADR-0019 makes this one module on purpose: the live map and, later, the
+ * This is one module on purpose: the live map and, later, the
  * replay view both draw through it, and the tile extraction writes files named
  * by what it returns. It has **no imports** — that is deliberate and is what
  * the standalone-import test pins. Nothing here reads a run, a database, or a
@@ -63,7 +63,7 @@ export function tileToWorld(row: number, col: number): { x: number; y: number } 
  *
  * Rows stack downward (screen Y) and columns run rightward (screen X): the
  * minimap tiles are stored north-up and west-left, so growing row is south and
- * growing column is east. ADR-0019 required this to be verified against a
+ * growing column is east. The map-view decision required this to be verified against a
  * rendered known zone before it was trusted: the extraction did that (see
  * `minimap/README.md`) and the tiles agree, so this stands as written.
  */

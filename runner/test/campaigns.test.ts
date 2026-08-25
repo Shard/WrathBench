@@ -1,5 +1,5 @@
 /**
- * The campaign fan-out (ADR-0041).
+ * The campaign fan-out.
  *
  * The assertions worth having here are about the three properties the design
  * rests on rather than about the plumbing: that completion is derived from runs

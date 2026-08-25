@@ -22,7 +22,7 @@
  * Every rule is deterministic over raw wikitext and the title, with the one
  * exception the operator approved on 2026-08-24: the id oracle, which comes off
  * an exported file at BUILD time and reaches the agent as nothing but ordinary
- * wiki text (ADR-0042). Nothing here reads a live server, the DBC tables or
+ * wiki text. Nothing here reads a live server, the DBC tables or
  * anything else outside the dump and that export (CONTRACTS.md).
  */
 
@@ -54,7 +54,7 @@ export type AdmitReason =
    * DB's name for it is what the page is about**: the page documents something
    * that is in this world, written late. Only reachable when the build was
    * given a world-id export (`--world-ids`), and never over a post-Wrath signal
-   * or a Classic-2019 one. See ADR-0042.
+   * or a Classic-2019 one.
    */
   | "post_cutoff_id_match"
   /**
@@ -730,7 +730,7 @@ function admitWithoutEraProse(page: AdmitInput): AdmitDecision {
     // server has, under the name the page is about. Below the explicit
     // signal, so a page that says what it is is counted for saying it, and
     // below both vetoes, so a page that names a later expansion can never be
-    // admitted by an id that expansion reused (ADR-0042).
+    // admitted by an id that expansion reused.
     if (page.worldIds !== undefined) {
       const { verdict, ids } = worldIdVerdict(page.title, page.newestWikitext, page.worldIds);
       if (verdict === "match") return { admit: true, reason: "post_cutoff_id_match", ids };

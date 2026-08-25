@@ -228,7 +228,7 @@ namespace WrathBench
 
         int64_t const nowMs = NowMs();
 
-        // Drive synthesized movement (ADR-0010). World thread: maps are not
+        // Drive synthesized movement. World thread: maps are not
         // mid-update here, so reading player state and QueuePacket are both safe.
         TickMovers(nowMs);
         TickRiders(nowMs);
@@ -375,8 +375,8 @@ namespace WrathBench
         // proxy for entropy, not a substitute for a random secret issued by the
         // module (still item 19), but it takes guessable tokens off the table.
         // Checked before the session is registered so a rejected token leaves
-        // nothing behind. Hint per ADR-0016: a human reading it should know
-        // what to do.
+        // nothing behind. Every rejection is actionable: a human reading the
+        // hint should know what to do.
         static constexpr size_t kMinTokenChars = 32;
         if (token.size() < kMinTokenChars)
             return {400, Json::Writer().Add("ok", false).Add("error", "weak_token")
@@ -443,11 +443,11 @@ namespace WrathBench
         try { (void)std::stoull(v); return true; } catch (...) { return false; }
     }
 
-    // The raw-action allowlist (ADR-0025, PROTOCOL.md "raw"). Every entry is a
+    // The raw-action allowlist (PROTOCOL.md "raw"). Every entry is a
     // client opcode a stock 3.3.5a client sends from ordinary play, whose
     // handler does nothing a non-GM client could not do, and which has NO
     // dedicated action yet — the hatch exists so a trajectory can show the
-    // need for a surface before the module and SDK grow one (ADR-0015).
+    // need for a surface before the module and SDK grow one.
     // Deliberately absent: movement (the module drives it; a stray packet
     // desyncs the mover), session lifecycle (login/logout/char create), every
     // opcode that already has an action (one audited path per opcode), and
@@ -667,7 +667,7 @@ namespace WrathBench
                 return MissingParam(action, "missing_talents", "talents");
             if (action == "raw")
             {
-                // The escape hatch (ADR-0025): an allowlisted client opcode by
+                // The escape hatch (PROTOCOL.md "raw"): an allowlisted client opcode by
                 // name plus a caller-built hex payload. Everything about it is
                 // checked here so a bad request never reaches the world thread.
                 std::string opcode = req.GetString("opcode");
@@ -714,8 +714,9 @@ namespace WrathBench
 
     // POST /character-delete: a short-lived utility session that parks at the
     // character-select stage and sends the real CMSG_CHAR_DELETE (STATUS_AUTHED,
-    // so it must not be in world). Needed because episode resets (ADR-0006)
-    // accumulate characters against the realm's per-account cap.
+    // so it must not be in world). Needed because episode resets (a fresh
+    // character per episode) accumulate characters against the realm's
+    // per-account cap.
     HttpReply Manager::HttpCharacterDelete(std::string const& body)
     {
         Json::Value req = Json::Parse(body);
@@ -817,7 +818,7 @@ namespace WrathBench
         // other same-token state — in world under a different character/account,
         // or already tearing down — means the old record is stale, so tear it
         // down and rebuild. Success is never returned for a character the caller
-        // did not ask for (ADR-0016: no silent wrong behavior). deleteMode and
+        // did not ask for (no silent wrong behavior). deleteMode and
         // listMode reject same-token upstream (HttpCharacterDelete/List) and
         // never reach here as duplicates.
         if (!s->deleteMode && !s->listMode)
@@ -847,7 +848,7 @@ namespace WrathBench
                     // event stream never restarts — without this the caller would
                     // get ok:inWorld beside an empty state cache (the trap in a new
                     // skin). Emit the same reattach snapshot the WS-reattach path
-                    // uses (ADR-0014); the SDK advances its event epoch before the
+                    // uses; the SDK advances its event epoch before the
                     // POST, so this lands in the new epoch, not the discarded one.
                     EmitSessionState(existing);
                     return;
@@ -959,7 +960,7 @@ namespace WrathBench
             totaltime = f[5].Get<uint32>();
         }
 
-        // Build the parked loopback socket (ADR-0009). Blocking connect then accept
+        // Build the parked loopback socket. Blocking connect then accept
         // on localhost: connect completes into the listen backlog without accept
         // running concurrently, so a single thread is fine.
         try
@@ -1055,7 +1056,7 @@ namespace WrathBench
     }
 
     // ------------------------------------------------------------- movement
-    // ADR-0010: move_to is resolved once against the server's mmaps (the single
+    // move_to is resolved once against the server's mmaps (the single
     // sanctioned exception in docs/CONTRACTS.md), then driven as the client
     // movement packet sequence a real client would send: MSG_MOVE_START_FORWARD,
     // MSG_MOVE_HEARTBEAT at ~500ms, MSG_MOVE_STOP — all through QueuePacket into
@@ -1072,7 +1073,7 @@ namespace WrathBench
     // the same model's world-space bounds (GameObjectModel::GetBounds, kept
     // current by UpdateModelPosition as the transport moves). When the model is
     // not loaded for a transport, a coarse radius around the transport's
-    // position stands in (documented in ADR-0026). World thread only.
+    // position stands in — a documented approximation. World thread only.
     static Transport* FindTransportAt(Map* map, float x, float y, float z)
     {
         if (!map)
@@ -1150,8 +1151,8 @@ namespace WrathBench
             && pts.size() >= 2;
     }
 
-    // A mesh path that falls is a ledge, not a route (ADR-0027 amendment,
-    // nav-probe c4 on map 369: a polyline segment with dz -7.64 over 1.0y of
+    // A mesh path that falls is a ledge, not a route (nav-probe c4 on map
+    // 369: a polyline segment with dz -7.64 over 1.0y of
     // 2D travel was walked, `arrived` was reported from a 2D-only check, and
     // the next move from down there was `start_off_mesh`). A segment is a
     // drop when it is both tall (> 2.0y, so stairs and stale-z corrections
@@ -1944,7 +1945,7 @@ namespace WrathBench
         }
         else if (action == "raw")
         {
-            // The escape hatch (ADR-0025): validated on the io thread (opcode
+            // The escape hatch: validated on the io thread (opcode
             // on the allowlist, payload well-formed hex, size-capped); here it
             // is only decoded and queued into the stock handler like any other
             // client packet. The audit record carries opcode and payload so
@@ -2660,7 +2661,7 @@ namespace WrathBench
         bool whitelisted;
         if (opcode == SMSG_UPDATE_OBJECT)
         {
-            // The hot path (ADR-0005): decoded inline, one pass, per-session
+            // The hot path: decoded inline, one pass, per-session
             // object-type cache for VALUES blocks. Compression is not a concern
             // here: EncryptableAndCompressiblePacket::CompressIfNeeded runs at
             // socket-write time, below this tap, so SMSG_COMPRESSED_UPDATE_OBJECT
@@ -2961,7 +2962,7 @@ namespace WrathBench
     }
 
     // Emit one synthetic WB_SESSION_STATE carrying the session's own
-    // client-visible state (ADR-0014). World thread only: reads the Player. The
+    // client-visible state. World thread only: reads the Player. The
     // guards mirror the reattach path — the session may tear down or lose the
     // core WorldSession between the caller's check and this run.
     void Manager::EmitSessionState(std::shared_ptr<BenchSession> const& s)
@@ -3001,7 +3002,7 @@ namespace WrathBench
     }
 
     // =================================================================
-    // SMSG_UPDATE_OBJECT decoding (the observation hot path, ADR-0005/0010).
+    // SMSG_UPDATE_OBJECT decoding (the observation hot path).
     // Layouts mirror Object::BuildCreateUpdateBlockForPlayer /
     // BuildMovementUpdate / BuildValuesUpdate and UpdateData::BuildPacket at
     // the pinned commit. Only whitelisted fields are named; everything else in
@@ -4681,7 +4682,7 @@ namespace WrathBench
                 {
                     // Destination and duration ONLY. The spline path points are
                     // consumed and dropped: serving them would leak the server's
-                    // route (ADR-0010 watch-out).
+                    // route.
                     name = "SMSG_MONSTER_MOVE";
                     uint64 guid = 0; p.readPackGUID(guid);
                     uint8 toggle; p >> toggle;

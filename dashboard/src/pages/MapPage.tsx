@@ -1,7 +1,7 @@
 /**
  * The live map, ported from the hand-written `/map` page onto Solid.
  *
- * ADR-0019's two rules hold unchanged. The renderer consumes a *position feed*
+ * The map view's two rules hold unchanged. The renderer consumes a *position feed*
  * and nothing else: `positions()` is the only thing that fetches, every draw
  * function takes what it draws as an argument, and no draw path asks whether a
  * run is live — a replay mode swaps the feed and this file does not change. And

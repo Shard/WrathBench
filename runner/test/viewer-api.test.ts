@@ -652,7 +652,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e90.runs).toHaveLength(0);
   });
 
-  test("harness is a tag on every results row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
+  test("harness is a tag on every results row, not a partition; ?harness= is an optional filter defaulting to all", async () => {
     const runs = fixture();
     stamped(runs, { ...TUPLE, harness: "claude-code" });
 

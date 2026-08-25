@@ -8,20 +8,21 @@
  * run page calls playtime.
  *
  * Runs that cannot be scored never appear: a scripted stub is not a model, and
- * an objective run was steered (ADR-0033). The harness (ADR-0035) is a tag on
+ * an objective run was steered. The harness is a tag on
  * the row, never an exclusion: claude-code and wrathbench rows share the
  * chart, and the column says which loop each group's runs came from. The
  * count of what was excluded is shown, because a chart that silently drops
  * three quarters of the runs is a lie of omission.
  *
- * The same rule governs the episode filter (ADR-0030). A tier is a
+ * The same rule governs the episode filter. A tier is a
  * comparability group and the page shows one at a time — e90 by default — and
  * says how many rows that filter removed. Older runs that merely *look* like a
  * tier are labeled, never enrolled, so they show up under `all` and nowhere
  * else.
  *
  * Drawn by hand in SVG. A charting library would be a dependency for two bar
- * charts, and ADR-0022's exception was for a component model, not for widgets.
+ * charts, and the dashboard's one allowed dependency was for a component
+ * model, not for widgets.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -48,7 +49,7 @@ export default function Results() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const overrides = (): boolean => params.overrides === "1";
-  // The harness filter (ADR-0035) defaults to all; it narrows, it never partitions.
+  // The harness filter defaults to all; it narrows, it never partitions.
   const harness = (): ReturnType<typeof harnessParam> => harnessParam(params.harness);
   /*
    * `?model=` is a client-side filter, deliberately: `/api/results` has no model
@@ -65,7 +66,7 @@ export default function Results() {
    */
   const effort = (): string | null => (typeof params.effort === "string" && params.effort.length > 0 ? params.effort : null);
   /*
-   * The starting character (ADR-0034's extras cycle) is a client-side filter
+   * The starting character (the extras cycle) is a client-side filter
    * for the same reason `?model=` is, and it is a *filter*, not a group key:
    * the baseline character is the comparison set, so a Dwarf Hunter run sits
    * in the same row as the Human Paladin runs it is being compared against
@@ -114,8 +115,8 @@ export default function Results() {
       <h2 class="section">results</h2>
       <p class="dim">
         Cost of reaching a level, per model per harness version. Scores are comparable within a
-        harness version only (ADR-0004); effort is part of the row, not averaged away (ADR-0024), and
-        so is whether the wiki served coordinates (ADR-0028).
+        harness version only; effort is part of the row, not averaged away, and so is whether the
+        wiki served coordinates. See docs/METHODOLOGY.md for the scoring rules.
       </p>
 
       <EpisodePicker
@@ -175,7 +176,7 @@ export default function Results() {
         </div>
         <p class="dim">
           Race and class label and filter rows; they are not a group key. The baseline character
-          (Human Paladin) is the comparison set — an extras run on another character (ADR-0034)
+          (Human Paladin) is the comparison set — an extras run on another character
           shares its model's row unless one character is picked here.
         </p>
       </Show>

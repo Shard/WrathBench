@@ -571,7 +571,7 @@ describe("a main-namespace title that is a Cataclysm coinage", () => {
 });
 
 /**
- * The world-id door (ADR-0042): a page written after the cutoff that says
+ * The world-id door: a page written after the cutoff that says
  * nothing about its era is admitted when an id it states about itself exists in
  * this server's 3.3.5a world DB **and the DB's name for that id is what the
  * page is about**.
@@ -793,7 +793,7 @@ describe("namesAgree", () => {
     // the rule is for; the residue it accepts is a page whose subject is a
     // strict word-subset of a different entity's name. Measured over the real
     // dump it costs ~15 pages, and every alternative measured cost more real
-    // ones than it saved (ADR-0042 addendum).
+    // ones than it saved.
     expect(namesAgree("Example Guard", "Example Other Guard")).toBe(true);
   });
 

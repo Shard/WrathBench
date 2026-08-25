@@ -11,7 +11,7 @@
 # Phases, each written to data/runs/server-state.json for the viewer:
 #
 #   draining    stop the `fleet` service. SIGTERM reaches the supervisor, every
-#               live run PAUSES (ADR-0036) and is resumed by the supervisor when
+#               live run PAUSES and is resumed by the supervisor when
 #               it comes back. The script then waits for the supervisor's own
 #               state file to say every job has exited — never pgrep, never a
 #               guess — with a bounded timeout that fails loudly.
@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
     --next-tag) NEXT_TAG="$2"; shift 2 ;;
     --no-smoke) RUN_SMOKE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --allow-live) echo "deploy-worldserver: --allow-live is gone — the deploy drains the fleet itself (runs pause and resume, ADR-0036)" >&2; exit 2 ;;
+    --allow-live) echo "deploy-worldserver: --allow-live is gone — the deploy drains the fleet itself (runs pause and resume; see docs/OPERATIONS.md)" >&2; exit 2 ;;
     -h|--help) sed -n '2,55p' "$0"; exit 0 ;;
     *) echo "deploy-worldserver: unknown flag $1" >&2; exit 2 ;;
   esac
@@ -122,7 +122,7 @@ cd "${REPO_ROOT}"
 # Smokes are `script<TAB>account` pairs (SMOKES / SMOKE_ACCOUNTS index-aligned):
 # fleet.json entries may be a bare script (on preflight.account) or
 # { script, account }. `deploySmokes` is the deploy-time full arc the
-# supervisor never runs (ADR-0023 amendment); it has its own budget.
+# supervisor never runs; it has its own budget.
 PREFLIGHT_ENABLED=""
 PREFLIGHT_ACCOUNT=""
 PREFLIGHT_TIMEOUT_S=""

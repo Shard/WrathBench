@@ -3,7 +3,7 @@
  *
  * `/api/fleet` is polled once, from the Layout, because two things read it on
  * every page: the status badge in the top bar, and the fleet page when it is
- * the page. One poller rather than one per consumer keeps ADR-0022's polling
+ * the page. One poller rather than one per consumer keeps the dashboard's polling
  * budget where it was when only the fleet page read it. `/api/info` rides
  * along for the same reason — the badge names the worldserver's build.
  */

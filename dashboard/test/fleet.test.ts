@@ -405,7 +405,7 @@ describe("episode progress in the state cell", () => {
 
   test("a probing row shows real progress: unscored is not uncapped", () => {
     // The gate is capped-ness, not scored-ness. A campaign sets an enforced
-    // clock and the run ends on it (ADR-0041), so the percentage is a fact
+    // clock and the run ends on it, so the percentage is a fact
     // about that run — nav-probe's six hours is this row, not the freeplay one.
     const row = rowFor(
       fleet({ jobs: [job({ episode: "probing" })] }),

@@ -44,7 +44,7 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 - **fleet** — the fleet supervisor (`infra/run-fleet.ts`) as a long-lived
   service, same image and mounts as `runner`. Behind the `fleet` compose profile
   so it only starts when named. See `docs/OPERATIONS.md` ("Running the fleet as
-  a service") and ADR-0020.
+  a service").
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
 published to the host are 3724 (authserver) and 8085 (worldserver), bound
@@ -189,7 +189,7 @@ config and everything but `model` has a default, so an old bare
 | key | default | notes |
 | --- | --- | --- |
 | `model` | — | required, passed through verbatim |
-| `driver` | `openai` | or `claude-code` (the claude-code harness, ADR-0035; `claude-subscription` is read as the old spelling) |
+| `driver` | `openai` | or `claude-code` (the claude-code harness; `claude-subscription` is read as the old spelling) |
 | `account` | runner default (`RUNNER`) | one live session per account |
 | `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
@@ -236,7 +236,7 @@ sidesteps that collision.
 ## The fleet
 
 `infra/fleet.json` is the whole answer to "what is running right now". Its
-unit of work is the **job** (ADR-0034): a roster entry (or a rotation of
+unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on
 one game **account**. Accounts have a **class** — `pool`, `paid`, `local`, or
 pinned to one job — and the class decides which job may land on them. A job
@@ -250,7 +250,7 @@ leaves free. Inspect the config, and you have inspected the fleet.
 
 The file has a `roster` map — the model **catalog**: name → the per-entry
 schema the roster accepts, plus `tier` and `idle`, and never an `objective`
-(ADR-0041) — an `accounts` block (`pool`, `paid`, `local` lists), a
+(steering belongs to a campaign) — an `accounts` block (`pool`, `paid`, `local` lists), a
 `campaigns` map (probe campaigns: an objective swept over `cells` by a set of
 `models`, optionally pinned to an `account`), a `queue` of jobs (`ref`,
 `episode`, `repeat`, optional `account`, optional `enabled`), a `policy` block
