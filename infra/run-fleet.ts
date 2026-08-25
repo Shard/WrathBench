@@ -75,6 +75,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { randomUUID } from "node:crypto";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, releaseRunSession, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
@@ -1090,6 +1091,64 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
 
 // ------------------------------------------------------------- scheduling
 
+// ADR-0050: the model names its own character, so a fixed name no longer
+// travels with the roster entry — what travels is where the LAST one is
+// standing. A fresh attempt therefore prefers the free account the model's
+// previous run used: the character it may well name the same thing again is
+// already there, hygiene wipes it on the way in, and the name cannot collide
+// with a copy of itself on some other account. Under ADR-0036 a resume always
+// went back to its own account and this never came up; ADR-0049 made every
+// scored lapse a FRESH attempt, and `fleet-sonnet-e90-...-a12` spent eight
+// minutes looping `char_create_failed_code_50` on RUNNER3 while its
+// predecessor's character still stood on RUNNER5 (2026-08-25).
+
+/** Where a model's last recorded character is: the account, and the name on it. */
+export interface Affinity {
+  account: string;
+  character: string | null;
+}
+
+/**
+ * The account each roster name last ran on, from the run facts the supervisor
+ * already reads. Pure. Latest start wins; a run with no recorded account is no
+ * evidence. Matching is the projection's own (model + effort), so a roster
+ * entry renamed keeps its history and two entries on one model id do not.
+ */
+export function affinityFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Affinity> {
+  const out = new Map<string, Affinity>();
+  const at = new Map<string, number>();
+  for (const [name, e] of Object.entries(roster)) {
+    for (const f of runs) {
+      if (f.account === null) continue;
+      if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
+      if ((at.get(name) ?? -1) >= f.startedAt) continue;
+      at.set(name, f.startedAt);
+      out.set(name, { account: f.account, character: f.character });
+    }
+  }
+  return out;
+}
+
+/** The account a fresh attempt of `ref` would rather have, or undefined. */
+export type AccountAffinity = (ref: string) => string | undefined;
+
+export function affinityOf(map: ReadonlyMap<string, Affinity>): AccountAffinity {
+  return (ref) => map.get(ref)?.account;
+}
+
+/**
+ * Take an account off a free list: the preferred one when it is on the list,
+ * otherwise the first, exactly as `shift()` gave it. Mutates the list, because
+ * every caller is walking one list handing out accounts.
+ */
+export function takeAccount(free: string[], prefer?: string): string | undefined {
+  if (prefer !== undefined) {
+    const i = free.findIndex((a) => a.toUpperCase() === prefer.toUpperCase());
+    if (i >= 0) return free.splice(i, 1)[0];
+  }
+  return free.shift();
+}
+
 export interface QueueSkip {
   job: FleetJob;
   reason: string;
@@ -1132,6 +1191,12 @@ export function planQueue(opts: {
   eligible?: Eligible;
   /** Roster names with a stream in flight outside `queue` (policy and pinned jobs). */
   runningRefs?: ReadonlySet<string>;
+  /**
+   * The account a job's model would rather have (ADR-0050, `affinityOf`): the
+   * one its last run left its character on. A preference only — a job whose
+   * account is busy takes the next free one, as before.
+   */
+  affinity?: AccountAffinity;
 }): QueuePlan {
   const plan: QueuePlan = { assign: [], waiting: [], skipped: [] };
   const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
@@ -1163,7 +1228,7 @@ export function planQueue(opts: {
       plan.skipped.push({ job, reason: cool });
       continue;
     }
-    const account = free.shift();
+    const account = takeAccount(free, opts.affinity?.(refs[0]!));
     if (account === undefined) {
       plan.waiting.push(job);
       continue;
@@ -1278,6 +1343,8 @@ export function planPolicy(opts: {
   campaigns?: readonly Campaign[];
   /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
   probeRuns?: readonly ProbeRun[];
+  /** The account a pick's model would rather have (ADR-0050, `affinityOf`). */
+  affinity?: AccountAffinity;
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
 }
@@ -1359,9 +1426,20 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
       ...(opts.campaigns !== undefined ? { campaigns: opts.campaigns } : {}),
       ...(opts.probeRuns !== undefined ? { probeRuns: opts.probeRuns } : {}),
     });
+  /*
+   * Accounts in preference order over the FINAL picks, each class over its own
+   * list — a paid pick keeps a paid account, a local one keeps the box, and
+   * the pool rows stay free-only. Affinity (ADR-0050) is the one thing that
+   * reorders a class's list: a pick whose model left its character on a free
+   * account of its own class takes that one instead of the first.
+   */
+  const pools: Partial<Record<AccountClass, string[]>> = { pool: [...free] };
+  for (const cls of ACCOUNT_CLASSES) if (splitFree[cls] !== undefined) pools[cls] = [...splitFree[cls]!];
+  const place = (pick: NextJob): PolicyPick =>
+    wrap({ ...pick, account: takeAccount(pools[listClass(pick.name)] ?? [], opts.affinity?.(pick.name)) ?? pick.account });
   if (opts.concurrency === undefined) {
     const plan = next(opts.states, free, []);
-    return { picks: plan.jobs.map(wrap), held: plan.held };
+    return { picks: plan.jobs.map(place), held: plan.held };
   }
   // The cap, over the projection's own priority order: a pick whose key is
   // full is passed over and the next candidate is asked for its account, until
@@ -1394,16 +1472,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     states = states.filter((s) => !passed.has(s.name));
     accounts = free.filter((a) => !out.some((p) => p.account === a));
   }
-  // Accounts in preference order over the final picks, as an uncapped round
-  // would give — each class over its own list, so a paid pick keeps a paid
-  // account, a local one keeps the box, and the pool rows stay free-only.
-  const at: Partial<Record<AccountClass, number>> = {};
-  const take = (cls: AccountClass): string => {
-    const i = at[cls] ?? 0;
-    at[cls] = i + 1;
-    return (cls === "pool" ? free[i] : splitFree[cls]![i])!;
-  };
-  return { picks: out.map((pick) => wrap({ ...pick, account: take(listClass(pick.name)) })), held };
+  return { picks: out.map(place), held };
 }
 
 /**
@@ -1923,6 +1992,83 @@ export async function releaseEndedSessions(ended: readonly EndedRun[], say: (s: 
   for (const e of ended) {
     const detail = await releaseRunSession(e.runId);
     say(`released the session for ${e.runId}${e.account !== null ? ` on ${e.account}` : ""} — ${detail}`);
+  }
+}
+
+/**
+ * Cross-account name hygiene (ADR-0050), the fallback under account affinity.
+ *
+ * Episode hygiene clears the LAUNCHING account and nothing else, so a name
+ * standing on some other pool account is invisible to it: the model asks for
+ * the name it used last time and the server answers `code 50`. Affinity makes
+ * that rare — the model usually goes back to the account its character is on —
+ * but it cannot when that account is busy or when the character is two runs
+ * old. So the supervisor, which is the only thing that knows which accounts
+ * are free, plans a delete of the stale name on the account that still holds
+ * it.
+ *
+ * The safety argument is the one that governs assignment itself: a sweep is
+ * planned only for an account this same tick considers FREE — not held by a
+ * live run, not assigned to anything — so it is exactly as safe as handing
+ * that account to a fresh run, whose hygiene would wipe the character anyway.
+ * The launching account is excluded: its own hygiene owns it.
+ */
+export interface NameSweep {
+  ref: string;
+  account: string;
+  character: string;
+}
+
+export function planNameSweeps(opts: {
+  /** What this tick is launching fresh: the roster ref and the account it got. */
+  assign: readonly { ref: string; account: string }[];
+  affinity: ReadonlyMap<string, Affinity>;
+  /** True when nothing holds the account and nothing this tick was given it. */
+  isFree: (account: string) => boolean;
+}): NameSweep[] {
+  const out: NameSweep[] = [];
+  for (const a of opts.assign) {
+    const prev = opts.affinity.get(a.ref);
+    if (prev === undefined || prev.character === null) continue;
+    if (prev.account.toUpperCase() === a.account.toUpperCase()) continue;
+    if (!opts.isFree(prev.account)) continue;
+    if (out.some((s) => s.account.toUpperCase() === prev.account.toUpperCase() && s.character === prev.character)) continue;
+    out.push({ ref: a.ref, account: prev.account, character: prev.character });
+  }
+  return out;
+}
+
+/**
+ * Delete the swept names, through the module's client delete path — the same
+ * `POST /character-delete` episode hygiene uses, never a database write
+ * (CONTRACTS.md). Best effort: a refusal is logged and the launch proceeds,
+ * because the model can simply choose another name.
+ */
+export async function sweepNames(
+  sweeps: readonly NameSweep[],
+  say: (s: string) => void,
+  f: typeof fetch = fetch,
+): Promise<void> {
+  const url = (process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086") + "/character-delete";
+  for (const sw of sweeps) {
+    // The module refuses tokens under 32 characters (`weak_token`), and this
+    // one addresses no session of ours, so it is random per call.
+    const token = `fleet-sweep-${randomUUID()}${randomUUID()}`;
+    try {
+      const r = await f(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, account: sw.account, character: sw.character }),
+      });
+      const j = (await r.json()) as { deleted?: boolean; error?: string };
+      say(
+        j.deleted === true
+          ? `name hygiene: deleted ${sw.character} on ${sw.account} — ${sw.ref} is launching elsewhere`
+          : `name hygiene: could not delete ${sw.character} on ${sw.account} (${j.error ?? `http ${r.status}`}) — the model can pick another name`,
+      );
+    } catch (e) {
+      say(`name hygiene: could not reach the module to delete ${sw.character} on ${sw.account} (${e instanceof Error ? e.message : String(e)})`);
+    }
   }
 }
 
@@ -3524,7 +3670,7 @@ function printStatus(configPath: string): void {
  * pool accounts the queue and then the policy would take. Pure over the
  * projection; used by --dry-run and by the startup fail-fast.
  */
-export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = [], probeRuns: readonly ProbeRun[] = []): {
+export function planTick(config: FleetConfig, states: readonly ModelState[], held: (a: string) => string | undefined, stamp: string, resumes: readonly ResumePlan[] = [], probeRuns: readonly ProbeRun[] = [], affinity?: AccountAffinity): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
   policy: PolicyPick[];
@@ -3554,6 +3700,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     cooling: () => undefined,
     eligible,
     runningRefs,
+    ...(affinity !== undefined ? { affinity } : {}),
   });
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
   const billingOfName = new Map(states.map((st) => [st.name, st.billing]));
@@ -3573,6 +3720,7 @@ export function planTick(config: FleetConfig, states: readonly ModelState[], hel
     paidRunning: 0,
     campaigns: unpinnedCampaigns(config),
     probeRuns,
+    ...(affinity !== undefined ? { affinity } : {}),
   });
   return { pinned, queue, policy, heldPicks };
 }
@@ -3590,7 +3738,9 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
-  const plan = planTick(config, states, held, stampToday, resumes.resume, probeRunsOf(runs, config.roster));
+  // Affinity (ADR-0050) so the printed plan places accounts the way the live
+  // supervisor would: a report that disagrees with the tick is worse than none.
+  const plan = planTick(config, states, held, stampToday, resumes.resume, probeRunsOf(runs, config.roster), affinityOf(affinityFrom(runs, config.roster)));
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
   const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
@@ -4033,6 +4183,10 @@ async function main(): Promise<void> {
       }
     }
     const runningAndReserved = new Map([...assigned, ...reserved]);
+    // Where each model's last character is standing (ADR-0050). Read once a
+    // tick from the same run facts everything else here reads.
+    const affinityMap = affinityFrom(runs, cfg.roster);
+    const affinity = affinityOf(affinityMap);
     lastPlan = planQueue({
       queue: poolJobs(cfg),
       roster: cfg.roster,
@@ -4043,10 +4197,14 @@ async function main(): Promise<void> {
       cooling: jobCooling,
       eligible,
       runningRefs,
+      affinity,
     });
     lastPlan.skipped.unshift(...pinnedSkips);
+    // Every fresh launch this tick, for the cross-account name sweep below.
+    const freshAssign: { ref: string; account: string }[] = [];
     for (const { job, account } of lastPlan.assign) {
       pending.set(job.name, job);
+      for (const r of job.refs) freshAssign.push({ ref: r, account });
       out.push(jobSpawn(job, cfg.roster, account, stampToday, eligible, cfg.campaigns));
     }
     // The policy fills what the queue left free. A gated spawn is not a
@@ -4066,6 +4224,7 @@ async function main(): Promise<void> {
         paidRunning,
         campaigns: unpinnedCampaigns(cfg),
         probeRuns: probes,
+        affinity,
       });
       for (const { job, account, why } of picks) {
         pending.set(job.name, job);
@@ -4079,6 +4238,7 @@ async function main(): Promise<void> {
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);
           record({ job: job.name, event: "policy-pick", detail: `${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account}: ${why}` });
         }
+        for (const r of job.refs) freshAssign.push({ ref: r, account });
         out.push(jobSpawn(job, cfg.roster, account, stampToday, undefined, cfg.campaigns));
       }
       const taken = new Set([...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...picks.map((p) => p.account)].map((a) => a.toUpperCase()));
@@ -4096,6 +4256,21 @@ async function main(): Promise<void> {
         if (idle !== undefined) say(`policy: ${idle}`);
         policyIdle = idle;
       }
+    }
+    // Cross-account name hygiene (ADR-0050): a name the launching account's own
+    // hygiene cannot see, on an account this tick calls free.
+    if (freshAssign.length > 0) {
+      const busy = new Set(
+        [...runningAndReserved.values(), ...lastPlan.assign.map((a) => a.account), ...freshAssign.map((a) => a.account)].map((a) =>
+          a.toUpperCase(),
+        ),
+      );
+      const sweeps = planNameSweeps({
+        assign: freshAssign,
+        affinity: affinityMap,
+        isFree: (a) => !busy.has(a.toUpperCase()) && held(a) === undefined,
+      });
+      if (sweeps.length > 0) void sweepNames(sweeps, say);
     }
     for (const sk of lastPlan.skipped) {
       if (complainedSkips.get(sk.job.name) !== sk.reason) {

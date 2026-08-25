@@ -1229,7 +1229,9 @@ async function attemptSpec(
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchTs = Date.now();
     say(
-      `launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ` (character ${spec.character})`}`,
+      // The name is the model's own from ADR-0050 on; what the roster carries
+      // is the suggestion the notice offers, so the line says so.
+      `launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ` (suggested character ${spec.character})`}`,
     );
     const code = await runEpisode(spec, resume);
     const verdict = classify(spec, code);
@@ -1523,7 +1525,7 @@ async function main(): Promise<void> {
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
-          `   character ${s.character} (race ${s.race}, class ${s.class})\n` +
+          `   character ${s.character} suggested (the model names its own, ADR-0050); race ${s.race}, class ${s.class} fixed\n` +
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +

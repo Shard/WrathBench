@@ -84,7 +84,10 @@ accounts    { pool: [...], paid: [...], local: [...] } — the account classes (
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            Never an account. Two scheduling axes (ADR-0043):
+            `character` is only the SUGGESTION the launch note offers: the model names its own
+            character (ADR-0050), and the name it chose is what the run row, meta.json and the
+            runs page carry. `race` and `class` are not the model's — they are the episode's
+            comparability dimensions. Never an account. Two scheduling axes (ADR-0043):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
               one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code

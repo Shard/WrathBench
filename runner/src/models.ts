@@ -442,6 +442,13 @@ export interface RunFact {
   pause: { reason: string; at: number; count: number; episodeElapsedMs: number | null } | null;
   /** The game account the run was launched on; a resume must go back to it. */
   account: string | null;
+  /**
+   * The character the run actually played (ADR-0050: the model names it, and
+   * `run.ts` rewrites the config's suggestion at the first sight of it). What
+   * account affinity keys on: a fresh attempt prefers the account this
+   * character is still standing on, so the name does not collide elsewhere.
+   */
+  character: string | null;
   /** The run's wall-clock budget (`watchdogs.episodeMs`), null when disabled. */
   episodeMs: number | null;
   /**
@@ -646,6 +653,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
       effort?: unknown;
       extra?: unknown;
       account?: unknown;
+      character?: unknown;
       campaign?: unknown;
       cell?: unknown;
       watchdogs?: { episodeMs?: unknown };
@@ -680,6 +688,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     live: false,
     pause: null,
     account: str(meta.config?.account),
+    character: str(meta.config?.character),
     episodeMs: num(meta.config?.watchdogs?.episodeMs),
     campaign: str(meta.config?.campaign),
     cell: str(meta.config?.cell),

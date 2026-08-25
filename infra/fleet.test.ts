@@ -54,6 +54,11 @@ import {
   withResume,
   planQueue,
   planPolicy,
+  affinityFrom,
+  affinityOf,
+  takeAccount,
+  planNameSweeps,
+  sweepNames,
   policyJob,
   rosterModels,
   eligibleFrom,
@@ -363,6 +368,7 @@ describe("campaigns (ADR-0041)", () => {
       live: false,
       pause: null,
       account: null,
+      character: null,
       episodeMs: null,
       campaign: "probe1",
       cell: "c1",
@@ -696,6 +702,7 @@ describe("the shipped fleet files", () => {
         live: false,
         pause: null,
         account: null,
+        character: null,
         episodeMs: null,
         campaign: null,
         cell: null,
@@ -1254,6 +1261,7 @@ describe("scheduling policy (ADR-0032)", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -1638,6 +1646,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     bestLevel: 3,
     live: false,
     pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 },
+    character: null,
     episodeMs: 90 * 60_000,
     campaign: null,
     cell: null,
@@ -1892,5 +1901,171 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     const out = withResume(mix, { runId: "fleet-mix-b-low-20260823", model: "b", effort: "low" });
     expect(out.entries?.map((e) => e.runId)).toEqual(["fleet-mix-b-low-20260823", "fleet-mix-a-20260823"]);
     expect(out.resumeRunId).toBe("fleet-mix-b-low-20260823");
+  });
+});
+
+// ---------------------------------------------- ADR-0050 account affinity
+
+describe("account affinity and cross-account name hygiene (ADR-0050)", () => {
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
+    ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
+    mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
+  };
+  const fact = (model: string, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `${model}-${over.startedAt ?? 0}`,
+    model,
+    effort: null,
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW - 3_600_000,
+    endedAt: NOW - 1_800_000,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 3,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    ...over,
+  });
+  const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
+    refs: [over.ref],
+    episode: "e90",
+    repeat: 1,
+    name: `${over.ref}-${over.episode ?? "e90"}`,
+    enabled: true,
+    source: "queue",
+    ...over,
+  });
+  const base = { roster, pool: ["RUNNER", "RUNNER2", "RUNNER3"], finished: new Set<string>(), held: () => undefined, cooling: () => undefined };
+  const empty = { assign: [], waiting: [], skipped: [] };
+
+  test("the latest run of a model names the account its character is standing on", () => {
+    const runs = [
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 7_200_000, account: "RUNNER", character: "Oldname" }),
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 3_600_000, account: "RUNNER5", character: "Grimjaw" }),
+      // No account recorded: no evidence, and it must not win on recency.
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 60_000, character: "Ghost" }),
+      fact("stealth/ox-alpha", { startedAt: NOW - 600_000, account: "RUNNER2", character: "Zeliana" }),
+    ];
+    const map = affinityFrom(runs, roster);
+    expect(map.get("glm")).toEqual({ account: "RUNNER5", character: "Grimjaw" });
+    expect(map.get("ox")).toEqual({ account: "RUNNER2", character: "Zeliana" });
+    expect(map.get("mimo")).toBeUndefined();
+    expect(affinityOf(map)("glm")).toBe("RUNNER5");
+    expect(affinityOf(map)("mimo")).toBeUndefined();
+  });
+
+  test("takeAccount prefers the affine account and otherwise gives the first, as shift did", () => {
+    const free = ["RUNNER", "RUNNER2", "RUNNER3"];
+    expect(takeAccount(free, "runner2")).toBe("RUNNER2");
+    expect(free).toEqual(["RUNNER", "RUNNER3"]);
+    // A preference that is not free falls through to the first free account.
+    expect(takeAccount(free, "RUNNER5")).toBe("RUNNER");
+    expect(takeAccount([], "RUNNER")).toBeUndefined();
+  });
+
+  test("a queue job goes back to the free account its model's character is on", () => {
+    const affinity = affinityOf(
+      affinityFrom([fact("mimo-v2.5-free", { account: "RUNNER3", character: "Grimjaw" })], roster),
+    );
+    const plan = planQueue({ ...base, queue: [job({ ref: "glm" }), job({ ref: "mimo" })], running: new Map(), affinity });
+    expect(plan.assign.map((a) => [a.job.name, a.account])).toEqual([["glm-e90", "RUNNER"], ["mimo-e90", "RUNNER3"]]);
+    // Without affinity the pool order stands: mimo would have taken RUNNER2.
+    const plain = planQueue({ ...base, queue: [job({ ref: "glm" }), job({ ref: "mimo" })], running: new Map() });
+    expect(plain.assign.map((a) => a.account)).toEqual(["RUNNER", "RUNNER2"]);
+  });
+
+  test("an affine account that is busy is not waited for — the next free one is taken", () => {
+    const affinity = affinityOf(
+      affinityFrom([fact("z-ai/glm-5.2:free", { account: "RUNNER3", character: "Grimjaw" })], roster),
+    );
+    const plan = planQueue({
+      ...base,
+      queue: [job({ ref: "glm" })],
+      running: new Map(),
+      held: (a) => (a === "RUNNER3" ? "another run" : undefined),
+      affinity,
+    });
+    expect(plan.assign.map((a) => a.account)).toEqual(["RUNNER"]);
+    expect(plan.waiting).toEqual([]);
+  });
+
+  test("a policy pick keeps its own account too", () => {
+    const states = modelStatesOf(rosterModels(roster));
+    const affinity = affinityOf(
+      affinityFrom([fact("stealth/ox-alpha", { account: "RUNNER3", character: "Zeliana" })], roster),
+    );
+    const picks = planPolicy({
+      states: states.filter((s) => s.name === "ox"),
+      pool: ["RUNNER", "RUNNER2", "RUNNER3"],
+      running: new Map(),
+      held: () => undefined,
+      queuePlan: empty,
+      runningRefs: new Set(),
+      affinity,
+    });
+    expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER3"]]);
+  });
+
+  test("a sweep is planned only for a name on an account this tick calls free, never the launching one", () => {
+    const affinity = affinityFrom(
+      [
+        fact("z-ai/glm-5.2:free", { account: "RUNNER5", character: "Grimjaw" }),
+        fact("stealth/ox-alpha", { account: "RUNNER6", character: "Zeliana" }),
+        fact("mimo-v2.5-free", { account: "RUNNER2", character: "Bramble" }),
+      ],
+      roster,
+    );
+    const sweeps = planNameSweeps({
+      assign: [
+        // glm launches on RUNNER3 while Grimjaw stands on a free RUNNER5.
+        { ref: "glm", account: "RUNNER3" },
+        // ox's old account is busy: nothing may be deleted there.
+        { ref: "ox", account: "RUNNER4" },
+        // mimo went back to its own account: its own hygiene owns it.
+        { ref: "mimo", account: "RUNNER2" },
+      ],
+      affinity,
+      isFree: (a) => a !== "RUNNER6",
+    });
+    expect(sweeps).toEqual([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }]);
+    // A model with no recorded character sweeps nothing.
+    expect(planNameSweeps({ assign: [{ ref: "mimo", account: "RUNNER" }], affinity: new Map(), isFree: () => true })).toEqual([]);
+  });
+
+  test("the sweep deletes through the module's client delete path, with a token the module will accept", async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const f = ((url: string, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, deleted: true }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    const said: string[] = [];
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), f);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toEndWith("/character-delete");
+    expect(calls[0]!.body["account"]).toBe("RUNNER5");
+    expect(calls[0]!.body["character"]).toBe("Grimjaw");
+    // The module refuses tokens under 32 characters (`weak_token`).
+    expect(String(calls[0]!.body["token"]).length).toBeGreaterThanOrEqual(32);
+    expect(said[0]).toContain("deleted Grimjaw on RUNNER5");
+  });
+
+  test("a refused delete is logged and never throws — the model can pick another name", async () => {
+    const f = (() => Promise.resolve(new Response(JSON.stringify({ ok: false, error: "account_in_use" }), { status: 409 }))) as unknown as typeof fetch;
+    const said: string[] = [];
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), f);
+    expect(said[0]).toContain("could not delete Grimjaw on RUNNER5 (account_in_use)");
+    const boom = (() => Promise.reject(new Error("econnrefused"))) as unknown as typeof fetch;
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), boom);
+    expect(said[1]).toContain("could not reach the module");
   });
 });
