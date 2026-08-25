@@ -111,7 +111,7 @@
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "none"},
     "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free", "tier": "t1", "idle": "none"},
     "deepseek-flash": {"model": "deepseek/deepseek-v4-flash-0731", "billing": "paid", "character": "Deepflash", "race": 1, "class": 2, "tier": "t0"},
-    "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "character": "Gptluna", "race": 1, "class": 2, "tier": "t0"},
+    "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "character": "Gptluna", "race": 1, "class": 2, "tier": "t1"},
     "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "character": "Gemflash", "race": 1, "class": 2, "tier": "t0"},
     "deepseek-pro": {"model": "deepseek/deepseek-v4-pro-0813", "billing": "paid", "character": "Deeppro", "race": 1, "class": 2, "tier": "t0"},
     "glm-53": {"model": "z-ai/glm-5.3", "billing": "paid", "character": "Glmfive", "race": 1, "class": 2, "tier": "t0"},
