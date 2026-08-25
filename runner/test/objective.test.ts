@@ -220,7 +220,6 @@ describe("argv -> run config", () => {
       "--objective", OBJECTIVE,
       "--max-tool-calls", "2500",
       "--wiki-coords", "true",
-      "--character", "Navprobe",
       "--race", "3",
       "--class", "2",
       "--episode-ms", "21600000",
@@ -239,10 +238,11 @@ describe("argv -> run config", () => {
       driver: "claude-code",
       model: "sonnet",
       account: "SHAKEOUT",
-      character: "Navprobe",
       race: 3,
       class: 2,
     });
+    // No name at launch: the model names its own and the run records it.
+    expect(config.character).toBeUndefined();
     expect(unscoredStamp(config.driver, config.objective)).toContain(OBJECTIVE_STAMP);
   });
 
