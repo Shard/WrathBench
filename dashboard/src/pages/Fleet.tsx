@@ -16,8 +16,8 @@
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
  * published view — jobs, accounts, a heartbeat, the gate — shared with the
  * badge through `lib/feeds.ts` so it is polled once. `/api/runs` is the
- * filesystem's view, read because the job rows carry the level, xp and
- * elapsed time of the run each job is driving.
+ * filesystem's view, read because the job rows carry the level, xp, tokens per
+ * second and elapsed time of the run each job is driving.
  */
 
 import { A, useNavigate } from "@solidjs/router";
@@ -35,6 +35,8 @@ import {
   rowStateLabel,
   runHref,
   serverBanner,
+  tpsLabel,
+  tpsTitle,
   type FleetRow,
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
@@ -226,6 +228,12 @@ function FleetRowView(props: { row: FleetRow }) {
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
       <td class="right mono dim">{fmtTokens(r().tokens)}</td>
+      {/*
+        Speed, as output tokens per second: the recent window in the cell (a live
+        run's rate now is what an operator is asking about) with the run's own
+        average in the title. Blank on a row driving nothing.
+      */}
+      <td class="right mono dim" title={tpsTitle(r().tps)}>{tpsLabel(r().tps)}</td>
       {/* The actual figure only, as the episodes page shows it; blank is "not reported", never an estimate. */}
       <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : fmtUsd(r().costUsd)}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>

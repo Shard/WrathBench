@@ -59,6 +59,7 @@ export type {
   RunsResponse,
   StatePoint,
   TokenTotals,
+  TpsFacts,
 } from "@viewer/api-types";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */

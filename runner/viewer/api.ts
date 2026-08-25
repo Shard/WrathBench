@@ -62,6 +62,7 @@ import {
   scanRunTotals,
   segmentsFrom,
   tokenTotals,
+  tokensPerSecond,
   type RunTotals,
 } from "./tail";
 
@@ -822,6 +823,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         ...row,
         modelResponses: totals?.modelResponses ?? null,
         tokens: totals?.tokens ?? null,
+        // Off the same memoised whole-file pass as the tokens; the fleet page's
+        // speed column and the run page's read one derivation.
+        tps: totals?.tps ?? null,
         cost:
           totals === null
             ? null
@@ -1014,6 +1018,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,
         taxi: tail.taxi,
+        // Same incremental path again: a live run's rate advances with the tail
+        // rather than waiting on the (size, mtime) totals cache to miss.
+        tps: tokensPerSecond(entries),
       };
       return json(body);
     }

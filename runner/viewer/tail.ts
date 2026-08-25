@@ -19,6 +19,7 @@ import type {
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
+  TpsFacts,
 } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
@@ -35,7 +36,7 @@ const MAX_ARRAY = 8;
  * The summary, usage and totals shapes live in `api-types.ts` — the type-only
  * contract the dashboard imports too — and are re-exported here unchanged.
  */
-export type { AchievementFacts, AreaFacts, EntrySummary, ReportedUsage, TaxiFacts, TokenTotals } from "./api-types";
+export type { AchievementFacts, AreaFacts, EntrySummary, ReportedUsage, TaxiFacts, TokenTotals, TpsFacts } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -373,6 +374,112 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
 }
 
 /**
+ * How many model replies the `recent` half of `TpsFacts` is measured over.
+ *
+ * Ten because the question it answers is "how is this run going *now*", and a
+ * reply is tens of seconds: fewer would swing on one long one, more would
+ * average across a stretch of the run the operator has stopped caring about.
+ */
+export const TPS_RECENT_REPLIES = 10;
+
+/**
+ * Output tokens per second, whole-run and over the last few replies.
+ *
+ * The unit measured is one REPLY, not one turn, because a turn is not the same
+ * thing under the two drivers. The fixed loop writes one `request` and one
+ * `response` per turn, but the claude-code driver hands the CLI a single
+ * request and then logs whatever the session emits: on
+ * `fleet-sonnet-e360-sonnet-20260824` that is one `request` and 2,833
+ * `response` records, so timing "a turn" there would time the whole six-hour
+ * episode — the run's elapsed clock wearing a label that says it is the
+ * model's, which is exactly what this figure must never be.
+ *
+ * So a span opens at one of the records that hand the model something to answer
+ * (`TPS_SPAN_OPENERS`: the `request` on the fixed loop, the `snippet_result` or
+ * `tool_result` the CLI was waiting on under claude-code) and closes at the
+ * last of the responses before the next opener. That is the wait plus the
+ * reply: the model was working for that span and for nothing outside it. On the
+ * fixed loop this is exactly request-to-response.
+ *
+ * Everything else — a `state` sample, a `milestone`, a `claude_system` line —
+ * is ignored rather than treated as a boundary, which matters: those are
+ * written by timers and taps while the model is mid-reply, and letting one
+ * restart the clock would shorten the span and read as a speed the model never
+ * had (on the live deepseek-pro run, by a third).
+ *
+ * A span whose responses never arrived is in flight and counts for nothing; so
+ * is one a `pause`, `resume` or `termination` (`SEGMENT_MARKS`) landed inside,
+ * whose reply sits on the far side of however long the run sat parked.
+ *
+ * Tokens: provider-reported where ANY response of the span reported usage, and
+ * `chars ÷ 4` only where none did. This deliberately differs from
+ * `tokenTotals`, which sums both: the claude-code driver splits one reply
+ * across several `response` records where only the last carries usage and that
+ * last figure is the RUNNING TOTAL for the whole reply (`adapter-claude.ts`),
+ * so adding an estimate for the earlier envelopes counts their text twice.
+ * `TokenTotals.completionTokens` still does (FOLLOW-UPS 82); this does not.
+ *
+ */
+export const TPS_SPAN_OPENERS = new Set(["request", "snippet_result", "tool_result"]);
+
+export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
+  /** One measured reply: what it produced, and how long the model took over it. */
+  const replies: { tokens: number; ms: number }[] = [];
+  let open: { reported: number; estimated: number; sawUsage: boolean; start: number; last: number | null } | null = null;
+
+  const close = (): void => {
+    if (open !== null && open.last !== null && open.last > open.start) {
+      replies.push({ tokens: open.sawUsage ? open.reported : open.estimated, ms: open.last - open.start });
+    }
+    open = null;
+  };
+
+  for (const e of entries) {
+    if (e.t === "response") {
+      if (open === null) continue; // a reply with nothing before it times nothing
+      const usage = e["usage"] as ReportedUsage | undefined;
+      if (usage !== undefined) {
+        open.sawUsage = true;
+        open.reported += usage.completion;
+      } else {
+        open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
+      }
+      if (e.ts > 0) open.last = e.ts;
+      continue;
+    }
+    // A record that opens or closes an active stretch drops the span it lands
+    // in: its clock would be measuring a pause, not the model.
+    if (SEGMENT_MARKS.has(e.t)) {
+      close();
+      continue;
+    }
+    // Ambient telemetry mid-reply is not a boundary; see the note above.
+    if (!TPS_SPAN_OPENERS.has(e.t)) continue;
+    close();
+    // No usable timestamp, nothing to time the reply against.
+    if (e.ts <= 0) continue;
+    const usage = e["usage"] as ReportedUsage | undefined;
+    // Some adapters report the whole reply's usage on the request that opened it.
+    open = { reported: usage?.completion ?? 0, estimated: 0, sawUsage: usage !== undefined, start: e.ts, last: null };
+  }
+  close();
+
+  /** Summed both ways round, never a mean of rates: one short reply must not carry the figure. */
+  const rate = (window: readonly { tokens: number; ms: number }[]): number | null => {
+    let tokens = 0;
+    let ms = 0;
+    for (const r of window) {
+      tokens += r.tokens;
+      ms += r.ms;
+    }
+    return ms > 0 ? tokens / (ms / 1000) : null;
+  };
+
+  const recent = replies.slice(-TPS_RECENT_REPLIES);
+  return { overall: rate(replies), recent: rate(recent), replies: replies.length, recentReplies: recent.length };
+}
+
+/**
  * What the provider says this run cost, or null when it said nothing.
  *
  * Two drivers report it in two shapes and both are summed here:
@@ -700,6 +807,8 @@ export interface RunTotals {
   /** How many responses did and did not carry a per-call charge; see
    * `responseCostCoverage`. */
   responseCost: { costed: number; uncosted: number };
+  /** Output tokens per second, whole-run and recent; see `tokensPerSecond`. */
+  tps: TpsFacts;
   /**
    * Where the run went, from its zone/area milestone records; null when it
    * wrote none — a run from before the producer shipped (2026-08-23), which
@@ -727,6 +836,14 @@ export interface RunTotals {
  */
 export async function scanRunTotals(path: string): Promise<RunTotals> {
   const projections: EntrySummary[] = [];
+  /*
+   * What `tokensPerSecond` reads: the request/response projections `tokenTotals`
+   * already gets, plus the records that open a span or drop one — the result
+   * the model was waiting on, and the pause marks. Everything else is ambient
+   * and the derivation ignores it, so it is never collected. The projections
+   * are shared objects here: pointers, not copies.
+   */
+  const tpsMarks: EntrySummary[] = [];
   const marks: SegmentMark[] = [];
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -782,7 +899,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       const taxi = taxiMarkOf(rec);
       if (taxi !== null) taxiMarks.push(taxi);
     }
-    if (t !== "request" && t !== "response") return;
+    if (t !== "request" && t !== "response") {
+      if (TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t)) tpsMarks.push({ i: 0, t, ts, start: 0, end: 0 });
+      return;
+    }
     const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
       const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
@@ -805,6 +925,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       }
     }
     projections.push(p);
+    tpsMarks.push(p);
   };
 
   try {
@@ -830,6 +951,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     segments: segmentsFrom(marks),
     reportedCostUsd: costUsd,
     responseCost: { costed, uncosted },
+    tps: tokensPerSecond(tpsMarks),
     areas: areaFactsFrom(areaMarks),
     achievements: achievementFactsFrom(achievementMarks),
     taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
