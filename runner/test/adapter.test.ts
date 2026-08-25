@@ -225,6 +225,12 @@ describe("OpenAiChatAdapter reasoning effort", () => {
     expect(await sentBody({ effort: "low" })).toMatchObject({ reasoning_effort: "low" });
   });
 
+  test("`none` — thinking off — goes through like any other level", async () => {
+    // Some OpenRouter models accept it and some reject it, which is true of
+    // `xhigh` and `max` too: the adapter does not curate the vocabulary.
+    expect(await sentBody({ effort: "none" })).toMatchObject({ reasoning_effort: "none" });
+  });
+
   test("effort is not host-gated the way the usage opt-in is", async () => {
     const body = await sentBody({ effort: "high" });
     expect(body["reasoning_effort"]).toBe("high");

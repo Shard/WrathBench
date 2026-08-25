@@ -103,6 +103,7 @@
     "sonnet-high": {"model": "sonnet", "driver": "claude-code", "effort": "high", "character": "Fleetsonnhi", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sonnet-xhigh": {"model": "sonnet", "driver": "claude-code", "effort": "xhigh", "character": "Fleetsonnxh", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sonnet-max": {"model": "sonnet", "driver": "claude-code", "effort": "max", "character": "Fleetsonnmx", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sonnet-none": {"model": "sonnet", "driver": "claude-code", "effort": "none", "character": "Fleetsonnno", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2, "tier": "t1"},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "tier": "t1"},
     "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "none"},
