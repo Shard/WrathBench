@@ -3,6 +3,9 @@ import {
   DEFAULT_PREFLIGHT,
   bootMarker,
   diffJobs,
+  applyPause,
+  parsePauseSidecar,
+  formatPauseBanner,
   formatGate,
   gateDecision,
   gateOpen,
@@ -90,9 +93,9 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
-import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
@@ -633,6 +636,108 @@ describe("diffJobs", () => {
   test("a newly added enabled job starts on the tick that sees it", () => {
     const a = diffJobs([spawn({ name: "old" }), spawn({ name: "new", account: "B" })], sets({ running: new Set(["old"]) }));
     expect(a.start.map((l) => l.name)).toEqual(["new"]);
+  });
+});
+
+describe("the pause switch", () => {
+  const sets = (over: Partial<JobSets> = {}): JobSets => ({
+    running: new Set(),
+    draining: new Set(),
+    finished: new Set(),
+    ...over,
+  });
+
+  test("only `paused: true` is a pause; anything else is not, including a half-written file", () => {
+    expect(parsePauseSidecar('{"paused":true,"why":"deploy","at":123}')).toEqual({ why: "deploy", at: 123 });
+    expect(parsePauseSidecar('{"paused":false,"why":"deploy"}')).toBeUndefined();
+    expect(parsePauseSidecar("{}")).toBeUndefined();
+    expect(parsePauseSidecar('{"paused":tru')).toBeUndefined();
+    expect(parsePauseSidecar("")).toBeUndefined();
+    // A pause with no reason still pauses: the switch is the operator's stop
+    // button, and a missing string must never make it a no-op.
+    const p = parsePauseSidecar('{"paused":true}');
+    expect(p?.why).toBe("no reason given");
+    expect(typeof p?.at).toBe("number");
+  });
+
+  test("paused: nothing starts and everything running drains — the same path as enabled:false", () => {
+    const spawns = [spawn({ name: "live" }), spawn({ name: "fresh", account: "B" })];
+    const live = sets({ running: new Set(["live"]) });
+    // Unpaused: the new job starts and the live one is left alone.
+    const before = diffJobs(applyPause(spawns, false), live);
+    expect(before.start.map((l) => l.name)).toEqual(["fresh"]);
+    expect(before.drain).toEqual([]);
+    // Paused: nothing starts, the live one drains (SIGTERM at its episode
+    // boundary, which is what makes the update cost no run its attempt).
+    const after = diffJobs(applyPause(spawns, true), live);
+    expect(after.start).toEqual([]);
+    expect(after.drain).toEqual(["live"]);
+  });
+
+  test("a resume spawn is suppressed too — it would launch an episode the recreate then kills", () => {
+    const resume = spawn({ name: "sonnet-e90", resumeRunId: "fleet-sonnet-e90-20260825" });
+    expect(diffJobs(applyPause([resume], false), sets()).start.map((l) => l.name)).toEqual(["sonnet-e90"]);
+    expect(diffJobs(applyPause([resume], true), sets()).start).toEqual([]);
+  });
+
+  test("clearing the switch before a job drains keeps it running instead of respawning it", () => {
+    const spawns = [spawn({ name: "live" })];
+    const draining = sets({ running: new Set(["live"]), draining: new Set(["live"]) });
+    const a = diffJobs(applyPause(spawns, false), draining);
+    expect(a.undrain).toEqual(["live"]);
+    expect(a.start).toEqual([]);
+  });
+
+  test("applyPause does not mutate its input, and is identity when nothing is paused", () => {
+    const spawns = [spawn({ name: "live" })];
+    const paused = applyPause(spawns, true);
+    expect(spawns[0]!.enabled).toBe(true);
+    expect(paused[0]!.enabled).toBe(false);
+    expect(applyPause(spawns, false)).toBe(spawns);
+  });
+
+  test("the banner separates the switch on disk from the one the supervisor picked up", () => {
+    const sw = { why: "supervisor update", at: Date.parse("2026-08-25T18:00:00Z") };
+    expect(formatPauseBanner(undefined, undefined)).toEqual([]);
+    expect(formatPauseBanner(sw, undefined).join(" ")).toContain("NOT picked it up yet");
+    expect(formatPauseBanner(sw, sw).join(" ")).toContain("in effect");
+    // The other order: the operator cleared the file and the supervisor has not
+    // ticked yet. Saying nothing here would read as "the fleet is scheduling".
+    expect(formatPauseBanner(undefined, sw).join(" ")).toContain("still in effect");
+  });
+
+  test("a config carrying an unknown top-level key is NOT rejected", () => {
+    // Why the switch could have lived in fleet.json: `parseFleet` refuses only
+    // the retired keys BY NAME, so the running supervisor ignores what it does
+    // not know. It is a sidecar anyway (a typo in fleet.json makes every
+    // `enabled` flag inert), but this is the fact that makes either delivery
+    // safe against the code that is live right now.
+    expect(() => parseFleet(fleetJson([], { paused: true, somethingNew: 1 }))).not.toThrow();
+  });
+
+  test("the drain an operator can do TODAY against the running supervisor: empty the account classes", () => {
+    // The rollout paradox: the pause switch is supervisor code, so it is not
+    // live until the supervisor is recreated. This is the escape — it needs no
+    // new code, and it is what the first graceful update uses. Proven against
+    // the SHIPPED file rather than a fixture, because that is what the operator
+    // will edit.
+    const raw = JSON.parse(readFileSync(new URL("./fleet.json", import.meta.url).pathname, "utf8")) as Record<string, unknown>;
+    const drained = {
+      ...raw,
+      accounts: { pool: [], paid: [], local: [] },
+      campaigns: Object.fromEntries(
+        Object.entries(raw["campaigns"] as Record<string, Record<string, unknown>>).map(([k, v]) => [k, { ...v, enabled: false }]),
+      ),
+      queue: [],
+    };
+    // It parses (the empty-pool `fail()` fires only on an enabled pool JOB, and
+    // the queue is empty), and the policy has nowhere to put a pick.
+    const config = parseFleet(drained);
+    expect(config.accounts.pool).toEqual([]);
+    expect(pinnedJobs(config).filter((j) => j.enabled)).toEqual([]);
+    expect(poolJobs(config).filter((j) => j.enabled)).toEqual([]);
+    const states = modelStates({ runsDir: "data/runs", roster: rosterModels(config.roster), policy: config.policy, runs: [] });
+    expect(planNextJobs(states, [], new Set(), { policy: config.policy, campaigns: config.campaigns }).jobs).toEqual([]);
   });
 });
 
