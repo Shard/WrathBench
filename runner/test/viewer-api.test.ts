@@ -757,7 +757,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     stamped(runs, { ...TUPLE, episode: "e90", episodeOverride: true });
     const body = (await (await api(runs)(new Request("http://x/api/episodes"))).json()) as {
       episodes: { id: string; minutes: number | null; toolCalls: number | null; summary: string;
-        members: number; overrides: number; derived: number }[];
+        members: number; overrides: number; derived: number; lapsed: number }[];
       untiered: number;
     };
     expect(body.episodes.map((e) => e.id)).toEqual(["e90", "e360", "probing", "freeplay"]);
@@ -765,7 +765,9 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e90.minutes).toBe(90);
     expect(e90.toolCalls).toBe(3000);
     expect(e90.summary.length).toBeGreaterThan(80);
-    expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0 });
+    // `lapsed` is the ADR-0049 bucket: stamped with the id, never a recorded
+    // episode. Nothing in the fixture ended that way, so it is zero here.
+    expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0, lapsed: 0 });
     expect(body.untiered).toBe(0);
   });
 

@@ -18,7 +18,7 @@
 
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
-import { ATTEMPT_FAILURE_REASONS } from "../src/lapse";
+import { NOT_THE_MODELS_FAULT } from "../src/lapse";
 import { EPISODES } from "../src/episodes";
 import type {
   AchievementFacts,
@@ -272,14 +272,17 @@ export function unscoredReason(run: RunRow): string | null {
     return `unscored (episode ${ep.episode})`;
   }
   /*
-   * A lapsed run is an attempt, never a recorded episode (ADR-0049). It sat
+   * An attempt that never became an episode (ADR-0049). It sat
    * out an unknown share of its clock — a provider window, a deploy, a night
    * the host slept — so the level it reached is not a reading of ninety
    * minutes of play. It stays on the runs page with its reason; the ladder and
    * every chart over episodes drop it here, through the predicate they already
-   * share.
+   * share. The set is the scheduler's own `NOT_THE_MODELS_FAULT`, so a run the
+   * policy has written off and a run the ladder shows can never be the same
+   * run: that covers an operator cut (`manual`) and a harness defect too, both
+   * of which are partial episodes the ladder used to read as finished ones.
    */
-  if (run.terminationReason !== null && ATTEMPT_FAILURE_REASONS.has(run.terminationReason)) {
+  if (run.terminationReason !== null && NOT_THE_MODELS_FAULT.has(run.terminationReason)) {
     return `unscored (${run.terminationReason})`;
   }
   return null;

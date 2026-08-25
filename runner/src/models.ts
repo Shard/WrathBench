@@ -59,7 +59,7 @@ import { harnessSeries } from "./comparability";
 import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
-import { TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { NOT_THE_MODELS_FAULT, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -854,12 +854,10 @@ export function stillbornOf(f: RunFact): boolean | null {
 }
 
 /** A run that counts toward a target: a member of its tier's group that got off the ground. */
-/**
- * Terminations that say nothing about the model: an operator cut the run, or the
- * harness itself failed. They still number attempts (run ids) but never count
- * toward the per-episode target, so the policy reruns them.
- */
-export const NOT_THE_MODELS_FAULT = new Set(["manual", "harness-error", "stale-character", "attempt-failed", "stale"]);
+// The set of "not the model's fault" terminations lives with the lapse rule
+// (ADR-0049), because the viewer's scored-ness predicate reads it too and the
+// two must not drift. Re-exported here so every existing importer is unchanged.
+export { NOT_THE_MODELS_FAULT } from "./lapse";
 
 /**
  * When a run last showed a sign of life: its pause mark when it has one, else

@@ -193,6 +193,12 @@ describe("unscoredReason", () => {
     // episodes — the ladder reads exactly this predicate.
     expect(unscoredReason(run({ terminationReason: "attempt-failed" }))).toBe("unscored (attempt-failed)");
     expect(unscoredReason(run({ terminationReason: "stale" }))).toBe("unscored (stale)");
+    // The same predicate the scheduler writes runs off with, so an operator cut
+    // and a harness defect are partial episodes here too — they used to reach
+    // the ladder with whatever level they had at the moment they were stopped.
+    expect(unscoredReason(run({ terminationReason: "manual" }))).toBe("unscored (manual)");
+    expect(unscoredReason(run({ terminationReason: "harness-error" }))).toBe("unscored (harness-error)");
+    expect(unscoredReason(run({ terminationReason: "stale-character" }))).toBe("unscored (stale-character)");
     // A run that ended on its own clock is untouched.
     expect(unscoredReason(run({ terminationReason: "episode-limit" }))).toBeNull();
   });

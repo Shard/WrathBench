@@ -41,6 +41,7 @@ import {
   jobSpawn,
   planResumes,
   planStaleRuns,
+  retryNumbers,
   formatEndedRun,
   formatPaused,
   formatEnded,
@@ -1654,9 +1655,17 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(plan.listed).toEqual([]);
     expect(plan.end).toHaveLength(1);
     expect(plan.end[0]).toMatchObject({ runId: run.runId, episode: "e90", reason: "attempt-failed", counts: true, account: "RUNNER4" });
-    expect(formatEndedRun(plan.end[0]!, 1)).toBe(
+    expect(formatEndedRun(plan.end[0]!, 2)).toBe(
       "failed attempt: quota-exhausted: not resumed — a scored run that pauses is a failed attempt (ADR-0049), retry 2/3",
     );
+    // A sweep after an outage numbers the batch it is about to write, not the
+    // projection it read before writing any of it: three failures of one model
+    // in one tick read 1/3, 2/3, 3/3 — tainted — and not "retry 1/3" thrice.
+    const batch = [plan.end[0]!, { ...plan.end[0]!, runId: "b" }, { ...plan.end[0]!, runId: "c" }];
+    expect(retryNumbers(batch, () => 0)).toEqual([1, 2, 3]);
+    expect(formatEndedRun(batch[2]!, 3)).toContain("retry 3/3 — tainted");
+    // An operator-pause in the middle spends an attempt without advancing the count.
+    expect(retryNumbers([batch[0]!, { ...batch[1]!, reason: "manual", counts: false }, batch[2]!], () => 0)).toEqual([1, 2, 2]);
     // An operator-pause is the harness's own doing: the attempt is spent, the model is not blamed.
     const stopped = planResumes({ runs: [{ ...run, pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 } }], config: config(), running: new Map(), held, now: NOW });
     expect(stopped.end[0]).toMatchObject({ reason: "manual", counts: false });
@@ -1768,6 +1777,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
       {
         runId: run.runId,
         model: "stealth/ox-alpha",
+        effort: null,
         ref: "ox",
         episode: "e90",
         reason: "manual",
@@ -1802,7 +1812,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     t.setPause(runId, "rate-limited", "429", 41 * 60_000);
     t.close();
     const detail = "ended by the supervisor: model stealth/ox-alpha no longer under ref ox";
-    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha", ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
+    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
     const after = new Trajectory(join(runsDir, runId));
     const row = after.runRow(runId)!;
     after.close();
@@ -1811,7 +1821,7 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     expect(row["pause_reason"]).toBeNull();
     expect(typeof row["ended_at"]).toBe("number");
     // A directory that is not there is reported, not thrown.
-    expect(endRuns("/nonexistent/runs", [{ runId: "x", model: "m", ref: "r", episode: "e90", reason: "manual", detail, counts: false, account: null }])[0]!.error).toBeDefined();
+    expect(endRuns("/nonexistent/runs", [{ runId: "x", model: "m", effort: null, ref: "r", episode: "e90", reason: "manual", detail, counts: false, account: null }])[0]!.error).toBeDefined();
   });
 
   test("withResume puts the paused entry first so a rotation-mate's fresh launch cannot wipe its character", () => {
