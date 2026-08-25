@@ -52,23 +52,27 @@ describe("groupFeed on the fixed loop's cycle", () => {
   test("a snippet card holds the code and the result, with a real duration", () => {
     const g = groupFeed(wrathbenchTurn(12, 1000))[3]!;
     if (g.kind !== "call") throw new Error(g.kind);
-    expect(g.name).toBe("run_snippet");
+    expect(g.call?.name).toBe("run_snippet");
     expect(g.snippet?.code).toBe("return 1");
     expect(g.result?.text).toBe("ok");
     expect(g.durationMs).toBe(449);
   });
 
-  test("state ticks and tool-served events inside a call survive, ahead of the card", () => {
+  test("ambient records inside a call survive, ahead of the card", () => {
+    // The mid-turn ticker writes state rows AND milestone/quest records while
+    // a call is in flight; any non-structural type must be scanned past, not
+    // treated as "the result was never written".
     const entries = [
       e("tool_call", 1_000, { turn: 3, name: "await_events", args: {} }),
       e("state", 5_000),
+      e("quest_complete", 6_000, { questId: 7 }),
       e("events_served", 9_000, { via: "tool", count: 2 }),
-      e("state", 10_000),
+      e("milestone", 10_000, { kind: "zone" }),
       e("tool_result", 11_000, { turn: 3, name: "await_events", isError: false, text: "2 events" }),
     ];
     const groups = groupFeed(entries);
-    expect(groups.map((g) => g.kind)).toEqual(["plain", "plain", "plain", "call"]);
-    const card = groups[3]!;
+    expect(groups.map((g) => g.kind)).toEqual(["plain", "plain", "plain", "plain", "call"]);
+    const card = groups[4]!;
     if (card.kind !== "call") throw new Error(card.kind);
     expect(card.durationMs).toBe(10_000);
   });
@@ -141,8 +145,8 @@ describe("groupFeed at the window's edges", () => {
     const card = groups[0]!;
     if (card.kind !== "call") throw new Error(card.kind);
     expect(card.call).toBeNull();
-    expect(card.isError).toBe(true);
-    expect(card.name).toBe("run_snippet");
+    expect(card.result?.isError).toBe(true);
+    expect(card.result?.name).toBe("run_snippet");
   });
 
   test("a trailing call with no result yet stays open, not glued to nothing", () => {
@@ -179,5 +183,32 @@ describe("groupFeed at the window's edges", () => {
     const g = groups[0]!;
     if (g.kind !== "response") throw new Error(g.kind);
     expect(g.latencyMs).toBeNull();
+  });
+});
+
+describe("groupFeed identity reuse", () => {
+  test("settled groups keep their object identity across a tail append", () => {
+    // Solid's <For> reconciles by reference: a settled row must come back as
+    // the SAME object or every append rebuilds the whole feed's DOM.
+    const turn = wrathbenchTurn(12, 1000);
+    const first = groupFeed(turn);
+    const second = groupFeed([...turn, e("state", 20_000)], first);
+    for (let i = 0; i < first.length; i++) expect(second[i]).toBe(first[i]!);
+    expect(second).toHaveLength(first.length + 1);
+  });
+
+  test("an open call group is replaced, not recycled, when its result arrives", () => {
+    const call = e("tool_call", 1_000, { turn: 3, name: "run_snippet", args: {} });
+    const snip = e("snippet", 1_000, { turn: 3, code: "x" });
+    const first = groupFeed([call, snip]);
+    const done = groupFeed(
+      [call, snip, e("snippet_result", 2_000, { turn: 3, name: "run_snippet", isError: false, text: "ok" })],
+      first,
+    );
+    expect(done).toHaveLength(1);
+    expect(done[0]).not.toBe(first[0]!);
+    const card = done[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.result?.text).toBe("ok");
   });
 });

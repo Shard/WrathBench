@@ -34,6 +34,7 @@ export type {
   CostView,
   HarnessView,
   EntriesResponse,
+  EventsServedEntry,
   EpisodeIdView,
   EpisodeTierView,
   EpisodesResponse,
@@ -70,6 +71,11 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+/** Path of one entry's raw JSONL line — shared by the fetcher and page hrefs. */
+export function rawPath(id: string, i: number): string {
+  return `/api/run/${encodeURIComponent(id)}/raw/${i}`;
 }
 
 export interface ClientOptions {
@@ -167,7 +173,7 @@ export function createClient(opts: ClientOptions = {}) {
     /** The raw JSONL line for one entry, secrets already stripped server-side. */
     raw: async (id: string, i: number): Promise<string> => {
       const f = opts.fetch ?? globalThis.fetch;
-      const res = await f(`${opts.base ?? ""}/api/run/${encodeURIComponent(id)}/raw/${i}`);
+      const res = await f(`${opts.base ?? ""}${rawPath(id, i)}`);
       if (!res.ok) throw new ApiError(res.status, `raw ${i}: ${res.status}`);
       return await res.text();
     },

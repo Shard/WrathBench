@@ -113,6 +113,23 @@ status.
 
 ## Episodes and results
 
+84. **Tool-call timing provenance should be stamped by the writers, not inferred by
+    the dashboard** (run-feed composite rows, 2026-08-25). The feed's call cards show
+    `result.ts − call.ts` only when the writer recorded the call before dispatching it,
+    and the dashboard infers which writer it was from incidental field shapes
+    (`feedgroup.ts`: `turn` present and `call` absent ⇒ `runner/src/loop.ts`, genuine;
+    the claude driver's `call` index or the MCP server's turn-less pairs ⇒ post-hoc,
+    duration withheld). Correct today and pinned by dashboard tests, but it turns three
+    writers' habits into an unstated protocol: loop.ts gaining a `call` index would
+    silently erase genuine durations; mcp.ts gaining `turn` would silently fabricate
+    ~0ms ones. The deeper fix: post-hoc writers stamp the real dispatch time (or an
+    explicit provenance flag) on the record, with `tail.ts`'s summariser as the
+    fallback stamping point; the field-shape inference then retires to a legacy
+    fallback for pre-stamp trajectories. `ResponseGroup.latencyMs` (adjacency-derived)
+    rides on the same ordering assumptions and should be covered by the same stamp.
+    Unblocked; touches the trajectory format and two runner writers, so it is its own
+    change, not a dashboard PR rider.
+
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
    not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
    of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is

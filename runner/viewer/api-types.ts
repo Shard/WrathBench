@@ -438,6 +438,12 @@ interface EntryBase {
   start: number;
   end: number;
   turn?: number;
+  /**
+   * The claude driver's monotonic tool-call index, stamped on its `tool_call`,
+   * `snippet` and result records (`runner/src/adapter-claude.ts`); absent on
+   * the fixed loop's records, which key on `turn` instead.
+   */
+  call?: number;
   clipped?: boolean;
 }
 
@@ -461,6 +467,13 @@ export interface ResponseEntry extends EntryBase {
 export interface SnippetEntry extends EntryBase {
   t: "snippet";
   code?: string;
+}
+
+/** A `tool_call` record: the generic summariser keeps its name and args. */
+export interface ToolCallEntry extends EntryBase {
+  t: "tool_call";
+  name?: string;
+  args?: unknown;
 }
 
 export interface SnippetResultEntry extends EntryBase {
@@ -490,6 +503,7 @@ export type FeedEntry =
   | RequestEntry
   | ResponseEntry
   | SnippetEntry
+  | ToolCallEntry
   | SnippetResultEntry
   | EventsServedEntry
   | OtherEntry;
