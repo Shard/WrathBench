@@ -18,8 +18,10 @@ import { For, Show, createEffect, createMemo, createSignal, getOwner, on, onClea
 import { subscribeTail } from "../api/live";
 import {
   api,
+  rawPath,
   type ApiInfoResponse,
   type ComparabilityView,
+  type EventsServedEntry,
   type FeedEntry,
   type ModelRowView,
   type RunDetailResponse,
@@ -29,7 +31,7 @@ import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
-import { groupFeed, type CallGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
+import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -214,6 +216,16 @@ export default function RunDetail() {
     });
   };
 
+  /*
+   * The composite view (lib/feedgroup.ts): a turn header per request, one
+   * card per tool call, everything else as-is. Re-derived from the whole
+   * window on every change — that is what lets a pair split by the live tail
+   * or the window edge heal without pairing state — but fed its own previous
+   * value so settled groups keep their object identity and `<For>` reuses
+   * their DOM instead of rebuilding every row per tail append.
+   */
+  const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
+
   /**
    * A plain-language guess at what the session is doing, from the newest entry
    * alone: the loop writes a fixed cycle, so the type of the last thing written
@@ -279,14 +291,7 @@ export default function RunDetail() {
                     </Show>
                   </h2>
                   <div class="feed">
-                    {/*
-                      The composite view (lib/feedgroup.ts): a turn header per
-                      request, one card per tool call, everything else as-is.
-                      Re-derived from the whole window on every change, which is
-                      what lets a pair split by the live tail or the window edge
-                      heal instead of needing pairing state.
-                    */}
-                    <For each={groupFeed(entries())}>
+                    <For each={groups()}>
                       {(g) => {
                         switch (g.kind) {
                           case "turn":
@@ -607,43 +612,30 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
   );
 }
 
-/** The text a given entry type puts in its body, and whether it is an error. */
-function bodyOf(e: FeedEntry): { text: string; bad: boolean; head: string } {
-  const rec = e as Record<string, unknown>;
-  const str = (k: string): string => (typeof rec[k] === "string" ? (rec[k] as string) : "");
-  switch (e.t) {
-    case "response":
-      return { text: str("text"), bad: false, head: (rec["tools"] as string[] | undefined)?.join(", ") ?? "" };
-    case "snippet":
-      return { text: str("code"), bad: false, head: "" };
-    case "snippet_result":
-    case "tool_result":
-      return { text: str("text"), bad: rec["isError"] === true, head: str("name") };
-    case "request":
-      return {
-        text: "",
-        bad: false,
-        head: `${String(rec["messageCount"] ?? "?")} messages · ${String(rec["promptChars"] ?? "?")} chars`,
-      };
-    case "events_served":
-      return {
-        text: "",
-        bad: false,
-        head: `${String(rec["count"] ?? 0)} events · ${((rec["opcodes"] as string[] | undefined) ?? []).join(" ")}`,
-      };
-    default: {
-      // Everything else — meta, state, notices, terminations — renders as the
-      // summary the server built, minus the bookkeeping fields.
-      const { i, t, ts, start, end, clipped, ...rest } = rec;
-      void i;
-      void t;
-      void ts;
-      void start;
-      void end;
-      void clipped;
-      return { text: JSON.stringify(rest, null, 1), bad: false, head: "" };
-    }
-  }
+/** The one-line summary of an events batch, shared by plain rows and turn headers. */
+function eventsHead(e: EventsServedEntry): string {
+  const more = (e.moreOpcodes ?? 0) > 0 ? ` +${e.moreOpcodes} kinds` : "";
+  return `${e.count ?? 0} events · ${(e.opcodes ?? []).join(" ")}${more}`;
+}
+
+/**
+ * The text an entry type puts in its body and head. Only types that still
+ * reach the plain `Entry` renderer belong here — `state`, stray events
+ * batches, meta/notices/terminations. Requests, responses and tool calls are
+ * always routed to the composite rows (lib/feedgroup.ts), never here.
+ */
+function bodyOf(e: FeedEntry): { text: string; head: string } {
+  if (e.t === "events_served") return { text: "", head: eventsHead(e as EventsServedEntry) };
+  // Everything else renders as the summary the server built, minus the
+  // bookkeeping fields.
+  const { i, t, ts, start, end, clipped, ...rest } = e as Record<string, unknown>;
+  void i;
+  void t;
+  void ts;
+  void start;
+  void end;
+  void clipped;
+  return { text: JSON.stringify(rest, null, 1), head: "" };
 }
 
 const FOLD_LINES = 3;
@@ -651,7 +643,13 @@ const FOLD_LINES = 3;
 /** A foldable pre block — the body treatment every card shares. */
 function FoldBlock(props: { text: string }) {
   const [open, setOpen] = createSignal(false);
-  const lines = createMemo(() => props.text.split("\n").length);
+  // Counted without splitting: bodies run to many KB and the array of line
+  // substrings would be built only to read its length.
+  const lines = createMemo(() => {
+    let n = 1;
+    for (let at = props.text.indexOf("\n"); at !== -1; at = props.text.indexOf("\n", at + 1)) n++;
+    return n;
+  });
   const foldable = (): boolean => lines() > FOLD_LINES;
   return (
     <>
@@ -668,32 +666,38 @@ function FoldBlock(props: { text: string }) {
 /** The raw-line link for one constituent of a composite row. */
 function RawLink(props: { runId: string; i: number; label?: string }) {
   return (
-    <a
-      href={`/api/run/${encodeURIComponent(props.runId)}/raw/${props.i}`}
-      target="_blank"
-      rel="noreferrer"
-    >
+    <a href={rawPath(props.runId, props.i)} target="_blank" rel="noreferrer">
       {props.label ?? "raw"}
     </a>
   );
 }
 
+/**
+ * One formatter for every row's clock cell: `toLocaleTimeString` builds a
+ * fresh `Intl.DateTimeFormat` per call, and this cell is on every row.
+ */
+const TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 /** The timestamp cell every head row ends with. */
 function When(props: { ts: number }) {
-  return <span title={stamp(props.ts)}>{new Date(props.ts).toLocaleTimeString()}</span>;
+  return <span title={stamp(props.ts)}>{TIME_FMT.format(props.ts)}</span>;
 }
 
 function Entry(props: { entry: FeedEntry; runId: string }) {
   const parts = createMemo(() => bodyOf(props.entry));
   return (
-    <div class={`entry ${parts().bad ? "bad" : ""}`}>
+    <div class="entry">
       <div class="head">
         <span class="t">{props.entry.t}</span>
         <Show when={props.entry.turn !== undefined}>
           <span>turn {props.entry.turn}</span>
         </Show>
         <span>{parts().head}</span>
-        <span class="spacer" style={{ flex: 1 }} />
+        <span class="spacer" />
         <When ts={props.entry.ts} />
         <Show when={props.entry.clipped === true}>
           <RawLink runId={props.runId} i={props.entry.i} />
@@ -724,15 +728,8 @@ function TurnRow(props: { g: TurnGroup; runId: string }) {
         <span>
           {req().messageCount ?? "?"} msgs · {fmtTokens(req().promptChars ?? null)} chars
         </span>
-        <Show when={props.g.events}>
-          {(ev) => (
-            <span>
-              {ev().count ?? 0} events · {(ev().opcodes ?? []).join(" ")}
-              <Show when={(ev().moreOpcodes ?? 0) > 0}> +{ev().moreOpcodes} kinds</Show>
-            </span>
-          )}
-        </Show>
-        <span class="spacer" style={{ flex: 1 }} />
+        <Show when={props.g.events}>{(ev) => <span>{eventsHead(ev())}</span>}</Show>
+        <span class="spacer" />
         <When ts={req().ts} />
         <Show when={props.g.events?.clipped === true}>
           <RawLink runId={props.runId} i={props.g.events!.i} label="raw events" />
@@ -759,7 +756,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string }) {
           <span class="lat">{fmtLatency(props.g.latencyMs)}</span>
         </Show>
         <span>{(e().tools ?? []).join(", ")}</span>
-        <span class="spacer" style={{ flex: 1 }} />
+        <span class="spacer" />
         <When ts={e().ts} />
         <Show when={e().clipped === true}>
           <RawLink runId={props.runId} i={e().i} />
@@ -791,13 +788,16 @@ function CallCard(props: { g: CallGroup; runId: string }) {
     if (args === undefined) return "";
     return typeof args === "string" ? args : JSON.stringify(args);
   });
+  const name = (): string =>
+    g().call?.name ?? g().result?.name ?? (g().snippet !== null ? "run_snippet" : "?");
+  const turn = (): number | undefined => (g().call ?? g().snippet ?? g().result)?.turn;
   const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
   return (
-    <div class={`entry ${g().isError ? "bad" : ""}`}>
+    <div class={`entry ${g().result?.isError === true ? "bad" : ""}`}>
       <div class="head">
-        <span class="t">{g().name}</span>
-        <Show when={g().turn !== undefined}>
-          <span>turn {g().turn}</span>
+        <span class="t">{name()}</span>
+        <Show when={turn() !== undefined}>
+          <span>turn {turn()}</span>
         </Show>
         <Show when={g().call?.call !== undefined}>
           <span>call {g().call!.call}</span>
@@ -805,7 +805,7 @@ function CallCard(props: { g: CallGroup; runId: string }) {
         <Show when={g().durationMs !== null}>
           <span class="lat">{fmtLatency(g().durationMs)}</span>
         </Show>
-        <span class="spacer" style={{ flex: 1 }} />
+        <span class="spacer" />
         <When ts={anyTs()} />
         <Show when={g().call?.clipped === true}>
           <RawLink runId={props.runId} i={g().call!.i} label="raw call" />
