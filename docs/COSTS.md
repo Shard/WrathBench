@@ -18,10 +18,17 @@ record.
   `reasoning_tokens`, and OpenRouter's own `cost` in credits. Since `d752ef7`
   it also names the serving `provider` when the body reports one.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
-  `claude_result` (natural completion). A watchdog kill cuts the stream before
-  that record lands, so most subscription episodes have no as-metered figure.
-  That record lands once per harness TURN, and its two halves do not cover the
-  same thing: `usage` is that turn's, so a run's output is the sum over the
+  `claude_result` (natural completion). Until 2026-08-25 a watchdog kill cut the
+  stream before that record landed, so most subscription episodes had no
+  as-metered figure at all; the driver now winds down instead — it records the
+  termination, refuses every further tool call, and reads the CLI's stream for
+  up to 90s so the closing `result` can land (runner/README.md, "Winding a
+  claude-code episode down"). Runs from then on should read `source:
+  "reported"` and carry a cost; a run whose CLI never closed its turn still
+  reads `snapshot`, and its `wind-down` record says `grace-expired`. Runs before
+  that date are unchanged and stay `snapshot`.
+- A `claude_result` lands once per harness TURN, and its two halves do not cover
+  the same thing: `usage` is that turn's, so a run's output is the sum over the
   records, while `total_cost_usd` is CUMULATIVE for the CLI session, so a
   session's cost is its LAST record and never the sum. Since 2026-08-25 the
   record also carries `sessionId` (the boundary a pause and resume crosses) and

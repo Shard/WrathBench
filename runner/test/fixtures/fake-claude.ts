@@ -17,6 +17,13 @@
  *               behind, because a pause tears down through shutdown() alone.
  *               Records its own pid and its MCP child's so the test can assert
  *               both are dead once the driver returns.
+ *   wind-down   like long-turn, but when a tool call comes back refused it does
+ *               what a well-behaved model does: stops calling tools and closes
+ *               the turn with a `result` carrying usage and cost. The shape the
+ *               wind-down grace exists to collect.
+ *   wind-down-deaf
+ *               like long-turn, but it ignores refusals and keeps hammering
+ *               tools forever, so the grace expires and the CLI is killed.
  *
  * Everything it saw (argv, selected env, the system prompt, the MCP tool list,
  * the user messages) is written to $WB_FAKE_RECORD as JSON after every event.
@@ -210,6 +217,50 @@ for await (const chunk of Bun.stdin.stream()) {
         duration_ms: 5,
         session_id: "fake-session",
       });
+      continue;
+    }
+
+    // Winding down: the harness ends the episode under us, refuses every tool
+    // call from then on, and waits for this `result`. `wind-down` obeys the
+    // refusal; `wind-down-deaf` never does and has to be killed.
+    if (mode === "wind-down" || mode === "wind-down-deaf") {
+      emit({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "working" }] },
+        session_id: "fake-session",
+      });
+      for (let i = 0; mcp !== null && i < 10_000; i++) {
+        const res = (await mcp.call("tools/call", {
+          name: "run_snippet",
+          arguments: { code: `await sdk.say("inner ${i}")` },
+        })) as { result?: { isError?: boolean; content?: { text?: string }[] } };
+        // Every result, in order: the test asserts that once a refusal appears
+        // nothing after it was executed.
+        (record["toolResults"] as unknown[]).push(res["result"]);
+        saveRecord();
+        const refused = res.result?.isError === true && (res.result.content?.[0]?.text ?? "").includes("episode is over");
+        if (refused && mode === "wind-down") {
+          // What the grace is for: the turn closes properly, so the finished
+          // output count and the metered cost actually land.
+          emit({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "stopping: the harness ended the episode",
+            num_turns: 9,
+            duration_ms: 4_242,
+            duration_api_ms: 2_121,
+            total_cost_usd: 1.25,
+            usage: { input_tokens: 40, output_tokens: 20_000, cache_read_input_tokens: 900 },
+            session_id: "fake-session",
+          });
+          saveRecord();
+          // and then it stops calling tools and waits, exactly as the real CLI
+          // does between turns. Only the driver's teardown ends this process.
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
       continue;
     }
 

@@ -239,6 +239,26 @@ them once per turn, which is once per tool batch. The claude-code
 driver checks them at every tool dispatch and on a 5s timer, because one of its
 turns can run for tens of minutes (see Drivers above).
 
+### Winding a claude-code episode down, rather than killing it
+
+Under `claude-code` the whole episode is usually ONE CLI turn, and the finished
+output count, the metered cost and the turn clock exist in exactly one place:
+the stream-json `result` envelope that closes it. Killing the CLI the moment a
+watchdog fired threw all three away — 6 of the 9 lane-2 runs of 2026-08-25 fell
+back to `tokens.source: "snapshot"` (the API's `message_start` figures, ~300×
+low) with no cost at all. So a watchdog or the tool-call ceiling firing mid-turn
+now records the termination exactly as before and then *winds down* instead of
+signalling: every further tool call is refused with an error telling the model
+the episode is over and to stop calling tools — nothing is dispatched, so no
+observation or action reaches the game after the termination — while the driver
+reads the CLI's stream for a bounded grace (`windDownGraceMs`, default 90s) in
+the hope of that `result`. It ends on the `result`, on the CLI exiting, or on
+the grace expiring, and a single `wind-down` trajectory record says which and
+how long it waited. The grace is not playtime: the `termination` record that
+closes the active segment was written before the wind-down began. An operator
+stop or pause still kills immediately — that is intent, not a measurement
+opportunity.
+
 ## Tests
 
 `bun test runner` — needs one `bun install` at the repo root first: that links
