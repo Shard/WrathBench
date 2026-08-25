@@ -13,11 +13,36 @@
 
 import { createSignal, onCleanup } from "solid-js";
 
+/**
+ * How many intervals may pass with no tick settling before the feed reads
+ * stalled. Generous on purpose — a slow round trip must not become a verdict,
+ * and every tick starts a fresh request, so a working-but-slow network settles
+ * something well inside the window.
+ */
+export const STALL_INTERVALS = 5;
+
+/**
+ * Whether a feed has stalled: nothing — success or failure — has settled for
+ * `STALL_INTERVALS` intervals on the real clock. This is the one hole `latest`
+ * and `error` leave between them: a fetch that never settles produces neither,
+ * so the last good value would stand forever looking healthy. Pure, and
+ * exported, so the verdict is asserted rather than the timer.
+ */
+export function isStalled(lastSettledAt: number, now: number, intervalMs: number): boolean {
+  return now - lastSettledAt >= intervalMs * STALL_INTERVALS;
+}
+
 export interface Poll<T> {
   /** The most recent successful value, kept across a failed poll. */
   readonly latest: T | undefined;
   /** The error from the most recent failed poll, cleared by the next success. */
   readonly error: unknown;
+  /**
+   * True while no poll has settled for a long stretch (`isStalled`). Distinct
+   * from `error` — a wedged fetch reports nothing at all — and measured on
+   * this browser's clock, because a frozen feed is a fact about this tab.
+   */
+  readonly stalled: boolean;
   /** Fetch now, without waiting for the next tick. */
   refresh: () => void;
 }
@@ -25,17 +50,29 @@ export interface Poll<T> {
 export function poll<T>(fetcher: () => Promise<T>, intervalMs: number): Poll<T> {
   const [latest, setLatest] = createSignal<T | undefined>(undefined);
   const [error, setError] = createSignal<unknown>(undefined);
+  const [stalled, setStalled] = createSignal(false);
   let disposed = false;
+  let lastSettledAt = Date.now();
 
   const tick = (): void => {
+    // Judged at each tick rather than on a clock of its own: the stall bound
+    // is a multiple of the interval, so the tick is granularity enough.
+    setStalled(isStalled(lastSettledAt, Date.now(), intervalMs));
     void fetcher().then(
       (v) => {
         if (disposed) return;
+        lastSettledAt = Date.now();
+        setStalled(false);
         setLatest(() => v);
         setError(undefined);
       },
       (e: unknown) => {
-        if (!disposed) setError(e);
+        if (disposed) return;
+        // A failure is a settlement: the feed is answering, just badly, and
+        // `error` is the signal that carries that.
+        lastSettledAt = Date.now();
+        setStalled(false);
+        setError(e);
       },
     );
   };
@@ -53,6 +90,9 @@ export function poll<T>(fetcher: () => Promise<T>, intervalMs: number): Poll<T> 
     },
     get error() {
       return error();
+    },
+    get stalled() {
+      return stalled();
     },
     refresh: tick,
   };

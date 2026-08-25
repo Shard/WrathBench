@@ -22,9 +22,11 @@ export function StatusBadge() {
    * No clock of its own. Every age the badge shows is measured inside the
    * response (`lib/fleet.ts`, `heartbeatAge`), so it advances with the fleet
    * poll — five seconds, the same granularity the rest of the page has — and
-   * never with this browser's idea of the time.
+   * never with this browser's idea of the time. The cost of that would be a
+   * wedged poll freezing the badge green forever; `stalled` is the poller's
+   * own real-clock watchdog (`lib/poll.ts`) that closes exactly that hole.
    */
-  const input = () => ({ fleet: feeds.fleet.latest, error: feeds.fleet.error });
+  const input = () => ({ fleet: feeds.fleet.latest, error: feeds.fleet.error, stalled: feeds.fleet.stalled });
   const status = () => serviceStatus(input());
   const rows = () => statusRows(input(), feeds.info.latest);
 

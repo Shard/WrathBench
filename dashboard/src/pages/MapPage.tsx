@@ -45,6 +45,7 @@ import {
 import {
   STALE_MS,
   TILE_MIN_PX,
+  type FeedClock,
   type Pip,
   type View,
   colorOf,
@@ -52,6 +53,7 @@ import {
   fitTo,
   hitTest,
   latticeLines,
+  positionAgeMs,
   project,
   stepPips,
   syncPips,
@@ -114,11 +116,22 @@ export default function MapPage() {
   const ageTick = useClock();
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
-  // owns the map — one feed reaches the renderer, never two.
+  // owns the map — one feed reaches the renderer, never two. The envelope's
+  // clock rides along: the public build's positions arrive up to two minutes
+  // late through no fault of the agents, and the pips' stale dimming has to
+  // age readings against the snapshot's own clock rather than this browser's
+  // (`positionAgeMs`). The private build carries no envelope and a null clock.
   const feed = poll(
-    () => (replayId() === undefined ? api.positions().then((p) => p.positions) : Promise.resolve([])),
+    () =>
+      replayId() === undefined
+        ? api.positions().then((p) => ({
+            positions: p.positions,
+            clock: p.generatedAt === undefined ? null : { generatedAt: p.generatedAt, fetchedAt: Date.now() },
+          }))
+        : Promise.resolve({ positions: [] as AgentPosition[], clock: null as FeedClock | null }),
     POLL_MS,
   );
+  const feedPositions = (): readonly AgentPosition[] => feed.latest?.positions ?? [];
 
   /*
    * The shell's harness series narrows the live feed, so the map
@@ -148,6 +161,8 @@ export default function MapPage() {
 
   /* Mutable render state — read every frame, never through a signal. */
   const pips = new Map<string, Pip>();
+  /* The live feed's reference clock, beside the pips it dates; null in a replay. */
+  let feedClock: FeedClock | null = null;
   const tiles = new Map<string, TileEntry>();
   let view: View = { scale: 0.25, ox: 0, oy: 0 };
   let route: { x: number; y: number }[] = [];
@@ -338,7 +353,7 @@ export default function MapPage() {
     for (const pip of list) {
       const p = project(view, pip.x, pip.y);
       if (p.sx < -60 || p.sy < -30 || p.sx > W + 60 || p.sy > H + 30) continue;
-      const stale = now - pip.data.ts > STALE_MS;
+      const stale = positionAgeMs(pip.data.ts, now, feedClock) > STALE_MS;
       const on = sel !== null && pip.runId === sel.runId;
       ctx.globalAlpha = stale ? 0.4 : 1;
       /*
@@ -506,10 +521,13 @@ export default function MapPage() {
     const t = track();
     if (t !== undefined) {
       const list = positionsAt(t, cursor());
+      // A replayed sample's age is not a freshness claim; the plain arithmetic applies.
+      feedClock = null;
       syncPips(pips, list, true);
       setFeedList(list);
     } else {
-      const list = feed.latest ?? [];
+      const list = feedPositions();
+      feedClock = feed.latest?.clock ?? null;
       syncPips(pips, list);
       setFeedList(list);
     }
