@@ -59,6 +59,7 @@ export type {
   RunsResponse,
   StatePoint,
   TokenTotals,
+  TpsFacts,
 } from "@viewer/api-types";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */
@@ -146,13 +147,13 @@ export function createClient(opts: ClientOptions = {}) {
       harness: HarnessView | "all" = "all",
     ): Promise<ResultsResponse> =>
       get<ResultsResponse>(`/api/results${resultsQuery(episode, includeOverrides, harness)}`, opts),
-    /** The same projection the ladder reads; the rung rules stay client-side. */
-    ladder: (
-      episode?: EpisodeIdView | "all",
-      includeOverrides = false,
-      harness: HarnessView | "all" = "all",
-    ): Promise<ResultsResponse> =>
-      get<ResultsResponse>(`/api/ladder${resultsQuery(episode, includeOverrides, harness)}`, opts),
+    /**
+     * The same projection the ladder reads; the rung rules stay client-side.
+     * One tier's members only: the ladder offers neither `all` nor overridden
+     * runs, because a rung is a claim about one comparability group.
+     */
+    ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
+      get<ResultsResponse>(`/api/ladder${resultsQuery(episode, false)}`, opts),
     /** One run's recorded track, for map replay. */
     track: (id: string): Promise<TrackResponse> =>
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`, opts),

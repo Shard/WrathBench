@@ -60,6 +60,7 @@ interface MetaShape {
   startedAt?: number;
   shakeout?: string;
   comparability?: unknown;
+  resolved?: { model?: unknown; cliVersion?: unknown };
   config?: {
     model?: string;
     extra?: boolean;
@@ -168,6 +169,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     className: null,
     characterLabel: null,
     platform: null,
+    resolvedModel: null,
+    cliVersion: null,
     apiBase: null,
     harnessVersion: null,
     startedAt: null,
@@ -209,6 +212,14 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.characterLabel = characterLabel(row.race, row.class);
     row.apiBase = str(meta.config?.apiBase);
     /*
+     * What the provider actually served, promoted onto the run mid-episode
+     * (`Trajectory.recordResolved`). Read here and from the columns below;
+     * a run written before either existed reads null and is back-filled from
+     * its trajectory by the caller, never rewritten on disk.
+     */
+    row.resolvedModel = str(meta.resolved?.model);
+    row.cliVersion = str(meta.resolved?.cliVersion);
+    /*
      * Validated, not trusted: meta.json is written by whatever build launched
      * the run, and a shape this build does not recognise reads as "not
      * recorded" rather than reaching a chart as a half-filled tuple.
@@ -240,6 +251,10 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         // neither, and the meta read above / the derivation below answer.
         row.character = str(r["character"]) ?? row.character;
         row.platform = str(r["platform"]);
+        // Added at 0.5: a run.sqlite that predates the columns yields undefined
+        // here, which `str` reads as null — the same as "not recorded".
+        row.resolvedModel = str(r["resolved_model"]) ?? row.resolvedModel;
+        row.cliVersion = str(r["resolved_cli_version"]) ?? row.cliVersion;
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
         row.pauseReason = str(r["pause_reason"]);

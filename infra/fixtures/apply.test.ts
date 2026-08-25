@@ -11,7 +11,7 @@ import {
   parseArgs,
   renderStatement,
 } from "./apply";
-import { SCENARIOS, facing, isScenarioName, validateScenario, type Scenario } from "./scenarios";
+import { SCENARIOS, facing, isScenarioName, taxiMask, validateScenario, type Scenario } from "./scenarios";
 
 describe("account guard", () => {
   test("accepts the smoke and probe accounts", () => {
@@ -185,5 +185,26 @@ describe("buildStatements", () => {
 describe("renderStatement", () => {
   test("inlines parameters and escapes quotes", () => {
     expect(renderStatement({ sql: "SELECT ?, ?", params: ["it's", 3] })).toBe("SELECT 'it''s', 3");
+  });
+});
+
+describe("taxiMask", () => {
+  test("sets bit n-1 of the right word, 14 words wide", () => {
+    expect(taxiMask([6, 7])).toBe(["96", ...new Array(13).fill("0")].join(" "));
+    expect(taxiMask([33]).split(" ")[1]).toBe("1");
+    expect(taxiMask([]).split(" ")).toHaveLength(14);
+  });
+  test("a scenario with taxiNodes writes taximask, one without does not", () => {
+    const base: Scenario = { description: "t", level: 10, position: SCENARIOS["taxi-ironforge"].position };
+    const without = buildStatements(217, base).map(renderStatement).join("\n");
+    expect(without).not.toContain("taximask");
+    const withNodes = buildStatements(217, { ...base, taxiNodes: [6, 7] }).map(renderStatement).join("\n");
+    expect(withNodes).toContain("taximask = '96 0 0 0 0 0 0 0 0 0 0 0 0 0'");
+  });
+  test("achievements become character_achievement rows with the fixture date", () => {
+    const base: Scenario = { description: "t", level: 10, position: SCENARIOS["taxi-ironforge"].position };
+    expect(buildStatements(217, base).map(renderStatement).join("\n")).not.toContain("character_achievement");
+    const withAch = buildStatements(217, { ...base, achievements: [6] }).map(renderStatement).join("\n");
+    expect(withAch).toContain("REPLACE INTO character_achievement (guid, achievement, date) VALUES (217, 6, 1262304000)");
   });
 });

@@ -38,10 +38,9 @@ export interface LoopOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /**
-   * How often the world is sampled while a turn is in flight (a model request
-   * or a tool call can hold the turn for minutes). Defaults to the same 5s
-   * tick the claude-code driver uses; tests shrink it. Recording stays
-   * throttled by `stateIntervalMs` regardless.
+   * How often the world is sampled while a turn is in flight (`startStateTicker`).
+   * Coarse by design and deliberately not derived from `stateIntervalMs`: the
+   * tick is the *opportunity* to sample, the interval is the gate.
    */
   stateTickMs?: number;
   /**
@@ -108,6 +107,22 @@ export class ContextBuilder {
   private lastZoneId: number | undefined;
   private lastAreaId: number | undefined;
   /**
+   * Achievement ids already written as a milestone, and whether the login
+   * backlog record has been written (ADR-0048).
+   *
+   * By id rather than by high-water mark, because the sandbox can restart: a
+   * rebuilt cache re-reads the whole login backlog, and a second pass over it
+   * must write nothing rather than re-report a run's own past as fresh earns.
+   */
+  private readonly recordedAchievements = new Set<number>();
+  private loginAchievementsRecorded = false;
+  /**
+   * The last `taxiFlight` reading. Seeded silently by the first observation:
+   * a resumed process whose first sample is already `true` joined a flight in
+   * progress, and calling that a takeoff would invent one.
+   */
+  private lastTaxiFlight: boolean | undefined;
+  /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
    * Set by the driver rather than counted here: the fixed loop and the
@@ -141,7 +156,23 @@ export class ContextBuilder {
   async snapshot(): Promise<SnapshotLike | null> {
     try {
       const snap = (await this.o.sandbox.stateSnapshot()) as SnapshotLike;
+      const wasLive = this.live;
       this.live = snap.self?.guid !== undefined && snap.self.guid !== null;
+      if (this.live && !wasLive) {
+        // The first sight of a character in the world: the fresh-episode
+        // precondition (ADR-0006) is judged here, once, by the watchdogs.
+        this.o.watchdogs.noteFirstLive({
+          guid: snap.self?.guid === undefined || snap.self.guid === null ? undefined : String(snap.self.guid),
+          level: snap.self?.level?.value as number | undefined,
+        });
+        // The model named the character (ADR-0050), so the launch config's
+        // name is only a suggestion: what is in the world is the run's
+        // character, and every reader of it is corrected here, once.
+        const name = typeof snap.self?.name === "string" ? snap.self.name : undefined;
+        if (name !== undefined && name.length > 0 && name !== this.o.config.character) {
+          this.o.trajectory.setCharacter(this.o.config.runId, name);
+        }
+      }
       return snap;
     } catch {
       return null;
@@ -162,14 +193,22 @@ export class ContextBuilder {
    * landing mid-sample gets that sample's snapshot, which is as fresh as the
    * one it would have taken.
    */
-  sampleState(): Promise<SnapshotLike | null> {
-    this.sampling ??= this.sampleOnce().finally(() => {
-      this.sampling = null;
+  async sampleState(): Promise<SnapshotLike | null> {
+    // One sample at a time, run-wide. The turn preamble and the ticker
+    // (`startStateTicker`) both call this, and two concurrent samples would
+    // double-read the world and race every high-water mark below — so a caller
+    // arriving mid-sample joins the one in flight rather than starting another.
+    if (this.inFlight !== null) return await this.inFlight;
+    const p = this.doSampleState().finally(() => {
+      if (this.inFlight === p) this.inFlight = null;
     });
-    return this.sampling;
+    this.inFlight = p;
+    return await p;
   }
 
-  private async sampleOnce(): Promise<SnapshotLike | null> {
+  private inFlight: Promise<SnapshotLike | null> | null = null;
+
+  private async doSampleState(): Promise<SnapshotLike | null> {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null || this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
@@ -215,6 +254,61 @@ export class ContextBuilder {
         ...turn,
       });
       this.lastAreaId = area.id;
+    }
+    // Achievements (ADR-0048, issue #8): the backlog once, then one record per
+    // own earn. The state cache has already dropped the say-range broadcasts
+    // that were another player's, so everything here is this character's.
+    const ach = snap.self?.achievements;
+    if (ach !== undefined) {
+      const entries = ach.entries ?? [];
+      if (!this.loginAchievementsRecorded && ach.loginSeen === true) {
+        const backlog = entries.filter((e) => e.source === "login");
+        const ids: number[] = [];
+        let points = 0;
+        for (const e of backlog) {
+          if (typeof e.achievementId !== "number") continue;
+          ids.push(e.achievementId);
+          if (typeof e.points === "number") points += e.points;
+        }
+        trajectory.recordMilestone({ kind: "achievements_at_login", ids, points, ...turn });
+        for (const id of ids) this.recordedAchievements.add(id);
+        this.loginAchievementsRecorded = true;
+      }
+      for (const e of entries) {
+        if (e.source !== "earned" || typeof e.achievementId !== "number") continue;
+        if (this.recordedAchievements.has(e.achievementId)) continue;
+        trajectory.recordMilestone({
+          kind: "achievement",
+          id: e.achievementId,
+          ...(typeof e.name === "string" ? { name: e.name } : {}),
+          ...(typeof e.points === "number" ? { points: e.points } : {}),
+          ...(typeof e.categoryId === "number" ? { categoryId: e.categoryId } : {}),
+          ...turn,
+        });
+        this.recordedAchievements.add(e.achievementId);
+      }
+    }
+    // Flights: no packet says "a flight began", so the flip is read the way a
+    // client reads it — an accepted reply, then the taxi flag turning on
+    // (ADR-0048). The flag turning off is the landing, recorded whether or not
+    // the takeoff was seen, because it is its own observation.
+    const taxiFlight = snap.self?.taxiFlight?.value;
+    if (typeof taxiFlight === "boolean") {
+      const accepted = (snap.self?.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
+      if (this.lastTaxiFlight === false && taxiFlight && accepted) {
+        trajectory.recordMilestone({
+          kind: "taxi",
+          ...(typeof area?.id === "number" ? { from: { areaId: area.id } } : {}),
+          ...turn,
+        });
+      } else if (this.lastTaxiFlight === true && !taxiFlight) {
+        trajectory.recordMilestone({
+          kind: "taxi_landed",
+          ...(typeof area?.id === "number" ? { to: { areaId: area.id } } : {}),
+          ...turn,
+        });
+      }
+      this.lastTaxiFlight = taxiFlight;
     }
     trajectory.recordState(config.runId, {
       level,
@@ -263,49 +357,62 @@ export class ContextBuilder {
   }
 }
 
+/** Default cadence of the state ticker: coarse, and independent of `stateIntervalMs`. */
+export const DEFAULT_STATE_TICK_MS = 5_000;
+
+export interface StateTickerOptions {
+  builder: ContextBuilder;
+  /** Cadence of the tick itself; `stateIntervalMs` still gates whether a row is written. */
+  tickMs?: number | undefined;
+  /** True once the episode is over: the ticker goes quiet without waiting to be cleared. */
+  stopped: () => boolean;
+  /**
+   * Run after each completed sample. The claude driver uses it to *enforce* the
+   * watchdogs mid-turn (it can kill the CLI from outside the turn); the fixed
+   * loop does not — it enforces at the turn boundary, so the episode clock keeps
+   * the semantics it has always had. Feeding the watchdogs is not this hook's
+   * job: `sampleState` does that itself, on every driver.
+   */
+  onSample?: (() => void) | undefined;
+}
+
 /**
- * The mid-turn state clock, shared by both drivers (FOLLOW-UPS 77): sampling
- * only at the turn boundary leaves everything inside a long turn invisible —
- * the claude-code driver's turns run tens of minutes, and one 485s model
- * request on the openai-compatible path left an 8-minute blackout in a run's
- * timeline. The ticker samples on wall clock while a turn is in flight;
- * `ContextBuilder.sampleState` throttles what is *recorded* to
- * `stateIntervalMs`, so a fast tick costs snapshots, never duplicate rows.
+ * Sample the world on a timer, independent of turn boundaries.
  *
- * Ticks never overlap (a slow sample makes later ticks no-ops rather than a
- * queue), a failed sample is dropped (the sandbox may be mid-restart, and the
- * next tick tries again), and `stop()` resolves only after any in-flight tick
- * has settled — so nothing appends to the trajectory after the episode has
- * been finalised and the trajectory closed. The sample itself is bounded (the
- * sandbox RPC has its own timeout), so awaiting it cannot park a shutdown.
+ * A driver turn is one HTTP request or one CLI session, and either can run for
+ * minutes: 485s was observed against a local model, leaving an eight-minute
+ * hole with no state row and no XP signal (FOLLOW-UPS 77). Sampling only side
+ * of a turn is therefore not sampling on the clock at all, so both drivers run
+ * this and neither implements its own.
+ *
+ * The tick is coarse and the `stateIntervalMs` gate inside `sampleState` decides
+ * whether a row is actually written; `sampleState`'s own mutex means a tick that
+ * lands on the turn preamble joins that sample rather than racing it. The timer
+ * is unref'd, so it can never hold the process open, and the returned stop must
+ * be called on every exit path — a live ticker outliving `runLoop` would write
+ * to a closed trajectory.
  */
-export function startStateTicker(o: {
-  sample: () => Promise<unknown>;
-  intervalMs: number;
-  /** Skip ticking entirely (the claude driver: episode already ended). */
-  done?: (() => boolean) | undefined;
-  /** After every tick, even a failed one (the claude driver checks watchdogs here). */
-  afterSample?: (() => void) | undefined;
-}): { stop: () => Promise<void> } {
-  let inFlight: Promise<void> | null = null;
+export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
+  let sampling: Promise<unknown> | null = null;
   const timer = setInterval(() => {
-    if (inFlight !== null || o.done?.() === true) return;
-    inFlight = o
-      .sample()
+    if (sampling !== null || o.stopped()) return;
+    sampling = o.builder
+      .sampleState()
       .catch(() => null)
-      .then(() => o.afterSample?.())
-      .catch(() => undefined)
       .finally(() => {
-        inFlight = null;
+        sampling = null;
+        if (!o.stopped()) o.onSample?.();
       });
-  }, o.intervalMs);
-  // Observability must never be what keeps the process alive.
+  }, o.tickMs ?? DEFAULT_STATE_TICK_MS);
   timer.unref?.();
-  return {
-    stop: async () => {
-      clearInterval(timer);
-      await inFlight;
-    },
+  // Awaited, because `clearInterval` does not cancel a sample already waiting on
+  // the sandbox: the caller closes the trajectory as soon as the episode ends,
+  // and a sample landing after that would write to a closed handle. The trailing
+  // sample keeps its row — it is a real observation — but `stopped()` gates
+  // `onSample`, so it cannot enforce anything after the outcome is decided.
+  return async () => {
+    clearInterval(timer);
+    await sampling?.catch(() => undefined);
   };
 }
 
@@ -359,22 +466,26 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     return terminate("manual", s.detail);
   };
 
-  // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn,
-  // and that used to be this loop's only sampling — one 485s request left an
-  // 8.1-minute blackout with no state row and no XP signal. The ticker keeps
-  // state rows and the no-xp progress signal flowing while `adapter.complete`
-  // or a long tool call holds the turn. Deliberately no watchdog enforcement
-  // here, unlike the claude driver's ticker: this loop reads its watchdogs at
-  // the turn boundary, the boundary is never further away than the adapter's
-  // own retry budget, and a mid-request kill would have to abandon a request
-  // the adapter still accounts for — the ticker's job is the record, not the
-  // kill.
-  const ticker = startStateTicker({
-    sample: () => builder.sampleState(),
-    intervalMs: o.stateTickMs ?? 5_000,
-  });
-
   let turn = 0;
+  /** Whether the provider's served-model id has already been promoted (first wins). */
+  let promotedResolved = false;
+  // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn, and
+  // that used to be this loop's only sampling — one 485s request left an
+  // 8.1-minute blackout with no state row and no XP signal. Live for the whole
+  // episode, not just the model call: a turn's tool calls can be slow too, and
+  // the gate inside `sampleState` keeps the row cadence fixed either way.
+  // Deliberately no watchdog enforcement here, unlike the claude driver's
+  // ticker: this loop reads its watchdogs at the turn boundary, the boundary is
+  // never further away than the adapter's own retry budget, and a mid-request
+  // kill would have to abandon a request the adapter still accounts for — the
+  // ticker's job is the record, not the kill. `finished` shuts it up the instant
+  // an outcome is decided, ahead of the `finally` that stops the timer.
+  let finished = false;
+  const stopTicker = startStateTicker({
+    builder,
+    tickMs: o.stateTickMs,
+    stopped: () => finished || stopRequestOf(o.signal) !== null,
+  });
   try {
     for (;;) {
       // 0. a stop request wins over everything, at the turn boundary
@@ -390,6 +501,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // 2. state line + 3. the fixed context (ADR-0012)
       turn++;
       const contextText = await builder.build(turn, pendingNotices);
+      // The sample above may have been the first sight of the character; a
+      // stale one ends the run here, not after a whole turn on it.
+      const integrity = watchdogs.check();
+      if (integrity !== null && integrity.reason === "stale-character") {
+        trajectory.append({ t: "watchdog", ...integrity });
+        return terminate(integrity.reason, integrity.detail);
+      }
 
       const messages: ChatMessage[] = [
         { role: "system", content: buildSystemPrompt(config.objective, config.episode) },
@@ -426,6 +544,18 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // cache, and a cost sweep must be able to tell that from harness prefix
       // instability without replaying per-generation API lookups.
       const servedBy = (outcome.turn.raw as { provider?: unknown } | null | undefined)?.provider;
+      /*
+       * The model the provider says it served, off the same response body. An
+       * aggregator answers a request for one slug with the id it actually
+       * routed to, and that — not the config string — is what a chart needs to
+       * name. Recorded on the record and promoted onto the run the first time,
+       * the same fact the claude-code harness reads out of its `init` event.
+       */
+      const servedModel = (outcome.turn.raw as { model?: unknown } | null | undefined)?.model;
+      if (typeof servedModel === "string" && servedModel.length > 0 && !promotedResolved) {
+        promotedResolved = true;
+        trajectory.recordResolved(runId, { model: servedModel });
+      }
       trajectory.append({
         t: "response",
         turn,
@@ -434,6 +564,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
         ...(typeof servedBy === "string" && servedBy.length > 0 ? { provider: servedBy } : {}),
+        ...(typeof servedModel === "string" && servedModel.length > 0 ? { model: servedModel } : {}),
         ...(outcome.turn.providerRequestId !== undefined
           ? { providerRequestId: outcome.turn.providerRequestId }
           : {}),
@@ -507,7 +638,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     }
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   } finally {
-    await ticker.stop();
+    finished = true;
+    await stopTicker();
   }
 }
 

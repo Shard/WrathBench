@@ -60,14 +60,14 @@ describe("paths", () => {
     await c.results();
     await c.results("e360");
     await c.results("all");
-    await c.ladder("e90", true);
+    await c.ladder("e360");
     expect(s.calls.map((x) => x.url)).toEqual([
       "/api/episodes",
       // No param at all: the server's own default (e90) is the one default.
       "/api/results",
       "/api/results?episode=e360",
       "/api/results?episode=all",
-      "/api/ladder?episode=e90&includeOverrides=1",
+      "/api/ladder?episode=e360",
     ]);
     expect(s.calls.every((x) => x.method === "GET")).toBe(true);
   });
@@ -123,7 +123,8 @@ describe("shapes", () => {
           campaign: null, cell: null, extra: false,
           comparability: null,
           character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
-          characterLabel: "Dwarf Hunter", platform: "openrouter", apiBase: null, harnessVersion: "harness-0.2",
+          characterLabel: "Dwarf Hunter", platform: "openrouter", resolvedModel: "claude-sonnet-5", cliVersion: "2.1.239",
+          apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
           pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, items: null, mtime: 5,
           bytes: 9, live: true, tokens: null, cost: null, firstTs: 1, lastTs: 2, playtimeMs: 1,

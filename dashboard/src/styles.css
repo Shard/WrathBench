@@ -14,9 +14,15 @@
   --accent: #7aa2f7;
   --err: #f7768e;
   --ok: #9ece6a;
+  /* A finished thing, not a live one: green enough to still mean "fine",
+     pulled back toward the background so it does not compete with --ok. */
+  --ok-muted: #7a9460;
   --warn: #e0af68;
   --grid: #1a1d22;
   --gridline: #23272e;
+  /* Claude's own orange, so the claude-code harness tag reads as itself rather
+     than as one more accent-coloured badge. */
+  --claude: #da7756;
 }
 
 @media (prefers-color-scheme: light) {
@@ -29,9 +35,13 @@
     --accent: #2f5fd0;
     --err: #b3283c;
     --ok: #3f7a24;
+    /* Muted means "toward the page" in both schemes, so on white it lightens. */
+    --ok-muted: #6e8f57;
     --warn: #8a5d00;
     --grid: #e9ebef;
     --gridline: #d5d9e0;
+    /* Darkened for a light background: #da7756 is too pale for an 11px badge. */
+    --claude: #b4522f;
   }
 }
 
@@ -57,6 +67,14 @@ header.top h1 { font-size: 15px; margin: 0; font-weight: 600; }
 header.top nav { display: inline-flex; gap: 10px; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
+
+/* The global harness-series selector (ADR-0046), left of the status badge. */
+.series { display: inline-flex; align-items: center; gap: 6px; align-self: center; font-size: 12px; }
+.series select {
+  font: inherit; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
+}
+.series select:focus-visible { outline: 1px solid var(--accent); }
 
 /* The service status badge (top right) and its popout; derivation in lib/status.ts. */
 .status { position: relative; align-self: center; }
@@ -84,10 +102,11 @@ main.flush { overflow: hidden; }
 .dim { color: var(--dim); }
 .err { color: var(--err); }
 .ok { color: var(--ok); }
+/* Done rather than going: a campaign that has finished its sweep. */
+.ok-muted { color: var(--ok-muted); }
 .warn { color: var(--warn); }
 .mono { font-variant-numeric: tabular-nums; }
 .right { text-align: right; }
-.nowrap { white-space: nowrap; }
 
 h2.section { font-size: 13px; margin: 20px 0 8px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
@@ -123,15 +142,29 @@ tbody tr:hover { background: var(--panel); }
 .badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
 /* Harness tags (ADR-0035): a label, not a verdict. */
 .badge.harness-wrathbench { color: var(--dim); }
-.badge.harness-claude-code { color: var(--accent); border-color: var(--accent); }
+.badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
 .badge.harness-unknown { opacity: .6; }
 /* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
 .progress { font-size: 11px; margin-left: 6px; }
 
 tbody tr.clickable { cursor: pointer; }
+/* The runs spreadsheet: every header sorts, and the sorted one says which way. */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--fg); }
+th.sorted { color: var(--fg); }
+.sortmark { margin-left: 4px; font-size: 9px; }
 
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
+
+/* A model's logo beside its name (ADR-0045); the fallback is a monogram disc.
+   The box is 1em so the mark rides the text it labels at any font size, and the
+   fallback's own em is scaled with it so both read the same size. */
+.model-icon { display: inline-flex; align-items: center; justify-content: center; flex: none;
+              width: 1em; height: 1em; margin-right: 5px; vertical-align: -.14em; }
+.model-icon svg { width: 1em; height: 1em; display: block; }
+.model-icon-fallback { font-size: .7em; width: 1.4em; height: 1.4em; border-radius: 50%;
+                       background: var(--panel); color: var(--dim); font-weight: 700; line-height: 1; }
 
 button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
@@ -146,8 +179,8 @@ button.on { border-color: var(--accent); font-weight: 700; }
 .banner { border: 1px solid var(--line); border-left-width: 3px; border-radius: 4px;
           padding: 8px 12px; margin: 10px 0; background: var(--panel); }
 .banner.bad { border-left-color: var(--err); }
-.banner.good { border-left-color: var(--ok); }
 .banner.warn { border-left-color: var(--warn); }
+.banner.info { border-left-color: var(--accent); }
 
 /* --- the run feed --- */
 .feed { display: flex; flex-direction: column; gap: 8px; }
@@ -197,6 +230,44 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .detail table { font-size: 12px; }
 .detail p { margin: 0 0 6px; }
 
+/* --- the collapsible pane (components/Collapsible.tsx) --- */
+/*
+ * The slide is a grid row going 0fr→1fr with the content clipped inside it,
+ * which is the one way to animate to "however tall the content is" without
+ * measuring anything. The clip element needs `min-height: 0`, or a grid item
+ * refuses to shrink below its content and nothing moves. Padding lives on a
+ * third element because padding on the clip would leak out of a zero row.
+ */
+.collapsible { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; }
+.collapsible-head { margin: 0; font-size: inherit; font-weight: inherit; }
+.collapsible-toggle {
+  display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left;
+  font: inherit; color: var(--fg); cursor: pointer;
+  background: none; border: none; border-radius: 6px; padding: 7px 10px;
+}
+/* Lifts from --panel, so the step has to clear it: --grid is two hex values away. */
+.collapsible-toggle:hover { background: var(--line); }
+.collapsible-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+/* Drawn rather than typed: the mono stack renders ▸ at a size the eye misses. */
+.collapsible-chev { flex: none; align-self: center; width: 0; height: 0; color: var(--dim);
+                    border-left: 6px solid currentColor;
+                    border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+                    transition: transform .18s ease; }
+.collapsible.open > .collapsible-head .collapsible-chev { transform: rotate(90deg); }
+.collapsible-title { font-weight: 700; }
+.collapsible-summary { margin-left: auto; font-size: 12px; text-align: right; }
+
+.collapsible-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease; }
+.collapsible.open > .collapsible-body { grid-template-rows: 1fr; }
+.collapsible-clip { overflow: hidden; min-height: 0; }
+.collapsible-content { padding: 0 10px 8px; }
+.collapsible-content > :first-child { margin-top: 0; }
+.collapsible-content > :last-child { margin-bottom: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .collapsible-body, .collapsible-chev { transition: none; }
+}
+
 /* --- the run view: XP chart on top, feed left, everything else right (sticky) --- */
 /*
  * The log column is its own scroll container and the sidebar another, so the
@@ -210,6 +281,32 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .xpchart { width: 100%; height: 200px; display: block; margin: 4px 0 12px;
            background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .xpchart.empty { height: auto; padding: 14px 12px; font-size: 12px; }
+
+/* The ladder's scatter: viewBox-scaled, never wider than the page. */
+.ladderchart { width: 100%; max-width: 100%; height: auto; display: block; margin: 4px 0 6px;
+               background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.ladderchart-pt { cursor: pointer; }
+.ladderchart-pt:hover circle:last-of-type { stroke: var(--fg); }
+.ladderchart-pt:hover text { text-decoration: underline; }
+.ladderchart-caption { font-size: 12px; margin: 0 0 12px; }
+
+/* The ladder's episode buttons: the axis the page turns on, so they are centred
+   and a size larger than a chip row that merely narrows something. */
+.chips.episodes { justify-content: center; gap: 8px; margin: 14px 0 8px; }
+.chips.episodes button { font-size: 15px; padding: 5px 16px; }
+
+/* Its filters: one line, hard right, directly above the chart they narrow. */
+.ladder-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+                   justify-content: flex-end; margin: 0 0 6px; font-size: 12px; }
+.ladder-controls > .dim:first-child { margin-right: auto; }
+.filter { display: inline-flex; align-items: center; gap: 6px; }
+.filter select {
+  font: inherit; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
+}
+.filter select:focus-visible { outline: 1px solid var(--accent); }
+.filter.check { cursor: pointer; }
+.filter.check input { accent-color: var(--accent); cursor: pointer; }
 
 .runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }
 .runview-logs { flex: 0 1 var(--log-col); min-width: 0; overflow-y: auto; }
