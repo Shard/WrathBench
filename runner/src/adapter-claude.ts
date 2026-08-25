@@ -116,6 +116,13 @@ export const BILLING_ENV_EXACT = [
 const DB_ENV_PREFIX = "WRATHBENCH_DB_";
 
 /**
+ * Not billing either: the CLI's thinking budget. The run's `effort` is the only
+ * thing that may set it (`thinkingEnv`), so an operator's shell variable cannot
+ * silently become a run dimension nobody recorded.
+ */
+const THINKING_ENV = "MAX_THINKING_TOKENS";
+
+/**
  * The child environment, constructed rather than inherited.
  *
  * One credential survives, and it is the one the run's LANE names: the token in
@@ -143,6 +150,7 @@ export function childEnv(
     if (BILLING_ENV_EXACT.includes(k)) continue;
     if (k.startsWith(DB_ENV_PREFIX)) continue;
     if (k.startsWith(DEFAULT_CLAUDE_TOKEN_ENV)) continue;
+    if (k === THINKING_ENV) continue;
     out[k] = v;
   }
   const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
@@ -307,9 +315,25 @@ async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<st
 export interface ClaudeArgsOptions {
   mcpConfigPath: string;
   model?: string | undefined;
-  /** `--effort` level, when the run declares one. */
+  /** `--effort` level, when the run declares one. `none` is env, not a flag. */
   effort?: string | undefined;
   systemPrompt?: string;
+}
+
+/**
+ * The effort level that means "no extended thinking".
+ *
+ * The CLI has no `--effort none`; it reads a thinking budget from
+ * `MAX_THINKING_TOKENS`, and zero turns the feature off. Keeping this inside
+ * the effort dimension rather than adding a flag of its own is what makes
+ * `sonnet at none` one more row of the same (model, effort) matrix, comparable
+ * to `sonnet at low` — nothing new is recorded, the run config already says it.
+ */
+export const NO_THINKING = "none";
+
+/** Env the CLI needs for an effort level, where a level is not a flag. */
+export function thinkingEnv(effort: string | undefined): Record<string, string> {
+  return effort === NO_THINKING ? { [THINKING_ENV]: "0" } : {};
 }
 
 /**
@@ -361,8 +385,10 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.model !== undefined ? ["--model", o.model] : []),
     // `--effort <low|medium|high|xhigh|max>` in 2.1.238. Only when the run
     // declares one: absent means the CLI's own default, which is not the same
-    // as any named level.
-    ...(o.effort !== undefined ? ["--effort", o.effort] : []),
+    // as any named level. `none` is not one of the CLI's levels — it is
+    // extended thinking off, which the CLI takes as `MAX_THINKING_TOKENS=0` in
+    // its environment (`thinkingEnv`), so the flag stays off the line.
+    ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
     ...mcpToolNames(),
@@ -652,12 +678,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     model: config.model,
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
+  const thinking = thinkingEnv(config.effort);
+  const extra = { ...thinking, ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
     // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
     // sees the token, under the one name it knows.
     ...(config.subscription !== undefined ? { tokenEnv: config.subscription } : {}),
-    ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 
   trajectory.append({
