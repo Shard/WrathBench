@@ -195,23 +195,37 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
-## Wiki
+80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
+    audit). `openSocket()` (`sdk/src/events.ts`) puts no timeout of its own around the
+    WebSocket construction, so one stalled TCP/WS handshake during a reconnect silently
+    consumes the caller's whole wait budget with no fallback — the reconnect ladder
+    only reschedules on close/error, never on "still opening". Observed once as the
+    events.test.ts reconnect test timing out at 5s in a loaded container (2026-08-24,
+    under the wrong Bun; not reproduced since — 25+ runs incl. under CPU stress), so
+    this stays parked per the earned-by-need rule. Unblocks on a second observation,
+    in CI or a live run's reconnect logs.
 
-65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
-    the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
-    states every one of its ~28 metrics three times: a `let`/`Record` in the
-    build loop, a `meta` key in the `setMeta` call, and a line in the console
-    summary. Nothing ties the three together, so a new counter is added in three
-    places and is silently absent from the bundle or the summary if one is
-    missed, and the ones that are deliberately *not* part of the accounting
-    identity (`pages_pre_announcement_protected`, `pages_id_name_mismatch`,
-    `empty_pages`) say so only in a comment beside each of the three. What it
-    costs today is small — the comments are good and the meta diff of a rebuild
-    catches a drift — which is why this is a follow-up and not a fix: it is worth
-    doing when the next counter goes in, as one metric table (name, help text,
-    whether it is in the identity, how it prints) that the loop increments, the
-    meta write reads and the summary renders. Watch for it the next time a
-    counter is added to `build.ts`.
+81. **run.sqlite is opened everywhere with busy_timeout 0** (2026-08-24, bare-clone
+    audit). No connection to a run.sqlite anywhere in the codebase sets
+    `PRAGMA busy_timeout` (or WAL), so any overlap — the runner writing while the
+    viewer, fleet supervisor or models.ts reads — throws SQLITE_BUSY immediately
+    instead of retrying. Never yet observed failing (the 2026-08-24 endRuns test
+    failure that first pointed here turned out to be a root-container path quirk),
+    which is why this is an item and not a change: one line in `Trajectory`'s
+    constructor plus the read-only opens, when an actual SQLITE_BUSY shows up in a
+    log. Unblocks on first observation.
+
+## Module
+
+82. **module/ has no host-side checks at all** (2026-08-24, bare-clone audit). ~5,900
+    lines of C++ with no unit tests, no lint, no static analysis runnable outside the
+    live stack — the smoke scripts are the verification and they need the full
+    compose stack, so every non-live environment (CI, web sessions, the 2026-08-24
+    audit) sees module/ as a blind spot. Deliberate so far (the module stays thin;
+    game semantics live in TypeScript), but the boundary deserves a decision rather
+    than a default: even a `clang-format --dry-run` or a syntax-only compile in the
+    image build would catch mechanical breakage before a deploy window. Next action:
+    decide what, if anything, runs without the stack; record it either way.
 
 ## Docs and release
 

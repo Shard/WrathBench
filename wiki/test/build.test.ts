@@ -4,13 +4,25 @@ import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUniquePages, createSchema, makeWriter } from "../src/bundle";
-import { eraSource, parseArgs, siblingRedirects } from "../src/build";
+import { eraSource, METRICS, parseArgs, siblingRedirects, type MetricKey } from "../src/build";
 import { DEFAULT_ERA_CUTOFF } from "../src/wrath-only";
 import { EMPTY_PAGE_SNIPPET, searchReference } from "../src/search";
 import { renderDump } from "./fixtures";
 
 const dir = mkdtempSync(join(tmpdir(), "wrathbench-wiki-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+/**
+ * The accounting identity's terms, read off the metric table rather than
+ * restated here: every bucket sums to `pages_in_namespaces`, and the kept
+ * buckets sum to `pages_kept`.
+ */
+const metricKeys = Object.keys(METRICS) as MetricKey[];
+const identityBuckets = metricKeys.filter((key) => METRICS[key].identity.role === "bucket");
+const keptBuckets = identityBuckets.filter((key) => {
+  const identity = METRICS[key].identity;
+  return identity.role === "bucket" && identity.kept;
+});
 
 test("build.ts turns a dump into a searchable bundle", async () => {
   const xmlPath = join(dir, "example-dump.xml");
@@ -313,35 +325,24 @@ test("build.ts turns a dump into a searchable bundle", async () => {
   expect(metaValue("pages_emptied_by_trim")).toBe("1");
   expect(metaValue("redirects_dropped_dangling")).toBe("1");
 
-  // Every non-redirect page the parser yielded is accounted for exactly once.
-  // Nothing else here catches a page counted twice or lost silently.
+  // Every page the parser yielded is accounted for exactly once, in the
+  // buckets the metric table declares. Nothing else here catches a page
+  // counted twice or lost silently.
   //
-  // The term on the right is `pages_era_redirect` and not `redirects`: a
-  // redirect row can now be generated for a title that is also a counted page
+  // The bucket that carries the names is `pages_era_redirect`, not `redirects`:
+  // a redirect row can now be generated for a title that is also a counted page
   // (a page move left the name behind), so the rows written are no longer the
   // pages that were redirects at the cutoff. Those are, and they are the only
   // yielded pages that go into no reason bucket.
   expect(metaValue("pages_era_redirect")).toBe("2");
   expect(metaValue("redirects_recovered_newest")).toBe("0");
   expect(metaValue("redirects_original_sibling")).toBe("0");
-  const accounted =
-    metaNumber("pages_pre_cutoff") +
-    metaNumber("pages_post_cutoff_wrath_signal") +
-    metaNumber("pages_post_cutoff_id_match") +
-    metaNumber("pages_dropped_post_cutoff") +
-    metaNumber("pages_dropped_post_wrath") +
-    metaNumber("pages_dropped_meta") +
-    metaNumber("empty_pages");
-  expect(accounted).toBe(metaNumber("pages_in_namespaces") - metaNumber("pages_era_redirect"));
+  const accounted = identityBuckets.reduce((sum, key) => sum + metaNumber(key), 0);
+  expect(accounted).toBe(metaNumber("pages_in_namespaces"));
   // A subset counter, never a bucket: adding it to the sum would double-count.
   expect(metaNumber("pages_emptied_by_trim")).toBeLessThanOrEqual(metaNumber("empty_pages"));
   // Every row in the bundle is an admitted page or an empty one, and nothing else.
-  expect(metaNumber("pages_kept")).toBe(
-    metaNumber("pages_pre_cutoff") +
-      metaNumber("pages_post_cutoff_wrath_signal") +
-      metaNumber("pages_post_cutoff_id_match") +
-      metaNumber("empty_pages"),
-  );
+  expect(metaNumber("pages_kept")).toBe(keptBuckets.reduce((sum, key) => sum + metaNumber(key), 0));
 
   // A page the trim emptied keeps its row: the prose is gone, the title and the
   // id are not, and both still answer a query. This is the whole point of not
@@ -1147,14 +1148,24 @@ test("the world-id door admits late pages, and only with the flag", async () => 
   expect(worldIds.exported_at).toBe("2026-08-24T12:00:00Z");
   expect(worldIds.counts).toEqual({ quest: 2, creature: 1, item: 1, gameobject: 1 });
   // The identity still holds with the sixth reason in it.
-  const accounted =
-    metaNumber("pages_pre_cutoff") +
-    metaNumber("pages_post_cutoff_wrath_signal") +
-    metaNumber("pages_post_cutoff_id_match") +
-    metaNumber("pages_dropped_post_cutoff") +
-    metaNumber("pages_dropped_post_wrath") +
-    metaNumber("pages_dropped_meta") +
-    metaNumber("empty_pages");
-  expect(accounted).toBe(metaNumber("pages_in_namespaces") - metaNumber("pages_era_redirect"));
+  const accounted = identityBuckets.reduce((sum, key) => sum + metaNumber(key), 0);
+  expect(accounted).toBe(metaNumber("pages_in_namespaces"));
   db.close();
 }, 30_000);
+
+test("the metric table is internally consistent", () => {
+  // Exactly one total for the buckets to sum to, and buckets on both sides of
+  // the bundle: names, drops and kept rows.
+  expect(metricKeys.filter((key) => METRICS[key].identity.role === "total")).toEqual([
+    "pages_in_namespaces",
+  ]);
+  expect(keptBuckets.length).toBeGreaterThan(0);
+  expect(identityBuckets.length).toBeGreaterThan(keptBuckets.length);
+  // A subset tags a counter that exists, and never itself.
+  for (const key of metricKeys) {
+    const identity = METRICS[key].identity;
+    if (identity.role !== "subset") continue;
+    expect(metricKeys as string[]).toContain(identity.of);
+    expect(identity.of).not.toBe(key);
+  }
+});

@@ -17,7 +17,7 @@
  * run.sqlite is opened readonly so a live writer is untouched.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, json } from "./api";
 
@@ -63,10 +63,12 @@ const fleetConfigPath = ((): string | undefined => {
   return given ?? (existsSync("infra/fleet.json") ? "infra/fleet.json" : undefined);
 })();
 
-if (!existsSync(runsDir)) {
-  console.error(`no runs directory at ${runsDir} — run from the repo root, or set WRATHBENCH_RUNS_DIR.`);
-  process.exit(1);
-}
+/*
+ * An absent runs directory is a bare clone, not a startup failure — the same
+ * posture as the tiles, the SPA and the fleet config above: the viewer only
+ * ever lists and reads it, so an empty one serves labelled empty states.
+ */
+if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
 
 const built = existsSync(join(dashboardDir, "index.html"));
 const handle = createApi({

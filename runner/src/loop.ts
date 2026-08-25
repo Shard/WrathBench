@@ -131,6 +131,8 @@ export class ContextBuilder {
    * "before the first turn", which is recorded as no turn at all.
    */
   private turn = 0;
+  /** The sample in flight, if any; concurrent callers share it. */
+  private sampling: Promise<SnapshotLike | null> | null = null;
   private readonly now: () => number;
 
   constructor(private readonly o: ContextBuilderOptions) {
@@ -183,6 +185,13 @@ export class ContextBuilder {
    * claude-code driver: one turn can run for tens of minutes) must
    * sample the world on the clock, not once per turn, or the timeline has no
    * data mid-turn and `no-xp` has nothing to measure.
+   *
+   * Coalesced, never concurrent: the mid-turn ticker and the turn preamble
+   * can call this at the same time, and two interleaved samples would each
+   * read the quest/zone/area high-water marks before either advanced them —
+   * double-logging every completion and milestone in the window. A caller
+   * landing mid-sample gets that sample's snapshot, which is as fresh as the
+   * one it would have taken.
    */
   async sampleState(): Promise<SnapshotLike | null> {
     // One sample at a time, run-wide. The turn preamble and the ticker
@@ -460,10 +469,17 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   let turn = 0;
   /** Whether the provider's served-model id has already been promoted (first wins). */
   let promotedResolved = false;
-  // Live for the whole episode, not just the model call: a turn's tool calls can
-  // be slow too, and the gate inside `sampleState` keeps the row cadence fixed
-  // either way. `finished` shuts it up the instant an outcome is decided, ahead
-  // of the `finally` that clears the timer.
+  // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn, and
+  // that used to be this loop's only sampling — one 485s request left an
+  // 8.1-minute blackout with no state row and no XP signal. Live for the whole
+  // episode, not just the model call: a turn's tool calls can be slow too, and
+  // the gate inside `sampleState` keeps the row cadence fixed either way.
+  // Deliberately no watchdog enforcement here, unlike the claude driver's
+  // ticker: this loop reads its watchdogs at the turn boundary, the boundary is
+  // never further away than the adapter's own retry budget, and a mid-request
+  // kill would have to abandon a request the adapter still accounts for — the
+  // ticker's job is the record, not the kill. `finished` shuts it up the instant
+  // an outcome is decided, ahead of the `finally` that stops the timer.
   let finished = false;
   const stopTicker = startStateTicker({
     builder,

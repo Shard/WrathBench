@@ -10,7 +10,7 @@ import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } 
 import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import { toJsonSafe } from "../src/jsonsafe";
-import { itemSample, runLoop } from "../src/loop";
+import { ContextBuilder, itemSample, runLoop } from "../src/loop";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -283,6 +283,90 @@ describe("runLoop", () => {
     const done = readTrajectory(dir).filter((r) => r.t === "quest_complete");
     expect(done.map((r) => r["questId"])).toEqual([7, 9, 11]);
     options.trajectory.close();
+  });
+
+  test("the ticker records state while a model request is in flight (item 77)", async () => {
+    // The openai-compatible path used to sample only in the turn preamble, so
+    // one 485s request was an 8-minute observability blackout: no state row,
+    // no XP signal. The ticker samples on the wall clock while complete()
+    // holds the turn.
+    const slow: ChatAdapter = {
+      label: "slow",
+      complete: async (): Promise<AdapterOutcome> => {
+        await new Promise((r) => setTimeout(r, 120));
+        return { kind: "stub-complete" };
+      },
+    };
+    const { options } = setup(slow);
+    await runLoop({ ...options, stateTickMs: 10 });
+    const rows = options.trajectory.stateRows("run-test");
+    // One row from the turn preamble, the rest from inside the request.
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    // Mid-request samples carry the turn in flight, not "before the first".
+    expect(rows.every((r) => r["turn"] === 1)).toBe(true);
+    options.trajectory.close();
+  });
+
+  test("the ticker stops with the loop: nothing samples after runLoop returns", async () => {
+    const { options } = setup(new StubAdapter([]));
+    await runLoop({ ...options, stateTickMs: 5 });
+    const recorded = options.trajectory.stateRows("run-test").length;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(options.trajectory.stateRows("run-test")).toHaveLength(recorded);
+    options.trajectory.close();
+  });
+
+  test("concurrent sampleState calls coalesce: completions and milestones log once", async () => {
+    // The ticker and the turn preamble can sample at the same moment; two
+    // interleaved samples would each read the quest/zone/area high-water marks
+    // before either advanced them and double-log everything in the window.
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
+    const config = {
+      ...loadRunConfig({ driver: "stub", stateIntervalMs: 1 }),
+      runId: "run-test",
+      token: "run-test",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
+    let snapshots = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () =>
+        new Promise((resolve) =>
+          setTimeout(() => {
+            snapshots++;
+            resolve({
+              self: { guid: "7", zone: { value: { id: 12 }, seq: 1, ts: 1 } },
+              lastSeq: -1,
+              eventCount: 0,
+              questCompletions: [{ questId: 7 }],
+            });
+          }, 20),
+        ),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    const builder = new ContextBuilder({
+      config,
+      sandbox,
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+    });
+    const [a, b] = await Promise.all([builder.sampleState(), builder.sampleState()]);
+    // One snapshot served both callers — not two interleaved samples.
+    expect(snapshots).toBe(1);
+    expect(a).toBe(b);
+    expect(readTrajectory(dir).filter((r) => r.t === "quest_complete")).toHaveLength(1);
+    expect(readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "zone")).toHaveLength(1);
+    expect(trajectory.stateRows("run-test")).toHaveLength(1);
+    // The coalescing window closes with the sample: a later call runs its own.
+    await builder.sampleState();
+    expect(snapshots).toBe(2);
+    trajectory.close();
   });
 
   test("the new signals survive the real snapshot serializer, not just the stub", async () => {
