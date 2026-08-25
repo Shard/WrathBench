@@ -693,3 +693,176 @@ at launch. On the host `run-episode.sh` does it; in the container `run-roster`
 does it, using the `git` in the runner image against the bind-mounted `.git`.
 A dirty tree stamps `-dirty` either way — that is the point, and it is why the
 stamp is not a file written once at `up` time.
+
+## Public dashboard
+
+The public site is **push-based**: a publisher on the lab renders the viewer's
+own API to JSON on a timer and PUTs it to an R2 bucket, and the SPA is built a
+second time to read that bucket instead of `/api`. No public request ever
+reaches the lab, so a traffic spike is Cloudflare's problem rather than the
+worldserver's, and the control surface stays exactly as unexposed as it is
+today. `docs/PUBLIC-DASHBOARD.md` is the design and the rejected alternatives;
+this section is how to stand it up.
+
+Per `docs/DATA-AND-LEGAL.md` the first public deploy is still gated on the
+operator's content decision (GitHub issue #10) about entry summaries and
+verbatim game text. What follows is the mechanism, not the green light.
+
+Do the steps in order — each one names the hostname or credential the next
+depends on.
+
+### 1. Create the bucket
+
+An R2 bucket, `wrathbench-public`, default location. Only projected JSON is
+ever uploaded, a fraction of what a trajectory weighs, so the free tier (10 GB
+stored, 10M reads, 1M writes a month) covers the whole corpus many times over.
+
+### 2. Attach a custom domain
+
+The CDN cache only fronts a bucket through a **custom domain**; the `r2.dev`
+URL is uncached, which would put every read on the bucket. Pick the data
+hostname (`data.<zone>`) on a zone in the same account and attach it under the
+bucket's public-access settings. Everything downstream names this hostname: the
+cache rule, the CORS policy, and the SPA's build-time snapshot base.
+
+### 3. Add the cache rule
+
+Cloudflare does **not** cache JSON by default. In that zone's caching rules,
+match `Hostname equals data.<zone>` and set cache eligibility to *eligible for
+cache* with edge TTL *use cache-control header from origin*. Respecting the
+origin header is what puts freshness in the publisher's hands: it sets
+`max-age=30` on the two mutable files (`v1/manifest.json`, `v1/live.json`) and
+`max-age=31536000, immutable` on every generation-addressed object, so worst-case
+staleness is the push cadence plus the edge TTL, about 90–120s.
+
+**A missing cache rule is the only way this design costs money.** Without it
+every public request is a billed read against the bucket — roughly $7/month at
+30M requests, versus roughly $0 with the rule. Verify it (step 8) before the
+URL goes anywhere.
+
+### 4. Apply the CORS policy
+
+`infra/cloudflare/r2-cors.json`, with its placeholder app origin edited to the
+real hostname first:
+
+```
+bunx wrangler r2 bucket cors set wrathbench-public --file infra/cloudflare/r2-cors.json
+```
+
+`GET`/`HEAD` from the app origin and from `http://localhost:5180`, which is the
+Vite dev server so snapshot mode can be developed against the real bucket. The
+private viewer is same-origin, so this is the project's first and only CORS
+policy.
+
+### 5. Mint two tokens
+
+Least privilege, one job each, and neither can do the other's:
+
+- **R2 Object Read & Write, scoped to `wrathbench-public` alone** — the
+  publisher's, and the only Cloudflare credential that lives on the lab. It
+  hands back an access key id and secret; put them in `.env` at the repository
+  root as `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`.
+- **Workers Scripts Edit** — wherever `wrangler deploy` runs, as
+  `CLOUDFLARE_API_TOKEN`. No bucket access.
+
+A third, zone **Cache Purge**, is only wanted if the manifest TTL is ever
+tightened by purging the two mutable URLs after each push. That is not the
+current design — do not mint it now.
+
+All of this runs on the **free plan**. Workers Paid ($5/month) is cliff
+insurance, wanted only if a Worker ever enters the read path. The $20/month
+zone "Pro" plan is the wrong SKU entirely: it is a zone plan and includes none
+of Workers, KV, D1 or R2.
+
+### 6. First publish, by hand
+
+`mkdir -p data/publish` first — it is the publisher's only writable path and
+Docker would otherwise create it as root. Then one pass:
+
+```
+docker compose -f infra/compose.yml run --rm --no-deps publisher \
+  bun infra/publish-dashboard.ts --once
+```
+
+Its environment is the compose service's, and the two must stay in agreement:
+
+| variable | value | why |
+| --- | --- | --- |
+| `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record, read-only |
+| `WRATHBENCH_FLEET_CONFIG` | `infra/fleet.json` | the roster names the models the pages label |
+| `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
+| `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` | `--loop` cadence; the harness's own floor is 30–60s, so a faster push buys nothing |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
+| `S3_BUCKET` | `wrathbench-public` | |
+| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint, not the custom domain |
+
+The four `S3_*` names are `Bun.S3Client`'s own, which is why they are not
+spelled `WRATHBENCH_*` and why they come from `.env` rather than from
+`compose.yml`.
+
+Then read the bucket back before trusting the loop with it:
+
+- `v1/manifest.json` exists, and the `gen` it names has a complete
+  `v1/snap/<gen>/` set beside it. The manifest is uploaded last precisely so
+  this is never half true.
+- `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
+- Object metadata shows `max-age=30` on the two mutable files and
+  `max-age=31536000, immutable` on everything else.
+- Nothing in the bucket is a minimap tile, a raw trajectory entry, a
+  scratchpad, or a filesystem path. The projection is an allowlist, so this
+  should be true by construction — check it once anyway, because it is the
+  legal boundary.
+
+### 7. Start the loop, then deploy the SPA
+
+```
+docker compose -f infra/compose.yml up -d --no-deps publisher
+docker compose -f infra/compose.yml logs -f publisher
+```
+
+`--no-deps` for the same reason as the fleet: without it compose may decide the
+worldserver is out of date and recreate it under live episodes. The service
+sits behind the `publish` profile so a bare `up -d` cannot start a second
+publisher against the same bucket. `stop publisher` needs no drain — an
+interrupted pass leaves the last manifest pointing at the last complete
+generation.
+
+The app is a separate deploy, and only ever a UI change; data never moves
+through it:
+
+```
+VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.<zone> bun run --cwd dashboard build
+bunx wrangler deploy --config dashboard/wrangler.jsonc
+```
+
+That env var is what selects the snapshot client at build time, so the public
+bundle and the private one (built without it, served same-origin by the viewer)
+come off the same source with no runtime switch. `dashboard/wrangler.jsonc`
+declares no `main`: assets only, no fetch handler, and therefore no Worker
+invocation anywhere in the read path.
+
+### 8. Verify
+
+```
+curl -sI https://data.<zone>/v1/manifest.json
+curl -sI https://data.<zone>/v1/manifest.json      # again
+```
+
+- The **second** response says `cf-cache-status: HIT`. A `MISS`, `DYNAMIC` or
+  `BYPASS` on the repeat means the cache rule from step 3 is not in effect;
+  fix that before anything else, because it is the one misconfiguration that
+  bills.
+- `cache-control: max-age=30` on the manifest, `max-age=31536000, immutable`
+  on a `v1/snap/<gen>/` object.
+- The app loads and the runs, ladder, episodes, models, campaigns, run detail,
+  fleet and map pages render. A CORS error in the console means the app origin
+  in step 4 does not match the hostname the browser used — scheme included.
+- The staleness banner reads a plausible age: a minute or two, never hours and
+  never negative. Three clocks are in play (fleet heartbeat 30–60s, push 60s,
+  edge TTL ≤60s) and the banner reads only the last push, so hours means the
+  publisher stopped, not that the cache is cold.
+- The map draws the labelled grid and no tiles, and a run detail page shows no
+  entries — the snapshot client answers `entries()` and `raw()` with the same
+  403 the viewer's public mode does, and there is no object in the bucket for
+  it to fetch either way. If either ever shows content, stop the publisher: the
+  content boundary has a hole.
