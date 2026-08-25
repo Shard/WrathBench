@@ -80,10 +80,8 @@ import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, rel
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
 import {
-  CHARACTER_NAME_RULE,
   DEFAULT_CLAUDE_TOKEN_ENV,
   isTokenEnvName,
-  isValidCharacterName,
   watchdogOverrideSchema,
   type TerminationReason,
 } from "../runner/src/config";
@@ -739,14 +737,6 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
           `a local/self-hosted apiBase is exempt`,
       );
     }
-    // The game's naming rules, enforced where the name is written so a bad
-    // one is a config refusal at load, not a ZodError the roster retries
-    // every tick: `Fleetsonnetlo` (13 chars) respawn-looped for two hours on
-    // 2026-08-24 because nothing between the file and the runner ever looked
-    // at the name. One predicate for every boundary (runner/src/config.ts).
-    if (e.character !== undefined && (typeof e.character !== "string" || !isValidCharacterName(e.character))) {
-      fail(`${where}: entry ${e.model}: ${CHARACTER_NAME_RULE} (got ${JSON.stringify(e.character)})`);
-    }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
       if (!parsed.success) {
@@ -973,6 +963,15 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // budget an operator wrote on purpose.
     if (rawTiers !== undefined) fail(`roster ${name}: tiers is not a 0.5 key — force a longer episode by setting tier: "t2"`);
     if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
+    // Retired with the same argument, and refused at LOAD for the reason a bad
+    // name was: a name in the config is a name the harness has to keep valid,
+    // and an invalid one takes the whole file down (`Fleetsonnno`, 2026-08-25)
+    // or respawn-loops a job (`Fleetsonnetlo`, 13 chars, 2026-08-24). The model
+    // names its own character and the run records what it chose, so there is
+    // nothing for an entry to say.
+    if (rest["character"] !== undefined) {
+      fail(`roster ${name}: character is not a key — the model names its own character and the run records it`);
+    }
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
     // An entry carrying an objective is outside the policy entirely
     // The roster is a CATALOG: an entry describes a model and says
@@ -1691,7 +1690,7 @@ export function jobSpawn(
       // campaign opts in.
       resumeOnPause: resumesOnPause(job.episode, campaign?.resume),
       // An extra run is stamped as one; a scored-tier extra also rolls the
-      // policy's character, where a freeplay extra keeps the entry's own.
+      // policy's race/class, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
       ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class } : {}),
       // The subscription lane, for the one driver that has one. Omitted on the
