@@ -406,18 +406,26 @@ export function policyRefs(
   roster: PolicyRoster,
 ): Set<string> {
   const pinned = pinnedRefs(jobs);
-  return new Set(Object.keys(roster).filter((n) => !pinned.has(n)));
+  return new Set(Object.keys(roster).filter((n) => !pinned.has(n) && refusalOf(roster, n) === undefined));
+}
+
+/** A per-entry refusal the parser recorded, if any (`FleetRosterEntry.refused`). */
+function refusalOf(roster: PolicyRoster, name: string): string | undefined {
+  const e = roster[name] as { refused?: unknown } | undefined;
+  return typeof e?.refused === "string" ? e.refused : undefined;
 }
 
 /** Why a roster name is outside the policy, or undefined when it is inside. */
 export function policyExclusion(
   jobs: readonly PolicyJob[],
-  _roster: PolicyRoster,
+  roster: PolicyRoster,
   name: string,
 ): string | undefined {
   const job = jobs.find((j) => j.account !== undefined && j.refs.includes(name));
   if (job !== undefined) return `pinned to ${job.account} by job ${job.name ?? job.refs.join("+")}`;
-  return undefined;
+  // An entry the parser refused: it stays in the catalog (so a job naming it is
+  // gated rather than taking the whole file down) and is scheduled by nothing.
+  return refusalOf(roster, name);
 }
 
 /** Operator overrides the supervisor persists (`fleet-models.json`). */
@@ -853,26 +861,31 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
 export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode"];
 
 /**
- * The key one Claude subscription lane counts against. The default lane keeps
- * the bare `claude-code` key — every config and every log line written before
- * there was a second subscription still means what it said — and any other lane
- * is that key with the env var's NAME after a colon:
+ * A claude-code run counts against TWO keys, and needs a free slot in both.
  *
- *   CLAUDE_CODE_OAUTH_TOKEN    -> claude-code
- *   CLAUDE_CODE_OAUTH_TOKEN_2  -> claude-code:CLAUDE_CODE_OAUTH_TOKEN_2
+ *  - `claude-code` — every Claude session in flight, whichever subscription
+ *    pays for it. The operator's overall ceiling, and the same key (with the
+ *    same meaning) that every config written before there was a second
+ *    subscription already had.
+ *  - `claude-code:<ENV NAME>` — that one subscription's sessions. Every lane
+ *    has one, the default lane included, so the two questions never share a
+ *    number: "how many Claude sessions at once" and "how many on THIS account"
+ *    are different limits and are written as different keys.
  *
- * A lane with no cap of its own inherits the `claude-code` one (`capFor`), so
- * "one live session per subscription" is a single number in the file rather
- * than a line per account.
+ * A key the file does not name is uncapped, as everywhere else. So an old file
+ * saying only `"claude-code": 2` still means exactly what it meant — two
+ * sessions, and nothing said about which account — and a per-account limit is
+ * added by naming the lane, never by re-reading the total.
  */
+export const CLAUDE_TOTAL_KEY = "claude-code";
+
 export function claudeLaneKey(tokenEnv: string | null | undefined): string {
-  const env = tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV;
-  return env === DEFAULT_CLAUDE_TOKEN_ENV ? "claude-code" : `claude-code:${env}`;
+  return `${CLAUDE_TOTAL_KEY}:${tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV}`;
 }
 
 /** The lane a `claude-code:<NAME>` key names, or null for anything else. */
 export function laneOfKey(key: string): string | null {
-  return key.startsWith("claude-code:") ? key.slice("claude-code:".length) : null;
+  return key.startsWith(`${CLAUDE_TOTAL_KEY}:`) ? key.slice(CLAUDE_TOTAL_KEY.length + 1) : null;
 }
 
 export function isConcurrencyKey(k: string): boolean {
@@ -882,12 +895,16 @@ export function isConcurrencyKey(k: string): boolean {
 }
 
 /**
- * The cap that applies to a key: its own, else — for a subscription lane — the
- * `claude-code` cap, which is what "one live session per subscription" is
- * written as. Undefined means uncapped, as before.
+ * Both keys a claude-code run on `tokenEnv` counts against, in the order a
+ * refusal should name them. Everything else counts against its one key.
  */
+export function claudeKeysFor(tokenEnv: string | null | undefined): string[] {
+  return [claudeLaneKey(tokenEnv), CLAUDE_TOTAL_KEY];
+}
+
+/** The cap on a key; undefined is uncapped. */
 export function capFor(max: Record<string, number>, key: string): number | undefined {
-  return max[key] ?? (laneOfKey(key) !== null ? max["claude-code"] : undefined);
+  return max[key];
 }
 
 /**

@@ -96,7 +96,8 @@ import {
   MODELS_SIDECAR,
   accountClassOf,
   capFor,
-  claudeLaneKey,
+  claudeKeysFor,
+  CLAUDE_TOTAL_KEY,
   concurrencyKeyOf,
   liveSubscriptions,
   inSeries,
@@ -262,6 +263,22 @@ export interface FleetRosterEntry extends RosterSpec {
   idle: IdleMode;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: Billing;
+  /**
+   * Optional: pin this model's runs to ONE Claude subscription, by env var
+   * NAME. Normally absent — a lane is the scheduler's to pick, and pinning
+   * costs the entry the other subscription's free slots: with its own lane busy
+   * the pick is HELD, exactly as if the fleet had one subscription. Its use is
+   * an entry that must be billed to a particular account (a borrowed one, a
+   * usage window being spent on purpose).
+   */
+  subscription?: string;
+  /**
+   * Set by the parser when this entry was refused: it stays in the catalog so a
+   * job naming it is gated rather than taking the whole file down, and nothing
+   * schedules it (`policyExclusion`). The operator's notice is the refusal line
+   * in `--status`.
+   */
+  refused?: string;
 }
 
 export type JobSource = "pinned" | "queue" | "policy";
@@ -872,6 +889,15 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
+  // An entry pinned to a subscription the file does not configure. Refused as
+  // the ENTRY, not the file: the rest of the roster is fine, and a rejected
+  // re-read would make every other flag in the file inert.
+  for (const [name, e] of Object.entries(roster)) {
+    if (e.subscription === undefined || policy.subscriptions.includes(e.subscription)) continue;
+    const why = `subscription ${e.subscription} is not in policy.subscriptions (${policy.subscriptions.join(", ")})`;
+    roster[name] = { ...e, refused: why, subscription: undefined };
+    refusals.push({ pin: `roster ${name}`, why: `${why} — the entry is in the catalog and scheduled by nothing`, jobs: [] });
+  }
   return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent, refusals };
 }
 
@@ -923,13 +949,24 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
   for (const [name, e] of Object.entries(raw as Record<string, unknown>)) {
     if (name.length === 0 || !/^[A-Za-z0-9._-]+$/.test(name)) fail(`roster: entry name ${JSON.stringify(name)} must be [A-Za-z0-9._-]+`);
     if (typeof e !== "object" || e === null || Array.isArray(e)) fail(`roster ${name}: entry must be an object`);
-    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, ...rest } = e as {
+    const { tier: rawTier, idle: rawIdle, tiers: rawTiers, runsPerEpisode: rawRuns, billing: rawBilling, subscription: rawSub, ...rest } = e as {
       tier?: unknown;
       idle?: unknown;
       tiers?: unknown;
       runsPerEpisode?: unknown;
       billing?: unknown;
+      subscription?: unknown;
     } & Record<string, unknown>;
+    // A NAME, never a token — the same rule the policy block and the queue keep.
+    // Whether the name is one of the CONFIGURED subscriptions is checked in
+    // `parseFleet`, where the policy block has been read: that one is a refusal
+    // of this entry, not of the file.
+    if (rawSub !== undefined && (typeof rawSub !== "string" || !isTokenEnvName(rawSub))) {
+      fail(`roster ${name}: subscription must be the NAME of the env var holding the token (e.g. CLAUDE_CODE_OAUTH_TOKEN_2), never the token`);
+    }
+    if (rawSub !== undefined && (e as { driver?: unknown }).driver !== "claude-code") {
+      fail(`roster ${name}: subscription is a claude-code lane — only an entry on that driver bills a subscription`);
+    }
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // The retired 0.4 spellings, refused by name. Both said how much a model
     // runs, which is its tier now; dropping them silently would re-scope a
@@ -973,6 +1010,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       tier,
       idle,
       ...(rawBilling !== undefined ? { billing: rawBilling as Billing } : {}),
+      ...(rawSub !== undefined ? { subscription: rawSub as string } : {}),
     };
   }
   return out;
@@ -1047,31 +1085,28 @@ export function driverOf(roster: Record<string, FleetRosterEntry>, name: string)
  */
 export function formatConcurrency(max: Record<string, number>, policy: Pick<SchedulingPolicy, "subscriptions">): string | undefined {
   const caps = Object.entries(max).map(([d, n]) => `${d} <= ${n}`);
-  const lanes = policy.subscriptions;
-  if (lanes.length > 1) {
-    caps.push(
-      ...lanes
-        .filter((l) => max[claudeLaneKey(l)] === undefined)
-        .map((l) => `${claudeLaneKey(l)} <= ${capFor(max, claudeLaneKey(l)) ?? "uncapped"}`),
-    );
-  }
   if (caps.length === 0) return undefined;
-  const subs = lanes.length > 1 ? `; ${lanes.length} subscriptions: ${lanes.join(", ")}` : "";
+  const lanes = policy.subscriptions;
+  const subs =
+    lanes.length > 1
+      ? `; ${lanes.length} subscriptions: ${lanes.join(", ")} — a claude run needs room on its own lane AND under claude-code`
+      : "";
   return `concurrency: ${caps.join(", ")} (every run on the key counts)${subs}`;
 }
 
 /**
- * The key one ref counts against while it runs on a given subscription lane.
+ * The keys one ref counts against while it runs on a given subscription lane.
  *
- * A claude-code ref's key is not fixed by its roster entry — which subscription
- * it bills is decided when it is scheduled — so every count of an in-flight
- * claude run goes through here with the lane that run is actually on
- * (`FleetJob.subscription`, or the lane read back off the live run). Everything
- * else keeps the key its entry gives it.
+ * A claude run counts TWICE — against its subscription and against the overall
+ * `claude-code` ceiling — and needs room in both to launch. Which subscription
+ * it bills is not fixed by its roster entry (it is decided when the run is
+ * scheduled), so every count of an in-flight claude run comes through here with
+ * the lane that run is actually on: `FleetJob.subscription`, or the lane read
+ * back off the live run. Everything else keeps the one key its entry gives it.
  */
-export function keyOfIn(keyOf: (n: string) => string, ref: string, lane: string | undefined): string {
+export function keysOfIn(keyOf: (n: string) => string, ref: string, lane: string | undefined): string[] {
   const k = keyOf(ref);
-  return k === "claude-code" ? claudeLaneKey(lane) : k;
+  return k === CLAUDE_TOTAL_KEY ? claudeKeysFor(lane) : [k];
 }
 
 export function concurrencyKeyOfRef(roster: Record<string, FleetRosterEntry>, name: string, billing: Billing | undefined): string {
@@ -1314,6 +1349,9 @@ export function runnableRefs(job: FleetJob, roster: Record<string, FleetRosterEn
   return job.refs.filter((r) => {
     const e = roster[r];
     if (e === undefined) return false;
+    // A refused entry (`FleetRosterEntry.refused`) runs under no job at all: it
+    // is in the catalog only so a job naming it is gated with a reason.
+    if (e.refused !== undefined) return false;
     // A policy job was made from the projection that answers eligibility; it is its own witness.
     if (job.attempt !== undefined) return true;
     // An unscored episode needs no promotion: no tier buys one, so there is no
@@ -1400,7 +1438,13 @@ export function planPolicy(opts: {
   held: (account: string) => string | undefined;
   queuePlan: QueuePlan;
   runningRefs: ReadonlySet<string>;
-  concurrency?: { keyOf: (name: string) => string; max: Record<string, number>; running: ReadonlyMap<string, number> };
+  concurrency?: {
+    keyOf: (name: string) => string;
+    max: Record<string, number>;
+    running: ReadonlyMap<string, number>;
+    /** A roster entry pinned to one subscription (`FleetRosterEntry.subscription`): its only candidate lane. */
+    pinnedLane?: (name: string) => string | undefined;
+  };
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
   paidRunning?: number;
@@ -1524,16 +1568,21 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
    * lane is not a property of the model, it is whichever account has a session
    * free, so the choice is made here and recorded on the job.
    */
-  const keysOf = (name: string): { key: string; lane: string }[] => {
+  /** The candidate placements for a pick: one per lane it may take, each with the keys it would spend. */
+  const keysOf = (name: string): { keys: string[]; lane: string }[] => {
     const k = keyOf(name);
-    if (k !== "claude-code") return [{ key: k, lane: "" }];
-    return lanes.map((l) => ({ key: claudeLaneKey(l), lane: l }));
+    if (k !== CLAUDE_TOTAL_KEY) return [{ keys: [k], lane: "" }];
+    // An entry pinned to one subscription has one candidate: with that lane
+    // busy the pick is held, never quietly moved to the other account.
+    const pin = opts.concurrency?.pinnedLane?.(name);
+    const usable = pin !== undefined ? [pin] : lanes;
+    return usable.map((l) => ({ keys: claudeKeysFor(l), lane: l }));
   };
   const count = new Map(opts.concurrency.running);
   const bump = (key: string): void => {
     count.set(key, (count.get(key) ?? 0) + 1);
   };
-  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) bump(keyOfIn(keyOf, r, a.job.subscription));
+  for (const a of opts.queuePlan.assign) for (const r of a.job.refs) for (const k of keysOfIn(keyOf, r, a.job.subscription)) bump(k);
   const out: NextJob[] = [];
   const held: HeldPick[] = [];
   const passed = new Set<string>();
@@ -1545,21 +1594,28 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     let rejected = false;
     for (const pick of plan.jobs) {
       const cands = keysOf(pick.name);
-      const room = cands.find(({ key }) => {
-        const cap = capFor(max, key);
-        return cap === undefined || (count.get(key) ?? 0) < cap;
-      });
+      /** A key with no room left; undefined when this placement can be made. */
+      const fullKey = (keys: readonly string[]): string | undefined =>
+        keys.find((k) => {
+          const cap = capFor(max, k);
+          return cap !== undefined && (count.get(k) ?? 0) >= cap;
+        });
+      const room = cands.find(({ keys }) => fullKey(keys) === undefined);
       if (room === undefined) {
         passed.add(pick.name);
+        // Name the key that actually blocked each candidate: "the other
+        // subscription had a slot but the overall ceiling is spent" and "this
+        // subscription is busy" are different problems with different fixes.
+        const blocked = cands.map((c) => fullKey(c.keys)!);
         const why =
           cands.length === 1
-            ? `cap: ${cands[0]!.key} <= ${capFor(max, cands[0]!.key)}, ${count.get(cands[0]!.key) ?? 0} in flight`
-            : `cap: every subscription is busy (${cands.map((c) => `${c.key} ${count.get(c.key) ?? 0}/${capFor(max, c.key)}`).join(", ")})`;
+            ? `cap: ${blocked[0]} <= ${capFor(max, blocked[0]!)}, ${count.get(blocked[0]!) ?? 0} in flight${cands[0]!.lane !== "" ? " (pinned to this subscription)" : ""}`
+            : `cap: no claude session free (${blocked.map((k) => `${k} ${count.get(k) ?? 0}/${capFor(max, k)}`).join(", ")})`;
         held.push({ name: pick.name, episode: pick.episode, why });
         rejected = true;
         continue;
       }
-      bump(room.key);
+      for (const k of room.keys) bump(k);
       // Only a non-default lane is recorded: the default lane is what a job
       // with nothing said about it already runs on.
       if (room.lane !== "" && room.lane !== DEFAULT_CLAUDE_TOKEN_ENV) chosenLane.set(pick.name, room.lane);
@@ -3832,8 +3888,7 @@ export function planTick(
   // Same rule the live tick uses: a claude ref counts against the subscription
   // its own run says it is on, so --status and --dry-run agree with the fleet.
   for (const r of runningRefs) {
-    const k = keyOfIn(keyOf, r, lanes.get(r));
-    keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+    for (const k of keysOfIn(keyOf, r, lanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
   }
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
@@ -3843,7 +3898,7 @@ export function planTick(
     held,
     queuePlan: queue,
     runningRefs,
-    concurrency: { keyOf, max: config.maxConcurrent, running: keyCount },
+    concurrency: { keyOf, max: config.maxConcurrent, running: keyCount, pinnedLane: (n) => config.roster[n]?.subscription },
     policy: config.policy,
     paidRunning: 0,
     campaigns: unpinnedCampaigns(config),
@@ -4191,8 +4246,7 @@ async function main(): Promise<void> {
       job.subscription ?? job.refs.map((r) => runLanes.get(r)).find((l) => l !== undefined);
     const countKey = (refs: readonly string[], lane?: string): void => {
       for (const r of refs) {
-        const k = keyOfIn(keyOf, r, lane ?? runLanes.get(r));
-        keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+        for (const k of keysOfIn(keyOf, r, lane ?? runLanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
       }
     };
     /**
@@ -4214,14 +4268,20 @@ async function main(): Promise<void> {
     };
     const assignLane = (job: FleetJob): FleetJob => {
       if (job.subscription !== undefined) return job;
-      if (!job.refs.some((r) => keyOf(r) === "claude-code")) return job;
+      if (!job.refs.some((r) => keyOf(r) === CLAUDE_TOTAL_KEY)) return job;
+      // A roster pin outranks everything: that entry bills that subscription.
+      const pin = job.refs.map((r) => cfg.roster[r]?.subscription).find((l) => l !== undefined);
+      if (pin !== undefined) return withLane(job, pin);
       const known = laneOf(job) ?? laneMemo.get(job.name);
       if (known !== undefined) return withLane(job, known);
-      const free = cfg.policy.subscriptions.find((l) => {
-        const k = claudeLaneKey(l);
-        const cap = capFor(cfg.maxConcurrent, k);
-        return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) < cap;
-      });
+      // Room in the lane AND under the overall ceiling: a claude session spends
+      // both, so a free subscription with the total spent is not free.
+      const free = cfg.policy.subscriptions.find((l) =>
+        claudeKeysFor(l).every((k) => {
+          const cap = capFor(cfg.maxConcurrent, k);
+          return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) < cap;
+        }),
+      );
       // Nothing free: the job is pinned or manual, so it is not held for a cap
       // it never consulted — it takes the default lane, as it did before there
       // was a second one.
@@ -4230,9 +4290,8 @@ async function main(): Promise<void> {
     /** Assign a lane and reserve it: for a job the policy's own cap loop will count. */
     const reserveLane = (job: FleetJob): FleetJob => {
       const placed = assignLane(job);
-      if (job.refs.some((r) => keyOf(r) === "claude-code")) {
-        const k = claudeLaneKey(placed.subscription);
-        laneReserve.set(k, (laneReserve.get(k) ?? 0) + 1);
+      if (job.refs.some((r) => keyOf(r) === CLAUDE_TOTAL_KEY)) {
+        for (const k of claudeKeysFor(placed.subscription)) laneReserve.set(k, (laneReserve.get(k) ?? 0) + 1);
       }
       return placed;
     };
@@ -4432,7 +4491,7 @@ async function main(): Promise<void> {
         held,
         queuePlan: lastPlan,
         runningRefs,
-        concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount },
+        concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount, pinnedLane: (n) => cfg.roster[n]?.subscription },
         policy: cfg.policy,
         paidRunning,
         campaigns: unpinnedCampaigns(cfg),

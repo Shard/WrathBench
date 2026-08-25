@@ -32,6 +32,7 @@ import {
   outstandingWork,
   formatOutstanding,
   capFor,
+  claudeKeysFor,
   claudeLaneKey,
   concurrencyKeyOf,
   laneOfKey,
@@ -825,29 +826,29 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
 });
 
 describe("subscription lanes", () => {
-  test("the default lane keeps the bare key; a second lane is the key plus its var NAME", () => {
-    expect(claudeLaneKey(undefined)).toBe("claude-code");
-    expect(claudeLaneKey(null)).toBe("claude-code");
-    expect(claudeLaneKey("CLAUDE_CODE_OAUTH_TOKEN")).toBe("claude-code");
+  test("every lane has its own key, the default one included; `claude-code` is the total", () => {
+    expect(claudeLaneKey(undefined)).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+    expect(claudeLaneKey(null)).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
     expect(claudeLaneKey("CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2");
     expect(laneOfKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
     expect(laneOfKey("claude-code")).toBeNull();
     expect(laneOfKey("openrouter")).toBeNull();
+    // A run spends its lane AND the total, so both have to have room.
+    expect(claudeKeysFor("CLAUDE_CODE_OAUTH_TOKEN_2")).toEqual(["claude-code:CLAUDE_CODE_OAUTH_TOKEN_2", "claude-code"]);
+    expect(claudeKeysFor(undefined)).toEqual(["claude-code:CLAUDE_CODE_OAUTH_TOKEN", "claude-code"]);
   });
 
-  test("a lane key is a concurrency key, and inherits the claude-code cap when it has none", () => {
+  test("a lane key is a concurrency key; a key the file does not name is uncapped", () => {
     expect(isConcurrencyKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(true);
     // Still a NAME, still checked as one: a token in the key is not a key.
     expect(isConcurrencyKey("claude-code:sk-ant-oat01-secret")).toBe(false);
-    const max = { "claude-code": 1, openrouter: 2 };
-    expect(capFor(max, "claude-code")).toBe(1);
-    // One live session per subscription, written once.
-    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(1);
-    // An explicit per-lane cap still wins.
-    expect(capFor({ ...max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2 }, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(2);
-    // Nothing else inherits anything, and an uncapped key is still uncapped.
+    const max = { "claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2, openrouter: 2 };
+    expect(capFor(max, "claude-code")).toBe(3);
+    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(2);
+    // No inheritance: an unnamed lane is bounded only by the total, which is
+    // what an old file saying just `"claude-code": 2` has always meant.
+    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN")).toBeUndefined();
     expect(capFor(max, "opencode")).toBeUndefined();
-    expect(capFor({}, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBeUndefined();
   });
 
   test("policy.subscriptions is a list of env var NAMES, and defaults to the one lane", () => {

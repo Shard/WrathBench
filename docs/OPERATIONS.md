@@ -631,14 +631,60 @@ the dry-run first; a live run is the one thing this must not touch.
 pause and no `run.ts` process names it: a supervisor retrying a paused run
 rewrites its files every few minutes, which would hold it forever.
 
+### Subscription lanes
+
+A Claude subscription is a **lane**, not a model dimension. The roster keeps one
+entry per model however many accounts are behind it, because which subscription
+paid for a run says nothing about what the run measured; what the lane decides
+is how many sessions may be live at once.
+
+`policy.subscriptions` lists the lanes, as the **names** of the env vars holding
+their OAuth tokens (`["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]`).
+The tokens themselves stay in `.env`; a token where a name belongs is refused
+everywhere it can be written. Absent means the single default lane, which is
+what every config written before 2026-08-25 meant.
+
+A claude-code run counts against **two** concurrency keys and needs a free slot
+in both:
+
+- `claude-code` — every Claude session in flight, whoever pays. The overall
+  ceiling, and the same key an older file already had.
+- `claude-code:<ENV NAME>` — that one subscription's sessions. Every lane has
+  one, the default lane included.
+
+A key the file does not name is uncapped. Today's numbers: three sessions at
+most, one on the operator's own subscription and two on the partner's — so a
+lane with a slot free is still held when the three are spent, and the reason
+in `--status` names the key that blocked it.
+
+The scheduler assigns the lane: a claude pick takes the first subscription with
+room, and the run **records** the lane it billed. That record is what the count
+is re-derived from every tick, so it survives a supervisor restart, and a
+resumed run goes back to the subscription it started on. Pinned jobs, campaign
+cells and manual queue jobs are assigned the same way.
+
+Two ways to override, both normally absent:
+
+- `queue[].subscription: "<ENV NAME>"` pins one job to one subscription.
+- `roster.<name>.subscription: "<ENV NAME>"` pins a model: its runs always bill
+  that account, and its pick is **held** when that lane is busy rather than
+  moved to the other one — pinning costs the entry the other subscription's
+  free slots. A name that is not in `policy.subscriptions` refuses **that
+  entry** (named in `--status`, scheduled by nothing) and leaves the rest of
+  the file in effect.
+
+Changing `policy.subscriptions` or the lane plumbing needs a fleet **recreate**,
+not just the 60s config re-read: the token-to-lane path is code.
+
 ### Secrets
 
 `.env` at the repo root, never argv. Bun loads `/wrathbench/.env` inside the
 container — in the supervisor and again in every child — so keys reach the
 runner without appearing in `ps` or in the compose file. A claude-code
-job needs `CLAUDE_CODE_OAUTH_TOKEN` there (`claude setup-token`); without it
-the roster refuses the episode with a `launch-failed` row rather than burning a
-session.
+job needs the token of the lane it was scheduled on there (`claude setup-token`)
+— `CLAUDE_CODE_OAUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN_2` for the second
+subscription; without it the roster refuses the episode with a `launch-failed`
+row naming that variable, rather than burning a session.
 
 ### Harness version stamping
 
