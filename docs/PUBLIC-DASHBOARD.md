@@ -170,6 +170,60 @@ with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
 
+## The gated interim shape (no domain on the account)
+
+**This shape is scaffolding, and it is not what launches.** It exists so a
+private preview can be shared before there is a domain; the launch shape is the
+one described above, and the reasons are load-bearing rather than aesthetic. See
+item 85 in `docs/FOLLOW-UPS.md` for the retirement steps.
+
+Everything above assumes a zone. The account has none, and that is not a
+detail to route around: on Cloudflare, access control, WAF, and cache are all
+**custom-domain features**. The managed `r2.dev` development URL has none of
+them, is rate-limited by design, and is world-readable to anyone who learns the
+hostname. "An r2.dev URL with a password on it" is not a configuration that
+exists.
+
+So a preview that must not be world-readable needs something in the read path
+able to say no, and on a zoneless account the only thing that can is a Worker.
+The interim shape, called **Gated** in the runbook:
+
+- one Worker on `*.workers.dev` serving the SPA from Static Assets **and**
+  `/v1/*` from an R2 **binding**, with `run_worker_first: true` so the gate sees
+  the page load and not only the data;
+- the bucket private, its Public Development URL **disabled** — the binding is
+  the only path to an object;
+- a shared password (`DASHBOARD_PASSWORD`, a Worker secret) accepted three ways:
+  a session cookie, `?k=<secret>` so one link is shareable, and HTTP Basic for
+  `curl`. The cookie holds a hash of the secret, not the secret;
+- the TTLs this document puts in cache rules set by the Worker on egress
+  instead, which incidentally answers the `Cache-Control` problem in "Bucket
+  layout": Bun's `S3Client` cannot send the header, so the Worker sends it;
+- no edge cache and no CORS. One origin, few readers, free-tier bucket reads.
+
+Every one of those bullets is a cost, and the reason the Open shape is the one
+that launches. A Worker in the read path means every request — page loads,
+static assets, artifacts — is billed compute with a per-day free ceiling, and
+nothing is held at the edge, so a spike converts directly into invocations and
+bucket reads. The push-based design exists precisely so that a spike is absorbed
+by cache in front of immutable objects, at roughly zero marginal cost and with
+no compute in the path to saturate. The gate trades that away to buy a password,
+which is the right trade for a preview shared with a handful of people and the
+wrong one for a launch.
+
+This inverts the design's "no Worker in the read path" for the read path only.
+The projection, the snapshot renderer, the publisher, and the SPA source are
+untouched and identical between the two shapes, so adopting a domain later is a
+rebuild with a different `VITE_WRATHBENCH_SNAPSHOT_BASE` and a `wrangler.jsonc`
+that drops its `main` — not a redesign.
+
+What the gate is worth is exactly one shared secret: no identity, no per-person
+revocation, nothing but rotation. That is the right weight for a preview shared
+with named people, and it is why issue #10's content gate still binds the first
+genuinely public deploy rather than being satisfied by this one. A link handed
+to anyone who asks would be that deploy in all but name.
+
+
 ## Rejected alternatives
 
 - **Cloudflare Tunnel / pull-through cache to the viewer** — the origin is
@@ -253,6 +307,16 @@ what a result means is the operator's:
 Decided by the operator 2026-08-25, recorded here: the public site includes
 the live fleet and map views at snapshot cadence (not a results-only site),
 accepting that positions reveal near-real-time lab activity.
+
+Also decided by the operator 2026-08-25: the first deploy is a **test run for
+going public**, not the public launch — no custom domain for now, and a basic
+shared password so the site is reachable by anyone the operator sends the link
+to and by nobody else. That settles decision 4 as *free plan* for the moment and
+defers decision 3; it does not touch decision 2, which still gates the
+ungated deploy. The operator's stated premise — an `r2.dev` hostname with a
+password on it — is not available on Cloudflare (see "The gated interim shape"),
+so the same intent is served by a Worker gate instead, and the bucket's Public
+Development URL stays disabled.
 
 ## Phasing
 
