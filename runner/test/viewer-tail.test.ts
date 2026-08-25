@@ -320,6 +320,96 @@ describe("tokenTotals", () => {
     expect(t.cacheWriteTokens).toBe(50);
     expect(t.promptTokens).toBe(1900);
   });
+
+  /*
+   * FOLLOW-UPS 82: the claude-code driver writes one reply as several
+   * `response` records, only the last of which carries usage, and that figure
+   * is the running total for the whole message (`adapter-claude.ts`).
+   */
+  test("a reply split across envelopes counts its completion once", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      // Two envelopes of one message: text, then the tool_use that carries the usage.
+      res(1, 40000),
+      summarize(
+        { t: "response", ts: 2, message: { role: "assistant", content: "done" }, usage: { prompt_tokens: 900, completion_tokens: 260 } },
+        2,
+        0,
+        1,
+      ),
+    ]);
+    // 260, not 260 + the 10k characters of the envelope already inside it.
+    expect(t.completionTokens).toBe(260);
+    // Same rule on the prompt: the reported figure replaces the request's
+    // estimate however many records after the request it lands.
+    expect(t.promptTokens).toBe(900);
+  });
+
+  test("several messages in one span each keep their reported total", () => {
+    // A span is not a message: the CLI can answer one tool result with several
+    // API calls, and each carries its own running total, so they sum.
+    const t = tokenTotals([
+      summarize({ t: "snippet_result", ts: 1, name: "run_snippet", text: "ok" }, 0, 0, 1),
+      summarize({ t: "response", ts: 2, message: {}, usage: { completion_tokens: 100 } }, 1, 0, 1),
+      summarize({ t: "response", ts: 3, message: {}, usage: { completion_tokens: 250 } }, 2, 0, 1),
+    ]);
+    expect(t.completionTokens).toBe(350);
+  });
+
+  test("a span whose last envelope reports nothing still uses the reported total", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize(
+        { t: "response", ts: 1, message: { role: "assistant", content: "x" }, usage: { completion_tokens: 260 } },
+        1,
+        0,
+        1,
+      ),
+      // The held-back envelope flushed at shutdown carries no usage of its own.
+      res(2, 40000),
+    ]);
+    expect(t.completionTokens).toBe(260);
+  });
+
+  test("a span nothing reported usage for is still estimated from characters", () => {
+    const t = tokenTotals([req(0, 4000), res(1, 4000), res(2, 4000)]);
+    expect(t.source).toBe("estimated");
+    expect(t.completionTokens).toBe(2000);
+  });
+
+  test("the openai-compatible shape totals exactly as it did before the span fix", () => {
+    // One request, one response, usage on the response: the fixed loop's whole
+    // vocabulary. Every field is asserted because the span fix touches the
+    // prompt as well as the completion.
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize(
+        {
+          t: "response", ts: 1, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 1200, completion_tokens: 250, cached_tokens: 400 },
+        },
+        1, 0, 1,
+      ),
+      summarize({ t: "request", ts: 2, messages: [{ role: "user", content: "y".repeat(7996) }] }, 2, 0, 1),
+      summarize(
+        {
+          t: "response", ts: 3, message: { role: "assistant", content: "ok" },
+          usage: { prompt_tokens: 1500, completion_tokens: 300, cached_tokens: 600 },
+        },
+        3, 0, 1,
+      ),
+    ]);
+    expect(t).toEqual({
+      source: "reported",
+      contextTokens: 1500,
+      promptTokens: 2700,
+      completionTokens: 550,
+      totalTokens: 3250,
+      cacheReadTokens: 1000,
+      cacheWriteTokens: null,
+      turns: 2,
+    });
+  });
 });
 
 describe("tokensPerSecond", () => {
@@ -463,9 +553,14 @@ describe("tokensPerSecond", () => {
     const totals = await scanRunTotals(path);
     expect(totals.tps.replies).toBe(2);
     expect(totals.tps.overall).toBe(150); // 600 tokens over 4s of model time
-    // The same entries through the incremental path the run page uses.
+    // The same entries through the incremental path the run page uses. Tokens
+    // too: both derivations read the same spans, so the single pass and the
+    // tail must not be able to disagree about what one reply produced.
     const tail = new TrajectoryTail(path);
-    expect(tokensPerSecond(await tail.scan())).toEqual(totals.tps);
+    const scanned = await tail.scan();
+    expect(tokensPerSecond(scanned)).toEqual(totals.tps);
+    expect(tokenTotals(scanned)).toEqual(totals.tokens);
+    expect(totals.tokens.completionTokens).toBe(600);
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -306,19 +306,110 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
 }
 
 /**
+ * One measured reply: what the model produced between the record that handed
+ * it something to answer and the last response before the next such record.
+ *
+ * Two consumers read these spans and they have to agree about what one reply
+ * is: `tokenTotals` (how many output tokens the run produced) and
+ * `tokensPerSecond` (how fast it produced them). See `tokensPerSecond` for why
+ * the span, rather than the turn, is the unit, and `TPS_SPAN_OPENERS` for what
+ * opens one.
+ */
+export interface ReplySpan {
+  /** Sum of `usage.completion` over the span's records that reported usage. */
+  reported: number;
+  /** Sum of `chars / 4` over the records that reported none. */
+  estimated: number;
+  /** Whether anything in the span reported usage; decides which of the two counts. */
+  sawUsage: boolean;
+  /** The opener's timestamp; 0 when it had none, and on responses that had no opener at all. */
+  start: number;
+  /** The last response's timestamp, or null where the span has no responses yet. */
+  last: number | null;
+}
+
+/**
+ * The run's replies, in order.
+ *
+ * A span's tokens are provider-reported where ANY of its records reported
+ * usage, and `chars / 4` only where none did — never both. The claude-code
+ * driver splits one reply across several `response` records where only the
+ * last carries usage, and that last figure is the RUNNING TOTAL for the whole
+ * message (`adapter-claude.ts`), so adding an estimate for the earlier
+ * envelopes counts their text twice (FOLLOW-UPS 82).
+ *
+ * Reported figures are SUMMED, not taken from the last: one span can hold
+ * several messages — several API calls — and each carries its own running
+ * total, so taking the last would drop every message but one.
+ *
+ * Responses with no opener before them still make a span, with `start` 0: they
+ * produced tokens, which `tokenTotals` must count, but they time nothing,
+ * which is why `tokensPerSecond` requires a `start`.
+ */
+export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
+  const spans: ReplySpan[] = [];
+  let open: ReplySpan | null = null;
+  const close = (): void => {
+    if (open !== null) spans.push(open);
+    open = null;
+  };
+
+  for (const e of entries) {
+    if (e.t === "response") {
+      open ??= { reported: 0, estimated: 0, sawUsage: false, start: 0, last: null };
+      const usage = e["usage"] as ReportedUsage | undefined;
+      if (usage !== undefined) {
+        open.sawUsage = true;
+        open.reported += usage.completion;
+      } else {
+        open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
+      }
+      if (e.ts > 0) open.last = e.ts;
+      continue;
+    }
+    // A record that opens or closes an active stretch ends the span it lands
+    // in: whatever comes next was written on the far side of a pause.
+    if (SEGMENT_MARKS.has(e.t)) {
+      close();
+      continue;
+    }
+    // Ambient telemetry mid-reply is not a boundary; see `tokensPerSecond`.
+    if (!TPS_SPAN_OPENERS.has(e.t)) continue;
+    close();
+    const usage = e["usage"] as ReportedUsage | undefined;
+    // Some adapters report the whole reply's usage on the record that opened it.
+    open = {
+      reported: usage?.completion ?? 0,
+      estimated: 0,
+      sawUsage: usage !== undefined,
+      start: e.ts > 0 ? e.ts : 0,
+      last: null,
+    };
+  }
+  close();
+  return spans;
+}
+
+/**
  * Token accounting for a whole run. Prompt tokens are summed per turn, so the
  * total is what a provider would bill, not the size of the final context.
+ *
+ * Completion tokens come from `replySpans`, so a reply split across several
+ * `response` records counts once (FOLLOW-UPS 82). Prompt tokens carry the same
+ * rule: a request's `chars / 4` estimate is held until something reports a
+ * prompt for it, and dropped when one does — under claude-code the reporting
+ * envelope is a record or more after the first, and consuming the estimate on
+ * the first would have counted both.
  */
 export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   let prompt = 0;
-  let completion = 0;
   let context = 0;
   let turns = 0;
   let reported = false;
   let cacheRead: number | null = null;
   let cacheWrite: number | null = null;
   // The provider reports a turn's prompt size on the *response*, so a request's
-  // estimate is held until the response either confirms or replaces it.
+  // estimate is held until a response either confirms or replaces it.
   let pending: number | null = null;
 
   for (const e of entries) {
@@ -328,38 +419,34 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
       if (usage.cacheWrite !== undefined) cacheWrite = (cacheWrite ?? 0) + usage.cacheWrite;
     }
     if (e.t === "request") {
-      if (pending !== null) prompt += pending; // a turn that never got a response
+      if (pending !== null) prompt += pending; // a turn nothing ever reported a prompt for
       turns++;
       const est = estimateTokens(Number(e["promptChars"] ?? 0));
       if (usage !== undefined) {
         reported = true;
         prompt += usage.prompt;
-        completion += usage.completion;
         context = usage.prompt;
         pending = null;
       } else {
         pending = est;
         context = est;
       }
-    } else if (e.t === "response") {
-      if (usage !== undefined) {
-        reported = true;
-        if (usage.prompt > 0) {
-          prompt += usage.prompt;
-          context = usage.prompt;
-        } else if (pending !== null) {
-          prompt += pending;
-        }
-        completion += usage.completion;
-      } else {
-        if (pending !== null) prompt += pending;
-        completion += estimateTokens(Number(e["outChars"] ?? 0));
+    } else if (e.t === "response" && usage !== undefined) {
+      reported = true;
+      if (usage.prompt > 0) {
+        prompt += usage.prompt;
+        context = usage.prompt;
+        // The reported figure replaces the request's estimate rather than
+        // joining it, however many records after the request it lands.
+        pending = null;
       }
-      pending = null;
     }
   }
-  // A request still in flight has already been sent, so it counts.
+  // A request nothing reported a prompt for has still been sent, so it counts.
   if (pending !== null) prompt += pending;
+
+  let completion = 0;
+  for (const s of replySpans(entries)) completion += s.sawUsage ? s.reported : s.estimated;
 
   return {
     source: reported ? "reported" : "estimated",
@@ -411,58 +498,27 @@ export const TPS_RECENT_REPLIES = 10;
  * is one a `pause`, `resume` or `termination` (`SEGMENT_MARKS`) landed inside,
  * whose reply sits on the far side of however long the run sat parked.
  *
- * Tokens: provider-reported where ANY response of the span reported usage, and
- * `chars ÷ 4` only where none did. This deliberately differs from
- * `tokenTotals`, which sums both: the claude-code driver splits one reply
- * across several `response` records where only the last carries usage and that
- * last figure is the RUNNING TOTAL for the whole reply (`adapter-claude.ts`),
- * so adding an estimate for the earlier envelopes counts their text twice.
- * `TokenTotals.completionTokens` still does (FOLLOW-UPS 82); this does not.
- *
+ * Tokens come from `replySpans`, which `tokenTotals` reads too, so the two
+ * figures can never disagree about what one reply produced: provider-reported
+ * where ANY record of the span reported usage, and `chars ÷ 4` only where none
+ * did, never both.
  */
 export const TPS_SPAN_OPENERS = new Set(["request", "snippet_result", "tool_result"]);
 
 export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
-  /** One measured reply: what it produced, and how long the model took over it. */
+  /**
+   * One measured reply: what it produced, and how long the model took over it.
+   *
+   * A span with no opener timestamp times nothing, and neither does one whose
+   * responses never arrived (in flight) or whose reply landed on the far side
+   * of a pause — `replySpans` closes the span at the mark, so the responses
+   * after it open a span with no start.
+   */
   const replies: { tokens: number; ms: number }[] = [];
-  let open: { reported: number; estimated: number; sawUsage: boolean; start: number; last: number | null } | null = null;
-
-  const close = (): void => {
-    if (open !== null && open.last !== null && open.last > open.start) {
-      replies.push({ tokens: open.sawUsage ? open.reported : open.estimated, ms: open.last - open.start });
-    }
-    open = null;
-  };
-
-  for (const e of entries) {
-    if (e.t === "response") {
-      if (open === null) continue; // a reply with nothing before it times nothing
-      const usage = e["usage"] as ReportedUsage | undefined;
-      if (usage !== undefined) {
-        open.sawUsage = true;
-        open.reported += usage.completion;
-      } else {
-        open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
-      }
-      if (e.ts > 0) open.last = e.ts;
-      continue;
-    }
-    // A record that opens or closes an active stretch drops the span it lands
-    // in: its clock would be measuring a pause, not the model.
-    if (SEGMENT_MARKS.has(e.t)) {
-      close();
-      continue;
-    }
-    // Ambient telemetry mid-reply is not a boundary; see the note above.
-    if (!TPS_SPAN_OPENERS.has(e.t)) continue;
-    close();
-    // No usable timestamp, nothing to time the reply against.
-    if (e.ts <= 0) continue;
-    const usage = e["usage"] as ReportedUsage | undefined;
-    // Some adapters report the whole reply's usage on the request that opened it.
-    open = { reported: usage?.completion ?? 0, estimated: 0, sawUsage: usage !== undefined, start: e.ts, last: null };
+  for (const s of replySpans(entries)) {
+    if (s.start <= 0 || s.last === null || s.last <= s.start) continue;
+    replies.push({ tokens: s.sawUsage ? s.reported : s.estimated, ms: s.last - s.start });
   }
-  close();
 
   /** Summed both ways round, never a mean of rates: one short reply must not carry the figure. */
   const rate = (window: readonly { tokens: number; ms: number }[]): number | null => {
@@ -629,6 +685,49 @@ export function playtimeMs(
     total += Math.max(0, end - seg.start);
   }
   return total;
+}
+
+/* --------------------------------------------------- the resolved model id */
+
+/**
+ * What a run was *really* on, as the trajectory recorded it.
+ *
+ * A run records the roster's string — often an alias (`sonnet`, `opus`) that
+ * the Claude Code CLI resolves at launch — so nothing on a page could say which
+ * Claude a row was. Runs launched from 2026-08-25 promote the answer onto
+ * `meta.json` and the `run` row at write time; every run before that carries it
+ * only inside its trajectory, and this is what back-fills those at read time.
+ * Nothing rewrites an old run: the derivation is the reader's, and a stamped
+ * value always wins over it.
+ */
+export interface ResolvedMark {
+  model: string | null;
+  cliVersion: string | null;
+}
+
+/**
+ * Read one record as a resolved-model mark, or null when it is not one.
+ *
+ * Two producers, one shape:
+ * - `claude_system` — the CLI's own `init` event, which names the id it
+ *   resolved the alias to (`model`) and its own version (`claude_code_version`).
+ * - `response` — an OpenAI-compatible body's top-level `model`, the id the
+ *   provider says it actually served (an aggregator may route a slug elsewhere).
+ *   Only written since 2026-08-25, so older openai runs derive nothing and read
+ *   as "not recorded" rather than being labelled with their config string.
+ *
+ * First observation wins at the call site; this function only projects.
+ */
+export function resolvedMarkOf(rec: Record<string, unknown>): ResolvedMark | null {
+  const t = rec["t"];
+  if (t !== "claude_system" && t !== "response") return null;
+  const model = rec["model"];
+  const cli = rec["claude_code_version"];
+  if (typeof model !== "string" && typeof cli !== "string") return null;
+  return {
+    model: typeof model === "string" && model.length > 0 ? model : null,
+    cliVersion: typeof cli === "string" && cli.length > 0 ? cli : null,
+  };
 }
 
 /* ------------------------------------------------------- zone/area milestones */
@@ -822,6 +921,13 @@ export interface RunTotals {
    */
   achievements: AchievementFacts | null;
   taxi: TaxiFacts | null;
+  /**
+   * The model the provider actually served and the CLI version that drove it,
+   * from the first record that named either (`resolvedMarkOf`). Null on a run
+   * whose trajectory names neither — "not recorded", never the config string.
+   * The read-time back-fill for runs written before the fields were stamped.
+   */
+  resolved: ResolvedMark | null;
 }
 
 /**
@@ -835,15 +941,14 @@ export interface RunTotals {
  * bytes and a finished run never changes.
  */
 export async function scanRunTotals(path: string): Promise<RunTotals> {
-  const projections: EntrySummary[] = [];
   /*
-   * What `tokensPerSecond` reads: the request/response projections `tokenTotals`
-   * already gets, plus the records that open a span or drop one — the result
-   * the model was waiting on, and the pause marks. Everything else is ambient
-   * and the derivation ignores it, so it is never collected. The projections
-   * are shared objects here: pointers, not copies.
+   * What `replySpans` reads, and through it both `tokenTotals` and
+   * `tokensPerSecond`: the request/response projections plus the records that
+   * open a span or close one — the result the model was waiting on, and the
+   * pause marks. Everything else is ambient and the derivation ignores it, so
+   * it is never collected.
    */
-  const tpsMarks: EntrySummary[] = [];
+  const spanMarks: EntrySummary[] = [];
   const marks: SegmentMark[] = [];
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -854,6 +959,13 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let costUsd: number | null = null;
   let costed = 0;
   let uncosted = 0;
+  /*
+   * First-wins, and read before the request/response filter below: a
+   * `claude_system` is neither, and the run's answer is settled by its first
+   * turn. Two `let`s rather than a mark list — there is one answer per run.
+   */
+  let resolvedModel: string | null = null;
+  let resolvedCli: string | null = null;
   const areaMarks: AreaMark[] = [];
   const achievementMarks: AchievementMark[] = [];
   const taxiMarks: ("taxi" | "taxi_landed")[] = [];
@@ -891,6 +1003,13 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     // Same reason, one record kind further: a `milestone` is neither a request
     // nor a response, so it has to be read before the early return below. Only
     // the ids are kept — tens of marks per run, not one per line.
+    if (resolvedModel === null || resolvedCli === null) {
+      const mark = resolvedMarkOf(rec);
+      if (mark !== null) {
+        resolvedModel ??= mark.model;
+        resolvedCli ??= mark.cliVersion;
+      }
+    }
     if (t === "milestone") {
       const mark = areaMarkOf(rec);
       if (mark !== null) areaMarks.push(mark);
@@ -900,10 +1019,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       if (taxi !== null) taxiMarks.push(taxi);
     }
     if (t !== "request" && t !== "response") {
-      if (TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t)) tpsMarks.push({ i: 0, t, ts, start: 0, end: 0 });
+      if (TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t)) spanMarks.push({ i: 0, t, ts, start: 0, end: 0 });
       return;
     }
-    const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
+    const p: EntrySummary = { i: spanMarks.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
       const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
       p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
@@ -924,8 +1043,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
         costUsd = (costUsd ?? 0) + usage.cost;
       }
     }
-    projections.push(p);
-    tpsMarks.push(p);
+    spanMarks.push(p);
   };
 
   try {
@@ -941,7 +1059,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   take(carry);
 
   return {
-    tokens: tokenTotals(projections),
+    // Over `spanMarks` rather than requests and responses alone: the span
+    // openers are what tell one reply from the next, and a completion figure
+    // derived without them is not the one the run page shows.
+    tokens: tokenTotals(spanMarks),
     firstTs,
     lastTs,
     entries,
@@ -951,10 +1072,14 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     segments: segmentsFrom(marks),
     reportedCostUsd: costUsd,
     responseCost: { costed, uncosted },
-    tps: tokensPerSecond(tpsMarks),
+    tps: tokensPerSecond(spanMarks),
     areas: areaFactsFrom(areaMarks),
     achievements: achievementFactsFrom(achievementMarks),
     taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
+    resolved:
+      resolvedModel === null && resolvedCli === null
+        ? null
+        : { model: resolvedModel, cliVersion: resolvedCli },
   };
 }
 
