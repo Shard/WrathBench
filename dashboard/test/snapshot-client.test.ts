@@ -22,6 +22,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
@@ -475,6 +477,42 @@ describe("what a bucket cannot serve", () => {
 
   test("there is no stream URL, so nothing can open one by accident", () => {
     expect(createSnapshotClient(BASE).streamUrl("r1")).toBe("");
+  });
+});
+
+/*
+ * The 403 above is the backstop, not the design. A withheld route reached in
+ * the public build would reject the continuation that asked for it — on the run
+ * page that continuation also owns the summary, the charts and the live poll —
+ * so the pages must not ask at all, and what they show instead is a statement
+ * of what this build publishes rather than an error.
+ *
+ * Asserted against the source the way the fleet page's own shape is
+ * (`status.test.ts`): this is component wiring with no pure seam to call, and a
+ * DOM harness for three build-flag branches would test the harness.
+ */
+describe("the public build's call sites", () => {
+  const read = (p: string): string => readFileSync(join(import.meta.dir, p), "utf8");
+
+  test("the run page asks for neither the entries nor the tail, and says why", () => {
+    const src = read("../src/pages/RunDetail.tsx");
+    // The first window: taken only on the private path, with the entry count
+    // coming off the published detail instead.
+    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{[\s\S]{0,120}\} else \{[\s\S]{0,200}api\.entries\(/);
+    // "load earlier": guarded at the call site, not left to an unreachable button.
+    expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,300}api\.entries\(/);
+    // The tail: no EventSource is constructed in the public build.
+    expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,400}subscribeTail\(/);
+    // The panel, stated plainly and not in the page's error styling.
+    expect(src).toContain("Trajectory entries are withheld on the public site.");
+    expect(src).toMatch(/fallback=\{<p class="dim">Trajectory entries are withheld/);
+  });
+
+  test("the map draws its labelled grid without asking for a tile", () => {
+    // Tiles are the only Blizzard-derived bytes in the stack and never leave
+    // the lab, so the public build must not spend a request per visible cell
+    // finding that out.
+    expect(read("../src/pages/MapPage.tsx")).toContain("useTiles = !SNAPSHOT_MODE &&");
   });
 });
 
