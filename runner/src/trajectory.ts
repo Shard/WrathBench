@@ -338,6 +338,31 @@ export class Trajectory {
       );
   }
 
+  /**
+   * The character the run is actually playing (ADR-0050: the model names it).
+   *
+   * The launch config carries only the harness's suggestion, so every reader
+   * of "which character was this" — the runs page and the positions feed off
+   * `run.character`, and the resume note off `meta.json` — has to be told the
+   * name the model chose, once, at the first sight of it in the world.
+   * Recorded in all three places because they are read by different processes:
+   * a resumed runner reads meta.json before any database is open.
+   */
+  setCharacter(runId: string, character: string): void {
+    this.append({ t: "character", character });
+    this.db.query(`UPDATE run SET character = ? WHERE run_id = ?`).run(character, runId);
+    const path = join(this.dir, "meta.json");
+    try {
+      const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
+      if (meta.config?.character === character) return;
+      const next = { ...meta, config: { ...meta.config, character } };
+      writeFileSync(path, `${JSON.stringify(toJsonSafe(next), null, 2)}\n`, "utf8");
+    } catch {
+      // No meta.json yet (a test harness, a torn write): the database row and
+      // the trajectory record still carry the name.
+    }
+  }
+
   setTermination(runId: string, reason: TerminationReason, detail?: string): void {
     this.append({ t: "termination", reason, detail });
     this.db

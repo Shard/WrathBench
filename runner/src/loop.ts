@@ -163,6 +163,13 @@ export class ContextBuilder {
           guid: snap.self?.guid === undefined || snap.self.guid === null ? undefined : String(snap.self.guid),
           level: snap.self?.level?.value as number | undefined,
         });
+        // The model named the character (ADR-0050), so the launch config's
+        // name is only a suggestion: what is in the world is the run's
+        // character, and every reader of it is corrected here, once.
+        const name = typeof snap.self?.name === "string" ? snap.self.name : undefined;
+        if (name !== undefined && name.length > 0 && name !== this.o.config.character) {
+          this.o.trajectory.setCharacter(this.o.config.runId, name);
+        }
       }
       return snap;
     } catch {

@@ -13,7 +13,7 @@ import { toJsonSafe } from "../src/jsonsafe";
 import { itemSample, runLoop } from "../src/loop";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import { Trajectory, readTrajectory } from "../src/trajectory";
+import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
 function fakeSandbox(snapshot: Record<string, unknown> = {}): SandboxHost {
@@ -644,6 +644,24 @@ describe("runLoop fresh-character precondition", () => {
     const records = readTrajectory(dir);
     expect(records.filter((r) => r.t === "request")).toHaveLength(0);
     expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("stale-character");
+  });
+
+  test("the name the model chose is recorded over the harness's suggestion (ADR-0050)", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Grimjaw", level: { value: 1 } } });
+    await runLoop(options);
+    // The runs page and the positions feed read the run row; a resumed runner
+    // reads meta.json. Both must name the character that is in the world.
+    expect(options.trajectory.runRow("run-test")?.["character"]).toBe("Grimjaw");
+    expect(readMeta(dir)?.config.character).toBe("Grimjaw");
+    expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(1);
+  });
+
+  test("a character whose name matches the launch config is not re-recorded", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Fleetsonnet", level: { value: 1 } } });
+    await runLoop(options);
+    expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(0);
   });
 
   test("a fresh level-1 character with an unlisted guid plays on", async () => {

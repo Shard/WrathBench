@@ -51,6 +51,7 @@ import {
   type WatchdogOverride,
 } from "./config";
 import { runLoop, type StopRequest } from "./loop";
+import { freshCharacterNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
@@ -493,6 +494,11 @@ async function main(): Promise<void> {
   }
   console.error(`[wrathbench] trajectory: ${runDir}`);
 
+  // Names still standing on the account after hygiene (slot-eaters it could
+  // not delete). The model chooses its own name (ADR-0050), so these are the
+  // ones it must not choose: `createSession` REUSES an existing character of
+  // that name, and landing on one is a `stale-character` attempt burned.
+  let takenNames: string[] = [];
   if (!resumed) {
     // Episode hygiene (ADR-0006 fresh character per episode): the account has
     // ~10 character slots and every character on it is disposable between
@@ -531,6 +537,7 @@ async function main(): Promise<void> {
       console.error(`[wrathbench] hygiene: cleared ${hygiene.cleared} leftover character(s)`);
       trajectory.append({ t: "harness", kind: "hygiene", cleared: hygiene.cleared });
     }
+    takenNames = hygiene.leftover;
     if (hygiene.leftover.length > 0) {
       console.error(
         `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the assigned name is free`,
@@ -589,14 +596,12 @@ async function main(): Promise<void> {
           {
             ts: Date.now(),
             kind: "session_note",
-            text:
-              `your assigned character for this episode: name "${config.character}", race ${config.race}, ` +
-              `class ${config.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin). Create it with ` +
-              `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
-              `after \`await connect()\`. Use exactly these values: the account's character slots were cleared ` +
-              `for this episode and other combinations may be rejected by the server's race/class rules. ` +
-              `The game account is assigned and bound for you by the harness — do not pass an account; ` +
-              `createSession is issued on the correct one automatically.`,
+            text: freshCharacterNote({
+              character: config.character,
+              race: config.race,
+              class: config.class,
+              taken: takenNames,
+            }),
           } as const,
         ];
 

@@ -99,3 +99,44 @@ describe("clearAccountCharacters with no module listening", () => {
     expect(lines[0]).toContain("skipped");
   });
 });
+
+describe("clearAccountCharacters with model-chosen names (ADR-0050)", () => {
+  test("deletes every leftover whatever it is called, not just the assigned name", async () => {
+    // The model names its own character, so the last episode's leftover is
+    // `Grimjaw` and not the roster's suggestion. Hygiene lists the account and
+    // deletes what it finds; nothing here may key on the assigned name.
+    const { f, calls } = fakeFetch({
+      list: [enumOf({ name: "Grimjaw", guid: "701" }, { name: "Zeliana", guid: "702" }), enumOf()],
+      del: [deleted("Grimjaw")],
+    });
+    const out = await clearAccountCharacters({ ...base, fetch: f, maxAttempts: 3 });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.cleared).toBe(2);
+    expect(out.leftover).toEqual([]);
+    // Both names went through the client delete path, and the guids of both
+    // are returned so the first-observation tripwire can recognise them.
+    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"]).sort()).toEqual([
+      "Grimjaw",
+      "Zeliana",
+    ]);
+    expect([...out.seen.entries()].sort()).toEqual([
+      ["grimjaw", "701"],
+      ["zeliana", "702"],
+    ]);
+  });
+
+  test("a survivor that is not the assigned name still lets the run start, and is named to the model", async () => {
+    // `leftover` is what run.ts puts in the launch notice: createSession
+    // REUSES a character of the name it is given, so a model that picked
+    // `Grimjaw` here would land on a used one.
+    const { f } = fakeFetch({
+      list: [enumOf({ name: "Grimjaw", guid: "701" }), enumOf({ name: "Grimjaw", guid: "701" })],
+      del: [timeout],
+    });
+    const out = await clearAccountCharacters({ ...base, fetch: f, maxAttempts: 2 });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.leftover).toEqual(["Grimjaw"]);
+  });
+});
