@@ -238,6 +238,17 @@ Two costs, both printed by the script:
   update later. Waiting is bounded (`--timeout`, default 8h) and a timeout
   leaves the switch set and kills nothing.
 
+A **refused pin** (the `!` block in `--status`) is deliberately spared from
+draining — its live run was overruled, not parked — so a refused pin that loops
+holds the window open until the timeout. `--status` names it; disable it in the
+file, or use `force`.
+
+"Quiet" is only ever claimed from a state file the script actually parsed,
+written by a supervisor whose heartbeat is current: an unreadable file (the
+supervisor writes it non-atomically, so a poll can land mid-write) and a dead
+supervisor's frozen rows both keep waiting rather than recreating over live
+episodes.
+
 Ctrl-C during the wait is safe: nothing has been signalled, the switch stays
 set, and `./infra/fleet-update.sh resume` puts the fleet back to work.
 

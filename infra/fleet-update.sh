@@ -242,18 +242,36 @@ if [[ -n "${pr}" ]]; then
   while IFS= read -r l; do [[ -n "${l}" ]] && say "      ${l}"; done <<< "${pr}"
 fi
 
+# Quiet is a claim about LIVE RUNS, and only a state file this poll actually
+# parsed, written by a supervisor that is actually ticking, can make it. Two
+# ways to get that wrong, both ending in a recreate over live episodes:
+# `writeState` is a plain writeFileSync, so a poll can land mid-write and read a
+# truncated file (`alive_jobs` says "none"); and a supervisor that died leaves a
+# file whose `alive: true` rows are frozen, not current. Neither is quiet. The
+# deploy script reads "none" as nothing-to-drain because it only asks AFTER
+# `compose stop fleet` returned — here the fleet is still up and the meaning
+# inverts.
 deadline=$(( $(date +%s) + TIMEOUT_S ))
 while :; do
   n="$(alive_jobs)"
-  [[ "${n}" =~ ^[0-9]+$ ]] || n=0
-  if [[ "${n}" == "0" ]]; then break; fi
+  hb="$(heartbeat_at_s)"; [[ "${hb}" =~ ^[0-9]+$ ]] || hb=0
+  age=$(( $(date +%s) - hb ))
+  if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
+    waiting="${STATE_JSON} did not parse this poll — NOT reading that as quiet"
+  elif (( hb == 0 || age > 180 )); then
+    waiting="the supervisor's heartbeat is ${age}s old — it is not ticking, so its job rows mean nothing"
+  elif [[ "${n}" == "0" ]]; then
+    break
+  else
+    waiting="${n} job(s) still live (heartbeat ${age}s ago)"
+  fi
   if (( $(date +%s) >= deadline )); then
-    say "TIMED OUT after ${TIMEOUT_S}s with ${n} job(s) still live. Nothing was killed and the"
-    say "switch is still set: wait longer (\`fleet-update.sh status\`), or accept the cost and run"
+    say "TIMED OUT after ${TIMEOUT_S}s: ${waiting}. Nothing was killed and the switch is still"
+    say "set: wait longer (\`fleet-update.sh status\`), or accept the cost and run"
     say "\`fleet-update.sh force\`. Clear the switch with \`fleet-update.sh resume\` to abandon the update."
     exit 1
   fi
-  say "  ${n} job(s) still live (heartbeat $(heartbeat_age_s)s ago) — waiting"
+  say "  ${waiting} — waiting"
   sleep "${POLL_S}"
 done
 say "quiet: no job holds a live episode."

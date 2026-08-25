@@ -52,6 +52,8 @@ interface Case {
   args: string[];
   /** Pre-existing pause file. */
   paused_switch?: boolean;
+  /** Write a truncated state file: a poll that landed mid-writeState. */
+  corruptState?: boolean;
   env?: Record<string, string>;
 }
 
@@ -87,6 +89,7 @@ function run(c: Case): Result {
       2,
     ),
   );
+  if (c.corruptState === true) writeFileSync(stateJson, '{"heartbeatAt": 1, "jobs": {"job-0": {"ali');
   const pauseJson = join(dir, "fleet-pause.json");
   if (c.paused_switch === true) {
     writeFileSync(pauseJson, JSON.stringify({ paused: true, why: "set by hand", at: Date.now() }));
@@ -157,6 +160,27 @@ describe("fleet-update.sh", () => {
     expect(r.out).toContain("COUNTED failed attempt");
     expect(r.out).toContain("fleet-glm-e90-20260825");
     expect(r.out).toContain("41m of 90m");
+  });
+
+  test("graceful: a state file that did not parse is NOT quiet — the recreate never happens", () => {
+    // writeState is a plain writeFileSync, so a poll can land mid-write. Reading
+    // that as "no job is alive" would recreate the container over live
+    // episodes, which is the one thing this path exists to prevent.
+    const r = run({ corruptState: true, args: ["graceful"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("did not parse this poll");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("graceful: a dead supervisor's frozen job rows are not quiet either", () => {
+    // No jobs alive, but nothing has ticked in an hour: the rows are stale and
+    // say nothing about what is running. Timing out is the honest answer.
+    const r = run({ aliveJobs: 0, heartbeatAgeS: 3600, args: ["graceful"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("is not ticking");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(r.pauseFile?.paused).toBe(true);
   });
 
   test("graceful: a supervisor that does not come back leaves the switch SET", () => {
