@@ -10,7 +10,6 @@
 
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { useLocation } from "@solidjs/router";
-import { useClock } from "../lib/clock";
 import { useFeeds } from "../lib/feeds";
 import { serviceStatus, statusRows } from "../lib/status";
 
@@ -18,12 +17,16 @@ export function StatusBadge() {
   const feeds = useFeeds();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
-  // The badge's own clock: the heartbeat's age must tick without a poll.
-  const now = useClock();
 
+  /*
+   * No clock of its own. Every age the badge shows is measured inside the
+   * response (`lib/fleet.ts`, `heartbeatAge`), so it advances with the fleet
+   * poll — five seconds, the same granularity the rest of the page has — and
+   * never with this browser's idea of the time.
+   */
   const input = () => ({ fleet: feeds.fleet.latest, error: feeds.fleet.error });
-  const status = () => serviceStatus(input(), now());
-  const rows = () => statusRows(input(), feeds.info.latest, now());
+  const status = () => serviceStatus(input());
+  const rows = () => statusRows(input(), feeds.info.latest);
 
   let root: HTMLDivElement | undefined;
   const onDocClick = (e: MouseEvent): void => {

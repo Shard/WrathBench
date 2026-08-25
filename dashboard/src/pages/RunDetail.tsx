@@ -19,6 +19,7 @@ import { subscribeTail } from "../api/live";
 import {
   api,
   rawPath,
+  SNAPSHOT_MODE,
   type ApiInfoResponse,
   type ComparabilityView,
   type EventsServedEntry,
@@ -215,6 +216,10 @@ export default function RunDetail() {
           });
         });
         // Only a live run needs the tail; a finished one never grows again.
+        // The public build has no tail to open at all: a bucket of published
+        // JSON serves no stream, and an EventSource against it would be a
+        // reconnect loop against a 404.
+        if (SNAPSHOT_MODE) return;
         stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {
             setEntries((prev) => [...prev, ...added]);
