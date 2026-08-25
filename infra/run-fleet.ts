@@ -119,6 +119,7 @@ import {
   type AccountClass,
   type BusyAccount,
   type HeldPick,
+  type ModelsSidecar,
   type ModelState,
   type NextJob,
   type RosterModel,
@@ -1859,6 +1860,52 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
     } catch (err) {
       return { runId: e.runId, error: err instanceof Error ? err.message : String(err) };
     }
+  });
+}
+
+/**
+ * The run facts as they read once this tick's terminations are on disk. Pure.
+ *
+ * The projection is built at the top of a tick and the sweep writes its
+ * terminations halfway down it, so without this the scheduler reads a strike
+ * count that predates the strike it just wrote. That is not a cosmetic lag: on
+ * 2026-08-25 the first tick after ADR-0049 shipped logged
+ * `retry 3/3 — tainted` for nemotron-ultra and spawned its ninth attempt one
+ * second later, because the projection behind the pick still said zero.
+ *
+ * Applied rather than re-read: the same values `setTermination` just wrote, so
+ * the answer is exactly next tick's without a second pass over the directory.
+ * A run that was paused stops being paused here too, which is the other half —
+ * a run the sweep ended must not go on holding its model or its account.
+ */
+export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[], now: number): RunFact[] {
+  if (ended.length === 0) return [...runs];
+  const by = new Map(ended.map((e) => [e.runId, e]));
+  return runs.map((f) => {
+    const e = by.get(f.runId);
+    return e === undefined ? f : { ...f, terminationReason: e.reason, endedAt: now, pause: null, live: false };
+  });
+}
+
+/**
+ * The projection the rest of a tick must read once its sweep has ended runs
+ * (ADR-0049). `sidecar` is the operator's clear list; omitted it is read from
+ * the run directory, exactly as the top-of-tick projection reads it.
+ */
+export function statesAfterSweep(
+  cfg: Pick<FleetConfig, "roster" | "policy">,
+  runs: readonly RunFact[],
+  ended: readonly EndedRun[],
+  now: number,
+  sidecar?: ModelsSidecar,
+): ModelState[] {
+  return modelStates({
+    runsDir: RUNS_DIR,
+    roster: rosterModels(cfg.roster),
+    policy: cfg.policy,
+    runs: applyEnded(runs, ended, now),
+    now,
+    ...(sidecar !== undefined ? { sidecar } : {}),
   });
 }
 
@@ -3822,8 +3869,11 @@ async function main(): Promise<void> {
     // planner. Eligibility for the queue's gate and the policy's picks read
     // the same answer (ADR-0034); resumes read the same facts (ADR-0036).
     const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
-    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
-    const eligible = eligibleFrom(states);
+    // Both are re-derived below if this tick's sweep ends anything: a strike
+    // written halfway down a tick has to be in the projection the queue and
+    // the policy read at the bottom of it (ADR-0049).
+    let states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
+    let eligible = eligibleFrom(states);
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
     const keyCount = new Map<string, number>();
@@ -3930,6 +3980,7 @@ async function main(): Promise<void> {
     // the paused set. Its session goes back with it, so the fresh attempt this
     // record promises does not land on an account that is still held.
     const lapsedRetries = retryNumbers(lapsed, (e) => failedAttemptsFor(states, e) ?? 0);
+    const applied: EndedRun[] = [];
     for (const r of endRuns(RUNS_DIR, lapsed)) {
       const i = lapsed.findIndex((x) => x.runId === r.runId);
       const e = lapsed[i]!;
@@ -3939,11 +3990,20 @@ async function main(): Promise<void> {
         continue;
       }
       endedRuns.push(e);
+      applied.push(e);
       const line = formatEndedRun(e, lapsedRetries[i]);
       say(`end ${e.runId}: ${line}`);
       record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "ended", detail: line });
     }
     if (lapsed.length > 0) void releaseEndedSessions(lapsed, say);
+    if (applied.length > 0) {
+      // The queue's gate, the policy's picks and the state file all read the
+      // post-sweep projection from here down. Nothing above this line reads a
+      // strike: the pinned jobs and the live pool jobs are the operator's, and
+      // the manual queue outranks a taint by decision anyway (ADR-0034).
+      states = statesAfterSweep(cfg, runs, applied, Date.now());
+      eligible = eligibleFrom(states);
+    }
     const reserved = new Map<string, string>();
     for (const r of resumes.resume) {
       const name = r.job.name;

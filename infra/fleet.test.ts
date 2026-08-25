@@ -42,6 +42,9 @@ import {
   planResumes,
   planStaleRuns,
   retryNumbers,
+  applyEnded,
+  statesAfterSweep,
+  failedAttemptsFor,
   formatEndedRun,
   formatPaused,
   formatEnded,
@@ -81,7 +84,7 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
-import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1764,6 +1767,57 @@ describe("pause and resume across a fleet stop (ADR-0036)", () => {
     // The job's own roster is running (mid-retry): nothing to do, nothing to list.
     plan = planResumes({ runs: [run], config: config([job]), running: new Map([["nav-freeplay", "RUNNER3"]]), held, now: NOW });
     expect(plan).toEqual({ resume: [], listed: [], end: [] });
+  });
+
+  test("the strike a tick writes is in the projection that tick schedules from (ADR-0049)", () => {
+    // The 2026-08-25 bug: the sweep logged `retry 3/3 — tainted` for
+    // nemotron-ultra and the policy spawned its ninth attempt one second
+    // later, because the projection behind the pick was built before the
+    // terminations were written and still counted zero.
+    const ended = (i: number): RunFact =>
+      paused({
+        runId: `fleet-ox-e90-stealth-ox-alpha-2026082${i}`,
+        model: "stealth/ox-alpha",
+        account: "RUNNER3",
+        pause: null,
+        terminationReason: "attempt-failed",
+        endedAt: NOW - (10 - i) * H,
+      });
+    const third = paused({
+      runId: "fleet-ox-e90-stealth-ox-alpha-20260825",
+      model: "stealth/ox-alpha",
+      account: "RUNNER3",
+      pause: { reason: "quota-exhausted", at: NOW - 60_000, count: 1, episodeElapsedMs: 12 * 60_000 },
+    });
+    const runs = [ended(1), ended(2), third];
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
+    const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW });
+    expect(plan.end).toHaveLength(1);
+    expect(retryNumbers(plan.end, (e) => failedAttemptsFor(modelStatesOf(rosterModels(roster), runs, NOW), e) ?? 0)).toEqual([3]);
+
+    // Before the fix: the same tick's pre-sweep projection would schedule it.
+    const before = modelStatesOf(rosterModels(roster), runs, NOW);
+    expect(before.find((st) => st.name === "ox")!.perEpisode.e90).toMatchObject({ failed: 2, tainted: false });
+
+    // After: the ends are applied, the third strike lands, and nothing spawns
+    // for that model in this tick.
+    const after = statesAfterSweep(cfg, runs, plan.end, NOW, { version: 1, cleared: {} });
+    const ox = after.find((st) => st.name === "ox")!;
+    expect(ox.perEpisode.e90).toMatchObject({ failed: 3, tainted: true });
+    const v = schedulability(ox);
+    expect(v.verdict).toBe("blocked");
+    expect(v.why).toContain("tainted on e90 (3 failed attempts)");
+    const tick = planTick(cfg, after, held, "20260825");
+    expect(tick.policy.map((p) => p.job.ref)).not.toContain("ox");
+    // The reverse race: the run the sweep ended holds neither its model nor
+    // its account, so RUNNER3 is free for the next model in the same tick.
+    expect(ox.paused).toBeUndefined();
+    expect(tick.policy.map((p) => p.account).sort()).toEqual(["RUNNER3", "RUNNER4"]);
+    expect(applyEnded(runs, plan.end, NOW).find((f) => f.runId === third.runId)).toMatchObject({
+      terminationReason: "attempt-failed",
+      pause: null,
+      live: false,
+    });
   });
 
   test("a paused run whose ref now names another model is ENDED by the supervisor, never resumed or listed", () => {
