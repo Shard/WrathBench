@@ -52,8 +52,11 @@ trails and falls back to the colored pip when a position's model is unknown.
   fetch CLI, commit. No code changes, no per-model branches.
 - The render sites are the runs table's model column, the ladder table's rungs
   rows, the fleet page's model cells and paused list, the models page's roster
-  names, the run page's model card, and the map's pips and sidebar; the ladder
-  *scatter* keeps its plain dots, whose colour is the harness legend.
+  names, the run page's model card, the map's pips and sidebar, and — since
+  2026-08-25 — the ladder *scatter*, whose marks are logo pucks. The scatter was
+  first shipped with plain dots to keep the harness colour legend; the logo
+  arrived by moving that colour to the puck's ring, so the legend reads "ring:
+  ● wrathbench ● claude-code ● both" and still says exactly what it said.
 - The icon package version is pinned like every other pin; bumping it is a
   deliberate edit to the lineup file.
 - Brand logos remain trademarks of their owners; the package license (MIT)

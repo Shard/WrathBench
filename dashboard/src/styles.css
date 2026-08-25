@@ -165,6 +165,13 @@ th.sorted { color: var(--fg); }
 .model-icon svg { width: 1em; height: 1em; display: block; }
 .model-icon-fallback { font-size: .7em; width: 1.4em; height: 1.4em; border-radius: 50%;
                        background: var(--panel); color: var(--dim); font-weight: 700; line-height: 1; }
+/* The models page leads its name cell with the mark instead of running it into
+   the text: twice the size, left of the name and the ids under it, centred
+   against the block as a whole. `font-size` is the whole of the resize because
+   the icon's box is 1em; the monogram fallback never takes this class and so
+   keeps the inline size it has everywhere else. */
+.model-idcell { display: flex; align-items: center; gap: 9px; }
+.model-icon-lg { font-size: 2em; margin-right: 0; vertical-align: 0; }
 
 button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
