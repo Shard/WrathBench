@@ -1011,7 +1011,7 @@ export function isNoProgress(f: RunFact): boolean {
   return f.terminationReason !== null && NO_PROGRESS_REASONS.has(f.terminationReason);
 }
 
-function matchesRoster(f: RunFact, r: RosterModel): boolean {
+function matchesRoster(f: RunFact, r: Pick<RosterModel, "model" | "effort">): boolean {
   return f.model === r.model && (f.effort ?? null) === (r.effort ?? null);
 }
 
@@ -1026,7 +1026,10 @@ function matchesRoster(f: RunFact, r: RosterModel): boolean {
  * launched before lanes existed) is the default lane, and the caller reads it
  * as one.
  */
-export function liveSubscriptions(runs: readonly RunFact[], roster: readonly RosterModel[]): Map<string, string> {
+export function liveSubscriptions(
+  runs: readonly RunFact[],
+  roster: readonly Pick<RosterModel, "name" | "model" | "effort">[],
+): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of roster) {
     const f = runs.find((x) => (x.live || x.pause !== null) && x.subscription !== null && matchesRoster(x, r));
