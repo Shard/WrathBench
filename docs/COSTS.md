@@ -20,16 +20,28 @@ record.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
   `claude_result` (natural completion). A watchdog kill cuts the stream before
   that record lands, so most subscription episodes have no as-metered figure.
-  That record is per harness TURN, not per session: a run's output is the sum
-  over them. Since `duration_api_ms` also rides on it (2026-08-25), which is
-  the CLI's time inside API calls as against `duration_ms`'s whole turn.
+  That record lands once per harness TURN, and its two halves do not cover the
+  same thing: `usage` is that turn's, so a run's output is the sum over the
+  records, while `total_cost_usd` is CUMULATIVE for the CLI session, so a
+  session's cost is its LAST record and never the sum. Since 2026-08-25 the
+  record also carries `sessionId` (the boundary a pause and resume crosses) and
+  `duration_api_ms` (time inside API calls, as against `duration_ms`'s whole
+  turn).
 - **2026-08-25:** every claude-code completion-token figure the viewer showed
   before this date was wrong low by roughly 300×, and so was its tokens/second.
   Per-response `usage.completion_tokens` under that driver is the API's
   `message_start` snapshot, not the finished count; the input side was and is
   correct. Output now comes off `claude_result.usageRaw.output_tokens`. Actual
-  cost (`costUsd`) never depended on it and does not move; EXPECTED cost, which
-  prices `completionTokens`, does.
+  cost (`costUsd`) never depended on it; EXPECTED cost, which prices
+  `completionTokens`, does. A run whose turns never emitted a `claude_result` at
+  all keeps the snapshot figures and is labelled `source: "snapshot"` rather
+  than `"reported"`, in the API and on the run page both.
+- **2026-08-25, same pass:** as-metered cost for a claude-code run was the SUM
+  of its `claude_result.costUsd` figures, which triangle-counts a cumulative
+  series — the haiku run read $69.30 for a session that charged $4.35. It is now
+  the last figure per CLI session, summed across sessions. Only runs with more
+  than one result record moved; the common case (a watchdog kill leaves none or
+  one) never did.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
   an estimate only where the provider reported nothing, and labels it).

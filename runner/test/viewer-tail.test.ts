@@ -573,9 +573,11 @@ describe("tokensPerSecond", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("a claude-code turn is one measured reply: the result's output over the CLI's clock", () => {
+  test("a claude-code turn is one measured reply: the result's output over the turn's span clocks", () => {
     // The envelopes' `completion_tokens` are the API's opening snapshot — a
-    // token or two — and the finished count lands only on the result.
+    // token or two — and the finished count lands only on the result. The
+    // CLOCK still comes from the spans: 1s waiting-to-reply plus 6s, and NOT
+    // the CLI's 9s, which counts the tool round trip in between.
     const entries = [
       req(1000, 1),
       res(2000, 1, 3),
@@ -585,18 +587,50 @@ describe("tokensPerSecond", () => {
     ];
     const t = tokensPerSecond(entries);
     expect(t.replies).toBe(1); // the turn, not its two spans
-    expect(t.overall).toBe(2000); // 4000 tokens over the 2s spent inside API calls
+    expect(t.overall).toBe(4000 / 7); // 4000 tokens over 7s of measured model time
     // Never the 8 the snapshots add up to, and never both.
     expect(tokenTotals(entries).completionTokens).toBe(4000);
   });
 
-  test("a run predating duration_api_ms falls back to the turn's whole clock", () => {
+  test("a turn with nothing measurable falls back to the CLI's clocks, api first", () => {
+    // A reply that arrived on the far side of a pause: `replySpans` gives it no
+    // start, so there is no model-time window to divide by and the driver's own
+    // figure is the only measurement left.
+    const pause = summarize({ t: "pause", ts: 1500, reason: "rate-limit" }, 5, 0, 1);
+    const resume = summarize({ t: "resume", ts: 3_600_000 }, 6, 0, 1);
+    const withApi = [
+      req(1000, 1),
+      pause,
+      resume,
+      res(3_602_000, 1, 3),
+      claudeResult(3_603_000, 1, { output_tokens: 4000 }, { durationApiMs: 2000, durationMs: 9000 }),
+    ];
+    expect(tokensPerSecond(withApi).overall).toBe(2000);
+    // A run predating the adapter recording the API clock has only the whole
+    // turn's, tool round trips included.
+    const older = [
+      req(1000, 1),
+      pause,
+      resume,
+      res(3_602_000, 1, 3),
+      claudeResult(3_603_000, 1, { output_tokens: 4500 }, { durationMs: 9000 }),
+    ];
+    expect(tokensPerSecond(older).overall).toBe(500);
+  });
+
+  test("a pause inside a claude-code turn drops that stretch from the denominator", () => {
+    const pause = summarize({ t: "pause", ts: 4000, reason: "rate-limit" }, 5, 0, 1);
+    const resume = summarize({ t: "resume", ts: 3_604_000 }, 6, 0, 1);
     const t = tokensPerSecond([
       req(1000, 1),
-      res(2000, 1, 3),
-      claudeResult(10_000, 1, { output_tokens: 4500 }, { durationMs: 9000 }),
+      res(3000, 1, 3), // a measured 2s span
+      pause,
+      resume,
+      res(3_610_000, 1, 4), // no opener after the resume: times nothing
+      claudeResult(3_611_000, 1, { output_tokens: 500 }, { durationMs: 3_610_000 }),
     ]);
-    expect(t.overall).toBe(500);
+    // 500 tokens over the 2s actually measured, not over the hour parked.
+    expect(t.overall).toBe(250);
   });
 
   test("iterations are read per reply only when they sum to the turn's total", () => {
@@ -619,7 +653,37 @@ describe("tokensPerSecond", () => {
       claudeResult(5000, 1, { output_tokens: 9000, iterations: [{ output_tokens: 400 }] }, { durationApiMs: 3000 }),
     ];
     expect(tokenTotals(declined).completionTokens).toBe(9000);
-    expect(tokensPerSecond(declined).overall).toBe(3000);
+    // Collapsed, and still timed by the span: 9000 over the 2s measured, not
+    // over the CLI's 3s.
+    expect(tokensPerSecond(declined).overall).toBe(4500);
+  });
+
+  test("a run whose turns never produced a result is labelled snapshot, not reported", () => {
+    // The 21 claude-code runs of 29 on disk on 2026-08-25: a watchdog kill, so
+    // no finished output count was ever emitted and what stands is the API's
+    // opening usage — provider-reported and ~300x too low. It must not read
+    // like a repaired run.
+    const driver = summarize({ t: "driver", ts: 900, driver: "claude-code" }, 0, 0, 1);
+    const killed = tokenTotals([driver, req(1000, 1), res(3000, 1, 7), req(4000, 2), res(6000, 2, 11)]);
+    expect(killed.source).toBe("snapshot");
+    expect(killed.completionTokens).toBe(18);
+
+    // The same records under the fixed loop are finished counts, and say so.
+    const fixedLoop = tokenTotals([req(1000, 1), res(3000, 1, 7), req(4000, 2), res(6000, 2, 11)]);
+    expect(fixedLoop.source).toBe("reported");
+
+    // And a run whose turns DID resolve stays `reported` even with an
+    // in-flight turn on the end carrying a snapshot of its own.
+    const repaired = tokenTotals([
+      driver,
+      req(1000, 1),
+      res(3000, 1, 7),
+      claudeResult(4000, 1, { output_tokens: 9000 }, { durationMs: 3000 }),
+      req(5000, 2),
+      res(7000, 2, 11),
+    ]);
+    expect(repaired.source).toBe("reported");
+    expect(repaired.completionTokens).toBe(9011);
   });
 
   test("a turn with no usable result keeps the snapshot figures", () => {
@@ -669,7 +733,9 @@ describe("tokensPerSecond", () => {
     );
     const totals = await scanRunTotals(path);
     expect(totals.tokens.completionTokens).toBe(5000);
-    expect(totals.tps).toEqual({ overall: 2500, recent: 2500, replies: 1, recentReplies: 1 });
+    // One reply: 5000 output over the turn's two spans (1s + 1.5s), which is
+    // model time — not the CLI's 2s of API clock and not its 4s turn.
+    expect(totals.tps).toEqual({ overall: 2000, recent: 2000, replies: 1, recentReplies: 1 });
     const tail = new TrajectoryTail(path);
     const scanned = await tail.scan();
     expect(tokensPerSecond(scanned)).toEqual(totals.tps);

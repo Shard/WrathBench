@@ -369,6 +369,22 @@ export function claudeTurnUsage(rec: Record<string, unknown>): ClaudeTurnUsage |
   };
 }
 
+/**
+ * Whether these entries came from the claude-code driver.
+ *
+ * Read off the records only that driver writes — its `driver` line, and the
+ * `claude_system` envelopes it forwards — because the question this answers is
+ * whether an unresolved `response` usage figure is an opening snapshot or a
+ * finished count, and that is a property of the driver, not of the run.
+ */
+function isClaudeCode(entries: readonly EntrySummary[]): boolean {
+  for (const e of entries) {
+    if (e.t === "claude_system" || e.t === "claude_result") return true;
+    if (e.t === "driver" && e["driver"] === "claude-code") return true;
+  }
+  return false;
+}
+
 /** The claude-code turns of a run, by turn number. */
 function claudeTurns(entries: readonly EntrySummary[]): Map<number, ClaudeTurnUsage> {
   const out = new Map<number, ClaudeTurnUsage>();
@@ -408,6 +424,12 @@ export interface ReplySpan {
   /** The harness turn this span's records belonged to, where they said. */
   turn: number | null;
   /**
+   * True where the span's reported tokens are claude-code opening snapshots
+   * that no `claude_result` could replace — a real figure is not available for
+   * this reply and what stands is known to be far too low.
+   */
+  snapshot?: boolean;
+  /**
    * A duration the driver measured, which overrides the span clock. Set only on
    * a collapsed claude-code turn, where the whole turn is the measured unit.
    */
@@ -439,6 +461,7 @@ export interface ReplySpan {
 export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
   const claude = claudeTurns(entries);
   const perReply = perReplyTokens(entries, claude);
+  const claudeCode = isClaudeCode(entries);
   const spans: ReplySpan[] = [];
   let open: ReplySpan | null = null;
   const close = (): void => {
@@ -465,6 +488,9 @@ export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
           open.reported += list[k] ?? 0;
         } else {
           open.reported += usage.completion;
+          // Nothing will replace this: the turn produced no result, so its
+          // opening snapshot is the whole of what anyone can say.
+          if (claudeCode && (turn === null || !claude.has(turn))) open.snapshot = true;
         }
       } else {
         open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
@@ -532,14 +558,21 @@ function perReplyTokens(
 
 /**
  * Fold each claude-code turn the per-reply path could not resolve into a single
- * measured reply: the turn's output total over the duration the CLI reported.
+ * measured reply: the turn's output total over the time its replies took.
  *
- * The turn is the smallest unit that driver measures honestly. Its `response`
- * records time the replies well enough, but their output figures are opening
- * snapshots, so a span-shaped total would be the wrong number timed precisely.
- * `duration_api_ms` — the CLI's own time-inside-API-calls — is the denominator
- * where the run has it; older runs have only `duration_ms`, which also covers
- * every tool round trip and so reads slower than the model was.
+ * The tokens have to come from the turn — its `response` figures are opening
+ * snapshots — but the CLOCK does not. The turn's spans time the replies exactly
+ * as they do under the fixed loop (opener → last response, a pause dropping the
+ * span it lands in), so summing those measured windows keeps the denominator
+ * inside model time and keeps the figure comparable to the fixed loop's
+ * request→response. The CLI's own `duration_ms` would not: on the 2026-08-25
+ * haiku run it sums to 5,283,659 ms of a 5,400,000 ms episode — 98% of wall
+ * clock, every MCP round trip into the game included — which is the run's
+ * elapsed clock wearing a label that says it is the model's.
+ *
+ * The driver's clocks are the fallback for a turn with no measurable span at
+ * all (nothing timed, a pause across the whole turn): `duration_api_ms` where
+ * the run records it, `duration_ms` otherwise, taken as one measurement.
  *
  * A turn with no result — one still in flight, or one a watchdog cut short —
  * keeps today's behaviour and its snapshot figures, which is the only thing
@@ -564,12 +597,17 @@ function collapseClaudeTurns(
     done.add(turn);
     let start = 0;
     let last: number | null = null;
+    let measured = 0;
     for (const o of spans) {
       if (o.turn !== turn) continue;
       if (o.start > 0 && (start === 0 || o.start < start)) start = o.start;
       if (o.last !== null && (last === null || o.last > last)) last = o.last;
+      // The same test `tokensPerSecond` applies to a span of the fixed loop, so
+      // an unmeasurable one — no opener, or the far side of a pause — is left
+      // out of the denominator here exactly as it is left out there.
+      if (o.start > 0 && o.last !== null && o.last > o.start) measured += o.last - o.start;
     }
-    const ms = usage.durationApiMs ?? usage.durationMs;
+    const ms = measured > 0 ? measured : (usage.durationApiMs ?? usage.durationMs);
     const collapsed: ReplySpan = {
       reported: usage.completion,
       estimated: 0,
@@ -587,6 +625,20 @@ function collapseClaudeTurns(
 /**
  * Token accounting for a whole run. Prompt tokens are summed per turn, so the
  * total is what a provider would bill, not the size of the final context.
+ *
+ * `source` is `snapshot` where the whole completion figure rests on claude-code
+ * opening snapshots — 21 of the 29 claude-code runs on disk on 2026-08-25,
+ * where a watchdog kill means no turn ever emitted the finished counts. Such a
+ * total is not an estimate and not a measurement: it is provider-reported and
+ * known to be far too low (~300× on the one run with both halves), and calling
+ * it `reported` would let it pass for the repaired ones.
+ *
+ * All of it, not any of it: a run whose turns resolved and whose last turn was
+ * cut off mid-flight carries a handful of snapshot tokens on that turn and is
+ * otherwise finished counts, and labelling that `snapshot` would be the same
+ * mistake pointing the other way. A resumed run whose first session resolved
+ * and whose second was killed is the case this rule reads generously; the
+ * per-turn truth is in the spans for anyone who needs it.
  *
  * Completion tokens come from `replySpans`, so a reply split across several
  * `response` records counts once (FOLLOW-UPS 82), and a claude-code turn counts
@@ -642,10 +694,19 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   if (pending !== null) prompt += pending;
 
   let completion = 0;
-  for (const s of replySpans(entries)) completion += s.sawUsage ? s.reported : s.estimated;
+  /** Split of the reported half, which decides between `reported` and `snapshot`. */
+  let fromSnapshots = 0;
+  let resolved = 0;
+  for (const s of replySpans(entries)) {
+    completion += s.sawUsage ? s.reported : s.estimated;
+    if (!s.sawUsage) continue;
+    if (s.snapshot === true) fromSnapshots += s.reported;
+    else resolved += s.reported;
+  }
+  const snapshot = fromSnapshots > 0 && resolved === 0;
 
   return {
-    source: reported ? "reported" : "estimated",
+    source: snapshot ? "snapshot" : reported ? "reported" : "estimated",
     contextTokens: context,
     promptTokens: prompt,
     completionTokens: completion,
@@ -699,11 +760,14 @@ export const TPS_RECENT_REPLIES = 10;
  * where ANY record of the span reported usage, and `chars ÷ 4` only where none
  * did, never both.
  *
- * The claude-code driver is the exception, and `collapseClaudeTurns` says why:
- * its responses carry opening snapshots rather than finished output counts, so
- * a whole harness turn collapses to one measured reply — the turn's output
- * total over the CLI's own `duration_api_ms`, or `duration_ms` where a run
- * predates it. That makes `replies` a count of turns on such a run, so
+ * The claude-code driver is one exception and only one: its responses carry
+ * opening snapshots rather than finished output counts, so a whole harness turn
+ * collapses to a single measured reply carrying the turn's output total. The
+ * clock does not change with it — the denominator is the SUM of that turn's
+ * spans, each timed by the rule above, so the figure stays inside model time
+ * and stays comparable to the fixed loop's request→response. The CLI's own
+ * `duration_api_ms`/`duration_ms` stand in only for a turn with no measurable
+ * span at all. That makes `replies` a count of turns on such a run, so
  * `TPS_RECENT_REPLIES` covers rather more of the episode there than on the
  * fixed loop.
  */
@@ -744,15 +808,61 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
 }
 
 /**
+ * The claude-code driver's own cost figure, accumulated the way the CLI reports
+ * it: cumulative within a session, so the session's cost is its last record.
+ *
+ * Sessions are told apart by `session_id`, which the `claude_system` envelopes
+ * carry from the CLI's first line onward and which `claude_result` records
+ * itself as of 2026-08-25. A run that pauses and resumes opens a new session
+ * and starts a new accumulation, so the run's cost is the sum over sessions —
+ * and a `claude_result` with no session known at all falls in one anonymous
+ * bucket, which takes the maximum rather than the sum. Taking the maximum
+ * rather than literally the last is the same number on a monotonic series and
+ * refuses to go backwards on a series that is not.
+ *
+ * Fed every record in order; ignores everything that is neither.
+ */
+export class ClaudeCostTally {
+  private readonly perSession = new Map<string, number>();
+  private current = "";
+
+  note(rec: Record<string, unknown>): void {
+    if (rec["t"] === "claude_system") {
+      const id = rec["session_id"];
+      if (typeof id === "string" && id.length > 0) this.current = id;
+      return;
+    }
+    if (rec["t"] !== "claude_result") return;
+    const own = rec["sessionId"];
+    const key = typeof own === "string" && own.length > 0 ? own : this.current;
+    const v = rec["costUsd"];
+    if (typeof v !== "number" || !Number.isFinite(v)) return;
+    const seen = this.perSession.get(key);
+    this.perSession.set(key, seen === undefined ? v : Math.max(seen, v));
+  }
+
+  /** The run's claude-code cost, or null where no result record carried one. */
+  total(): number | null {
+    if (this.perSession.size === 0) return null;
+    let sum = 0;
+    for (const v of this.perSession.values()) sum += v;
+    return sum;
+  }
+}
+
+/**
  * What the provider says this run cost, or null when it said nothing.
  *
  * Two drivers report it in two shapes and both are summed here:
  *
- * - `claude_result.costUsd` — the Claude Agent SDK's `total_cost_usd` for *one
- *   session*, emitted only when that session's turn loop ends cleanly; a hard
- *   watchdog kill cuts the stream before it lands, so most runs have none. A
- *   paused-and-resumed run opens a new CLI session, so figures are summed
- *   rather than maxed.
+ * - `claude_result.costUsd` — the Claude Agent SDK's `total_cost_usd`, which is
+ *   CUMULATIVE for the CLI session and lands once per harness turn, emitted
+ *   only when that turn ends cleanly; a hard watchdog kill cuts the stream
+ *   before it lands, so most runs have none. One session's figure is therefore
+ *   its LAST record, never the sum of them: summing 23 cumulative records on
+ *   the 2026-08-25 haiku run read $69.30 for a session that charged $4.35. The
+ *   sum across SESSIONS stands — a paused-and-resumed run opens a new one, and
+ *   each starts its own accumulation. See `ClaudeCostTally`.
  * - `response.usage.cost` — OpenRouter's per-call charge in credits (dollars),
  *   under the usage opt-in the adapter sets for that host. Per response, so the
  *   run's figure is necessarily a sum, and it grows with a live run.
@@ -761,12 +871,10 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
  */
 export function reportedCostUsd(entries: readonly { t: string; [k: string]: unknown }[]): number | null {
   let total: number | null = null;
+  const claude = new ClaudeCostTally();
   for (const e of entries) {
-    if (e.t === "claude_result") {
-      const v = e["costUsd"];
-      if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v;
-      continue;
-    }
+    claude.note(e);
+    if (e.t === "claude_result") continue;
     // Responses only: a `request` record carries no charge, and counting the
     // usage block on both sides would double the bill.
     if (e.t !== MODEL_RESPONSE_RECORD) continue;
@@ -774,7 +882,8 @@ export function reportedCostUsd(entries: readonly { t: string; [k: string]: unkn
     const c = usage?.cost;
     if (typeof c === "number" && Number.isFinite(c)) total = (total ?? 0) + c;
   }
-  return total;
+  const cli = claude.total();
+  return cli === null ? total : (total ?? 0) + cli;
 }
 
 /**
@@ -1165,6 +1274,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let snippets = 0;
   let modelResponses = 0;
   let costUsd: number | null = null;
+  /** Cumulative-per-session, summed across sessions; see `ClaudeCostTally`. */
+  const claudeCost = new ClaudeCostTally();
+  let sawClaudeMark = false;
   let costed = 0;
   let uncosted = 0;
   /*
@@ -1203,10 +1315,15 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     else if (t === "snippet") snippets++;
     else if (t === MODEL_RESPONSE_RECORD) modelResponses++;
     // Read before the token projection drops everything that is not a turn:
-    // the driver's own cost lives on a `claude_result`, which is neither.
-    if (t === "claude_result") {
-      const v = rec["costUsd"];
-      if (typeof v === "number" && Number.isFinite(v)) costUsd = (costUsd ?? 0) + v;
+    // the driver's own cost lives on a `claude_result`, which is neither, and
+    // the session it belongs to on a `claude_system`, which is neither either.
+    claudeCost.note(rec);
+    // One marker per run is all the derivation needs to know which driver wrote
+    // these responses — see `isClaudeCode`. Pushing every `claude_system` would
+    // put thousands of entries in a list kept small on purpose.
+    if (!sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
+      sawClaudeMark = true;
+      spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
     }
     // Same reason, one record kind further: a `milestone` is neither a request
     // nor a response, so it has to be read before the early return below. Only
@@ -1277,6 +1394,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     /* an unreadable trajectory degrades one row, never the listing */
   }
   take(carry);
+
+  const cli = claudeCost.total();
+  if (cli !== null) costUsd = (costUsd ?? 0) + cli;
 
   return {
     // Over `spanMarks` rather than requests and responses alone: the span

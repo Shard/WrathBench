@@ -227,25 +227,6 @@ status.
     constructor plus the read-only opens, when an actual SQLITE_BUSY shows up in a
     log. Unblocks on first observation.
 
-84. **`reportedCostUsd` sums a cumulative figure for claude-code runs**
-    (2026-08-25, found while fixing the output-token defect). The Claude Agent
-    SDK's `total_cost_usd` on a `claude_result` is cumulative for the SESSION,
-    not the cost of that turn: on
-    `fleet-sub-haiku-e90-claude-haiku-4-5-20251001-20260825` it climbs
-    monotonically 0.95 → 4.35 across the 23 result records while the same
-    record's `usage` is genuinely per turn (output 57,063 then 23,977 then
-    3,253). `reportedCostUsd` sums them, so that run's "actual" cost reads
-    $69.30 against a real ~$4.35 — a triangular over-count, worse the more turns
-    a run completes, and it is the figure labelled as-metered against which the
-    $3.96 list-price estimate is called an upper bound. Only runs with more than
-    one result record are affected; a run with one (the common case, since a
-    watchdog kill leaves none or few) is right. Next action: take the LAST
-    result's `costUsd` per CLI session rather than the sum, keeping the sum
-    across sessions a pause/resume opens (that is why it was written as a sum),
-    and re-check the cost figures the ladder shows. Out of scope of the
-    2026-08-25 token fix by decision — it is a cost figure and wants its own
-    measurement.
-
 ## Module
 
 82. **module/ has no host-side checks at all** (2026-08-24, bare-clone audit). ~5,900
