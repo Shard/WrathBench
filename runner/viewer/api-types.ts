@@ -591,7 +591,7 @@ export interface RunsResponse extends SnapshotEnvelope {
   runs: RunListRow[];
 }
 
-export interface PositionsResponse {
+export interface PositionsResponse extends SnapshotEnvelope {
   positions: AgentPosition[];
 }
 
@@ -782,7 +782,7 @@ export interface FleetServerView {
  * The supervisor's published state. `present: false` is the normal answer on a
  * machine where the fleet has never run — it is not an error.
  */
-export interface FleetResponse {
+export interface FleetResponse extends SnapshotEnvelope {
   present: boolean;
   /** The deploy window's phase; `running` with an empty detail when nothing was ever written. */
   server: FleetServerView;

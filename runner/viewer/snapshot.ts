@@ -88,6 +88,11 @@ function hash12(body: string): string {
  * sees a copy with `now: 0` while the EMITTED body keeps the real value.
  * Nothing else is normalized on purpose: a live run's growing playtime,
  * `lastTs` or `live` flag are data, and a changed generation is then correct.
+ * The same holds for the scheduler's clock-crossings in models.json — a
+ * cooldown expiring or a pause going stale flips a status the models page
+ * shows, so the gen moving on those (rare, boundary) events is deliberate.
+ * The invariant is "no data change and no state-visible clock crossing ⇒
+ * same gen", not "idle wall clock ⇒ same gen".
  * (The spread below builds a hash-only local copy of an already-projected
  * payload, never anything emitted — the projection's no-spread rule is about
  * what ships.)

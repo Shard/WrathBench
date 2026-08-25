@@ -631,9 +631,10 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
     ...(f.containerized !== undefined ? { containerized: f.containerized } : {}),
     ...(f.stamp !== undefined ? { stamp: f.stamp } : {}),
     ...(f.configLoadedAt !== undefined ? { configLoadedAt: f.configLoadedAt } : {}),
-    ...(f.configRejected !== undefined
-      ? { configRejected: { since: f.configRejected.since, error: f.configRejected.error } }
-      : {}),
+    // The rejection error is a raw exception message: a fs failure embeds the
+    // config's filesystem path and a schema failure can echo config values, so
+    // only the fact and the time survive, like lastError.message above.
+    ...(f.configRejected !== undefined ? { configRejected: { since: f.configRejected.since, error: "" } } : {}),
     ...(f.preflight !== undefined ? { preflight: projectPreflight(f.preflight) } : {}),
     jobs: f.jobs.map(projectFleetJob),
     accounts: f.accounts.map(
