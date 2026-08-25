@@ -22,7 +22,7 @@ is created empty, and every page serves its labelled empty state.
 
 ## This directory is the API; the UI is the dashboard
 
-Since ADR-0022 the UI is a SolidJS SPA in `dashboard/`, and this directory is
+The UI is a SolidJS SPA in `dashboard/`, and this directory is
 the API it reads plus the static host that serves it. Build it with
 `bun run --cwd dashboard build`; the viewer picks it up from `dashboard/dist`
 with no further configuration.
@@ -43,7 +43,8 @@ that prints why, unless `WRATHBENCH_VIEWER_LAN=1` explicitly opts a trusted
 private network in. That opt-in is for a LAN, not the internet: it lets someone
 on the same network read pages, and reaches nothing else — the module stays
 loopback regardless. Public hosting is intended eventually and is not this;
-ADR-0022 carries what has to be settled first.
+the viewer/dashboard section of `docs/ARCHITECTURE.md` carries what has to be
+settled first.
 
 Opting in takes two steps, and the second is the one that gets forgotten:
 
@@ -126,7 +127,7 @@ mislead. Runs recorded after the fix carry real counts, cache writes included.
 `/api/positions` is the feed behind the map: for every run with no termination
 reason, the newest `state` row that actually carried `map, x, y` — not simply
 the newest row, since a level-only sample would otherwise blink an agent off the
-map — dropped if that reading is more than ten minutes old. Per ADR-0019 the
+map — dropped if that reading is more than ten minutes old. By design the
 renderer consumes only that array and never touches the run store, which is what
 lets a replay mode plug a trajectory reader into the same shape later. The
 coordinate transform lives on its own in `worldmap.ts` (`tile = 32 −
@@ -183,7 +184,8 @@ variable, and the value of that variable is never written to the trajectory.
 verbatim game text or Blizzard-derived bytes — raw entries, scratchpads and
 minimap tiles. It is opt-in-to-public, not opt-in-to-raw: the run page depends on
 raw bodies, so a public deployment sets the flag rather than the developer
-clearing it. See ADR-0022 for the legal question that is still open.
+clearing it. The legal question around public hosting is still open; see the
+viewer/dashboard section of `docs/ARCHITECTURE.md`.
 
 Tail and summariser logic is tested in `runner/test/viewer-tail.test.ts`; the
 coordinate transform, the position feed and tile path validation in

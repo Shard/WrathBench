@@ -7,7 +7,7 @@
  *   ./infra/run-roster.sh infra/roster-example.json --dry-run
  *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
  *
- * Every entry is config: `model`, `driver` (openai | claude-code, ADR-0035),
+ * Every entry is config: `model`, `driver` (openai | claude-code),
  * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
  * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
@@ -15,7 +15,7 @@
  * One episode at a time, in roster order. On the host each is launched through
  * `infra/run-episode.sh` (so its preflight, .env handling and harness version
  * stamping all still apply — nothing here reimplements it). Inside the runner
- * image — where the fleet supervisor now lives, ADR-0020 — there is no docker
+ * image — where the fleet supervisor now lives — there is no docker
  * to exec with, so the episode is spawned as a direct `bun runner/src/run.ts`
  * child and the few things run-episode.sh contributed (harness stamp, claude
  * token check) are done here. See `inContainer()`.
@@ -64,7 +64,7 @@ export interface RosterSpec {
   billing?: "free" | "paid";
   /**
    * Defaults to "openai". `claude-code` runs go through the Claude Code CLI,
-   * which is their harness (ADR-0035).
+   * which is their harness — a tag on the run, not a separate benchmark.
    */
   driver?: Driver;
   /** Game account for the entry's session. Omitted -> the runner's default. */
@@ -79,7 +79,7 @@ export interface RosterSpec {
   class?: number;
   episodeMs?: number;
   /**
-   * Run dimensions (ADR-0024), both optional and both recorded in the run's
+   * Run dimensions, both optional and both recorded in the run's
    * metadata. `objective` is one operator-authored line rendered into the
    * fixed prompt for every model alike, and stamps the run unscored;
    * `watchdogs` is a partial threshold override where `null`/`0` disables one.
@@ -91,15 +91,15 @@ export interface RosterSpec {
   watchdogs?: WatchdogOverride;
   maxToolCalls?: number;
   /**
-   * Whether `search_reference` serves wiki coordinates (ADR-0028). Absent or
+   * Whether `search_reference` serves wiki coordinates. Absent or
    * false is names-first, the scored default; only freeplay/unscored jobs
    * should set it. Stamped into the run's comparability tuple.
    */
   wikiCoords?: boolean;
-  /** An extra run past the policy target (ADR-0034): stamped `extra: true`, never counted. */
+  /** An extra run past the policy target: stamped `extra: true`, never counted. */
   extra?: boolean;
   /**
-   * Episode tier id (ADR-0030/0031): `e90`, `e360`, `probing` or `freeplay`. Passed to the
+   * Episode tier id: `e90`, `e360`, `probing` or `freeplay`. Passed to the
    * runner verbatim as `--episode <id>`; the explicit watchdog/maxToolCalls
    * flags the fleet derives from it travel alongside, so a runner that does
    * not know the flag yet still runs the right shape.
@@ -107,7 +107,7 @@ export interface RosterSpec {
   episode?: string;
   /**
    * The probe campaign that commissioned this entry and which of its cells it
-   * is (ADR-0041). Passed to the runner as `--campaign` / `--cell` and recorded
+   * is. Passed to the runner as `--campaign` / `--cell` and recorded
    * on the run, which is what a campaign's remaining work is counted from and
    * what keeps its results grouped after its config entry is deleted.
    */
@@ -181,7 +181,7 @@ const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
 /**
  * SIGTERM → SIGKILL grace for the episode child. The runner pauses on SIGTERM
- * (ADR-0036): it abandons the request in flight, tears down a CLI child, writes
+ * (pause, not terminate): it abandons the request in flight, tears down a CLI child, writes
  * the pause record and releases the session; its own backstop fires at 60s.
  * This must outlast that, and stay inside the fleet container's 180s
  * `stop_grace_period` with room for the supervisor's own reap.
@@ -203,7 +203,7 @@ const RUNNER_ENTRY = join(REPO_ROOT, "runner", "src", "run.ts");
 // Two homes, one code path. On the HOST the roster shells out to
 // `infra/run-episode.sh`, which docker-compose-execs the runner container —
 // that is how it has always worked and it stays byte-identical. Inside the
-// runner image (the `fleet` compose service, ADR-0020) there is no docker CLI
+// runner image (the `fleet` compose service) there is no docker CLI
 // and no container to exec into: the runner is a sibling process, so the
 // roster spawns `bun runner/src/run.ts` directly, talks to the module over the
 // compose network itself, and signals its own child.
@@ -333,7 +333,7 @@ function usage(): void {
       "                       a hand-started paused run still holds the shared game account",
       "  --loop               when the roster is exhausted, start over (cycle 2+ run ids get a",
       "                       -cN suffix so each pass is its own run). With no --until/--max-hours",
-      "                       it loops until stopped — that is the fleet-service shape (ADR-0020)",
+      "                       it loops until stopped — that is the fleet-service shape (see docs/OPERATIONS.md)",
       "  --resume-roster      continue a partially completed roster",
       "  --date YYYYMMDD      the stamp in derived run ids and the log name. Defaults to today —",
       "                       pass the ORIGINAL date when resuming a roster after midnight, or the",
@@ -488,7 +488,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // runner's argv parser ignores flags it does not know, so this is safe to
   // emit before the runner learns it.
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
-  // A probe's identity (ADR-0041). Recorded on the run rather than derived: the
+  // A probe's identity. Recorded on the run rather than derived: the
   // scheduler counts these to know what a sweep still owes, and they are what
   // keeps a campaign's results grouped once its config entry is gone.
   if (spec.campaign !== undefined) argv.push("--campaign", spec.campaign);
@@ -1261,7 +1261,7 @@ async function attemptSpec(
     if (verdict.reason === "operator-pause") {
       // The supervisor stopped under it (or an operator SIGTERMed the runner):
       // the run is suspended with its clock and session released by the
-      // runner itself (ADR-0036). The fleet resumes it on its next boot — same
+      // runner itself. The fleet resumes it on its next boot — same
       // run id, same account, same character. Nothing to free, nothing to
       // retry here.
       say(
@@ -1405,7 +1405,7 @@ async function main(): Promise<void> {
   const deadline = computeDeadline(args.until, args.maxHours);
   // --loop with no deadline used to be refused, on the theory that an
   // unbounded loop is always an operator mistake. The fleet-as-a-service shape
-  // (ADR-0020) makes it the normal case: the supervisor is up while the machine
+  // makes it the normal case: the supervisor is up while the machine
   // is up and steering is done by editing fleet.json, not by a wall clock. The
   // stop conditions remain available as optional caps.
   if (args.loop && deadline === undefined) {
@@ -1481,7 +1481,7 @@ async function main(): Promise<void> {
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
-          (s.wikiCoords ? `\n   wiki coords served (ADR-0028)` : "") +
+          (s.wikiCoords ? `\n   wiki coords served (unscored-lane setting; see docs/METHODOLOGY.md)` : "") +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
       console.log(

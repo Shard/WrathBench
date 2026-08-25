@@ -7,7 +7,7 @@
  * value survives a failed poll (a blip must not blank the page), and the timer
  * stops when the component goes away.
  *
- * ADR-0022 names polling rate as a public-hosting constraint, so the intervals
+ * Polling rate is a public-hosting constraint, so the intervals
  * are stated at each call site rather than hidden in here.
  */
 

@@ -1,5 +1,5 @@
 /**
- * Episode tiers (ADR-0030).
+ * Episode tiers.
  *
  * The load-bearing claims: `--episode` sets the whole leash from one flag, an
  * explicit threshold on top of it still wins but costs the run its tier
@@ -142,7 +142,8 @@ describe("overrides cost membership, not the flag", () => {
 
   test("a tighter leash applied on the resume path reads as an override too", () => {
     // Resume rebuilds config from stored meta, never from argv: the predicate
-    // has to be over the effective leash, or a restamp would lie (ADR-0026).
+    // has to be over the effective leash, or a restamp would lie: the tuple
+    // records what will actually be enforced.
     const launched = configFromArgs(["--episode", "e90"]);
     const resumed = loadRunConfig({
       ...launched,

@@ -4,9 +4,9 @@
  *
  * The one rule this module exists to enforce: **a chart never mixes runs that
  * are not comparable.** Scorability comes from the server's own `unscored`
- * predicate, and everything below groups by (model, harness series) — ADR-0004
- * makes scores comparable only within a harness version, and ADR-0034 names
- * the *series* (major.minor) as that group: a fix commit does not start a new
+ * predicate, and everything below groups by (model, harness series) — scores
+ * are comparable only within a harness version, and the *series*
+ * (major.minor) is that group: a fix commit does not start a new
  * row, a minor bump does. The exact versions a row holds are listed on it.
  */
 
@@ -24,7 +24,7 @@ export function scored(runs: readonly ResultRun[]): ResultRun[] {
 /**
  * The starting characters present, as chip labels: "Dwarf Hunter", sorted.
  *
- * Race and class vary only as a *pair* — the extras cycle (ADR-0034) hands out
+ * Race and class vary only as a *pair* — the extras cycle hands out
  * `{ race, class }` combinations from a fixed list — so one chip row of pairs
  * is the filter, not two rows that would offer combinations no run can have.
  * Runs whose metadata never recorded a character contribute no option; they
@@ -72,17 +72,17 @@ export interface ResultGroup {
   /** Every exact version stamp in the row, sorted — the label's detail. */
   harnessVersions: string[];
   effort: string | null;
-  /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
+  /** Whether wiki coordinates were served; null when not recorded. */
   wikiCoords: boolean | null;
   /**
    * The starting characters the group's runs were played on, sorted. A *label*,
    * not part of the key: the baseline character is the comparison set, and an
-   * extras run (ADR-0034) is compared against it rather than charted apart.
+   * extras run is compared against it rather than charted apart.
    * More than one entry means the group mixes characters, and the row says so.
    */
   characters: string[];
   /**
-   * The harness tags present in the group (ADR-0035), sorted. Not part of the
+   * The harness tags present in the group, sorted. Not part of the
    * key: the operator chose to tag rather than partition, so a group may hold
    * both loops and the column says so.
    */
@@ -117,15 +117,15 @@ function median(values: readonly number[]): number | null {
  * Group scored runs by (model, harness series, effort, server build) and
  * report what each group cost to reach `level`.
  *
- * Effort is part of the key rather than averaged over: ADR-0024 calls it a
+ * Effort is part of the key rather than averaged over: it is a
  * dimension, so `opus at low` and `opus at high` are two rows, not one blurred
  * one. A group with no run that reached the level is still returned — "twelve
  * attempts, none reached L10" is a result, and dropping it would flatter the
- * chart. Server build folds in the same way (ADR-0026): the worldserver
+ * chart. Server build folds in the same way: the worldserver
  * commit is pinned and changed deliberately, same as the harness version, so
  * two runs on different builds are two rows, and a run with no recorded build
  * groups on its own rather than silently joining one it may not have run
- * against. The wiki-coordinates tier (ADR-0028) is a dimension the same way:
+ * against. The wiki-coordinates tier is a dimension the same way:
  * a names-first run and a coords run are not the same task, and a run that
  * never recorded the field groups on its own.
  */
@@ -312,7 +312,7 @@ export interface LadderRow {
    */
   bestMoney: number | null;
   bestMoneyRunId: string | null;
-  /** Harness tags among the model's scored runs (ADR-0035), sorted. */
+  /** Harness tags among the model's scored runs, sorted. */
   harnesses: string[];
   /** Starting characters among those runs, sorted; a label, never a row key. */
   characters: string[];
@@ -325,8 +325,8 @@ export interface LadderRow {
  * sitting at rung 3 is not claimed to have passed rung 2 — the page shows the
  * whole row and lets the gaps speak.
  *
- * The row order is a stated derivation, versioned with this file (ADR-0018
- * amendment, 2026-08-23): **highest rung reached, then total XP, then gold.**
+ * The row order is a stated derivation, versioned with this file
+ * (2026-08-23): **highest rung reached, then total XP, then gold.**
  * Total XP is the `(level, xp)` pair compared lexicographically — xp resets at
  * every ding and level never falls, so the pair *is* the total-XP ordering, and
  * no `level * K + xp` integer is synthesised because no XP-per-level table

@@ -180,7 +180,7 @@ describe("modelStates", () => {
     expect(by["glm"]!.perEpisode.e90).toMatchObject({ counted: 0, stillborn: 3, attempts: 3, lastReason: "stillborn" });
 
     expect(by["sonnet"]).toMatchObject({ status: "active", eligible: ["e90"], platform: "claude-code", harness: "claude-code" });
-    // The old driver spelling in a roster reads as the same harness (ADR-0035).
+    // The old driver spelling in a roster reads as the same harness.
     expect(by["sonnet-low"]).toMatchObject({ platform: "claude-code", harness: "claude-code" });
     expect(by["ox"]).toMatchObject({ harness: "wrathbench" });
     expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, reachedL5: false });
@@ -196,7 +196,7 @@ describe("modelStates", () => {
     expect(by["sonnet"]!.billing).toBe("free"); // subscription
   });
 
-  test("series keying: runs from another series are shown, not counted (ADR-0034)", () => {
+  test("series keying: runs from another series are shown, not counted", () => {
     const policy: SchedulingPolicy = { ...DEFAULT_POLICY, series: "0.3" };
     const states = modelStates({ runsDir, roster, policy, now: NOW, sidecar: { version: 1, cleared: {} } });
     const local = states.find((s) => s.name === "local")!;
@@ -271,7 +271,7 @@ describe("the ladder", () => {
     expect(s.status).toBe("new");
   });
 
-  test("a paused run is an attempt, never counted, never a rung, and holds the model (ADR-0036)", () => {
+  test("a paused run is an attempt, never counted, never a rung, and holds the model", () => {
     const paused: RunFact = {
       ...fail(9, NOW - 1000, null, 30),
       pause: { reason: "operator-pause", at: NOW - 1000, count: 1, episodeElapsedMs: 41 * 60_000 },
@@ -417,7 +417,7 @@ describe("nextJobs", () => {
   });
 });
 
-describe("paid and free (ADR-0034 amendment)", () => {
+describe("paid and free", () => {
   const good = (model: string, ep: EpisodeId, i: number, level = 3, extra = false): RunFact => ({
     runId: `${model}-${ep}-${i}`,
     model,
@@ -453,7 +453,7 @@ describe("paid and free (ADR-0034 amendment)", () => {
     expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
   });
 
-  test("a target is the tier and only the tier — billing buys no runs and costs none (ADR-0043)", () => {
+  test("a target is the tier and only the tier — billing buys no runs and costs none", () => {
     // The same tier means the same budget whoever is paying. This is the whole
     // point of the split: billing says where a run may execute, never how many.
     for (const model of ["vendor/big", "vendor/big:free"]) {
@@ -742,7 +742,7 @@ describe("outstandingWork", () => {
   });
 });
 
-describe("concurrency lanes (ADR-0034: cap keys on the rate-limit key)", () => {
+describe("concurrency lanes (cap keys on the rate-limit key)", () => {
   const key = (r: { name?: string; driver?: string; apiBase?: string }, billing: "free" | "paid") =>
     concurrencyKeyOf({ name: r.name ?? "x", ...(r.driver !== undefined ? { driver: r.driver } : {}), ...(r.apiBase !== undefined ? { apiBase: r.apiBase } : {}) }, billing);
 
@@ -776,7 +776,7 @@ describe("concurrency lanes (ADR-0034: cap keys on the rate-limit key)", () => {
   });
 });
 
-describe("probe campaigns in the schedule (ADR-0041)", () => {
+describe("probe campaigns in the schedule", () => {
   const NOW2 = 1_800_000_000_000;
   const H = 3_600_000;
   const done = (model: string, ep: EpisodeId, i: number, over: Partial<RunFact> = {}): RunFact => ({

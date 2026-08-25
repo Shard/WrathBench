@@ -335,7 +335,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted (ADR-0036)", async () => {
+  test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted", async () => {
     const abort = new AbortController();
     let calls = 0;
     const slow: ChatAdapter = {
@@ -533,7 +533,7 @@ describe("prompt-cache prefix discipline", () => {
       const prev = (reqs[i - 1]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
       const next = (reqs[i]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
       if (next.length < prev.length) {
-        trims++; // the one deliberate cache miss per block (ADR-0012)
+        trims++; // the one deliberate cache miss per block (hysteretic window)
         continue;
       }
       expect(next.slice(0, prev.length)).toEqual(prev);

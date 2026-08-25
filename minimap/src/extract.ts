@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Minimap tile extractor (ADR-0019).
+ * Minimap tile extractor. Feeds the dashboard's map view; the rationale lives
+ * in docs/ARCHITECTURE.md (dashboard section).
  *
  * Reads the WoW 3.3.5a client archives on the host, decodes the minimap BLP2
  * tiles and writes `data/minimap/<mapId>/<tileRow>_<tileCol>.png` (256x256

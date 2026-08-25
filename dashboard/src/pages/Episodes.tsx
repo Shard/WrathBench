@@ -1,7 +1,7 @@
 /**
  * Episodes: the per-run grain, under the tier that defines it.
  *
- * One page per grain (ADR-0022 amendment, 2026-08-23). The fleet page answers
+ * One page per grain (decided 2026-08-23). The fleet page answers
  * "what is running"; this one answers "what has run" — every recorded run of
  * one tier, with the character it was played on, what it earned, how long it
  * was actually driven, what it cost, and how it ended. It is where the fleet
@@ -11,7 +11,7 @@
  * Two feeds, because the two questions are different. `/api/episodes` is the
  * tier definitions and how many runs sit against each; `/api/results` is the
  * runs themselves, filtered by the same `?episode=` the results and ladder
- * pages use. The membership rule (ADR-0030) lives in the API, once, so this
+ * pages use. The membership rule lives in the API, once, so this
  * page cannot disagree with a chart about what "e90" selects.
  *
  * Three counts per tier, kept apart on purpose. **Members** are runs stamped
@@ -19,8 +19,8 @@
  * compare, and the only ones the table below lists unless overridden runs are
  * asked for by name. **Overridden** are stamped but were run on a different
  * leash, which is harness development rather than a result. **Labeled** are
- * older runs the reader recognises as looking like the tier; ADR-0030 is
- * explicit that they are never back-labeled into membership, because they ran
+ * older runs the reader recognises as looking like the tier; the episode
+ * policy is explicit that they are never back-labeled into membership, because they ran
  * under the watchdog defaults of their day.
  *
  * The prose comes off the API rather than being written here, so the rules a
@@ -105,7 +105,7 @@ export default function Episodes() {
       <p class="dim">
         The rulesets a run can be launched under, with <code>--episode &lt;id&gt;</code>, and every
         run recorded against one. An id is a comparability group: two runs may only be compared if
-        they share an id <em>and</em> a harness series (ADR-0030, ADR-0034). The id fixes the shape
+        they share an id <em>and</em> a harness series (see docs/EPISODES.md). The id fixes the shape
         of the run — how long, which watchdogs, whether the operator may steer — and nothing about
         the model. Aggregates are the <A href="/results">results</A> page; this is the runs.
       </p>
@@ -248,7 +248,7 @@ export default function Episodes() {
         <p class="dim">
           {tiers.latest!.untiered} run{tiers.latest!.untiered === 1 ? "" : "s"} carry no episode id
           and cannot be given one. They ran before the ids existed, under the watchdog defaults of
-          their day, and a tuple field is never recomputed after the fact (ADR-0026): saying nothing
+          their day, and a tuple field is never recomputed after the fact: saying nothing
           is more honest than asserting a comparability that was never established. They are listed
           under{" "}
           <button class="toggle" onClick={() => setParams({ episode: "all" }, { replace: true })}>
@@ -298,7 +298,7 @@ function RunRowView(props: { row: ResultRun }) {
         </Show>
         <Show when={r().extra}>
           {" "}
-          <span class="dim" title="an extra run past the policy target (ADR-0034)">
+          <span class="dim" title="an extra run past the policy target; scored like any other, never counted toward it">
             extra
           </span>
         </Show>
@@ -307,7 +307,7 @@ function RunRowView(props: { row: ResultRun }) {
         The tier and how the run came by it: a derived label is the reader
         recognising the shape of a run, never the run claiming membership.
       */}
-      <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled (ADR-0030)" : ""}>
+      <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled as a member" : ""}>
         {r().episode ?? "—"}
         <Show when={r().episodeSource === "derived"}> (labeled)</Show>
         <Show when={r().episodeOverride}>

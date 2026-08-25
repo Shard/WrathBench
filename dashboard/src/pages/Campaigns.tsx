@@ -1,5 +1,5 @@
 /**
- * Probe campaigns: the commissioned middle lane (ADR-0041).
+ * Probe campaigns: the commissioned middle lane.
  *
  * Everything here is unscored by construction, so this page reports coverage
  * rather than performance — which cells have been swept, by how many models,

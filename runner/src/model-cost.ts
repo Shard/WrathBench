@@ -2,7 +2,7 @@
  * Whether a model costs the operator money per run: `free` or `paid`.
  *
  * Billing is a property of the *model as the roster names it*, not of a run,
- * and it is decided once here so the scheduler (ADR-0034: paid models get a
+ * and it is decided once here so the scheduler (paid models get a
  * hard target and a concurrency cap, free ones get extras) and the viewer's
  * price table (`runner/viewer/pricing.ts`) cannot disagree about which side a
  * model is on. The rules are deliberately few and mechanical:
@@ -69,7 +69,7 @@ export interface BillableModel {
   model: string;
   apiBase?: string | null;
   driver?: string | null;
-  /** The harness tag (ADR-0035), for a stored run that recorded one. */
+  /** The harness tag, for a stored run that recorded one. */
   harness?: string | null;
   /** Operator override; wins over every rule. */
   billing?: Billing;

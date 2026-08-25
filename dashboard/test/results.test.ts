@@ -101,7 +101,7 @@ describe("groupsForLevel", () => {
     expect(m.reached[0]!.runId).toBe("a");
   });
 
-  test("effort is a dimension, not an average (ADR-0024)", () => {
+  test("effort is a dimension, not an average", () => {
     const groups = groupsForLevel(
       [
         run({ runId: "lo", effort: "low", levels: [mark(5, 50, 5)] }),
@@ -113,7 +113,7 @@ describe("groupsForLevel", () => {
     expect(groups.map((g) => g.effort)).toEqual(["high", "low"]);
   });
 
-  test("the wiki-coordinates tier is a dimension (ADR-0028)", () => {
+  test("the wiki-coordinates tier is a dimension", () => {
     const groups = groupsForLevel(
       [
         run({ runId: "names", wikiCoords: false, levels: [mark(5, 50, 5)] }),
@@ -126,7 +126,7 @@ describe("groupsForLevel", () => {
     expect(groups.map((g) => g.wikiCoords)).toEqual([true, null, false]);
   });
 
-  test("the harness is a tag on the group, not part of its key (ADR-0035)", () => {
+  test("the harness is a tag on the group, not part of its key", () => {
     const groups = groupsForLevel(
       [
         run({ runId: "w", harness: "wrathbench", levels: [mark(5, 10, 5)] }),
@@ -203,7 +203,7 @@ describe("ladderRows", () => {
   });
 });
 
-describe("series grouping (ADR-0034)", () => {
+describe("series grouping: major.minor is the comparability group", () => {
   test("two builds in one series share a row and the row lists both; a minor bump is its own row", () => {
     const rows = [
       run({ runId: "a", harnessVersion: "harness-0.3-10-gaaa", harnessSeries: "0.3", levels: [mark(5, 10, 1000)] }),
@@ -221,7 +221,7 @@ describe("series grouping (ADR-0034)", () => {
   });
 });
 
-describe("the character filter (ADR-0034's extras cycle)", () => {
+describe("the character filter (the extras cycle)", () => {
   const rows = [
     run({ runId: "base", levels: [mark(5, 10, 1000)] }),
     run({ runId: "extra", extra: true, race: 3, raceName: "Dwarf", class: 3, className: "Hunter", characterLabel: "Dwarf Hunter", levels: [mark(5, 4, 400)] }),

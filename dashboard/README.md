@@ -3,7 +3,8 @@
 The operator SPA over the viewer's read-only API: fleet overview, one page per
 run, and the live map. SolidJS + Vite, TypeScript strict, no CSS framework.
 
-Why an SPA and why a dependency at all: ADR-0022.
+Why an SPA and why a dependency at all: the viewer/dashboard section of
+`docs/ARCHITECTURE.md`.
 
 ## Running
 
@@ -39,12 +40,12 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 | `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
 | `/episodes` | the tiers, and every run recorded against one — the per-run grain |
 | `/results` | what a level costs, per model per harness series |
-| `/ladder` | the rungs each model has reached (ADR-0018) |
+| `/ladder` | the rungs each model has reached (see docs/METHODOLOGY.md "Scoring") |
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 
-One page per grain (ADR-0022 amendment, 2026-08-23): the fleet page is what is
+One page per grain (decided 2026-08-23): the fleet page is what is
 running *now* and links to a run, never listing them; `/episodes` is the runs;
 `/results` and `/ladder` are aggregates over them, and a results row links to
 the runs behind it.
@@ -64,7 +65,7 @@ Two modules are imported from the viewer rather than copied, under the
 - `runner/viewer/api-types.ts` — the wire shapes. The viewer imports the same
   file, so a drift between what it serves and what this expects is a compile
   error rather than a runtime surprise.
-- `runner/viewer/worldmap.ts` — the world→tile transform (ADR-0019). Both are
+- `runner/viewer/worldmap.ts` — the world→tile transform. Both are
   import-free by construction, so nothing server-side follows them into the
   browser bundle.
 
@@ -82,4 +83,4 @@ loops would cost more than it pins.
 - Paths are root-relative, so the same code runs behind the dev proxy and
   same-origin off the viewer. That is why there is no CORS configuration.
 - Polling intervals are stated at each call site, not hidden in `poll()` —
-  ADR-0022 names polling rate as a public-hosting constraint.
+  polling rate is a public-hosting constraint.

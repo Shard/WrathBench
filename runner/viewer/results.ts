@@ -139,7 +139,7 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
  * XP resets to zero at every ding, so a run's xp only means something paired
  * with the level it was read at. Taking the maximum at the run's highest
  * observed level is the furthest the character got into that level, which is
- * what the ladder's second ordering compares (ADR-0018 amendment). Null when
+ * what the ladder's second ordering compares. Null when
  * no sample carried xp at that level — never 0, which is a real reading.
  */
 export function xpAtLevel(states: readonly StatePoint[], level: number): number | null {
@@ -154,7 +154,8 @@ export function xpAtLevel(states: readonly StatePoint[], level: number): number 
 /**
  * Whether a run is a *member* of its episode tier's comparability group.
  *
- * Membership is stamped and un-overridden, and nothing else. ADR-0030: a run
+ * Membership is stamped and un-overridden, and nothing else. Per the episode
+ * policy, a run
  * that predates the tiers "reads `episode: null` and is never back-labeled",
  * because it ran under the watchdog defaults of its day; a run whose leash was
  * overridden is likewise not what the id describes. Both still carry the label
@@ -178,10 +179,10 @@ const E90_MS = 90 * 60_000;
 /**
  * The episode tier of a run — read from the stamp, or derived when there is none.
  *
- * Derivation happens **in the reader** and nothing is written back (ADR-0026:
- * stamped, never recomputed). Two rules, both narrow on purpose:
+ * Derivation happens **in the reader** and nothing is written back (the tuple
+ * is stamped, never recomputed). Two rules, both narrow on purpose:
  *
- * - a run naming a campaign is a probe (ADR-0041); a steered run naming none is
+ * - a run naming a campaign is a probe; a steered run naming none is
  *   freeplay;
  * - a run whose stamped budget is exactly ninety minutes, with no objective, is
  *   the tier the whole fleet has been running since before it had a name.
@@ -213,9 +214,9 @@ export function episodeOf(run: RunRow): EpisodeOf {
  *
  * One predicate, so the charts and the ladder cannot disagree about what counts.
  * The reasons are the ones recorded: a stub run stamps unscored, and an
- * operator objective stamps unscored (ADR-0033). The driver check is separate
+ * operator objective stamps unscored. The driver check is separate
  * from the stamp so a stub run launched before the stamp existed still reads
- * as one. The harness is deliberately *not* a reason (ADR-0035): a
+ * as one. The harness is deliberately *not* a reason (it is a tag, not a partition): a
  * `claude-code` run is a tagged row.
  */
 export function unscoredReason(run: RunRow): string | null {

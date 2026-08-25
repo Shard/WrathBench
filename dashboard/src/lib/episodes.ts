@@ -35,7 +35,7 @@ export type HarnessChoice = HarnessView | "all";
 export const HARNESS_CHOICES: readonly HarnessChoice[] = ["all", "wrathbench", "claude-code"];
 
 /**
- * The `?harness=` search param (ADR-0035). Defaults to `all`: the harness is
+ * The `?harness=` search param. Defaults to `all`: the harness is
  * a tag on every row, and the operator chose not to partition on it, so the
  * filter is an optional narrowing rather than the default view.
  */

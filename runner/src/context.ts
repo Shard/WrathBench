@@ -1,6 +1,6 @@
 /**
  * The fixed context policy. This file IS the policy; the prose version is
- * docs/decisions/ADR-0012-context-policy.md. Do not tune per model (ADR-0004).
+ * docs/METHODOLOGY.md ("Context policy"). Do not tune per model.
  *
  * Per model request the conversation is rebuilt as:
  *
@@ -39,7 +39,7 @@ export const CONTEXT_POLICY = {
    * The message window is hysteretic: it grows to MESSAGE_WINDOW_MAX, then a
    * single block of MESSAGE_WINDOW_TRIM oldest messages is dropped, cutting it
    * back to MESSAGE_WINDOW_MAX - MESSAGE_WINDOW_TRIM. The floor is the old
-   * fixed window (24 messages ≈ 8–12 tool exchanges, ADR-0012); the ceiling
+   * fixed window (24 messages ≈ 8–12 tool exchanges); the ceiling
    * buys a byte-stable prefix for a full block of turns.
    */
   MESSAGE_WINDOW_MAX: 48,

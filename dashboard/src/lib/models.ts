@@ -5,7 +5,7 @@
  * Nothing here decides anything about a model. The status, the counts, the
  * cooling deadline and the retirement reason all arrive decided from
  * `/api/models`, which serves the same projection the fleet supervisor
- * schedules on (ADR-0032). What this file does is phrase them, and phrase them
+ * schedules on. What this file does is phrase them, and phrase them
  * once, so the table and the detail panel cannot word the same fact two ways.
  */
 
@@ -17,7 +17,7 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/ap
  * episodes, extras, the verdict — plus where the model is served and its
  * newest run.
  *
- * On the word "tier": since ADR-0043 it means a rung of the EVIDENCE ladder
+ * On the word "tier": here it means a rung of the EVIDENCE ladder
  * (t0/t1/t2), never an episode. The episode columns are named by their ids.
  */
 export const MODEL_COLUMNS = ["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
@@ -63,8 +63,8 @@ export function noteOf(row: ModelRowView): string | null {
 
 /**
  * Extras across every episode: attempts the policy made past the target, never
- * counted. Not just the tier columns — a local model's extras are freeplay runs
- * (ADR-0034), and they belong in the same number.
+ * counted. Not just the tier columns — a local model's extras are freeplay
+ * runs, and they belong in the same number.
  */
 export function extrasOf(row: ModelRowView): number {
   return Object.values(row.perEpisode).reduce((n, st) => n + (st?.extras ?? 0), 0);
@@ -167,7 +167,7 @@ export function resultsHref(f: Parameters<typeof runFilterQuery>[0]): string {
 /**
  * The per-run view, filtered — the drill-down under an aggregate row.
  *
- * The episodes page is the per-run grain (ADR-0022 amendment), so "show me the
+ * The episodes page is the per-run grain (one page per grain), so "show me the
  * runs behind this number" is a link there rather than an expander here.
  */
 export function episodesHref(f: Parameters<typeof runFilterQuery>[0]): string {

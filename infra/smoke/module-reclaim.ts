@@ -190,7 +190,7 @@ async function main() {
 
   // --- (c) same-token create while B is in world → idempotent success that
   // also re-syncs state (a WB_SESSION_STATE lands on B's event stream). Open a
-  // subscriber first; that itself triggers one reattach state event (ADR-0014),
+  // subscriber first; that itself triggers one reattach state event,
   // so we count from after it and require a NEW one from the idempotent create.
   const bufB: any[] = [];
   const wsB = await openEvents(TOKEN_B, bufB);

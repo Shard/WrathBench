@@ -1,7 +1,7 @@
 /**
  * The fleet table's pure layer: its columns, and the rows it is made of.
  *
- * One table, keyed by the JOB (ADR-0034: the job is the unit of work, an
+ * One table, keyed by the JOB (the job is the unit of work, an
  * account — with a class — is where it runs). A row is either a job with an
  * account or an account with no job, and the table is ordered by state: see
  * `STATE_RANK` for the list and why it runs that way. The service-level
@@ -198,7 +198,7 @@ export interface FleetRow {
  * real, enforced clock for half of them while adding nothing for the other half,
  * because a run with no recorded budget already falls out below. `probing` was
  * never gated for the same reason: a campaign sets an enforced clock and its run
- * ends on it (ADR-0041).
+ * ends on it.
  *
  * **Past the budget.** The real figure, over 100%. A run that overruns its
  * watchdog is a signal (`fleet-deepseek-flash-e90-…-a3` ran 114 minutes against
@@ -327,7 +327,7 @@ function byState(a: FleetRow, b: FleetRow): number {
 
 /**
  * A job whose process is gone during a deploy window, driving no run, is a
- * job the deploy stopped: its run paused (ADR-0036) and resumes when the
+ * job the deploy stopped: its run paused and resumes when the
  * script starts the fleet again. The same row outside a window is just exited.
  */
 function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {

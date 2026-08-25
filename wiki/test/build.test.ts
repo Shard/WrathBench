@@ -950,7 +950,7 @@ test("a Cataclysm-coined title is neither a page nor a recovered name", async ()
 }, 30_000);
 
 /**
- * Which revision a protected page's prose comes from (ADR-0040).
+ * Which revision a protected page's prose comes from.
  */
 const ARTICLE = "x".repeat(1000);
 
@@ -1021,8 +1021,8 @@ test("no signal-free revision at all leaves the page on the one it has", () => {
 });
 
 /**
- * `--world-ids`: a late page whose stated id exists on this server is admitted
- * (ADR-0042). The export here is invented, like every other fixture.
+ * `--world-ids`: a late page whose stated id exists on this server is admitted.
+ * The export here is invented, like every other fixture.
  */
 test("the world-id door admits late pages, and only with the flag", async () => {
   const xmlPath = join(dir, "world-ids-dump.xml");

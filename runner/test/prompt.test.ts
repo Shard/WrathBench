@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { SYSTEM_PROMPT } from "../src/prompt";
 
 /**
- * The prompt is harness surface (ADR-0004), so the facts a run proved models
+ * The prompt is harness surface, so the facts a run proved models
  * get wrong are pinned here rather than left to a careful re-read. Each case
  * cites the trajectory that made it worth a sentence.
  */

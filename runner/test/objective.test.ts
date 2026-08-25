@@ -1,5 +1,5 @@
 /**
- * Objective and watchdog overrides as run dimensions (ADR-0024).
+ * Objective and watchdog overrides as run dimensions.
  *
  * Three properties are load-bearing and all three are pinned here: the prompt
  * text depends only on the objective (never on the model or the driver), a run
@@ -42,9 +42,9 @@ describe("objective in the run config", () => {
   });
 
   test("an objective stamps the run unscored, and stacks with the driver's stamp", () => {
-    // No objective: exactly the stamps that shipped before ADR-0024.
+    // No objective: exactly the stamps that shipped before objectives existed.
     expect(unscoredStamp("openai")).toBeUndefined();
-    expect(unscoredStamp("claude-code")).toBeUndefined(); // ADR-0035: a harness, not a penalty
+    expect(unscoredStamp("claude-code")).toBeUndefined(); // a harness, not a penalty
     expect(unscoredStamp("stub")).toBe(STUB_STAMP);
     // An objective alone is enough to keep a run out of a scored comparison.
     expect(unscoredStamp("openai", OBJECTIVE)).toBe(OBJECTIVE_STAMP);
@@ -266,7 +266,7 @@ describe("argv -> run config", () => {
     expect(configFromArgs(["--model", "m"]).wikiCoords).toBe(false);
   });
 
-  test("--extra is a flag like --wiki-coords; absent is a counted run (ADR-0034)", () => {
+  test("--extra is a flag like --wiki-coords; absent is a counted run", () => {
     expect(configFromArgs(["--model", "m", "--extra", "true"]).extra).toBe(true);
     expect(configFromArgs(["--model", "m", "--extra", "--race", "3"]).extra).toBe(true);
     expect(configFromArgs(["--model", "m"]).extra).toBe(false);

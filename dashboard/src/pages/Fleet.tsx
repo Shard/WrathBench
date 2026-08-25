@@ -1,8 +1,8 @@
 /**
  * Fleet overview: what the supervisor is running, right now.
  *
- * One grain per page (ADR-0022 amendment, 2026-08-23). This one is the fleet's:
- * one table keyed by the job (ADR-0034) with the idle accounts under it, the
+ * One grain per page (decided 2026-08-23). This one is the fleet's:
+ * one table keyed by the job with the idle accounts under it, the
  * paused and ended runs. The per-run grain is the episodes page, and a job's
  * run link is the only per-run reference here.
  *
@@ -89,7 +89,7 @@ export default function Fleet() {
                 )}
               </Show>
 
-              {/* The gate (ADR-0023) only when it blocks: a PASS is not news. */}
+              {/* The preflight gate only when it blocks: a PASS is not news. */}
               <Show when={gateVerdict(f().preflight) === "FAIL"}>
                 <div class="banner bad">
                   preflight FAIL — jobs blocked
@@ -116,7 +116,7 @@ export default function Fleet() {
                 <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
 
-              {/* Paused runs the supervisor is not resuming, and why (ADR-0036); the ones it ended instead. */}
+              {/* Paused runs the supervisor is not resuming, and why; the ones it ended instead. */}
               <Show when={f().paused.length > 0}>
                 <p class="dim">paused runs not resumed ({f().paused.length}):</p>
                 <ul class="dim">

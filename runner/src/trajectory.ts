@@ -69,7 +69,7 @@ export interface ItemSample {
 
 /**
  * A world-state transition the loop noticed between two samples (FOLLOW-UPS
- * 35; ADR-0018). Kinds are additive; derivations (first capital, zone
+ * 35). Kinds are additive; derivations (first capital, zone
  * coverage) come later and read these. `from`/`to` carry ids only — never
  * names — so the record stays what the server said, and a rendering choice
  * (which locale, which DBC) never changes a trajectory after the fact.
@@ -89,7 +89,7 @@ export interface RunMeta {
   /**
    * Everything that has to match before two runs share a chart: harness
    * version, prompt hash, episode budget, context engine, effort, and whether
-   * an operator objective steered the run (ADR-0026). Absent on runs written
+   * an operator objective steered the run. Absent on runs written
    * before the stamp existed, which read as "not recorded" rather than being
    * recomputed against today's prompt.
    */
@@ -98,8 +98,8 @@ export interface RunMeta {
    * The unscored stamp (`unscoredStamp` in config.ts): set for a stub run or
    * an operator-objective run. Present in meta.json, in the `shakeout` column
    * of run.sqlite and in the timeline header, so such a run cannot be mistaken
-   * for a score. The key keeps its pre-ADR-0035 name because old runs carry
-   * it; the harness (`wrathbench` | `claude-code`) is a separate dimension in
+   * for a score. The key keeps its name from before the harness/driver
+   * split because old runs carry it; the harness (`wrathbench` | `claude-code`) is a separate dimension in
    * the comparability tuple, never a stamp here.
    */
   shakeout?: string;
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS run (
   driver TEXT,
   shakeout TEXT,
   model TEXT,
-  -- The operator objective this run was steered with, if any (ADR-0024). Its
+  -- The operator objective this run was steered with, if any. Its
   -- own column for the same reason the driver has one: a cross-run SELECT must
   -- be able to exclude steered runs without parsing config_json.
   objective TEXT,
@@ -362,8 +362,8 @@ export class Trajectory {
   /**
    * The most recent state sample this run recorded, or null. Read on
    * `--resume` so the resumed session note can tell the model where its
-   * character was left (ADR-0036: the character survives a pause, so the note
-   * has to name it).
+   * character was left (the character survives a pause, so the note has to
+   * name it).
    */
   lastState(runId: string): { level?: number; xp?: number } | null {
     try {

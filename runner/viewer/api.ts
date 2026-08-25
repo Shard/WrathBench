@@ -11,7 +11,7 @@
  *   stripped in `tail.ts` at both places a raw record can reach a client, and
  *   `WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the three routes that
  *   carry verbatim game text or Blizzard bytes (raw entries, scratchpads,
- *   minimap tiles). See ADR-0022.
+ *   minimap tiles). See docs/ARCHITECTURE.md (viewer/dashboard section).
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -83,8 +83,8 @@ export interface ApiOptions {
    */
   moduleUrl?: string;
   /**
-   * The fleet config whose `roster` block names the models `/api/models` rows
-   * (ADR-0031). Absent, missing or unreadable is a normal state the route
+   * The fleet config whose `roster` block names the models `/api/models` rows.
+   * Absent, missing or unreadable is a normal state the route
    * labels rather than an error; a roster map is the one source of names.
    */
   fleetConfigPath?: string;
@@ -383,7 +383,7 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
     /*
      * Accounts, in class order, with what holds each: the idle rows of the
      * fleet table. A pinned account that a class also lists (the coexistence
-     * rule, ADR-0034) belongs to the class that schedules it, so `pinned` is
+     * rule) belongs to the class that schedules it, so `pinned` is
      * filtered against the classes rather than concatenated with them.
      */
     const accounts: FleetAccountView[] = [
@@ -567,7 +567,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
-   * The optional `?harness=` filter (ADR-0035), shared by `/api/results`,
+   * The optional `?harness=` filter, shared by `/api/results`,
    * `/api/ladder` and `/api/models`. Defaults to `all`: the harness is a tag
    * on the row, not a partition, so a chart shows both loops unless asked
    * not to. Unknown values are a 400 for the same reason the episode filter's are.
@@ -591,7 +591,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     const everything = await resultRuns();
     const all = harness === "all" ? everything : everything.filter((r) => r.harness === harness);
     /*
-     * Filtering to a tier means filtering to its *members* (ADR-0030): stamped
+     * Filtering to a tier means filtering to its *members*: stamped
      * with the id and not overridden. A derived label is countable but is not
      * membership, and an overridden run is only shown when asked for by name.
      */
@@ -647,7 +647,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
-   * The probe lane, grouped by what commissioned each run (ADR-0041).
+   * The probe lane, grouped by what commissioned each run.
    *
    * Built from the RUN DIRECTORY and only annotated from the config, which is
    * the property that matters: a campaign that has been completed, switched off
@@ -880,7 +880,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 });
           /*
            * The starting character rides along from the same row, so the panel
-           * can label an extras-cycle run (ADR-0034) without the scheduler's
+           * can label an extras-cycle run without the scheduler's
            * projection having to learn about races.
            */
           r.race = runRow?.race ?? null;
@@ -1049,7 +1049,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       return dashboardIndex();
     }
 
-    // No build on disk. There is no fallback UI to serve (ADR-0022): the SPA
+    // No build on disk. There is no fallback UI to serve: the SPA
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();

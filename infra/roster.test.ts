@@ -87,7 +87,7 @@ describe("episodeArgv", () => {
     expect(specs.map((s) => s.runId)).toEqual(["roster-opus-20260101", "roster-opus-low-20260101"]);
   });
 
-  // ADR-0020: the fleet supervisor runs inside the runner image, where there is
+  // The fleet supervisor runs inside the runner image, where there is
   // no docker CLI to exec with. Only the launcher head changes; every flag after
   // it is identical, because run-episode.sh passes them through verbatim.
   test("in the container the episode is a direct bun runner/src/run.ts child", () => {
@@ -127,7 +127,7 @@ describe("forCycle", () => {
 });
 
 /**
- * Run dimensions (ADR-0024): an entry may carry an operator objective, partial
+ * Run dimensions: an entry may carry an operator objective, partial
  * watchdog overrides, and its own tool-call ceiling, and all three have to
  * survive the trip into run.ts's argv.
  */
@@ -151,7 +151,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(argv[argv.indexOf("--objective") + 1]).toBe(OBJECTIVE);
   });
 
-  test("wikiCoords reaches argv as an explicit `--wiki-coords true` (ADR-0028)", () => {
+  test("wikiCoords reaches argv as an explicit `--wiki-coords true`", () => {
     const [s] = resolve([{ model: "m", wikiCoords: true }], "20260101");
     expect(s!.wikiCoords).toBe(true);
     const argv = episodeArgv(s!, false);
@@ -160,7 +160,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
-  test("an extra run reaches argv as `--extra true` and is off by default (ADR-0034)", () => {
+  test("an extra run reaches argv as `--extra true` and is off by default", () => {
     const [s] = resolve([{ model: "m", extra: true }], "20260101");
     expect(s!.extra).toBe(true);
     const argv = episodeArgv(s!, false);
