@@ -15,6 +15,7 @@ import {
   splitLines,
   summarize,
   tokenTotals,
+  tokensPerSecond,
 } from "../viewer/tail";
 
 function tempFile(): string {
@@ -318,6 +319,158 @@ describe("tokenTotals", () => {
     expect(t.cacheReadTokens).toBe(1000);
     expect(t.cacheWriteTokens).toBe(50);
     expect(t.promptTokens).toBe(1900);
+  });
+});
+
+describe("tokensPerSecond", () => {
+  const req = (ts: number, turn: number) =>
+    summarize({ t: "request", ts, turn, messages: [{ role: "user", content: "hi" }] }, ts, 0, 1);
+  const res = (ts: number, turn: number, completion: number) =>
+    summarize(
+      { t: "response", ts, turn, message: { role: "assistant", content: "y" }, usage: { prompt_tokens: 10, completion_tokens: completion } },
+      ts,
+      0,
+      1,
+    );
+  /** A response with no usage block at all: the estimate path. */
+  const bare = (ts: number, chars: number) =>
+    summarize({ t: "response", ts, turn: 1, message: { role: "assistant", content: "z".repeat(chars) } }, ts, 0, 1);
+
+  test("one reply: output tokens over the wait-to-reply span", () => {
+    const t = tokensPerSecond([req(1000, 1), res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // 400 tokens over 2s
+    expect(t.recent).toBe(200);
+    expect(t.recentReplies).toBe(1);
+  });
+
+  test("a reply split across several response records is timed to its LAST one", () => {
+    // The claude-code driver appends one record per content block; the span
+    // runs to the final block, not the first.
+    const t = tokensPerSecond([req(1000, 1), res(2000, 1, 30), res(3000, 1, 70), res(5000, 1, 300)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(100); // 400 tokens over 4s
+  });
+
+  test("a multi-envelope reply takes the provider's running total, never total-plus-estimate", () => {
+    // adapter-claude.ts: the earlier envelopes of one message go out WITHOUT
+    // usage and the last carries the running total for the whole reply, so
+    // adding an estimate for the earlier ones would count their text twice.
+    const t = tokensPerSecond([req(1000, 1), bare(2000, 4000), res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // 400 tokens over 2s — the 1000-token estimate is not added
+  });
+
+  test("a reply with no reported usage at all is estimated from characters", () => {
+    const t = tokensPerSecond([req(1000, 1), bare(3000, 400)]);
+    expect(t.replies).toBe(1);
+    // chars ÷ 4 over 2 seconds; `messageChars` counts the message's own text.
+    expect(t.overall).toBeGreaterThan(45);
+    expect(t.overall).toBeLessThan(55);
+  });
+
+  test("a request with no reply yet has no rate, and does not end the previous span", () => {
+    const inflight = tokensPerSecond([req(1000, 1)]);
+    expect(inflight.replies).toBe(0);
+    expect(inflight.overall).toBeNull();
+    expect(inflight.recent).toBeNull();
+
+    const t = tokensPerSecond([req(1000, 1), res(3000, 1, 400), req(9000, 2)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200);
+  });
+
+  test("under the claude-code driver a span opens at the result the CLI was waiting on", () => {
+    // One request, many replies, each one timed from the tool result before it
+    // — never from the request, which on that driver spans the whole episode.
+    const result = (ts: number) => summarize({ t: "snippet_result", ts, turn: 1, text: "ok" }, ts, 0, 1);
+    const t = tokensPerSecond([
+      req(1000, 1),
+      res(3000, 1, 400),
+      summarize({ t: "tool_call", ts: 3100, turn: 1, name: "eval_snippet" }, 3, 0, 1),
+      result(4000),
+      res(6000, 1, 400),
+    ]);
+    expect(t.replies).toBe(2);
+    // 800 tokens over 4s of model time — not over the 5s the run has existed.
+    expect(t.overall).toBe(200);
+  });
+
+  test("an ambient record mid-reply does not restart the clock", () => {
+    // A `state` sample lands on a timer while the model is still generating; on
+    // the live deepseek-pro run, treating one as a boundary read a third fast.
+    const sample = summarize({ t: "state", ts: 2000, level: 4 }, 2, 0, 1);
+    const t = tokensPerSecond([req(1000, 1), sample, res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // timed from the request, not from the sample
+  });
+
+  test("recent is the last ten replies, summed — not a mean of per-reply rates", () => {
+    const entries = [];
+    // Twelve replies: the first two are slow (10 tok/s), the last ten fast (100).
+    for (let i = 0; i < 12; i++) {
+      const start = 100_000 + i * 100_000;
+      const fast = i >= 2;
+      entries.push(req(start, i + 1), res(start + (fast ? 1000 : 10_000), i + 1, 100));
+    }
+    const t = tokensPerSecond(entries);
+    expect(t.replies).toBe(12);
+    expect(t.recentReplies).toBe(10);
+    expect(t.recent).toBe(100); // 1000 tokens over 10s
+    // The whole run: 1200 tokens over 30s, dragged down by the two slow replies.
+    expect(t.overall).toBe(40);
+  });
+
+  test("a pause between a request and its reply drops that span", () => {
+    const pause = summarize({ t: "pause", ts: 5000, reason: "rate-limit" }, 5, 0, 1);
+    const resume = summarize({ t: "resume", ts: 3_605_000 }, 6, 0, 1);
+    const t = tokensPerSecond([
+      req(1000, 1),
+      res(3000, 1, 400),
+      req(4000, 2),
+      pause,
+      resume,
+      // The reply that would otherwise be timed across the whole hour parked.
+      res(3_606_000, 2, 400),
+      req(3_607_000, 3),
+      res(3_609_000, 3, 400),
+    ]);
+    expect(t.replies).toBe(2);
+    expect(t.overall).toBe(200);
+  });
+
+  test("scanRunTotals carries the same figure off its single pass", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-tps-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({ t: "request", ts: 2000, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+        JSON.stringify({
+          t: "response", ts: 4000, turn: 1, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 500, completion_tokens: 200 },
+        }),
+        // A second reply, opened by the snippet result the model was waiting on.
+        JSON.stringify({ t: "snippet_result", ts: 5000, turn: 1, text: "ok" }),
+        JSON.stringify({
+          t: "response", ts: 7000, turn: 1, message: { role: "assistant", content: "hi again" },
+          usage: { prompt_tokens: 500, completion_tokens: 400 },
+        }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.tps.replies).toBe(2);
+    expect(totals.tps.overall).toBe(150); // 600 tokens over 4s of model time
+    // The same entries through the incremental path the run page uses.
+    const tail = new TrajectoryTail(path);
+    expect(tokensPerSecond(await tail.scan())).toEqual(totals.tps);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("an empty run has no rate at all", () => {
+    expect(tokensPerSecond([])).toEqual({ overall: null, recent: null, replies: 0, recentReplies: 0 });
   });
 });
 

@@ -26,9 +26,8 @@ import {
   type TokenTotals,
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
-import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, fmtTps, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
@@ -76,6 +75,18 @@ function achievementLine(d: RunDetailResponse | undefined): string {
   const left = ach === null ? "achievements: not recorded" : `achievements: ${ach.earned} (${ach.points} pts)`;
   const right = taxi === null ? "flights: not recorded" : `flights: ${taxi.flights}`;
   return `${left} · ${right}`;
+}
+
+/**
+ * The token card's speed line: how fast the model is producing, recently and
+ * over the run. Recent first, for the reason the fleet column shows it: on a
+ * live run the rate now is the question. "no reply yet" rather than a zero — a
+ * run whose first request is still in flight has not been slow.
+ */
+function tpsLine(d: RunDetailResponse | undefined): string {
+  const tps = d?.tps ?? null;
+  if (tps === null || tps.recent === null) return "tok/s: no reply measured yet";
+  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} over ${tps.replies}`;
 }
 
 export default function RunDetail() {
@@ -201,10 +212,6 @@ export default function RunDetail() {
     });
   };
 
-  const levels = createMemo(() =>
-    (detail()?.states ?? []).map((s) => s.level).filter((v): v is number => v !== null && v > 0),
-  );
-
   /**
    * A plain-language guess at what the session is doing, from the newest entry
    * alone: the loop writes a fixed cycle, so the type of the last thing written
@@ -328,8 +335,16 @@ export default function RunDetail() {
                           <span class="dim"> · {run().characterLabel}</span>
                         </Show>
                       </div>
+                      {/*
+                        `xp in level` lives here since the level/xp card was
+                        retired: the XP chart above plots CUMULATIVE xp with the
+                        levels as bands, which is a different number from
+                        progress toward the next ding, and that progress is on
+                        no other surface of this page.
+                      */}
                       <div class="sub">
-                        level {num(run().level)} · {fmtMoney(run().money)} · {num(run().questsCompleted)} quests
+                        level {num(run().level)} · {num(run().xp)} xp in level · {fmtMoney(run().money)} ·{" "}
+                        {num(run().questsCompleted)} quests
                       </div>
                       {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
                       <div class="sub">carrying: {fmtItems(run().items, false)}</div>
@@ -351,6 +366,16 @@ export default function RunDetail() {
                       <div class="sub">
                         {tokens()?.source === "reported" ? "provider-reported" : "estimated (chars ÷ 4)"} ·{" "}
                         {tokens()?.turns ?? 0} turns
+                      </div>
+                      {/*
+                        Speed, in the same unit the tokens above are counted in.
+                        The clock is the model's own replies — what it was
+                        waiting on, to the last record of the reply — never the
+                        run's elapsed time, most of which the harness spends
+                        driving the game.
+                      */}
+                      <div class="sub" title="output tokens ÷ wall time of model replies (the wait it answered, plus the reply)">
+                        {tpsLine(detail())}
                       </div>
                     </div>
                     <div class="card">
@@ -402,17 +427,6 @@ export default function RunDetail() {
                         {detail()?.cost.expected.basis === "none"
                           ? (detail()?.cost.expected.note ?? "")
                           : `from the token totals at ${detail()?.cost.expected.priceId ?? "list"} prices, ${detail()?.cost.expected.asOf ?? "undated"}`}
-                      </div>
-                    </div>
-                    <div class="card">
-                      <div class="k">level / xp</div>
-                      <div class="v">
-                        {/* The prominent XP curve is the full-width chart above; this is a
-                            glanceable level trace. */}
-                        <Sparkline values={levels()} title="level over time" height={22} width={140} />
-                      </div>
-                      <div class="sub">
-                        L{num(run().level)} · xp {num(run().xp)} in level
                       </div>
                     </div>
                   </div>

@@ -76,6 +76,17 @@ export function fmtTokens(n: number | null | undefined): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+/**
+ * Output tokens per second. One decimal below a hundred and none above it: the
+ * difference between 12.4 and 12 tok/s is worth reading, the difference between
+ * 340 and 340.2 is not. A dash where there is no rate — a run with no completed
+ * turn has not been slow, it has produced nothing yet.
+ */
+export function fmtTps(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return v < 100 ? v.toFixed(1) : String(Math.round(v));
+}
+
 /** "2h ago", "yesterday" — with the exact stamp left for a title attribute. */
 export function fmtWhen(ts: number | null, now = Date.now()): string {
   if (ts === null) return "—";

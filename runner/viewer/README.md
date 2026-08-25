@@ -86,6 +86,34 @@ table and the run page cannot disagree. Note that this is not the
 `episode-limit` watchdog's clock, which is per-process uptime since the current
 resume and so never sees paused time.
 
+Tokens per second (`tps`, on the listing rows and on `/api/run/<id>`) is output
+tokens over the wall time of the model's REPLIES, never over the run's elapsed
+time, most of which the harness spends driving the game. A span opens at a
+record that hands the model something to answer — the `request` on the fixed
+loop, the `snippet_result` or `tool_result` the CLI was waiting on under
+claude-code — and closes at the last `response` before the next such record.
+Replies rather than turns because a turn is not the same unit under the two
+drivers: `fleet-sonnet-e360-sonnet-20260824` is one `request` and 2,833
+`response` records, so timing "a turn" there would time the whole six-hour
+episode. Ambient records (`state`, `milestone`, `claude_system`) are ignored
+rather than treated as boundaries — they are written by timers while the model
+is mid-reply, and one restarting the clock reads as a speed the model never had.
+A span still in flight, and one a `pause`/`resume`/`termination` landed inside,
+count for nothing. Two figures ride together: the whole run, and the last ten
+replies, each summed as Σ tokens ÷ Σ seconds rather than averaged over replies.
+Tokens are provider-reported where any response of the span reported usage and
+`chars ÷ 4` only where none did — the claude-code driver's last envelope carries
+the running total for the whole reply, so estimating the earlier ones alongside
+it would count their text twice (which `TokenTotals.completionTokens` still
+does; FOLLOW-UPS 82).
+
+The figure is comparable within a lane and NOT between the two drivers: a
+claude-code span runs from the result the CLI was handed to the reply that came
+back, so it carries the CLI round trip as well as the generation, where a fixed
+loop span is request-to-response with no such hop in it. Read it as "is this run
+moving", never as a model's generation speed.
+
+
 The `state` table gains signals over time and an old run directory never gains
 them retroactively, so the viewer asks each database what columns it has before
 selecting: `money` and `quests_completed` come back null where the schema

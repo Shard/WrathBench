@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtItems, fmtTokens, fmtUsd, fmtWhen, num, shortHarness } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtItems, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, shortHarness } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -141,5 +141,20 @@ describe("fmtDuration", () => {
     expect(fmtDuration(65_000)).toBe("1m05s");
     expect(fmtDuration(3_600_000)).toBe("1h00m");
     expect(fmtDuration(3_600_000 + 90_000)).toBe("1h01m");
+  });
+});
+
+describe("fmtTps", () => {
+  test("no rate is a dash, never a zero", () => {
+    expect(fmtTps(null)).toBe("—");
+    expect(fmtTps(undefined)).toBe("—");
+    expect(fmtTps(Number.NaN)).toBe("—");
+  });
+
+  test("a decimal where it reads, none where it does not", () => {
+    expect(fmtTps(0)).toBe("0.0");
+    expect(fmtTps(12.44)).toBe("12.4");
+    expect(fmtTps(99.94)).toBe("99.9");
+    expect(fmtTps(340.2)).toBe("340");
   });
 });

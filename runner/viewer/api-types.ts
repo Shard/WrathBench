@@ -300,6 +300,37 @@ export interface TokenTotals {
   turns: number;
 }
 
+/**
+ * How fast a run's model is producing: output tokens divided by the wall time
+ * the model spent on its replies — the wait it was answering plus the reply
+ * itself — and never by the run's elapsed time, most of which the harness
+ * spends driving the game.
+ *
+ * The unit is one REPLY rather than one turn, because a turn is not the same
+ * thing under the two drivers: the fixed loop writes a `request` and a
+ * `response` per turn, while the claude-code driver hands the CLI one request
+ * and logs thousands of responses under it. See `tokensPerSecond` in
+ * `runner/viewer/tail.ts` for how a span is opened and closed.
+ *
+ * Two figures because a live run's speed now is a different question from the
+ * average it has managed so far: `recent` is the last `TPS_RECENT_REPLIES`
+ * measured replies, summed the same way (Σ tokens ÷ Σ seconds over the window,
+ * never a mean of per-reply rates, which one short reply would dominate).
+ *
+ * Null on either figure when nothing in it is measurable — a run whose first
+ * request is still in flight has no rate, and zero would claim it had stalled.
+ */
+export interface TpsFacts {
+  /** Output tokens per second over every measured reply; null when there are none. */
+  overall: number | null;
+  /** The same over the last `TPS_RECENT_REPLIES` replies. */
+  recent: number | null;
+  /** Measured replies behind `overall`. Not `TokenTotals.turns`: see above. */
+  replies: number;
+  /** Measured replies behind `recent` (at most `TPS_RECENT_REPLIES`). */
+  recentReplies: number;
+}
+
 /** The four priced components of a run's tokens, in dollars. */
 export interface CostBreakdown {
   input: number;
@@ -466,6 +497,13 @@ export interface AgentPosition {
 /** A run row as the listing serves it: the row plus whole-file totals. */
 export interface RunListRow extends RunRow {
   tokens: TokenTotals | null;
+  /**
+   * Output tokens per second, whole-run and recent; see `TpsFacts`. Null when
+   * the trajectory could not be read or no turn has completed. Optional for the
+   * reason `ResultRun.xpEarned` is: a dashboard built against a viewer that
+   * predates the field must still render.
+   */
+  tps?: TpsFacts | null;
   /** The run's cost, on the same basis the run page shows. Null when unreadable. */
   cost: CostView | null;
   firstTs: number | null;
@@ -515,6 +553,12 @@ export interface RunDetailResponse {
    */
   achievements?: AchievementFacts | null;
   taxi?: TaxiFacts | null;
+  /**
+   * Output tokens per second (`TpsFacts`), off the same incremental tail as the
+   * tokens above, so a live run's rate advances with its trajectory. Null when
+   * no turn has completed; optional for the reason `achievements` is.
+   */
+  tps?: TpsFacts | null;
 }
 
 export interface EntriesResponse {
@@ -970,6 +1014,17 @@ export interface ResultRun {
    * so. Optional for the reason `xpEarned` is.
    */
   expectedCost?: CostFigure | null;
+  /**
+   * Whether this run cost the operator money (`runner/src/billing.ts`). Derived
+   * from the model id, the api base, and the harness — a subscription counts as
+   * paid here, which is deliberately the opposite of the scheduler's verdict in
+   * `runner/src/model-cost.ts`; that one answers "does this consume the paid
+   * concurrency budget". The ladder's "exclude free" toggle reads this.
+   * Optional for the reason `xpEarned` is: a dashboard built against a viewer
+   * that predates the field must still work, and reads `undefined` as unknown
+   * rather than as free.
+   */
+  billing?: "free" | "paid";
   /**
    * Where the run went, from its zone/area milestone records (FOLLOW-UPS 35):
    * the ladder's rungs 2 and 4 read this. `null` is a run that wrote no such
