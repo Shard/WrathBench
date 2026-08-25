@@ -14,7 +14,14 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import { MARK_R, MARK_RING_R, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import {
+  MARK_R,
+  MARK_RING_R,
+  type LadderPoint,
+  fmtCostTick,
+  ladderChartLayout,
+  ladderPoints,
+} from "../lib/ladder";
 import { logoHrefOf } from "./ModelIcon";
 import { fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
@@ -82,9 +89,11 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           class="ladderchart"
           viewBox={`0 0 ${VB_W} ${VB_H}`}
           role="img"
-          aria-label={`average cost per ${props.episode} run against average xp earned, one point per model`}
+          aria-label={`average cost per ${props.episode} run, on a log scale, against average xp earned, one point per model`}
         >
-          <title>average cost per {props.episode} run (USD) against average xp earned, one point per model</title>
+          <title>
+            average cost per {props.episode} run (USD, log scale) against average xp earned, one point per model
+          </title>
 
           {/* Gridlines and ticks: the same px/py the points were placed with. */}
           <For each={layout().yTicks}>
@@ -100,6 +109,26 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
               );
             }}
           </For>
+          {/*
+           * The cost axis is logarithmic, so it gets the faint vertical lines
+           * the linear one did not need: the 2× and 5× inside each decade,
+           * without which the eye has no way to read a distance between two
+           * decade labels. The decades themselves keep the tick mark below
+           * the axis they always had — a full-height line at every decade on
+           * top of these would be more chrome than data.
+           */}
+          <For each={layout().xMinorTicks}>
+            {(t) => (
+              <line
+                x1={layout().px(t)}
+                y1={BOX.y0}
+                x2={layout().px(t)}
+                y2={BOX.y1}
+                stroke="var(--gridline)"
+                opacity="0.4"
+              />
+            )}
+          </For>
           <For each={layout().xTicks}>
             {(t) => {
               const x = layout().px(t);
@@ -107,18 +136,45 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 <>
                   <line x1={x} y1={BOX.y0} x2={x} y2={BOX.y0 + 4} stroke="var(--line)" />
                   <text x={x} y={BOX.y0 + 17} text-anchor="middle" font-size="11" fill="var(--dim)">
-                    {fmtUsd(t)}
+                    {fmtCostTick(t)}
                   </text>
                 </>
               );
             }}
           </For>
 
+          {/*
+           * The free gutter. A $0 entry is a reading and not a small price, so
+           * it sits left of the axis with its own label, divided off, and is
+           * never interpolated against the decades. It is drawn only when
+           * something in view actually cost nothing.
+           */}
+          <Show when={layout().hasFree}>
+            <line
+              x1={layout().dividerX}
+              y1={BOX.y0}
+              x2={layout().dividerX}
+              y2={BOX.y1}
+              stroke="var(--line)"
+              stroke-dasharray="2 4"
+              opacity="0.7"
+            />
+            <text
+              x={layout().freeX}
+              y={BOX.y0 + 17}
+              text-anchor="middle"
+              font-size="11"
+              fill="var(--dim)"
+            >
+              free
+            </text>
+          </Show>
+
           {/* Axes and their units. */}
           <line x1={BOX.x0} y1={BOX.y0} x2={BOX.x1} y2={BOX.y0} stroke="var(--line)" />
           <line x1={BOX.x0} y1={BOX.y1} x2={BOX.x0} y2={BOX.y0} stroke="var(--line)" />
           <text x={BOX.x1} y={BOX.y0 + 33} text-anchor="end" font-size="11" fill="var(--dim)">
-            avg cost per {props.episode} run (USD)
+            avg cost per {props.episode} run (USD, log)
           </text>
           <text
             x={-(BOX.y1 + 4)}
@@ -197,8 +253,8 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
       </Show>
 
       <p class="dim ladderchart-caption">
-        avg cost per {props.episode} run (USD) · avg xp earned, means over each entry's counted runs on{" "}
-        {props.episode}. Cost is what the provider charged, else the list price applied to the run's own
+        avg cost per {props.episode} run (USD, log scale from 1¢; free runs sit in their own gutter) · avg xp
+        earned, means over each entry's counted runs on {props.episode}. Cost is what the provider charged, else the list price applied to the run's own
         tokens ($0 for a free tier or local hardware, as-if-metered for a subscription); xp earned is the run
         page's lower bound. Each mark is the model's logo; ring:{" "}
         <span style={{ color: "var(--accent)" }}>●</span> wrathbench{" "}
