@@ -18,9 +18,10 @@
  *   race/class labels (`characterLabel`, `raceName`, `className`) stay — they
  *   are this repo's own tables, not game strings.
  * - Free-text fields that can quote the world or the operator's machine are
- *   dropped: `terminationDetail`, `pauseReason`, the operator `objective`, the
- *   model last-error `message` (its enum-ish `reason` stays), a run row's
- *   read-`error`, and the preflight scripts' output `tail`.
+ *   dropped: `terminationDetail`, the operator `objective`, the model
+ *   last-error `message` (its enum-ish `reason` stays), a run row's
+ *   read-`error`, and the preflight scripts' output `tail`. `pauseReason`
+ *   keeps only the fixed token `"paused"` (see `pausedToken`).
  * - No local filesystem path leaves: `configPath`, the roster `path`, and the
  *   wiki bundle annotation (whose `source` is the operator's dump filename).
  * - Nothing host-like leaves: `apiBase` (a LAN base URL is topology), and the
@@ -90,6 +91,18 @@ export interface PublicFleetResponse extends Omit<FleetResponse, "fleetPid" | "j
 }
 
 /* ---------------------------------------------------------- sub-shapes --- */
+
+/**
+ * The paused *signal* without the prose. The private field is free text (a
+ * rate-limit message, an operator's note) that can quote the world or the
+ * operator's machine — but the dashboard derives a run's "paused" status from
+ * the field's non-nullness, so nulling it would misreport paused runs as
+ * something else. A fixed token keeps the status honest while withholding the
+ * words; null stays null.
+ */
+function pausedToken(reason: string | null): string | null {
+  return reason === null || reason === "" ? null : "paused";
+}
 
 function projectComparability(c: ComparabilityView): ComparabilityView {
   return {
@@ -230,7 +243,7 @@ function projectRunRow(r: RunRow): RunRow {
     // Free-text detail can quote NPCs, quests and places; the enum-ish reason
     // above is the public fact.
     terminationDetail: null,
-    pauseReason: null,
+    pauseReason: pausedToken(r.pauseReason),
     level: r.level,
     xp: r.xp,
     money: r.money,
@@ -317,8 +330,8 @@ function projectResultRun(r: ResultRun): ResultRun {
       ? { achievements: r.achievements === null ? null : projectAchievements(r.achievements) }
       : {}),
     ...(r.taxi !== undefined ? { taxi: r.taxi === null ? null : projectTaxi(r.taxi) } : {}),
-    // Free text; same rule as the run row's.
-    pauseReason: null,
+    // The token, never the prose; same rule as the run row's.
+    pauseReason: pausedToken(r.pauseReason),
   };
 }
 
@@ -330,7 +343,11 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
     // Forced, whatever the source viewer ran as: a snapshot IS the public mode.
     publicMode: true,
     dashboard: i.dashboard,
-    dashboardBuild: i.dashboardBuild,
+    // Withheld: this would be the operator's PRIVATE dashboard build id, and
+    // the shell's stale-build banner compares it against the build a tab first
+    // saw — a lab rebuild would nag every public tab to reload for a bundle it
+    // is not running. Null reads as "cannot tell" and never nags.
+    dashboardBuild: null,
     worldserver:
       i.worldserver === null ? null : { build: i.worldserver.build, startedAtMs: i.worldserver.startedAtMs },
     ...(i.harnessSeries !== undefined
