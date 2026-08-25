@@ -84,11 +84,13 @@ accounts    { pool: [...], paid: [...], local: [...] } — the account classes, 
             preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
-            apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            `character` is only the SUGGESTION the launch note offers: the model names its own
-            character, and the name it chose is what the run row, meta.json and the runs page
-            carry. `race` and `class` are not the model's — they are the episode's comparability
-            dimensions. Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The tier is
+            apiKeyEnv, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
+            NO character name: the model names its own at createSession, and the name it chose is
+            what the run row, meta.json and the runs page carry. `character` is REFUSED by name
+            here (as it is in a campaign or a cell) — a name in the config is one the harness has
+            to keep valid and unique, and an invalid one takes the whole file down. `race` and
+            `class` are not the model's either, but they stay: they are the episode's
+            comparability dimensions. Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The tier is
             the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
@@ -118,7 +120,7 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, models "all"|[refs], runsPerCell,
-            cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,
+            cells [{ id, race?, class?, objective?, ... }], account?, objective?,
             wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
             episode; the campaign owns its whole task shape, so a catalog entry's own objective
             or leash never leaks into one. Precedence: episode defaults < campaign < cell.

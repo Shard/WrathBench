@@ -199,14 +199,14 @@ config and everything but `model` has a default, so an old bare
 | `account` | runner default (`RUNNER`) | one live session per account |
 | `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
-| `character`, `race`, `class` | derived from the model, Human Paladin | |
+| `race`, `class` | Human Paladin | no name: the model names its own character at `createSession` and the run records what it chose |
 | `episodeMs` | 5400000 (90m) | |
 | `runId` | `roster-<model-slug>-<date>` | |
 
 `--loop` restarts the roster when the list is exhausted, until `--until` or
 `--max-hours` (one of which it requires). Cycle 2 onward gets `-cN` run ids;
-characters are reused, and since a fresh episode wipes the account's characters
-first, every cycle starts at level 1. Loop mode burns tokens, it does not build
+since a fresh episode wipes the account's characters first, every cycle starts
+at level 1 whatever the model names its new one. Loop mode burns tokens, it does not build
 a levelling curve.
 
 Before each launch the roster checks whether another run already holds the
