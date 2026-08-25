@@ -321,8 +321,15 @@ export const runConfigSchema = z.object({
    * as the CLI's `--effort`, which accepts low|medium|high|xhigh|max (verified
    * against the 2.1.238 binary in the runner image). `xhigh`/`max` are
    * claude-only; `minimal` is OpenAI-only.
+   *
+   * `none` means extended thinking OFF, which is a level like any other and
+   * not the same as absent: absent is the provider's default, which for these
+   * models thinks. `claude-code` reaches it by setting `MAX_THINKING_TOKENS=0`
+   * in the CLI's environment and passing no `--effort` — the flag has no such
+   * level; `openai` sends `reasoning_effort: "none"`, which some OpenRouter
+   * models accept and others reject, as with every level here.
    */
-  effort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+  effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 

@@ -110,10 +110,44 @@ it would count their text twice. `tokenTotals` reads the same spans
 (`replySpans`), so the run's completion total and its rate can never disagree
 about what one reply produced.
 
-The figure is comparable within a lane and NOT between the two drivers: a
-claude-code span runs from the result the CLI was handed to the reply that came
-back, so it carries the CLI round trip as well as the generation, where a fixed
-loop span is request-to-response with no such hop in it. Read it as "is this run
+The claude-code driver is the exception on the OUTPUT side, fixed 2026-08-25.
+Its `response` envelopes carry the API's `message_start` usage, whose
+`output_tokens` is the snapshot taken before the reply exists — one to
+thirty-odd tokens, never the finished count — while its input figures are
+right. Summing them read ~300× low (508 responses summing to 671 output tokens
+on a run whose 23 `claude_result` records report 207,062). So where a turn has a
+`claude_result`, the viewer takes that turn's output from it and ignores the
+snapshots, and the turn becomes the measured unit for `tps`: the result's
+`output_tokens` over the SUM of that turn's span clocks, each timed by the rule
+above (so a stretch across a pause drops out). The clock stays model time, which
+keeps the figure comparable to the fixed loop's request-to-response; the CLI's
+own `duration_api_ms`, then `duration_ms`, stand in only for a turn with no
+measurable span at all. `duration_ms` is not the default denominator on purpose:
+on the 2026-08-25 haiku run it sums to 5,283,659 ms of a 5,400,000 ms episode,
+which is the run's elapsed clock with every MCP round trip in it.
+
+The result's `iterations` array is documented as one
+entry per API call but holds only the last call on every CLI version logged so
+far, so the per-reply path is gated on the entries summing to the turn total —
+true on a one-call turn, declined on everything else. A turn with no result (in
+flight, or cut short by a watchdog) keeps its snapshot figures, which are all
+anyone has for it.
+
+A run where NONE of the turns produced a result — 21 of the 29 claude-code runs
+on disk on 2026-08-25, because a watchdog kill is the normal ending — has a
+completion total resting entirely on those snapshots, and `tokenTotals` reports
+`source: "snapshot"` for it rather than `"reported"`. It is neither an estimate
+nor a measurement: provider-reported and known to be far too low, so the run page
+labels it "snapshot — under-read" and marks the rate the same way. A run that
+resolved its turns and was cut off mid-flight on the last one stays `reported`;
+labelling that `snapshot` over a handful of tokens would be the same mistake
+pointing the other way.
+
+The figure is comparable within a lane and roughly so between the drivers: a
+claude-code turn is timed by its own spans, each of which runs from the result
+the CLI was handed to the reply that came back and so carries the CLI round trip
+as well as the generation, where a fixed loop span is request-to-response with no
+such hop in it. Read it as "is this run
 moving", never as a model's generation speed.
 
 
