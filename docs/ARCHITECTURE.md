@@ -103,6 +103,29 @@ the SPA owns everything that is UI.
   disagree. This is a different dimension from the harness filter, which
   selects which *loop* owned a run; both exist and compose, which is why the
   new one is spelled `series` everywhere.
+- **`infra/model-lineup.json` is the model identity catalog; `fleet.json` stays
+  a scheduling catalog.** Every roster field in `fleet.json` is a scheduling
+  fact and presentation has always been absent from its schema, so a cosmetic
+  field there would be the first — and it would have to survive the four
+  parsers kept deliberately in sync. The lineup file instead defines *families*
+  (`{ id, name, vendor, icon, match }`) keyed by model-id glob patterns rather
+  than roster names, so it recognizes an id wherever it turns up: the roster,
+  run history, a map position. Matching is data-driven and dumb on purpose —
+  lowercase the id, strip a trailing `:free`, take the first family whose
+  pattern matches, file order being precedence — and an id no family matches
+  gets a neutral monogram rather than a special case in code, which is the
+  per-model override the harness forbids. Recognizing a new model is a data
+  edit, never a code change. Logos are fetched rather than drawn:
+  `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
+  at the version pinned in the lineup's own `icons` block and extracts exactly
+  the icons the lineup names; the SVGs are committed, because they are a few
+  hundred bytes each and the dashboard has to build from a bare clone with no
+  network. The CLI prunes assets no family references and has a `--check` mode
+  so drift is detectable offline. The artwork is MIT-licensed and the brands
+  remain their owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
+  The pricing table's display ids and the scheduler's family test stay where
+  they are — billing and scheduling facts, not presentation, and folding them
+  in would couple scheduling to a cosmetic file.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet

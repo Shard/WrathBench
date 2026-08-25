@@ -1,0 +1,121 @@
+{
+  "_notes": [
+    "The model identity catalog. fleet.json stays a scheduling catalog;",
+    "everything about recognizing and presenting a model id lives here.",
+    "A family maps model id strings to a display name, vendor and logo.",
+    "Matching: ids are lowercased and a trailing ':free' is stripped, then the",
+    "first family whose pattern matches wins — order matters. '*' matches any",
+    "characters. An unmatched id gets the neutral fallback in the UI, never a",
+    "hard-coded special case in code.",
+    "icons pins the logo source: @lobehub/icons-static-svg (MIT, lobehub/lobe-icons),",
+    "fetched from the npm registry by infra/fetch-model-logos.ts, which writes",
+    "dashboard/src/assets/model-logos/<family-id>.svg. Prefer '<slug>-color' icons;",
+    "mono icons use fill=currentColor and follow the theme when inlined.",
+    "After editing families or bumping icons.version: bun infra/fetch-model-logos.ts"
+  ],
+  "version": 1,
+  "icons": {
+    "package": "@lobehub/icons-static-svg",
+    "version": "1.94.0"
+  },
+  "families": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "vendor": "Anthropic",
+      "icon": "claude-color",
+      "match": ["anthropic/*", "claude*", "opus*", "sonnet*", "haiku*"]
+    },
+    {
+      "id": "openai",
+      "name": "GPT",
+      "vendor": "OpenAI",
+      "icon": "openai",
+      "match": ["openai/*", "gpt*"]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini",
+      "vendor": "Google",
+      "icon": "gemini-color",
+      "match": ["google/*", "gemini*", "gemma*"]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "vendor": "DeepSeek",
+      "icon": "deepseek-color",
+      "match": ["deepseek/*", "deepseek*"]
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen",
+      "vendor": "Alibaba",
+      "icon": "qwen-color",
+      "match": ["qwen/*", "qwen*", "qwq*"]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "vendor": "Mistral AI",
+      "icon": "mistral-color",
+      "match": ["mistralai/*", "mistral/*", "mistral*", "mixtral*", "ministral*", "magistral*", "codestral*", "devstral*"]
+    },
+    {
+      "id": "llama",
+      "name": "Llama",
+      "vendor": "Meta",
+      "icon": "meta-color",
+      "match": ["meta-llama/*", "meta/*", "llama*"]
+    },
+    {
+      "id": "grok",
+      "name": "Grok",
+      "vendor": "xAI",
+      "icon": "xai",
+      "match": ["x-ai/*", "xai/*", "grok*"]
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "vendor": "Moonshot AI",
+      "icon": "kimi-color",
+      "match": ["moonshotai/*", "moonshot/*", "kimi*"]
+    },
+    {
+      "id": "glm",
+      "name": "GLM",
+      "vendor": "Z.ai",
+      "icon": "zhipu-color",
+      "match": ["z-ai/*", "zhipuai/*", "zhipu/*", "glm*"]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "vendor": "MiniMax",
+      "icon": "minimax-color",
+      "match": ["minimax/*", "minimax*"]
+    },
+    {
+      "id": "nvidia",
+      "name": "Nemotron",
+      "vendor": "NVIDIA",
+      "icon": "nvidia-color",
+      "match": ["nvidia/*", "nemotron*"]
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere",
+      "vendor": "Cohere",
+      "icon": "cohere-color",
+      "match": ["cohere/*", "command*"]
+    },
+    {
+      "id": "poolside",
+      "name": "Laguna",
+      "vendor": "poolside",
+      "icon": "poolside-color",
+      "match": ["poolside/*", "laguna*"]
+    }
+  ]
+}

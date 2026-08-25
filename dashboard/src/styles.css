@@ -157,6 +157,15 @@ th.sorted { color: var(--fg); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
 
+/* A model's logo beside its name (ADR-0045); the fallback is a monogram disc.
+   The box is 1em so the mark rides the text it labels at any font size, and the
+   fallback's own em is scaled with it so both read the same size. */
+.model-icon { display: inline-flex; align-items: center; justify-content: center; flex: none;
+              width: 1em; height: 1em; margin-right: 5px; vertical-align: -.14em; }
+.model-icon svg { width: 1em; height: 1em; display: block; }
+.model-icon-fallback { font-size: .7em; width: 1.4em; height: 1.4em; border-radius: 50%;
+                       background: var(--panel); color: var(--dim); font-weight: 700; line-height: 1; }
+
 button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
