@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "for p in sdk runner infra dashboard wiki minimap; do tsc --noEmit -p $p || exit 1; done",
+    "typecheck": "for p in sdk runner infra dashboard dashboard/worker wiki minimap; do tsc --noEmit -p $p || exit 1; done",
     "docs:api": "bun run sdk/generate-api-docs.ts",
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",
@@ -18,6 +18,7 @@
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20260825.1",
     "@types/bun": "1.4.0",
     "typescript": "7.0.2"
   }

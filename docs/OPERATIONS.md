@@ -837,28 +837,69 @@ worldserver's, and the control surface stays exactly as unexposed as it is
 today. `docs/PUBLIC-DASHBOARD.md` is the design and the rejected alternatives;
 this section is how to stand it up.
 
-Per `docs/DATA-AND-LEGAL.md` the first public deploy is still gated on the
-operator's content decision (GitHub issue #10) about entry summaries and
-verbatim game text. What follows is the mechanism, not the green light.
+Per `docs/DATA-AND-LEGAL.md` the first genuinely public deploy is still gated on
+the operator's content decision (GitHub issue #10) about entry summaries and
+verbatim game text. A password-gated preview shared with named people is not
+that deploy, and does not wait on it. What follows is the mechanism.
+
+### Two shapes, and which one you are standing up
+
+The design doc's shape needs a **domain on the Cloudflare account**: R2 behind a
+custom domain, zone cache rules carrying the TTLs, and an assets-only Worker so
+that nothing is invoked in the read path at all.
+
+Without a domain that shape is not merely inconvenient, it is unavailable.
+Cloudflare's access controls, WAF, and cache are all custom-domain features; the
+managed `r2.dev` development URL has none of them, is rate-limited, and is
+world-readable to anyone who learns the hostname. There is no password in front
+of an `r2.dev` bucket, and enabling one alongside any other gate simply routes
+around it.
+
+So there are two shapes, and the steps below are marked for whichever applies:
+
+| | **Gated** (no domain — what is deployed today) | **Open** (needs a zone — the design doc's) |
+| --- | --- | --- |
+| app | Worker, Static Assets, `*.workers.dev` | same, assets-only |
+| data | same origin, `/v1/*` from a private bucket binding | `data.<zone>`, public bucket |
+| who can read it | whoever has the password | anyone |
+| TTLs set by | the Worker, on the way out | zone cache rules |
+| CORS | none — one origin | `infra/cloudflare/r2-cors.json` |
+| edge cache | none | yes, and load-bearing |
+| gate | shared secret in `dashboard/worker/index.ts` | none; issue #10 binds it |
+
+The Gated shape puts a Worker in the read path, which the design doc rejects for
+the Open one. That trade is deliberate and narrow: a preview that must not be
+world-readable needs something to say no, and on a zoneless account only a
+Worker can. Everything upstream of the read path — the projection, the snapshot
+renderer, the publisher, and the SPA source — is identical between the two, so
+moving to Open is a rebuild with a different base and a `wrangler.jsonc` that
+drops its `main`. Nothing has to be re-derived.
 
 Do the steps in order — each one names the hostname or credential the next
 depends on.
 
 ### 1. Create the bucket
 
-An R2 bucket, `wrathbench-public`, default location. Only projected JSON is
-ever uploaded, a fraction of what a trajectory weighs, so the free tier (10 GB
-stored, 10M reads, 1M writes a month) covers the whole corpus many times over.
+An R2 bucket, `wrathbench-public`. Only projected JSON is ever uploaded, a
+fraction of what a trajectory weighs, so the free tier (10 GB stored, 10M reads,
+1M writes a month) covers the whole corpus many times over.
 
-### 2. Attach a custom domain
+**Leave the Public Development URL disabled** — the bucket's settings call it
+that; it is the `pub-<id>.r2.dev` hostname. In the Gated shape the Worker's
+binding is the only path to an object, and enabling the development URL would
+publish the whole bucket beside the gate rather than behind it. Check it is off
+whenever you touch bucket settings, not just once.
 
-The CDN cache only fronts a bucket through a **custom domain**; the `r2.dev`
-URL is uncached, which would put every read on the bucket. Pick the data
+### 2. Attach a custom domain — **Open shape only**
+
+The CDN cache only fronts a bucket through a custom domain. Pick the data
 hostname (`data.<zone>`) on a zone in the same account and attach it under the
 bucket's public-access settings. Everything downstream names this hostname: the
 cache rule, the CORS policy, and the SPA's build-time snapshot base.
 
-### 3. Add the cache rule
+In the Gated shape there is no data hostname. Skip to step 5.
+
+### 3. Add the cache rule — **Open shape only**
 
 Cloudflare does **not** cache JSON by default, and the rule also has to carry
 the TTLs itself: Bun's S3 writer cannot send a `Cache-Control` header (the
@@ -875,12 +916,19 @@ Two rules on the zone, first match wins:
    content-addressed and never rewritten, so a long TTL is safe by
    construction.
 
-**A missing cache rule is the only way this design costs money.** Without it
+**A missing cache rule is the only way the Open shape costs money.** Without it
 every public request is a billed read against the bucket — roughly $7/month at
-30M requests, versus roughly $0 with the rule. Verify it (step 8) before the
-URL goes anywhere.
+30M requests, versus roughly $0 with the rule.
 
-### 4. Apply the CORS policy
+The Gated shape has no zone and therefore no cache rules, and does not need
+them: `dashboard/worker/index.ts` sets the same TTLs as response headers on the
+way out. They land in the browser cache rather than Cloudflare's, so a reader
+who has never loaded the page still costs one bucket read. With a gate in front
+and a handful of readers behind it, that is far inside the free tier — and
+edge-caching a response that only some visitors are allowed to see is a footgun
+best left unarmed.
+
+### 4. Apply the CORS policy — **Open shape only**
 
 `infra/cloudflare/r2-cors.json`, with its placeholder app origin edited to the
 real hostname first:
@@ -889,10 +937,8 @@ real hostname first:
 bunx wrangler r2 bucket cors set wrathbench-public --file infra/cloudflare/r2-cors.json
 ```
 
-`GET`/`HEAD` from the app origin and from `http://localhost:5180`, which is the
-Vite dev server so snapshot mode can be developed against the real bucket. The
-private viewer is same-origin, so this is the project's first and only CORS
-policy.
+The Gated shape serves the app and the data from one origin, so there is no
+cross-origin request to permit and this file does not apply to it.
 
 ### 5. Mint two tokens
 
@@ -901,20 +947,38 @@ Least privilege, one job each, and neither can do the other's:
 - **R2 Object Read & Write, scoped to `wrathbench-public` alone** — the
   publisher's, and the only Cloudflare credential that lives on the lab. It
   hands back an access key id and secret; put them in `.env` at the repository
-  root as `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`.
+  root as `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`. The account holds
+  unrelated buckets, so the scoping is doing real work.
 - **Workers Scripts Edit** — wherever `wrangler deploy` runs, as
-  `CLOUDFLARE_API_TOKEN`. No bucket access.
+  `CLOUDFLARE_API_TOKEN`. In the Gated shape add **Workers R2 Storage Read**,
+  which is what lets the deploy bind the bucket; it still needs no object
+  write.
 
-A third, zone **Cache Purge**, is only wanted if the manifest TTL is ever
-tightened by purging the two mutable URLs after each push. That is not the
-current design — do not mint it now.
+A third, zone **Cache Purge**, is only wanted in the Open shape if the manifest
+TTL is ever tightened by purging the two mutable URLs after each push. That is
+not the current design — do not mint it now.
 
-All of this runs on the **free plan**. Workers Paid ($5/month) is cliff
-insurance, wanted only if a Worker ever enters the read path. The $20/month
-zone "Pro" plan is the wrong SKU entirely: it is a zone plan and includes none
-of Workers, KV, D1 or R2.
+All of this runs on the **free plan**. The Gated shape invokes a Worker on
+every request including static assets, which is 100k requests/day free; a
+private preview is nowhere near it. Workers Paid ($5/month) is the cliff
+insurance if that changes. The $20/month zone "Pro" plan is the wrong SKU
+entirely: it is a zone plan and includes none of Workers, KV, D1 or R2.
 
-### 6. First publish, by hand
+### 6. Set the gate secret — **Gated shape only**
+
+```
+bunx wrangler secret put DASHBOARD_PASSWORD --config dashboard/wrangler.jsonc
+```
+
+Typed at the prompt, never in argv and never in the repository. The Worker fails
+closed if it is unset — a deploy with no secret answers `503 gate not
+configured` rather than serving the bucket to the internet — so set it before
+the first deploy, not after.
+
+Rotating it is the same command plus a redeploy; existing sessions die with it,
+because the session cookie is derived from the secret rather than stored.
+
+### 7. First publish, by hand
 
 `mkdir -p data/publish` first — it is the publisher's only writable path and
 Docker would otherwise create it as root. Then one pass:
@@ -934,26 +998,28 @@ Its environment is the compose service's, and the two must stay in agreement:
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` | `--loop` cadence; the harness's own floor is 30–60s, so a faster push buys nothing |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
 | `S3_BUCKET` | `wrathbench-public` | |
-| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint, not the custom domain |
+| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname, and unchanged between the two shapes |
 
 The four `S3_*` names are `Bun.S3Client`'s own, which is why they are not
 spelled `WRATHBENCH_*` and why they come from `.env` rather than from
 `compose.yml`.
 
-Then read the bucket back before trusting the loop with it:
+Then read the bucket back before trusting the loop with it. In the Gated shape
+the bucket has no public hostname to `curl`, so read it with
+`bunx wrangler r2 object get` or the dashboard's object browser:
 
 - `v1/manifest.json` exists, and the `gen` it names has a complete
   `v1/snap/<gen>/` set beside it. The manifest is uploaded last precisely so
   this is never half true.
 - `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
   (Objects carry no `Cache-Control` metadata — Bun's S3 writer cannot send
-  it — which is why step 3's rules set the TTLs at the edge instead.)
+  it — which is why the TTLs are set at the edge or by the Worker instead.)
 - Nothing in the bucket is a minimap tile, a raw trajectory entry, a
   scratchpad, or a filesystem path. The projection is an allowlist, so this
   should be true by construction — check it once anyway, because it is the
   legal boundary.
 
-### 7. Start the loop, then deploy the SPA
+### 8. Start the loop, then deploy the SPA
 
 ```
 docker compose -f infra/compose.yml up -d --no-deps publisher
@@ -967,8 +1033,17 @@ publisher against the same bucket. `stop publisher` needs no drain — an
 interrupted pass leaves the last manifest pointing at the last complete
 generation.
 
-The app is a separate deploy, and only ever a UI change; data never moves
-through it:
+The app is a separate deploy. In the **Gated** shape the data is same-origin, so
+the snapshot base is a bare `/` — non-empty, which is what selects the snapshot
+client, and the client appends `/v1/...` itself:
+
+```
+VITE_WRATHBENCH_SNAPSHOT_BASE=/ bun run --cwd dashboard build
+bunx wrangler deploy --config dashboard/wrangler.jsonc
+```
+
+In the **Open** shape it is the data hostname, and the deploy is only ever a UI
+change because data never moves through it:
 
 ```
 VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.<zone> bun run --cwd dashboard build
@@ -977,31 +1052,48 @@ bunx wrangler deploy --config dashboard/wrangler.jsonc
 
 That env var is what selects the snapshot client at build time, so the public
 bundle and the private one (built without it, served same-origin by the viewer)
-come off the same source with no runtime switch. `dashboard/wrangler.jsonc`
-declares no `main`: assets only, no fetch handler, and therefore no Worker
-invocation anywhere in the read path.
+come off the same source with no runtime switch.
 
-### 8. Verify
+### 9. Verify
+
+**Gated shape.** The first two checks are the ones that matter; run them from a
+browser profile or a shell that has never held the cookie:
 
 ```
-curl -sI https://data.<zone>/v1/manifest.json
-curl -sI https://data.<zone>/v1/manifest.json      # again
+curl -si  https://wrathbench-dashboard.<subdomain>.workers.dev/            | head -1
+curl -si  https://wrathbench-dashboard.<subdomain>.workers.dev/v1/manifest.json | head -1
+curl -si "https://wrathbench-dashboard.<subdomain>.workers.dev/v1/manifest.json" -u ":$DASHBOARD_PASSWORD" | head -1
+curl -sI  https://pub-<bucket-id>.r2.dev/v1/manifest.json                  | head -1
 ```
 
-- The **second** response says `cf-cache-status: HIT`. A `MISS`, `DYNAMIC` or
-  `BYPASS` on the repeat means the cache rule from step 3 is not in effect;
-  fix that before anything else, because it is the one misconfiguration that
-  bills.
-- The response headers show the rule's TTLs: `cache-control: max-age=30` on
-  the manifest, a year on a `v1/snap/<gen>/` object. Both come from step 3's
-  cache rules — the objects themselves carry none.
+- Unauthenticated **`/`** answers `401` and a password form — not the app.
+- Unauthenticated **`/v1/manifest.json`** answers `401` and JSON — not the
+  manifest, and not the SPA's `index.html`. If it returns HTML, the Worker is
+  not running first; check `run_worker_first` in `dashboard/wrangler.jsonc`.
+- With the password, the manifest returns `200` and JSON.
+- The `r2.dev` hostname does **not** resolve or answers `404`/error. If it
+  serves the manifest, the Public Development URL is enabled — disable it (step
+  1) before the link goes anywhere, because it is the gate's bypass.
+- The shared link — `https://<app>/?k=<password>` — lands, redirects to `/`
+  without the secret in the address bar, and renders.
+
+**Open shape.** As before: the second `curl -sI https://data.<zone>/v1/manifest.json`
+says `cf-cache-status: HIT`, and the headers show the rule's TTLs (30s on the
+manifest, a year on a `v1/snap/<gen>/` object). A `MISS`, `DYNAMIC` or `BYPASS`
+on the repeat means the cache rule from step 3 is not in effect; fix that before
+anything else, because it is the one misconfiguration that bills. `cf-cache-status`
+does not apply to the Gated shape and its absence there is not a fault.
+
+**Both shapes**, once you are through the gate:
+
 - The app loads and the runs, ladder, episodes, models, campaigns, run detail,
-  fleet and map pages render. A CORS error in the console means the app origin
-  in step 4 does not match the hostname the browser used — scheme included.
+  fleet and map pages render. In the Open shape a CORS error in the console
+  means the app origin in step 4 does not match the hostname the browser used —
+  scheme included.
 - The staleness banner reads a plausible age: a minute or two, never hours and
   never negative. Three clocks are in play (fleet heartbeat 30–60s, push 60s,
-  edge TTL ≤60s) and the banner reads only the last push, so hours means the
-  publisher stopped, not that the cache is cold.
+  and a TTL ≤60s) and the banner reads only the last push, so hours means the
+  publisher stopped, not that a cache is cold.
 - The map draws the labelled grid and no tiles, and a run detail page shows no
   entries — the snapshot client answers `entries()` and `raw()` with the same
   403 the viewer's public mode does, and there is no object in the bucket for
