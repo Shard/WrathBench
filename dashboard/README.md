@@ -32,6 +32,30 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 — so a checkout that wants the dashboard has to build it.
 `WRATHBENCH_DASHBOARD_DIR` overrides where the viewer looks.
 
+**Public** — the same SPA, reading published JSON snapshots out of a bucket
+instead of a viewer (docs/PUBLIC-DASHBOARD.md). One build-time flag selects it:
+
+```
+VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.example bun run dashboard:build
+```
+
+Set, `src/api/client.ts` hands the pages `createSnapshotClient` instead of
+`createClient`; unset, nothing about the private build changes. The snapshot
+client implements the same `Client` interface — it resolves a manifest, reads
+generation-addressed artifacts, and re-applies the `?episode=`/`?harness=`
+filters client-side over the published projection — so no page knows which one
+it is talking to. Every page keeps the poll interval stated at its call site;
+a ~30s memo inside the client is what keeps a 5s poller off the network.
+
+Three things a bucket cannot serve, and the guards that go with them: entry
+summaries and raw trajectory lines answer 403 the way
+`WRATHBENCH_VIEWER_PUBLIC=1` does, the run page opens no SSE tail, and the map
+draws its labelled grid without asking for a tile (they are the only
+Blizzard-derived bytes in the stack and never leave the lab). The shell gains
+a "data as of Ns ago" line — the publisher's clock, kept separate from the
+supervisor's heartbeat in the status badge — and the attribution footer every
+published artifact carries.
+
 ## Routes
 
 | route | what |
@@ -76,7 +100,8 @@ server-side. `lib/harness.ts` holds the pure half and its tests.
 ## Structure
 
 ```
-src/api/      typed client over the viewer JSON endpoints, and the SSE tail
+src/api/      typed client over the viewer JSON endpoints, the SSE tail, and
+              the snapshot client the public build reads a bucket with
 src/lib/      pure helpers: view maths, formatting, polling
 src/pages/    one file per route
 src/components/  the shell and the pieces shared between pages
