@@ -1295,7 +1295,13 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // The lane reaches the runner as --token-env, on the claude entry only.
     const spawn = jobSpawn(twoPlan.policy[1]!.job, two.roster, "RUNNER2", "20260101");
     expect(spawn.entries[0]!.tokenEnv).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
-    expect(episodeArgv({ ...resolve([spawn.entries[0]!], "s")[0]! }, false)).toContain("--token-env");
+    // The flag AND its value: a wrong lane here bills the wrong subscription
+    // and nothing downstream would notice.
+    const argv = episodeArgv(resolve([spawn.entries[0]!], "s")[0]!, false);
+    expect(argv[argv.indexOf("--token-env") + 1]).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    // The default lane emits no flag at all: a pre-lane argv is unchanged.
+    const plainSpawn = jobSpawn(twoPlan.policy[0]!.job, two.roster, "RUNNER", "20260101");
+    expect(episodeArgv(resolve([plainSpawn.entries[0]!], "s")[0]!, false)).not.toContain("--token-env");
 
     // A lane with room to spare still yields to the overall ceiling: two
     // sessions on the partner's subscription are allowed, three Claude sessions
