@@ -410,6 +410,11 @@ describe("childEnv", () => {
         GOOGLE_APPLICATION_CREDENTIALS: "/g.json",
         CLAUDE_CODE_USE_BEDROCK: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+        // Not a billing credential, dropped for a different reason: the runner
+        // and fleet services carry it for the gate's fixture staging, and root
+        // on acore_characters is the shortcut docs/CONTRACTS.md forbids.
+        WRATHBENCH_DB_PASSWORD: "must-not-leak",
+        WRATHBENCH_TOKEN: "keep",
         UNRELATED: "keep",
       },
       { configDir: "/runs/x/claude-config" },
@@ -421,6 +426,8 @@ describe("childEnv", () => {
     expect(env["GOOGLE_APPLICATION_CREDENTIALS"]).toBeUndefined();
     expect(env["CLAUDE_CODE_USE_BEDROCK"]).toBeUndefined();
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
+    expect(env["WRATHBENCH_DB_PASSWORD"]).toBeUndefined();
+    expect(env["WRATHBENCH_TOKEN"]).toBe("keep");
     expect(env["UNRELATED"]).toBe("keep");
     expect(env["CLAUDE_CONFIG_DIR"]).toBe("/runs/x/claude-config");
   });
