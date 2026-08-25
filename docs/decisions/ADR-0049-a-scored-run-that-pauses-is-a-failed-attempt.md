@@ -150,10 +150,18 @@ stop a run being ended.
   the run in flight and roughly its elapsed time. That is the trade ADR-0038's
   deploy window was already sizing for; the mitigation is unchanged (deploy when
   the board is quiet).
-- The projection is read once a tick, so a run ended this tick still reads as
-  paused in the same tick's `states`: the fresh attempt starts on the tick
-  after. Self-healing, and safe — the paused run holds its model in between, so
-  nothing double-schedules.
+- **A tick re-derives its projection after its own sweep.** The first draft
+  said the stale read was self-healing one tick later. It was not: on the first
+  live tick (2026-08-25) the sweep wrote `retry 3/3 — tainted` for
+  `nemotron-ultra` and the policy spawned its ninth attempt a second later, off
+  a projection built before the terminations existed. The ends are now applied
+  to the facts in memory (`applyEnded` → `statesAfterSweep`) and the queue's
+  gate, the policy's picks and the state file read the result. Nothing above
+  that line reads a strike: the pinned jobs and the live pool jobs are the
+  operator's, and the manual queue outranks a taint by decision anyway. The
+  same refresh answers the mirror question — a run the sweep ended stops
+  holding its model and its account in that same tick, so the account is free
+  for the next pick immediately.
 - The runner is untouched. It still pauses, because "the process stopped without
   a verdict" is the honest thing for it to write; turning that into a failed
   attempt is a *scheduling* decision and lives with the scheduler.
