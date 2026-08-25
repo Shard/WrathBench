@@ -187,6 +187,8 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
+## Wiki
+
 65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
     the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
     states every one of its ~28 metrics three times: a `let`/`Record` in the
