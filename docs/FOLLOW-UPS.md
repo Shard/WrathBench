@@ -127,20 +127,6 @@ status.
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
 
-
-82. **`TokenTotals.completionTokens` double-counts multi-envelope replies on the
-    claude-code lane** (2026-08-25, found while deriving tokens per second). The
-    driver splits one reply across several `response` records where only the last
-    carries usage, and that last figure is the RUNNING TOTAL for the whole reply
-    (`adapter-claude.ts`); `tokenTotals` adds `chars ÷ 4` for each earlier
-    envelope on top of it. On `fleet-sonnet-e360-sonnet-20260824`, 2,833 response
-    records under 2,147 replies, with 42k characters of text on envelopes that
-    carry no usage — all of it already inside the totals reported by the
-    envelopes that do. `tokensPerSecond` resolves a span to the reported total
-    when any response in it reported one, and is the shape of the fix; the totals
-    (and every cost figure priced off them) still need it. Unblocked by someone
-    deciding whether restated token totals invalidate recorded costs.
-
 32. **Dashboard parity gaps against the deleted pages** (2026-08-22, ADR-0022; the
     pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
     `runner/viewer/pricing.ts`, priced from dated, sourced rows rather than the old
