@@ -31,7 +31,11 @@ import {
   type ModelState,
   outstandingWork,
   formatOutstanding,
+  capFor,
+  claudeLaneKey,
   concurrencyKeyOf,
+  laneOfKey,
+  liveSubscriptions,
   isConcurrencyKey,
   CONCURRENCY_KEYS,
   parsePolicyBlock,
@@ -247,6 +251,7 @@ describe("the ladder", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
   });
   const m: RosterModel = { name: "m", model: "m", tier: "t1" };
 
@@ -408,6 +413,7 @@ describe("nextJobs", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
   });
 
   test("priority: never-run first, then e90 before e360, then fewest counted, then roster order", () => {
@@ -477,6 +483,7 @@ describe("paid and free", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
   });
   const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[], p = policy) =>
@@ -710,6 +717,7 @@ describe("outstandingWork", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
   });
   const policy: SchedulingPolicy = { ...DEFAULT_POLICY, paid: { ...DEFAULT_PAID } };
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[]): ModelState =>
@@ -816,6 +824,95 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
   });
 });
 
+describe("subscription lanes", () => {
+  test("the default lane keeps the bare key; a second lane is the key plus its var NAME", () => {
+    expect(claudeLaneKey(undefined)).toBe("claude-code");
+    expect(claudeLaneKey(null)).toBe("claude-code");
+    expect(claudeLaneKey("CLAUDE_CODE_OAUTH_TOKEN")).toBe("claude-code");
+    expect(claudeLaneKey("CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(laneOfKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(laneOfKey("claude-code")).toBeNull();
+    expect(laneOfKey("openrouter")).toBeNull();
+  });
+
+  test("a lane key is a concurrency key, and inherits the claude-code cap when it has none", () => {
+    expect(isConcurrencyKey("claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(true);
+    // Still a NAME, still checked as one: a token in the key is not a key.
+    expect(isConcurrencyKey("claude-code:sk-ant-oat01-secret")).toBe(false);
+    const max = { "claude-code": 1, openrouter: 2 };
+    expect(capFor(max, "claude-code")).toBe(1);
+    // One live session per subscription, written once.
+    expect(capFor(max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(1);
+    // An explicit per-lane cap still wins.
+    expect(capFor({ ...max, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2 }, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBe(2);
+    // Nothing else inherits anything, and an uncapped key is still uncapped.
+    expect(capFor(max, "opencode")).toBeUndefined();
+    expect(capFor({}, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2")).toBeUndefined();
+  });
+
+  test("policy.subscriptions is a list of env var NAMES, and defaults to the one lane", () => {
+    expect(parsePolicyBlock(undefined).subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+    expect(parsePolicyBlock({}).subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+    expect(parsePolicyBlock({ subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"] }).subscriptions).toEqual([
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN_2",
+    ]);
+    // The one mistake that would put a credential in a committed file.
+    expect(() => parsePolicyBlock({ subscriptions: ["sk-ant-oat01-secret"] })).toThrow(/never the token/);
+    expect(() => parsePolicyBlock({ subscriptions: [] })).toThrow(/non-empty array/);
+    expect(() => parsePolicyBlock({ subscriptions: ["A_TOKEN", "A_TOKEN"] })).toThrow(/listed twice/);
+  });
+
+  test("a live run's own lane is read back off the run, so a restart does not lose it", () => {
+    const fact = (over: Partial<RunFact>): RunFact => ({
+      runId: "r",
+      model: "opus",
+      effort: null,
+      episode: "e90",
+      episodeOverride: false,
+      harnessVersion: null,
+      harnessSeries: null,
+      extra: false,
+      startedAt: 0,
+      endedAt: null,
+      terminationReason: null,
+      modelResponses: 1,
+      bestLevel: 1,
+      live: true,
+      pause: null,
+      account: null,
+      character: null,
+      episodeMs: null,
+      campaign: null,
+      cell: null,
+      subscription: null,
+      ...over,
+    });
+    const roster = [
+      { name: "sub-opus", model: "opus", driver: "claude-code" },
+      { name: "sub-opus-low", model: "opus", effort: "low", driver: "claude-code" },
+      { name: "sonnet", model: "sonnet", driver: "claude-code" },
+    ];
+    const lanes = liveSubscriptions(
+      [
+        fact({ runId: "a", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" }),
+        // Same model, different effort: a different entry, and its own lane.
+        fact({ runId: "b", effort: "low", subscription: "CLAUDE_CODE_OAUTH_TOKEN" }),
+        // A paused run still holds its lane — it is resumed onto that subscription.
+        fact({ runId: "c", model: "sonnet", live: false, pause: { reason: "quota-exhausted", at: 1, count: 1, episodeElapsedMs: null }, subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" }),
+        // A finished run holds nothing.
+        fact({ runId: "d", model: "sonnet", live: false, terminationReason: "episode-limit", subscription: "CLAUDE_CODE_OAUTH_TOKEN" }),
+      ],
+      roster,
+    );
+    expect(lanes.get("sub-opus")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    expect(lanes.get("sub-opus-low")).toBe("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(lanes.get("sonnet")).toBe("CLAUDE_CODE_OAUTH_TOKEN_2");
+    // A run with no lane recorded (one launched before lanes existed) says nothing.
+    expect(liveSubscriptions([fact({})], roster).size).toBe(0);
+  });
+});
+
 describe("probe campaigns in the schedule", () => {
   const NOW2 = 1_800_000_000_000;
   const H = 3_600_000;
@@ -840,6 +937,7 @@ describe("probe campaigns in the schedule", () => {
     episodeMs: null,
     campaign: null,
     cell: null,
+    subscription: null,
     ...over,
   });
   /** A model on t0 whose single e90 is done: owes nothing, so it is `free`. */

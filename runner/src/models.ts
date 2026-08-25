@@ -57,7 +57,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { harnessSeries } from "./comparability";
-import { DRIVERS, harnessOf, isDriver, type Driver, type Harness } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
 import { NOT_THE_MODELS_FAULT, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
@@ -191,6 +191,22 @@ export interface SchedulingPolicy {
    * physically execute (the paid account class) and how many at once.
    */
   paid: { maxConcurrent: number } | null;
+  /**
+   * The Claude subscription LANES the fleet may schedule on, as the names of
+   * the env vars holding their OAuth tokens — never the tokens, which stay in
+   * `.env`. In preference order: a claude-code run takes the first lane with a
+   * free slot.
+   *
+   * A subscription is a lane, not a model dimension. The roster stays one entry
+   * per model however many accounts are behind it, because which subscription
+   * paid for a run says nothing about what the run measured. What it does
+   * decide is how many claude-code sessions may be live at once, which is why
+   * it lives here with the rest of "where a run may physically execute".
+   *
+   * Defaults to the single default lane, which is exactly the behaviour of
+   * every config written before there was a second subscription.
+   */
+  subscriptions: string[];
 }
 
 /** The paid default once `policy.paid` is present: one paid run in flight. */
@@ -200,6 +216,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
   promoteAtLevel: 5,
   series: null,
   paid: null,
+  subscriptions: [DEFAULT_CLAUDE_TOKEN_ENV],
 };
 
 /**
@@ -221,7 +238,7 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown };
   const out = { ...base };
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
@@ -257,6 +274,22 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
       cap = p.maxConcurrent;
     }
     out.paid = { maxConcurrent: cap };
+  }
+  if (o.subscriptions !== undefined) {
+    if (!Array.isArray(o.subscriptions) || o.subscriptions.length === 0) {
+      throw new Error('policy.subscriptions must be a non-empty array of env var NAMES, like ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]');
+    }
+    const names: string[] = [];
+    for (const v of o.subscriptions as unknown[]) {
+      // A NAME, checked as one: the token itself in this field would put a
+      // credential in a file that is committed and printed by --status.
+      if (typeof v !== "string" || !isTokenEnvName(v)) {
+        throw new Error(`policy.subscriptions: ${JSON.stringify(v)} is not an environment variable name — name the var that holds the token, never the token`);
+      }
+      if (names.includes(v)) throw new Error(`policy.subscriptions: ${v} listed twice — one entry per subscription`);
+      names.push(v);
+    }
+    out.subscriptions = names;
   }
   return out;
 }
@@ -460,6 +493,17 @@ export interface RunFact {
    */
   campaign: string | null;
   cell: string | null;
+  /**
+   * The Claude subscription lane this run bills, as the env var NAME holding
+   * its token (`RunConfig.subscription`); null on anything that is not a
+   * claude-code run, and on a claude-code run launched before lanes existed —
+   * which is the default lane, and reads as one (`claudeLaneKey`).
+   *
+   * Read off the run's own config for the same reason `campaign` is: the fleet
+   * counts live runs per lane, and that count has to survive a supervisor
+   * restart, which nothing held in memory does.
+   */
+  subscription: string | null;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -657,6 +701,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
       character?: unknown;
       campaign?: unknown;
       cell?: unknown;
+      subscription?: unknown;
       watchdogs?: { episodeMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
@@ -693,6 +738,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
     episodeMs: num(meta.config?.watchdogs?.episodeMs),
     campaign: str(meta.config?.campaign),
     cell: str(meta.config?.cell),
+    subscription: str(meta.config?.subscription),
   };
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -806,8 +852,42 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
  */
 export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode"];
 
+/**
+ * The key one Claude subscription lane counts against. The default lane keeps
+ * the bare `claude-code` key — every config and every log line written before
+ * there was a second subscription still means what it said — and any other lane
+ * is that key with the env var's NAME after a colon:
+ *
+ *   CLAUDE_CODE_OAUTH_TOKEN    -> claude-code
+ *   CLAUDE_CODE_OAUTH_TOKEN_2  -> claude-code:CLAUDE_CODE_OAUTH_TOKEN_2
+ *
+ * A lane with no cap of its own inherits the `claude-code` one (`capFor`), so
+ * "one live session per subscription" is a single number in the file rather
+ * than a line per account.
+ */
+export function claudeLaneKey(tokenEnv: string | null | undefined): string {
+  const env = tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV;
+  return env === DEFAULT_CLAUDE_TOKEN_ENV ? "claude-code" : `claude-code:${env}`;
+}
+
+/** The lane a `claude-code:<NAME>` key names, or null for anything else. */
+export function laneOfKey(key: string): string | null {
+  return key.startsWith("claude-code:") ? key.slice("claude-code:".length) : null;
+}
+
 export function isConcurrencyKey(k: string): boolean {
-  return (CONCURRENCY_KEYS as readonly string[]).includes(k);
+  if ((CONCURRENCY_KEYS as readonly string[]).includes(k)) return true;
+  const lane = laneOfKey(k);
+  return lane !== null && isTokenEnvName(lane);
+}
+
+/**
+ * The cap that applies to a key: its own, else — for a subscription lane — the
+ * `claude-code` cap, which is what "one live session per subscription" is
+ * written as. Undefined means uncapped, as before.
+ */
+export function capFor(max: Record<string, number>, key: string): number | undefined {
+  return max[key] ?? (laneOfKey(key) !== null ? max["claude-code"] : undefined);
 }
 
 /**
@@ -830,6 +910,12 @@ export function isConcurrencyKey(k: string): boolean {
  * host is normalized to `opencode` here and only here: `platformOfBase` keeps
  * its host spelling so `run.platform` and the viewer's listing stay stable
  * against runs already on disk; the key is the one seam that renames it.
+ *
+ * `claude-code` is the only key that is refined further, and not here: which
+ * SUBSCRIPTION a claude run bills is decided when it is scheduled, not by the
+ * roster entry, so the fleet turns this key into the run's lane key with
+ * `claudeLaneKey`. A caller with no lane in hand gets the default lane's key,
+ * which is this one.
  */
 export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBase">, billing: Billing): string {
   const driver = driverOf(r);
@@ -927,6 +1013,26 @@ export function isNoProgress(f: RunFact): boolean {
 
 function matchesRoster(f: RunFact, r: RosterModel): boolean {
   return f.model === r.model && (f.effort ?? null) === (r.effort ?? null);
+}
+
+/**
+ * The subscription lane each roster entry's live-or-paused run is on, read off
+ * the runs themselves.
+ *
+ * This is what makes lane assignment survive a supervisor restart: the fleet's
+ * own record of which token a job was spawned with dies with the process, but
+ * the run wrote its lane into its meta.json, and a paused run resumed later
+ * goes back to the subscription it started on. A run with no lane recorded (one
+ * launched before lanes existed) is the default lane, and the caller reads it
+ * as one.
+ */
+export function liveSubscriptions(runs: readonly RunFact[], roster: readonly RosterModel[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const r of roster) {
+    const f = runs.find((x) => (x.live || x.pause !== null) && x.subscription !== null && matchesRoster(x, r));
+    if (f?.subscription != null) out.set(r.name, f.subscription);
+  }
+  return out;
 }
 
 /**
