@@ -109,11 +109,22 @@ function env(name: string, fallback?: string): string {
   return v;
 }
 
+/**
+ * The database password, mirroring compose's `${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}`:
+ * the service env sets WRATHBENCH_DB_PASSWORD, a host shell or `.env` more often
+ * sets WRATHBENCH_DB_ROOT_PASSWORD (infra/README), and the compose default is
+ * the literal. Without the last step every invocation from a container that
+ * predates the env block would throw instead of connecting.
+ */
+function dbPassword(): string {
+  return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
+}
+
 const cfg = {
   host: env("WRATHBENCH_DB_HOST", "db"),
   port: Number(env("WRATHBENCH_DB_PORT", "3306")),
   user: env("WRATHBENCH_DB_USER", "root"),
-  password: env("WRATHBENCH_DB_PASSWORD"),
+  password: dbPassword(),
   database: env("WRATHBENCH_AUTH_DB", "acore_auth"),
   realmId: Number(env("WRATHBENCH_REALM_ID", "1")),
   realmName: env("WRATHBENCH_REALM_NAME", "WrathBench"),
