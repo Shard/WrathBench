@@ -38,6 +38,12 @@ export interface LoopOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /**
+   * How often the world is sampled while a turn is in flight (`startStateTicker`).
+   * Coarse by design and deliberately not derived from `stateIntervalMs`: the
+   * tick is the *opportunity* to sample, the interval is the gate.
+   */
+  stateTickMs?: number;
+  /**
    * The runner's stop request. Its `reason` is a `StopRequest`: a pause
    * (the supervisor is stopping; the run is suspended, not judged) or a
    * termination (`manual`, the operator's Ctrl-C). Read at the turn
@@ -172,6 +178,21 @@ export class ContextBuilder {
    * data mid-turn and `no-xp` has nothing to measure.
    */
   async sampleState(): Promise<SnapshotLike | null> {
+    // One sample at a time, run-wide. The turn preamble and the ticker
+    // (`startStateTicker`) both call this, and two concurrent samples would
+    // double-read the world and race every high-water mark below — so a caller
+    // arriving mid-sample joins the one in flight rather than starting another.
+    if (this.inFlight !== null) return await this.inFlight;
+    const p = this.doSampleState().finally(() => {
+      if (this.inFlight === p) this.inFlight = null;
+    });
+    this.inFlight = p;
+    return await p;
+  }
+
+  private inFlight: Promise<SnapshotLike | null> | null = null;
+
+  private async doSampleState(): Promise<SnapshotLike | null> {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
     if (snap === null || this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
@@ -320,6 +341,58 @@ export class ContextBuilder {
   }
 }
 
+/** Default cadence of the state ticker: coarse, and independent of `stateIntervalMs`. */
+export const DEFAULT_STATE_TICK_MS = 5_000;
+
+export interface StateTickerOptions {
+  builder: ContextBuilder;
+  /** Cadence of the tick itself; `stateIntervalMs` still gates whether a row is written. */
+  tickMs?: number | undefined;
+  /** True once the episode is over: the ticker goes quiet without waiting to be cleared. */
+  stopped: () => boolean;
+  /**
+   * Run after each completed sample. The claude driver uses it to *enforce* the
+   * watchdogs mid-turn (it can kill the CLI from outside the turn); the fixed
+   * loop does not — it enforces at the turn boundary, so the episode clock keeps
+   * the semantics it has always had. Feeding the watchdogs is not this hook's
+   * job: `sampleState` does that itself, on every driver.
+   */
+  onSample?: (() => void) | undefined;
+}
+
+/**
+ * Sample the world on a timer, independent of turn boundaries.
+ *
+ * A driver turn is one HTTP request or one CLI session, and either can run for
+ * minutes: 485s was observed against a local model, leaving an eight-minute
+ * hole with no state row and no XP signal (FOLLOW-UPS 77). Sampling only side
+ * of a turn is therefore not sampling on the clock at all, so both drivers run
+ * this and neither implements its own.
+ *
+ * The tick is coarse and the `stateIntervalMs` gate inside `sampleState` decides
+ * whether a row is actually written; `sampleState`'s own mutex means a tick that
+ * lands on the turn preamble joins that sample rather than racing it. The timer
+ * is unref'd, so it can never hold the process open, and the returned stop must
+ * be called on every exit path — a live ticker outliving `runLoop` would write
+ * to a closed trajectory.
+ */
+export function startStateTicker(o: StateTickerOptions): () => void {
+  let sampling = false;
+  const timer = setInterval(() => {
+    if (sampling || o.stopped()) return;
+    sampling = true;
+    void o.builder
+      .sampleState()
+      .catch(() => null)
+      .finally(() => {
+        sampling = false;
+        if (!o.stopped()) o.onSample?.();
+      });
+  }, o.tickMs ?? DEFAULT_STATE_TICK_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
@@ -371,6 +444,16 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   };
 
   let turn = 0;
+  // Live for the whole episode, not just the model call: a turn's tool calls can
+  // be slow too, and the gate inside `sampleState` keeps the row cadence fixed
+  // either way. `finished` shuts it up the instant an outcome is decided, ahead
+  // of the `finally` that clears the timer.
+  let finished = false;
+  const stopTicker = startStateTicker({
+    builder,
+    tickMs: o.stateTickMs,
+    stopped: () => finished || stopRequestOf(o.signal) !== null,
+  });
   try {
     for (;;) {
       // 0. a stop request wins over everything, at the turn boundary
@@ -509,6 +592,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       return terminate("adapter-error", `${err.message}${err.status !== undefined ? ` (HTTP ${err.status})` : ""}`);
     }
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+  } finally {
+    finished = true;
+    stopTicker();
   }
 }
 
