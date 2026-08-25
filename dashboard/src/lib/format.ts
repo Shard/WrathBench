@@ -39,6 +39,20 @@ export function fmtDuration(ms: number | null): string {
 }
 
 /**
+ * A short span for the feed's latency figures: "840ms", "12.3s", then
+ * `fmtDuration`'s m:ss/h:mm forms. Empty string, not a dash, when there is
+ * nothing to say — these render inline in a crowded header where a
+ * placeholder would just be noise.
+ */
+export function fmtLatency(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  // 59.95s would print as "60.0s"; from there fmtDuration takes over.
+  if (ms < 59_950) return `${(ms / 1000).toFixed(1)}s`;
+  return fmtDuration(ms);
+}
+
+/**
  * Dollars. Small figures keep three decimals because a cent's resolution is
  * useless at $0.004, and a recorded $0 prints as "$0.00" rather than the dash —
  * a free model costing nothing is a fact, not a missing value.

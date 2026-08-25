@@ -160,9 +160,12 @@ scratchpad, not the chat history, is the durable memory.
 
 The child environment is constructed, not inherited. Every `ANTHROPIC_*`,
 `AWS_*`, `GOOGLE_*`, `GCLOUD_*`, `CLOUDSDK_*` variable and the Bedrock/Vertex
-switches are dropped, so `CLAUDE_CODE_OAUTH_TOKEN` is the only credential the
-CLI can see: it bills the subscription or it refuses, and it can never fall
-back to API credits. (The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"`
+switches are dropped, and so is every `CLAUDE_CODE_OAUTH_TOKEN*` variable —
+the one the run's own lane names is then copied back onto
+`CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI knows. So the CLI sees exactly
+one credential, the subscription it was scheduled on: it bills that or it
+refuses, it can never fall back to API credits, and it never sees another
+subscription's token. (The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"`
 whenever that variable is set, which is exactly the fallback being prevented.)
 There is no CLI flag that pins the auth source, so this is done with the
 environment. For the same reason `CLAUDE_CONFIG_DIR` is redirected to
@@ -178,7 +181,21 @@ echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> .env    # .env is gitignored
 ./infra/run-episode.sh --model opus --driver claude-code
 ```
 
-The runner refuses to start this driver without the token. Note that the
+A second subscription is a second variable, never a second spelling of the
+first, and `--token-env` names it:
+
+```bash
+echo 'CLAUDE_CODE_OAUTH_TOKEN_2=...' >> .env
+./infra/run-episode.sh --model opus --driver claude-code --token-env CLAUDE_CODE_OAUTH_TOKEN_2
+```
+
+The run records the NAME (`config.subscription` in `meta.json`), never the
+value, so a reader can tell which subscription paid for it and `--resume` goes
+back to the same one. The fleet sets this flag itself — a subscription is a
+lane it schedules, see docs/OPERATIONS.md.
+
+The runner refuses to start this driver without the chosen lane's token, and
+the refusal names that variable. Note that the
 compose `runner` service runs `oven/bun` and has no `claude` binary: install it
 into that service, or use `--local` with a module URL the host can reach
 (`WRATHBENCH_MODULE_URL`) — the module's port is not published to the host by

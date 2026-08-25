@@ -5,6 +5,7 @@
  *   bun runner/src/run.ts --driver openai --model <id> [--api-base URL] [--effort low] [flags]
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
+ *   bun runner/src/run.ts --driver claude-code --model opus --token-env CLAUDE_CODE_OAUTH_TOKEN_2
  *   bun runner/src/run.ts --resume <run-id>
  *
  * Two run dimensions are recorded and never model-specific:
@@ -38,8 +39,10 @@ import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
 import {
+  DEFAULT_CLAUDE_TOKEN_ENV,
   DRIVERS,
   episodeOverrideOf,
+  isTokenEnvName,
   loadRunConfig,
   MIN_TOKEN_LENGTH,
   newRunId,
@@ -147,6 +150,10 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
         ? args["api-base"]
         : process.env["OPENAI_BASE_URL"] ?? undefined,
     apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
+    // The subscription lane, by env var NAME (claude-code only). Identity, like
+    // the account: a resumed run bills the subscription it started on, so
+    // --token-env is not an override on --resume.
+    subscription: typeof args["token-env"] === "string" ? args["token-env"] : undefined,
     // Identity, like model and driver: a resumed run keeps the effort it was
     // launched with, so --effort is not an override on --resume.
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
@@ -278,17 +285,28 @@ async function main(): Promise<void> {
     }
     adapter = StubAdapter.fromScriptFile(config.stubScript);
   } else if (config.driver === "claude-code") {
-    const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
+    // The subscription lane: a var NAME, defaulting to the one the CLI itself
+    // knows. Everything below says the CHOSEN name, so an operator reading a
+    // refusal is told which of two subscriptions is missing.
+    const tokenEnv = config.subscription ?? DEFAULT_CLAUDE_TOKEN_ENV;
+    if (!isTokenEnvName(tokenEnv)) {
+      console.error(`--token-env ${tokenEnv} is not an environment variable name (it must not be the token itself)`);
+      process.exit(2);
+    }
+    const token = process.env[tokenEnv];
     if (token === undefined || token.trim().length === 0) {
       console.error(
-        "--driver claude-code needs $CLAUDE_CODE_OAUTH_TOKEN.\n" +
+        `--driver claude-code needs $${tokenEnv}.\n` +
           "  generate one with:  claude setup-token\n" +
-          "  then put it in .env as CLAUDE_CODE_OAUTH_TOKEN=... (.env is gitignored)\n" +
+          `  then put it in .env as ${tokenEnv}=... (.env is gitignored)\n` +
           "  and start the run through infra/run-episode.sh, which exports it for you.",
       );
       process.exit(2);
     }
     trajectory.redact(token);
+    // Recorded, so the run names its lane rather than leaving a reader (or the
+    // fleet's per-lane count) to infer the default. The NAME, never the value.
+    config = { ...config, subscription: tokenEnv };
   } else {
     const apiKey = process.env[config.apiKeyEnv];
     const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
