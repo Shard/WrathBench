@@ -3,9 +3,10 @@
 The decisions that shape what a WrathBench result means, and the principles
 behind them. This is the successor to the numbered ADR series (44 records,
 consolidated 2026-08-25; the full texts are in git history under
-`docs/decisions/`). It is edited in place: a change to anything here is a
-change to what the benchmark measures and is treated as such — see
-"Changing this document" at the end. Mechanics live in the doc that owns the
+`docs/decisions/`, and `docs/WORKLOG.md` holds the table mapping each old
+number to where its decision lives now). It is edited in place: a change to
+anything here is a change to what the benchmark measures and is treated as
+such — see "Changing this document" at the end. Mechanics live in the doc that owns the
 component (`docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`, `docs/EPISODES.md`,
 `docs/OPERATIONS.md`, `module/PROTOCOL.md`, `wiki/README.md`); this page is
 the why.
@@ -341,51 +342,3 @@ still edits to this page or the owning doc, dated in the worklog. Keep this
 document consolidated: fold a new decision into the section it belongs to,
 prune what it obsoletes, and let git history hold the past — no append-only
 records.
-
-## Where the former ADRs went
-
-The numbered records (ADR-0001…0044) were consolidated into this page on
-2026-08-25. Worklogs and commit messages cite the numbers; they resolve here.
-Full texts: git history of `docs/decisions/`.
-
-| ADR | Decision | Now lives |
-|---|---|---|
-| 0001 | WoW 3.3.5a on AzerothCore | here: What WrathBench measures |
-| 0002 | Server-side module, client-fidelity contracts | here: Client fidelity; docs/CONTRACTS.md |
-| 0003 | Script-and-supervise | here: What WrathBench measures |
-| 0004 | Fixed harness, model the only variable | here: What WrathBench measures |
-| 0005 | Bun + thin C++ module | CLAUDE.md (toolchain); docs/ARCHITECTURE.md |
-| 0006 | Fresh character reset | here: Episodes, lanes, and evidence |
-| 0007 | Stock AzerothCore, no playerbots fork | docs/ARCHITECTURE.md (infra) |
-| 0008 | Worldserver image from upstream's Dockerfile | docs/ARCHITECTURE.md (infra) |
-| 0009 | Headless session on a parked socket | docs/ARCHITECTURE.md (module); here: Client fidelity |
-| 0010 | Synthesized movement, update decoding | here: Client fidelity; docs/ARCHITECTURE.md, module/PROTOCOL.md |
-| 0011 | Game outcomes are values | here: The model surface |
-| 0012 | Runner context policy | here: Context policy |
-| 0013 | Quest/combat client-local judgment calls | here: Client fidelity; module/PROTOCOL.md |
-| 0014 | Synthetic session-state event on reattach | module/PROTOCOL.md |
-| 0015 | SDK surface: simple by default, escape hatch | here: The model surface |
-| 0016 | API surface softening | here: The model surface |
-| 0017 | Guids are opaque decimal strings | here: The model surface |
-| 0018 | Signals recorded, scores derived offline | here: Scoring |
-| 0019 | Map view: client minimap tiles, one renderer | docs/ARCHITECTURE.md (dashboard) |
-| 0020 | Fleet supervisor as a compose service | docs/OPERATIONS.md |
-| 0021 | Client-parity queries in the SDK | here: Client fidelity |
-| 0022 | Dashboard SPA over read-only viewer API | docs/ARCHITECTURE.md (dashboard) |
-| 0023 | Deploy-window smoke as a supervisor gate | docs/OPERATIONS.md (preflight gate) |
-| 0024, 0026, 0028, 0030, 0031, 0032 | superseded same-day by 0033/0034 | retired |
-| 0025 | Raw escape hatch as an opcode allowlist | here: The model surface; module/PROTOCOL.md |
-| 0027 | Navigation is the module's | here: Client fidelity; docs/CONTRACTS.md, module/PROTOCOL.md |
-| 0029 | Bundle states the ender and the era | here: The reference bundle; wiki/README.md |
-| 0033 | Run dimensions and the comparability tuple | here: Episodes, lanes, and evidence |
-| 0034 | Account pool, scheduling from run history | docs/OPERATIONS.md (scheduling) |
-| 0035 | Harness and driver are separate words | here: What WrathBench measures |
-| 0036 | A fleet stop pauses runs | docs/OPERATIONS.md |
-| 0037 | SDK-side outcomes, caller budget | here: The model surface |
-| 0038 | The deploy owns the window | docs/OPERATIONS.md (deploy window) |
-| 0039 | Run data storage (proposed) | docs/ARCHITECTURE.md (persistence) |
-| 0040 | The bundle is a Wrath snapshot | here: The reference bundle; wiki/README.md |
-| 0041 | Probe campaigns are the third lane | here: Episodes, lanes, and evidence; docs/EPISODES.md |
-| 0042 | The build may ask the world DB about ids | here: The reference bundle; wiki/README.md |
-| 0043 | The tier is the evidence budget | here: Episodes, lanes, and evidence |
-| 0044 | Cache misses are provider weather | docs/COSTS.md |
