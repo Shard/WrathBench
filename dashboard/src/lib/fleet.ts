@@ -120,6 +120,13 @@ export interface FleetRow {
   /** Every model behind it, for the cell's title. */
   modelsTitle: string;
   /**
+   * The same models as ids, in roster order, for the cell's icons (ADR-0045).
+   * A paused account row carries the one model its run is on; an idle one
+   * carries none. Kept beside the pre-joined string rather than replacing it:
+   * the text is the truncated label and this is what identity is read from.
+   */
+  modelList: string[];
+  /**
    * The episode id (e90, e360, freeplay). Null on an account row — and also on
    * a job whose episode the supervisor could not name, which the page
    * distinguishes: an account row has no episode to show, a job with none is a
@@ -416,6 +423,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
        * place the strip says which Claude is in flight.
        */
       modelsTitle: withServed(job.models.join(", "), run?.resolvedModel),
+      modelList: [...job.models],
       episode: job.episode ?? null,
       account: job.account,
       accountClass: job.accountClass,
@@ -450,6 +458,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       job: null,
       models: here?.model ?? "—",
       modelsTitle: withServed(here?.model ?? "", run?.resolvedModel),
+      modelList: here === undefined ? [] : [here.model],
       episode: null,
       account: a.account,
       accountClass: a.class,

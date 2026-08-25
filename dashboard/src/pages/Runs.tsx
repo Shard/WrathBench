@@ -23,6 +23,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
+import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
@@ -187,7 +188,10 @@ function RunRowView(props: { row: ResultRun; query: string }) {
       case "model":
         return (
           <td>
+            {/* The family's mark, read from the model id (ADR-0045); an id no
+                family claims gets the neutral monogram, never a special case. */}
             <Show when={r().model !== null} fallback="—">
+              <ModelIcon model={r().model} />
               <A
                 href={narrow(r().effort === null ? { model: r().model! } : { model: r().model!, effort: r().effort! })}
                 title="narrow to this model"
