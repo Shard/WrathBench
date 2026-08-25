@@ -727,13 +727,20 @@ cache rule, the CORS policy, and the SPA's build-time snapshot base.
 
 ### 3. Add the cache rule
 
-Cloudflare does **not** cache JSON by default. In that zone's caching rules,
-match `Hostname equals data.<zone>` and set cache eligibility to *eligible for
-cache* with edge TTL *use cache-control header from origin*. Respecting the
-origin header is what puts freshness in the publisher's hands: it sets
-`max-age=30` on the two mutable files (`v1/manifest.json`, `v1/live.json`) and
-`max-age=31536000, immutable` on every generation-addressed object, so worst-case
-staleness is the push cadence plus the edge TTL, about 90–120s.
+Cloudflare does **not** cache JSON by default, and the rule also has to carry
+the TTLs itself: Bun's S3 writer cannot send a `Cache-Control` header (the
+publisher notes this at the top of `infra/publish-dashboard.ts`), so objects
+land in the bucket without one and "respect origin" would respect nothing.
+Two rules on the zone, first match wins:
+
+1. `Hostname equals data.<zone> and URI Path is in {"/v1/manifest.json",
+   "/v1/live.json"}` — eligible for cache, edge TTL **30s**, browser TTL
+   **30s**. These are the two mutable files; worst-case staleness is the push
+   cadence plus this TTL, about 90–120s.
+2. `Hostname equals data.<zone>` — eligible for cache, edge TTL **1 year**,
+   browser TTL **1 year**. Everything else is generation- or
+   content-addressed and never rewritten, so a long TTL is safe by
+   construction.
 
 **A missing cache rule is the only way this design costs money.** Without it
 every public request is a billed read against the bucket — roughly $7/month at
@@ -806,8 +813,8 @@ Then read the bucket back before trusting the loop with it:
   `v1/snap/<gen>/` set beside it. The manifest is uploaded last precisely so
   this is never half true.
 - `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
-- Object metadata shows `max-age=30` on the two mutable files and
-  `max-age=31536000, immutable` on everything else.
+  (Objects carry no `Cache-Control` metadata — Bun's S3 writer cannot send
+  it — which is why step 3's rules set the TTLs at the edge instead.)
 - Nothing in the bucket is a minimap tile, a raw trajectory entry, a
   scratchpad, or a filesystem path. The projection is an allowlist, so this
   should be true by construction — check it once anyway, because it is the
@@ -852,8 +859,9 @@ curl -sI https://data.<zone>/v1/manifest.json      # again
   `BYPASS` on the repeat means the cache rule from step 3 is not in effect;
   fix that before anything else, because it is the one misconfiguration that
   bills.
-- `cache-control: max-age=30` on the manifest, `max-age=31536000, immutable`
-  on a `v1/snap/<gen>/` object.
+- The response headers show the rule's TTLs: `cache-control: max-age=30` on
+  the manifest, a year on a `v1/snap/<gen>/` object. Both come from step 3's
+  cache rules — the objects themselves carry none.
 - The app loads and the runs, ladder, episodes, models, campaigns, run detail,
   fleet and map pages render. A CORS error in the console means the app origin
   in step 4 does not match the hostname the browser used — scheme included.
