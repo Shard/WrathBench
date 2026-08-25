@@ -110,10 +110,27 @@ it would count their text twice. `tokenTotals` reads the same spans
 (`replySpans`), so the run's completion total and its rate can never disagree
 about what one reply produced.
 
+The claude-code driver is the exception on the OUTPUT side, fixed 2026-08-25.
+Its `response` envelopes carry the API's `message_start` usage, whose
+`output_tokens` is the snapshot taken before the reply exists — one to
+thirty-odd tokens, never the finished count — while its input figures are
+right. Summing them read ~300× low (508 responses summing to 671 output tokens
+on a run whose 23 `claude_result` records report 207,062). So where a turn has a
+`claude_result`, the viewer takes that turn's output from it and ignores the
+snapshots, and the turn becomes the measured unit for `tps`: the result's
+`output_tokens` over `duration_api_ms`, or `duration_ms` where a run predates
+the adapter recording the API clock. Its `iterations` array is documented as one
+entry per API call but holds only the last call on every CLI version logged so
+far, so the per-reply path is gated on the entries summing to the turn total —
+true on a one-call turn, declined on everything else. A turn with no result (in
+flight, or cut short by a watchdog) keeps its snapshot figures, which are all
+anyone has for it.
+
 The figure is comparable within a lane and NOT between the two drivers: a
-claude-code span runs from the result the CLI was handed to the reply that came
-back, so it carries the CLI round trip as well as the generation, where a fixed
-loop span is request-to-response with no such hop in it. Read it as "is this run
+claude-code turn is timed by the CLI's own clock — `duration_api_ms` where the
+run has it, and on runs before 2026-08-25 only `duration_ms`, which also covers
+every tool round trip the turn made and so reads slower than the model wrote,
+where a fixed loop span is request-to-response with no such hop in it. Read it as "is this run
 moving", never as a model's generation speed.
 
 

@@ -20,6 +20,16 @@ record.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
   `claude_result` (natural completion). A watchdog kill cuts the stream before
   that record lands, so most subscription episodes have no as-metered figure.
+  That record is per harness TURN, not per session: a run's output is the sum
+  over them. Since `duration_api_ms` also rides on it (2026-08-25), which is
+  the CLI's time inside API calls as against `duration_ms`'s whole turn.
+- **2026-08-25:** every claude-code completion-token figure the viewer showed
+  before this date was wrong low by roughly 300×, and so was its tokens/second.
+  Per-response `usage.completion_tokens` under that driver is the API's
+  `message_start` snapshot, not the finished count; the input side was and is
+  correct. Output now comes off `claude_result.usageRaw.output_tokens`. Actual
+  cost (`costUsd`) never depended on it and does not move; EXPECTED cost, which
+  prices `completionTokens`, does.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
   an estimate only where the provider reported nothing, and labels it).
@@ -34,8 +44,10 @@ record.
 - **Do not sum claude-code per-response `usage` into dollars.** Summed
   per-response prompt tokens overshot a real `costUsd` by ~4x and the summed
   output figure undercounted real output ~6.8x on the one run with ground
-  truth. Per-response blocks are good for the SHAPE of context growth, never
-  for absolute $.
+  truth — and the output side is worse than that measurement suggested: the
+  figures are opening snapshots, so on the 2026-08-25 haiku run they undercount
+  by ~300×. Per-response blocks are good for the SHAPE of context growth, never
+  for absolute $, and on the output side not even for shape.
 - **Cost control is external to the fleet by decision** (operator, 2026-08-24): a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
