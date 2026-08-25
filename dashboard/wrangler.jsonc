@@ -1,0 +1,34 @@
+// Cloudflare deployment for the PUBLIC (snapshot-mode) dashboard. The design is
+// docs/PUBLIC-DASHBOARD.md; the runbook is docs/OPERATIONS.md, "Public
+// dashboard". The private dashboard is unaffected — it is still the same bundle
+// served same-origin by runner/viewer over loopback.
+//
+// There is no `main`, and that absence is the whole design: an assets-only
+// Worker has no fetch handler, so nothing is invoked on a page load and every
+// request in the read path is a free static asset. Data does not come from here
+// either — the SPA reads an R2 bucket on a separate hostname (infra/cloudflare/),
+// so a redeploy is only ever a UI change.
+//
+// Workers Static Assets rather than Pages: parity today, and Cloudflare raises
+// limits on Workers first.
+//
+// Build before deploying — wrangler uploads `dist` as it finds it:
+//
+//   VITE_WRATHBENCH_SNAPSHOT_BASE=https://<data-host> bun run --cwd dashboard build
+//   bunx wrangler deploy --config dashboard/wrangler.jsonc
+//
+// The deploying shell needs CLOUDFLARE_API_TOKEN holding the Workers Scripts
+// Edit token. It never needs bucket access; the publisher's R2 token never needs
+// Workers access.
+{
+  "name": "wrathbench-dashboard",
+  "compatibility_date": "2026-08-25",
+  "assets": {
+    // Relative to this file: `bun run --cwd dashboard build` writes dashboard/dist.
+    "directory": "./dist",
+    // The SPA owns its routes (/runs, /ladder, /run/<id>, /map, ...), so a deep
+    // link or a refresh must serve index.html instead of 404ing on a path that
+    // only exists in the client router.
+    "not_found_handling": "single-page-application"
+  }
+}
