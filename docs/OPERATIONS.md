@@ -171,31 +171,147 @@ fresh (below). Ctrl-C on a hand-started `infra/run-episode.sh` still ends the
 run as `manual`: SIGINT is the operator's cut, SIGTERM is the supervisor's
 pause.
 
-To stop launching *without* pausing what is running, set every job to
-`"enabled": false` and wait for `--status` to go quiet. The supervisor does not exit when it runs out of
-work — with no deadline it idles (logging so once) and waits for the config to
+To stop launching *without* pausing what is running, use the pause switch —
+"Updating the live fleet", below. The supervisor does not exit when it runs out
+of work: with no deadline it idles (logging so once) and waits for the config to
 give it something, because exiting under `restart: unless-stopped` would just
 restart it a minute later with a new epoch.
 
 `docker compose rm fleet` afterwards if you want the container gone; the state
 in `data/runs/` is what matters and it is on the bind mount.
 
-### Roll the epoch / pick up code changes
+### Updating the live fleet
 
-The date stamp in run ids (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
-supervisor start and stays fixed for the life of the process — it is an *epoch*,
-not a calendar date, so that `--resume-roster` and the loop's `-cN` numbering
-keep meaning what they meant. A supervisor up for three days still stamps the
-day it started. To roll it — and to pick up edits to `run-fleet.ts`,
-`run-roster.ts` or the runner image:
+Everything that changes the harness reaches the running fleet one of three
+ways, and the first question is always **which**:
+
+| What you changed | How it lands |
+| --- | --- |
+| `runner/src/**`, `sdk/**`, the wiki bundle | the **next episode spawn**. The repo is a bind mount and every episode is a fresh `bun runner/src/run.ts`: nothing to restart, and a run in flight keeps the code it started with. |
+| `infra/fleet.json` | the **next tick** (60s). Hot-reloaded; a malformed edit is complained about and ignored. |
+| `dashboard/**` | `bun run build` in `dashboard/`, then restart the viewer service. No fleet involvement. |
+| `infra/run-fleet.ts`, `infra/run-roster.ts`, the runner **image**, compose env | only when the **`fleet` container's process restarts**. That is what the two recipes below are for. |
+
+The supervisor's date stamp (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
+start and fixed for the life of the process — an *epoch*, not a calendar date,
+so `--resume-roster` and the loop's `-cN` numbering keep meaning what they
+meant. A supervisor up for three days still stamps the day it started; a
+restart rolls it, and so does `restart: unless-stopped` after a crash or a
+reboot. Resumes do not care: the run id is read off disk.
+
+#### Graceful — nobody's run is interrupted
 
 ```
-docker compose -f infra/compose.yml stop fleet          # runs pause
-docker compose -f infra/compose.yml build fleet         # only if the image changed
-docker compose -f infra/compose.yml up -d --no-deps fleet   # runs resume, then the pool fills
+./infra/fleet-update.sh graceful            # the whole thing
+./infra/fleet-update.sh graceful --dry-run  # the plan and every resolved value; safe while runs are live
+./infra/fleet-update.sh status              # the switch, the heartbeat, the live jobs
 ```
 
-The restart procedure is therefore **stop → (runs pause) → start → (scored runs
+It sets the **pause switch**, waits for every live run to end on its own clock,
+recreates the container on the new code, waits for the new supervisor's first
+heartbeat, and clears the switch. Nothing is signalled and no attempt is spent.
+
+The switch is `data/runs/fleet-pause.json` (`{"paused": true, "why": "..."}`),
+read every tick beside the config. While it is set the fleet launches
+**nothing** — no queue job, no policy pick, no campaign cell, no resume of a
+paused run — and every running job *drains*: SIGTERM only once its roster is
+between episodes, exactly as `"enabled": false` on one job does. It is a
+sidecar rather than a fleet.json key on purpose: a typo in `fleet.json` makes
+every `enabled` flag in it inert until somebody reads the banner, and the stop
+button must not be able to do that. It also works while the file is rejected,
+which is when someone most wants it. Set it by hand if you prefer
+(`fleet-update.sh` only writes and deletes that file); `--status` leads with a
+banner naming it, and distinguishes the switch on disk from the one the
+supervisor has picked up.
+
+Two costs, both printed by the script:
+
+- the drain race the supervisor has always had: an episode spawned in the
+  instant between the idle check and the SIGTERM gets run-roster's graceful
+  30s episode termination. Worst case one just-started episode, never one
+  mid-flight.
+- a run already **paused by its provider** is not resumed while the switch is
+  set. If the window outlasts that run's own episode budget it is swept as
+  stale — and a stale *provider* pause is a **counted** failed attempt against
+  the model (`runner/src/lapse.ts`). The script lists such runs before it waits;
+  a long wait with one of those on the board is a reason to clear the switch and
+  update later. Waiting is bounded (`--timeout`, default 8h) and a timeout
+  leaves the switch set and kills nothing.
+
+Ctrl-C during the wait is safe: nothing has been signalled, the switch stays
+set, and `./infra/fleet-update.sh resume` puts the fleet back to work.
+
+**The first time, the switch is not live yet.** It is supervisor code, so a
+supervisor started before this shipped does not read it — the graceful path
+becomes available only after one restart. That restart does *not* have to be
+the forceful one: the equivalent drain against the code running right now is a
+`fleet.json` edit (it is hot-reloaded, so it needs nothing new) —
+
+```
+accounts: { "pool": [], "paid": [], "local": [] }   # the policy has nowhere to schedule
+campaigns: every one "enabled": false               # each drains at its episode boundary
+queue: []                                           # nothing manual
+```
+
+— then wait for `--status` to show no live job, `docker compose -f
+infra/compose.yml up -d --no-deps --force-recreate fleet`, and put the accounts
+and campaigns back. `infra/fleet.test.ts` pins that this edit parses and
+schedules nothing. It is strictly worse than the switch (it is an edit to the
+file whose every flag goes inert on a typo, and it does not stop a *resume*),
+which is why it is the bootstrap and not the recipe.
+
+#### Forceful — now, and it costs the live runs
+
+```
+./infra/fleet-update.sh force               # asks for confirmation; --yes to skip
+docker compose -f infra/compose.yml up -d --no-deps --force-recreate fleet   # the same thing by hand
+```
+
+Compose stops the container inside its 180s `stop_grace_period`, so every live
+run takes the **pause** path rather than being killed: the supervisor SIGTERMs
+each roster, each roster SIGTERMs its episode, and the runner writes a pause and
+logs the character out. Nothing is corrupted. What it costs:
+
+- a scored run (`e90`/`e360`) is ended `manual` on the next boot: **the attempt
+  is spent** — with whatever money or quota it had burned — and the scheduler
+  gives the model a fresh attempt with a full clock. `manual` is in
+  `NOT_THE_MODELS_FAULT`, so it is **not a strike** and never reaches a scored
+  surface; three of *those* would taint a model, and a supervisor kill is not
+  one of them (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
+- freeplay, and a probe campaign with `resume: true`, come back where they left
+  off on the same account and character.
+- a preflight smoke in flight dies with the container; the gate re-runs it.
+
+`--no-deps` is not optional on either path: without it compose may decide the
+worldserver is out of date and recreate it under every live episode.
+
+Rebuilding the image (`docker compose -f infra/compose.yml build fleet`) belongs
+between the drain and the recreate; `fleet-update.sh` does not build for you.
+
+#### The worldserver
+
+`./infra/deploy-worldserver.sh` owns its own window and is the **forceful**
+path by design: its `draining` phase is `compose stop fleet`, so every live run
+pauses and a scored one spends its attempt, exactly as above. That is the
+documented trade — the script needs nothing from you while it runs, and a
+deploy must never depend on an operator watching a wait loop.
+
+For the graceful version, drain first and hand the script a quiet fleet:
+
+```
+./infra/fleet-update.sh drain      # pause, wait for quiet, stop the fleet; switch stays set
+./infra/build-worldserver.sh
+./infra/deploy-worldserver.sh      # its stop finds nothing live; it brings the fleet back up
+./infra/fleet-update.sh resume     # clear the switch; the pool fills on the next tick
+```
+
+The deploy still brings the fleet up on every exit path — that invariant is
+untouched — so `resume` is the only step you owe it afterwards. If you forget,
+`--status` says the fleet is paused and nothing schedules until you do.
+
+#### What a restart does to paused runs
+
+The restart procedure is **stop → (runs pause) → start → (scored runs
 are ended as failed attempts and reattempted; freeplay and opted-in campaigns
 resume)**. On boot, before the queue or the policy spawns anything, the
 supervisor finds every paused run whose model and episode are still in
@@ -211,11 +327,9 @@ scratchpad, the same "runner restarted, this run resumed" notice every driver
 gets) and is stamped `resumedFresh: true` in meta.json. Only once every resume
 has its account does the pool fill. The same planner runs every tick, so a run
 paused by its provider (`rate-limited`, `quota-exhausted`) is resumed once its
-cooling is over — see "Paused runs" below.
-
-Note that `restart: unless-stopped` also rolls the epoch on its own after a
-crash or a machine reboot, so run ids change there too; resumes do not care
-about the epoch (the run id is read from disk).
+cooling is over — see "Lapsed runs" below. A supervisor that boots with the
+pause switch set does none of this until the switch is cleared, which is what
+keeps an update window from filling the pool behind the operator's back.
 
 ### Lapsed runs: paused, and stale
 
@@ -291,7 +405,11 @@ it. Commit before building so the stamp names a commit rather than `-dirty`.
 You do not drain anything first, you do not wait for anything, and you do not
 kill anything. If a deploy ever needs a wait loop or a `pkill` from the
 operator, that is a bug in the script, not a procedure. Run it with the fleet
-up; run it again if it failed; it is safe both ways.
+up; run it again if it failed; it is safe both ways. The price of that is the
+`draining` phase below: a `compose stop`, so every live run pauses and a scored
+one spends its attempt. When you would rather pay nothing, drain first —
+"Updating the live fleet", *The worldserver* — and hand the script a fleet that
+is already quiet. Nothing about the script changes either way.
 
 #### What each phase means
 
@@ -511,7 +629,9 @@ as a config error (every per-entry account is checked), and none is ever
 ./infra/run-fleet.sh --status
 ```
 
-In order: the REJECTED banner when the file is not in effect; the `!` refusal
+In order: the REJECTED banner when the file is not in effect; the PAUSED banner
+when `data/runs/fleet-pause.json` is set (with what the supervisor has actually
+picked up — see "Updating the live fleet"); the `!` refusal
 block when the file IS in effect but the account rules disabled a pin in it
 (item 66 — an enabled job or campaign on a listed account, or a second one on
 an account already taken, is refused by name rather than taking the whole file
