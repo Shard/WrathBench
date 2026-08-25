@@ -261,6 +261,26 @@ status.
     loop. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
+86. **Live runs re-publish their detail every pass, and nobody has priced it**
+    (2026-08-25, from the `/code-review` pass over PR #20). `renderSnapshot`
+    puts `playtimeMs` — which carries `Date.now()` — at the top level of the
+    run detail payload, and `addressable()` only clock-normalizes a field named
+    `now`. So a *live* run's payload hashes differently every pass: a new
+    `v1/run/<id>/<ver>/` pair is written (2 PUTs) and the pass-before-last is
+    pruned (2 DELETEs), about **4 class-A ops per minute per live run** —
+    roughly 0.5M/month at 3 concurrent runs and ~1M at 6, against R2's 1M/month
+    free class-A tier. Correctness is unaffected: the manifest is still flipped
+    last and never points at a torn generation. What is affected is the cost
+    argument in `infra/publish-dashboard.ts`'s header and
+    `docs/PUBLIC-DASHBOARD.md`'s "Cost" section, both of which reason about an
+    **idle** fleet and are silent on this. Next action is the operator's: decide
+    whether to normalize `playtimeMs` the way `now` is (cheapest — a live run's
+    detail then only changes when something real changes), lengthen the publish
+    interval for live runs, or accept the ops and write the arithmetic down so
+    the next reader is not surprised by an R2 bill. Do this before the publisher
+    loop runs unattended (see item 85's sibling: the loop cannot start from a
+    clean checkout until PR #20 merges).
+
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). Shipped so far: the module refuses
     tokens under 32 characters (`400 weak_token`) and the runner issues random tokens
