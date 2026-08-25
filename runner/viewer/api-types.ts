@@ -307,8 +307,14 @@ export interface ReportedUsage {
 
 /** Token accounting for a whole run. */
 export interface TokenTotals {
-  /** "reported" only when a driver actually logged provider usage. */
-  source: "reported" | "estimated";
+  /**
+   * `reported` only when a driver actually logged provider usage, `estimated`
+   * when nobody counted, and `snapshot` for a claude-code run whose completion
+   * figure rests on the API's opening usage snapshots because the turns that
+   * produced it never emitted a `claude_result` — reported, and known to
+   * under-read badly. See `tokenTotals` in `tail.ts`.
+   */
+  source: "reported" | "estimated" | "snapshot";
   contextTokens: number;
   promptTokens: number;
   completionTokens: number;

@@ -194,7 +194,13 @@ export interface OpenAiAdapterOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** Reasoning effort, sent as `reasoning_effort`. Omitted when absent. */
+  /**
+   * Reasoning effort, sent as `reasoning_effort`. Omitted when absent.
+   *
+   * Every level goes through unchanged, `none` (thinking off) included: some
+   * OpenRouter models accept it, others reject it, which is true of `xhigh` and
+   * `max` too and is the operator's problem, not the adapter's.
+   */
   effort?: string;
   maxAttempts?: number;
   requestTimeoutMs?: number;

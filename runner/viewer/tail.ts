@@ -294,6 +294,15 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       return base;
     }
     default: {
+      // The token derivations read a claude-code turn's output off this record
+      // (`ClaudeTurnUsage`), and the generic shrink below would cut a long
+      // `iterations` array down to eight entries plus a string. Project it
+      // first, from the raw record, so both this path and `scanRunTotals` read
+      // the same thing.
+      if (t === "claude_result") {
+        const ct = claudeTurnUsage(rec);
+        if (ct !== null) base["claudeTurn"] = ct;
+      }
       for (const [k, v] of Object.entries(rec)) {
         if (k === "t" || k === "ts" || k === "turn") continue;
         // `meta` lands here carrying the run config, bearer token and all.
@@ -303,6 +312,92 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       return base;
     }
   }
+}
+
+/**
+ * What one harness turn of the claude-code driver actually produced, off its
+ * `claude_result` record.
+ *
+ * The `response` records inside such a turn carry the API's `message_start`
+ * usage snapshot, which is the finished count for INPUT and a placeholder for
+ * OUTPUT — one to thirty-odd tokens, whatever had been emitted when the stream
+ * opened. Summing them read ~300× low: on the haiku run of 2026-08-25, 508
+ * responses summed to 671 output tokens against the 207,062 the 23 result
+ * records report. So output for a claude-code turn is read here and nowhere
+ * else, and prompt tokens keep coming off the responses, where they are right.
+ *
+ * `iterations` is documented as one entry per API call in the turn. It is not,
+ * on any CLI version we have logged: it holds a single entry, the LAST call, on
+ * all seven runs that carry it, including turns of 1,280 API calls. So the
+ * per-reply path below is gated on the only invariant that can tell a real list
+ * from that one entry — the entries summing to the turn total — which on a
+ * one-call turn is true and correct, and on everything else declines.
+ */
+export interface ClaudeTurnUsage {
+  /** Output tokens for the whole harness turn. Authoritative. */
+  completion: number;
+  /** Per-API-call output tokens, in order, or empty when the list is unusable. */
+  iterations: number[];
+  /** The CLI's own turn clock: model time plus every tool round trip. */
+  durationMs: number | null;
+  /** Wall clock inside API calls. Absent before 2026-08-25; preferred when present. */
+  durationApiMs: number | null;
+}
+
+/** Read a raw or summarised `claude_result` record into the shape above. */
+export function claudeTurnUsage(rec: Record<string, unknown>): ClaudeTurnUsage | null {
+  const raw = rec["usageRaw"];
+  if (raw === null || typeof raw !== "object") return null;
+  const u = raw as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const completion = num(u["output_tokens"]);
+  if (completion === null) return null;
+  let iterations: number[] = [];
+  if (Array.isArray(u["iterations"])) {
+    const each = (u["iterations"] as unknown[]).map((it) =>
+      it !== null && typeof it === "object" ? num((it as Record<string, unknown>)["output_tokens"]) : null,
+    );
+    // A shrunk summary can replace overflow entries with a string; anything
+    // that is not a number end to end makes the list unusable, not partial.
+    if (each.length > 0 && each.every((n) => n !== null)) iterations = each as number[];
+  }
+  return {
+    completion,
+    iterations,
+    durationMs: num(rec["durationMs"]),
+    durationApiMs: num(rec["durationApiMs"]),
+  };
+}
+
+/**
+ * Whether these entries came from the claude-code driver.
+ *
+ * Read off the records only that driver writes — its `driver` line, and the
+ * `claude_system` envelopes it forwards — because the question this answers is
+ * whether an unresolved `response` usage figure is an opening snapshot or a
+ * finished count, and that is a property of the driver, not of the run.
+ */
+function isClaudeCode(entries: readonly EntrySummary[]): boolean {
+  for (const e of entries) {
+    if (e.t === "claude_system" || e.t === "claude_result") return true;
+    if (e.t === "driver" && e["driver"] === "claude-code") return true;
+  }
+  return false;
+}
+
+/** The claude-code turns of a run, by turn number. */
+function claudeTurns(entries: readonly EntrySummary[]): Map<number, ClaudeTurnUsage> {
+  const out = new Map<number, ClaudeTurnUsage>();
+  for (const e of entries) {
+    if (e.t !== "claude_result") continue;
+    const turn = e["turn"];
+    if (typeof turn !== "number") continue;
+    const usage = (e["claudeTurn"] as ClaudeTurnUsage | undefined) ?? claudeTurnUsage(e);
+    // A turn that reports no output is a turn this cannot speak for: an error
+    // result with nothing in it must not zero out what the envelopes did see.
+    if (usage !== null && usage !== undefined && usage.completion > 0) out.set(turn, usage);
+  }
+  return out;
 }
 
 /**
@@ -326,6 +421,19 @@ export interface ReplySpan {
   start: number;
   /** The last response's timestamp, or null where the span has no responses yet. */
   last: number | null;
+  /** The harness turn this span's records belonged to, where they said. */
+  turn: number | null;
+  /**
+   * True where the span's reported tokens are claude-code opening snapshots
+   * that no `claude_result` could replace — a real figure is not available for
+   * this reply and what stands is known to be far too low.
+   */
+  snapshot?: boolean;
+  /**
+   * A duration the driver measured, which overrides the span clock. Set only on
+   * a collapsed claude-code turn, where the whole turn is the measured unit.
+   */
+  ms?: number;
 }
 
 /**
@@ -334,9 +442,13 @@ export interface ReplySpan {
  * A span's tokens are provider-reported where ANY of its records reported
  * usage, and `chars / 4` only where none did — never both. The claude-code
  * driver splits one reply across several `response` records where only the
- * last carries usage, and that last figure is the RUNNING TOTAL for the whole
+ * last carries usage, and that last figure is the running total for the whole
  * message (`adapter-claude.ts`), so adding an estimate for the earlier
- * envelopes counts their text twice (FOLLOW-UPS 82).
+ * envelopes counts their text twice (FOLLOW-UPS 82). That is true of the
+ * message's INPUT side only: its `completion` is the API's opening snapshot,
+ * so where the turn has a `claude_result` the spans are resolved against it —
+ * `perReplyTokens` where the turn's `iterations` really describe its replies,
+ * `collapseClaudeTurns` otherwise.
  *
  * Reported figures are SUMMED, not taken from the last: one span can hold
  * several messages — several API calls — and each carries its own running
@@ -347,20 +459,39 @@ export interface ReplySpan {
  * which is why `tokensPerSecond` requires a `start`.
  */
 export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
+  const claude = claudeTurns(entries);
+  const perReply = perReplyTokens(entries, claude);
+  const claudeCode = isClaudeCode(entries);
   const spans: ReplySpan[] = [];
   let open: ReplySpan | null = null;
   const close = (): void => {
     if (open !== null) spans.push(open);
     open = null;
   };
+  const turnOf = (e: EntrySummary): number | null =>
+    typeof e["turn"] === "number" ? (e["turn"] as number) : null;
+  /** Per turn, how many of its usage-bearing responses have been seen. */
+  const seen = new Map<number, number>();
 
   for (const e of entries) {
     if (e.t === "response") {
-      open ??= { reported: 0, estimated: 0, sawUsage: false, start: 0, last: null };
+      open ??= { reported: 0, estimated: 0, sawUsage: false, start: 0, last: null, turn: turnOf(e) };
+      open.turn ??= turnOf(e);
       const usage = e["usage"] as ReportedUsage | undefined;
       if (usage !== undefined) {
         open.sawUsage = true;
-        open.reported += usage.completion;
+        const turn = turnOf(e);
+        const list = turn === null ? undefined : perReply.get(turn);
+        if (list !== undefined && turn !== null) {
+          const k = seen.get(turn) ?? 0;
+          seen.set(turn, k + 1);
+          open.reported += list[k] ?? 0;
+        } else {
+          open.reported += usage.completion;
+          // Nothing will replace this: the turn produced no result, so its
+          // opening snapshot is the whole of what anyone can say.
+          if (claudeCode && (turn === null || !claude.has(turn))) open.snapshot = true;
+        }
       } else {
         open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
       }
@@ -384,18 +515,135 @@ export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
       sawUsage: usage !== undefined,
       start: e.ts > 0 ? e.ts : 0,
       last: null,
+      turn: turnOf(e),
     };
   }
   close();
-  return spans;
+  return collapseClaudeTurns(spans, claude, perReply);
+}
+
+/**
+ * Where a `claude_result`'s `iterations` can be trusted to describe the turn's
+ * replies one for one: only when they sum to the turn's output total.
+ *
+ * Counting them instead would not discriminate. The adapter writes a `response`
+ * only for an envelope that carried text or a tool call, so a two-call turn
+ * whose first call produced neither has one usage-bearing response and one
+ * iteration — the counts match, the single last-call figure gets read as the
+ * whole turn, and the total silently loses a call. The sum cannot go wrong that
+ * way: it is either the turn or it is declined.
+ */
+function perReplyTokens(
+  entries: readonly EntrySummary[],
+  claude: ReadonlyMap<number, ClaudeTurnUsage>,
+): Map<number, number[]> {
+  const out = new Map<number, number[]>();
+  if (claude.size === 0) return out;
+  const usageBearing = new Map<number, number>();
+  for (const e of entries) {
+    if (e.t !== "response" || e["usage"] === undefined) continue;
+    const turn = e["turn"];
+    if (typeof turn !== "number") continue;
+    usageBearing.set(turn, (usageBearing.get(turn) ?? 0) + 1);
+  }
+  for (const [turn, usage] of claude) {
+    const list = usage.iterations;
+    if (list.length === 0) continue;
+    if (list.reduce((a, b) => a + b, 0) !== usage.completion) continue;
+    if ((usageBearing.get(turn) ?? 0) !== list.length) continue;
+    out.set(turn, list);
+  }
+  return out;
+}
+
+/**
+ * Fold each claude-code turn the per-reply path could not resolve into a single
+ * measured reply: the turn's output total over the time its replies took.
+ *
+ * The tokens have to come from the turn — its `response` figures are opening
+ * snapshots — but the CLOCK does not. The turn's spans time the replies exactly
+ * as they do under the fixed loop (opener → last response, a pause dropping the
+ * span it lands in), so summing those measured windows keeps the denominator
+ * inside model time and keeps the figure comparable to the fixed loop's
+ * request→response. The CLI's own `duration_ms` would not: on the 2026-08-25
+ * haiku run it sums to 5,283,659 ms of a 5,400,000 ms episode — 98% of wall
+ * clock, every MCP round trip into the game included — which is the run's
+ * elapsed clock wearing a label that says it is the model's.
+ *
+ * The driver's clocks are the fallback for a turn with no measurable span at
+ * all (nothing timed, a pause across the whole turn): `duration_api_ms` where
+ * the run records it, `duration_ms` otherwise, taken as one measurement.
+ *
+ * A turn with no result — one still in flight, or one a watchdog cut short —
+ * keeps today's behaviour and its snapshot figures, which is the only thing
+ * anyone has for it.
+ */
+function collapseClaudeTurns(
+  spans: readonly ReplySpan[],
+  claude: ReadonlyMap<number, ClaudeTurnUsage>,
+  perReply: ReadonlyMap<number, number[]>,
+): ReplySpan[] {
+  if (claude.size === 0) return [...spans];
+  const out: ReplySpan[] = [];
+  const done = new Set<number>();
+  for (const s of spans) {
+    const turn = s.turn;
+    const usage = turn === null ? undefined : claude.get(turn);
+    if (turn === null || usage === undefined || perReply.has(turn)) {
+      out.push(s);
+      continue;
+    }
+    if (done.has(turn)) continue; // its siblings are already in the collapsed span
+    done.add(turn);
+    let start = 0;
+    let last: number | null = null;
+    let measured = 0;
+    for (const o of spans) {
+      if (o.turn !== turn) continue;
+      if (o.start > 0 && (start === 0 || o.start < start)) start = o.start;
+      if (o.last !== null && (last === null || o.last > last)) last = o.last;
+      // The same test `tokensPerSecond` applies to a span of the fixed loop, so
+      // an unmeasurable one — no opener, or the far side of a pause — is left
+      // out of the denominator here exactly as it is left out there.
+      if (o.start > 0 && o.last !== null && o.last > o.start) measured += o.last - o.start;
+    }
+    const ms = measured > 0 ? measured : (usage.durationApiMs ?? usage.durationMs);
+    const collapsed: ReplySpan = {
+      reported: usage.completion,
+      estimated: 0,
+      sawUsage: true,
+      start,
+      last,
+      turn,
+    };
+    if (ms !== null && ms > 0) collapsed.ms = ms;
+    out.push(collapsed);
+  }
+  return out;
 }
 
 /**
  * Token accounting for a whole run. Prompt tokens are summed per turn, so the
  * total is what a provider would bill, not the size of the final context.
  *
+ * `source` is `snapshot` where the whole completion figure rests on claude-code
+ * opening snapshots — 21 of the 29 claude-code runs on disk on 2026-08-25,
+ * where a watchdog kill means no turn ever emitted the finished counts. Such a
+ * total is not an estimate and not a measurement: it is provider-reported and
+ * known to be far too low (~300× on the one run with both halves), and calling
+ * it `reported` would let it pass for the repaired ones.
+ *
+ * All of it, not any of it: a run whose turns resolved and whose last turn was
+ * cut off mid-flight carries a handful of snapshot tokens on that turn and is
+ * otherwise finished counts, and labelling that `snapshot` would be the same
+ * mistake pointing the other way. A resumed run whose first session resolved
+ * and whose second was killed is the case this rule reads generously; the
+ * per-turn truth is in the spans for anyone who needs it.
+ *
  * Completion tokens come from `replySpans`, so a reply split across several
- * `response` records counts once (FOLLOW-UPS 82). Prompt tokens carry the same
+ * `response` records counts once (FOLLOW-UPS 82), and a claude-code turn counts
+ * its `claude_result` output total instead of its responses' opening snapshots
+ * (`ClaudeTurnUsage`) — never both. Prompt tokens carry the same
  * rule: a request's `chars / 4` estimate is held until something reports a
  * prompt for it, and dropped when one does — under claude-code the reporting
  * envelope is a record or more after the first, and consuming the estimate on
@@ -446,10 +694,19 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   if (pending !== null) prompt += pending;
 
   let completion = 0;
-  for (const s of replySpans(entries)) completion += s.sawUsage ? s.reported : s.estimated;
+  /** Split of the reported half, which decides between `reported` and `snapshot`. */
+  let fromSnapshots = 0;
+  let resolved = 0;
+  for (const s of replySpans(entries)) {
+    completion += s.sawUsage ? s.reported : s.estimated;
+    if (!s.sawUsage) continue;
+    if (s.snapshot === true) fromSnapshots += s.reported;
+    else resolved += s.reported;
+  }
+  const snapshot = fromSnapshots > 0 && resolved === 0;
 
   return {
-    source: reported ? "reported" : "estimated",
+    source: snapshot ? "snapshot" : reported ? "reported" : "estimated",
     contextTokens: context,
     promptTokens: prompt,
     completionTokens: completion,
@@ -502,6 +759,17 @@ export const TPS_RECENT_REPLIES = 10;
  * figures can never disagree about what one reply produced: provider-reported
  * where ANY record of the span reported usage, and `chars ÷ 4` only where none
  * did, never both.
+ *
+ * The claude-code driver is one exception and only one: its responses carry
+ * opening snapshots rather than finished output counts, so a whole harness turn
+ * collapses to a single measured reply carrying the turn's output total. The
+ * clock does not change with it — the denominator is the SUM of that turn's
+ * spans, each timed by the rule above, so the figure stays inside model time
+ * and stays comparable to the fixed loop's request→response. The CLI's own
+ * `duration_api_ms`/`duration_ms` stand in only for a turn with no measurable
+ * span at all. That makes `replies` a count of turns on such a run, so
+ * `TPS_RECENT_REPLIES` covers rather more of the episode there than on the
+ * fixed loop.
  */
 export const TPS_SPAN_OPENERS = new Set(["request", "snippet_result", "tool_result"]);
 
@@ -516,8 +784,12 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
    */
   const replies: { tokens: number; ms: number }[] = [];
   for (const s of replySpans(entries)) {
-    if (s.start <= 0 || s.last === null || s.last <= s.start) continue;
-    replies.push({ tokens: s.sawUsage ? s.reported : s.estimated, ms: s.last - s.start });
+    // A driver-measured duration wins where there is one: on a collapsed
+    // claude-code turn the span clock times replies whose token figures were
+    // discarded, so pairing the two would be a rate off two different things.
+    const ms = s.ms ?? (s.start > 0 && s.last !== null ? s.last - s.start : 0);
+    if (ms <= 0) continue;
+    replies.push({ tokens: s.sawUsage ? s.reported : s.estimated, ms });
   }
 
   /** Summed both ways round, never a mean of rates: one short reply must not carry the figure. */
@@ -536,15 +808,61 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
 }
 
 /**
+ * The claude-code driver's own cost figure, accumulated the way the CLI reports
+ * it: cumulative within a session, so the session's cost is its last record.
+ *
+ * Sessions are told apart by `session_id`, which the `claude_system` envelopes
+ * carry from the CLI's first line onward and which `claude_result` records
+ * itself as of 2026-08-25. A run that pauses and resumes opens a new session
+ * and starts a new accumulation, so the run's cost is the sum over sessions —
+ * and a `claude_result` with no session known at all falls in one anonymous
+ * bucket, which takes the maximum rather than the sum. Taking the maximum
+ * rather than literally the last is the same number on a monotonic series and
+ * refuses to go backwards on a series that is not.
+ *
+ * Fed every record in order; ignores everything that is neither.
+ */
+export class ClaudeCostTally {
+  private readonly perSession = new Map<string, number>();
+  private current = "";
+
+  note(rec: Record<string, unknown>): void {
+    if (rec["t"] === "claude_system") {
+      const id = rec["session_id"];
+      if (typeof id === "string" && id.length > 0) this.current = id;
+      return;
+    }
+    if (rec["t"] !== "claude_result") return;
+    const own = rec["sessionId"];
+    const key = typeof own === "string" && own.length > 0 ? own : this.current;
+    const v = rec["costUsd"];
+    if (typeof v !== "number" || !Number.isFinite(v)) return;
+    const seen = this.perSession.get(key);
+    this.perSession.set(key, seen === undefined ? v : Math.max(seen, v));
+  }
+
+  /** The run's claude-code cost, or null where no result record carried one. */
+  total(): number | null {
+    if (this.perSession.size === 0) return null;
+    let sum = 0;
+    for (const v of this.perSession.values()) sum += v;
+    return sum;
+  }
+}
+
+/**
  * What the provider says this run cost, or null when it said nothing.
  *
  * Two drivers report it in two shapes and both are summed here:
  *
- * - `claude_result.costUsd` — the Claude Agent SDK's `total_cost_usd` for *one
- *   session*, emitted only when that session's turn loop ends cleanly; a hard
- *   watchdog kill cuts the stream before it lands, so most runs have none. A
- *   paused-and-resumed run opens a new CLI session, so figures are summed
- *   rather than maxed.
+ * - `claude_result.costUsd` — the Claude Agent SDK's `total_cost_usd`, which is
+ *   CUMULATIVE for the CLI session and lands once per harness turn, emitted
+ *   only when that turn ends cleanly; a hard watchdog kill cuts the stream
+ *   before it lands, so most runs have none. One session's figure is therefore
+ *   its LAST record, never the sum of them: summing 23 cumulative records on
+ *   the 2026-08-25 haiku run read $69.30 for a session that charged $4.35. The
+ *   sum across SESSIONS stands — a paused-and-resumed run opens a new one, and
+ *   each starts its own accumulation. See `ClaudeCostTally`.
  * - `response.usage.cost` — OpenRouter's per-call charge in credits (dollars),
  *   under the usage opt-in the adapter sets for that host. Per response, so the
  *   run's figure is necessarily a sum, and it grows with a live run.
@@ -553,12 +871,10 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
  */
 export function reportedCostUsd(entries: readonly { t: string; [k: string]: unknown }[]): number | null {
   let total: number | null = null;
+  const claude = new ClaudeCostTally();
   for (const e of entries) {
-    if (e.t === "claude_result") {
-      const v = e["costUsd"];
-      if (typeof v === "number" && Number.isFinite(v)) total = (total ?? 0) + v;
-      continue;
-    }
+    claude.note(e);
+    if (e.t === "claude_result") continue;
     // Responses only: a `request` record carries no charge, and counting the
     // usage block on both sides would double the bill.
     if (e.t !== MODEL_RESPONSE_RECORD) continue;
@@ -566,7 +882,8 @@ export function reportedCostUsd(entries: readonly { t: string; [k: string]: unkn
     const c = usage?.cost;
     if (typeof c === "number" && Number.isFinite(c)) total = (total ?? 0) + c;
   }
-  return total;
+  const cli = claude.total();
+  return cli === null ? total : (total ?? 0) + cli;
 }
 
 /**
@@ -957,6 +1274,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let snippets = 0;
   let modelResponses = 0;
   let costUsd: number | null = null;
+  /** Cumulative-per-session, summed across sessions; see `ClaudeCostTally`. */
+  const claudeCost = new ClaudeCostTally();
+  let sawClaudeMark = false;
   let costed = 0;
   let uncosted = 0;
   /*
@@ -995,10 +1315,15 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     else if (t === "snippet") snippets++;
     else if (t === MODEL_RESPONSE_RECORD) modelResponses++;
     // Read before the token projection drops everything that is not a turn:
-    // the driver's own cost lives on a `claude_result`, which is neither.
-    if (t === "claude_result") {
-      const v = rec["costUsd"];
-      if (typeof v === "number" && Number.isFinite(v)) costUsd = (costUsd ?? 0) + v;
+    // the driver's own cost lives on a `claude_result`, which is neither, and
+    // the session it belongs to on a `claude_system`, which is neither either.
+    claudeCost.note(rec);
+    // One marker per run is all the derivation needs to know which driver wrote
+    // these responses — see `isClaudeCode`. Pushing every `claude_system` would
+    // put thousands of entries in a list kept small on purpose.
+    if (!sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
+      sawClaudeMark = true;
+      spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
     }
     // Same reason, one record kind further: a `milestone` is neither a request
     // nor a response, so it has to be read before the early return below. Only
@@ -1019,10 +1344,22 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       if (taxi !== null) taxiMarks.push(taxi);
     }
     if (t !== "request" && t !== "response") {
-      if (TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t)) spanMarks.push({ i: 0, t, ts, start: 0, end: 0 });
+      // `claude_result` rides along with the span openers: it is what tells the
+      // derivation how many output tokens the turn actually produced, and a
+      // listing figure computed without it would not match the run page.
+      const carried = t === "claude_result" || TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t);
+      if (!carried) return;
+      const mark: EntrySummary = { i: 0, t, ts, start: 0, end: 0 };
+      if (typeof rec["turn"] === "number") mark["turn"] = rec["turn"];
+      if (t === "claude_result") {
+        const ct = claudeTurnUsage(rec);
+        if (ct !== null) mark["claudeTurn"] = ct;
+      }
+      spanMarks.push(mark);
       return;
     }
     const p: EntrySummary = { i: spanMarks.length, t, ts, start: 0, end: 0 };
+    if (typeof rec["turn"] === "number") p["turn"] = rec["turn"];
     if (t === "request") {
       const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
       p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
@@ -1057,6 +1394,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     /* an unreadable trajectory degrades one row, never the listing */
   }
   take(carry);
+
+  const cli = claudeCost.total();
+  if (cli !== null) costUsd = (costUsd ?? 0) + cli;
 
   return {
     // Over `spanMarks` rather than requests and responses alone: the span

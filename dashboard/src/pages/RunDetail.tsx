@@ -87,10 +87,35 @@ function achievementLine(d: RunDetailResponse | undefined): string {
  * live run the rate now is the question. "no reply yet" rather than a zero — a
  * run whose first request is still in flight has not been slow.
  */
-function tpsLine(d: RunDetailResponse | undefined): string {
+function tpsLine(d: RunDetailResponse | undefined, source?: string): string {
   const tps = d?.tps ?? null;
   if (tps === null || tps.recent === null) return "tok/s: no reply measured yet";
-  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} over ${tps.replies}`;
+  const line = `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} over ${tps.replies}`;
+  // The rate is the token total's per-reply arithmetic, so a total that
+  // under-reads makes a rate that under-reads by the same factor.
+  return source === "snapshot" ? `${line} · under-read` : line;
+}
+
+/**
+ * How the token figure was arrived at. `snapshot` is its own answer, not a
+ * flavour of "reported": the claude-code driver's per-response usage carries
+ * the API's opening output count, so a run whose turns never emitted a
+ * `claude_result` has a completion total that is provider-reported and known to
+ * be far too low (~300× on the run with both halves). Saying so is the whole
+ * point — an unrepaired figure must not read like a repaired one.
+ */
+function sourceLabel(source: string | undefined): string {
+  if (source === "reported") return "provider-reported";
+  if (source === "snapshot") return "snapshot — under-read";
+  return "estimated (chars ÷ 4)";
+}
+
+function sourceHint(source: string | undefined): string {
+  if (source === "snapshot") {
+    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the rate below are far too low";
+  }
+  if (source === "reported") return "provider-reported token counts";
+  return "no provider counted; characters ÷ 4";
 }
 
 export default function RunDetail() {
@@ -408,9 +433,8 @@ export default function RunDetail() {
                       <div class="v mono">
                         {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
                       </div>
-                      <div class="sub">
-                        {tokens()?.source === "reported" ? "provider-reported" : "estimated (chars ÷ 4)"} ·{" "}
-                        {tokens()?.turns ?? 0} turns
+                      <div class="sub" title={sourceHint(tokens()?.source)}>
+                        {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns
                       </div>
                       {/*
                         Speed, in the same unit the tokens above are counted in.
@@ -420,7 +444,7 @@ export default function RunDetail() {
                         driving the game.
                       */}
                       <div class="sub" title="output tokens ÷ wall time of model replies (the wait it answered, plus the reply)">
-                        {tpsLine(detail())}
+                        {tpsLine(detail(), tokens()?.source)}
                       </div>
                     </div>
                     <div class="card">

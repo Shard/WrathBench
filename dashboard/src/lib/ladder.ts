@@ -520,10 +520,22 @@ export interface PlacedPoint {
 }
 
 export interface LadderChartLayout {
+  /** Decade ticks on the log cost axis: 0.01, 0.1, 1, … up to the ceiling. */
   xTicks: number[];
+  /** The 2× and 5× lines inside each decade — gridlines only, never labelled. */
+  xMinorTicks: number[];
   yTicks: number[];
+  /** The cost axis ceiling. */
   xMax: number;
   yMax: number;
+  /** Where the log axis begins: the plot's left edge, or past the free gutter. */
+  axisX0: number;
+  /** The centre of the free gutter, where a $0 entry is drawn. */
+  freeX: number;
+  /** Where the divider between the gutter and the log axis is drawn. */
+  dividerX: number;
+  /** Whether any entry cost nothing, and so whether the gutter is there at all. */
+  hasFree: boolean;
   placed: PlacedPoint[];
   /** The same value→pixel maps the points were placed with, for the chart's own tick gridlines. */
   px: (x: number) => number;
@@ -559,8 +571,113 @@ export const MARK_RING_R = MARK_R + 1.5;
  */
 export const LABEL_GAP = MARK_RING_R + 1.5;
 
+/* ------------------------------------------------------- the cost axis */
+
 /**
- * Where everything goes. Points map linearly onto the plot; labels are placed
+ * The cost axis is logarithmic, and these are the three numbers that make it
+ * readable rather than a smear.
+ *
+ * A roster spans three orders of magnitude — most entries run a fraction of a
+ * dollar and one reasoning model runs sixty — so on a linear axis every model
+ * anyone wants to compare is crushed against the y axis by the one outlier.
+ * A log axis is the honest fix, and it needs a floor: log10(0) is negative
+ * infinity, and a tenth of a cent is not a distance worth a decade of the
+ * plot. `COST_FLOOR` is that floor — anything positive below it is clamped
+ * onto it rather than dropped, because "cheaper than a cent" is the reading
+ * and the exact figure below that is noise.
+ *
+ * Zero is not on this axis at all. A free tier's $0 is a real reading and
+ * cannot be clamped to a cent without inventing a price, so free entries get
+ * their own narrow gutter to the left of the axis, divided off, labelled, and
+ * never interpolated against. The gutter exists only when something is
+ * actually free.
+ */
+export const COST_FLOOR = 0.01;
+
+/** The gutter's width in viewBox units, when there is one. */
+export const FREE_GUTTER_W = 54;
+
+/** The narrowest the axis is allowed to be, so an all-cheap view is not a sliver. */
+export const COST_CEILING_MIN = 10;
+
+export interface CostScale {
+  floor: number;
+  ceiling: number;
+  /** Decades from the floor to the ceiling, inclusive. */
+  ticks: number[];
+  /** The 2× and 5× lines strictly inside the axis. */
+  minorTicks: number[];
+  hasFree: boolean;
+  axisX0: number;
+  freeX: number;
+  dividerX: number;
+  /** $0 to the gutter; anything else clamped into [floor, ceiling] and logged. */
+  px: (usd: number) => number;
+}
+
+/**
+ * The smallest decade at or above `max` — the axis ceiling.
+ *
+ * "At or above", not "strictly above": a roster whose dearest entry is exactly
+ * $10 puts that point on the right edge rather than leaving a whole empty
+ * decade, which is the behaviour the linear axis had. `Math.log10` of an exact
+ * power of ten can land a hair either side of the integer, so the exponent is
+ * corrected downward rather than trusted.
+ */
+function decadeCeiling(max: number): number {
+  if (!(max > COST_CEILING_MIN)) return COST_CEILING_MIN;
+  let e = Math.ceil(Math.log10(max));
+  if (10 ** (e - 1) >= max) e -= 1;
+  while (10 ** e < max) e += 1;
+  return 10 ** e;
+}
+
+/**
+ * The log cost scale for a set of costs, mapped across `[x0, x1]`.
+ *
+ * Data-independent: the floor, the gutter width and the minimum ceiling are
+ * fixed, and the only thing the data decides is how many decades the axis
+ * spans and whether the gutter is drawn. The gutter is keyed on a $0
+ * coordinate and not on the page's "exclude free" filter — a local model's
+ * list price is $0 whether or not its billing said `free`, and the coordinate
+ * is the honest test.
+ */
+export function costScale(costs: readonly number[], x0: number, x1: number): CostScale {
+  const positive = costs.filter((c) => c > 0);
+  const ceiling = decadeCeiling(positive.length === 0 ? 0 : Math.max(...positive));
+  const hasFree = costs.some((c) => c <= 0);
+  const axisX0 = hasFree ? x0 + FREE_GUTTER_W : x0;
+  const freeX = x0 + FREE_GUTTER_W / 3;
+  const dividerX = x0 + (FREE_GUTTER_W * 2) / 3;
+
+  const ticks: number[] = [];
+  for (let v = COST_FLOOR; v <= ceiling * 1.0000001; v *= 10) ticks.push(Number(v.toPrecision(12)));
+  const minorTicks: number[] = [];
+  for (const t of ticks) {
+    for (const m of [2, 5]) {
+      const v = Number((t * m).toPrecision(12));
+      if (v < ceiling) minorTicks.push(v);
+    }
+  }
+
+  const lo = Math.log10(COST_FLOOR);
+  const hi = Math.log10(ceiling);
+  const px = (usd: number): number => {
+    if (!(usd > 0)) return hasFree ? freeX : axisX0;
+    const v = Math.min(Math.max(usd, COST_FLOOR), ceiling);
+    return axisX0 + ((Math.log10(v) - lo) / (hi - lo)) * (x1 - axisX0);
+  };
+  return { floor: COST_FLOOR, ceiling, ticks, minorTicks, hasFree, axisX0, freeX, dividerX, px };
+}
+
+/** A decade tick's label: cents below a dollar, dollars at and above one. */
+export function fmtCostTick(usd: number): string {
+  return usd < 1 ? `${Math.round(usd * 100)}\u00a2` : `$${Math.round(usd)}`;
+}
+
+/**
+ * Where everything goes. Cost maps onto the log axis above (or into its
+ * free gutter) and xp maps linearly; labels are placed
  * greedily, each trying right-above, right-below, left-above, left-below of
  * its point (then the same four a row further out) and taking the first slot that overlaps no label already placed
  * and stays inside the plot. Points are visited highest-y first so the
@@ -569,11 +686,10 @@ export const LABEL_GAP = MARK_RING_R + 1.5;
  * label is worse than an ugly one.
  */
 export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox): LadderChartLayout {
-  const xTicks = niceTicks(Math.max(0, ...points.map((p) => p.x)));
+  const cost = costScale(points.map((p) => p.x), box.x0, box.x1);
   const yTicks = niceTicks(Math.max(0, ...points.map((p) => p.y)));
-  const xMax = xTicks[xTicks.length - 1]!;
   const yMax = yTicks[yTicks.length - 1]!;
-  const px = scaleLinear([0, xMax], [box.x0, box.x1]);
+  const px = cost.px;
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
   type Rect = { l: number; t: number; r: number; b: number };
@@ -613,5 +729,18 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
     taken.push(rectOf(pick));
     placed.push({ point: p, cx, cy, ...pick });
   }
-  return { xTicks, yTicks, xMax, yMax, placed, px, py };
+  return {
+    xTicks: cost.ticks,
+    xMinorTicks: cost.minorTicks,
+    yTicks,
+    xMax: cost.ceiling,
+    yMax,
+    axisX0: cost.axisX0,
+    freeX: cost.freeX,
+    dividerX: cost.dividerX,
+    hasFree: cost.hasFree,
+    placed,
+    px,
+    py,
+  };
 }

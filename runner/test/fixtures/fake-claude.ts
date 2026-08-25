@@ -63,6 +63,8 @@ const record: Record<string, unknown> = {
     hasAwsBearer: Bun.env["AWS_BEARER_TOKEN_BEDROCK"] !== undefined,
     hasOauthToken: Bun.env["CLAUDE_CODE_OAUTH_TOKEN"] !== undefined,
     configDir: Bun.env["CLAUDE_CONFIG_DIR"] ?? null,
+    // How `effort: "none"` reaches the CLI: a thinking budget of zero, no flag.
+    maxThinkingTokens: Bun.env["MAX_THINKING_TOKENS"] ?? null,
   },
   userMessages: [] as string[],
   mcpTools: [] as string[],
@@ -351,6 +353,7 @@ for await (const chunk of Bun.stdin.stream()) {
       result: `turn ${turn} done`,
       num_turns: 2,
       duration_ms: 12,
+      duration_api_ms: 7,
       total_cost_usd: 0,
       usage: { input_tokens: 10, output_tokens: 5 },
       session_id: "fake-session",

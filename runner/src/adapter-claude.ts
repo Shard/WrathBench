@@ -116,6 +116,13 @@ export const BILLING_ENV_EXACT = [
 const DB_ENV_PREFIX = "WRATHBENCH_DB_";
 
 /**
+ * Not billing either: the CLI's thinking budget. The run's `effort` is the only
+ * thing that may set it (`thinkingEnv`), so an operator's shell variable cannot
+ * silently become a run dimension nobody recorded.
+ */
+const THINKING_ENV = "MAX_THINKING_TOKENS";
+
+/**
  * The child environment, constructed rather than inherited.
  *
  * One credential survives, and it is the one the run's LANE names: the token in
@@ -143,6 +150,7 @@ export function childEnv(
     if (BILLING_ENV_EXACT.includes(k)) continue;
     if (k.startsWith(DB_ENV_PREFIX)) continue;
     if (k.startsWith(DEFAULT_CLAUDE_TOKEN_ENV)) continue;
+    if (k === THINKING_ENV) continue;
     out[k] = v;
   }
   const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
@@ -307,9 +315,25 @@ async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<st
 export interface ClaudeArgsOptions {
   mcpConfigPath: string;
   model?: string | undefined;
-  /** `--effort` level, when the run declares one. */
+  /** `--effort` level, when the run declares one. `none` is env, not a flag. */
   effort?: string | undefined;
   systemPrompt?: string;
+}
+
+/**
+ * The effort level that means "no extended thinking".
+ *
+ * The CLI has no `--effort none`; it reads a thinking budget from
+ * `MAX_THINKING_TOKENS`, and zero turns the feature off. Keeping this inside
+ * the effort dimension rather than adding a flag of its own is what makes
+ * `sonnet at none` one more row of the same (model, effort) matrix, comparable
+ * to `sonnet at low` — nothing new is recorded, the run config already says it.
+ */
+export const NO_THINKING = "none";
+
+/** Env the CLI needs for an effort level, where a level is not a flag. */
+export function thinkingEnv(effort: string | undefined): Record<string, string> {
+  return effort === NO_THINKING ? { [THINKING_ENV]: "0" } : {};
 }
 
 /**
@@ -361,8 +385,10 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.model !== undefined ? ["--model", o.model] : []),
     // `--effort <low|medium|high|xhigh|max>` in 2.1.238. Only when the run
     // declares one: absent means the CLI's own default, which is not the same
-    // as any named level.
-    ...(o.effort !== undefined ? ["--effort", o.effort] : []),
+    // as any named level. `none` is not one of the CLI's levels — it is
+    // extended thinking off, which the CLI takes as `MAX_THINKING_TOKENS=0` in
+    // its environment (`thinkingEnv`), so the flag stays off the line.
+    ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
     ...mcpToolNames(),
@@ -652,12 +678,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     model: config.model,
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
+  const thinking = thinkingEnv(config.effort);
+  const extra = { ...thinking, ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
     // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
     // sees the token, under the one name it knows.
     ...(config.subscription !== undefined ? { tokenEnv: config.subscription } : {}),
-    ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 
   trajectory.append({
@@ -935,13 +963,16 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               watchdogs.noteModelOutput();
               // One API reply can span several `assistant` envelopes (one per
               // content block) sharing a message.id, and the usage on each is a
-              // running total, not a copy: on morning-opus-1 the first envelope
-              // of a message reported 1 completion token where the last reported
-              // 208, and counting the first summed the run to 2,504 against a
-              // real 51,044. So exactly one entry per message id carries usage,
-              // and it is the LAST envelope's. The `result` envelope's session
-              // total only lands at end of episode, which a run cut short by the
-              // wall clock never reaches.
+              // running total for the INPUT side: on morning-opus-1 the first
+              // envelope of a message reported 1 completion token where the last
+              // reported 208. So exactly one entry per message id carries usage,
+              // and it is the LAST envelope's. Note what that figure is and is
+              // not: input is the finished count, output is the `message_start`
+              // snapshot the API sends before the reply exists (1–33 tokens),
+              // never what the reply ended up costing. The finished output count
+              // arrives only on the turn's `result` envelope, which is where the
+              // viewer reads it; a turn cut short by the wall clock never gets
+              // one, and its snapshots are all anyone has.
               const messageId = (msg["message"] as { id?: unknown } | undefined)?.id;
               const idKey = typeof messageId === "string" ? messageId : undefined;
               const entry = {
@@ -982,11 +1013,27 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               subtype: msg["subtype"],
               isError: msg["is_error"] === true,
               numTurns: msg["num_turns"],
+              // Which CLI session this turn belongs to. `total_cost_usd` below
+              // is cumulative WITHIN a session, so a reader needs the boundary
+              // to know when a figure restarts (`ClaudeCostTally` in the
+              // viewer). A pause and resume opens a new one.
+              sessionId: msg["session_id"],
               durationMs: msg["duration_ms"],
+              // Wall clock the CLI spent inside API calls, as against
+              // `duration_ms` which also covers every tool round trip the turn
+              // made. The closest thing the driver reports to model time.
+              durationApiMs: msg["duration_api_ms"],
+              // CUMULATIVE for the session, not this turn's charge: it climbs
+              // across the turns of one CLI invocation, so a run's cost is the
+              // last figure per session and not the sum of the records.
               costUsd: msg["total_cost_usd"],
               // Raw for fidelity; normalised so a reader never has to know two
-              // token vocabularies. This is a session total, not a per-turn
-              // figure, so nothing sums it — the response entries carry that.
+              // token vocabularies. This covers ONE harness turn — one CLI
+              // invocation, `num_turns` API calls inside it — so a run's output
+              // is the sum over these records. It is NOT the sum of the turn's
+              // `response` entries: their usage is the `message_start` snapshot
+              // (a token or two), never the finished count, so the viewer reads
+              // output tokens from here and prompt tokens from the responses.
               usageRaw: msg["usage"],
               usage: normalizeClaudeUsage(msg["usage"]),
               text: resultText.slice(0, 2_000),
