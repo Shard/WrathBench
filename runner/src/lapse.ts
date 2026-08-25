@@ -43,6 +43,24 @@ export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", 
 export const ATTEMPT_FAILURE_REASONS: ReadonlySet<string> = new Set(["attempt-failed", "stale"]);
 
 /**
+ * Terminations that say nothing about the model: an operator cut the run or
+ * stopped the fleet under it, the harness itself failed, a lapsed run was
+ * ended. They still number attempts (run ids) but they are never evidence —
+ * the policy reruns them, and no scored surface reads one as an episode.
+ *
+ * One set, read by BOTH predicates that ask the question: the scheduler's
+ * `isCounted` and the viewer's `unscoredReason`. They were two lists, and a
+ * reason added to one and not the other is exactly how a run the scheduler
+ * had already written off would still have landed on the ladder.
+ */
+export const NOT_THE_MODELS_FAULT: ReadonlySet<string> = new Set([
+  "manual",
+  "harness-error",
+  "stale-character",
+  ...ATTEMPT_FAILURE_REASONS,
+]);
+
+/**
  * How long a run may show no activity before it is cooked. Its OWN recorded
  * budget, never a tier nominal: a run launched with an overridden watchdog is
  * held to the clock it actually ran under.

@@ -102,19 +102,32 @@ dead one open for another tick.
 ### It is an attempt, never a recorded episode
 
 A failed attempt numbers a run id, shows on the runs page with its reason, and
-counts as an attempt spent on the Models page. It is excluded from every
-episodes-grain surface through the predicate those surfaces already share
-(`unscoredReason` → `unscored (attempt-failed)`), the same way a freeplay run
-is — no parallel field, no new filter, and the ADR-0047 grains keep meaning what
-they meant.
+counts as an attempt spent on the Models page. It is excluded from the scored
+surfaces through the predicate they already share (`unscoredReason`), and from
+the Episodes page's member count, which now reports it in its own `lapsed`
+column: an attempt spent on the tier, apart from the episodes it recorded.
+
+**And the two predicates become one set.** The scheduler had
+`NOT_THE_MODELS_FAULT` and the viewer had its own list, so `manual` — the
+reason a fleet stop now writes on every scored run in flight — would have been
+written off by the policy and still drawn on the ladder, with whatever level it
+had at the minute it was stopped. That is the failure this record exists to
+stop, arriving through the back door and at deploy scale. `NOT_THE_MODELS_FAULT`
+moves to `lapse.ts` beside the rule and is read by both. Historical `manual`,
+`harness-error` and `stale-character` runs therefore leave the ladder and the
+member counts too. That is the consolidation, not a side effect: it is the same
+sentence FOLLOW-UPS 78 is written in — *either way they must not count* — and
+those four runs' reclassification now does what it says on every surface.
 
 ### The session goes back with the run
 
 A provider-paused run keeps its module session alive on purpose (that is the
 in-place retry path). Ending one therefore has to release it, or the fresh
 attempt this record promises lands on an account that is still held and dies
-`account_in_use`. Every path that ends a lapsed run — the roster's, on its way
-past, and the supervisor's — frees the session first.
+`account_in_use`. The roster frees the session before it writes the
+termination; the supervisor writes first and releases after, without waiting on
+the DELETE — it has a full tick of slack, and a release that fails must not
+stop a run being ended.
 
 ## Alternatives
 
@@ -150,6 +163,18 @@ past, and the supervisor's — frees the session first.
   `--status` names both in full.
 - The 0.5 config gains no key it does not use: no campaign sets `resume` today,
   so every campaign is re-swept on a pause.
+- **The manual queue still outranks the taint.** `eligibleFrom` does not read
+  it, so a queue job for a tainted (model, episode) runs. That is ADR-0034's
+  rule about the queue being the operator's override, and it is the second
+  escape hatch beside `--clear-model` — stated here so it is not rediscovered
+  as a bug.
+- **The first tick after this ships is a backlog sweep.** `--dry-run` on
+  2026-08-25 named fifteen lapsed runs from one 12.7h outage, and because
+  provider-paused stale runs count, three of them are `nemotron-ultra`'s: it is
+  tainted on `e90` by the sweep alone. Six more models land at 2/3. The rule is
+  right and the arithmetic is right; the input is one outage rather than seven
+  models failing three times each, so the operator may want a `--clear-model`
+  pass (or an archive of the backlog) after the first tick.
 - The harness series does not bump. Nothing about what a run measures changes:
   the counted-run set is unchanged for every run already on disk, and this only
   decides what happens to runs that never became measurements.

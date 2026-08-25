@@ -1545,6 +1545,8 @@ export interface ResumePlan {
 export interface EndedRun {
   runId: string;
   model: string;
+  /** Part of the model's identity: opus-low and opus-high are two rows. */
+  effort: string | null;
   /** The job ref it was launched under, when the run id names one. */
   ref: string | null;
   episode: EpisodeId;
@@ -1657,6 +1659,7 @@ export function planStaleRuns(opts: {
     out.push({
       runId: f.runId,
       model: f.model,
+      effort: f.effort,
       ref: refOfRunId(f.runId, f.episode, opts.refs ?? []) ?? null,
       episode: f.episode,
       reason: lapse.reason!,
@@ -1714,6 +1717,7 @@ export function planResumes(opts: {
       end.push({
         runId: f.runId,
         model: f.model,
+        effort: f.effort,
         ref: launchedUnder,
         episode: f.episode,
         reason: "manual",
@@ -1745,6 +1749,7 @@ export function planResumes(opts: {
       end.push({
         runId: f.runId,
         model: f.model,
+        effort: f.effort,
         ref: launchedUnder ?? null,
         episode: f.episode,
         reason: lapse.reason!,
@@ -1879,17 +1884,37 @@ export async function releaseEndedSessions(ended: readonly EndedRun[], say: (s: 
  * belongs to — what "retry 2/3" counts from. The projection is the only place
  * that number is derived, so the log line and the Models page agree.
  */
-export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "episode">): number | undefined {
-  const st = states.find((s) => s.model === e.model)?.perEpisode[e.episode];
+export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "episode">): number | undefined {
+  const st = states.find((s) => s.model === e.model && s.effort === e.effort)?.perEpisode[e.episode];
   return st?.failed;
+}
+
+/**
+ * The retry number each of a batch of lapsed runs will carry, in order.
+ *
+ * The projection is read once a tick, so it does not know about the runs this
+ * same tick is about to end. A sweep after an outage ends several failures for
+ * one model at once, and without this every line would read "retry 1/3" while
+ * they summed to three. Counting within the batch is what makes `--status`
+ * honest about a model that is being tainted right now.
+ */
+export function retryNumbers(ended: readonly EndedRun[], base: (e: EndedRun) => number): number[] {
+  const seen = new Map<string, number>();
+  return ended.map((e) => {
+    const key = `${e.model}@${e.effort ?? ""}@${e.episode}`;
+    const n = base(e) + (seen.get(key) ?? 0);
+    if (e.counts) seen.set(key, (seen.get(key) ?? 0) + 1);
+    return n + 1;
+  });
 }
 
 /** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
 export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean, failedSoFar?: (e: EndedRun) => number): string[] {
   if (ended.length === 0) return [];
+  const retries = failedSoFar === undefined ? undefined : retryNumbers(ended, failedSoFar);
   return [
     `lapsed runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
-    ...ended.map((e) => `  ${e.runId} — ${formatEndedRun(e, failedSoFar?.(e))}`),
+    ...ended.map((e, i) => `  ${e.runId} — ${formatEndedRun(e, retries?.[i])}`),
   ];
 }
 
@@ -1899,13 +1924,12 @@ export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean, failed
  * is over, and what the operator needs to know is how many attempts are left
  * before the model is tainted for that episode.
  */
-export function formatEndedRun(e: EndedRun, failedSoFar?: number): string {
+export function formatEndedRun(e: EndedRun, retry?: number): string {
   // `manual` is the supervisor ending a run for a reason its detail already
   // states in full ("ended by the supervisor: …"), so it gets no head of its own.
   const head = e.reason === "attempt-failed" ? "failed attempt: " : e.reason === "stale" ? "stale: " : "";
-  const retry =
-    e.counts && failedSoFar !== undefined && failedSoFar + 1 <= TAINT_AFTER ? `, retry ${failedSoFar + 1}/${TAINT_AFTER}` : "";
-  return `${head}${e.detail}${retry}`;
+  const of = e.counts && retry !== undefined ? `, retry ${Math.min(retry, TAINT_AFTER)}/${TAINT_AFTER}${retry >= TAINT_AFTER ? " — tainted" : ""}` : "";
+  return `${head}${e.detail}${of}`;
 }
 
 /** One line per paused run the supervisor is not resuming, for --status and --dry-run. */
@@ -3905,17 +3929,19 @@ async function main(): Promise<void> {
     // A lapsed run is ended through the runner's own writer, once, and leaves
     // the paused set. Its session goes back with it, so the fresh attempt this
     // record promises does not land on an account that is still held.
+    const lapsedRetries = retryNumbers(lapsed, (e) => failedAttemptsFor(states, e) ?? 0);
     for (const r of endRuns(RUNS_DIR, lapsed)) {
-      const e = lapsed.find((x) => x.runId === r.runId)!;
+      const i = lapsed.findIndex((x) => x.runId === r.runId);
+      const e = lapsed[i]!;
       if (r.error !== undefined) {
         say(`end ${e.runId}: could not write the termination — ${r.error}`);
         record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "end-failed", detail: `${e.detail}; ${r.error}` });
         continue;
       }
       endedRuns.push(e);
-      const failedSoFar = failedAttemptsFor(states, e);
-      say(`end ${e.runId}: ${formatEndedRun(e, failedSoFar)}`);
-      record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "ended", detail: formatEndedRun(e, failedSoFar) });
+      const line = formatEndedRun(e, lapsedRetries[i]);
+      say(`end ${e.runId}: ${line}`);
+      record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "ended", detail: line });
     }
     if (lapsed.length > 0) void releaseEndedSessions(lapsed, say);
     const reserved = new Map<string, string>();

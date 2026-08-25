@@ -108,11 +108,18 @@ export interface EpisodesResponse {
   episodes: (EpisodeTierView & {
     /**
      * Runs that are *members* of this tier's comparability group: stamped with
-     * the id and never overridden. This is the count a chart may use.
+     * the id, never overridden, and a recorded episode rather than a spent
+     * attempt. This is the count a chart may use.
      */
     members: number;
     /** Stamped with the id but given a leash the id does not describe. */
     overrides: number;
+    /**
+     * Stamped with the id but never a recorded episode (ADR-0049): the run
+     * lapsed and was ended, an operator cut it, or the harness failed. An
+     * attempt spent on this tier, counted apart from its members.
+     */
+    lapsed: number;
     /**
      * Labeled with the id by the reader rather than stamped at launch — an
      * older run that looks like this tier. Countable, never a member (ADR-0030:

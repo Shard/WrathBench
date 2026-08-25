@@ -77,6 +77,9 @@ export default function Episodes() {
                 <th class="right" title="stamped with the id but run on another leash; never on the ladder, so the number links to the runs">
                   overridden
                 </th>
+                <th class="right" title="stamped with the id but never a recorded episode: ended as a failed attempt, stale, cut or a harness defect (ADR-0049)">
+                  lapsed
+                </th>
                 <th class="right">labeled</th>
               </tr>
             </thead>
@@ -105,6 +108,13 @@ export default function Episodes() {
                         </A>
                       </Show>
                     </td>
+                    <td class="right mono dim">
+                      <Show when={t.lapsed > 0} fallback={t.lapsed}>
+                        <A href={runsHref({ episode: t.id })} title="attempts spent on this tier that never became episodes">
+                          {t.lapsed}
+                        </A>
+                      </Show>
+                    </td>
                     <td class="right mono dim">{t.derived}</td>
                   </tr>
                 )}
@@ -121,6 +131,7 @@ export default function Episodes() {
               <p class="dim">
                 {t.members} member run{t.members === 1 ? "" : "s"}
                 <Show when={t.overrides > 0}> · {t.overrides} with an overridden leash</Show>
+                <Show when={t.lapsed > 0}> · {t.lapsed} spent attempt(s) that never became episodes</Show>
                 <Show when={t.derived > 0}> · {t.derived} older run(s) labeled, never enrolled</Show>
                 {" · "}
                 <A href={runsHref({ episode: t.id })}>runs</A> ·{" "}

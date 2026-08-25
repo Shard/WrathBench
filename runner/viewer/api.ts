@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
+import { NOT_THE_MODELS_FAULT } from "../src/lapse";
 import type {
   ApiInfoResponse,
   CampaignRowView,
@@ -695,9 +696,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       episodes: EPISODE_LIST.map((tier) => {
         const tagged = all.filter((r) => r.episode === tier.id);
         const stamped = tagged.filter((r) => r.episodeSource === "stamped");
+        // An attempt that never became an episode is not a member of the tier's
+        // group (ADR-0049) — the same predicate the ladder filters on, so this
+        // count and that chart hold the same runs.
+        const lapsed = (r: (typeof stamped)[number]): boolean =>
+          r.terminationReason !== null && NOT_THE_MODELS_FAULT.has(r.terminationReason);
         return {
           ...tier,
-          members: stamped.filter((r) => !r.episodeOverride).length,
+          members: stamped.filter((r) => !r.episodeOverride && !lapsed(r)).length,
+          lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
           overrides: stamped.filter((r) => r.episodeOverride).length,
           derived: tagged.length - stamped.length,
         };
