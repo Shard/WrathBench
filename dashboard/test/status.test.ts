@@ -43,7 +43,7 @@ function fleet(over: Partial<FleetResponse> = {}): FleetResponse {
   };
 }
 
-const status = (f: FleetResponse | undefined, error?: unknown) => serviceStatus({ fleet: f, error }, NOW);
+const status = (f: FleetResponse | undefined, error?: unknown) => serviceStatus({ fleet: f, error });
 
 describe("serviceStatus", () => {
   test("an API error is red and unreachable, whatever the last value said", () => {
@@ -82,7 +82,7 @@ describe("statusRows", () => {
   const value = (rows: { label: string; value: string }[], label: string): string => rows.find((r) => r.label === label)!.value;
 
   test("at rest: heartbeat, jobs, exhaust, uptime, harness, accounts — and nothing else", () => {
-    const rows = statusRows({ fleet: fleet(), error: undefined }, undefined, NOW);
+    const rows = statusRows({ fleet: fleet(), error: undefined }, undefined);
     expect(labels(rows)).toEqual(["heartbeat", "jobs", "exhaust", "uptime", "harness", "accounts"]);
     expect(value(rows, "heartbeat")).toBe("5s ago");
     expect(rows[0]!.title).toBe(new Date(NOW - 5_000).toLocaleString());
@@ -96,31 +96,53 @@ describe("statusRows", () => {
 
   test("a stale heartbeat says so in the row; missing facts say unknown rather than vanish", () => {
     const { startedAt: _s, outstanding: _o, ...bare } = fleet({ heartbeatAt: NOW - HEARTBEAT_STALE_MS });
-    const rows = statusRows({ fleet: bare, error: undefined }, undefined, NOW);
+    const rows = statusRows({ fleet: bare, error: undefined }, undefined);
     expect(value(rows, "heartbeat")).toBe("3m00s ago (stale)");
     expect(value(rows, "jobs")).toBe("1 / unknown");
     expect(value(rows, "exhaust")).toBe("unknown");
     expect(value(rows, "uptime")).toBe("unknown");
-    expect(value(statusRows({ fleet: fleet({ outstanding: { lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0, breakdown: [] } }), error: undefined }, undefined, NOW), "jobs")).toBe("1 / exhausted");
+    expect(value(statusRows({ fleet: fleet({ outstanding: { lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0, breakdown: [] } }), error: undefined }, undefined), "jobs")).toBe("1 / exhausted");
   });
 
   test("the deploy detail appears only while not running; the worldserver's build only when it differs", () => {
     const info = { service: "wrathbench-viewer" as const, publicMode: false, dashboard: true, dashboardBuild: null, worldserver: { build: "harness-0.4-73", startedAtMs: 1 }, now: NOW };
-    expect(labels(statusRows({ fleet: fleet(), error: undefined }, info, NOW))).not.toContain("worldserver");
+    expect(labels(statusRows({ fleet: fleet(), error: undefined }, info))).not.toContain("worldserver");
     const other = { ...info, worldserver: { build: "harness-0.4-70", startedAtMs: 1 } };
-    const rows = statusRows({ fleet: fleet({ server: server({ phase: "verifying", detail: "smoke 1 of 2" }) }), error: undefined }, other, NOW);
+    const rows = statusRows({ fleet: fleet({ server: server({ phase: "verifying", detail: "smoke 1 of 2" }) }), error: undefined }, other);
     expect(labels(rows)).toEqual(["heartbeat", "jobs", "exhaust", "uptime", "harness", "worldserver", "verifying", "accounts"]);
     expect(value(rows, "verifying")).toBe("smoke 1 of 2");
     expect(value(rows, "worldserver")).toBe("harness-0.4-70");
   });
 
   test("with no fleet state the rows say why; an error is its own row", () => {
-    expect(statusRows({ fleet: undefined, error: undefined }, undefined, NOW)).toEqual([{ label: "api", value: "loading" }]);
-    expect(statusRows({ fleet: undefined, error: new Error("502") }, undefined, NOW)[0]!.value).toContain("502");
-    const rows = statusRows({ fleet: fleet({ present: false, server: server({ build: "" }) }), error: undefined }, undefined, NOW);
+    expect(statusRows({ fleet: undefined, error: undefined }, undefined)).toEqual([{ label: "api", value: "loading" }]);
+    expect(statusRows({ fleet: undefined, error: new Error("502") }, undefined)[0]!.value).toContain("502");
+    const rows = statusRows({ fleet: fleet({ present: false, server: server({ build: "" }) }), error: undefined }, undefined);
     expect(labels(rows)).toEqual(["fleet", "harness"]);
     expect(value(rows, "harness")).toBe("unknown");
-    expect(statusRows({ fleet: fleet(), error: new Error("502") }, undefined, NOW)[0]!.label).toBe("api");
+    expect(statusRows({ fleet: fleet(), error: new Error("502") }, undefined)[0]!.label).toBe("api");
+  });
+
+  /*
+   * Every age in the popout is a span between two readings taken on the
+   * server. A response the reader gets late — a snapshot pushed a minute ago
+   * and served from a CDN — must not read as a minute more silence and an
+   * extra minute of uptime.
+   */
+  test("the heartbeat and uptime rows are spans inside the response, not against the reader's clock", () => {
+    // The fixture's heartbeat is 5s old and its supervisor an hour up, both
+    // measured against the body's own `now`. Nothing outside the body moves them.
+    const rows = statusRows({ fleet: fleet(), error: undefined }, undefined);
+    expect(value(rows, "heartbeat")).toBe("5s ago");
+    expect(value(rows, "uptime")).toBe("1h00m");
+    /*
+     * Advancing only the response's clock is what real silence looks like: the
+     * viewer keeps stamping a newer `now` while the supervisor's heartbeat
+     * stands still, so the gap widens inside the body and the badge says so.
+     */
+    const late = fleet({ now: NOW + 600_000 });
+    expect(value(statusRows({ fleet: late, error: undefined }, undefined), "heartbeat")).toBe("10m05s ago (stale)");
+    expect(serviceStatus({ fleet: late, error: undefined })).toEqual({ tone: "red", word: "stale" });
   });
 
   test("accounts busy counts alive jobs per schedulable class; pinned is not a class here", () => {
