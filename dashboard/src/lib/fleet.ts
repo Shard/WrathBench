@@ -21,12 +21,36 @@ import type { RunListRow } from "@viewer/api-types";
 export const HEARTBEAT_STALE_MS = 180_000;
 
 /**
+ * How long ago the supervisor last beat, **on the server's own clock**.
+ *
+ * Both numbers come out of the same response, and that is the whole point.
+ * `heartbeatAt` is written by the supervisor and read by the viewer; ageing it
+ * against `Date.now()` in the browser measures the two machines' clock skew as
+ * well as the silence, and there is a deployment where the skew is not noise:
+ * the public dashboard reads a snapshot pushed up to a minute earlier
+ * (docs/PUBLIC-DASHBOARD.md), so a perfectly healthy fleet would drift toward
+ * the three-tick threshold and read dead. Against `now` the age is what it was
+ * when the response was rendered, which is the honest reading in both builds.
+ *
+ * A snapshot that stops arriving therefore freezes this age rather than
+ * inflating it — deliberately. The publisher's own silence is a different
+ * clock and gets its own banner (`snapshotBanner`); conflating the two would
+ * blame the fleet for the publisher having stopped.
+ *
+ * Null when nothing has beaten here at all.
+ */
+export function heartbeatAge(fleet: Pick<FleetResponse, "heartbeatAt" | "now">): number | null {
+  return fleet.heartbeatAt === undefined ? null : fleet.now - fleet.heartbeatAt;
+}
+
+/**
  * The supervisor's liveness, as --status decides it: a heartbeat inside the
  * window. No heartbeat at all is "not running" — the only honest reading
  * across a container boundary.
  */
-export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt">, now: number): boolean {
-  return fleet.heartbeatAt !== undefined && now - fleet.heartbeatAt < HEARTBEAT_STALE_MS;
+export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt" | "now">): boolean {
+  const age = heartbeatAge(fleet);
+  return age !== null && age < HEARTBEAT_STALE_MS;
 }
 
 /**

@@ -32,7 +32,7 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
-import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { cursorMemory } from "../lib/cursormemory";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
@@ -235,8 +235,14 @@ export default function MapPage() {
      * grid would be on screen at once — more cells than the cache holds, so
      * every frame would evict and re-request the lot. The threshold also keeps
      * the visible cell count inside the LRU.
+     *
+     * The public build never asks at all. Tiles are the only Blizzard-derived
+     * bytes anywhere in the stack and they do not leave the lab, so there is
+     * nothing behind `/tiles/` on the public host: the labelled grid below is
+     * the map the public site draws, and asking first would only spend a
+     * request per visible cell to be told so.
      */
-    const useTiles = g.size >= TILE_MIN_PX;
+    const useTiles = !SNAPSHOT_MODE && g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";
