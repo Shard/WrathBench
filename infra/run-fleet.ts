@@ -75,12 +75,13 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, releaseRunSession, slug, type DeferEntry, type RosterSpec } from "./run-roster";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
-import { CHARACTER_NAME_RULE, isValidCharacterName, watchdogOverrideSchema } from "../runner/src/config";
+import { CHARACTER_NAME_RULE, isValidCharacterName, watchdogOverrideSchema, type TerminationReason } from "../runner/src/config";
 import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
 import { campaignWork, parseCampaigns, workDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
+import { TAINT_AFTER, classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
   LADDER_MS,
@@ -89,7 +90,9 @@ import {
   concurrencyKeyOf,
   inSeries,
   isCounted,
-  isStalePause,
+  isFailedAttempt,
+  isStaleRun,
+  staleForMs,
   modelStates,
   outstandingWork,
   formatOutstanding,
@@ -924,6 +927,13 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rest["wikiCoords"] !== undefined) {
       fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them (ADR-0041)`);
     }
+    // Whether a lapse is resumed is a property of the LANE, not of the model
+    // (ADR-0049): scored runs never resume, freeplay always does, and a probe
+    // campaign opts in. An entry saying `resume` meant something specific by
+    // it, so it is refused rather than ignored.
+    if (rest["resume"] !== undefined) {
+      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule (ADR-0049); a probe campaign opts in with campaigns.<name>.resume`);
+    }
     // Required, with no exception left to make: every entry is now something
     // the policy can schedule, so an absent tier is always a mistake.
     if (rawTier === undefined) fail(`roster ${name}: every entry states its tier (${TIERS.join(", ")})`);
@@ -1043,6 +1053,13 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
     const ref = (refs as string[]).join("+");
     if (typeof j.episode !== "string" || !(EPISODE_IDS as readonly string[]).includes(j.episode)) {
       fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
+    }
+    // `resume` on a job means nothing: whether a lapsed run comes back is the
+    // lane's rule (ADR-0049), and the only opt-in is a campaign's. The key is
+    // also the supervisor's own internal spelling for "this spawn resumes run
+    // X", so accepting it from the file would be actively confusing.
+    if ((j as Record<string, unknown>)["resume"] !== undefined) {
+      fail(`queue ${ref}: a job must not carry resume — a scored run that pauses is a failed attempt (ADR-0049); only campaigns opt in`);
     }
     const repeat = j.repeat ?? 1;
     if (repeat !== "loop" && (typeof repeat !== "number" || !Number.isInteger(repeat) || repeat <= 0)) {
@@ -1445,6 +1462,11 @@ export function jobSpawn(
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
       ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
+      // Whether a pause is resumed at all, decided by the lane and travelling
+      // with the spec so the roster process needs no config of its own
+      // (ADR-0049). Scored evals never resume; freeplay always does; a probe
+      // campaign opts in.
+      resumeOnPause: resumesOnPause(job.episode, campaign?.resume),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's character, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
@@ -1507,16 +1529,30 @@ export interface ResumePlan {
 }
 
 /**
- * A paused run the supervisor ENDS instead of resuming: the roster entry its
- * job ref names is a different model now (the operator re-pointed the ref),
- * so the run has no job to come back under. Ended as `manual` with the detail
- * below, through the runner's own termination writer, never resumed.
+ * A run the supervisor ENDS instead of resuming, through the runner's own
+ * termination writer. Three kinds reach here:
+ *
+ *  - the roster entry its job ref names is a different model now (the operator
+ *    re-pointed the ref), so the run has nothing to come back under (`manual`);
+ *  - it is a scored eval (or a campaign that did not ask to resume) that
+ *    paused: under ADR-0049 such a run is a **failed attempt**, not a resume;
+ *  - nothing came back for it at all and it went stale.
+ *
+ * `counts` is the three-strike question and it is exactly
+ * `reason === "attempt-failed"`, carried here so the log line and the
+ * projection cannot disagree about it.
  */
 export interface EndedRun {
   runId: string;
   model: string;
-  ref: string;
+  /** The job ref it was launched under, when the run id names one. */
+  ref: string | null;
+  episode: EpisodeId;
+  reason: TerminationReason;
   detail: string;
+  counts: boolean;
+  /** The account to release, when the run recorded one. */
+  account: string | null;
 }
 
 /** The job ref a fleet run id was launched under, off the id's `fleet-<ref>-<episode>-` prefix. Longest ref wins. */
@@ -1562,6 +1598,77 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
 }
 
 /**
+ * Whether the campaign that commissioned a run asked to be resumed
+ * (`campaigns.<name>.resume`, default false). A run with no campaign, or one
+ * whose campaign has since been deleted from the file, is not resumed: the
+ * config is the only place that opt-in can come from.
+ */
+export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, campaign: string | null): boolean {
+  if (campaign === null || campaigns === undefined) return false;
+  return campaigns.find((c) => c.name === campaign)?.resume === true;
+}
+
+/**
+ * Runs nothing came back for (ADR-0049). Pure.
+ *
+ * The host slept, or the fleet was down for half a day: a run left live or
+ * paused is cooked, because its episode budget elapsed in wall clock while
+ * nobody was playing it. Every such run is ENDED — a failed attempt when it
+ * was waiting on its provider, `stale` otherwise, since an offline gap is the
+ * harness's weather and not the model's failure. Freeplay is ended the same
+ * way; the next tick starts a fresh session rather than resuming a dead one.
+ *
+ * Paused runs are handled by `planResumes`, which walks them anyway; this
+ * covers the ones with no pause record at all — a run whose process died with
+ * the machine.
+ */
+export function planStaleRuns(opts: {
+  runs: readonly RunFact[];
+  campaigns?: readonly Campaign[];
+  /** Roster ref names, so an ended run can name the job it was launched under. */
+  refs?: readonly string[];
+  /** Run ids the supervisor's own processes hold; never ended from under them. */
+  running?: ReadonlySet<string>;
+  /**
+   * Accounts a live job holds, upper-cased. A run on one of them is left
+   * alone even if it looks cold: the supervisor cannot name the run ids its
+   * children are playing, and ending a live run's row would be worse than
+   * leaving a dead one open for another tick.
+   */
+  busyAccounts?: ReadonlySet<string>;
+  now: number;
+}): EndedRun[] {
+  const running = opts.running ?? new Set<string>();
+  const busy = opts.busyAccounts ?? new Set<string>();
+  const out: EndedRun[] = [];
+  for (const f of opts.runs) {
+    if (f.pause !== null || running.has(f.runId)) continue;
+    if (!f.runId.startsWith("fleet-")) continue; // not the fleet's run, not the fleet's verdict
+    if (f.account !== null && busy.has(f.account.toUpperCase())) continue;
+    const gap = staleForMs(f, opts.now);
+    if (gap === null) continue;
+    const lapse = classifyLapse({
+      episode: f.episode,
+      campaignResume: campaignResumeOf(opts.campaigns, f.campaign),
+      pause: null,
+      staleForMs: gap,
+    });
+    if (lapse.kind === "resume") continue;
+    out.push({
+      runId: f.runId,
+      model: f.model,
+      ref: refOfRunId(f.runId, f.episode, opts.refs ?? []) ?? null,
+      episode: f.episode,
+      reason: lapse.reason!,
+      detail: lapse.detail!,
+      counts: lapse.counts,
+      account: f.account,
+    });
+  }
+  return out;
+}
+
+/**
  * Which paused runs to resume this tick, and which to list instead. Pure.
  *
  * A run maps back to its job by what the run recorded — model, effort,
@@ -1577,7 +1684,7 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
  */
 export function planResumes(opts: {
   runs: readonly RunFact[];
-  config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts">;
+  config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> & Partial<Pick<FleetConfig, "campaigns">>;
   /** job name -> account, every job with a process (pinned ones included). */
   running: ReadonlyMap<string, string>;
   held: (account: string) => string | undefined;
@@ -1604,11 +1711,47 @@ export function planResumes(opts: {
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
     if (launchedUnder !== undefined && current !== undefined && (current.model !== f.model || (current.effort ?? null) !== (f.effort ?? null))) {
-      end.push({ runId: f.runId, model: f.model, ref: launchedUnder, detail: `ended by the supervisor: model ${f.model} no longer under ref ${launchedUnder}` });
+      end.push({
+        runId: f.runId,
+        model: f.model,
+        ref: launchedUnder,
+        episode: f.episode,
+        reason: "manual",
+        detail: `ended by the supervisor: model ${f.model} no longer under ref ${launchedUnder}`,
+        counts: false,
+        account: f.account,
+      });
       continue;
     }
-    if (isStalePause(f, now)) {
-      list(`stale: paused ${fmtElapsed(now - pause.at)} ago, past twice its ${f.episodeMs !== null ? fmtElapsed(f.episodeMs) : "6h"} budget — resume by hand (--resume ${f.runId}) or archive`);
+    // ADR-0049: the lane decides whether a lapse is resumed at all. A scored
+    // eval never is — it is a failed attempt, the account and character go
+    // back, and the scheduler gives the model a fresh one. Freeplay resumes,
+    // and a campaign resumes only if it asked to.
+    const lapse = classifyLapse({
+      episode: f.episode,
+      campaignResume: campaignResumeOf(config.campaigns, f.campaign),
+      pause,
+      staleForMs: staleForMs(f, now),
+    });
+    if (lapse.kind !== "resume") {
+      // Only a run the fleet launched is the fleet's to end. A hand-started
+      // run is listed exactly as it always was: the operator resumes it or
+      // archives it, and the supervisor does not write a verdict on work it
+      // did not commission.
+      if (!f.runId.startsWith("fleet-")) {
+        list(`${lapse.detail} — hand-launched, so the supervisor leaves it: resume by hand (--resume ${f.runId}) or archive`);
+        continue;
+      }
+      end.push({
+        runId: f.runId,
+        model: f.model,
+        ref: launchedUnder ?? null,
+        episode: f.episode,
+        reason: lapse.reason!,
+        detail: lapse.detail!,
+        counts: lapse.counts,
+        account: f.account,
+      });
       continue;
     }
     if (seenModel.has(modelKey)) {
@@ -1703,7 +1846,7 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
     try {
       const t = new Trajectory(join(runsDir, e.runId));
       try {
-        t.setTermination(e.runId, "manual", e.detail);
+        t.setTermination(e.runId, e.reason, e.detail);
       } finally {
         t.close();
       }
@@ -1714,13 +1857,55 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
   });
 }
 
+/**
+ * The game session a lapsed run left behind, released best-effort.
+ *
+ * Every roster path that walks away from a paused run frees its session first
+ * (`run-roster.ts`, and the runner itself on an `operator-pause`), so this is
+ * normally a no-op DELETE. It is here for the paths where nobody did: a roster
+ * killed mid-backoff, a machine that slept with a live run on it. Without it
+ * the account stays held and the fresh attempt this record promises dies
+ * `account_in_use`.
+ */
+export async function releaseEndedSessions(ended: readonly EndedRun[], say: (s: string) => void): Promise<void> {
+  for (const e of ended) {
+    const detail = await releaseRunSession(e.runId);
+    say(`released the session for ${e.runId}${e.account !== null ? ` on ${e.account}` : ""} — ${detail}`);
+  }
+}
+
+/**
+ * How many failed attempts this model already has on the episode a lapsed run
+ * belongs to — what "retry 2/3" counts from. The projection is the only place
+ * that number is derived, so the log line and the Models page agree.
+ */
+export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "episode">): number | undefined {
+  const st = states.find((s) => s.model === e.model)?.perEpisode[e.episode];
+  return st?.failed;
+}
+
 /** One line per run the supervisor would end rather than resume, for --status and --dry-run. */
-export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean): string[] {
+export function formatEnded(ended: readonly EndedRun[], fleetUp: boolean, failedSoFar?: (e: EndedRun) => number): string[] {
   if (ended.length === 0) return [];
   return [
-    `paused runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
-    ...ended.map((e) => `  ${e.runId} — ${e.detail}`),
+    `lapsed runs the supervisor ${fleetUp ? "ends on its next tick" : "will end when it starts"} (${ended.length}):`,
+    ...ended.map((e) => `  ${e.runId} — ${formatEndedRun(e, failedSoFar?.(e))}`),
   ];
+}
+
+/**
+ * "failed attempt (quota-exhausted), retry 2/3" — how a lapsed eval run reads
+ * on `--status` and in the strip. It is never called "paused" there: the run
+ * is over, and what the operator needs to know is how many attempts are left
+ * before the model is tainted for that episode.
+ */
+export function formatEndedRun(e: EndedRun, failedSoFar?: number): string {
+  // `manual` is the supervisor ending a run for a reason its detail already
+  // states in full ("ended by the supervisor: …"), so it gets no head of its own.
+  const head = e.reason === "attempt-failed" ? "failed attempt: " : e.reason === "stale" ? "stale: " : "";
+  const retry =
+    e.counts && failedSoFar !== undefined && failedSoFar + 1 <= TAINT_AFTER ? `, retry ${failedSoFar + 1}/${TAINT_AFTER}` : "";
+  return `${head}${e.detail}${retry}`;
 }
 
 /** One line per paused run the supervisor is not resuming, for --status and --dry-run. */
@@ -3051,7 +3236,7 @@ function printStatus(configPath: string): void {
   // Paused runs (ADR-0036): what the supervisor would resume now, and what it
   // lists instead — computed from disk so it is right with the fleet down.
   const runFacts = readRunFacts(RUNS_DIR);
-  const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStalePause(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
+  const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStaleRun(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
   const resumePlan =
     config !== undefined
       ? planResumes({
@@ -3153,10 +3338,25 @@ function printStatus(configPath: string): void {
       } else if (pausedHere !== undefined) {
         const p = pausedHere.pause!;
         const prog = runProgress(pausedHere.runId);
+        const ending = resumePlan.end.find((e) => e.runId === pausedHere.runId);
+        const head =
+          ending !== undefined
+            ? `${formatEndedRun(ending)} — ${pausedHere.runId}`
+            : `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}`;
         note =
-          `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}` +
+          head +
           `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +
-          `${resumePlan.resume.some((r) => r.runId === pausedHere.runId) ? ", resumes on the next tick" : fleetUp ? "" : ", resumes when the fleet starts"}`;
+          `${
+            ending !== undefined
+              ? fleetUp
+                ? ", ended on the next tick and reattempted fresh"
+                : ", ended when the fleet starts and reattempted fresh"
+              : resumePlan.resume.some((r) => r.runId === pausedHere.runId)
+                ? ", resumes on the next tick"
+                : fleetUp
+                  ? ""
+                  : ", resumes when the fleet starts"
+          }`;
       } else if (kind !== "pool" && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {
@@ -3205,9 +3405,16 @@ function printStatus(configPath: string): void {
     );
   }
 
-  // (d) paused runs the supervisor is not resuming, and why; and the ones it ends.
+  // (d) paused runs the supervisor is not resuming, and why; and the ones it
+  // ends — a lapsed eval reads as a failed attempt with its retry number, not
+  // as something waiting to come back (ADR-0049).
+  const lapsed = [
+    ...resumePlan.end,
+    ...planStaleRuns({ runs: runFacts, ...(config !== undefined ? { campaigns: config.campaigns, refs: Object.keys(config.roster) } : {}), now: Date.now() }),
+  ];
+  const statusStates = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: runFacts }) : [];
   for (const line of formatPaused(resumePlan.listed)) console.log(`  ${line}`);
-  for (const line of formatEnded(resumePlan.end, fleetUp)) console.log(`  ${line}`);
+  for (const line of formatEnded(lapsed, fleetUp, (e) => failedAttemptsFor(statusStates, e) ?? 0)) console.log(`  ${line}`);
   if (state?.ended !== undefined && state.ended.length > 0) {
     console.log(`  ended this session (${state.ended.length}): ${state.ended.map((e) => `${e.runId} (${e.detail})`).join("; ")}`);
   }
@@ -3381,7 +3588,13 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   for (const line of formatModels(states, new Set(), Date.now(), excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed)) console.log(line);
-  for (const line of formatEnded(resumes.end, false)) console.log(line);
+  for (const line of formatEnded(
+    [...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now: Date.now() })],
+    false,
+    (e) => failedAttemptsFor(states, e) ?? 0,
+  )) {
+    console.log(line);
+  }
   if (Object.keys(config.maxConcurrent).length > 0) {
     console.log(`concurrency: ${Object.entries(config.maxConcurrent).map(([d, n]) => `${d} <= ${n}`).join(", ")} (every run on the key counts)`);
   }
@@ -3676,19 +3889,35 @@ async function main(): Promise<void> {
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
     const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
     lastPaused = resumes.listed;
-    // A paused run whose ref now names another model is ended, not resumed:
-    // the runner's own writer, once, and the run leaves the paused set.
-    for (const r of endRuns(RUNS_DIR, resumes.end)) {
-      const e = resumes.end.find((x) => x.runId === r.runId)!;
+    // Runs nothing came back for (ADR-0049) are ended on every tick, boot
+    // included: the host slept, or the fleet was down past the run's own
+    // budget, and neither a live run nor a paused one survives that.
+    const lapsed = [
+      ...resumes.end,
+      ...planStaleRuns({
+        runs,
+        campaigns: cfg.campaigns,
+        refs: Object.keys(cfg.roster),
+        busyAccounts: new Set([...runningMap.values()].map((a) => a.toUpperCase())),
+        now: Date.now(),
+      }),
+    ];
+    // A lapsed run is ended through the runner's own writer, once, and leaves
+    // the paused set. Its session goes back with it, so the fresh attempt this
+    // record promises does not land on an account that is still held.
+    for (const r of endRuns(RUNS_DIR, lapsed)) {
+      const e = lapsed.find((x) => x.runId === r.runId)!;
       if (r.error !== undefined) {
         say(`end ${e.runId}: could not write the termination — ${r.error}`);
-        record({ job: `${e.ref}-${runs.find((f) => f.runId === e.runId)?.episode ?? "e90"}`, event: "end-failed", detail: `${e.detail}; ${r.error}` });
+        record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "end-failed", detail: `${e.detail}; ${r.error}` });
         continue;
       }
       endedRuns.push(e);
-      say(`end ${e.runId}: ${e.detail}`);
-      record({ job: `${e.ref}-${runs.find((f) => f.runId === e.runId)?.episode ?? "e90"}`, event: "ended", detail: e.detail });
+      const failedSoFar = failedAttemptsFor(states, e);
+      say(`end ${e.runId}: ${formatEndedRun(e, failedSoFar)}`);
+      record({ job: `${e.ref ?? e.model}-${e.episode}`, event: "ended", detail: formatEndedRun(e, failedSoFar) });
     }
+    if (lapsed.length > 0) void releaseEndedSessions(lapsed, say);
     const reserved = new Map<string, string>();
     for (const r of resumes.resume) {
       const name = r.job.name;
