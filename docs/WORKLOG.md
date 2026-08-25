@@ -45,9 +45,12 @@ Convention:
 - [2026-08-25](worklogs/2026-08-25.md) — ladder scatter: cost per run against xp earned,
   one point per model per tier; `all`/overridden/harness controls and the filter note
   dropped from the ladder; episodes counts lead to the ladder; viewer `xpEarned` and
-  `expectedCost` on `ResultRun` (restart owed). The 50 ADRs consolidated into
-  `docs/METHODOLOGY.md` and the owning component docs; `docs/decisions/` deleted;
-  every ADR citation outside the worklogs replaced or removed.
+  `expectedCost` on `ResultRun` (restart owed). Model logos across the dashboard:
+  `infra/model-lineup.json` as the data-driven identity catalog with a
+  `bun run model-logos` CLI fetching pinned, committed SVG assets; icon pucks replace
+  anonymous pips on the map. The 51 ADRs consolidated into `docs/METHODOLOGY.md`
+  and the owning component docs; `docs/decisions/` deleted; every ADR citation
+  outside the worklogs replaced or removed.
 
 ## Where the former ADRs went
 
@@ -104,6 +107,7 @@ history of `docs/decisions/`.
 | 0042 | The build may ask the world DB about ids | METHODOLOGY.md — The reference bundle; wiki/README.md |
 | 0043 | The tier is the evidence budget | METHODOLOGY.md — Episodes, lanes, and evidence |
 | 0044 | Cache misses are provider weather | docs/COSTS.md |
+| 0045 | Model lineup is the identity catalog | docs/ARCHITECTURE.md (dashboard) |
 | 0046 | The harness series is one shell-wide filter | docs/ARCHITECTURE.md (dashboard) |
 | 0047 | The runs page is the runs grain, episodes the episodes | docs/ARCHITECTURE.md (dashboard) |
 | 0048 | Achievements and flight use are observed, not inferred | METHODOLOGY.md — Client fidelity, Scoring; module/PROTOCOL.md |
