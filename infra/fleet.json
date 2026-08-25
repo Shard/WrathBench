@@ -41,6 +41,26 @@
     "",
     "policy: only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n } (concurrencyKeyOf);",
     "  paid { maxConcurrent } is the paid throttle. runsPerEpisode and extras are NOT 0.5 keys and are refused by name.",
+    "  subscriptions — the Claude subscriptions the fleet may schedule on, as the NAMES of the env vars",
+    "  holding their OAuth tokens; the tokens live in .env and never here. A subscription is a LANE, not a",
+    "  model dimension: one roster entry per model however many accounts are behind it, because which",
+    "  subscription paid says nothing about what a run measured. A claude-code run takes the first lane with",
+    "  a session free and RECORDS the lane it billed, so the count survives a supervisor restart; a claude",
+    "  pick with every lane full is held like any other cap. Absent = [\"CLAUDE_CODE_OAUTH_TOKEN\"], which is",
+    "  what every config written before 2026-08-25 meant.",
+    "  Rate-limit keys: a claude run counts against TWO and needs a free slot in BOTH — `claude-code`, every",
+    "  Claude session in flight whoever pays, and `claude-code:<ENV NAME>`, that one subscription's. Every",
+    "  lane has its own key, the default lane included, so the overall ceiling and a per-account limit are",
+    "  never the same number. A key the file does not name is uncapped, so an old file saying only",
+    "  \"claude-code\": 2 still means what it meant. Today: 3 sessions at most, 1 on the operator's own",
+    "  subscription and 2 on the partner's — a lane with a slot free is still HELD when the 3 are spent.",
+    "  A queue job may add",
+    "  subscription: \"<ENV NAME>\" to pin itself to one subscription's usage window, and a ROSTER ENTRY may",
+    "  do the same: roster.<name>.subscription pins that model's runs to one lane, and its pick is HELD when",
+    "  that lane is busy rather than moved to the other account. Normally absent — a lane is the scheduler's",
+    "  to pick, and pinning costs the entry the other subscription's free slots. A name that is not in",
+    "  policy.subscriptions refuses THAT ENTRY (named in --status, scheduled by nothing) and leaves the rest",
+    "  of the file in effect.",
     "",
     "campaigns: probe campaigns, the third lane (see docs/EPISODES.md). { <name>: { enabled, models \"all\"|[refs],",
     "  runsPerCell, cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,",
@@ -76,6 +96,13 @@
     "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2, "tier": "t0"},
     "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "tier": "t0"},
     "sub-haiku": {"model": "claude-haiku-4-5-20251001", "driver": "claude-code", "character": "Fleethaiku", "race": 3, "class": 2, "tier": "t0"},
+    "sub-fable": {"model": "claude-fable-5", "driver": "claude-code", "character": "Fleetfable", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sub-opus-48": {"model": "claude-opus-4-8", "driver": "claude-code", "character": "Fleetopeight", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sub-opus-46": {"model": "claude-opus-4-6", "driver": "claude-code", "character": "Fleetopsix", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sonnet-medium": {"model": "sonnet", "driver": "claude-code", "effort": "medium", "character": "Fleetsonnmd", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sonnet-high": {"model": "sonnet", "driver": "claude-code", "effort": "high", "character": "Fleetsonnhi", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sonnet-xhigh": {"model": "sonnet", "driver": "claude-code", "effort": "xhigh", "character": "Fleetsonnxh", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
+    "sonnet-max": {"model": "sonnet", "driver": "claude-code", "effort": "max", "character": "Fleetsonnmx", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2, "tier": "t1"},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "tier": "t1"},
     "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "none"},
@@ -99,7 +126,8 @@
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "character": "Qwenlocal", "race": 1, "class": 2, "tier": "t1", "idle": "unlimited"}
   },
   "policy": {
-    "maxConcurrent": {"claude-code": 2, "openrouter": 1, "opencode": 1},
+    "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2, "openrouter": 1, "opencode": 1},
+    "subscriptions": ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"],
     "paid": {"maxConcurrent": 1}
   },
   "campaigns": {
@@ -130,7 +158,5 @@
       ]
     }
   },
-  "queue": [
-    { "ref": "sub-opus-low", "episode": "e90", "account": "SHAKEOUT2", "repeat": "loop", "enabled": false }
-  ]
+  "queue": []
 }

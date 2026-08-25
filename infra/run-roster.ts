@@ -50,7 +50,7 @@ import { Database } from "bun:sqlite";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -75,6 +75,14 @@ export interface RosterSpec {
   effort?: string;
   apiBase?: string;
   apiKeyEnv?: string;
+  /**
+   * `claude-code` only: the subscription LANE this entry runs on, named by the
+   * env var holding its OAuth token — never the token. Absent means the default
+   * lane (`CLAUDE_CODE_OAUTH_TOKEN`), which is every roster written before there
+   * was a second subscription. The fleet assigns it; a hand-written roster may
+   * set it to pin an entry to one account's usage window.
+   */
+  tokenEnv?: string;
   runId?: string;
   character?: string;
   race?: number;
@@ -132,6 +140,8 @@ export interface Resolved {
   effort: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
+  /** The subscription lane, by env var NAME; undefined is the default lane. */
+  tokenEnv: string | undefined;
   runId: string;
   character: string;
   race: number;
@@ -420,6 +430,11 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (s.wikiCoords !== undefined && typeof s.wikiCoords !== "boolean") {
       throw new Error(`roster entry ${s.model}: wikiCoords must be a boolean`);
     }
+    if (s.tokenEnv !== undefined && !isTokenEnvName(s.tokenEnv)) {
+      // A NAME, never a token: the value would end up in argv, and argv is
+      // visible in `ps` to anything sharing the container.
+      throw new Error(`roster entry ${s.model}: tokenEnv must be an environment variable name, not a token`);
+    }
     const character = s.character ?? deriveCharacter(s.model, taken);
     taken.add(character.toLowerCase());
     out.push({
@@ -429,6 +444,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       effort: s.effort,
       apiBase: s.apiBase ?? DEFAULT_API_BASE,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
+      // Only the claude-code driver has a subscription to bill.
+      tokenEnv: driver === "claude-code" ? s.tokenEnv : undefined,
       // Effort is part of the run's identity, so it is part of the derived id:
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
@@ -489,6 +506,9 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
   }
+  // The subscription lane, by NAME. Emitted only when it is not the default, so
+  // every argv a pre-lane roster produced is unchanged.
+  if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
@@ -1214,10 +1234,13 @@ async function attemptSpec(
   // its one load-bearing check is this: without the token every claude episode
   // burns a session setup to fail at the first turn.
   if (CONTAINER && spec.driver === "claude-code" && !opts.dryRun) {
-    const token = process.env["CLAUDE_CODE_OAUTH_TOKEN"];
+    // The CHOSEN lane's variable, and the message names it: with two
+    // subscriptions the useful sentence is which one is missing.
+    const tokenEnv = spec.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV;
+    const token = process.env[tokenEnv];
     if (token === undefined || token.trim().length === 0) {
       const detail =
-        "CLAUDE_CODE_OAUTH_TOKEN is not visible to the fleet container — put it in /wrathbench/.env " +
+        `${tokenEnv} is not visible to the fleet container — put it in /wrathbench/.env ` +
         "(`claude setup-token`), it is loaded by Bun there and never passed via argv";
       say(`launch-failed ${spec.runId}: ${detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
