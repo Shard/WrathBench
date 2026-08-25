@@ -187,18 +187,6 @@ status.
     there is what makes the sessions restartable in the first place.
 
 
-80. **The running fleet and viewer keep the pre-ADR-0049 behaviour until they are
-    recreated** (2026-08-25, shipping ADR-0049 during a worldserver deploy). The
-    supervisor in flight still resumes scored runs and still lists a stale pause
-    forever instead of ending it, and the 8090 viewer still scores a run
-    terminated `attempt-failed` or `stale` into the ladder, because
-    `unscoredReason` is evaluated in its process. Next action: at the end of the
-    deploy window, `up -d --no-deps fleet` (the orchestrator's step anyway) **and**
-    restart the viewer, then check `--status` names the lapsed runs and the ladder
-    has dropped them. The same recreate item 78 already owes.
-
-## Wiki
-
 65. **The build's counters are three hand-synced lists** (2026-08-24, surfaced by
     the simplify pass over `wiki/`; predates that PR's diff). `wiki/src/build.ts`
     states every one of its ~28 metrics three times: a `let`/`Record` in the
