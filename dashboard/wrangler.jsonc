@@ -3,25 +3,39 @@
 // dashboard". The private dashboard is unaffected — it is still the same bundle
 // served same-origin by runner/viewer over loopback.
 //
-// There is no `main`, and that absence is the whole design: an assets-only
-// Worker has no fetch handler, so nothing is invoked on a page load and every
-// request in the read path is a free static asset. Data does not come from here
-// either — the SPA reads an R2 bucket on a separate hostname (infra/cloudflare/),
-// so a redeploy is only ever a UI change.
+// This is the INTERIM, zoneless shape. The design doc's shape — R2 behind a
+// custom domain, zone cache rules carrying the TTLs, an assets-only Worker with
+// no fetch handler and therefore nothing invoked in the read path — needs a
+// domain on the account, and buys nothing without one: on Cloudflare, access
+// control, WAF, and cache are all custom-domain features. An `r2.dev`
+// development URL is world-readable to whoever learns the hostname.
+//
+// A gated preview needs a gate, so here there IS a `main`: one Worker serving
+// the SPA from Static Assets and the published artifacts from a private bucket
+// binding, with a shared secret in front of both (dashboard/worker/index.ts).
+// One origin, so there is no CORS in this shape and infra/cloudflare/r2-cors.json
+// does not apply to it. When the account has a domain, the read path reverts to
+// the design doc's and this file loses its `main` again.
 //
 // Workers Static Assets rather than Pages: parity today, and Cloudflare raises
 // limits on Workers first.
 //
-// Build before deploying — wrangler uploads `dist` as it finds it:
+// Build before deploying — wrangler uploads `dist` as it finds it. The base is
+// "/" rather than a hostname: same-origin, and the SPA appends `/v1/...` itself.
 //
-//   VITE_WRATHBENCH_SNAPSHOT_BASE=https://<data-host> bun run --cwd dashboard build
+//   VITE_WRATHBENCH_SNAPSHOT_BASE=/ bun run --cwd dashboard build
 //   bunx wrangler deploy --config dashboard/wrangler.jsonc
 //
-// The deploying shell needs CLOUDFLARE_API_TOKEN holding the Workers Scripts
-// Edit token. It never needs bucket access; the publisher's R2 token never needs
-// Workers access.
+// The gate's secret is not in this file and never in argv:
+//
+//   bunx wrangler secret put DASHBOARD_PASSWORD --config dashboard/wrangler.jsonc
+//
+// The deploying shell needs CLOUDFLARE_API_TOKEN holding a token with Workers
+// Scripts Edit *and* Workers R2 Storage Read (to bind the bucket). It never
+// needs object write; the publisher's R2 token never needs Workers access.
 {
   "name": "wrathbench-dashboard",
+  "main": "./worker/index.ts",
   "compatibility_date": "2026-08-25",
   "assets": {
     // Relative to this file: `bun run --cwd dashboard build` writes dashboard/dist.
@@ -29,6 +43,19 @@
     // The SPA owns its routes (/runs, /ladder, /run/<id>, /map, ...), so a deep
     // link or a refresh must serve index.html instead of 404ing on a path that
     // only exists in the client router.
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    // `true`, not a route list: the gate has to see the page load too, or the
+    // HTML is public and only the data behind it is not.
+    "run_worker_first": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "PUBLIC_BUCKET",
+      "bucket_name": "wrathbench-public"
+    }
+  ],
+  "observability": {
+    "enabled": true
   }
 }
