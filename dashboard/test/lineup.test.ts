@@ -17,14 +17,24 @@ describe("the roster's ids", () => {
     expect(idOf("opus")).toBe("claude");
     expect(idOf("sonnet")).toBe("claude");
     expect(idOf("anthropic/claude-opus-4-1")).toBe("claude");
+    // A dated id, which is what the claude-code harness's roster entries carry.
+    expect(idOf("claude-haiku-4-5-20251001")).toBe("claude");
   });
 
   test("every other id the fleet runs finds its family", () => {
     expect(idOf("openai/gpt-5.6-luna")).toBe("openai");
+    // An open-weights model under the vendor's prefix is still that vendor's mark.
+    expect(idOf("openai/gpt-oss-120b")).toBe("openai");
     expect(idOf("google/gemini-3.7-flash")).toBe("gemini");
     expect(idOf("deepseek/deepseek-v4-flash-0731")).toBe("deepseek");
+    expect(idOf("deepseek/deepseek-v4-pro-0813")).toBe("deepseek");
     expect(idOf("qwen/qwen3.8-27b")).toBe("qwen");
     expect(idOf("z-ai/glm-5.2:free")).toBe("glm");
+    expect(idOf("z-ai/glm-5.3")).toBe("glm");
+    expect(idOf("z-ai/glm-4.7-flash")).toBe("glm");
+    expect(idOf("minimax/minimax-m3")).toBe("minimax");
+    // ...and bare, the way an OpenCode Zen id names the same model.
+    expect(idOf("minimax-m3")).toBe("minimax");
   });
 
   test("the billing suffix is stripped, not matched on", () => {
