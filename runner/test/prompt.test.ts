@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { SYSTEM_PROMPT, freshCharacterNote } from "../src/prompt";
+import { SYSTEM_PROMPT, freshCharacterNote, resumeSessionNote } from "../src/prompt";
 
 /**
  * The prompt is harness surface, so the facts a run proved models
@@ -102,18 +102,22 @@ describe("episode sentence", () => {
 });
 
 describe("the fresh-launch session note (the model names its character)", () => {
-  const note = (taken: string[] = []) => freshCharacterNote({ character: "Fleetsonnet", race: 1, class: 2, taken });
+  const note = (taken: string[] = []) => freshCharacterNote({ race: 1, class: 2, taken });
 
   test("invites the model to name the character, in the game's own naming rules", () => {
     expect(note()).toContain("name your character");
     expect(note()).toContain("2-12 letters, no spaces, no three identical letters in a row");
     expect(note()).toContain("it is yours for the episode");
+    expect(note()).toContain("pick something you like and be creative");
   });
 
-  test("the roster name is offered as a suggestion, not as an assignment", () => {
-    expect(note()).toContain('"Fleetsonnet" is the harness\'s suggestion');
+  test("no name travels with the launch — not as an assignment and not as a suggestion", () => {
+    // A suggestion is a name the harness has to invent, keep valid and keep
+    // unique; an invalid one took a whole fleet.json down (2026-08-25).
+    expect(note()).not.toContain("suggestion");
     expect(note()).not.toContain("your assigned character");
     expect(note()).not.toContain("Use exactly these values");
+    expect(note()).toContain("be creative");
   });
 
   test("race and class stay fixed — they are the episode's comparability dimensions", () => {
@@ -134,5 +138,29 @@ describe("the fresh-launch session note (the model names its character)", () => 
 
   test("the model is still never told the account", () => {
     expect(note()).toContain("do not pass an account");
+  });
+});
+
+describe("the resume session note", () => {
+  const base = { race: 1, class: 2, clock: "40 minutes elapsed of 90", seen: "", raceName: "Human", className: "Paladin" };
+
+  test("a run that recorded a name is told to reuse exactly that character", () => {
+    const note = resumeSessionNote({ ...base, character: "Grimjaw", seen: " It was last observed at level 6, and that progress is still there." });
+    expect(note).toContain('name "Grimjaw"');
+    expect(note).toContain('createSession({ character: "Grimjaw", race: 1, class: 2 })');
+    expect(note).toContain("Do not create a different one");
+    expect(note).toContain("level 6");
+    expect(note).toContain("race 1 (Human), class 2 (Paladin)");
+  });
+
+  test("a run that paused before createSession landed gets the fresh-launch note, never a name it does not have", () => {
+    // The name is the model's own and is recorded only once the character
+    // exists; nothing may interpolate an absent one into an instruction.
+    const note = resumeSessionNote({ ...base, character: undefined });
+    expect(note).toContain("resumed after a pause");
+    expect(note).not.toContain("undefined");
+    expect(note).not.toContain("Do not create a different one");
+    expect(note).toContain("name your character");
+    expect(note).toContain('createSession({ character: "<your name>", race: 1, class: 2 })');
   });
 });

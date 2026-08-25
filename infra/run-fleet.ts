@@ -80,10 +80,8 @@ import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, rel
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
 import {
-  CHARACTER_NAME_RULE,
   DEFAULT_CLAUDE_TOKEN_ENV,
   isTokenEnvName,
-  isValidCharacterName,
   watchdogOverrideSchema,
   type TerminationReason,
 } from "../runner/src/config";
@@ -662,6 +660,7 @@ const STATE_PATH = join(RUNS_DIR, "fleet-state.json");
  */
 const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
 const SERVER_STATE_LOCK = join(RUNS_DIR, "server-state.lock");
+const PAUSE_PATH = join(RUNS_DIR, "fleet-pause.json");
 
 // ------------------------------------------------------------------ parsing
 
@@ -738,14 +737,6 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
           `declares "billing": "paid" — a deliberate paid model under policy.paid; ` +
           `a local/self-hosted apiBase is exempt`,
       );
-    }
-    // The game's naming rules, enforced where the name is written so a bad
-    // one is a config refusal at load, not a ZodError the roster retries
-    // every tick: `Fleetsonnetlo` (13 chars) respawn-looped for two hours on
-    // 2026-08-24 because nothing between the file and the runner ever looked
-    // at the name. One predicate for every boundary (runner/src/config.ts).
-    if (e.character !== undefined && (typeof e.character !== "string" || !isValidCharacterName(e.character))) {
-      fail(`${where}: entry ${e.model}: ${CHARACTER_NAME_RULE} (got ${JSON.stringify(e.character)})`);
     }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);
@@ -973,6 +964,15 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // budget an operator wrote on purpose.
     if (rawTiers !== undefined) fail(`roster ${name}: tiers is not a 0.5 key — force a longer episode by setting tier: "t2"`);
     if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
+    // Retired with the same argument, and refused at LOAD for the reason a bad
+    // name was: a name in the config is a name the harness has to keep valid,
+    // and an invalid one takes the whole file down (`Fleetsonnno`, 2026-08-25)
+    // or respawn-loops a job (`Fleetsonnetlo`, 13 chars, 2026-08-24). The model
+    // names its own character and the run records what it chose, so there is
+    // nothing for an entry to say.
+    if (rest["character"] !== undefined) {
+      fail(`roster ${name}: character is not a key — the model names its own character and the run records it`);
+    }
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
     // An entry carrying an objective is outside the policy entirely
     // The roster is a CATALOG: an entry describes a model and says
@@ -1691,7 +1691,7 @@ export function jobSpawn(
       // campaign opts in.
       resumeOnPause: resumesOnPause(job.episode, campaign?.resume),
       // An extra run is stamped as one; a scored-tier extra also rolls the
-      // policy's character, where a freeplay extra keeps the entry's own.
+      // policy's race/class, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
       ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class } : {}),
       // The subscription lane, for the one driver that has one. Omitted on the
@@ -2475,6 +2475,78 @@ export interface JobActions {
   rearm: string[];
 }
 
+// ------------------------------------------------------------- the switch
+//
+// One knob, outside fleet.json: `data/runs/fleet-pause.json`. It stops the
+// fleet launching anything while every live episode finishes on its own clock,
+// which is what makes a supervisor update (`infra/fleet-update.sh graceful`)
+// cost no run its attempt.
+//
+// A SIDECAR rather than a config key, for the reason the models sidecar is one:
+// `infra/fleet.json` is hand-written, checked in, and a typo in it makes every
+// `enabled` flag in the file inert until someone notices the banner. A switch
+// an operator flips under time pressure must not be able to do that. It also
+// means the switch survives the file being rejected, which is exactly when
+// somebody wants to stop the fleet.
+//
+// The pause does NOT signal anything. It marks every job disabled for the
+// tick, and `diffJobs` then drains them the way it drains a job the operator
+// parked: no SIGTERM while a roster has an episode child, SIGTERM at the next
+// episode boundary. Same small race, same worst case — one just-started
+// episode terminated gracefully, never one mid-flight.
+
+/** The pause switch's file name, under `data/runs/`. */
+export const PAUSE_SIDECAR = "fleet-pause.json";
+// PAUSE_PATH (above, beside the other state paths) is this file resolved.
+
+export interface FleetPause {
+  /** Free text: who paused the fleet and what for. Printed by `--status`. */
+  why: string;
+  /** When the switch was set. */
+  at: number;
+}
+
+/**
+ * Read the switch out of its file's text. A file that does not parse, or does
+ * not say `paused: true`, is NOT a pause: this runs every tick and a half
+ * written file must never take the fleet down. Pure.
+ */
+export function parsePauseSidecar(text: string): FleetPause | undefined {
+  try {
+    const raw = JSON.parse(text) as { paused?: unknown; why?: unknown; at?: unknown };
+    if (typeof raw !== "object" || raw === null || raw.paused !== true) return undefined;
+    return {
+      why: typeof raw.why === "string" && raw.why.length > 0 ? raw.why : "no reason given",
+      at: typeof raw.at === "number" && Number.isFinite(raw.at) ? raw.at : Date.now(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The switch as it stands on disk, or undefined when the fleet is not paused. */
+export function readPauseSidecar(runsDir: string = RUNS_DIR): FleetPause | undefined {
+  const p = join(runsDir, PAUSE_SIDECAR);
+  if (!existsSync(p)) return undefined;
+  try {
+    return parsePauseSidecar(readFileSync(p, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The switch, applied to a tick's spawns: every job disabled, which is
+ * `enabled:false` on all of them at once. `diffJobs` then starts nothing
+ * (including a resume spawn) and drains everything that is running. Pure, and
+ * reversible: clear the switch and the same diff `undrain`s a job that had not
+ * reached its episode boundary yet.
+ */
+export function applyPause(spawns: JobSpawn[], paused: boolean): JobSpawn[] {
+  if (!paused) return spawns;
+  return spawns.map((s) => (s.enabled ? { ...s, enabled: false } : s));
+}
+
 /** What the supervisor should do to make reality match the config. Pure. */
 export function diffJobs(spawns: JobSpawn[], sets: JobSets): JobActions {
   const actions: JobActions = { start: [], drain: [], undrain: [], rearm: [] };
@@ -3113,6 +3185,13 @@ interface FleetState {
   configRejected?: ConfigRejection;
   /** The last deploy-window gate result; absent for a pre-gate supervisor. */
   preflight?: PreflightRecord;
+  /**
+   * Present while the pause switch (`data/runs/fleet-pause.json`) is set: the
+   * fleet is launching nothing and every live job is draining to its episode
+   * boundary. What `infra/fleet-update.sh` waits on, and what `--status` says
+   * instead of leaving an operator to wonder why nothing spawns.
+   */
+  pausedSwitch?: FleetPause;
   /** Who holds which account: pinned -> job name; pool -> job name or null when free. */
   accounts?: {
     pinned: Record<string, string>;
@@ -3204,6 +3283,8 @@ let preflightInFlight: { identity: string; since: number } | undefined;
 let configRejected: ConfigRejection | undefined;
 /** When the config actually in force was parsed. Set on load and on re-read. */
 let configLoadedAt: number | undefined;
+/** The pause switch as of the last tick; every writeState carries it. */
+let pauseSwitch: FleetPause | undefined;
 /**
  * The refusals last logged, joined. Deduping on the SET rather than a count
  * means a swap — one pin fixed and another broken in the same edit — is still
@@ -3296,6 +3377,7 @@ function writeState(
     ...(configRejected !== undefined ? { configRejected } : {}),
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
+    ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
     ...(pool !== undefined
       ? {
           accounts: {
@@ -3566,6 +3648,30 @@ export function jobsByAccount(
   return out;
 }
 
+/**
+ * The banner `--status` leads with while the fleet is paused. Two facts, kept
+ * apart on purpose: the switch on disk (what the operator set) and the switch
+ * the supervisor has actually picked up (its last tick). Between them lies the
+ * up-to-60s window where the file says stop and jobs are still being spawned.
+ * Pure.
+ */
+export function formatPauseBanner(onDisk: FleetPause | undefined, inEffect: FleetPause | undefined): string[] {
+  if (onDisk === undefined && inEffect === undefined) return [];
+  if (onDisk === undefined) {
+    return [
+      `!! pause switch CLEARED on disk, still in effect for the supervisor (${inEffect!.why}) — it schedules again within a tick`,
+    ];
+  }
+  const since = new Date(onDisk.at).toLocaleString();
+  const head = `!! fleet PAUSED since ${since}: ${onDisk.why}`;
+  return [
+    head,
+    inEffect === undefined
+      ? `   the supervisor has NOT picked it up yet (up to 60s) — a job can still be spawned until it does`
+      : `   in effect: nothing is launched, live jobs drain at their episode boundary; delete data/runs/${PAUSE_SIDECAR} to resume`,
+  ];
+}
+
 function printStatus(configPath: string): void {
   // State first, and the banner before anything else: the file may not parse
   // here either, and even when it does, this reader can be a different code
@@ -3581,6 +3687,10 @@ function printStatus(configPath: string): void {
   }
   const rejected = state?.configRejected;
   for (const line of formatConfigBanner(rejected, state?.configLoadedAt)) console.log(line);
+  // The pause switch is read from ITS OWN file, not from the state: the state
+  // is only as fresh as the last tick, and an operator who has just flipped the
+  // switch is asking this very question.
+  for (const line of formatPauseBanner(readPauseSidecar(), state?.pausedSwitch)) console.log(line);
   const { config, error: configError } = loadConfigForRead(configPath);
   if (config === undefined) {
     console.log(
@@ -4742,8 +4852,33 @@ async function main(): Promise<void> {
     return gateOpen(action, gate);
   };
 
+  /**
+   * The pause switch, re-read every tick beside the config. Boot reads it too:
+   * a supervisor that comes back up inside an update window must not fill the
+   * pool before the operator has cleared the switch.
+   */
+  const readPause = (): void => {
+    const now = readPauseSidecar();
+    if ((now === undefined) === (pauseSwitch === undefined)) {
+      pauseSwitch = now;
+      return;
+    }
+    pauseSwitch = now;
+    if (now !== undefined) {
+      say(`fleet PAUSED by ${PAUSE_PATH}: ${now.why} — nothing new is launched; live jobs drain at their episode boundary`);
+      record({ job: "-", event: "paused", detail: now.why });
+    } else {
+      say("pause switch cleared — scheduling again on this tick");
+      record({ job: "-", event: "unpaused" });
+    }
+  };
+  readPause();
+  if (pauseSwitch !== undefined) {
+    say(`fleet PAUSED at boot by ${PAUSE_PATH}: ${pauseSwitch.why} — delete that file to schedule again`);
+  }
+
   let mayStart = await checkGate(config.preflight);
-  if (mayStart) for (const spawn of diffJobs(effectiveJobs(config), sets).start) spawnJob(spawn);
+  if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
@@ -4830,7 +4965,8 @@ async function main(): Promise<void> {
       }
     }
 
-    const actions = diffJobs(effectiveJobs(config), sets);
+    readPause();
+    const actions = diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets);
     // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
     // normally means the operator parked it, so `diffJobs` drains its live run
     // at the next episode boundary — but a refused pin was not parked, it was
@@ -4860,8 +4996,9 @@ async function main(): Promise<void> {
     }
     for (const name of actions.drain) {
       sets.draining.add(name);
-      say(`job ${name}: disabled — draining (SIGTERM at the next episode boundary)`);
-      record({ job: name, event: "draining" });
+      const why = pauseSwitch !== undefined ? "the fleet is paused" : "disabled";
+      say(`job ${name}: ${why} — draining (SIGTERM at the next episode boundary)`);
+      record({ job: name, event: "draining", detail: why });
     }
     // Drains: only SIGTERM a roster with no episode child. Delivered BEFORE the
     // gate, which can sit inside a smoke for minutes: an operator parking a job
@@ -4892,7 +5029,9 @@ async function main(): Promise<void> {
     }
 
     writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
-    const toStart = diffJobs(effectiveJobs(config), sets).start.length + lastPlan.waiting.length;
+    const toStart =
+      diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start.length +
+      (pauseSwitch !== undefined ? 0 : lastPlan.waiting.length);
     if (fleetComplete({ running: sets.running.size, toStart, hasDeadline: args.until !== undefined })) {
       say("all jobs have exited and nothing is left to spawn — fleet complete");
       break;
@@ -4901,7 +5040,11 @@ async function main(): Promise<void> {
     if (idle !== wasIdle) {
       wasIdle = idle;
       if (idle) {
-        say("no jobs running and none to spawn — idling; enable a job in fleet.json (or stop the service)");
+        say(
+          pauseSwitch !== undefined
+            ? `paused and quiet: no job is running and nothing will launch until ${PAUSE_PATH} is deleted — the update window is open`
+            : "no jobs running and none to spawn — idling; enable a job in fleet.json (or stop the service)",
+        );
         record({ job: "-", event: "idle" });
       } else {
         record({ job: "-", event: "unidle" });

@@ -29,7 +29,7 @@ const refused = { status: 409, body: { ok: false, error: "account_in_use" } };
 const deleted = (name: string) => ({ body: { ok: true, token: "t", character: name, deleted: true } });
 const timeout = { status: 504, body: { ok: false, error: "timeout" } };
 
-const base = { moduleUrl: "http://module", token: "tok", account: "RUNNER", character: "Fleetsonnet", sleep: () => Promise.resolve() };
+const base = { moduleUrl: "http://module", token: "tok", account: "RUNNER", sleep: () => Promise.resolve() };
 
 describe("clearAccountCharacters", () => {
   test("the 2026-08-24 sequence: timed-out delete then a refused re-list is NOT clear", async () => {
@@ -58,15 +58,17 @@ describe("clearAccountCharacters", () => {
     expect(calls.filter((c) => c.path === "/character-delete").length).toBe(1);
   });
 
-  test("the assigned name standing in the final OK listing refuses the run", async () => {
+  test("a name that survives every delete no longer blocks the run — it is a slot-eater the model is told about", async () => {
+    // No name is assigned any more (the model picks its own), so a survivor
+    // is not a precondition violation: it is a name that must not be chosen.
     const { f } = fakeFetch({
       list: [enumOf({ name: "Fleetsonnet", guid: "294" })],
       del: [timeout],
     });
     const out = await clearAccountCharacters({ ...base, fetch: f, maxAttempts: 2 });
-    expect(out.ok).toBe(false);
-    if (out.ok) throw new Error("unreachable");
-    expect(out.reason).toContain("survived deletion");
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.leftover).toEqual(["Fleetsonnet"]);
   });
 
   test("other survivors only eat a slot; the run proceeds", async () => {
@@ -103,8 +105,8 @@ describe("clearAccountCharacters with no module listening", () => {
 describe("clearAccountCharacters with model-chosen names", () => {
   test("deletes every leftover whatever it is called, not just the assigned name", async () => {
     // The model names its own character, so the last episode's leftover is
-    // `Grimjaw` and not the roster's suggestion. Hygiene lists the account and
-    // deletes what it finds; nothing here may key on the assigned name.
+    // whatever it called itself. Hygiene lists the account and deletes what it
+    // finds; no name is assigned for it to key on.
     const { f, calls } = fakeFetch({
       list: [enumOf({ name: "Grimjaw", guid: "701" }, { name: "Zeliana", guid: "702" }), enumOf()],
       del: [deleted("Grimjaw")],
@@ -126,7 +128,7 @@ describe("clearAccountCharacters with model-chosen names", () => {
     ]);
   });
 
-  test("a survivor that is not the assigned name still lets the run start, and is named to the model", async () => {
+  test("a survivor still lets the run start, and is named to the model", async () => {
     // `leftover` is what run.ts puts in the launch notice: createSession
     // REUSES a character of the name it is given, so a model that picked
     // `Grimjaw` here would land on a used one.

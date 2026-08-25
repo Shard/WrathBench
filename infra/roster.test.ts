@@ -19,7 +19,6 @@ describe("resolve", () => {
       apiBase: "https://openrouter.ai/api/v1",
       apiKeyEnv: "OPENROUTER_KEY",
       runId: "roster-glm-5-2-20260101",
-      character: "Glm",
       race: 1,
       class: 2,
       episodeMs: 5_400_000,
@@ -31,13 +30,12 @@ describe("resolve", () => {
       model: "sonnet",
       driver: "claude-code",
       account: "SHAKEOUT2",
-      character: "Burnsonn",
       race: 3,
       class: 2,
       episodeMs: 60_000,
     };
     const [s] = resolve([spec], "20260101");
-    expect(s).toMatchObject({ driver: "claude-code", account: "SHAKEOUT2", character: "Burnsonn", race: 3 });
+    expect(s).toMatchObject({ driver: "claude-code", account: "SHAKEOUT2", race: 3 });
   });
 
   test("an unknown driver is refused rather than passed through", () => {
@@ -63,6 +61,16 @@ describe("episodeArgv", () => {
     expect(argv).toContain("--api-key-env");
     expect(argv).not.toContain("--account");
     expect(argv[argv.indexOf("--driver") + 1]).toBe("openai");
+  });
+
+  test("no name reaches the runner: race and class are the launch dimensions", () => {
+    // A spec has no character to pass and the flag is gone from the runner —
+    // the model names its own at createSession and the run records it.
+    const [s] = resolve([{ model: "opus", driver: "claude-code", race: 3, class: 2 }], "20260101");
+    const argv = episodeArgv(s!, false);
+    expect(argv).not.toContain("--character");
+    expect(argv[argv.indexOf("--race") + 1]).toBe("3");
+    expect(argv[argv.indexOf("--class") + 1]).toBe("2");
   });
 
   test("claude entries carry no api flags and do carry their account", () => {
@@ -128,11 +136,11 @@ describe("forCycle", () => {
     expect(forCycle(s!, 1).runId).toBe("roster-opus-20260101");
   });
 
-  test("later cycles get their own run id but keep the character", () => {
-    const [s] = resolve([{ model: "opus", character: "Burnopus" }], "20260101");
+  test("later cycles get their own run id and keep every other dimension", () => {
+    const [s] = resolve([{ model: "opus", race: 3, class: 2 }], "20260101");
     const c3 = forCycle(s!, 3);
     expect(c3.runId).toBe("roster-opus-20260101-c3");
-    expect(c3.character).toBe("Burnopus");
+    expect(c3.race).toBe(3);
   });
 });
 
