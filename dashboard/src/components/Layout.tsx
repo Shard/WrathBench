@@ -2,13 +2,39 @@
  * The shell: one nav, the service status badge, one scroll container. The map
  * opts out of scrolling. The shell owns the shared feeds (`lib/feeds.ts`) so
  * the badge and the fleet page read one `/api/fleet` poller between them.
+ *
+ * The public build adds two things nothing else can carry: how stale the
+ * published data is, and the attribution every published artifact needs. Both
+ * are properties of the whole view rather than of any page, which is what puts
+ * them here beside the badge and the build notice.
  */
 
 import { A, useLocation, useSearchParams } from "@solidjs/router";
-import { Show, type ParentProps } from "solid-js";
+import { Show, createSignal, onCleanup, type ParentProps } from "solid-js";
+import { snapshotSource } from "../api/client";
+import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
+import { useClock } from "../lib/clock";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { SeriesSelect } from "./SeriesSelect";
 import { StatusBadge } from "./StatusBadge";
+
+/**
+ * The public build's freshness line, and the attribution that must ride with
+ * any published artifact (docs/DATA-AND-LEGAL.md).
+ *
+ * Only the public build has either, so the signal, the subscription and the
+ * one-second clock behind "Ns ago" are all created inside this branch rather
+ * than sitting unused in the private one.
+ */
+function snapshotShell(source: SnapshotSource): { banner: () => SnapshotBanner | null; attribution: () => string | null } {
+  const [state, setState] = createSignal(source.state());
+  onCleanup(source.subscribe((next) => setState(next)));
+  const now = useClock();
+  return {
+    banner: () => snapshotBanner(state(), now()),
+    attribution: () => state().attribution,
+  };
+}
 
 export function Layout(props: ParentProps) {
   const location = useLocation();
@@ -20,6 +46,7 @@ export function Layout(props: ParentProps) {
     read: () => params.series,
     write: (v) => setParams({ series: v }, { replace: true }),
   });
+  const snapshot = snapshotSource === null ? null : snapshotShell(snapshotSource);
   return (
     <FeedsContext.Provider value={feeds}>
     <div class="app">
@@ -72,6 +99,24 @@ export function Layout(props: ParentProps) {
           </button>
         </Show>
         {/*
+          * Beside the build notice for the same reasons: it reports on the
+          * service rather than on any page, and the map's flush layout has no
+          * room to spare. It is its own clock — the heartbeat in the status
+          * badge is the supervisor's silence, this is the publisher's, and
+          * three clocks the reader could conflate is exactly what the public
+          * build must not ship (docs/PUBLIC-DASHBOARD.md).
+          */}
+        <Show when={snapshot?.banner()}>
+          {(b) => (
+            <span
+              class={`snapshot-age ${b().tone}`}
+              title="This dashboard reads published snapshots, not the live harness. The age is how long ago the lab last pushed one."
+            >
+              {b().text}
+            </span>
+          )}
+        </Show>
+        {/*
           * The one series filter for the whole dashboard, next to
           * the badge for the same reason the badge is here: it is a property of
           * the whole view rather than of any page, and a per-page copy of it
@@ -81,6 +126,8 @@ export function Layout(props: ParentProps) {
         <StatusBadge />
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>
+      {/* Required of every published artifact; see docs/DATA-AND-LEGAL.md. */}
+      <Show when={snapshot?.attribution()}>{(a) => <footer class="attribution">{a()}</footer>}</Show>
     </div>
     </FeedsContext.Provider>
   );

@@ -14,7 +14,7 @@
  */
 
 import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
-import { HEARTBEAT_STALE_MS, deployWindowOpen, etaHours, supervisorAlive } from "./fleet";
+import { HEARTBEAT_STALE_MS, deployWindowOpen, etaHours, heartbeatAge, supervisorAlive } from "./fleet";
 import { fmtAge, fmtDuration, stamp } from "./format";
 
 /** The dot's colour: the three the operator reads at a glance, and grey for "not known yet". */
@@ -50,15 +50,20 @@ export interface StatusInput {
  * The stale bound is `HEARTBEAT_STALE_MS` (three supervisor ticks), the same
  * one `run-fleet --status` and the fleet table use, so the badge and the
  * table cannot disagree about whether the supervisor is alive.
+ *
+ * Every age here is measured on the response's own clock (`heartbeatAge`), so
+ * the badge reports the fleet and not the gap between two machines' clocks.
+ * The one thing still on the browser's clock is rule 1: a poll that failed is
+ * a fact about this tab, and a stale value is no comfort.
  */
-export function serviceStatus(input: StatusInput, now: number): ServiceStatus {
+export function serviceStatus(input: StatusInput): ServiceStatus {
   if (input.error !== undefined) return { tone: "red", word: "unreachable" };
   const f = input.fleet;
   if (f === undefined) return { tone: "grey", word: "loading" };
   if (!f.present) return { tone: "red", word: "down" };
   if (f.server.phase === "failed") return { tone: "red", word: "failed" };
   if (f.server.phase === "rolled-back") return { tone: "red", word: "rolled back" };
-  const alive = supervisorAlive(f, now);
+  const alive = supervisorAlive(f);
   if (deployWindowOpen(f.server)) return { tone: "yellow", word: alive ? f.server.phase : "paused for deploy" };
   if (f.heartbeatAt === undefined) return { tone: "red", word: "down" };
   if (!alive) return { tone: "red", word: "stale" };
@@ -88,7 +93,7 @@ const STALE_WORD = "stale";
  * time; the two optional rows — the deploy detail and the worldserver's own
  * build — appear only when they carry news.
  */
-export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined, now: number): StatusRow[] {
+export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined): StatusRow[] {
   const f = input.fleet;
   if (f === undefined) return [{ label: "api", value: input.error === undefined ? "loading" : String(input.error) }];
   const rows: StatusRow[] = [];
@@ -97,7 +102,7 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
     rows.push({ label: "fleet", value: "no fleet-state.json — never run here" });
   } else {
     const hb = f.heartbeatAt;
-    const hbAge = hb === undefined ? null : now - hb;
+    const hbAge = heartbeatAge(f);
     rows.push({
       label: "heartbeat",
       value: hbAge === null ? "none" : `${fmtAge(hbAge)}${hbAge >= HEARTBEAT_STALE_MS ? ` (${STALE_WORD})` : ""}`,
@@ -114,7 +119,9 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
     });
     rows.push({
       label: "uptime",
-      value: f.startedAt === undefined ? "unknown" : fmtDuration(now - f.startedAt),
+      // The response's clock again: `startedAt` is the supervisor's, and this
+      // row is a span between two readings taken on the same machine.
+      value: f.startedAt === undefined ? "unknown" : fmtDuration(f.now - f.startedAt),
       ...(f.startedAt === undefined ? {} : { title: `supervisor started ${stamp(f.startedAt)}` }),
     });
   }
