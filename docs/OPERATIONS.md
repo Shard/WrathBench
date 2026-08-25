@@ -8,9 +8,10 @@ a fresh machine is `infra/README.md`.
 
 The fleet supervisor (`infra/run-fleet.ts`) is a compose service. It is up
 while the dev machine is up, it has no deadline, and it is steered entirely by
-editing `infra/fleet.json` — which it re-reads every 60 seconds. See
-`docs/decisions/ADR-0020-fleet-as-a-service.md` for why it lives inside the
-runner image rather than on the host.
+editing `infra/fleet.json` — which it re-reads every 60 seconds. It lives
+inside the runner image rather than on the host so it survives the operator's
+shell and reboots, never crosses the container boundary to spawn a runner,
+and is one step from the intended Helm shape.
 
 ### Start it
 
@@ -41,8 +42,8 @@ reports `NOT RUNNING`.
 
 ### Steer it
 
-Edit `infra/fleet.json`. Nothing to restart. The unit you steer is the **job**
-(ADR-0034): a roster entry (or a rotation of several), an episode, a
+Edit `infra/fleet.json`. Nothing to restart. The unit you steer is the
+**job**: a roster entry (or a rotation of several), an episode, a
 repeat count, on one account — pinned to it when the job names an `account`,
 otherwise on whichever pool account is free.
 
@@ -66,8 +67,8 @@ otherwise on whichever pool account is free.
   decides what runs. Trust the banner over your own reading of the file.
 
 Two enabled jobs must not share an account, a pinned account may not be in the
-pool, and the roster policy (claude models on the claude-code driver only — the
-claude-code harness, ADR-0035; shared free pools carry free ids only) is
+pool, and the roster policy (claude models on the claude-code driver only —
+the claude-code harness; shared free pools carry free ids only) is
 enforced on every roster entry at every re-read.
 
 #### Config reference (`infra/fleet.next.json`)
@@ -77,20 +78,21 @@ handed `fleet.next.json` when one is beside it (`preferNextConfig`), so the
 running supervisor keeps its config until it restarts and the rename commutes.
 
 ```
-preflight   the gate (ADR-0023): enabled, account, smokes [{script, account}], timeoutMs,
+preflight   the gate (below): enabled, account, smokes [{script, account}], timeoutMs,
             deploySmokes, deployTimeoutMs. Its accounts may not be in the pool or on a job.
-accounts    { pool: [...], paid: [...], local: [...] } — the account classes (ADR-0034), each in
+accounts    { pool: [...], paid: [...], local: [...] } — the account classes, each in
             preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
             refused if authored.
 roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
             apiKeyEnv, character, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
-            Never an account. Two scheduling axes (ADR-0043):
+            Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The
+            tier is the evidence budget"):
             `tier` — REQUIRED, and the only thing that sets a run count. t0 trial (e90 x1, the
               ladder is HELD and it never climbs on its own), t1 standard (e90 x3, climbs to t2 on
               one counted level-5 e90), t2 long (e90 x3 + e360 x1). The table is code
               (`TIER_TABLE`, runner/src/models.ts) — a bespoke volume is a NAMED tier added there,
-              not a number edited into one entry. On EVERY entry: the roster is a model catalog
-              (ADR-0041), so there is no unscheduled entry to make an exception for.
+              not a number edited into one entry. On EVERY entry: the roster is a model catalog,
+              so there is no unscheduled entry to make an exception for.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
               under `models` and supplies its own task shape.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
@@ -108,11 +110,11 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
             same sentence a free model's budget is written in.
             Billing is derived per model (free slug / LAN apiBase / claude-code / allowlist ->
-            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Since ADR-0043
-            billing says only WHERE a run may execute — the account class and the rate-limit key.
+            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Billing
+            says only WHERE a run may execute — the account class and the rate-limit key.
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
-campaigns   probe campaigns (ADR-0041): { <name>: { enabled, models "all"|[refs], runsPerCell,
+campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, models "all"|[refs], runsPerCell,
             cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,
             wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
             episode; the campaign owns its whole task shape, so a catalog entry's own objective
@@ -145,7 +147,9 @@ refused by name, with the message naming the 0.4 keys.
 docker compose -f infra/compose.yml stop fleet
 ```
 
-A stop **pauses** the live runs, it does not cost them (ADR-0036). SIGTERM
+A stop **pauses** the live runs, it does not cost them — a six-hour episode
+forty minutes from its wall clock must never be thrown away for a one-line
+fix. SIGTERM
 reaches the supervisor, which SIGTERMs each job's roster, which SIGTERMs the
 runner; the runner pauses its run as `operator-pause`: the episode clock stops
 (the minutes spent so far are written to meta.json and the budget resumes from
@@ -264,7 +268,7 @@ line at the top: the phase in plain words, then the script's own `detail`
 sentence verbatim. The page never guesses at what the window is doing.
 
 - **draining** — `docker compose stop fleet`. SIGTERM reaches the supervisor,
-  every live run pauses (ADR-0036), the supervisor writes its final state and
+  every live run pauses (see "Stop it"), the supervisor writes its final state and
   exits. The script then waits for that state file to say no job is alive —
   the supervisor's own word, never a process listing — for at most 60s after
   `stop` returns, and fails loudly if it never does (a SIGKILL inside the
@@ -395,7 +399,7 @@ top-level `preflight` block in `infra/fleet.json`, hot-reloaded like the jobs:
 }
 ```
 
-There are two kinds of smoke (ADR-0023, amended 2026-08-23):
+There are two kinds of smoke:
 
 - **`smokes` is the per-tick gate.** It runs before the first job is spawned
   and again whenever the server identity changes — which is to say on every
@@ -502,9 +506,9 @@ back (`no paid account configured`, `no local account configured`).
 
 ### Changing the config shape
 
-The pattern, from the 2026-08-23 switch to the job shape (ADR-0034 amendment):
+The pattern, from the 2026-08-23 switch to the job shape:
 ship the new file as a sibling (`infra/fleet.next.json`), drain or `stop fleet`
-(running episodes pause and resume on start, ADR-0036), rename it over
+(running episodes pause and resume on start), rename it over
 `fleet.json`, check `--dry-run` from the new code before anything spawns, then
 `up -d --no-deps fleet`. The new file under the old code is the one thing that
 must not happen, which is why it ships as a sibling. A shape the current code
@@ -512,19 +516,19 @@ does not read is refused by name — there is no compatibility read, so roll
 back by renaming the old file back. Run ids carry the job name, so a renamed
 job starts a fresh id; nothing resumes across the rename.
 
-### The scheduling policy (ADR-0034)
+### The scheduling policy
 
 With the job shape the `queue` normally holds only the pinned jobs: the
-supervisor fills free pool accounts from the roster by policy — three runs per
-(model, episode), `e90` for everyone, `e360` once earned, newest-to-the-roster
-first, shorter episode first, fewest runs first, one stream per model, within
-`policy.maxConcurrent` per driver. Only runs from the running checkout's
-harness **series** (`0.3` of `harness-0.3-114-g…`) count; a minor bump starts
-every model's evidence over, a fix commit does not. With `policy.paid` set,
-paid models (derived, see the config reference) get hard targets of 3/1 and
-share a one-in-flight cap; with `policy.extras` set, free models past their
-targets get extra runs — stamped `extra: true`, an attempt but never counted —
-with the next race/class in the cycle, once nothing else is schedulable.
+supervisor fills free pool accounts from the roster by policy — each model's
+tier budget (`t0`/`t1`/`t2`, see the config reference), `e90` for everyone,
+`e360` once earned, newest-to-the-roster first, shorter episode first, fewest
+runs first, one stream per model, within `policy.maxConcurrent` per rate-limit
+key. Only runs from the running checkout's harness **series** (`0.3` of
+`harness-0.3-114-g…`) count; a minor bump starts every model's evidence over,
+a fix commit does not. With `policy.paid` set, at most that many paid runs are
+in flight at once — a throttle, never a budget. A model whose entry says
+`idle: "unlimited"` takes one capped freeplay session at a time once its
+targets are met, stamped `extra: true` — an attempt but never counted.
 Everything it decides is derived from `data/runs/` each tick; nothing is
 stored except an operator's clear.
 
@@ -544,7 +548,7 @@ but does climb the ladder, so a dead provider costs at most ten launches over
 ~10 hours before it is retired. A manual pool job (`queue` entry without an account) always
 outranks the policy for a POOL account; add one to force a specific run (an
 `e360` for a model that has not climbed needs `tier: "t2"` on its roster entry
-as well). How many runs a model gets is its `tier` and nothing else (ADR-0043).
+as well). How many runs a model gets is its `tier` and nothing else.
 
 ### Ad-hoc launches still work
 

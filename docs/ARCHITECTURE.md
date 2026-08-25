@@ -22,9 +22,10 @@ A thin bridge. It does two things and should never learn to do a third.
 
 It knows about opcodes and sessions. It does not know what a quest, a rotation, or a route is.
 
-How it attaches to the core (ADR-0009): a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
+How it attaches to the core: a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
 
-The mover (ADR-0010, ADR-0027): `move_to` resolves a path once with `PathGenerator` on the world thread; only a fully normal path whose endpoint lands within 4y (2D) of the request is accepted, a straight-line request beyond ~250y is `too_far`, a partial path is subdivided once. It then sends `MSG_MOVE_START_FORWARD`, a heartbeat every ~500ms and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position (3s deadline after the stop); >15y of drift between server and interpolation ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
+The mover (why the module owns movement and navigation detail:
+`docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread; only a fully normal path whose endpoint lands within 4y (2D) of the request is accepted, a straight-line request beyond ~250y is `too_far`, a partial path is subdivided once. It then sends `MSG_MOVE_START_FORWARD`, a heartbeat every ~500ms and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position (3s deadline after the stop); >15y of drift between server and interpolation ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
 
 ### sdk/ (Bun/TypeScript, MIT)
 
@@ -44,7 +45,7 @@ The SDK is versioned. Its surface is part of the harness version.
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
 The operator's read-only window on runs, live and finished. Split in two along
-one line (ADR-0022): the Bun process owns everything that needs the filesystem,
+one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api` (run listing, run
@@ -57,7 +58,10 @@ the SPA owns everything that is UI.
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
   on 2026-08-22, the only UI: fleet overview, the episodes page (the per-run
-  grain), results, ladder, models, run detail, and the ADR-0019 map.
+  grain), results, ladder, models, run detail, and the map view — minimap
+  tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
+  drawn on plain canvas behind a position-feed interface so replay can later
+  plug a trajectory reader into the renderer that serves live runs.
   It imports two modules from the viewer rather than copying them — the API wire
   types and the world→tile transform — so drift between the two sides is a
   compile error. It is the only place in the repository with a dependency graph;
@@ -67,7 +71,9 @@ the SPA owns everything that is UI.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet
-  decided; ADR-0022 carries the constraints.
+  decided; the open question — tiles are Blizzard textures, and entry
+  summaries carry model output and game text — is docs/DATA-AND-LEGAL.md's to
+  settle, and the first public deployment is gated on it.
 
 ### wiki/ (Bun/TypeScript, MIT)
 
@@ -80,6 +86,10 @@ Tooling for local map assets used by the viewer. The assets themselves are suppl
 ### infra/
 
 Compose file for worldserver, authserver, database, module build, and runner. The server data directory is supplied by the operator under `data/`. Smoke script that drives one quest end to end through the SDK.
+
+The core is stock AzerothCore, pinned by commit — no playerbots fork, so there
+is one dependency tree; the party question waits for encounter work and will
+be answered with data from real runs.
 
 The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation of upstream AzerothCore's own multi-stage Dockerfile with the build context at our repo root: it copies the pinned submodule plus `module/` as `modules/mod-wrathbench` and keeps upstream's stage names, base image, toolchain, runtime user and filesystem layout, so upstream docker fixes diff cleanly against ours at each submodule bump. Two departures: `-DWITHOUT_GIT=1`, because a submodule checkout has no usable `.git` (version strings read `unknown`; the submodule pointer and `infra/PINS.md` are the pin), and a 10G ccache mount, because upstream's 1G thrashes on a full core build and module iteration is the hot path. RelWithDebInfo is kept because symbols matter when the module crashes the worldserver. A `db-import` target is built alongside because upstream's boot flow expects it.
 
@@ -103,6 +113,16 @@ Phase 0: every episode starts with a freshly created character at level 1 in its
 - Run metadata and periodic state in `bun:sqlite` under `data/runs/`.
 - Trajectories as JSONL next to it.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
+
+The files under `data/runs/` are the evidence record — the thing a result
+claim points at — and stay authoritative. The staged plan for when reads
+outgrow directory scans (proposed, not yet decided): first a single typed
+`runs/` reader plus published JSON snapshots so the dashboard stops opening
+run files in a request path (which is also the public-hosting shape); then
+Parquet exports queried with DuckDB so analysis becomes checked-in SQL instead
+of ad-hoc JSONL scripts; ClickHouse only when the Parquet set outgrows a
+laptop or the public dashboard needs live aggregates. Every stage is a derived
+view; no store ever becomes the only copy of a trajectory.
 
 ## What is deliberately absent in Phase 0
 

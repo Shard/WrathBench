@@ -16,8 +16,12 @@ Convention:
   that line is not optional — it is the only bridge.
 - Agents append to today's day file (create it if absent). This index gets one line per
   day.
-- Decisions go in `docs/decisions/` as ADRs; a day file cites the ADR, it does not
-  restate it.
+- Decisions that shape results go in `docs/METHODOLOGY.md` (edited in place, kept
+  consolidated); component-level why goes in the doc that owns the component. A day
+  file records that the decision was made and where it landed, it does not restate
+  it. (Before 2026-08-25 decisions were numbered ADRs under `docs/decisions/`; day
+  files cite those numbers, which resolve through METHODOLOGY's "Where the former
+  ADRs went" table.)
 
 ## Days
 
@@ -34,6 +38,9 @@ Convention:
   (`equipItem`, `reclaimCorpse`, `moveTo(unit)`, `sleep` reasons, `events.off`); bundle
   schema 4 (ADR-0029); episode tiers, runner pool, scheduling policy, stillborn runs,
   Models page, COSTS.md (ADR-0030/0031/0032); fleet on the pool/queue shape.
+- [2026-08-25](worklogs/2026-08-25.md) — the 44 ADRs consolidated into
+  `docs/METHODOLOGY.md`; `docs/decisions/` deleted; every ADR citation outside
+  the worklogs replaced or removed, user-facing surfaces first.
 - [2026-08-24](worklogs/2026-08-24.md) — run view redesign: two-column layout (feed
   left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
   the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
