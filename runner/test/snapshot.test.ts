@@ -13,7 +13,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IMMUTABLE_CACHE, MUTABLE_CACHE, renderSnapshot, type SnapshotResult } from "../viewer/snapshot";
@@ -146,12 +146,14 @@ function writeRun(
   }
 }
 
-function fixture(): string {
+function fixture(withLive = true): string {
   const runs = mkdtempSync(join(tmpdir(), "snapshot-"));
   writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true });
   // A live, unterminated run with a fresh position, so live.json's positions
-  // feed is non-empty and its character/items withholding is exercised.
-  writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false });
+  // feed is non-empty and its character/items withholding is exercised. The
+  // generation-stability test leaves it out: a live run's growing playtime is
+  // data, and data is supposed to move the generation.
+  if (withLive) writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false });
 
   writeFileSync(
     join(runs, "fleet-state.json"),
@@ -290,9 +292,19 @@ describe("renderSnapshot", () => {
     const out = await render(runs, 111);
     const paths = new Set(out.artifacts.map((a) => a.path));
     const listed = JSON.parse(out.artifacts.find((a) => a.path === `v1/snap/${out.gen}/runs.json`)!.body) as {
-      runs: { runId: string; snapshot?: { detail: string; track: string } }[];
+      runs: {
+        runId: string;
+        character: string | null;
+        pauseReason: string | null;
+        terminationDetail: string | null;
+        snapshot?: { detail: string; track: string };
+      }[];
     };
     expect(listed.runs).toHaveLength(2);
+    const dead = listed.runs.find((r) => r.runId === DEAD_RUN)!;
+    expect(dead.pauseReason).toBe("paused");
+    expect(dead.terminationDetail).toBeNull();
+    expect(dead.character).toBeNull();
     for (const row of listed.runs) {
       expect(row.snapshot).toBeDefined();
       expect(row.snapshot!.detail).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/detail\\.json$`));
@@ -301,6 +313,25 @@ describe("renderSnapshot", () => {
       expect(paths.has(row.snapshot!.track)).toBe(true);
     }
     expect(out.gen).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  test("gen is stable across re-renders of unchanged input, and moves when the data does", async () => {
+    // No live run: an idle fleet's renders must land on one generation, or the
+    // publisher re-uploads the whole aggregate set every pass.
+    const runs = fixture(false);
+    const first = await render(runs, 111);
+    const second = await render(runs, 222);
+    expect(second.gen).toBe(first.gen);
+    expect(second.artifacts.map((a) => a.path).sort()).toEqual(first.artifacts.map((a) => a.path).sort());
+    // A data change is a new generation: the address moves with the content.
+    appendFileSync(
+      join(runs, DEAD_RUN, "trajectory.jsonl"),
+      JSON.stringify({ ts: 2100, t: "state", level: 4 }) + "\n",
+    );
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(join(runs, DEAD_RUN, "trajectory.jsonl"), past, past);
+    const third = await render(runs, 333);
+    expect(third.gen).not.toBe(first.gen);
   });
 
   test("a re-render of unchanged input reuses a finished run's version key", async () => {

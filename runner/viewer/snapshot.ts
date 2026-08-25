@@ -77,6 +77,26 @@ function hash12(body: string): string {
   return createHash("sha256").update(body, "utf8").digest("hex").slice(0, 12);
 }
 
+/**
+ * Serialize a projected payload for ADDRESSING (`gen`, per-run `<ver>`), with
+ * the volatile clock zeroed.
+ *
+ * Several responses stamp a top-level `now` (results, ladder, episodes,
+ * campaigns, models, info) that moves with wall clock, not with data; hashed
+ * as-is it would make every render a new generation, and the publisher would
+ * re-upload the whole aggregate set every pass of an idle fleet. So the hash
+ * sees a copy with `now: 0` while the EMITTED body keeps the real value.
+ * Nothing else is normalized on purpose: a live run's growing playtime,
+ * `lastTs` or `live` flag are data, and a changed generation is then correct.
+ * (The spread below builds a hash-only local copy of an already-projected
+ * payload, never anything emitted — the projection's no-spread rule is about
+ * what ships.)
+ */
+function addressable(payload: object): string {
+  const o = payload as Record<string, unknown>;
+  return JSON.stringify(typeof o["now"] === "number" ? { ...o, now: 0 } : o);
+}
+
 export async function renderSnapshot(opts: {
   runsDir: string;
   fleetConfigPath?: string;
@@ -134,7 +154,7 @@ export async function renderSnapshot(opts: {
   for (const row of runs.runs) {
     const detail = projectRunDetail(await get<RunDetailResponse>(`/api/run/${encodeURIComponent(row.runId)}`));
     const track = projectTrack(await get<TrackResponse>(`/api/run/${encodeURIComponent(row.runId)}/track`));
-    const ver = hash12(JSON.stringify(detail));
+    const ver = hash12(addressable(detail));
     // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
     // keys as-is; anything else never got a run directory to be listed from.
     const base = `v1/run/${row.runId}/${ver}`;
@@ -158,7 +178,7 @@ export async function renderSnapshot(opts: {
     ["models.json", models],
     ["campaigns.json", campaigns],
   ];
-  const gen = hash12(snap.map(([, payload]) => JSON.stringify(payload)).join("\n"));
+  const gen = hash12(snap.map(([, payload]) => addressable(payload)).join("\n"));
 
   const out: SnapshotArtifact[] = [
     {

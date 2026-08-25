@@ -482,11 +482,17 @@ describe("projectRuns", () => {
     expect(row.objective).toBeNull();
     expect(row.apiBase).toBeNull();
     expect(row.terminationDetail).toBeNull();
-    expect(row.pauseReason).toBeNull();
+    // The paused signal survives as a fixed token, never as the free text.
+    expect(row.pauseReason).toBe("paused");
     // What the label layer needs survives.
     expect(row.characterLabel).toBe("Dwarf Hunter");
     expect(row.raceName).toBe("Dwarf");
     expect(row.terminationReason).toBe("episode-limit");
+  });
+
+  test("a run that never paused stays null: the token marks paused runs only", () => {
+    const input = { runs: [{ ...runListRowFixture(), pauseReason: null }] };
+    expect(projectRuns(input).runs[0]!.pauseReason).toBeNull();
   });
 });
 
@@ -547,7 +553,7 @@ describe("projectResults", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.runs[0]!.character).toBeNull();
-    expect(out.runs[0]!.pauseReason).toBeNull();
+    expect(out.runs[0]!.pauseReason).toBe("paused");
   });
 });
 
@@ -1090,6 +1096,10 @@ describe("projectInfo", () => {
       ]),
     );
     expect(out.publicMode).toBe(true);
+    // The private dashboard's build id must not ride along: the shell's
+    // stale-build banner would compare public tabs against the lab's bundle.
+    expect(out.dashboardBuild).toBeNull();
+    expect(JSON.stringify(out)).not.toContain("app-abc123.js");
     assertClean(JSON.stringify(out));
   });
 });
