@@ -424,12 +424,18 @@ export interface PublishReport {
  * empty state remembers no keys, so the next pass re-uploads everything. That
  * is the only recovery path, and it is why the state file is a cache the
  * operator may throw away rather than a record they must keep.
+ *
+ * `bodyHash` is a thunk because two of those three regimes never consult it,
+ * and they are the two that cover almost every key in a pass. Hashing the whole
+ * run and snap corpus to decide nothing is exactly the cost this function
+ * exists to avoid, so the caller hands over the means to hash rather than a
+ * hash.
  */
-export function needsPut(path: string, bodyHash: string, state: PublishState, gen: string): boolean {
+export function needsPut(path: string, bodyHash: () => string, state: PublishState, gen: string): boolean {
   const kind = classifyPath(path).kind;
   if (kind === "run" || kind === "gen") return state.uploaded[path] === undefined;
   if (path === MANIFEST_PATH && gen === state.lastGen && state.uploaded[path] !== undefined) return false;
-  return state.uploaded[path] !== bodyHash;
+  return state.uploaded[path] !== bodyHash();
 }
 
 /**
@@ -467,11 +473,19 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
 
   assertResult(result);
 
-  const hashes = new Map(result.artifacts.map((a) => [a.path, hashBody(a.body)] as const));
-  for (const a of result.artifacts) {
-    const c = classifyPath(a.path);
-    if (c.kind === "run") registerRunVersion(state, c.runId, c.version);
-  }
+  // Bodies are hashed on demand and at most once each: most keys are immutable
+  // and decided by presence alone, so hashing the corpus up front would spend
+  // the pass's real work on answers nobody asks for. The one hash a key does
+  // need is shared between its diff and its `uploaded` record.
+  const hashes = new Map<string, string>();
+  const hashOf = (a: SnapshotArtifact): string => {
+    let hash = hashes.get(a.path);
+    if (hash === undefined) {
+      hash = hashBody(a.body);
+      hashes.set(a.path, hash);
+    }
+    return hash;
+  };
 
   const report: PublishReport = { gen: result.gen, put: [], unchanged: 0, bytes: 0, deleted: [], deleteFailures: [], flipped: false };
 
@@ -481,7 +495,7 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
     // whole safety property (live.json, then manifest.json).
     inWave.sort((x, y) => (wave === "mutable" ? mutableRank(x.path) - mutableRank(y.path) : x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 
-    const todo = inWave.filter((a) => needsPut(a.path, hashes.get(a.path)!, state, result.gen));
+    const todo = inWave.filter((a) => needsPut(a.path, () => hashOf(a), state, result.gen));
     report.unchanged += inWave.length - todo.length;
 
     const { failed } = await pooled(
@@ -489,7 +503,13 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
       wave === "mutable" ? 1 : concurrency,
       async (a) => {
         await store.put(a.path, a.body, { contentType: a.contentType, cacheControl: a.cacheControl });
-        state.uploaded[a.path] = hashes.get(a.path)!;
+        state.uploaded[a.path] = hashOf(a);
+        // A content-addressed key comes back whenever its content does, so a
+        // key we just wrote may still be queued from a delete that failed
+        // passes ago. That retry would now delete a live object out from under
+        // the manifest this pass is about to flip: having re-PUT it, we want it.
+        const queued = state.pendingDeletes.indexOf(a.path);
+        if (queued !== -1) state.pendingDeletes.splice(queued, 1);
         report.put.push(a.path);
         report.bytes += Buffer.byteLength(a.body, "utf8");
       },
@@ -509,6 +529,20 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
   }
   report.flipped = true;
   recordGen(state, result.gen, now());
+  // Registered here, with the generation, and for the same reason: history is
+  // what flipped, not what was attempted. A pass that died before the flip must
+  // not spend one of the `keepRunVersions` slots, or a run of failures would
+  // push the version the live manifest still names out of the keep window and
+  // the next prune would delete it. The accepted consequence is that objects a
+  // never-flipped pass uploaded stay in `state.uploaded` — skipped rather than
+  // re-PUT — while nothing indexes them as live, so the next flip's prune
+  // treats them as surplus unless that flip names them. Bounded either way, and
+  // deliberately not indexed: an inventory of unflipped uploads would be a
+  // second history to keep correct for no gain.
+  for (const a of result.artifacts) {
+    const c = classifyPath(a.path);
+    if (c.kind === "run") registerRunVersion(state, c.runId, c.version);
+  }
 
   if (opts.prune !== false) await runPrune(store, state, report, { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions }, concurrency, log);
   return report;

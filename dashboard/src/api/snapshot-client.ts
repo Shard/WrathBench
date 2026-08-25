@@ -36,11 +36,12 @@ import type {
   PositionsResponse,
   ResultsResponse,
   RunDetailResponse,
-  RunListRow,
   RunsResponse,
+  SnapshotEnvelope,
   TrackResponse,
 } from "@viewer/api-types";
-import { ApiError, type Client } from "./client";
+import type { PublicFleetResponse } from "@viewer/public-projection";
+import { ApiError, getJson, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
 /**
@@ -77,14 +78,6 @@ export interface SnapshotClientOptions {
   ttlMs?: number;
 }
 
-/**
- * The two optional fields every published body may carry
- * (`runner/viewer/api-types.ts`' optional-so-older-consumers-still-render
- * convention). Declared locally so this file compiles against a viewer that
- * has not grown them yet.
- */
-type Envelope<T> = T & { generatedAt?: number; attribution?: string };
-
 /** `v1/manifest.json`: which generation the immutable artifacts are under. */
 interface Manifest {
   gen: string;
@@ -93,28 +86,15 @@ interface Manifest {
 
 /**
  * `v1/live.json`: the fast lane, deliberately outside the generation chain.
- * For the fleet pips and the map, freshness beats consistency.
+ * For the fleet pips and the map, freshness beats consistency. The fleet half
+ * is the *published* shape — the projection strips the jobs' process facts —
+ * so it is typed as what the publisher writes, not as the live API's response.
  */
 interface LiveArtifact {
   generatedAt: number;
   attribution?: string;
-  fleet: FleetResponse;
+  fleet: PublicFleetResponse;
   positions: PositionsResponse;
-}
-
-/** Where a run's immutable per-run artifacts sit, relative to the bucket root. */
-interface SnapshotPointer {
-  detail: string;
-  track: string;
-}
-
-/** A published run row: the listing row plus its pointer, when it has one. */
-type SnapshotRunRow = RunListRow & { snapshot?: SnapshotPointer };
-
-interface RunsArtifact {
-  runs: SnapshotRunRow[];
-  generatedAt?: number;
-  attribution?: string;
 }
 
 /** How fresh the data is, and whose reconstruction it came off. */
@@ -220,6 +200,19 @@ interface CacheEntry {
   value: Promise<unknown>;
 }
 
+/**
+ * Drop every entry whose window has passed. Run on each memo lookup — the only
+ * moment the map is touched — because expiry alone does not bound the cache:
+ * generation- and version-addressed URLs are never asked for again once the
+ * manifest moves on, so an overwrite-on-reuse map would keep every generation
+ * a long-lived tab ever saw. Exported for its test.
+ */
+export function sweepExpired(cache: Map<string, { at: number }>, now: number, ttlMs: number): void {
+  for (const [url, entry] of cache) {
+    if (now - entry.at >= ttlMs) cache.delete(url);
+  }
+}
+
 export function createSnapshotClient(base: string, opts: SnapshotClientOptions = {}): SnapshotClient {
   const f = opts.fetch ?? globalThis.fetch;
   const clock = opts.now ?? ((): number => Date.now());
@@ -255,19 +248,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   }
 
   async function fetchJson<T>(url: string): Promise<T> {
-    const res = await f(url, { headers: { accept: "application/json" } });
-    if (!res.ok) {
-      // A bucket answers XML or nothing at all; a viewer answers `{ error }`.
-      let detail = `${res.status}`;
-      try {
-        const body = (await res.json()) as { error?: unknown };
-        if (typeof body.error === "string") detail = body.error;
-      } catch {
-        /* a non-JSON error body is still an error */
-      }
-      throw new ApiError(res.status, `${url}: ${detail}`);
-    }
-    const body = (await res.json()) as T;
+    const body = await getJson<T>(url, f);
     saw(body);
     return body;
   }
@@ -280,6 +261,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    */
   function memo<T>(url: string): Promise<T> {
     const at = clock();
+    sweepExpired(cache, at, ttl);
     const hit = cache.get(url);
     if (hit !== undefined && at - hit.at < ttl) return hit.value as Promise<T>;
     const value = fetchJson<T>(url);
@@ -299,11 +281,11 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     return await memo<T>(`${root}/v1/snap/${encodeURIComponent(m.gen)}/${name}`);
   }
 
-  /** A pointer out of `runs.json` is a bucket path, unless it is already absolute. */
-  function artifactUrl(path: string): string {
-    if (/^https?:\/\//i.test(path)) return path;
-    return `${root}/${path.replace(/^\/+/, "")}`;
-  }
+  /*
+   * A pointer out of `runs.json` is always a bucket key relative to the root —
+   * the publisher rejects leading slashes — so the join is a plain join.
+   */
+  const artifactUrl = (path: string): string => `${root}/${path}`;
 
   /**
    * A run's per-run artifact, found through the listing.
@@ -314,7 +296,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    * words the viewer uses.
    */
   async function pointer(id: string, which: "detail" | "track"): Promise<string> {
-    const artifact = await snap<RunsArtifact>("runs.json");
+    const artifact = await snap<RunsResponse>("runs.json");
     const row = artifact.runs.find((r) => r.runId === id);
     if (row === undefined) throw new ApiError(404, `no such run: ${id}`);
     const path = row.snapshot?.[which];
@@ -325,7 +307,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   }
 
   /** Carry the envelope onto a body split out of a larger artifact. */
-  function withEnvelope<T>(body: T, env: { generatedAt?: number; attribution?: string }): T {
+  function withEnvelope<T>(body: T, env: SnapshotEnvelope): T {
     const extra: Record<string, unknown> = {};
     if (env.generatedAt !== undefined) extra["generatedAt"] = env.generatedAt;
     if (env.attribution !== undefined) extra["attribution"] = env.attribution;
@@ -334,8 +316,8 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   }
 
   const client: Client = {
-    info: (): Promise<ApiInfoResponse> => snap<Envelope<ApiInfoResponse>>("info.json"),
-    runs: (): Promise<RunsResponse> => snap<RunsArtifact>("runs.json"),
+    info: (): Promise<ApiInfoResponse> => snap<ApiInfoResponse>("info.json"),
+    runs: (): Promise<RunsResponse> => snap<RunsResponse>("runs.json"),
     /*
      * Both halves of the fast lane ride in one object, so the map's pips and
      * the fleet table cannot show two different moments.
@@ -346,7 +328,15 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     },
     fleet: async (): Promise<FleetResponse> => {
       const l = await live();
-      return withEnvelope(l.fleet, l);
+      /*
+       * The one deliberate widening in this file. `Client.fleet()` promises the
+       * live shape, but the published fleet's job rows omit the process facts
+       * (pid, spawn time, exit code, source — `PublicFleetJobView`). No page
+       * reads those fields, so the pages render the projection unchanged; the
+       * cast records that the gap is known here rather than hiding it behind a
+       * response typed as something the bucket never serves.
+       */
+      return withEnvelope(l.fleet as FleetResponse, l);
     },
     /*
      * The harness filter is a row predicate the projection already carries, so
@@ -354,18 +344,18 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * are harness-independent and pass through untouched.
      */
     models: async (harness: HarnessView | "all" = "all"): Promise<ModelsResponse> => {
-      const body = await snap<Envelope<ModelsResponse>>("models.json");
+      const body = await snap<ModelsResponse>("models.json");
       if (harness === "all") return body;
-      return { ...body, models: body.models.filter((m) => m.harness === harness), harness } as Envelope<ModelsResponse>;
+      return { ...body, models: body.models.filter((m) => m.harness === harness), harness };
     },
-    episodes: (): Promise<EpisodesResponse> => snap<Envelope<EpisodesResponse>>("episodes.json"),
-    campaigns: (): Promise<CampaignsResponse> => snap<Envelope<CampaignsResponse>>("campaigns.json"),
+    episodes: (): Promise<EpisodesResponse> => snap<EpisodesResponse>("episodes.json"),
+    campaigns: (): Promise<CampaignsResponse> => snap<CampaignsResponse>("campaigns.json"),
     results: async (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,
       harness: HarnessView | "all" = "all",
     ): Promise<ResultsResponse> => {
-      const source = await snap<Envelope<ResultsResponse>>("results.json");
+      const source = await snap<ResultsResponse>("results.json");
       // `undefined` is the caller declining to choose, which the server answers
       // with e90 — the one default, kept in one place by reproducing it here.
       return withEnvelope(projectResults(source, episode ?? DEFAULT_EPISODE, includeOverrides, harness), source);
@@ -376,11 +366,10 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * surface and there is nothing left to narrow.
      */
     ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
-      snap<Envelope<ResultsResponse>>(`ladder-${encodeURIComponent(episode)}.json`),
-    track: async (id: string): Promise<TrackResponse> =>
-      await memo<Envelope<TrackResponse>>(await pointer(id, "track")),
+      snap<ResultsResponse>(`ladder-${encodeURIComponent(episode)}.json`),
+    track: async (id: string): Promise<TrackResponse> => await memo<TrackResponse>(await pointer(id, "track")),
     run: async (id: string): Promise<RunDetailResponse> =>
-      await memo<Envelope<RunDetailResponse>>(await pointer(id, "detail")),
+      await memo<RunDetailResponse>(await pointer(id, "detail")),
     /*
      * Entry summaries and raw trajectory lines carry model output and verbatim
      * game text, which docs/DATA-AND-LEGAL.md does not let out of the lab. The
