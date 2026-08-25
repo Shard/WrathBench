@@ -2,12 +2,12 @@
  * The comparability tuple: everything that has to match before two runs may be
  * put on the same chart.
  *
- * ADR-0004 says scores are comparable *within a harness version*. In practice
- * the harness version alone is not the whole story — a run also carries an
- * episode budget, a reasoning effort, a harness and possibly an operator
- * objective (ADR-0033), and each of those changes what the number means. This
- * module names that tuple once, stamps it into run metadata at launch, and is
- * the only place that decides what belongs in it.
+ * docs/METHODOLOGY.md ("What WrathBench measures") says scores are comparable
+ * *within a harness version*. In practice the harness version alone is not the
+ * whole story — a run also carries an episode budget, a reasoning effort, a
+ * harness and possibly an operator objective, and each of those changes what
+ * the number means. This module names that tuple once, stamps it into run
+ * metadata at launch, and is the only place that decides what belongs in it.
  *
  * Two properties are deliberate:
  *
@@ -17,7 +17,7 @@
  *   today's prompt, which would be a fabricated claim of comparability.
  * - **The prompt hash is of the rendered prompt**, the bytes the model actually
  *   saw. With no objective it equals the fixed prompt's hash by construction
- *   (ADR-0024 point 2: both drivers render through `buildSystemPrompt`), so
+ *   (both drivers render through `buildSystemPrompt`), so
  *   scored runs share one hash and a steered run visibly does not.
  */
 
@@ -28,11 +28,12 @@ import { buildSystemPrompt } from "./prompt";
 import type { WikiBundleMeta } from "./wiki";
 
 /**
- * Harness as the tuple records it (ADR-0035): which machinery decided what the
- * model saw each turn. `wrathbench` applies ADR-0012 (event window, hysteretic
- * message window, regenerated per-turn context); `claude-code` is the Claude
- * Code CLI, which owns its own history and compaction. Two harnesses are two
- * comparability groups; neither is a scoring penalty.
+ * Harness as the tuple records it: which machinery decided what the model saw
+ * each turn. `wrathbench` applies its own context policy (docs/METHODOLOGY.md,
+ * "Context policy": event window, hysteretic message window, regenerated
+ * per-turn context); `claude-code` is the Claude Code CLI, which owns its own
+ * history and compaction. Two harnesses are two comparability groups; neither
+ * is a scoring penalty.
  */
 export const harnessSchema = z.enum(HARNESSES);
 
@@ -61,10 +62,10 @@ export const serverBuildSchema = z
 export type ServerBuild = z.infer<typeof serverBuildSchema>;
 
 /**
- * The reference bundle's identity as the tuple annotates it (ADR-0033, "The
- * wiki bundle's identity"). Every field nullable: this is evidence about the
- * file the run read, and a bundle that cannot describe itself must read as
- * "not recorded" rather than making the whole tuple unparseable.
+ * The reference bundle's identity as the tuple annotates it (docs/METHODOLOGY.md,
+ * "Episodes, lanes, and evidence"). Every field nullable: this is evidence
+ * about the file the run read, and a bundle that cannot describe itself must
+ * read as "not recorded" rather than making the whole tuple unparseable.
  */
 export const wikiBundleSchema = z
   .object({
@@ -83,19 +84,19 @@ export const comparabilitySchema = z.object({
   promptHash: z.string(),
   /** Length of that prompt, so a hash mismatch has a visible magnitude. */
   promptChars: z.number().int().nonnegative(),
-  /** Which loop owned the run (ADR-0035). */
+  /** Which loop owned the run. */
   harness: harnessSchema,
   /** Reasoning effort, or null for "the field was never sent". */
   effort: z.string().nullable(),
   budget: episodeBudgetSchema,
   /**
-   * Whether an operator objective steered this run (ADR-0024). Recorded as a
+   * Whether an operator objective steered this run. Recorded as a
    * flag, never as the text: the tuple answers "is this comparable", and a run
    * with an objective is unscored whatever the objective said.
    */
   objective: z.boolean(),
   /**
-   * Whether the reference surface served wiki coordinates (ADR-0028). Absent
+   * Whether the reference surface served wiki coordinates. Absent
    * on tuples stamped before the field existed; those runs are grouped as
    * "unrecorded", never as either side.
    */
@@ -106,10 +107,10 @@ export const comparabilitySchema = z.object({
    * *annotation*, not a grouping key of its own — a bundle whose page text
    * changes is a behaviour change, and behaviour changes are already grouped by
    * the harness series, so a text-changing rebuild is paired with a harness
-   * minor bump and this field is the evidence of what that bump was about
-   * (ADR-0033). Note that `sameComparability` compares every stamped field and
-   * so is stricter: a rebuild between launch and resume restamps. Null when there was
-   * no bundle; absent on tuples stamped before the field existed.
+   * minor bump and this field is the evidence of what that bump was about.
+   * Note that `sameComparability` compares every stamped field and so is
+   * stricter: a rebuild between launch and resume restamps. Null when there
+   * was no bundle; absent on tuples stamped before the field existed.
    */
   wikiBundle: wikiBundleSchema.optional(),
   /**
@@ -134,7 +135,7 @@ export const comparabilitySchema = z.object({
   serverBuild: serverBuildSchema,
   /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
-   * run launched as `sonnet` (ADR-0033 amendment, 2026-08-25).
+   * run launched as `sonnet`.
    *
    * An **annotation**, in exactly the sense the wiki bundle is one: it answers
    * "which model was this really", which the roster alias cannot, and it is
@@ -177,8 +178,8 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
  * The harness *series* of a version stamp: `harness-0.3-114-gda93f0a-dirty`
  * is series `"0.3"`. Commits within a series are fixes and instrumentation;
  * a minor bump is a change to what the run measures. The scheduler keys its
- * targets on the series of the checkout it runs from (ADR-0034: a bump
- * restarts the evidence, a fix commit does not), and the results surface groups
+ * targets on the series of the checkout it runs from (a bump restarts the
+ * evidence, a fix commit does not), and the results surface groups
  * by it, labelling rows with the exact versions they hold. Null when the
  * stamp has no recognisable major.minor (the unversioned fallback included),
  * so a reader says "no series" rather than inventing one.

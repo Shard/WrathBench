@@ -4,7 +4,7 @@
  * The property under test is the one the design rests on: this page is built
  * from the RUN DIRECTORY and only annotated from the config, so a campaign that
  * was completed, switched off and deleted from the file still has a row. That is
- * what makes "a finished campaign is not archived" (ADR-0041) mean something —
+ * what makes "a finished campaign is not archived" mean something —
  * switching a campaign off must not be a way of losing its results, and neither
  * must deleting its entry.
  */
@@ -29,7 +29,7 @@ interface Probe {
   cell: string | null;
   level?: number;
   ended?: boolean;
-  /** `pause_reason` on an unended run: what makes its model unhealthy (ADR-0036). */
+  /** `pause_reason` on an unended run: what makes its model unhealthy. */
   paused?: string;
 }
 

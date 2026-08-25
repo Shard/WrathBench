@@ -16,7 +16,7 @@ const Models = lazy(() => import("./pages/Models"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
-/** `/results` was renamed `/runs` (ADR-0047). A redirect, so a bookmarked link still lands. */
+/** `/results` was renamed `/runs`. A redirect, so a bookmarked link still lands. */
 function ResultsRedirect() {
   const location = useLocation();
   return <Navigate href={`/runs${location.search}`} />;
@@ -32,7 +32,7 @@ render(
       <Route path="/run/:id" component={RunDetail} />
       <Route path="/map" component={MapPage} />
       <Route path="/runs" component={Runs} />
-      {/* The results page became the runs page (ADR-0047); old links keep their query. */}
+      {/* The results page became the runs page; old links keep their query. */}
       <Route path="/results" component={ResultsRedirect} />
       <Route path="/ladder" component={Ladder} />
       <Route path="/episodes" component={Episodes} />

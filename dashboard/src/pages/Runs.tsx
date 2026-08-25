@@ -1,7 +1,7 @@
 /**
- * Runs: every run the viewer knows about, as a spreadsheet (ADR-0047).
+ * Runs: every run the viewer knows about, as a spreadsheet.
  *
- * One page per grain (ADR-0022 amendment): the fleet page is what is running
+ * One page per grain: the fleet page is what is running
  * *now*, the ladder is aggregates over runs, and this is the runs — probe,
  * campaign, freeplay, scored, live, paused, ended, on any harness series the
  * shell's selector admits. It opens on all of them, newest first, and the
@@ -60,7 +60,7 @@ export default function Runs() {
   const feed = poll(() => api.results("all", true, "all"), POLL_MS);
   const body = (): ResultsResponse | undefined => feed.latest;
 
-  // The shell's harness series (ADR-0046): the one filter this page does not own.
+  // The shell's harness series: the one filter this page does not own.
   const feeds = useFeeds();
   const served = (): ResultRun[] => body()?.runs ?? [];
   const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
@@ -188,7 +188,7 @@ function RunRowView(props: { row: ResultRun; query: string }) {
       case "model":
         return (
           <td>
-            {/* The family's mark, read from the model id (ADR-0045); an id no
+            {/* The family's mark, read from the model id; an id no
                 family claims gets the neutral monogram, never a special case. */}
             <Show when={r().model !== null} fallback="—">
               <ModelIcon model={r().model} />
@@ -237,7 +237,7 @@ function RunRowView(props: { row: ResultRun; query: string }) {
         );
       case "episode":
         return (
-          <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled (ADR-0030)" : ""}>
+          <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled" : ""}>
             <Show when={r().episode !== null} fallback="—">
               <A href={narrow({ episode: r().episode! })} title="narrow to this tier">
                 {r().episode}

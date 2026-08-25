@@ -1,13 +1,13 @@
 {
   "_notes": [
-    "Fleet config 0.5 (ADR-0043). One concept, the JOB; one axis for evidence, the TIER; one axis for idle work, IDLE.",
+    "Fleet config 0.5 (see docs/OPERATIONS.md). One concept, the JOB; one axis for evidence, the TIER; one axis for idle work, IDLE.",
     "Hot-reloaded every 60s; history in docs/worklogs. Shipped as a sibling file so the rename and the restart commute.",
     "",
     "roster.<name>.tier — how much evidence this model gets. THE only thing that sets a run count.",
     "  t0 trial     e90 x1, promotion HELD — it can never climb out on its own.",
     "  t1 standard  e90 x3, promotes to t2 on one counted e90 that reached level 5.",
     "  t2 long      e90 x3 + e360 x1.",
-    "  Required on EVERY entry: the roster is a model CATALOG (ADR-0041), so there is no",
+    "  Required on EVERY entry: the roster is a model CATALOG, so there is no",
     "  unscheduled entry left to make an exception for. objective and wikiCoords are REFUSED here —",
     "  steering is a campaign, which names the entry under `models` and owns its own task shape.",
     "  There is no per-entry override and no per-billing table: a bespoke volume is a NAMED tier in",
@@ -37,12 +37,12 @@
     "  take the whole file down: a file that does not parse has no rest to keep.",
     "",
     "roster entries: `character` is only the name the launch note SUGGESTS — the model names its own",
-    "  (ADR-0050) and the run records what it chose; `race`/`class` are fixed dimensions and are not.",
+    "  and the run records what it chose; `race`/`class` are fixed dimensions and are not.",
     "",
     "policy: only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n } (concurrencyKeyOf);",
     "  paid { maxConcurrent } is the paid throttle. runsPerEpisode and extras are NOT 0.5 keys and are refused by name.",
     "",
-    "campaigns: probe campaigns, the third lane (ADR-0041). { <name>: { enabled, models \"all\"|[refs],",
+    "campaigns: probe campaigns, the third lane (see docs/EPISODES.md). { <name>: { enabled, models \"all\"|[refs],",
     "  runsPerCell, cells [{ id, race?, class?, character?, objective?, ... }], account?, objective?,",
     "  wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing` episode, so a",
     "  campaign is never re-armed by a harness bump — that is what separates a probe from an eval.",
@@ -54,7 +54,7 @@
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
     "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy for a pool account.",
     "  A waiting manual job reserves the POOL only — the paid and local classes still pick (a226bbb).",
-    "preflight: ADR-0023; its accounts may not be in the pool or on a job."
+    "preflight: the smoke gate the supervisor runs before spawning (docs/OPERATIONS.md); its accounts may not be in the pool or on a job."
   ],
   "preflight": {
     "enabled": true,

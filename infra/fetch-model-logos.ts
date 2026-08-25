@@ -6,7 +6,7 @@
  *   bun infra/fetch-model-logos.ts            # download, write, prune
  *   bun infra/fetch-model-logos.ts --check    # no network; drift check
  *
- * Recognizing a new model should be a data edit (ADR-0045): add or extend a
+ * Recognizing a new model should be a data edit: add or extend a
  * family in the lineup, run this, commit. The artwork comes from
  * `@lobehub/icons-static-svg` at the version the lineup pins, pulled straight
  * from `registry.npmjs.org` — the CDN mirrors that normally serve these files

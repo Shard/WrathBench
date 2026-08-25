@@ -186,11 +186,11 @@ describe("unscoredReason", () => {
     // Even with no stamp: the stub is scripted.
     expect(unscoredReason(run({ driver: "stub", shakeout: null }))).toContain("stub");
     expect(unscoredReason(run({ objective: "walk to Ironforge" }))).toContain("objective");
-    // ADR-0035: a claude-code run is a tagged row, not an excluded one.
+    // A claude-code run is a tagged row, not an excluded one.
     expect(unscoredReason(run({ driver: "claude-code", harness: "claude-code", shakeout: null }))).toBeNull();
   });
 
-  test("a lapsed run is an attempt, never a recorded episode (ADR-0049)", () => {
+  test("a lapsed run is an attempt, never a recorded episode", () => {
     // It is on the runs page with its reason, and out of every chart over
     // episodes — the ladder reads exactly this predicate.
     expect(unscoredReason(run({ terminationReason: "attempt-failed" }))).toBe("unscored (attempt-failed)");

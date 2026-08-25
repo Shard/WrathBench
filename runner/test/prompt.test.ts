@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { SYSTEM_PROMPT, freshCharacterNote } from "../src/prompt";
 
 /**
- * The prompt is harness surface (ADR-0004), so the facts a run proved models
+ * The prompt is harness surface, so the facts a run proved models
  * get wrong are pinned here rather than left to a careful re-read. Each case
  * cites the trajectory that made it worth a sentence.
  */
@@ -101,7 +101,7 @@ describe("episode sentence", () => {
   });
 });
 
-describe("the fresh-launch session note (ADR-0050: the model names its character)", () => {
+describe("the fresh-launch session note (the model names its character)", () => {
   const note = (taken: string[] = []) => freshCharacterNote({ character: "Fleetsonnet", race: 1, class: 2, taken });
 
   test("invites the model to name the character, in the game's own naming rules", () => {

@@ -1,5 +1,5 @@
 /**
- * The world-id export the build reads (`--world-ids`, ADR-0042).
+ * The world-id export the build reads (`--world-ids`).
  *
  * Every id and name here is invented; no export of the real server is in this
  * repository and none ever will be.

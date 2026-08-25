@@ -20,7 +20,7 @@
  * removed, not labelled: a label costs the model a paragraph of reading and
  * still leaves the wrong world in the snippet window. Removal is deterministic,
  * counted in `meta`, and reversible by rebuilding — which is the reversibility
- * that matters (ADR-0040).
+ * that matters.
  *
  * The same file also holds the second reason a section is cut: not that it is
  * about a later world, but that it is not about the world at all. A character
@@ -28,7 +28,7 @@
  * gallery or a lore essay, and the census says those are most of the bundle's
  * bulk — `External links` alone is 66,140 pages and 14% of raw bytes. The
  * `OUT_OF_WORLD_SECTION` set names them by heading and the same walker drops
- * them, counted separately from the era cut (ADR-0040).
+ * them, counted separately from the era cut.
  *
  * Three levels here, all running on the RAW wikitext before the strip, because
  * the strip destroys the templates and headings that identify a section:
@@ -68,7 +68,7 @@ import { stripWikitext } from "./strip";
  * pages with no pre-cutoff revision at all for no gain in accuracy. 4.0.1
  * rather than the Shattering (2010-11-23) or Cataclysm's release (2010-12-07):
  * those two buy 0.2-0.3% fewer drops and let in a month of beta-informed
- * rewrites. See ADR-0040.
+ * rewrites; docs/METHODOLOGY.md "The reference bundle" has the full reasoning.
  */
 export const DEFAULT_ERA_CUTOFF = "2010-10-12T00:00:00Z";
 

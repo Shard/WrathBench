@@ -3,7 +3,7 @@
 The operator SPA over the viewer's read-only API: fleet overview, one page per
 run, and the live map. SolidJS + Vite, TypeScript strict, no CSS framework.
 
-Why an SPA and why a dependency at all: ADR-0022.
+Why an SPA and why a dependency at all: docs/ARCHITECTURE.md (dashboard section).
 
 ## Running
 
@@ -38,14 +38,14 @@ UI at all — page routes answer with a plain-text notice naming the build comma
 | --- | --- |
 | `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
 | `/episodes` | the tiers: what each id fixes, and how many runs sit against it; a tier's member count leads to its ladder |
-| `/runs` | every run, as a sortable table — the per-run grain (ADR-0047); `/results` redirects here |
-| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached (ADR-0018) |
+| `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
+| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached |
 | `/models` | the roster with the scheduler's verdict on each entry |
-| `/campaigns` | probe campaign coverage: cells swept, by how many models (ADR-0041) |
+| `/campaigns` | probe campaign coverage: cells swept, by how many models |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 
-One page per grain (ADR-0022 amendment, ADR-0047): the fleet page is what is
+One page per grain: the fleet page is what is
 running *now* and links to a run, never listing them; `/runs` is the runs;
 `/episodes` is the tiers; `/ladder` is aggregates over runs. A tier's member
 count on `/episodes` leads to that tier's ladder, and a point on the ladder's
@@ -55,14 +55,14 @@ chart leads to the runs behind it.
 
 The harness series (`major.minor`) is the comparability group, so every page
 that shows runs is a view of one. There is one selector for all of them, in the
-top bar (ADR-0046) — `all`, `latest`, then each series with runs, descending —
+top bar — `all`, `latest`, then each series with runs, descending —
 and it filters `/runs`, `/ladder` and the live agents on `/map`; `/episodes`
 lists no runs, so it has nothing to filter. `latest` is stored as the token, so it
 follows a minor bump. The choice
 rides in `?series=` and in `localStorage`; the URL wins, so a shared link means
 what its sender saw.
 
-It is not the `?harness=` filter of ADR-0035, which selects which *loop* owned a
+It is not the `?harness=` filter, which selects which *loop* owned a
 run (`wrathbench` or `claude-code`). Different dimension, same word. `/runs`
 still filters on it by clicking a cell; the ladder no longer offers it as a
 control (the harness is a tag on each row and a colour on each point, not a
@@ -88,7 +88,7 @@ Two modules are imported from the viewer rather than copied, under the
 - `runner/viewer/api-types.ts` — the wire shapes. The viewer imports the same
   file, so a drift between what it serves and what this expects is a compile
   error rather than a runtime surprise.
-- `runner/viewer/worldmap.ts` — the world→tile transform (ADR-0019). Both are
+- `runner/viewer/worldmap.ts` — the world→tile transform. Both are
   import-free by construction, so nothing server-side follows them into the
   browser bundle.
 
@@ -106,4 +106,5 @@ loops would cost more than it pins.
 - Paths are root-relative, so the same code runs behind the dev proxy and
   same-origin off the viewer. That is why there is no CORS configuration.
 - Polling intervals are stated at each call site, not hidden in `poll()` —
-  ADR-0022 names polling rate as a public-hosting constraint.
+  docs/ARCHITECTURE.md (dashboard section) names polling rate as a
+  public-hosting constraint.

@@ -1,6 +1,6 @@
 /**
  * The runs table's pure layer: its columns, the sort, the filters, and the
- * one-word readings a row shows (ADR-0047).
+ * one-word readings a row shows.
  *
  * The page is a spreadsheet of every run the viewer knows about — probe,
  * campaign, freeplay, scored, live, paused, ended, any series — and the one
@@ -46,9 +46,9 @@ export function columnClass(column: RunColumn): string {
 /** The header's hover: what the column actually counts. */
 export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
   started: "when the run was launched; the default order, newest first",
-  harness: "which loop owned the run (ADR-0035), and the harness series it ran on (ADR-0034)",
+  harness: "which loop owned the run, and the harness series it ran on",
   kind: "what the run was for: a scored tier attempt, a probe cell, freeplay, or a steered objective",
-  episode: "the tier the run was launched under (ADR-0030); (labeled) is the reader's guess at an older run, never membership",
+  episode: "the tier the run was launched under; (labeled) is the reader's guess at an older run, never membership",
   status: "live, paused (with why), or how it ended",
   level: "the highest level any state sample observed",
   turns: "driver turns the provider reported usage for; model responses where nothing reported",
@@ -87,12 +87,12 @@ export function statusText(r: Pick<ResultRun, "live" | "pauseReason" | "terminat
 /**
  * What the run was for, in a word.
  *
- * A probe names its campaign and cell (ADR-0041); freeplay is its own tier;
- * an objective run was steered (ADR-0024) and says so; anything else the
- * server could not score reads as `unscored` with the reason on hover; and a
- * run the server can score is `scored`, with `extra` marking one past the
- * policy target (ADR-0034). The kind is a reading of fields the server
- * decided, not a fifth way of deciding them.
+ * A probe names its campaign and cell; freeplay is its own tier; an
+ * objective run was steered and says so; anything else the server could not
+ * score reads as `unscored` with the reason on hover; and a run the server
+ * can score is `scored`, with `extra` marking one past the policy target.
+ * The kind is a reading of fields the server decided, not a fifth way of
+ * deciding them.
  */
 export function kindOf(r: Pick<ResultRun, "campaign" | "cell" | "episode" | "unscored" | "extra">): string {
   if (r.campaign !== null) return `probe ${r.campaign}${r.cell === null ? "" : `/${r.cell}`}`;

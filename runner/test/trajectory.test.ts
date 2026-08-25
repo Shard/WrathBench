@@ -39,7 +39,7 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  test("setCharacter records the name the model actually created (ADR-0050)", () => {
+  test("setCharacter records the name the model actually created", () => {
     // The launch config carries only the harness's suggestion. Three readers,
     // three places: the runs page and the positions feed read `run.character`,
     // a resumed runner reads meta.json before any database is open, and the

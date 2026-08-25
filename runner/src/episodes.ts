@@ -2,11 +2,11 @@
  * Episode tiers: the named shapes a run can have, in one table.
  *
  * A run's length, its watchdogs and whether an operator may steer it were three
- * independent flags until now (ADR-0024), which meant "a 90-minute run" was a
+ * independent flags until now, which meant "a 90-minute run" was a
  * convention held in fleet.json rather than a thing the harness knew about. A
  * tier names the whole shape at once: `--episode e90` sets the budget and the
  * watchdogs together, and the id is stamped into the comparability tuple
- * (ADR-0026) so two rows on a chart can be asked whether they were given the
+ * so two rows on a chart can be asked whether they were given the
  * same episode, not just the same watchdog numbers.
  *
  * Three rules keep the tier honest:
@@ -18,14 +18,14 @@
  *   `--episode e90 --no-xp-ms 0` is allowed — harness development needs it —
  *   but the tuple then carries `episodeOverride: true`, so the run cannot pass
  *   as a clean tier run on a chart.
- * - **A derived tier is a label, not a membership.** ADR-0030 is explicit that
- *   past runs are never back-labeled: they ran under the defaults of their day
+ * - **A derived tier is a label, not a membership.** Past runs are never
+ *   back-labeled: they ran under the defaults of their day
  *   (idle 10m, no-XP 45m), which is not what `e90` pins. The reader still
  *   *labels* such a run so it can be found and counted
  *   (`runner/viewer/results.ts`), but only a stamped, un-overridden run is a
  *   member of a tier's comparability group, and nothing is ever written back.
  *
- * The decision is ADR-0030; the operator-facing write-up of what each tier is
+ * The operator-facing write-up of what each tier is
  * *for* is docs/EPISODES.md. The `summary` strings below are the short form the
  * API and the dashboard serve, and they must stay consistent both with the
  * numbers beside them and with that page.
@@ -55,7 +55,7 @@ export interface EpisodeTier {
    * it is the runaway guard.
    */
   toolCalls: number | null;
-  /** Whether an operator objective (ADR-0024) may steer a run of this tier. */
+  /** Whether an operator objective may steer a run of this tier. */
   objectiveAllowed: boolean;
   /** Whether runs of this tier may enter a scored comparison. */
   scored: boolean;
@@ -74,7 +74,7 @@ export const EPISODES = {
     scored: true,
     summary:
       "The default tier, and the one every model starts on. Ninety minutes of wall clock, a " +
-      "fresh level-1 character (ADR-0006), no operator objective, idle and no-XP watchdogs at " +
+      "fresh level-1 character, no operator objective, idle and no-XP watchdogs at " +
       "twenty minutes each, and a 3000-call runaway ceiling — 1000 calls per thirty minutes, " +
       "a guard against a loop rather than a task budget. Short " +
       "enough that a full roster gets several episodes a night, which is what makes it the " +
@@ -111,7 +111,7 @@ export const EPISODES = {
     objectiveAllowed: true,
     scored: false,
     summary:
-      "The probe-campaign tier (ADR-0041): a commissioned run under a campaign's own objective, " +
+      "The probe-campaign tier: a commissioned run under a campaign's own objective, " +
       "cell and clock. Unscored, and never a target — a campaign is run once to completion and a " +
       "harness bump does not re-arm it, which is exactly what separates a probe from an eval. The " +
       "ninety minutes here is the default a campaign inherits when it names no clock of its own, " +
@@ -129,8 +129,8 @@ export const EPISODES = {
     summary:
       "Labeled and unscored. The id caps nothing — a freeplay run may set any wall clock or " +
       "none, and its watchdogs are set per experiment and recorded like everything else. It is " +
-      "the only id where the operator may point the agent somewhere (ADR-0024) and where wiki " +
-      "coordinates may be served (ADR-0028), which is exactly why it can never score. e360 and " +
+      "the only id where the operator may point the agent somewhere and where wiki " +
+      "coordinates may be served, which is exactly why it can never score. e360 and " +
       "freeplay are both often six hours long: duration is not what separates them, steering " +
       "is. A freeplay run neither qualifies nor disqualifies a model for anything.",
   },
@@ -187,7 +187,7 @@ export function watchdogsFor(tier: EpisodeTier): {
  *
  * Deliberately a predicate over the *effective* thresholds rather than a record
  * of which flags were typed: a resume (`--resume … --watchdogs-json`) never
- * goes through the launch flag path, and ADR-0026 says the tuple records what
+ * goes through the launch flag path, and the tuple records what
  * will actually be enforced. So the same question is asked the same way on both
  * paths, and `--episode e90 --idle-ms 1200000` — the tier's own value, spelled
  * out — correctly reads as a clean tier run.

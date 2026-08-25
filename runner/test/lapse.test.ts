@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { TAINT_AFTER, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
- * The whole of ADR-0049's rule, as a table. Every row is a case an operator
+ * The whole of the lapse rule, as a table. Every row is a case an operator
  * asked about by name; the answers are one function's, so the supervisor, the
  * roster and `--status` cannot drift apart on any of them.
  */
-describe("what happens to a lapsed run (ADR-0049)", () => {
+describe("what happens to a lapsed run", () => {
   const H = 3_600_000;
   const cases: {
     what: string;
@@ -35,7 +35,7 @@ describe("what happens to a lapsed run (ADR-0049)", () => {
       pause: { reason: "operator-pause" },
       want: { kind: "fail", reason: "manual", counts: false },
     },
-    { what: "freeplay: resumed, exactly as ADR-0036 said", episode: "freeplay", pause: { reason: "quota-exhausted" }, want: { kind: "resume", counts: false } },
+    { what: "freeplay: resumed, exactly as before", episode: "freeplay", pause: { reason: "quota-exhausted" }, want: { kind: "resume", counts: false } },
     { what: "freeplay stopped by the operator: resumed", episode: "freeplay", pause: { reason: "operator-pause" }, want: { kind: "resume", counts: false } },
     { what: "a probe campaign that asked to resume", episode: "probing", campaignResume: true, pause: { reason: "rate-limited" }, want: { kind: "resume", counts: false } },
     {
@@ -74,7 +74,7 @@ describe("what happens to a lapsed run (ADR-0049)", () => {
       want: { kind: "stale", reason: "stale", counts: false },
     },
     {
-      what: "a hand-written roster with no episode: ADR-0036's behaviour, untouched",
+      what: "a hand-written roster with no episode: the original behaviour, untouched",
       episode: undefined,
       pause: { reason: "quota-exhausted" },
       want: { kind: "resume", counts: false },

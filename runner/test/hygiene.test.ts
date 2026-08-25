@@ -1,5 +1,5 @@
 /**
- * Episode hygiene (ADR-0006): the assigned character is gone only when an OK
+ * Episode hygiene: the assigned character is gone only when an OK
  * listing says so. Replays the 2026-08-24 sequence that let a scored run start
  * on its predecessor's level-6 character: delete times out (player still
  * loaded), the re-list is refused during the core's linger.
@@ -100,7 +100,7 @@ describe("clearAccountCharacters with no module listening", () => {
   });
 });
 
-describe("clearAccountCharacters with model-chosen names (ADR-0050)", () => {
+describe("clearAccountCharacters with model-chosen names", () => {
   test("deletes every leftover whatever it is called, not just the assigned name", async () => {
     // The model names its own character, so the last episode's leftover is
     // `Grimjaw` and not the roster's suggestion. Hygiene lists the account and

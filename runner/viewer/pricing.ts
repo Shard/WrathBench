@@ -135,7 +135,7 @@ export const LOCAL_PRICE: PriceRow = {
 
 /**
  * The free/local/paid split is a model property decided once in
- * `runner/src/model-cost.ts` (the scheduler reads the same verdict, ADR-0034);
+ * `runner/src/model-cost.ts` (the scheduler reads the same verdict);
  * the predicates are re-exported so existing callers keep their names.
  */
 export { isFreeSlug, isLocalBase } from "../src/model-cost";

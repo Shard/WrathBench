@@ -19,8 +19,8 @@
  * - **Counted is spelled once.** The run ids behind a count use `isCounted`
  *   from `runner/src/models.ts` — the same predicate that produced
  *   `EpisodeStats` — so the list and the count cannot differ.
- * - **The roster names the models.** ADR-0031's `roster` map is the one
- *   source of a model's name; a fleet config without one is unreadable, not a
+ * - **The roster names the models.** The fleet config's `roster` map is the
+ *   one source of a model's name; a fleet config without one is unreadable, not a
  *   config to invent names for.
  */
 
@@ -78,7 +78,7 @@ const rosterEntrySchema = z
     billing: z.enum(["free", "paid"]).optional(),
     /** An objective puts the entry outside the policy (`policyExclusion`). */
     objective: z.string().min(1).optional(),
-    // The evidence budget and the idle axis (ADR-0043). Validated against the
+    // The evidence budget and the idle axis. Validated against the
     // projection's own exported key sets, so the two parsers cannot drift on
     // what a tier IS even while they stay deliberate twins on everything else.
     // Optional HERE and required in the supervisor's own parser, deliberately:
@@ -94,7 +94,7 @@ const rosterEntrySchema = z
 /**
  * A job, as narrowly as the membership predicate needs it: the roster names it
  * holds and the account it is pinned to. The file calls the list `queue`
- * (ADR-0034's amendment kept the key while the concept became "job"); a job
+ * (the key survived the concept's rename to "job"); a job
  * with an `account` is pinned.
  */
 const fleetJobSchema = z
@@ -106,7 +106,7 @@ const fleetJobSchema = z
   .loose();
 
 /**
- * The account classes (ADR-0034), as counts. Read from the file rather than
+ * The account classes, as counts. Read from the file rather than
  * from `fleet-state.json` so the page's concurrency figures agree with
  * `--status` even with the supervisor down — `--status` reads
  * `classAccountsOf(config, …)`, which is this same block.
@@ -162,7 +162,7 @@ export interface RosterRead {
   /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
   accounts: ClassAccountCounts;
   /**
-   * The `campaigns` block (ADR-0041), or empty when the file names none or names
+   * The `campaigns` block, or empty when the file names none or names
    * them unreadably. The viewer reports what a file says and never adjudicates
    * it — a campaigns block the supervisor would refuse simply reads as absent
    * here rather than taking the whole roster down with it.
@@ -170,7 +170,7 @@ export interface RosterRead {
   campaigns: Campaign[];
 }
 
-/** The series this viewer runs from — what the projection counts against (ADR-0034). */
+/** The series this viewer runs from — what the projection counts against. */
 export function currentSeries(): string | null {
   return harnessSeries(harnessVersion());
 }
@@ -227,7 +227,7 @@ export function readFleetRoster(path: string | undefined, series: string | null 
     };
   });
   // Over every roster NAME. One reason is left — a pinned job holds this
-  // account — since a catalog entry can no longer carry an objective (ADR-0041)
+  // account — since a catalog entry can no longer carry an objective
   // and a campaign borrows a model rather than removing it from the schedule.
   const excluded: { name: string; reason: string }[] = [];
   for (const name of Object.keys(parsed.roster)) {
@@ -499,7 +499,7 @@ export function modelsResponse(opts: {
   runsDir: string;
   roster: RosterRead;
   now?: number;
-  /** Optional harness filter (ADR-0035); "all" or absent lists every row. */
+  /** Optional harness filter; "all" or absent lists every row. */
   harness?: HarnessView | "all";
   /** Roster refs with a job in flight (the supervisor's state), for the verdict. */
   running?: ReadonlySet<string>;

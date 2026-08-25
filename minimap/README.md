@@ -2,7 +2,8 @@
 
 One-time tooling that reads the WoW 3.3.5a minimap textures out of the client
 MPQ archives and writes them as PNG tiles under `data/minimap/`. Tooling lives
-in git, output does not — same shape as `wiki/`, per ADR-0019.
+in git, output does not — same shape as `wiki/`. The map view this feeds is
+described in docs/ARCHITECTURE.md (dashboard section).
 
 Nothing here is Blizzard-derived: the MPQ reader, BLP2 decoder and PNG encoder
 are ours, the tests build synthetic archives and textures in code, and every
@@ -51,7 +52,7 @@ The two naming conventions in play are different from each other, so state both:
 - **Input (`md5translate.trs`)**: an entry `map<A>_<B>.blp` has **A = tile
   column, B = tile row** — the same order ADT filenames use.
 - **Output (this tool)**: `<tileRow>_<tileCol>.png` — **row first**, matching
-  ADR-0019 and `runner/viewer/worldmap.ts`. So the trs entry
+  `runner/viewer/worldmap.ts`. So the trs entry
   `Azeroth\map31_43.blp` becomes `data/minimap/0/43_31.png`.
 
 The transform the viewer must use:
@@ -121,8 +122,8 @@ The transposed reading fails all three checks.
 
 `runner/viewer/worldmap.ts` owns the transform and `runner/viewer/tiles.ts`
 serves `data/minimap/<mapId>/<row>_<col>.png`. Both already agree with what
-this tool writes; no reconciliation was needed. ADR-0019 flagged the
-orientation in `worldToPixel` as unverified until an extraction rendered a
+this tool writes; no reconciliation was needed. The original map-view design
+note flagged the orientation in `worldToPixel` as unverified until an extraction rendered a
 known zone — the Northshire Abbey check above is that verification, and it
 confirms the existing code rather than changing it.
 

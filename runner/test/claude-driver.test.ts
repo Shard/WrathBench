@@ -147,7 +147,7 @@ describe("claude-code driver", () => {
     expect(record["model"]).toBe("opus");
     // our MCP server really answered tools/list over the loopback bridge
     expect(record["mcpTools"]).toEqual(TOOLS.map((t) => t.name));
-    // the context message is the harness's, assembled by ADR-0012 machinery
+    // the context message is the harness's, assembled by the fixed context machinery
     const userMessages = record["userMessages"] as string[];
     expect(userMessages).toHaveLength(2);
     expect(userMessages[0]).toContain("[turn 1]");
@@ -188,7 +188,7 @@ describe("claude-code driver", () => {
   test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {
     const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
     // Launched with a stamped tuple, the way run.ts launches one: the resolved
-    // id is an annotation on it (ADR-0033 amendment) as well as a run field.
+    // id is an annotation on it as well as a run field.
     trajectory.writeMeta({
       runId: "run-test",
       harnessVersion: "t",
@@ -561,7 +561,7 @@ describe("driver selection and stamping", () => {
     return { dir, runId: runId!, stderr };
   }
 
-  test("an externally delivered SIGTERM pauses the run as operator-pause (ADR-0036)", async () => {
+  test("an externally delivered SIGTERM pauses the run as operator-pause", async () => {
     const { dir, runId, stderr } = await stopMidTurn("SIGTERM");
     expect(stderr).toContain("SIGTERM: pausing run as `operator-pause`");
     const runDir = join(dir, runId);

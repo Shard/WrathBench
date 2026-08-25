@@ -1,12 +1,12 @@
 /**
- * What happens to a run that stopped without a verdict (ADR-0049).
+ * What happens to a run that stopped without a verdict.
  *
  * A run can lapse two ways. It can **pause** — the runner wrote a pause record
- * and released or kept its session (ADR-0036) — or it can go **stale**, which
+ * and released or kept its session — or it can go **stale**, which
  * is nothing at all: the host slept, the fleet was down, and hours later the
  * run's trajectory has not grown and no process is behind it.
  *
- * ADR-0036 answered both with "resume it". That is right for a sandbox and
+ * The original answer to both was "resume it". That is right for a sandbox and
  * wrong for a measurement: a scored episode that paused for two hours and came
  * back is not a recorded ninety minutes of play, it is a broken one. So the
  * lane decides:
@@ -32,7 +32,8 @@ export const TAINT_AFTER = 3;
 
 /**
  * A run with no wall clock of its own is stale after this. Twice the longest
- * tier budget (`e360`), which is the same fallback ADR-0036 used, stated once.
+ * tier budget (`e360`), which is the same fallback the pause logic used,
+ * stated once.
  */
 export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 
@@ -73,7 +74,8 @@ export function staleAfterMs(episodeMs: number | null): number {
  * Whether a lane resumes a lapsed run. `resume` is the campaign key an
  * operator writes (`campaigns.<name>.resume`); `resumeOnPause` is the same
  * answer travelling on a roster spec. An episode the table does not know —
- * a hand-written roster with no `--episode` — keeps ADR-0036's behaviour.
+ * a hand-written roster with no `--episode` — keeps the original resume
+ * behaviour.
  */
 export function resumesOnPause(episode: string | undefined, campaignResume?: boolean): boolean {
   if (episode === undefined || !isEpisodeId(episode)) return true;
@@ -83,7 +85,7 @@ export function resumesOnPause(episode: string | undefined, campaignResume?: boo
 }
 
 export interface Lapse {
-  /** `resume` keeps ADR-0036; the other two end the run. */
+  /** `resume` keeps the run going; the other two end it. */
   kind: "resume" | "fail" | "stale";
   /** The termination to write. Absent on `resume`. */
   reason?: "attempt-failed" | "manual" | "stale";
@@ -119,8 +121,8 @@ export function classifyLapse(opts: {
     // the run was already waiting on its provider when the lights went out.
     const gap = `no activity for ${fmtGap(opts.staleForMs)}`;
     return provider
-      ? { kind: "stale", reason: "attempt-failed", detail: `${cause}: ${gap} — ended stale (ADR-0049)`, counts: true }
-      : { kind: "stale", reason: "stale", detail: `${cause}: ${gap} — ended stale (ADR-0049)`, counts: false };
+      ? { kind: "stale", reason: "attempt-failed", detail: `${cause}: ${gap} — ended stale`, counts: true }
+      : { kind: "stale", reason: "stale", detail: `${cause}: ${gap} — ended stale`, counts: false };
   }
   if (opts.pause === null) return { kind: "resume", counts: false };
   if (resumesOnPause(opts.episode, opts.campaignResume)) return { kind: "resume", counts: false };
@@ -128,7 +130,7 @@ export function classifyLapse(opts: {
     return {
       kind: "fail",
       reason: "attempt-failed",
-      detail: `${cause}: not resumed — a scored run that pauses is a failed attempt (ADR-0049)`,
+      detail: `${cause}: not resumed — a scored run that pauses is a failed attempt`,
       counts: true,
     };
   }
@@ -137,7 +139,7 @@ export function classifyLapse(opts: {
   return {
     kind: "fail",
     reason: "manual",
-    detail: `${cause}: ended as a failed attempt, not counted against the model (ADR-0049)`,
+    detail: `${cause}: ended as a failed attempt, not counted against the model`,
     counts: false,
   };
 }

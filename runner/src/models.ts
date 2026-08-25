@@ -8,12 +8,13 @@
  * pool's free accounts. The fleet supervisor (`infra/run-fleet.ts`) calls both
  * every tick; `--status`, `--dry-run` and the viewer's `/api/models` read the
  * same projection, so there is exactly one answer to "why is this model not
- * running". The policy is ADR-0032; the tiers are ADR-0030 / docs/EPISODES.md.
+ * running". The policy lives in docs/OPERATIONS.md; the tiers in
+ * docs/METHODOLOGY.md ("Episodes, lanes, and evidence") / docs/EPISODES.md.
  *
  * Rules the projection holds to:
  *
  * - **Only stamped runs exist.** A run directory with no `comparability.episode`
- *   in its meta.json predates the tiers and is never back-labeled (ADR-0030),
+ *   in its meta.json predates the tiers and is never back-labeled,
  *   so it is invisible here — it neither counts toward a target nor climbs the
  *   ladder. Every fleet run since the tiers landed is stamped.
  * - **A zero-response run is a launch that did not happen** — no model
@@ -35,7 +36,7 @@
  *   from, and runs from another series are shown but not counted — a minor
  *   bump restarts the evidence, a fix commit within the series does not. A
  *   policy with no series (an unversioned checkout) filters nothing.
- * - **A paused run is suspended, not judged** (ADR-0036). A run with a
+ * - **A paused run is suspended, not judged.** A run with a
  *   `pause_reason` and no termination — the supervisor stopped under it, or
  *   its provider ran out of quota — is an attempt but is neither counted nor
  *   a ladder failure while it is paused, and it holds its model: the policy
@@ -45,7 +46,7 @@
  *   targets (hard: never extras) and shares one in-flight cap; a free model
  *   gets extra runs at lowest priority once nothing else is schedulable,
  *   cycling through `extras.characters`. An extra is an attempt, never counted.
- * - **A local model's extras are freeplay** (`policy.extras.local`, ADR-0034).
+ * - **A local model's extras are freeplay** (`policy.extras.local`).
  *   The box is inference-bound, so another 90 minutes of it says little that
  *   the last three said; one unbounded freeplay run at a time, restarted when
  *   it ends, is the long-horizon data it can give. Same rule otherwise: an
@@ -89,14 +90,14 @@ export interface StartingCharacter {
 }
 
 /**
- * The ladder a model climbs, named once here (ADR-0043). A tier is a statement
+ * The ladder a model climbs, named once here. A tier is a statement
  * of **how much evidence** a model gets, denominated in runs, and it is the
  * only thing that sets a run count: there is no per-entry override and no
  * per-billing table, so "how many runs does this model get" has exactly one
  * answer and it is the word in the config.
  *
  * The table lives in code, not in `fleet.json`, for the reason promotion is a
- * threshold rather than a judgement (ADR-0034): a budget that every model is
+ * threshold rather than a judgement: a budget that every model is
  * held to alike is a recorded decision, and a bespoke volume is a NAMED tier
  * added here, reviewed like an episode id — never a number edited into one
  * model's entry at 03:00.
@@ -150,8 +151,8 @@ export function effectiveTier(declared: Tier, earnedRung1: boolean): Tier {
  * wrong shape for what it was doing: sampling start states is exploration, so
  * putting it in a SCORED episode meant an unscored question was being asked in
  * the scored lane, with the cell chosen by a counter that meant something else
- * (how many extras this model had made). It is a probe campaign now (ADR-0041),
- * where the cells are named in the config and the runs are unscored.
+ * (how many extras this model had made). It is a probe campaign now, where
+ * the cells are named in the config and the runs are unscored.
  *
  * - `none` — nothing. The default, and what a paid model wants.
  * - `unlimited` — a freeplay session, unscored, up to `UNLIMITED_SESSION_MS`.
@@ -163,7 +164,7 @@ export type IdleMode = (typeof IDLE_MODES)[number];
  * The wall clock an `unlimited` idle session gets, on every account class.
  *
  * It is a clock rather than the unbounded run local extras used to get, because
- * a class governs the next pick and never a run in flight (ADR-0034): an
+ * a class governs the next pick and never a run in flight: an
  * endless session ended only by a 20-minute idle watchdog — which a model that
  * keeps playing never trips — holds its account forever, and after a series
  * bump the re-armed scored targets would queue behind it indefinitely. Six
@@ -208,7 +209,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
  * What is left here is only ever about **where a run may physically execute
  * and how many at once**: `maxConcurrent` per rate-limit key, and `paid` as
  * the paid class's throttle. How much evidence a model gets is its tier
- * (ADR-0043) and is not expressible in this block at all.
+ * and is not expressible in this block at all.
  *
  * The removed keys are refused BY NAME rather than ignored. A file still
  * carrying `policy.runsPerEpisode` meant something specific by it, and
@@ -226,11 +227,11 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
   if (o.extras !== undefined) {
-    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign (ADR-0041)');
+    throw new Error('policy.extras is not a 0.5 key — idle behaviour is per model now; set roster.<name>.idle to "unlimited", and put a race/class sweep in a probe campaign');
   }
   if (o.resume !== undefined) {
     throw new Error(
-      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule (ADR-0049): scored evals never do, freeplay always does, a probe campaign opts in with campaigns.<name>.resume",
+      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in with campaigns.<name>.resume",
     );
   }
   if (o.maxConcurrent !== undefined) {
@@ -347,8 +348,8 @@ export interface PolicyJob {
  * A roster as the two predicates below need it: the NAMES, and nothing else.
  *
  * It used to need each entry's `objective`, because an entry carrying one was
- * outside the policy. Since ADR-0041 a catalog entry cannot carry one, so
- * nothing about an entry excludes it any more — only a pinned job holding its
+ * outside the policy. A catalog entry cannot carry one any more, so nothing
+ * about an entry excludes it — only a pinned job holding its
  * account does, and that is a property of the queue.
  */
 export type PolicyRoster = Readonly<Record<string, unknown>>;
@@ -362,8 +363,8 @@ export function pinnedRefs(jobs: readonly PolicyJob[]): Set<string> {
  * The roster names the policy may schedule: every name not referenced by a
  * pinned job, whose account is spoken for.
  *
- * It used to also exclude an entry carrying an objective. Since ADR-0041 an
- * entry cannot carry one — steering is a campaign, which BORROWS a catalog
+ * It used to also exclude an entry carrying an objective. An entry cannot
+ * carry one any more — steering is a campaign, which BORROWS a catalog
  * entry rather than taking it out of the schedule — so that clause described a
  * state the parser now refuses.
  */
@@ -420,7 +421,7 @@ export interface RunFact {
   harnessVersion: string | null;
   /** `harnessSeries(harnessVersion)`; what the schedule keys on. */
   harnessSeries: string | null;
-  /** An extra run (ADR-0034): an attempt the policy made past the target, never counted. */
+  /** An extra run: an attempt the policy made past the target, never counted. */
   extra: boolean;
   startedAt: number;
   /** `ended_at` from run.sqlite, else the trajectory's mtime. */
@@ -433,7 +434,7 @@ export interface RunFact {
   /** No termination row, not paused, and a trajectory that grew recently. */
   live: boolean;
   /**
-   * Set while the run is paused (ADR-0036): `pause_reason` in run.sqlite with
+   * Set while the run is paused: `pause_reason` in run.sqlite with
    * no termination. `at` is meta.json's pause mark when present, else the
    * trajectory's mtime; `count` is how many times this run has paused, which
    * is what a resume cadence indexes; `episodeElapsedMs` is the clock the run
@@ -443,7 +444,7 @@ export interface RunFact {
   /** The game account the run was launched on; a resume must go back to it. */
   account: string | null;
   /**
-   * The character the run actually played (ADR-0050: the model names it, and
+   * The character the run actually played (the model names it, and
    * `run.ts` rewrites the config's suggestion at the first sight of it). What
    * account affinity keys on: a fresh attempt prefers the account this
    * character is still standing on, so the name does not collide elsewhere.
@@ -452,7 +453,7 @@ export interface RunFact {
   /** The run's wall-clock budget (`watchdogs.episodeMs`), null when disabled. */
   episodeMs: number | null;
   /**
-   * The probe campaign and cell this run was commissioned by (ADR-0041), or
+   * The probe campaign and cell this run was commissioned by, or
    * null on anything that is not a campaign run. Read straight off the run's own
    * config, which is why a campaign's progress survives an edit to the file —
    * and why a completed campaign's results outlive the deletion of its entry.
@@ -477,13 +478,13 @@ export interface EpisodeStats {
   /** Runs from another harness series: shown and numbered as attempts, never counted. */
   otherSeries: number;
   /**
-   * Attempts spent on a run that lapsed and was not resumed (ADR-0049):
+   * Attempts spent on a run that lapsed and was not resumed:
    * `attempt-failed` terminations in this series. An operator-pause (`manual`)
    * and an offline gap (`stale`) are the harness's doing and are not here.
    */
   failed: number;
   /**
-   * `failed` reached `TAINT_AFTER` (ADR-0049): the model gets no further
+   * `failed` reached `TAINT_AFTER`: the model gets no further
    * attempts on this episode in this series. Distinct from the roster's own
    * `isTainted`, which is a per-process defer ladder over launch failures.
    */
@@ -513,7 +514,7 @@ export interface ModelState {
   model: string;
   effort: string | null;
   platform: string | null;
-  /** The harness this entry's runs go through (ADR-0035), from its driver; a tag, not a partition. */
+  /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
   harness: Harness;
   status: ModelStatus;
   /** Free or paid, decided by `model-cost.ts` (or the roster's override). */
@@ -543,7 +544,7 @@ export interface ModelState {
   /** Consecutive no-progress attempts on the ladder (0 when the last attempt progressed). */
   ladder: number;
   /**
-   * The model's newest paused run in this series (ADR-0036): it holds the
+   * The model's newest paused run in this series: it holds the
    * model — nothing new is scheduled for it — until the supervisor resumes
    * the run or the run goes stale (`isStalePause`).
    */
@@ -560,7 +561,7 @@ export interface NextJob {
   /** An extra run past the target (free models only), with the character it rolls. */
   extra?: StartingCharacter;
   /**
-   * Set on a probe pick (ADR-0041): which campaign commissioned it and which
+   * Set on a probe pick: which campaign commissioned it and which
    * cell it is. The supervisor reads the campaign back out of the config for
    * the run dimensions; only the identity travels on the pick.
    */
@@ -863,9 +864,9 @@ export function stillbornOf(f: RunFact): boolean | null {
 }
 
 /** A run that counts toward a target: a member of its tier's group that got off the ground. */
-// The set of "not the model's fault" terminations lives with the lapse rule
-// (ADR-0049), because the viewer's scored-ness predicate reads it too and the
-// two must not drift. Re-exported here so every existing importer is unchanged.
+// The set of "not the model's fault" terminations lives with the lapse rule,
+// because the viewer's scored-ness predicate reads it too and the two must
+// not drift. Re-exported here so every existing importer is unchanged.
 export { NOT_THE_MODELS_FAULT } from "./lapse";
 
 /**
@@ -883,7 +884,7 @@ export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt
 }
 
 /**
- * A run nothing came back for (ADR-0049): no termination, and no activity for
+ * A run nothing came back for: no termination, and no activity for
  * longer than its own episode budget (a run with no wall clock gets
  * `STALE_FALLBACK_MS`). The host slept, or the fleet was down; either way the
  * run is cooked and is ended rather than resumed. A live process is excluded
@@ -900,8 +901,8 @@ export function staleForMs(f: Parameters<typeof isStaleRun>[0], now: number): nu
 }
 
 /**
- * A failed attempt that counts toward the model's three strikes on an episode
- * (ADR-0049). One predicate, and it reads the termination reason and nothing
+ * A failed attempt that counts toward the model's three strikes on an
+ * episode. One predicate, and it reads the termination reason and nothing
  * else: `manual` (an operator-pause or a cut) and `stale` (an offline gap) are
  * the harness's doing and are deliberately not here. Only a run the fleet
  * launched spends a policy attempt.
@@ -1058,7 +1059,7 @@ export function projectModel(
     perEpisode,
     ladder,
   };
-  // The newest paused run that is not stale holds the model (ADR-0036).
+  // The newest paused run that is not stale holds the model.
   const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStaleRun(f, opts.now));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
@@ -1174,15 +1175,15 @@ export function schedulability(
   if (s.paused !== undefined) {
     const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
     const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
-    // A scored run that paused is not coming back (ADR-0049): it holds the
-    // model only until the next tick ends it as a failed attempt, and the
-    // fresh attempt is scheduled the tick after. Unscored lanes still resume.
+    // A scored run that paused is not coming back: it holds the model only
+    // until the next tick ends it as a failed attempt, and the fresh attempt
+    // is scheduled the tick after. Unscored lanes still resume.
     const fate = resumesOnPause(s.paused.episode)
       ? "resumed by the supervisor, never rescheduled"
       : "ended as a failed attempt on the next tick, then reattempted fresh";
     return blocked(`paused run ${s.paused.runId} (${s.paused.reason}, ${spent}${of} elapsed) — ${fate}`);
   }
-  // Three failed attempts on an episode stop the spending (ADR-0049). The
+  // Three failed attempts on an episode stop the spending. The
   // model is blocked rather than "free": idle work is not the reward for
   // burning three evals, and the taint is a stop signal, not a target met.
   const tainted = s.eligible.filter((ep) => s.perEpisode[ep]?.tainted === true);
@@ -1239,9 +1240,10 @@ function episodeOrder(ep: EpisodeId): number {
 }
 
 /**
- * The account class a pick belongs to (ADR-0034, "Account classes"): which of
- * `accounts.pool` / `accounts.paid` / `accounts.local` it may land on. `pool`
- * is the base class — every account that is not split out belongs to it.
+ * The account class a pick belongs to (docs/OPERATIONS.md, "Account
+ * classes"): which of `accounts.pool` / `accounts.paid` / `accounts.local`
+ * it may land on. `pool` is the base class — every account that is not
+ * split out belongs to it.
  */
 export type AccountClass = "pool" | "paid" | "local";
 
@@ -1275,7 +1277,7 @@ export function rosterClass(r: RosterModel): AccountClass {
  * other class was assumed to want characters — so the same model meant
  * different things depending on which account it landed on, and a non-local
  * model could not take unlimited sessions at all. One axis, stated per model,
- * replaces both spellings (ADR-0043).
+ * replaces both spellings.
  */
 export function idleModeOf(s: Pick<ModelState, "idle">): IdleMode {
   return s.idle;
@@ -1287,7 +1289,7 @@ export interface NextJobsOptions {
   policy?: Pick<SchedulingPolicy, "paid">;
   /**
    * The accounts each SPLIT-OUT class may use (`accounts.paid`,
-   * `accounts.local`; ADR-0034's account classes). A class missing from this
+   * `accounts.local`; the account classes). A class missing from this
    * map is not split: its picks share `freeAccounts`, which is what every
    * caller did before the split. A class present takes its accounts from here
    * and never from `freeAccounts`; an empty array is therefore "this class has
@@ -1312,7 +1314,7 @@ export interface NextJobsOptions {
    */
   poolHeld?: string;
   /**
-   * The enabled, UNPINNED campaigns the policy may schedule (ADR-0041), in
+   * The enabled, UNPINNED campaigns the policy may schedule, in
    * declaration order. A pinned campaign is a pinned job and never appears
    * here. Absent means no campaign work, which is what an older config gets.
    */
@@ -1327,7 +1329,7 @@ export interface NextJobsOptions {
  * episode first, (3) fewest counted runs toward target, ties by roster order.
  * One job per model. `running` holds roster names with a stream in flight.
  *
- * Two additions under ADR-0034's paid/free split. A paid pick is held when
+ * Two additions under the paid/free split. A paid pick is held when
  * `policy.paid.maxConcurrent` paid models are already in flight, and the
  * next candidate takes its account; `held` says so. A pick of a SPLIT-OUT
  * class (paid, local) draws from `opts.classAccounts[class]` — never from
@@ -1366,9 +1368,9 @@ export function planNextJobs(
     verdicts.set(s.name, v);
     if (wantsIdle(v, s)) {
       // One candidate, not one per tier: `unlimited` is the only idle mode left
-      // (ADR-0041 moved the race/class cycle to a probe campaign, where an
-      // unscored question belongs), an unlimited session has no tier, and there
-      // is only ever one of them in flight.
+      // (the race/class cycle moved to a probe campaign, where an unscored
+      // question belongs), an unlimited session has no tier, and there is
+      // only ever one of them in flight.
       extraCands.push({ s, ep: "freeplay", epOrder: episodeOrder("freeplay"), fresh: 1, counted: extrasSoFar(s), order });
       return;
     }
@@ -1448,7 +1450,7 @@ export function planNextJobs(
       why: `${c.fresh === 0 ? "no counted runs yet" : `${st.counted}/${st.target} on ${c.ep}`}${c.s.status === "promoted" ? ", promoted" : ""}`,
     });
   }
-  // Probe campaigns (ADR-0041): commissioned work, above idle work and below
+  // Probe campaigns: commissioned work, above idle work and below
   // evidence. Only a model that owes nothing is eligible — a probe never delays
   // a counted run — and the sweep order is the fan-out's, which spreads across
   // models before finishing any one of them.
@@ -1529,8 +1531,8 @@ export function nextJobs(
  *
  * The fleet page's one forward-looking number: everything else on it says what
  * is happening now, this says how much of the schedule is left. Two bounds,
- * because the biggest unknown is promotion (ADR-0030: a model enters e360 by
- * reaching `promoteAtLevel` on e90, which has not happened yet for most of the
+ * because the biggest unknown is promotion (a model enters e360 by reaching
+ * `promoteAtLevel` on e90, which has not happened yet for most of the
  * roster):
  *
  * - **lower** assumes nobody else promotes: every schedulable model's unmet
@@ -1541,7 +1543,7 @@ export function nextJobs(
  *   it adds the full e360 target of the models the lower bound left out.
  *
  * Extras never appear: they are what the pool does when the schedule is empty,
- * not work the policy owes (ADR-0034). Neither do models outside the policy —
+ * not work the policy owes. Neither do models outside the policy —
  * a name a pinned job holds or one carrying an objective, the same exclusion
  * `/api/models` makes — nor retired ones. A cooling or paused model still owes
  * its runs; it is late, not excused.
@@ -1554,7 +1556,7 @@ export function nextJobs(
  *
  *     eta = Σ over groups  (group's remaining minutes / group's concurrency)
  *
- * The groups are the account classes (ADR-0034) — pool, paid, local — because
+ * The groups are the account classes — pool, paid, local — because
  * a model can only ever land on its own class's accounts, with `policy.paid.
  * maxConcurrent` capping the paid class below its account count. Claude-code
  * models are carved out of the pool as their own group, since

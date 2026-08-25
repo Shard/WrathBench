@@ -1,7 +1,7 @@
 /**
  * Race and class ids as 3.3.5a spells them, for display only.
  *
- * The extras cycle (ADR-0034) gives free models a different starting character
+ * The extras cycle gives free models a different starting character
  * per extra run, so `race: 3, class: 3` has to reach a page as "Dwarf Hunter"
  * or the dimension is unreadable. The ids are the client's own — `enum Races`
  * and `enum Classes` in AzerothCore's `SharedDefines.h`, which is where these

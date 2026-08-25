@@ -37,7 +37,7 @@ export class Watchdogs {
   private lastProgress: { level: number; xp: number } | null = null;
   private sandboxRestarts = 0;
   /**
-   * Fresh-episode precondition (ADR-0006). Set by `expectFreshCharacter` on a
+   * Fresh-episode precondition. Set by `expectFreshCharacter` on a
    * non-resumed run; `noteFirstLive` evaluates the first in-world observation
    * against it once and, if it fails, `check()` ends the run as
    * `stale-character` from then on. A resumed run never arms it: its

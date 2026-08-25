@@ -48,7 +48,7 @@ function writeRun(runsDir: string, r: Synth): void {
     join(dir, "meta.json"),
     JSON.stringify({
       runId: r.id,
-      // This checkout's series, so the route counts the run (ADR-0034 keys on the series).
+      // This checkout's series, so the route counts the run (the schedule keys on the series).
       harnessVersion: r.harnessVersion ?? `harness-${currentSeries() ?? "0.0"}-test`,
       startedAt: r.startedAt,
       config,
@@ -129,7 +129,7 @@ afterAll(() => {
 });
 
 describe("readFleetRoster", () => {
-  test("reads the ADR-0031 roster map, with effort and policy", () => {
+  test("reads the roster map, with effort and policy", () => {
     const { fleetPath } = fixture(ROSTER);
     const read = readFleetRoster(fleetPath);
     expect(read.shape).toBe("roster");
@@ -174,7 +174,7 @@ describe("readFleetRoster", () => {
     // The viewer is deliberately lenient about a config the supervisor would
     // refuse — it reports what a file says rather than adjudicating it — so an
     // entry with a stray objective is still read. It is simply not a reason:
-    // since ADR-0041 nothing on an entry takes it out of the policy, and a
+    // since campaigns took over steering nothing on an entry takes it out of the policy, and a
     // campaign borrows a model rather than removing it from the schedule.
     const { fleetPath } = fixture({
       ...ROSTER,

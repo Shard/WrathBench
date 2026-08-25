@@ -1,9 +1,9 @@
 /*
  * The harness-series selector, in the top bar next to the status badge.
  *
- * One control for the whole dashboard (ADR-0046): the series is the
- * comparability group (ADR-0034), so every page that shows runs is a view of
- * one, and the operator chose to say which one once rather than on each page.
+ * One control for the whole dashboard: the series is the comparability
+ * group, so every page that shows runs is a view of one, and the operator
+ * chose to say which one once rather than on each page.
  *
  * A `<select>` rather than the chips the episode filter uses: the set of series
  * grows with every minor bump and would eventually wrap the header, and this is
@@ -29,7 +29,7 @@ export function SeriesSelect() {
   return (
     <label
       class="series"
-      title="Harness series (ADR-0034): the comparability group every page filters to. `latest` follows the newest series rather than pinning to it."
+      title="Harness series: the comparability group every page filters to. `latest` follows the newest series rather than pinning to it."
     >
       <span class="dim">series</span>
       {/*

@@ -1,6 +1,6 @@
 /**
  * Probe for the spellbook/cooldown/talent surface and the raw escape hatch
- * (FOLLOW-UPS 39, ADR-0025): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
+ * (FOLLOW-UPS 39; the raw allowlist is in module/PROTOCOL.md): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
  * `SMSG_SPELL_COOLDOWN`, `SMSG_TALENTS_INFO` decodes plus the `learn_talent`
  * and `raw` actions.
  *

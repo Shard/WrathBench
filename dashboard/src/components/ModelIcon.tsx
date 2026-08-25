@@ -1,5 +1,5 @@
 /**
- * A model's logo, wherever a model is named (ADR-0045).
+ * A model's logo, wherever a model is named.
  *
  * The SVGs are committed assets fetched by `infra/fetch-model-logos.ts` and are
  * *inlined* rather than linked: a mono icon paints with `fill="currentColor"`,
@@ -85,12 +85,48 @@ export function logoImageOf(model: string | null | undefined): HTMLImageElement 
 }
 
 /**
+ * A model's logo as a URL an SVG `<image>` can point at, or null.
+ *
+ * The ladder scatter draws its marks in SVG rather than on a canvas, so it
+ * wants an href and not a decoded image: an href is answered synchronously,
+ * which is what spares a Solid chart the null-then-redraw dance the map does.
+ * Deliberately its own cache and its own data URI rather than sharing
+ * `logoImageOf`'s blob: that one revokes its URL the moment the image decodes,
+ * so a shared href would go dead as soon as the map had drawn that family.
+ * Same assets, same `familyOf`, same reason to sit on a light puck — a mono
+ * icon's `currentColor` is black in an image document.
+ */
+const hrefs = new Map<string, string>();
+
+export function logoHrefOf(model: string | null | undefined): string | null {
+  const family = familyOf(model);
+  if (family === null) return null;
+  const have = hrefs.get(family.id);
+  if (have !== undefined) return have;
+  const svg = SVG.get(family.id);
+  if (svg === undefined) return null;
+  const href = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  hrefs.set(family.id, href);
+  return href;
+}
+
+/**
  * The icon itself: the family's logo, or a monogram for an id nothing claims.
  *
  * Nothing at all for a model that is absent — a cell with no model to name
  * shows its own dash and does not want a badge in front of it.
  */
-export function ModelIcon(props: { model: string | null | undefined; title?: string }) {
+export function ModelIcon(props: {
+  model: string | null | undefined;
+  title?: string;
+  /**
+   * `lg` is the models page's lead mark: the same logo at twice the size,
+   * sitting left of a name and its sub-lines rather than inline in one. Only
+   * the logo grows — a monogram is a letter in a disc, and doubling that makes
+   * a placeholder shout louder than the identities it stands in for.
+   */
+  size?: "lg";
+}) {
   const model = (): string => props.model ?? "";
   const label = (): string => {
     if (props.title !== undefined) return props.title;
@@ -107,7 +143,13 @@ export function ModelIcon(props: { model: string | null | undefined; title?: str
           </span>
         }
       >
-        {(svg) => <span class="model-icon" title={label()} innerHTML={svg()} />}
+        {(svg) => (
+          <span
+            class={props.size === "lg" ? "model-icon model-icon-lg" : "model-icon"}
+            title={label()}
+            innerHTML={svg()}
+          />
+        )}
       </Show>
     </Show>
   );

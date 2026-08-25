@@ -1,7 +1,7 @@
 /**
  * The map's view maths, with no canvas and no DOM.
  *
- * ADR-0019 keeps the world→tile transform in `runner/viewer/worldmap.ts` and
+ * The world→tile transform lives in `runner/viewer/worldmap.ts` and
  * this module imports it rather than copying it — the reason the hand-written
  * map page duplicated those constants was that it was a string with no module
  * loader, which the SPA is not. Everything here is pure so pip placement and

@@ -68,7 +68,7 @@ header.top nav { display: inline-flex; gap: 10px; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
-/* The global harness-series selector (ADR-0046), left of the status badge. */
+/* The global harness-series selector, left of the status badge. */
 .series { display: inline-flex; align-items: center; gap: 6px; align-self: center; font-size: 12px; }
 .series select {
   font: inherit; color: var(--fg); background: var(--panel);
@@ -140,7 +140,7 @@ tbody tr:hover { background: var(--panel); }
 .badge.resuming { color: var(--accent); border-color: var(--accent); }
 .badge.paused { color: var(--warn); }
 .badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
-/* Harness tags (ADR-0035): a label, not a verdict. */
+/* Harness tags: a label, not a verdict. */
 .badge.harness-wrathbench { color: var(--dim); }
 .badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
 .badge.harness-unknown { opacity: .6; }
@@ -157,7 +157,7 @@ th.sorted { color: var(--fg); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }
 
-/* A model's logo beside its name (ADR-0045); the fallback is a monogram disc.
+/* A model's logo beside its name; the fallback is a monogram disc.
    The box is 1em so the mark rides the text it labels at any font size, and the
    fallback's own em is scaled with it so both read the same size. */
 .model-icon { display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -165,6 +165,13 @@ th.sorted { color: var(--fg); }
 .model-icon svg { width: 1em; height: 1em; display: block; }
 .model-icon-fallback { font-size: .7em; width: 1.4em; height: 1.4em; border-radius: 50%;
                        background: var(--panel); color: var(--dim); font-weight: 700; line-height: 1; }
+/* The models page leads its name cell with the mark instead of running it into
+   the text: twice the size, left of the name and the ids under it, centred
+   against the block as a whole. `font-size` is the whole of the resize because
+   the icon's box is 1em; the monogram fallback never takes this class and so
+   keeps the inline size it has everywhere else. */
+.model-idcell { display: flex; align-items: center; gap: 9px; }
+.model-icon-lg { font-size: 2em; margin-right: 0; vertical-align: 0; }
 
 button, .btn {
   font: inherit; background: var(--panel); color: var(--fg);
