@@ -16,22 +16,25 @@
  * flight to a node the character has not visited (ERR_TAXINOTVISITED).
  *
  * Arc:
- *   1. login -> SMSG_ALL_ACHIEVEMENT_DATA arrives with `achievements[]` (any
- *      length; a fixture character may hold none) and, for every row, id,
- *      packed `date`, readable `time`, and — when the module loaded
- *      Achievement.dbc — a string `name` and integer `points`;
- *   2. self's SMSG_UPDATE_OBJECT carries `taxiFlight: false`;
+ *   1. login -> SMSG_ALL_ACHIEVEMENT_DATA arrives with `achievements[]`
+ *      holding the row the fixture planted (Achievement.dbc 6, "Level 10",
+ *      10 points — the module's DBC naming, asserted non-vacuously) with id,
+ *      packed `date`, readable `time`, `name`, `points`;
+ *   2. self's SMSG_UPDATE_OBJECT carries `taxiFlight: false`. Self is matched
+ *      by guid: only create/movement blocks carry `self: true`, a values-only
+ *      block names the guid (the first gate run failed on exactly this);
  *   3. raw CMSG_ACTIVATETAXI (Gryth's guid, 6 -> 7) -> SMSG_ACTIVATETAXIREPLY
  *      with reply 0, then self flips to `taxiFlight: true` within 5s;
  *   4. DELETE /session mid-flight. apply.ts resets `taxi_path` and the
  *      position on the next run, so the flight never has to finish.
  *
- * Run from inside the network:
- *   docker compose -f infra/compose.yml exec \
- *     -e MODULE_ACCOUNT=PROBE \
- *     -e WRATHBENCH_DB_HOST=db -e WRATHBENCH_DB_PORT=3306 \
- *     -e WRATHBENCH_DB_USER=root -e WRATHBENCH_DB_PASSWORD=wrathbench \
- *     runner bun infra/smoke/achievements-taxi.ts
+ * Run from inside the network. The `runner` service carries the DB env the
+ * fixture tool needs and MODULE_ACCOUNT defaults to PROBE, so no `-e` flags:
+ *
+ *   docker compose -f infra/compose.yml exec runner bun infra/smoke/achievements-taxi.ts
+ *
+ * (Add `-e MODULE_ACCOUNT=SMOKE2` and the like only to log in as another
+ * allowlisted account.)
  */
 
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
@@ -49,6 +52,7 @@ const SCENARIO = "taxi-ironforge";
 const GRYTH_THURDEN = 1573; // creature entry, Ironforge flight master
 const TAXI_IRONFORGE = 6;
 const TAXI_THELSAMAR = 7;
+const ACHIEVEMENT_LEVEL_10 = 6; // Achievement.dbc: "Level 10", 10 points, planted by the fixture
 
 function log(msg: string) {
   console.log(`[probe] ${msg}`);
@@ -117,10 +121,15 @@ async function waitFor(pred: (e: any) => boolean, timeoutMs: number, what: strin
   }
 }
 
-/** Self's `fields.taxiFlight` on an update block, if that block carries the field. */
+/**
+ * Self's `fields.taxiFlight` on an update block, if that block carries the
+ * field. Matched by guid: `self: true` rides only the create/movement block,
+ * and the flag flip arrives as a values-only block that names the guid.
+ */
 function selfTaxiFlight(e: any): boolean | undefined {
-  if (e.opcode !== "SMSG_UPDATE_OBJECT") return undefined;
-  for (const o of e.data?.objects ?? []) if (o.self && typeof o.fields?.taxiFlight === "boolean") return o.fields.taxiFlight;
+  if (e.opcode !== "SMSG_UPDATE_OBJECT" || !selfGuid) return undefined;
+  for (const o of e.data?.objects ?? [])
+    if ((o.self || o.guid === selfGuid) && typeof o.fields?.taxiFlight === "boolean") return o.fields.taxiFlight;
   return undefined;
 }
 
@@ -158,6 +167,7 @@ async function main() {
   await Bun.sleep(200);
   const session = await createSession();
   log(`in world as ${CHARACTER} guid=${session.guid}`);
+  selfGuid = String(session.guid);
 
   // 1. Login-time achievement list.
   const all = await waitFor((e) => e.opcode === "SMSG_ALL_ACHIEVEMENT_DATA", 10_000, "SMSG_ALL_ACHIEVEMENT_DATA (is the tap deployed?)");
@@ -173,7 +183,11 @@ async function main() {
   }
   const named = rows.filter((r) => typeof r.name === "string").length;
   log(`ALL_ACHIEVEMENT_DATA: ${rows.length} earned, ${named} named from Achievement.dbc${rows[0] ? `; first ${JSON.stringify(rows[0])}` : ""}`);
-  if (rows.length > 0 && named === 0) fail(`no achievement row carries a name: Achievement.dbc did not load in the module`);
+  const planted = rows.find((r) => r.achievementId === ACHIEVEMENT_LEVEL_10);
+  if (!planted) fail(`the fixture's achievement ${ACHIEVEMENT_LEVEL_10} is not in the login list: ${JSON.stringify(rows)}`);
+  if (planted.name !== "Level 10" || planted.points !== 10 || planted.categoryId !== 92)
+    fail(`achievement ${ACHIEVEMENT_LEVEL_10} is not named from Achievement.dbc: ${JSON.stringify(planted)} (did the module log "loaded N achievements"?)`);
+  if (!/^2010-01-01 \d\d:\d\d$/.test(planted.time)) fail(`fixture date decoded as ${planted.time}, expected 2010-01-01`);
 
   // 2. Self on the ground: taxiFlight false.
   const selfBlock = await waitFor((e) => selfTaxiFlight(e) !== undefined, 10_000, "self update with taxiFlight");

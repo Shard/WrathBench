@@ -201,4 +201,10 @@ describe("taxiMask", () => {
     const withNodes = buildStatements(217, { ...base, taxiNodes: [6, 7] }).map(renderStatement).join("\n");
     expect(withNodes).toContain("taximask = '96 0 0 0 0 0 0 0 0 0 0 0 0 0'");
   });
+  test("achievements become character_achievement rows with the fixture date", () => {
+    const base: Scenario = { description: "t", level: 10, position: SCENARIOS["taxi-ironforge"].position };
+    expect(buildStatements(217, base).map(renderStatement).join("\n")).not.toContain("character_achievement");
+    const withAch = buildStatements(217, { ...base, achievements: [6] }).map(renderStatement).join("\n");
+    expect(withAch).toContain("REPLACE INTO character_achievement (guid, achievement, date) VALUES (217, 6, 1262304000)");
+  });
 });

@@ -30,6 +30,7 @@ import {
   SCENARIO_NAMES,
   isScenarioName,
   taxiMask,
+  ACHIEVEMENT_FIXTURE_DATE,
   validateScenario,
   type Scenario,
   type ScenarioName,
@@ -214,6 +215,13 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     });
   }
 
+  for (const achievement of scenario.achievements ?? []) {
+    statements.push({
+      sql: `REPLACE INTO character_achievement (guid, achievement, date) VALUES (?, ?, ?)`,
+      params: [guid, achievement, ACHIEVEMENT_FIXTURE_DATE],
+    });
+  }
+
   if (scenario.clearQuests) {
     statements.push({ sql: `DELETE FROM character_queststatus WHERE guid = ?`, params: [guid] });
     statements.push({ sql: `DELETE FROM character_queststatus_rewarded WHERE guid = ?`, params: [guid] });
@@ -246,13 +254,24 @@ function env(name: string, fallback?: string): string {
 
 const log = (msg: string) => console.log(`[fixtures] ${msg}`);
 
+/**
+ * The database password, mirroring compose's `${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}`:
+ * the service env sets WRATHBENCH_DB_PASSWORD, a host shell or `.env` more often
+ * sets WRATHBENCH_DB_ROOT_PASSWORD (infra/README), and the compose default is
+ * the literal. Without the last step every invocation from a container that
+ * predates the env block would throw instead of connecting.
+ */
+function dbPassword(): string {
+  return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
+}
+
 async function connect(): Promise<SQL> {
   const sql = new SQL({
     adapter: "mysql",
     hostname: env("WRATHBENCH_DB_HOST", "db"),
     port: Number(env("WRATHBENCH_DB_PORT", "3306")),
     username: env("WRATHBENCH_DB_USER", "root"),
-    password: env("WRATHBENCH_DB_PASSWORD"),
+    password: dbPassword(),
     database: env("WRATHBENCH_CHARACTERS_DB", "acore_characters"),
     // Same reason as bootstrap.ts: MySQL 8.4's caching_sha2_password wants the
     // server's RSA key on first handshake, and the connection never leaves the
