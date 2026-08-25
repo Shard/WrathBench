@@ -25,8 +25,9 @@ const SVG = new Map<string, string>(
   Object.entries(LOGOS).map(([path, svg]) => [path.slice(path.lastIndexOf("/") + 1, -".svg".length), svg]),
 );
 
-/** The raw SVG for a model's family, for the callers that cannot use the component. */
-export function logoSvgOf(model: string | null | undefined): string | null {
+/** The raw SVG for a model's family. Inlined by the component below; the canvas
+ * side wants a decoded image instead, which is `logoImageOf`. */
+function logoSvgOf(model: string | null | undefined): string | null {
   const family = familyOf(model);
   return family === null ? null : SVG.get(family.id) ?? null;
 }
