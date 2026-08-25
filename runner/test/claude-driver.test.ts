@@ -104,18 +104,17 @@ function setupEpisode(
 
 /**
  * Whether a pid is gone, polled: a group SIGKILL reaches the grandchild a beat
- * after the driver returns, so a single check would race it. A pid that has
- * exited but not been reaped answers signal 0 while it is a zombie, hence the
- * kernel-state read rather than kill(pid, 0) alone.
+ * after the driver returns, so a single check would race it. Use signal 0
+ * rather than Linux-only /proc inspection so this test has the same meaning on
+ * macOS, where the runner is developed and exercised.
  */
 async function gone(pid: number, timeoutMs = 5_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     let alive: boolean;
     try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
-      alive = state !== "Z";
+      process.kill(pid, 0);
+      alive = true;
     } catch {
       alive = false;
     }
