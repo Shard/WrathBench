@@ -264,7 +264,7 @@ export const METRICS = {
   pages_post_cutoff_id_match: {
     help:
       "Admitted with no pre-cutoff revision, because an id the page states about itself " +
-      "exists on this server under an agreeing name (ADR-0042).",
+      "exists on this server under an agreeing name.",
     identity: { role: "bucket", kept: true },
   },
   pages_id_name_mismatch: {
@@ -285,7 +285,7 @@ export const METRICS = {
     identity: { role: "bucket", kept: false },
   },
   pages_dropped_meta: {
-    help: "Dropped as out-of-game: a patch archive, the addon API, a real-world topic (ADR-0040).",
+    help: "Dropped as out-of-game: a patch archive, the addon API, a real-world topic.",
     identity: { role: "bucket", kept: false },
   },
   sections_dropped: {
@@ -494,7 +494,7 @@ interface Args {
    * Path to a world-id export (`infra/export-world-ids.sh`), or "" for none.
    * Absent, the build behaves exactly as it did before the id door existed and
    * `meta.world_ids` records the absence; present, a late page whose stated id
-   * exists on this server is admitted as `post_cutoff_id_match` (ADR-0042).
+   * exists on this server is admitted as `post_cutoff_id_match`.
    */
   worldIds: string;
 }
@@ -683,7 +683,7 @@ async function main(): Promise<void> {
    * The candidate is resolved with all the others, so it lands only if the
    * chain ends at a page this bundle actually has.
    *
-   * Out-of-game titles are the exception and stay out entirely. ADR-0040 drops
+   * Out-of-game titles are the exception and stay out entirely. The build drops
    * a patch archive or an addon-API page rather than demoting it, and a name
    * that resolves is a name search can return; `verify.ts` checks exactly that
    * for the patch pages.
@@ -985,7 +985,7 @@ async function main(): Promise<void> {
     era_cutoff: args.eraCutoff,
     // Which world-id export the id door read, if any. Recorded so a bundle
     // built against a different export is visible on the comparability tuple:
-    // the door's answer is a function of this file (ADR-0042).
+    // the door's answer is a function of this file.
     world_ids:
       worldIds === undefined
         ? "none"

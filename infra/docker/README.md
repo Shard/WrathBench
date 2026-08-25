@@ -26,7 +26,7 @@ All targets share one `build` stage, so after the first (~30-60 min) build the o
 
 ## Layout inside the images
 
-Stock AzerothCore layout (kept identical to upstream on purpose, ADR-0008):
+Stock AzerothCore layout (kept identical to upstream on purpose):
 
 - Binaries: `/azerothcore/env/dist/bin/` (on `PATH`)
 - Reference confs: `/azerothcore/env/ref/etc/` — `worldserver.conf.dist`, `authserver.conf.dist`, `dbimport.conf.dist`, and `modules/mod_wrathbench.conf.dist`

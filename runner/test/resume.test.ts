@@ -1,5 +1,5 @@
 /**
- * --resume after a pause (ADR-0036): the stored pause mark is consumed, the
+ * --resume after a pause: the stored pause mark is consumed, the
  * episode clock continues from what the paused segments had spent, and the
  * trajectory records the resume. Runs run.ts as a subprocess with the stub
  * driver; the sandbox only dials the module on connect(), which a stub that

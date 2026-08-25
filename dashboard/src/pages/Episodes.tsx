@@ -1,7 +1,7 @@
 /**
  * Episodes: the tiers a run can be launched under, and what each fixes.
  *
- * One page per grain (ADR-0022 amendment, ADR-0047). This page is the
+ * One page per grain. This page is the
  * *episodes* — the rulesets, how many runs sit against each and how they came
  * to (members, overridden, labeled), and a link to those runs. It lists no
  * runs of its own: a tier's id and its member count link to the ladder for
@@ -12,9 +12,9 @@
  * with the id and given the leash the id describes — the only ones a chart may
  * compare. **Overridden** are stamped but were run on a different leash, which
  * is harness development rather than a result. **Labeled** are older runs the
- * reader recognises as looking like the tier; ADR-0030 is explicit that they
- * are never back-labeled into membership, because they ran under the watchdog
- * defaults of their day.
+ * reader recognises as looking like the tier; they are never back-labeled
+ * into membership, because they ran under the watchdog defaults of their
+ * day.
  *
  * The prose comes off the API rather than being written here, so the rules a
  * reader sees are the rules the runner enforces.
@@ -53,7 +53,7 @@ export default function Episodes() {
       <p class="dim">
         The rulesets a run can be launched under, with <code>--episode &lt;id&gt;</code>. An id is a
         comparability group: two runs may only be compared if they share an id <em>and</em> a
-        harness series (ADR-0030, ADR-0034). The id fixes the shape of the run — how long, which
+        harness series. The id fixes the shape of the run — how long, which
         watchdogs, whether the operator may steer — and nothing about the model. The runs
         themselves are the <A href="/runs">runs</A> page; aggregates over them are the{" "}
         <A href="/ladder">ladder</A>.
@@ -77,7 +77,7 @@ export default function Episodes() {
                 <th class="right" title="stamped with the id but run on another leash; never on the ladder, so the number links to the runs">
                   overridden
                 </th>
-                <th class="right" title="stamped with the id but never a recorded episode: ended as a failed attempt, stale, cut or a harness defect (ADR-0049)">
+                <th class="right" title="stamped with the id but never a recorded episode: ended as a failed attempt, stale, cut or a harness defect">
                   lapsed
                 </th>
                 <th class="right">labeled</th>
@@ -145,8 +145,8 @@ export default function Episodes() {
         <p class="dim">
           {tiers.latest!.untiered} run{tiers.latest!.untiered === 1 ? "" : "s"} carry no episode id
           and cannot be given one. They ran before the ids existed, under the watchdog defaults of
-          their day, and a tuple field is never recomputed after the fact (ADR-0026): saying nothing
-          is more honest than asserting a comparability that was never established. They are in the{" "}
+          their day, and a tuple field is never recomputed after the fact: saying nothing is more
+          honest than asserting a comparability that was never established. They are in the{" "}
           <A href="/runs">runs</A> table with a blank episode.
         </p>
       </Show>

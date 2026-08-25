@@ -1,5 +1,5 @@
 /**
- * A model's logo, wherever a model is named (ADR-0045).
+ * A model's logo, wherever a model is named.
  *
  * The SVGs are committed assets fetched by `infra/fetch-model-logos.ts` and are
  * *inlined* rather than linked: a mono icon paints with `fill="currentColor"`,

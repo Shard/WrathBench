@@ -1,7 +1,8 @@
 /**
  * The position feed: where every live agent is, right now.
  *
- * ADR-0019 makes this an interface rather than a query the renderer runs. The
+ * This is an interface rather than a query the renderer runs, so one renderer
+ * can sit behind any position feed. The
  * map draws `AgentPosition[]` and knows nothing about where they came from —
  * live mode fills them from each run's `run.sqlite` (here), and a replay mode
  * later fills the same shape from a trajectory reader plus a time cursor. That

@@ -114,7 +114,7 @@ describe("formatStateSummary", () => {
     expect(none).toContain("position: map 0 (1, 2, 3)");
   });
 
-  test("achievements are a count and a points total, never the list (ADR-0048)", () => {
+  test("achievements are a count and a points total, never the list", () => {
     const text = formatStateSummary(
       {
         self: {

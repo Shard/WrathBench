@@ -44,9 +44,9 @@ describe("resolve", () => {
     expect(() => resolve([{ model: "x", driver: "anthropic" as never }], "20260101")).toThrow(/unknown driver/);
   });
 
-  test("resumeOnPause follows the lane, and falls back to the episode (ADR-0049)", () => {
+  test("resumeOnPause follows the lane, and falls back to the episode", () => {
     // What the fleet writes wins; a hand-written roster with no episode keeps
-    // ADR-0036's resume, and a scored one does not.
+    // the lane's resume, and a scored one does not.
     expect(resolve([{ model: "x" }], "20260101")[0]!.resumeOnPause).toBe(true);
     expect(resolve([{ model: "x", episode: "e90" }], "20260101")[0]!.resumeOnPause).toBe(false);
     expect(resolve([{ model: "x", episode: "freeplay" }], "20260101")[0]!.resumeOnPause).toBe(true);
@@ -97,7 +97,7 @@ describe("episodeArgv", () => {
     expect(specs.map((s) => s.runId)).toEqual(["roster-opus-20260101", "roster-opus-low-20260101"]);
   });
 
-  // ADR-0020: the fleet supervisor runs inside the runner image, where there is
+  // The fleet supervisor runs inside the runner image, where there is
   // no docker CLI to exec with. Only the launcher head changes; every flag after
   // it is identical, because run-episode.sh passes them through verbatim.
   test("in the container the episode is a direct bun runner/src/run.ts child", () => {
@@ -137,7 +137,7 @@ describe("forCycle", () => {
 });
 
 /**
- * Run dimensions (ADR-0024): an entry may carry an operator objective, partial
+ * Run dimensions: an entry may carry an operator objective, partial
  * watchdog overrides, and its own tool-call ceiling, and all three have to
  * survive the trip into run.ts's argv.
  */
@@ -161,7 +161,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(argv[argv.indexOf("--objective") + 1]).toBe(OBJECTIVE);
   });
 
-  test("wikiCoords reaches argv as an explicit `--wiki-coords true` (ADR-0028)", () => {
+  test("wikiCoords reaches argv as an explicit `--wiki-coords true`", () => {
     const [s] = resolve([{ model: "m", wikiCoords: true }], "20260101");
     expect(s!.wikiCoords).toBe(true);
     const argv = episodeArgv(s!, false);
@@ -170,7 +170,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
-  test("an extra run reaches argv as `--extra true` and is off by default (ADR-0034)", () => {
+  test("an extra run reaches argv as `--extra true` and is off by default", () => {
     const [s] = resolve([{ model: "m", extra: true }], "20260101");
     expect(s!.extra).toBe(true);
     const argv = episodeArgv(s!, false);

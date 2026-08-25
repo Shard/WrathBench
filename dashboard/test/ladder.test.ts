@@ -135,7 +135,7 @@ describe("ladderRows", () => {
     expect(left.highest).toBe(2);
   });
 
-  test("rung 4 needs both halves: a capital zone AND a recorded flight (ADR-0048)", () => {
+  test("rung 4 needs both halves: a capital zone AND a recorded flight", () => {
     const both = ladderRows([
       run({ model: "cap", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
     ])[0]!;
@@ -165,7 +165,7 @@ describe("ladderRows", () => {
     expect(cell.runId).toBe("post");
   });
 
-  test("achievement points are a displayed signal and change no ordering (ADR-0018/0043)", () => {
+  test("achievement points are a displayed signal and change no ordering", () => {
     const rows = ladderRows([
       run({ model: "decorated", maxLevel: 4, achievements: { earned: 40, points: 400, ids: [1] } }),
       run({ model: "plain", maxLevel: 12, achievements: null }),

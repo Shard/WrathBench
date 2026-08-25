@@ -432,7 +432,7 @@ describe("a page with no article text", () => {
 describe("out-of-game reference pages", () => {
   test("are not in the bundle to be found", () => {
     // `classifyMetaPage` runs at build time now and the build does not emit a
-    // classified page (ADR-0040), so search has no band, no label and no
+    // classified page, so search has no band, no label and no
     // exact-title carve-out for them. This asserts the absence of the field a
     // consumer might still be reading.
     const hits = searchReference(db, "Example Zone Beta", { limit: 8 });

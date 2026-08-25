@@ -1,7 +1,7 @@
 /**
  * The one model adapter: OpenAI-compatible chat completions with tool calling.
  * Provider, base URL, model id and key env var are run config; there is no
- * per-model behaviour anywhere in here (ADR-0004).
+ * per-model behaviour anywhere in here.
  *
  * ### Retry policy (fixed, documented here and only here)
  *
@@ -56,7 +56,7 @@ export interface ToolCall {
  * Provider-reported token usage, when the provider reports it. Optional
  * end to end: an upstream that omits `usage` changes nothing downstream.
  * Worth logging because it is the only honest measure of prompt-cache
- * effectiveness (ADR-0012 addendum) — estimates cannot see a cache hit.
+ * effectiveness — estimates cannot see a cache hit.
  */
 export interface TokenUsage {
   prompt_tokens?: number;

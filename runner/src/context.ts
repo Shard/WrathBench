@@ -1,6 +1,6 @@
 /**
  * The fixed context policy. This file IS the policy; the prose version is
- * docs/decisions/ADR-0012-context-policy.md. Do not tune per model (ADR-0004).
+ * docs/METHODOLOGY.md ("Context policy"). Do not tune per model.
  *
  * Per model request the conversation is rebuilt as:
  *
@@ -39,7 +39,7 @@ export const CONTEXT_POLICY = {
    * The message window is hysteretic: it grows to MESSAGE_WINDOW_MAX, then a
    * single block of MESSAGE_WINDOW_TRIM oldest messages is dropped, cutting it
    * back to MESSAGE_WINDOW_MAX - MESSAGE_WINDOW_TRIM. The floor is the old
-   * fixed window (24 messages ≈ 8–12 tool exchanges, ADR-0012); the ceiling
+   * fixed window (24 messages ≈ 8–12 tool exchanges); the ceiling
    * buys a byte-stable prefix for a full block of turns.
    */
   MESSAGE_WINDOW_MAX: 48,
@@ -141,7 +141,7 @@ export interface SnapshotLike {
     /** `{ delayMs, readyAt }` — when a reclaim becomes legal (wall-clock ms). */
     reclaimDelay?: ObservedLike;
     /**
-     * `state.self.achievements` (ADR-0048): every achievement observed for this
+     * `state.self.achievements`: every achievement observed for this
      * character, the login backlog first. The HUD prints a **count and a points
      * total only** — the list is tens of rows a turn of prompt for a fact the
      * agent can read with a snippet, and the ids ride the trajectory instead.
@@ -421,7 +421,7 @@ export function formatStateSummary(
   // prompt every turn for something a snippet can read
   // (`state.self.achievements`), and the ids are on the trajectory. Unobserved
   // when no achievement packet has arrived: a zero here would be a guess, and a
-  // run on a pre-ADR-0048 worldserver never sees one.
+  // run on a worldserver that predates achievement tracking never sees one.
   const ach = s.achievements;
   if (ach === undefined) {
     lines.push("achievements: unobserved");

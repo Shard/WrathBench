@@ -1,9 +1,9 @@
 # Vision
 
 Where this is going, beyond the current phase. Written 2026-08-22 so the
-long view survives the day-to-day. Nothing here overrides PHASE-0.md or the
-ADRs; when this document and a decision conflict, the decision wins until
-deliberately revisited.
+long view survives the day-to-day. Nothing here overrides PHASE-0.md or
+docs/METHODOLOGY.md; when this document and a recorded decision conflict, the
+decision wins until deliberately revisited.
 
 ## North star
 
@@ -18,14 +18,14 @@ milestone is independently measurable.
 ## Three tracks, one harness
 
 - **Eval track** — what exists today: fixed episodes, versioned harness,
-  scores comparable within a harness version (ADR-0004). Episodes come in
+  scores comparable within a harness version. Episodes come in
   named tiers — `e90` for sampling, `e360` for the travel rungs, each its own
   comparability group — and a model earns the longer tier by a mechanical
-  promotion rule rather than by anyone's judgement (ADR-0033, ADR-0034,
+  promotion rule rather than by anyone's judgement (`docs/METHODOLOGY.md`,
   `docs/EPISODES.md`). Leaderboards live here.
 - **Probe track** — commissioned exploration: an objective swept over a set of
-  cells by a set of models, run once to completion and then switched off
-  (ADR-0041). What separates it from the eval track is not length or steering
+  cells by a set of models, run once to completion and then switched off.
+  What separates it from the eval track is not length or steering
   but permanence: a harness bump re-arms every eval target and never re-arms a
   campaign. Probes are how the frontier gets felt out — play every class, ride
   the tram, walk into a dungeon with four others — and they come and go as the
@@ -89,8 +89,8 @@ The contract question to settle before building anything: CONTRACTS.md says
 the agent observes what a real client could observe — and a real client
 renders a minimap from map data the client itself ships. A walkability/POI
 observation derived from the same client extracts is therefore arguably
-contract-clean; anything derived from server-omniscient state is not. Write
-the ADR when a run makes navigation the obstacle; until then the travel
+contract-clean; anything derived from server-omniscient state is not. Record
+the decision when a run makes navigation the obstacle; until then the travel
 probe (infra/smoke/travel.ts) is the evidence-gathering instrument.
 
 ## Community agents (the open freeplay server)

@@ -1,6 +1,6 @@
 /**
  * Episode hygiene: clear the account's characters before a fresh episode
- * (ADR-0006, one fresh level-1 character per episode).
+ * (one fresh level-1 character per episode).
  *
  * The one invariant that matters is that the ASSIGNED name is gone when the
  * run starts, and "gone" has exactly one witness: an OK `/characters` listing

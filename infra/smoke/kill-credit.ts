@@ -1,5 +1,5 @@
 /**
- * Fast-gate smoke B (ADR-0023 amendment, 2026-08-23): combat, kill credit and
+ * Fast-gate smoke B (added to the gate 2026-08-23): combat, kill credit and
  * loot, with exactly ONE kill. Runs on its own account in parallel with
  * quest-accept-status.ts; together they are the per-tick preflight gate. The
  * deploy-time full arc (eight kills to objective completion and the kill

@@ -15,8 +15,8 @@
  * - Three slots per page. `wikitext` is the newest revision, which is what the
  *   structured extractors (coords, ids, quest infobox) read. `eraWikitext` is
  *   the newest revision saved before the era cutoff, which is what the prose
- *   index reads: the dump is from 2020 and this world is patch 3.3.5a
- *   (ADR-0040). A page with no pre-cutoff revision has `eraWikitext` null and
+ *   index reads: the dump is from 2020 and this world is patch 3.3.5a.
+ *   A page with no pre-cutoff revision has `eraWikitext` null and
  *   the build drops it. `eraFreeWikitext` is the newest pre-cutoff revision
  *   that carries no post-Wrath signal, which is the page before the beta
  *   touched it — the slot a protected page's prose comes from.
@@ -85,7 +85,7 @@ export interface WikiPage {
    * pre-announcement page's prose comes from: Deepholm and Uldum are Wrath lore
    * pages whose 2010 revisions were rewritten into Cataclysm zone articles, so
    * the newest pre-cutoff revision is the wrong one to index even though the
-   * page is right to keep (ADR-0040). `build.ts` decides whether to use it.
+   * page is right to keep. `build.ts` decides whether to use it.
    */
   eraFreeWikitext: string | null;
   /** Timestamp of that revision, or "" when there is none. */

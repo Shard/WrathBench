@@ -1,5 +1,5 @@
 /**
- * The roster, with the scheduler's verdict on each model (ADR-0031, ADR-0032).
+ * The roster, with the scheduler's verdict on each model.
  *
  * One row per roster entry, and every number on it arrives decided from
  * `/api/models` — which serves the same projection `run-fleet --status` prints,
@@ -55,7 +55,7 @@ export default function Models() {
       <p class="dim">
         The fleet roster and what the scheduler makes of it. A model is eligible for{" "}
         <A href="/episodes">e90</A> from the moment it is listed and earns <code>e360</code> by
-        reaching level 5 in an un-overridden e90 run (ADR-0030). Counts are <em>counted</em> runs —
+        reaching level 5 in an un-overridden e90 run (see docs/EPISODES.md). Counts are <em>counted</em> runs —
         launches that produced at least one model response; a launch that produced none is archived
         as it ends, and consecutive ones are what the defer ladder backs off from.
       </p>
@@ -73,7 +73,7 @@ export default function Models() {
                 </>
               }
             >
-              The fleet config at {body()!.roster.path} could not be read as a roster (ADR-0031: a{" "}
+              The fleet config at {body()!.roster.path} could not be read as a roster (a{" "}
               <code>roster</code> map names the models). Fix the file and the rows appear.
             </Show>
           </div>
@@ -103,10 +103,10 @@ export default function Models() {
                       <td>
                         {/*
                           The family's mark leads the cell, from the model id
-                          rather than the roster name (ADR-0045). It sits left
-                          of the whole name-and-ids block and centred against
-                          it, at twice the inline size: this page is the roster,
-                          and the mark is what a reader scans it by.
+                          rather than the roster name. It sits left of the whole
+                          name-and-ids block and centred against it, at twice the
+                          inline size: this page is the roster, and the mark is
+                          what a reader scans it by.
                         */}
                         <div class="model-idcell">
                         <ModelIcon model={row.model} size="lg" />
@@ -229,8 +229,8 @@ export default function Models() {
 
         {/*
           Roster entries the policy does not schedule are named, not rowed. One
-          reason is left — a pinned job holds that account — since ADR-0041 made
-          the roster a catalog: an entry cannot carry an objective, and a probe
+          reason is left — a pinned job holds that account — since the roster
+          became a catalog: an entry cannot carry an objective, and a probe
           campaign BORROWS a catalog entry rather than taking it out of the
           schedule, so it produces no exclusion at all.
         */}
@@ -277,7 +277,7 @@ function Detail(props: { row: ModelRowView }) {
             <tr>
               <th>run</th>
               <th>episode</th>
-              <th title="the starting character this run was launched on — a campaign cell for a probe (ADR-0041), the entry's own otherwise">character</th>
+              <th title="the starting character this run was launched on — a campaign cell for a probe, the entry's own otherwise">character</th>
               <th class="right">level</th>
               <th>ended</th>
               <th class="right">wall clock</th>

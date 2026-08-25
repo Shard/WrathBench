@@ -8,7 +8,7 @@
  *   ./infra/run-fleet.sh --status                               (host, read-only)
  *
  * The supervisor's home is the `fleet` compose service — same image and mounts
- * as `runner`, `restart: unless-stopped`, no deadline (ADR-0020). It therefore
+ * as `runner`, `restart: unless-stopped`, no deadline. It therefore
  * cannot assume the reader of `--status` shares its PID namespace: liveness is
  * published as a heartbeat in fleet-state.json and per-job `alive` flags, not
  * inferred with kill(pid, 0). Paths in that state file are repo-relative for
@@ -18,7 +18,7 @@
  * entry (or a rotation of several), an episode tier, a repeat count, on ONE
  * game account for the life of its process. A job that names an `account` is
  * PINNED to it; a job without one takes whichever POOL account is free when
- * its turn comes; and the scheduling policy (ADR-0034) makes up jobs of its
+ * its turn comes; and the scheduling policy makes up jobs of its
  * own — synthetic, never persisted — for the accounts the manual queue leaves
  * free. Every job spawns through the same path: it becomes one run-roster
  * process on one account, and releases the account when that process exits.
@@ -50,7 +50,7 @@
  * The roster's own account-busy guard still runs under every job: a job
  * pointed at an account something else is using waits, it does not clobber.
  *
- * Preflight gate (ADR-0023): the top-level `preflight` block in fleet.json is
+ * Preflight gate (docs/OPERATIONS.md): the top-level `preflight` block in fleet.json is
  * the deploy-window smoke, made a normal part of fleet operation. The
  * supervisor runs those scripts against the live server before it spawns any
  * job, and again whenever the server identity changes (a recreate, or a
@@ -135,7 +135,7 @@ import { DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT } from "../runner/src/model
 export { isAllowlistedFree };
 
 /**
- * The harness series this supervisor runs from (ADR-0034): the projection
+ * The harness series this supervisor runs from: the projection
  * counts only runs stamped with it. Null outside a versioned checkout, which
  * counts every run and is said so in `--status`.
  */
@@ -149,7 +149,7 @@ export function currentSeries(): string | null {
  * A job as it is spawned: one run-roster process on one account. This is the
  * materialised form every job takes on its way to `spawnJob` — pinned, pool
  * and policy alike. The roster entries carry every run dimension themselves
- * (objective, watchdogs, maxToolCalls, wikiCoords — ADR-0024/0028); the
+ * (objective, watchdogs, maxToolCalls, wikiCoords); the
  * spawn adds only the account and the fleet-scoped run ids.
  */
 export interface JobSpawn {
@@ -160,7 +160,7 @@ export interface JobSpawn {
   /** Roster entries — the exact per-entry schema run-roster accepts. */
   entries: RosterSpec[];
   /**
-   * Set on a spawn that resumes a paused run (ADR-0036): its first entry
+   * Set on a spawn that resumes a paused run: its first entry
    * carries that run id, and the roster is started with --resume-roster so
    * it reattaches instead of launching fresh (which would wipe the account's
    * characters).
@@ -226,19 +226,19 @@ export interface PreflightRecord {
 
 // ------------------------------------------------------------------- jobs
 //
-// ADR-0034: the fleet is a set of jobs over a set of accounts. A job PINNED
+// The fleet is a set of jobs over a set of accounts. A job PINNED
 // to an account (`account` in the file) runs there and nowhere else; a job
 // without one is POOL work, spawned on whichever `accounts.pool` account is
 // free when its turn comes; the policy's own picks are jobs too, made up each
 // tick.
 
-/** Episode tiers (ADR-0033). The unscored ids bypass the tiers gate entirely. */
+/** Episode tiers. The unscored ids bypass the tiers gate entirely. */
 export const EPISODE_IDS = ["e90", "e360", "probing", "freeplay"] as const;
 export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
  * A roster entry as named in the `roster` map: the exact per-entry schema plus
- * its scheduling axes (ADR-0043). `tier` is the whole answer to how much this
+ * its scheduling axes. `tier` is the whole answer to how much this
  * model runs, and it is required — except on a steered entry (one carrying an
  * `objective`), which is outside the policy and has no budget to state, where
  * it is refused instead. `idle` says what the model does with an account once
@@ -247,7 +247,7 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
  * objective is a roster entry like any other, referenced by a pinned job.
  */
 export interface FleetRosterEntry extends RosterSpec {
-  /** Required: since ADR-0041 there is no such thing as an entry outside the policy. */
+  /** Required: the roster is a pure catalog, so there is no such thing as an entry outside the policy. */
   tier: Tier;
   idle: IdleMode;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
@@ -285,7 +285,7 @@ export interface FleetJob {
    */
   attempt?: number;
   /**
-   * Set on an extra run that rolls a character (ADR-0034): a policy pick past
+   * Set on an extra run that rolls a character: a policy pick past
    * the model's target on a scored tier. Reaches the runner as `--race/--class`
    * plus `--extra true`, so the run is stamped and never counted. A local
    * model's extra is a freeplay run and rolls nothing — `isExtraJob` is the
@@ -293,12 +293,12 @@ export interface FleetJob {
    */
   extra?: StartingCharacter;
   /**
-   * Set by `planResumes` (ADR-0036): this job's spawn resumes the paused run
+   * Set by `planResumes`: this job's spawn resumes the paused run
    * named here, on the account it was on, before anything fresh is launched.
    * `model`/`effort` pick the entry that carries the run id.
    */
   resume?: { runId: string; model: string; effort?: string | undefined };  /**
-   * Set when this job is a probe campaign's work (ADR-0041): which campaign
+   * Set when this job is a probe campaign's work: which campaign
    * commissioned it and which cell it is. The campaign's own dimensions are
    * looked up from the config at spawn time; only the identity travels here.
    */
@@ -311,7 +311,7 @@ export interface FleetAccounts {
   /** free-for-the-pool accounts, in preference order. Free models only. */
   pool: string[];
   /**
-   * The paid class (ADR-0034 amendment 2026-08-23): accounts a PAID policy
+   * The paid class (split out 2026-08-23): accounts a PAID policy
    * pick may use, in preference order. A paid pick lands here and nowhere
    * else; the pool stays free-only. Empty with `policy.paid` present means
    * paid picks are held ("no paid account configured") rather than spilling
@@ -319,7 +319,7 @@ export interface FleetAccounts {
    */
   paid: string[];
   /**
-   * The local class (ADR-0034, "Account classes"): the accounts a model on the
+   * The local class: the accounts a model on the
    * operator's own hardware may use — `isLocalBase` in `runner/src/model-cost.ts`
    * decides which models those are. The LM Studio box serves one runner at a
    * time, so its accounts are its own for the same reason the paid ones are:
@@ -336,7 +336,7 @@ export interface FleetConfig {
   roster: Record<string, FleetRosterEntry>;
   /** Every job the file names, pinned and pool, in file order. */
   jobs: FleetJob[];
-  /** The `campaigns` block (ADR-0041), in declaration order; empty when the file has none. */
+  /** The `campaigns` block, in declaration order; empty when the file has none. */
   campaigns: Campaign[];
   /**
    * Pins refused at parse time (item 66), one line each. The rest of the file
@@ -344,7 +344,7 @@ export interface FleetConfig {
    * on a clean config; `--status` and the supervisor log name every entry.
    */
   refusals: ConfigRefusal[];
-  /** ADR-0034 targets; `policy.runsPerEpisode` in the file, defaults apply. */
+  /** The scheduling policy's run targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
    * `policy.maxConcurrent`: streams the policy may have in flight per key
@@ -364,10 +364,10 @@ export interface FleetConfig {
  * file said so — `accounts.paid` non-empty, or a `policy.paid` block present —
  * which left exactly one configuration where a paid pick took a free pool
  * account and spent real money on it: neither of those set. The file's own
- * `_notes` and ADR-0034's account-class amendment state the rule with no such
+ * `_notes` and the account-class rule state it with no such
  * exception, so the code was conditional where the record was absolute. An
  * unconfigured paid class now HOLDS its picks and names them in --status,
- * exactly as `local` has since ADR-0034: the failure of an incomplete config is
+ * exactly as `local` always has: the failure of an incomplete config is
  * a model that does not run, never an account that quietly bills.
  *
  * That leaves `policy.paid` with its one real job, the concurrency cap. It no
@@ -611,7 +611,7 @@ export const DEFAULT_PREFLIGHT: FleetPreflight = {
 const TICK_MS = 60_000;
 /** A heartbeat older than this means the supervisor is gone, not merely quiet. */
 const HEARTBEAT_STALE_MS = 3 * TICK_MS;
-/** Set by the `fleet` compose service; see ADR-0020 and run-roster's inContainer(). */
+/** Set by the `fleet` compose service; see run-roster's inContainer(). */
 const CONTAINER = process.env["WRATHBENCH_IN_CONTAINER"] === "1";
 const REPO_ROOT = dirname(import.meta.dir);
 const RUNS_DIR = join(REPO_ROOT, "data", "runs");
@@ -632,7 +632,7 @@ function fail(msg: string): never {
   throw new Error(msg);
 }
 
-/** True for models that must ride the claude-code driver (the claude-code harness, ADR-0035). */
+/** True for models that must ride the claude-code driver (the claude-code harness). */
 export function isClaudeFamily(model: string): boolean {
   return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
 }
@@ -698,7 +698,7 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
         `${where}: entry ${e.model}: roster policy — a shared free-cloud pool ` +
           `(OpenRouter/OpenCode) carries free models only (id must end -free or :free, ` +
           `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST) unless the entry ` +
-          `declares "billing": "paid" — a deliberate paid model under policy.paid (ADR-0034); ` +
+          `declares "billing": "paid" — a deliberate paid model under policy.paid; ` +
           `a local/self-hosted apiBase is exempt`,
       );
     }
@@ -790,7 +790,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     campaigns?: unknown;
   };
   if (o.lanes !== undefined) {
-    fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (ADR-0034)");
+    fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (see docs/OPERATIONS.md)");
   }
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
@@ -829,8 +829,8 @@ export function parseFleet(raw: unknown): FleetConfig {
   if (preflight.enabled) {
     for (const account of preflightAccounts(preflight)) {
       // A pin on the gate's account is refused like any other local violation:
-      // there is one pin to name and disable, and the gate outranks it (ADR-0023
-      // runs before anything else does). The two rules below have no pin to
+      // there is one pin to name and disable, and the gate outranks it (the
+      // gate runs before anything else does). The two rules below have no pin to
       // refuse — the loser would be an account list — so they still fail.
       const clash = pinsOf(jobs, campaigns).find(
         (pin) => pin.enabled && pin.account?.toUpperCase() === account.toUpperCase(),
@@ -918,23 +918,23 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rawRuns !== undefined) fail(`roster ${name}: runsPerEpisode is not a 0.5 key — run counts are the tier (${TIERS.join(", ")})`);
     if (rest["account"] !== undefined) fail(`roster ${name}: an entry must not pin an account — pin the job that references it`);
     // An entry carrying an objective is outside the policy entirely
-    // The roster is a CATALOG (ADR-0041): an entry describes a model and says
+    // The roster is a CATALOG: an entry describes a model and says
     // how much evidence it gets, and nothing else. Steering belongs to a
     // campaign, which owns its whole task shape — an entry that could carry an
     // objective is what used to make the roster two kinds of thing, and every
     // scored surface then needed a branch to tell them apart.
     if (rest["objective"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry an objective — steering is a campaign now (ADR-0041), which names this entry under "models"`);
+      fail(`roster ${name}: an entry must not carry an objective — steering is a campaign now (see docs/EPISODES.md), which names this entry under "models"`);
     }
     if (rest["wikiCoords"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them (ADR-0041)`);
+      fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them`);
     }
-    // Whether a lapse is resumed is a property of the LANE, not of the model
-    // (ADR-0049): scored runs never resume, freeplay always does, and a probe
+    // Whether a lapse is resumed is a property of the LANE, not of the model:
+    // scored runs never resume, freeplay always does, and a probe
     // campaign opts in. An entry saying `resume` meant something specific by
     // it, so it is refused rather than ignored.
     if (rest["resume"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule (ADR-0049); a probe campaign opts in with campaigns.<name>.resume`);
+      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule; a probe campaign opts in with campaigns.<name>.resume`);
     }
     // Required, with no exception left to make: every entry is now something
     // the policy can schedule, so an absent tier is always a mistake.
@@ -975,7 +975,7 @@ function parsePolicy(raw: unknown): { policy: SchedulingPolicy; maxConcurrent: R
  * idle axis.
  *
  * Every entry projects. It used to drop the tierless ones, which were the
- * steered probes — and since ADR-0041 there are none: an entry cannot carry an
+ * steered probes — and since campaigns took over steering there are none: an entry cannot carry an
  * objective, so it cannot be outside the policy, so it always states a tier.
  */
 export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterModel[] {
@@ -1057,11 +1057,11 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
       fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
     }
     // `resume` on a job means nothing: whether a lapsed run comes back is the
-    // lane's rule (ADR-0049), and the only opt-in is a campaign's. The key is
+    // lane's rule, and the only opt-in is a campaign's. The key is
     // also the supervisor's own internal spelling for "this spawn resumes run
     // X", so accepting it from the file would be actively confusing.
     if ((j as Record<string, unknown>)["resume"] !== undefined) {
-      fail(`queue ${ref}: a job must not carry resume — a scored run that pauses is a failed attempt (ADR-0049); only campaigns opt in`);
+      fail(`queue ${ref}: a job must not carry resume — a scored run that pauses is a failed attempt; only campaigns opt in`);
     }
     const repeat = j.repeat ?? 1;
     if (repeat !== "loop" && (typeof repeat !== "number" || !Number.isInteger(repeat) || repeat <= 0)) {
@@ -1091,14 +1091,14 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
 
 // ------------------------------------------------------------- scheduling
 
-// ADR-0050: the model names its own character, so a fixed name no longer
+// The model names its own character, so a fixed name no longer
 // travels with the roster entry — what travels is where the LAST one is
 // standing. A fresh attempt therefore prefers the free account the model's
 // previous run used: the character it may well name the same thing again is
 // already there, hygiene wipes it on the way in, and the name cannot collide
-// with a copy of itself on some other account. Under ADR-0036 a resume always
-// went back to its own account and this never came up; ADR-0049 made every
-// scored lapse a FRESH attempt, and `fleet-sonnet-e90-...-a12` spent eight
+// with a copy of itself on some other account. A resume always used to go
+// back to its own account and this never came up; making every scored lapse
+// a FRESH attempt changed that, and `fleet-sonnet-e90-...-a12` spent eight
 // minutes looping `char_create_failed_code_50` on RUNNER3 while its
 // predecessor's character still stood on RUNNER5 (2026-08-25).
 
@@ -1172,7 +1172,7 @@ export interface QueuePlan {
  * own account-busy inference, injected as `held`). A job carrying an account
  * is pinned and is not this scheduler's: it is skipped here.
  *
- * `freeplay` bypasses the tiers gate: it is unscored (ADR-0033), so there is no
+ * `freeplay` bypasses the tiers gate: it is unscored, so there is no
  * promotion to record for it.
  */
 export function planQueue(opts: {
@@ -1186,13 +1186,13 @@ export function planQueue(opts: {
   /**
    * Who may run what. Default: only what needs no promotion. The
    * supervisor passes `eligibleFrom(modelStates(...))`, which adds what run
-   * history has earned (ADR-0034).
+   * history has earned.
    */
   eligible?: Eligible;
   /** Roster names with a stream in flight outside `queue` (policy and pinned jobs). */
   runningRefs?: ReadonlySet<string>;
   /**
-   * The account a job's model would rather have (ADR-0050, `affinityOf`): the
+   * The account a job's model would rather have (`affinityOf`): the
    * one its last run left its character on. A preference only — a job whose
    * account is busy takes the next free one, as before.
    */
@@ -1308,7 +1308,7 @@ export interface PolicyPick {
 }
 
 /**
- * The policy's fill for whatever the queue left free (ADR-0034). Pure: the
+ * The policy's fill for whatever the queue left free. Pure: the
  * projection is handed in. Only runs when no manual job is waiting — a manual
  * entry always outranks the policy — and never puts a second stream on a
  * model. `concurrency` is the per-key cap (`concurrencyKeyOf`): `running`
@@ -1339,11 +1339,11 @@ export function planPolicy(opts: {
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
   paidRunning?: number;
-  /** The enabled, unpinned campaigns the policy may schedule (ADR-0041). */
+  /** The enabled, unpinned campaigns the policy may schedule. */
   campaigns?: readonly Campaign[];
   /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
   probeRuns?: readonly ProbeRun[];
-  /** The account a pick's model would rather have (ADR-0050, `affinityOf`). */
+  /** The account a pick's model would rather have (`affinityOf`). */
   affinity?: AccountAffinity;
 }): PolicyPick[] {
   return planPolicyHeld(opts).picks;
@@ -1352,8 +1352,8 @@ export function planPolicy(opts: {
 /** `planPolicy` plus what it held back and why. */
 export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks: PolicyPick[]; held: HeldPick[] } {
   // A waiting manual job reserves the POOL, and nothing else. Such a job has no
-  // account, and a job with no account can only ever take a pool one (ADR-0034:
-  // the class split governs the policy; a manual queue job draws from the
+  // account, and a job with no account can only ever take a pool one (the
+  // class split governs the policy; a manual queue job draws from the
   // pool), so vetoing every class starved paid and local picks on accounts the
   // queue could never have used — a queue job stuck behind a busy RUNNER would
   // hold the local box idle. Returning no `held` with it also broke this file's
@@ -1429,7 +1429,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   /*
    * Accounts in preference order over the FINAL picks, each class over its own
    * list — a paid pick keeps a paid account, a local one keeps the box, and
-   * the pool rows stay free-only. Affinity (ADR-0050) is the one thing that
+   * the pool rows stay free-only. Affinity is the one thing that
    * reorders a class's list: a pick whose model left its character on a free
    * account of its own class takes that one instead of the first.
    */
@@ -1492,7 +1492,7 @@ export function jobSpawn(
 ): JobSpawn {
   const dims = episodeDimensions(job.episode);
   /*
-   * A probe's task shape comes from its campaign and nothing else (ADR-0041).
+   * A probe's task shape comes from its campaign and nothing else.
    * The catalog entry supplies credentials and a model, so its own `objective`,
    * `watchdogs`, `maxToolCalls` and `wikiCoords` are dropped rather than merged:
    * a campaign that says "no objective" must not inherit one from whichever
@@ -1533,8 +1533,8 @@ export function jobSpawn(
       ...(probeDims ?? {}),
       ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
       // Whether a pause is resumed at all, decided by the lane and travelling
-      // with the spec so the roster process needs no config of its own
-      // (ADR-0049). Scored evals never resume; freeplay always does; a probe
+      // with the spec so the roster process needs no config of its own.
+      // Scored evals never resume; freeplay always does; a probe
       // campaign opts in.
       resumeOnPause: resumesOnPause(job.episode, campaign?.resume),
       // An extra run is stamped as one; a scored-tier extra also rolls the
@@ -1561,7 +1561,7 @@ export function jobSpawn(
 }
 
 /**
- * The spawn, made to resume one paused run first (ADR-0036): the entry for
+ * The spawn, made to resume one paused run first: the entry for
  * that model carries the paused run id and moves to the front — the roster
  * runs entries in order, and a *fresh* launch of a rotation-mate wipes the
  * account's characters, which would cost the paused run its level. The
@@ -1583,7 +1583,7 @@ export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume
 
 // ------------------------------------------------------------------ resumes
 //
-// ADR-0036: a fleet stop pauses every live run (the runner pauses on SIGTERM,
+// A fleet stop pauses every live run (the runner pauses on SIGTERM,
 // clock stopped, session released) and a fleet start resumes them before the
 // queue or the policy launches anything fresh. The same planner runs every
 // tick, so a run its provider paused (rate-limited, quota-exhausted) is also
@@ -1605,7 +1605,7 @@ export interface ResumePlan {
  *  - the roster entry its job ref names is a different model now (the operator
  *    re-pointed the ref), so the run has nothing to come back under (`manual`);
  *  - it is a scored eval (or a campaign that did not ask to resume) that
- *    paused: under ADR-0049 such a run is a **failed attempt**, not a resume;
+ *    paused: such a run is a **failed attempt**, not a resume;
  *  - nothing came back for it at all and it went stale.
  *
  * `counts` is the three-strike question and it is exactly
@@ -1681,7 +1681,7 @@ export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, cam
 }
 
 /**
- * Runs nothing came back for (ADR-0049). Pure.
+ * Runs nothing came back for. Pure.
  *
  * The host slept, or the fleet was down for half a day: a run left live or
  * paused is cooked, because its episode budget elapsed in wall clock while
@@ -1797,7 +1797,7 @@ export function planResumes(opts: {
       });
       continue;
     }
-    // ADR-0049: the lane decides whether a lapse is resumed at all. A scored
+    // The lane decides whether a lapse is resumed at all. A scored
     // eval never is — it is a failed attempt, the account and character go
     // back, and the scheduler gives the model a fresh one. Freeplay resumes,
     // and a campaign resumes only if it asked to.
@@ -1938,7 +1938,7 @@ export function endRuns(runsDir: string, ended: readonly EndedRun[]): { runId: s
  * The projection is built at the top of a tick and the sweep writes its
  * terminations halfway down it, so without this the scheduler reads a strike
  * count that predates the strike it just wrote. That is not a cosmetic lag: on
- * 2026-08-25 the first tick after ADR-0049 shipped logged
+ * 2026-08-25 the first tick after the lane-resume rule shipped logged
  * `retry 3/3 — tainted` for nemotron-ultra and spawned its ninth attempt one
  * second later, because the projection behind the pick still said zero.
  *
@@ -1957,8 +1957,8 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 }
 
 /**
- * The projection the rest of a tick must read once its sweep has ended runs
- * (ADR-0049). `sidecar` is the operator's clear list; omitted it is read from
+ * The projection the rest of a tick must read once its sweep has ended runs.
+ * `sidecar` is the operator's clear list; omitted it is read from
  * the run directory, exactly as the top-of-tick projection reads it.
  */
 export function statesAfterSweep(
@@ -1996,7 +1996,7 @@ export async function releaseEndedSessions(ended: readonly EndedRun[], say: (s: 
 }
 
 /**
- * Cross-account name hygiene (ADR-0050), the fallback under account affinity.
+ * Cross-account name hygiene, the fallback under account affinity.
  *
  * Episode hygiene clears the LAUNCHING account and nothing else, so a name
  * standing on some other pool account is invisible to it: the model asks for
@@ -2643,7 +2643,7 @@ export interface JobRow {
   planned?: boolean;
   /** The policy's attempt number, for a policy job. */
   attempt?: number;
-  /** A scored-tier extra run (ADR-0034), with the character it rolls; a freeplay extra rolls none. */
+  /** A scored-tier extra run, with the character it rolls; a freeplay extra rolls none. */
   extra?: StartingCharacter;
   /**
    * The job is running on an account of another class (it was scheduled before
@@ -2723,7 +2723,7 @@ export function formatModels(
   const w = Math.max(12, ...states.map((s) => s.name.length));
   const series = policy.series ?? "any";
   const out: string[] = [
-    `models: ${states.length} in roster (policy: ADR-0043; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
+    `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
       `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
       `; idle unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
@@ -2968,7 +2968,7 @@ interface FleetState {
     skipped: { name: string; reason: string }[];
   };
   /**
-   * Every job with a process: the one unit of work (ADR-0034) — what it is
+   * Every job with a process: the one unit of work — what it is
    * (ref, tier, account, source) and the process that runs it (pid, files,
    * exit). Written fresh every tick; the supervisor rewrites the whole file
    * on boot, so nothing reads an older shape.
@@ -2978,9 +2978,9 @@ interface FleetState {
   policy?: { idle?: string };
   /** Counters since the supervisor started. */
   session?: { finished: number; ok: number; retried: number };
-  /** Paused runs the supervisor is not resuming right now, with why (ADR-0036). */
+  /** Paused runs the supervisor is not resuming right now, with why. */
   paused?: PausedListing[];
-  /** Paused runs the supervisor ended instead of resuming, this session (ADR-0036 amendment). */
+  /** Paused runs the supervisor ended instead of resuming, this session. */
   ended?: EndedRun[];
 }
 
@@ -2993,11 +2993,11 @@ export interface StateJob {
   source: JobSource;
   attempt?: number;
   extra?: StartingCharacter;
-  /** The paused run this spawn is resuming (ADR-0036). */
+  /** The paused run this spawn is resuming. */
   resuming?: string;
   models: string[];
   pid: number;
-  /** Repo-relative (ADR-0020): the reader may be on the other side of the mount. */
+  /** Repo-relative: the reader may be on the other side of the mount. */
   rosterPath: string;
   jsonl: string;
   log: string;
@@ -3065,7 +3065,7 @@ interface PoolView {
   skipped: { name: string; reason: string }[];
   policyIdle?: string;
   session: { finished: number; ok: number; retried: number };
-  /** Paused runs the last plan did not resume, with why (ADR-0036). */
+  /** Paused runs the last plan did not resume, with why. */
   paused: PausedListing[];
   /** Paused runs ended instead of resumed, this session. */
   ended: EndedRun[];
@@ -3440,7 +3440,7 @@ function printStatus(configPath: string): void {
         : ` — supervisor pid ${state.fleetPid} (${where}) ${fleetUp ? "ALIVE" : "NOT RUNNING"}` +
           (hbAgeMs !== undefined
             ? `, heartbeat ${Math.round(hbAgeMs / 1000)}s ago`
-            : ", no heartbeat in state (pre-ADR-0020 supervisor)") +
+            : ", no heartbeat in state (supervisor predates heartbeats)") +
           `, up since ${new Date(state.startedAt).toLocaleString()}, stamp ${state.stamp}`),
   );
   if (state?.containerized === true) {
@@ -3450,7 +3450,7 @@ function printStatus(configPath: string): void {
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
   const live = liveJobsFromState(state);
-  // Paused runs (ADR-0036): what the supervisor would resume now, and what it
+  // Paused runs: what the supervisor would resume now, and what it
   // lists instead — computed from disk so it is right with the fleet down.
   const runFacts = readRunFacts(RUNS_DIR);
   const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStaleRun(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
@@ -3624,7 +3624,7 @@ function printStatus(configPath: string): void {
 
   // (d) paused runs the supervisor is not resuming, and why; and the ones it
   // ends — a lapsed eval reads as a failed attempt with its retry number, not
-  // as something waiting to come back (ADR-0049).
+  // as something waiting to come back.
   const lapsed = [
     ...resumePlan.end,
     ...planStaleRuns({ runs: runFacts, ...(config !== undefined ? { campaigns: config.campaigns, refs: Object.keys(config.roster) } : {}), now: Date.now() }),
@@ -3738,7 +3738,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
-  // Affinity (ADR-0050) so the printed plan places accounts the way the live
+  // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
   const plan = planTick(config, states, held, stampToday, resumes.resume, probeRunsOf(runs, config.roster), affinityOf(affinityFrom(runs, config.roster)));
   const rows: AccountRow[] = [];
@@ -3825,7 +3825,7 @@ function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampTod
     `\n${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
       `\nsupervision: re-read fleet.json every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
-      `\nstamp ${stampToday} is fixed for the life of the supervisor (ADR-0020), not rolled at midnight.` +
+      `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
       `\nrunning as: ${CONTAINER ? "the `fleet` compose service (episodes spawn in-process)" : "a host process (episodes go through docker compose exec)"}.`,
   );
 }
@@ -3880,11 +3880,11 @@ function parseArgs(argv: string[]): {
             "                  host against a containerized supervisor (heartbeat, not kill -0)",
             "  --live-runs     read-only: list live episodes across the job accounts and exit",
             "                  non-zero if there are any (the deploy window's refusal check)",
-            "  --clear-model NAME  forgive a roster model's defer ladder / retirement (ADR-0032):",
+            "  --clear-model NAME  forgive a roster model's defer ladder / retirement:",
             "                  records the clear in data/runs/fleet-models.json; the running",
             "                  supervisor picks it up on its next tick. Safe while the fleet runs.",
             "",
-            "The supervisor's normal home is the `fleet` compose service (ADR-0020):",
+            "The supervisor's normal home is the `fleet` compose service (see docs/OPERATIONS.md):",
             "  docker compose -f infra/compose.yml up -d --no-deps fleet",
           ].join("\n"),
         );
@@ -3967,7 +3967,7 @@ async function main(): Promise<void> {
   const sets: JobSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
   let wasIdle = false;
-  // Job bookkeeping (ADR-0034): which job holds which account, the job itself
+  // Job bookkeeping: which job holds which account, the job itself
   // for every live process, and the last plan's waiting/skipped rows for
   // --status. A skip reason is logged once per (job, reason), not once a tick.
   const assigned = new Map<string, string>();
@@ -4017,11 +4017,11 @@ async function main(): Promise<void> {
     const out: JobSpawn[] = [];
     // The run facts once a tick, shared by the projection and the resume
     // planner. Eligibility for the queue's gate and the policy's picks read
-    // the same answer (ADR-0034); resumes read the same facts (ADR-0036).
+    // the same answer; resumes read the same facts.
     const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
     // Both are re-derived below if this tick's sweep ends anything: a strike
     // written halfway down a tick has to be in the projection the queue and
-    // the policy read at the bottom of it (ADR-0049).
+    // the policy read at the bottom of it.
     let states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     let eligible = eligibleFrom(states);
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
@@ -4037,7 +4037,7 @@ async function main(): Promise<void> {
     };
     // Pinned jobs: from the file, on their own accounts — plus a pinned
     // campaign's next cell, which is a pinned job in everything but where it
-    // was written down (ADR-0041).
+    // was written down.
     const probes = probeRunsOf(runs, cfg.roster);
     campaignJobs = pinnedCampaignJobs(cfg, probes);
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
@@ -4105,7 +4105,7 @@ async function main(): Promise<void> {
       }
     }
     const held = (a: string): string | undefined => accountHeldBy(a, "");
-    // Resumes before anything fresh (ADR-0036): a paused run goes back onto
+    // Resumes before anything fresh: a paused run goes back onto
     // its own account ahead of the queue and the policy, so nothing can wipe
     // its character first. A pinned job's spawn is replaced by its resume
     // spawn; a pool job's resume reserves its account like an assignment.
@@ -4113,7 +4113,7 @@ async function main(): Promise<void> {
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
     const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
     lastPaused = resumes.listed;
-    // Runs nothing came back for (ADR-0049) are ended on every tick, boot
+    // Runs nothing came back for are ended on every tick, boot
     // included: the host slept, or the fleet was down past the run's own
     // budget, and neither a live run nor a paused one survives that.
     const lapsed = [
@@ -4150,7 +4150,7 @@ async function main(): Promise<void> {
       // The queue's gate, the policy's picks and the state file all read the
       // post-sweep projection from here down. Nothing above this line reads a
       // strike: the pinned jobs and the live pool jobs are the operator's, and
-      // the manual queue outranks a taint by decision anyway (ADR-0034).
+      // the manual queue outranks a taint by decision anyway (docs/OPERATIONS.md).
       states = statesAfterSweep(cfg, runs, applied, Date.now());
       eligible = eligibleFrom(states);
     }
@@ -4183,7 +4183,7 @@ async function main(): Promise<void> {
       }
     }
     const runningAndReserved = new Map([...assigned, ...reserved]);
-    // Where each model's last character is standing (ADR-0050). Read once a
+    // Where each model's last character is standing. Read once a
     // tick from the same run facts everything else here reads.
     const affinityMap = affinityFrom(runs, cfg.roster);
     const affinity = affinityOf(affinityMap);
@@ -4257,7 +4257,7 @@ async function main(): Promise<void> {
         policyIdle = idle;
       }
     }
-    // Cross-account name hygiene (ADR-0050): a name the launching account's own
+    // Cross-account name hygiene: a name the launching account's own
     // hygiene cannot see, on an account this tick calls free.
     if (freshAssign.length > 0) {
       const busy = new Set(
@@ -4378,7 +4378,7 @@ async function main(): Promise<void> {
   const requestStop = (): void => {
     if (stopping) process.exit(130);
     stopping = true;
-    say("stopping: SIGTERM to every job — each live episode PAUSES as operator-pause (ADR-0036); waiting for the rosters to exit");
+    say("stopping: SIGTERM to every job — each live episode PAUSES as operator-pause; waiting for the rosters to exit");
     wakeTick?.();
     for (const [name, p] of procs) {
       if (!p.exited) {

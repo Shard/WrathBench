@@ -21,7 +21,7 @@
  * (sdk/test/state.test.ts, "bag() spans a worn bag"). Nothing further is
  * opened: the first trajectory that buys a bag is the live check.
  *
- * Preflight-gate ready (ADR-0023 amendment): reads MODULE_ACCOUNT the way the
+ * Preflight-gate ready: reads MODULE_ACCOUNT the way the
  * supervisor's spawnSmoke injects it, deletes last run's character through the
  * real CMSG_CHAR_DELETE path before creating this run's, and only logs out at
  * the end. Budget: ~15s.

@@ -2,7 +2,7 @@
  * The agent loop: model-agnostic driver. One iteration = one model request
  * with the fixed context (context.ts), then execution of whatever tool calls
  * came back, then fixed pacing. No per-model branches, prompts, or retries —
- * the only thing that varies between runs is the adapter config (ADR-0004).
+ * the only thing that varies between runs is the adapter config.
  */
 
 import type { Database } from "bun:sqlite";
@@ -95,7 +95,7 @@ export interface ContextBuilderOptions {
 /**
  * The per-turn preamble, shared by every driver: snapshot state, emit the
  * periodic state line, gather the event window and assemble the fixed context
- * message (ADR-0012). It lives in one place precisely because it *is* the
+ * message. It lives in one place precisely because it *is* the
  * context policy — a driver that assembled its own would be per-model tuning.
  */
 export class ContextBuilder {
@@ -108,7 +108,7 @@ export class ContextBuilder {
   private lastAreaId: number | undefined;
   /**
    * Achievement ids already written as a milestone, and whether the login
-   * backlog record has been written (ADR-0048).
+   * backlog record has been written.
    *
    * By id rather than by high-water mark, because the sandbox can restart: a
    * rebuilt cache re-reads the whole login backlog, and a second pass over it
@@ -160,12 +160,12 @@ export class ContextBuilder {
       this.live = snap.self?.guid !== undefined && snap.self.guid !== null;
       if (this.live && !wasLive) {
         // The first sight of a character in the world: the fresh-episode
-        // precondition (ADR-0006) is judged here, once, by the watchdogs.
+        // precondition is judged here, once, by the watchdogs.
         this.o.watchdogs.noteFirstLive({
           guid: snap.self?.guid === undefined || snap.self.guid === null ? undefined : String(snap.self.guid),
           level: snap.self?.level?.value as number | undefined,
         });
-        // The model named the character (ADR-0050), so the launch config's
+        // The model named the character, so the launch config's
         // name is only a suggestion: what is in the world is the run's
         // character, and every reader of it is corrected here, once.
         const name = typeof snap.self?.name === "string" ? snap.self.name : undefined;
@@ -255,7 +255,7 @@ export class ContextBuilder {
       });
       this.lastAreaId = area.id;
     }
-    // Achievements (ADR-0048, issue #8): the backlog once, then one record per
+    // Achievements (issue #8): the backlog once, then one record per
     // own earn. The state cache has already dropped the say-range broadcasts
     // that were another player's, so everything here is this character's.
     const ach = snap.self?.achievements;
@@ -289,8 +289,8 @@ export class ContextBuilder {
       }
     }
     // Flights: no packet says "a flight began", so the flip is read the way a
-    // client reads it — an accepted reply, then the taxi flag turning on
-    // (ADR-0048). The flag turning off is the landing, recorded whether or not
+    // client reads it — an accepted reply, then the taxi flag turning on.
+    // The flag turning off is the landing, recorded whether or not
     // the takeoff was seen, because it is its own observation.
     const taxiFlight = snap.self?.taxiFlight?.value;
     if (typeof taxiFlight === "boolean") {
@@ -421,8 +421,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
 
-  // Append-only. The model-visible window is a pure function of it (ADR-0012
-  // addendum): no trim state accumulates, so a rebuilt history cuts identically.
+  // Append-only. The model-visible window is a pure function of it: no trim
+  // state accumulates, so a rebuilt history cuts identically.
   const history: ChatMessage[] = [];
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
   const builder = new ContextBuilder({
@@ -498,7 +498,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(verdict.reason, verdict.detail);
       }
 
-      // 2. state line + 3. the fixed context (ADR-0012)
+      // 2. state line + 3. the fixed context (context.ts)
       turn++;
       const contextText = await builder.build(turn, pendingNotices);
       // The sample above may have been the first sight of the character; a

@@ -18,7 +18,7 @@ status.
 ## Next up
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
-   ADR-0027 flips to accepted on that run.
+   navigation N1 is proven on that run.
 2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
    grouping and instance records exist, and death/level-up/spell/talent are still
    unwritten.
@@ -32,17 +32,17 @@ status.
     (VISION.md). Scoped to walking, the Deeprun Tram and flight masters; boats,
     zeppelins and elevators are rung-7 work. Source: the 2026-08-22 spatial-delivery
     synthesis and the travel probe (worklogs/2026-08-22).
-    - **N1 — actions and statuses: shipped and deployed** (ADR-0027, commits
+    - **N1 — actions and statuses: shipped and deployed** (commits
       92f7df1..b88dd1d, live as `harness-0.3-68` since 2026-08-23). Typed `no_path`
       causes with the subdivision retry in the module, `CMSG_AREATRIGGER` on entering
       a DBC volume, transfer packets tapped and `waitForTransfer` typed,
       transport-relative movement. **Gate passed 2026-08-23** on `harness-0.4-73-gafd352c`:
       `travel.ts --from tram-ironforge --rides 3` (item 45 fixture) rode IF→SW three
       times with typed success on every leg, boarding on attempt 1 each time, rides
-      60s; ADR-0027 is accepted. One residual left: triggers are only tested while a
+      60s; N1 is proven. One residual left: triggers are only tested while a
       `move_to` is active.
     - **N2 — field-level observations**, each small, each earned, each logged.
-      **Shipped 2026-08-23 (ADR-0027 amendment, built to `:next`, awaiting the deploy
+      **Shipped 2026-08-23 (an N1 amendment, built to `:next`, awaiting the deploy
       window):** zone and area name on self (`WB_AREA` from the server's zone/area pair
       named by the client's `AreaTable.dbc`; `state.self.zone` / `state.self.area`; HUD
       `position: Elwynn Forest / Northshire Valley — map 0 (x, y, z)`; `milestone`
@@ -68,10 +68,11 @@ status.
       arrival at server-confirmed map+xyz). Never "ended near the coordinate"; that
       scores `move_to`.
     - **Not in 0.3, by decision:** a `here()` / `goTo(name)` helper, a rendered minimap
-      as model observation (ADR-0019 stays operator-only), the TaxiPath /
+      as model observation (the map stays operator-only), the TaxiPath /
       areatrigger_teleport tables, walkability masks, a persistent map notebook (a
       labelled context-engine change under 8b if ever). Wiki coordinates are a run
-      dimension withheld from scored runs (ADR-0028); pull back to a labelled coords
+      dimension withheld from scored runs (docs/METHODOLOGY.md, "Episodes, lanes,
+      and evidence"); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
 ## Fleet and gate
@@ -92,7 +93,7 @@ status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
-79. **Second track for the achievement/taxi taps** (2026-08-25, ADR-0048, issue #8).
+79. **Second track for the achievement/taxi taps** (2026-08-25, issue #8).
     The module half is deployed (`harness-0.5-34-g9be594e`) and gated:
     `infra/smoke/achievements-taxi.ts` PASS on PROBE 2026-08-25 (login list
     named from Achievement.dbc, reply 0, `taxiFlight` flips on a values-only
@@ -103,7 +104,7 @@ status.
     the SDK derivation is in hand with another agent.
 
 83. **The fleet has to restart before the resolved model id is stamped**
-    (2026-08-25, ADR-0033 addendum). The write-time half — `meta.resolved`, the
+    (2026-08-25). The write-time half — `meta.resolved`, the
     two `run.sqlite` columns, `comparability.resolvedModel` — only reaches runs
     launched by a supervisor running this code. The live fleet predates it, so
     every run it launches until the next drain/deploy still records the alias
@@ -113,8 +114,9 @@ status.
 
 ## Episodes and results
 
-8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
-   not penalised). No trim; one CLI conversation grows linearly (~200k tokens by the end
+8. **Context policy is not applied on the claude-code harness** (recorded, not
+   penalised: the harness is a tag on every row, docs/METHODOLOGY.md, "What
+   WrathBench measures"). No trim; one CLI conversation grows linearly (~200k tokens by the end
    of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is
    mostly cache-read replays of a growing prefix and a `quota-exhausted` pause loses the
    context on resume. Either the driver applies a policy or the prompt stops promising
@@ -130,13 +132,13 @@ status.
    - **8b — context engine as a labelled harness value; parked, operator direction.**
      (a) Stretch the window past 24–48 in a future harness version: caching makes a much
      longer prefix nearly free at ~8–12k steady state against 131k–200k contexts.
-     (b) Offer threshold-triggered self-compaction as a third value of the ADR-0033
-     tuple's `harness` field (ADR-0035), since grow-then-self-compact is what end-user
+     (b) Offer threshold-triggered self-compaction as a third value of the
+     comparability tuple's `harness` field, since grow-then-self-compact is what end-user
      agents run under: comparable within a harness if the operator partitions, never
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
 
-32. **Dashboard parity gaps against the deleted pages** (2026-08-22, ADR-0022; the
+32. **Dashboard parity gaps against the deleted pages** (2026-08-22; the
     pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
     `runner/viewer/pricing.ts`, priced from dated, sourced rows rather than the old
     hard-coded table. Left, each deliberate: (2) **Whole-feed expand preset** (Minimal /
@@ -146,8 +148,8 @@ status.
     them; neither blocks release.
 
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
-    ADR-0018 lists deaths, zones, spells learned and talents spent in the signal vector
-    and none is recorded (the `state` table has level, xp, map+xyz, money,
+    The signal vector lists deaths, zones, spells learned and talents spent
+    (docs/METHODOLOGY.md, "Scoring") and none is recorded (the `state` table has level, xp, map+xyz, money,
     quests_completed, turn; `quest_complete` is the only event-shaped record). Add a
     `milestone` trajectory record `{ t: "milestone", kind, ... }` emitted from the loop
     the way `quest_complete` is: death (and spirit-healer/corpse recovery), zone and
@@ -168,7 +170,7 @@ status.
     capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
     `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
     (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
-    `false`. **Achievements and flights (2026-08-25, ADR-0048, issue #8):** the
+    `false`. **Achievements and flights (2026-08-25, issue #8):** the
     loop also writes `{ kind: "achievement", id, name?, points?, categoryId? }`
     per own earn, `{ kind: "achievements_at_login", ids, points }` once per
     process (written even when the backlog is empty — it is what says the taps
@@ -183,16 +185,17 @@ status.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the
-    "ultra long-term sandbox" actually needs** (2026-08-24, from the ADR-0043
-    conversation). `idle: "unlimited"` now gives a model repeated six-hour
+    "ultra long-term sandbox" actually needs** (2026-08-24, from the
+    evidence-budget conversation). `idle: "unlimited"` now gives a model repeated six-hour
     freeplay sessions, but every episode still deletes and recreates a fresh
-    level-1 character (ADR-0006), so session N+1 starts where session 1 did and
+    level-1 character (docs/METHODOLOGY.md, "Episodes, lanes, and evidence"), so
+    session N+1 starts where session 1 did and
     the long horizon is six hours, not a week. Carry-over is exactly what the
     scored episodes forbid, so this is not a knob — it needs its own record:
     what identity a resumable freeplay character has, how its run ids and
     trajectory relate across sessions, and how the viewer shows a character
-    rather than a run. Out of scope for ADR-0043 deliberately; the six-hour cap
-    there is what makes the sessions restartable in the first place.
+    rather than a run. Out of scope for the tier rule deliberately; the six-hour
+    cap there is what makes the sessions restartable in the first place.
 
 
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
