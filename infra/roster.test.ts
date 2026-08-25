@@ -43,6 +43,16 @@ describe("resolve", () => {
   test("an unknown driver is refused rather than passed through", () => {
     expect(() => resolve([{ model: "x", driver: "anthropic" as never }], "20260101")).toThrow(/unknown driver/);
   });
+
+  test("resumeOnPause follows the lane, and falls back to the episode (ADR-0049)", () => {
+    // What the fleet writes wins; a hand-written roster with no episode keeps
+    // ADR-0036's resume, and a scored one does not.
+    expect(resolve([{ model: "x" }], "20260101")[0]!.resumeOnPause).toBe(true);
+    expect(resolve([{ model: "x", episode: "e90" }], "20260101")[0]!.resumeOnPause).toBe(false);
+    expect(resolve([{ model: "x", episode: "freeplay" }], "20260101")[0]!.resumeOnPause).toBe(true);
+    expect(resolve([{ model: "x", episode: "probing" }], "20260101")[0]!.resumeOnPause).toBe(false);
+    expect(resolve([{ model: "x", episode: "probing", resumeOnPause: true }], "20260101")[0]!.resumeOnPause).toBe(true);
+  });
 });
 
 describe("episodeArgv", () => {

@@ -18,6 +18,7 @@
 
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
+import { ATTEMPT_FAILURE_REASONS } from "../src/lapse";
 import { EPISODES } from "../src/episodes";
 import type {
   AchievementFacts,
@@ -269,6 +270,17 @@ export function unscoredReason(run: RunRow): string | null {
   const ep = episodeOf(run);
   if (ep.episode !== null && !EPISODES[ep.episode].scored) {
     return `unscored (episode ${ep.episode})`;
+  }
+  /*
+   * A lapsed run is an attempt, never a recorded episode (ADR-0049). It sat
+   * out an unknown share of its clock — a provider window, a deploy, a night
+   * the host slept — so the level it reached is not a reading of ninety
+   * minutes of play. It stays on the runs page with its reason; the ladder and
+   * every chart over episodes drop it here, through the predicate they already
+   * share.
+   */
+  if (run.terminationReason !== null && ATTEMPT_FAILURE_REASONS.has(run.terminationReason)) {
+    return `unscored (${run.terminationReason})`;
   }
   return null;
 }
