@@ -935,13 +935,16 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               watchdogs.noteModelOutput();
               // One API reply can span several `assistant` envelopes (one per
               // content block) sharing a message.id, and the usage on each is a
-              // running total, not a copy: on morning-opus-1 the first envelope
-              // of a message reported 1 completion token where the last reported
-              // 208, and counting the first summed the run to 2,504 against a
-              // real 51,044. So exactly one entry per message id carries usage,
-              // and it is the LAST envelope's. The `result` envelope's session
-              // total only lands at end of episode, which a run cut short by the
-              // wall clock never reaches.
+              // running total for the INPUT side: on morning-opus-1 the first
+              // envelope of a message reported 1 completion token where the last
+              // reported 208. So exactly one entry per message id carries usage,
+              // and it is the LAST envelope's. Note what that figure is and is
+              // not: input is the finished count, output is the `message_start`
+              // snapshot the API sends before the reply exists (1–33 tokens),
+              // never what the reply ended up costing. The finished output count
+              // arrives only on the turn's `result` envelope, which is where the
+              // viewer reads it; a turn cut short by the wall clock never gets
+              // one, and its snapshots are all anyone has.
               const messageId = (msg["message"] as { id?: unknown } | undefined)?.id;
               const idKey = typeof messageId === "string" ? messageId : undefined;
               const entry = {
@@ -983,10 +986,18 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               isError: msg["is_error"] === true,
               numTurns: msg["num_turns"],
               durationMs: msg["duration_ms"],
+              // Wall clock the CLI spent inside API calls, as against
+              // `duration_ms` which also covers every tool round trip the turn
+              // made. The closest thing the driver reports to model time.
+              durationApiMs: msg["duration_api_ms"],
               costUsd: msg["total_cost_usd"],
               // Raw for fidelity; normalised so a reader never has to know two
-              // token vocabularies. This is a session total, not a per-turn
-              // figure, so nothing sums it — the response entries carry that.
+              // token vocabularies. This covers ONE harness turn — one CLI
+              // invocation, `num_turns` API calls inside it — so a run's output
+              // is the sum over these records. It is NOT the sum of the turn's
+              // `response` entries: their usage is the `message_start` snapshot
+              // (a token or two), never the finished count, so the viewer reads
+              // output tokens from here and prompt tokens from the responses.
               usageRaw: msg["usage"],
               usage: normalizeClaudeUsage(msg["usage"]),
               text: resultText.slice(0, 2_000),

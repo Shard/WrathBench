@@ -351,6 +351,7 @@ for await (const chunk of Bun.stdin.stream()) {
       result: `turn ${turn} done`,
       num_turns: 2,
       duration_ms: 12,
+      duration_api_ms: 7,
       total_cost_usd: 0,
       usage: { input_tokens: 10, output_tokens: 5 },
       session_id: "fake-session",

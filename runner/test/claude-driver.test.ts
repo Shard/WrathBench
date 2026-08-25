@@ -163,6 +163,10 @@ describe("claude-code driver", () => {
     expect(snippetResult?.["text"]).toContain('ran:await sdk.say("turn 1")');
     const result = records.find((r) => r.t === "claude_result");
     expect(result?.["numTurns"]).toBe(2);
+    // Both clocks: `duration_ms` covers the tool round trips too, and the
+    // viewer prefers the API one when reading how fast the model wrote.
+    expect(result?.["durationMs"]).toBe(12);
+    expect(result?.["durationApiMs"]).toBe(7);
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("turn-limit");
     trajectory.close();
   }, 20_000);
