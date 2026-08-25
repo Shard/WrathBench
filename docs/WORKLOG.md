@@ -38,3 +38,7 @@ Convention:
   left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
   the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
   bands on the y-axis, inventory folded into the sidebar.
+- [2026-08-25](worklogs/2026-08-25.md) — run feed composite rows: turn headers (request
+  + context events as one line), tool-call cards (call/snippet/result merged, input over
+  result), latency figures on responses and calls, honest suppression for post-hoc
+  writers; pairing pure over the window so live tails and window edges self-heal.
