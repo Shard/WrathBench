@@ -20,8 +20,8 @@ Convention:
   consolidated); component-level why goes in the doc that owns the component. A day
   file records that the decision was made and where it landed, it does not restate
   it. (Before 2026-08-25 decisions were numbered ADRs under `docs/decisions/`; day
-  files cite those numbers, which resolve through METHODOLOGY's "Where the former
-  ADRs went" table.)
+  files cite those numbers, which resolve through the table at the end of this
+  file.)
 
 ## Days
 
@@ -38,10 +38,61 @@ Convention:
   (`equipItem`, `reclaimCorpse`, `moveTo(unit)`, `sleep` reasons, `events.off`); bundle
   schema 4 (ADR-0029); episode tiers, runner pool, scheduling policy, stillborn runs,
   Models page, COSTS.md (ADR-0030/0031/0032); fleet on the pool/queue shape.
-- [2026-08-25](worklogs/2026-08-25.md) — the 44 ADRs consolidated into
-  `docs/METHODOLOGY.md`; `docs/decisions/` deleted; every ADR citation outside
-  the worklogs replaced or removed, user-facing surfaces first.
 - [2026-08-24](worklogs/2026-08-24.md) — run view redesign: two-column layout (feed
   left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
   the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
   bands on the y-axis, inventory folded into the sidebar.
+- [2026-08-25](worklogs/2026-08-25.md) — the 44 ADRs consolidated into
+  `docs/METHODOLOGY.md`; `docs/decisions/` deleted; every ADR citation outside
+  the worklogs replaced or removed, user-facing surfaces first.
+
+## Where the former ADRs went
+
+The first four days of the project recorded decisions as numbered ADRs under
+`docs/decisions/`; on 2026-08-25 they were consolidated into
+`docs/METHODOLOGY.md` and the owning component docs, and the directory was
+deleted. The day files above, commits and old branches still cite the
+numbers — this table is where those citations resolve. Full texts: git
+history of `docs/decisions/`.
+
+| ADR | Decision | Now lives |
+|---|---|---|
+| 0001 | WoW 3.3.5a on AzerothCore | METHODOLOGY.md — What WrathBench measures |
+| 0002 | Server-side module, client-fidelity contracts | METHODOLOGY.md — Client fidelity; docs/CONTRACTS.md |
+| 0003 | Script-and-supervise | METHODOLOGY.md — What WrathBench measures |
+| 0004 | Fixed harness, model the only variable | METHODOLOGY.md — What WrathBench measures |
+| 0005 | Bun + thin C++ module | CLAUDE.md (toolchain); docs/ARCHITECTURE.md |
+| 0006 | Fresh character reset | METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0007 | Stock AzerothCore, no playerbots fork | docs/ARCHITECTURE.md (infra) |
+| 0008 | Worldserver image from upstream's Dockerfile | docs/ARCHITECTURE.md (infra) |
+| 0009 | Headless session on a parked socket | docs/ARCHITECTURE.md (module); METHODOLOGY.md — Client fidelity |
+| 0010 | Synthesized movement, update decoding | METHODOLOGY.md — Client fidelity; docs/ARCHITECTURE.md, module/PROTOCOL.md |
+| 0011 | Game outcomes are values | METHODOLOGY.md — The model surface |
+| 0012 | Runner context policy | METHODOLOGY.md — Context policy |
+| 0013 | Quest/combat client-local judgment calls | METHODOLOGY.md — Client fidelity; module/PROTOCOL.md |
+| 0014 | Synthetic session-state event on reattach | module/PROTOCOL.md |
+| 0015 | SDK surface: simple by default, escape hatch | METHODOLOGY.md — The model surface |
+| 0016 | API surface softening | METHODOLOGY.md — The model surface |
+| 0017 | Guids are opaque decimal strings | METHODOLOGY.md — The model surface |
+| 0018 | Signals recorded, scores derived offline | METHODOLOGY.md — Scoring |
+| 0019 | Map view: client minimap tiles, one renderer | docs/ARCHITECTURE.md (dashboard) |
+| 0020 | Fleet supervisor as a compose service | docs/OPERATIONS.md |
+| 0021 | Client-parity queries in the SDK | METHODOLOGY.md — Client fidelity |
+| 0022 | Dashboard SPA over read-only viewer API | docs/ARCHITECTURE.md (dashboard) |
+| 0023 | Deploy-window smoke as a supervisor gate | docs/OPERATIONS.md (preflight gate) |
+| 0024, 0026, 0028, 0030, 0031, 0032 | superseded same-day by 0033/0034 | retired |
+| 0025 | Raw escape hatch as an opcode allowlist | METHODOLOGY.md — The model surface; module/PROTOCOL.md |
+| 0027 | Navigation is the module's | METHODOLOGY.md — Client fidelity; docs/CONTRACTS.md, module/PROTOCOL.md |
+| 0029 | Bundle states the ender and the era | METHODOLOGY.md — The reference bundle; wiki/README.md |
+| 0033 | Run dimensions and the comparability tuple | METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0034 | Account pool, scheduling from run history | docs/OPERATIONS.md (scheduling) |
+| 0035 | Harness and driver are separate words | METHODOLOGY.md — What WrathBench measures |
+| 0036 | A fleet stop pauses runs | docs/OPERATIONS.md |
+| 0037 | SDK-side outcomes, caller budget | METHODOLOGY.md — The model surface |
+| 0038 | The deploy owns the window | docs/OPERATIONS.md (deploy window) |
+| 0039 | Run data storage (proposed) | docs/ARCHITECTURE.md (persistence) |
+| 0040 | The bundle is a Wrath snapshot | METHODOLOGY.md — The reference bundle; wiki/README.md |
+| 0041 | Probe campaigns are the third lane | METHODOLOGY.md — Episodes, lanes, and evidence; docs/EPISODES.md |
+| 0042 | The build may ask the world DB about ids | METHODOLOGY.md — The reference bundle; wiki/README.md |
+| 0043 | The tier is the evidence budget | METHODOLOGY.md — Episodes, lanes, and evidence |
+| 0044 | Cache misses are provider weather | docs/COSTS.md |
