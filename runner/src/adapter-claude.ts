@@ -32,8 +32,10 @@
  *   tools, the same dispatch, the same trajectory records.
  * - Billing: the child environment is constructed explicitly and every
  *   Anthropic/Bedrock/Vertex credential variable is dropped, so the CLI can
- *   only bill the subscription behind `CLAUDE_CODE_OAUTH_TOKEN` or refuse.
- *   It can never silently fall back to API-key credits.
+ *   only bill the subscription this run was scheduled on — its LANE, named by
+ *   `RunConfig.subscription` and copied onto `CLAUDE_CODE_OAUTH_TOKEN` — or
+ *   refuse. It can never silently fall back to API-key credits, and it never
+ *   sees another lane's token.
  *
  * ## Measured scaffold gap (claude 2.1.238, verified against a local capture
  * proxy, no model calls)
@@ -68,7 +70,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
@@ -116,16 +118,23 @@ const DB_ENV_PREFIX = "WRATHBENCH_DB_";
 /**
  * The child environment, constructed rather than inherited.
  *
- * `CLAUDE_CODE_OAUTH_TOKEN` is the only credential that survives: the CLI
- * reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is set,
- * so leaving it in place would spend API credits instead of the subscription.
- * `CLAUDE_CONFIG_DIR` is redirected into the run directory so no user-level
- * settings, skills, hooks, memory or `apiKeyHelper` are read. `WRATHBENCH_DB_*`
- * is dropped too — see `DB_ENV_PREFIX`.
+ * One credential survives, and it is the one the run's LANE names: the token in
+ * `$<tokenEnv>` is copied onto `CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI
+ * knows. Every other `CLAUDE_CODE_OAUTH_TOKEN*` variable is dropped by prefix,
+ * so a second subscription's token (`..._2`) is never in the child's
+ * environment at all — a run bills the subscription it was scheduled on, and
+ * cannot see, let alone spend, the other one. The prefix also covers a third
+ * lane arriving later without another edit here.
+ *
+ * The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is
+ * set, so leaving it in place would spend API credits instead of the
+ * subscription; `CLAUDE_CONFIG_DIR` is redirected into the run directory so no
+ * user-level settings, skills, hooks, memory or `apiKeyHelper` are read; and
+ * `WRATHBENCH_DB_*` is dropped too — see `DB_ENV_PREFIX`.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
-  o: { configDir: string; extra?: Record<string, string> },
+  o: { configDir: string; tokenEnv?: string; extra?: Record<string, string> },
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(parent)) {
@@ -133,8 +142,11 @@ export function childEnv(
     if (BILLING_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
     if (BILLING_ENV_EXACT.includes(k)) continue;
     if (k.startsWith(DB_ENV_PREFIX)) continue;
+    if (k.startsWith(DEFAULT_CLAUDE_TOKEN_ENV)) continue;
     out[k] = v;
   }
+  const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
+  if (token !== undefined && token.length > 0) out[DEFAULT_CLAUDE_TOKEN_ENV] = token;
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
   // Belt and braces: the CLI treats an empty string as unset for these.
   delete out["ANTHROPIC_API_KEY"];
@@ -642,6 +654,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   });
   const env = childEnv(o.env ?? process.env, {
     configDir,
+    // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
+    // sees the token, under the one name it knows.
+    ...(config.subscription !== undefined ? { tokenEnv: config.subscription } : {}),
     ...(o.extraEnv !== undefined ? { extra: o.extraEnv } : {}),
   });
 

@@ -438,6 +438,12 @@ interface EntryBase {
   start: number;
   end: number;
   turn?: number;
+  /**
+   * The claude driver's monotonic tool-call index, stamped on its `tool_call`,
+   * `snippet` and result records (`runner/src/adapter-claude.ts`); absent on
+   * the fixed loop's records, which key on `turn` instead.
+   */
+  call?: number;
   clipped?: boolean;
 }
 
@@ -461,6 +467,13 @@ export interface ResponseEntry extends EntryBase {
 export interface SnippetEntry extends EntryBase {
   t: "snippet";
   code?: string;
+}
+
+/** A `tool_call` record: the generic summariser keeps its name and args. */
+export interface ToolCallEntry extends EntryBase {
+  t: "tool_call";
+  name?: string;
+  args?: unknown;
 }
 
 export interface SnippetResultEntry extends EntryBase {
@@ -490,6 +503,7 @@ export type FeedEntry =
   | RequestEntry
   | ResponseEntry
   | SnippetEntry
+  | ToolCallEntry
   | SnippetResultEntry
   | EventsServedEntry
   | OtherEntry;
@@ -1299,9 +1313,16 @@ export interface ModelsResponse {
     /** The ladder itself, so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
     /**
-     * `policy.maxConcurrent`: streams the policy may have in flight per
-     * key (`concurrencyKeyOf`), counting every run on that key. An absent
-     * key is unlimited; an empty object is a file that names no cap.
+     * `policy.maxConcurrent`: streams the policy may have in flight per key,
+     * counting every run on that key. An absent key is unlimited; an empty
+     * object is a file that names no cap.
+     *
+     * Most keys are a roster entry's own (`concurrencyKeyOf`). The exception is
+     * Claude: a run counts against BOTH `claude-code` — every session in flight,
+     * whichever subscription pays — and `claude-code:<ENV NAME>`, that one
+     * subscription's, and needs room in both. Which subscription a run bills is
+     * decided when it is scheduled, so no key here is derivable from the entry
+     * alone.
      */
     maxConcurrent: Record<string, number>;
   };
