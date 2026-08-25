@@ -34,8 +34,6 @@
 
 import { z } from "zod";
 
-import { CHARACTER_NAME_RULE, isValidCharacterName } from "./config";
-
 /** The watchdog overrides a campaign or a cell may set, in the config's own spelling. */
 const watchdogsSchema = z
   .object({
@@ -61,9 +59,6 @@ const dimensionsSchema = {
   /** The starting character, as the client's own race/class ids. */
   race: z.number().int().positive().optional(),
   class: z.number().int().positive().optional(),
-  // The shared game-rule predicate (config.ts): a cell's bad name should be a
-  // named config refusal here, not a create-failure the probe run dies on.
-  character: z.string().refine(isValidCharacterName, { message: CHARACTER_NAME_RULE }).optional(),
 };
 
 export const campaignCellSchema = z
@@ -129,6 +124,28 @@ export const campaignsSchema = z.record(z.string().regex(NAME), campaignSchema);
  */
 export function parseCampaigns(raw: unknown): Campaign[] {
   if (raw === undefined) return [];
+  // The retired key, refused by name rather than as a generic "unrecognized
+  // key": `character` used to be a cell dimension back when a name travelled
+  // with a launch. The model names its own character and the run records what
+  // it chose, so there is nothing for a cell to set.
+  if (typeof raw === "object" && raw !== null) {
+    for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof spec !== "object" || spec === null) continue;
+      const c = spec as { character?: unknown; cells?: unknown };
+      if (c.character !== undefined) {
+        throw new Error(`campaign ${name}: character is not a key — the model names its own character`);
+      }
+      if (Array.isArray(c.cells)) {
+        for (const cell of c.cells as { id?: unknown; character?: unknown }[]) {
+          if (cell !== null && typeof cell === "object" && cell.character !== undefined) {
+            throw new Error(
+              `campaign ${name}: cell ${String(cell.id ?? "?")}: character is not a key — the model names its own character`,
+            );
+          }
+        }
+      }
+    }
+  }
   const parsed = campaignsSchema.parse(raw);
   return Object.entries(parsed).map(([name, spec]) => ({ name, ...spec }));
 }
@@ -255,12 +272,11 @@ export function workDimensions(c: Campaign, cell: CampaignCell): {
   maxToolCalls?: number;
   race?: number;
   class?: number;
-  character?: string;
 } {
   const pick = <K extends keyof CampaignCell & keyof CampaignSpec>(k: K): CampaignCell[K] | CampaignSpec[K] | undefined =>
     cell[k] !== undefined ? cell[k] : c[k];
   const out: Record<string, unknown> = {};
-  for (const k of ["objective", "wikiCoords", "maxToolCalls", "race", "class", "character"] as const) {
+  for (const k of ["objective", "wikiCoords", "maxToolCalls", "race", "class"] as const) {
     const v = pick(k);
     if (v !== undefined) out[k] = v;
   }

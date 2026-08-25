@@ -9,7 +9,8 @@
  *
  * Every entry is config: `model`, `driver` (openai | claude-code),
  * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
- * `character`/`race`/`class`, `episodeMs`. Everything but `model` has a default, so the old shape — a bare
+ * `race`/`class`, `episodeMs`. No name: the model names its own character and
+ * the run records what it chose. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
  *
  * One episode at a time, in roster order. On the host each is launched through
@@ -84,7 +85,6 @@ export interface RosterSpec {
    */
   tokenEnv?: string;
   runId?: string;
-  character?: string;
   race?: number;
   class?: number;
   episodeMs?: number;
@@ -143,7 +143,6 @@ export interface Resolved {
   /** The subscription lane, by env var NAME; undefined is the default lane. */
   tokenEnv: string | undefined;
   runId: string;
-  character: string;
   race: number;
   class: number;
   /** Null when the episode watchdog is disabled outright. */
@@ -394,22 +393,7 @@ function dateStamp(d: Date = new Date()): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
 }
 
-/** Letters only, <= 12 chars, unique within the roster (letter suffix). */
-function deriveCharacter(model: string, taken: Set<string>): string {
-  const letters = slug(model).replace(/[^a-z]/g, "");
-  const base = (letters.length >= 2 ? letters : "benchy").slice(0, 12);
-  const name = base.charAt(0).toUpperCase() + base.slice(1);
-  if (!taken.has(name.toLowerCase())) return name;
-  for (const c of "abcdefghijklmnopqrstuvwxyz") {
-    const stem = name.length >= 12 ? name.slice(0, 11) : name;
-    const cand = stem + c.toUpperCase();
-    if (!taken.has(cand.toLowerCase())) return cand;
-  }
-  return name.slice(0, 11) + "Z";
-}
-
 export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
-  const taken = new Set<string>();
   const out: Resolved[] = [];
   for (const s of specs) {
     if (typeof s.model !== "string" || s.model.length === 0) {
@@ -435,8 +419,6 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // visible in `ps` to anything sharing the container.
       throw new Error(`roster entry ${s.model}: tokenEnv must be an environment variable name, not a token`);
     }
-    const character = s.character ?? deriveCharacter(s.model, taken);
-    taken.add(character.toLowerCase());
     out.push({
       model: s.model,
       driver,
@@ -450,7 +432,6 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
       runId: s.runId ?? `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}-${stamp}`,
-      character,
       race: s.race ?? 1,
       class: s.class ?? 2,
       // Precedence, fixed and tested: `watchdogs.episodeMs` wins over the
@@ -526,7 +507,8 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // keeps a campaign's results grouped once its config entry is gone.
   if (spec.campaign !== undefined) argv.push("--campaign", spec.campaign);
   if (spec.cell !== undefined) argv.push("--cell", spec.cell);
-  argv.push("--character", spec.character, "--race", String(spec.race), "--class", String(spec.class));
+  // Race and class only: the name is the model's, and the runner records it.
+  argv.push("--race", String(spec.race), "--class", String(spec.class));
   // The wall clock keeps its own flag when it is a number (that is what every
   // existing job emits); a disabled one can only travel in the JSON.
   if (spec.episodeMs !== null) argv.push("--episode-ms", String(spec.episodeMs));
@@ -1251,11 +1233,9 @@ async function attemptSpec(
     if (!(await awaitAccount(spec, opts.deadline, opts.dryRun))) return "done";
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchTs = Date.now();
-    say(
-      // The name is the model's own; what the roster carries
-      // is the suggestion the notice offers, so the line says so.
-      `launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ` (suggested character ${spec.character})`}`,
-    );
+    // The name is the model's own and is not known until it creates the
+    // character, so the launch line has none to print.
+    say(`launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ""}`);
     const code = await runEpisode(spec, resume);
     const verdict = classify(spec, code);
     const level = readLevel(spec.runId);
@@ -1548,7 +1528,7 @@ async function main(): Promise<void> {
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
-          `   character ${s.character} suggested (the model names its own); race ${s.race}, class ${s.class} fixed\n` +
+          `   character named by the model at createSession; race ${s.race}, class ${s.class} fixed\n` +
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
@@ -1659,9 +1639,9 @@ async function main(): Promise<void> {
     // before; the map is empty, so every spec plans `fresh`). Later cycles give
     // each *healthy* spec a fresh run under a -cN run id — reusing the id would
     // append to one trajectory and overwrite the run row classify() reads.
-    // Characters are deliberately reused; a fresh episode wipes the account's
-    // characters first, so a fresh cycle-N burn sample starts at level 1 either
-    // way. Loop mode burns tokens; it does not accumulate progress.
+    // A fresh episode wipes the account's characters first, so a cycle-N burn
+    // sample starts at level 1 whatever the model names its new one. Loop mode
+    // burns tokens; it does not accumulate progress.
     //
     // A spec that deferred (rate-limited) does NOT get a fresh -cN here: it is
     // either skipped (still cooling) or resumed in place. freeCycle only needs

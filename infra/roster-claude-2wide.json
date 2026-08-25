@@ -3,7 +3,6 @@
     "model": "opus",
     "driver": "claude-code",
     "account": "SHAKEOUT",
-    "character": "Wideopus",
     "race": 3,
     "class": 2,
     "episodeMs": 5400000
@@ -12,7 +11,6 @@
     "model": "sonnet",
     "driver": "claude-code",
     "account": "SHAKEOUT2",
-    "character": "Widesonn",
     "race": 3,
     "class": 2,
     "episodeMs": 5400000

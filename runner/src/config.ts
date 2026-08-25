@@ -200,11 +200,17 @@ export const runConfigSchema = z.object({
    */
   token: z.string().min(1).optional(),
 
-  // Character (PHASE-0: run config, default forgiving solo class — Human Paladin).
+  /**
+   * The character the run is PLAYING — the name the model chose, written here
+   * by `trajectory.setCharacter` once `createSession` lands and read back on
+   * `--resume`. It is never a launch input: nothing suggests a name and no
+   * flag sets one. Absent means the model has not named one yet, which is
+   * every run's first minute.
+   */
   character: z
     .string()
     .refine(isValidCharacterName, { message: CHARACTER_NAME_RULE })
-    .default("Benchy"),
+    .optional(),
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
   account: z.string().min(2).max(16).default("RUNNER"),
