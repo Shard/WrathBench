@@ -1,7 +1,8 @@
 # ADR-0048: Achievements and flight use are observed, not inferred
 
-Status: Accepted (module built to `:next`; the deploy and a passing
-`infra/smoke/achievements-taxi.ts` are FOLLOW-UPS 79). Date: 2026-08-25.
+Status: Accepted — deployed as `harness-0.5-34-g9be594e` 2026-08-25;
+`infra/smoke/achievements-taxi.ts` PASS on PROBE the same day (the second
+track, SDK/runner/dashboard, is FOLLOW-UPS 79). Date: 2026-08-25.
 
 ## Context
 ADR-0018 records a signal vector and derives scores offline, so anything the

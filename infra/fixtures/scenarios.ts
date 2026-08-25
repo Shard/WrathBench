@@ -71,7 +71,18 @@ export type Scenario = {
    * flight master names both ends here.
    */
   taxiNodes?: number[];
+  /**
+   * Achievement.dbc ids to mark as earned (`character_achievement` rows, dated
+   * ACHIEVEMENT_FIXTURE_DATE). The core loads them at login and lists them in
+   * SMSG_ALL_ACHIEVEMENT_DATA, which is how a smoke proves the decode names.
+   */
+  achievements?: number[];
 };
+
+/** 2010-01-01 00:00 UTC: a fixed, obviously-fixture date, so builds stay pure. */
+export const ACHIEVEMENT_FIXTURE_DATE = 1262304000;
+/** Achievement.dbc 6 = "Level 10", category 92, 10 points. */
+export const ACHIEVEMENT_LEVEL_10 = 6;
 
 /**
  * Facing from one point toward another, normalised to [0, 2*PI).
@@ -157,6 +168,7 @@ export const SCENARIOS = {
     },
     homebind: { map: 0, zone: 1537, x: -4918.88, y: -940.406, z: 501.564 },
     taxiNodes: [TAXI_IRONFORGE, TAXI_THELSAMAR],
+    achievements: [ACHIEVEMENT_LEVEL_10],
   },
   "trainer-northshire": {
     description: "level 4, 50s, standing in front of Brother Sammuel in Northshire Abbey",
@@ -267,6 +279,8 @@ export function validateScenario(scenario: Scenario): void {
     scenario.taxiNodes === undefined || (isIdList(scenario.taxiNodes) && scenario.taxiNodes.every((n) => n <= TAXI_MASK_WORDS * 32)),
     `taxiNodes must be TaxiNodes.dbc ids in 1..${TAXI_MASK_WORDS * 32}`,
   );
+
+  assert(scenario.achievements === undefined || isIdList(scenario.achievements), "achievements must be positive integer ids");
 }
 
 /** `characters.taximask` is 14 u32 words in 3.3.5 (TaxiMaskSize); node n sets bit n-1. */
