@@ -75,6 +75,7 @@
   "roster": {
     "sub-opus": {"model": "opus", "driver": "claude-code", "character": "Fleetopus", "race": 3, "class": 2, "tier": "t0"},
     "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "character": "Fleetopuslo", "race": 3, "class": 2, "tier": "t0"},
+    "sub-haiku": {"model": "claude-haiku-4-5-20251001", "driver": "claude-code", "character": "Fleethaiku", "race": 3, "class": 2, "tier": "t0"},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "character": "Fleetsonnet", "race": 3, "class": 2, "tier": "t1"},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "character": "Fleetsonnlo", "race": 3, "class": 2, "tier": "t1"},
     "ox-alpha": {"model": "stealth/ox-alpha", "character": "Oxalpha", "race": 1, "class": 2, "tier": "t1", "idle": "none"},
