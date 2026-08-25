@@ -25,6 +25,7 @@ import type {
   RunsResponse,
   TrackResponse,
 } from "@viewer/api-types";
+import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 
 export type {
   AgentPosition,
@@ -184,5 +185,31 @@ export function createClient(opts: ClientOptions = {}) {
 
 export type Client = ReturnType<typeof createClient>;
 
+/**
+ * The bucket the public build reads, or "" for the private one.
+ *
+ * A build-time Vite env rather than a runtime probe: one flag produces the
+ * public bundle, and the private build keeps its same-origin, CORS-free
+ * posture with the snapshot path dead-code-eliminated behind a constant.
+ */
+const snapshotBase = ((): string => {
+  const configured: unknown = import.meta.env.VITE_WRATHBENCH_SNAPSHOT_BASE;
+  return typeof configured === "string" ? configured.trim() : "";
+})();
+
+/**
+ * True in the public build. The guards that read it are the ones a bucket
+ * cannot answer: the SSE tail, and the minimap tiles that never leave the lab.
+ */
+export const SNAPSHOT_MODE: boolean = snapshotBase !== "";
+
+const snapshot = SNAPSHOT_MODE ? createSnapshotClient(snapshotBase) : null;
+
+/**
+ * How fresh the published data is, for the shell's banner. Null in the
+ * private build, where the API is the live one and there is nothing to age.
+ */
+export const snapshotSource: SnapshotSource | null = snapshot?.snapshot ?? null;
+
 /** The one the pages use. */
-export const api: Client = createClient();
+export const api: Client = snapshot ?? createClient();

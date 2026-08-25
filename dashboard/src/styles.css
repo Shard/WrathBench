@@ -95,9 +95,20 @@ header.top .spacer { flex: 1; }
 .status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
 .status-popout dd { margin: 0; overflow-wrap: anywhere; }
 
+/* Public build only: how long ago the lab last pushed a snapshot. */
+.snapshot-age { align-self: center; font-size: 12px; }
+.snapshot-age.dim { color: var(--dim); }
+.snapshot-age.warn { color: var(--warn); }
+
 main { flex: 1; min-height: 0; overflow: auto; }
 main.flush { overflow: hidden; }
 .page { padding: 16px; }
+
+/* Public build only: the attribution every published artifact carries. */
+footer.attribution {
+  flex: none; padding: 6px 16px; border-top: 1px solid var(--line);
+  background: var(--bg); color: var(--dim); font-size: 11px;
+}
 
 .dim { color: var(--dim); }
 .err { color: var(--err); }
