@@ -24,6 +24,7 @@ import {
   scored,
   xpEarnedOf,
 } from "../src/lib/ladder";
+import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
@@ -83,6 +84,29 @@ describe("scored", () => {
   test("anything with a reason is out", () => {
     const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "unscored (scripted stub)" })];
     expect(scored(rows).map((r) => r.runId)).toEqual(["a"]);
+  });
+});
+
+describe("the resolved model id on a ladder row", () => {
+  test("collects the ids a row's runs were really on, and shows an alias resolving two ways", () => {
+    const rows = ladderRows([
+      run({ runId: "a", model: "sonnet", resolvedModel: "claude-sonnet-5", maxLevel: 4 }),
+      run({ runId: "b", model: "sonnet", resolvedModel: "claude-sonnet-4-5", maxLevel: 3 }),
+      run({ runId: "c", model: "z-ai/glm-5.2", resolvedModel: "z-ai/glm-5.2", maxLevel: 2 }),
+      run({ runId: "d", model: "opus", maxLevel: 2 }),
+    ]);
+    const by = new Map(rows.map((r) => [r.model, r]));
+    // One row, two Claudes: the drift the alias hid.
+    expect(by.get("sonnet")!.resolvedModels).toEqual(["claude-sonnet-4-5", "claude-sonnet-5"]);
+    expect(resolvedSummary("sonnet", by.get("sonnet")!.resolvedModels)).toEqual({
+      ids: ["claude-sonnet-4-5", "claude-sonnet-5"],
+      mixed: true,
+    });
+    // A slug served as itself says nothing a row does not already print.
+    expect(resolvedSummary("z-ai/glm-5.2", by.get("z-ai/glm-5.2")!.resolvedModels)).toBeNull();
+    // A run that recorded none reads as "not recorded", never as its config string.
+    expect(by.get("opus")!.resolvedModels).toEqual([]);
+    expect(resolvedSummary("opus", by.get("opus")!.resolvedModels)).toBeNull();
   });
 });
 

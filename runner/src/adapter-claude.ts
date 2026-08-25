@@ -413,6 +413,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    */
   let pausedAs: { reason: PauseReason; detail: string } | null = null;
   let killClaude: () => void = () => undefined;
+  /** Whether the CLI's own `init` word has already been promoted onto the run. */
+  let promotedResolved = false;
   const endEpisode = (
     reason: TerminationReason,
     detail?: string,
@@ -870,6 +872,25 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         switch (msg["type"]) {
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
+            /*
+             * The CLI resolves the roster's alias (`sonnet`) to a real id
+             * (`claude-sonnet-5`) at launch and names it — with its own version —
+             * only here. Promoted onto the run the first time it is seen, so
+             * nothing downstream has to replay a trajectory to say which Claude
+             * a row was. First-wins is enforced by `recordResolved`; the local
+             * flag only keeps a second `system` envelope from re-reading meta.
+             */
+            if (!promotedResolved) {
+              const resolvedModel = msg["model"];
+              const cliVersion = msg["claude_code_version"];
+              if (typeof resolvedModel === "string" || typeof cliVersion === "string") {
+                promotedResolved = true;
+                trajectory.recordResolved(runId, {
+                  model: typeof resolvedModel === "string" ? resolvedModel : null,
+                  cliVersion: typeof cliVersion === "string" ? cliVersion : null,
+                });
+              }
+            }
             const servers = msg["mcp_servers"];
             if (Array.isArray(servers)) {
               const bad = (servers as { name?: string; status?: string }[]).filter(

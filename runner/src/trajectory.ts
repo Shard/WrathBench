@@ -148,6 +148,28 @@ export interface RunMeta {
    * least one fresh restart somewhere in its life.
    */
   resumedFresh?: boolean;
+  /**
+   * What the *provider* said it actually served, as opposed to what the run
+   * asked for. `config.model` is the roster's string — often an alias (`sonnet`,
+   * `opus`) that the Claude Code CLI resolves at launch — so nothing in run
+   * metadata said which Claude a run was on. The CLI's `init` event names the
+   * resolved id and its own version; an OpenAI-compatible provider names the
+   * served id on every response. First observation wins and is never revised:
+   * a run has one answer, and a second look would only ever be a later segment
+   * disagreeing with the one the score was earned under.
+   *
+   * Absent on every run written before this existed. The viewer back-fills
+   * those at read time from the trajectory rather than rewriting them.
+   */
+  resolved?: ResolvedModel;
+}
+
+/** The provider's own answer to "what ran", promoted onto the run. */
+export interface ResolvedModel {
+  /** The resolved model id (`claude-sonnet-5`), or null when none was named. */
+  model: string | null;
+  /** The Claude Code CLI's version. Null on any other driver. */
+  cliVersion: string | null;
 }
 
 export interface PauseMark {
@@ -186,6 +208,12 @@ CREATE TABLE IF NOT EXISTS run (
   -- not have to parse a blob or re-derive a rule that could drift.
   character TEXT,
   platform TEXT,
+  -- What the provider actually served (RunMeta.resolved), promoted out of the
+  -- driver's own first word: the CLI resolves the alias 'sonnet' to the id
+  -- 'claude-sonnet-5' at launch, and a column means a cross-run SELECT can ask which Claude a row
+  -- was on without replaying the trajectory.
+  resolved_model TEXT,
+  resolved_cli_version TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
@@ -223,6 +251,10 @@ CREATE TABLE IF NOT EXISTS state (
 const RUN_ADDED_COLUMNS: Record<string, string> = {
   character: "TEXT",
   platform: "TEXT",
+  // Added at 0.5: promoted from the driver's first word mid-episode, so a run
+  // launched by an older build (and any run resumed by this one) gains them here.
+  resolved_model: "TEXT",
+  resolved_cli_version: "TEXT",
 };
 
 /**
@@ -292,8 +324,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -306,9 +338,75 @@ export class Trajectory {
         meta.config.objective ?? null,
         meta.config.character ?? null,
         platformOf(meta.config.apiBase, meta.config.driver),
+        meta.resolved?.model ?? null,
+        meta.resolved?.cliVersion ?? null,
         this.scrub(jsonLine(meta.config)),
       );
     this.append({ t: "meta", ...meta });
+  }
+
+  /**
+   * Promote what the provider said it served onto the run, once.
+   *
+   * Not folded into `writeMeta`: the answer arrives mid-episode (the CLI's
+   * `init` event, the first response body), long after the launch write, and
+   * `writeMeta`'s conflict path deliberately updates only `harness_version`.
+   * So this owns both halves — the `run` row and `meta.json` — and is the only
+   * writer of either field. First observation wins: a call that would overwrite
+   * an already-recorded value with a different one is ignored, and the run
+   * keeps the id it was launched under.
+   *
+   * Returns whether anything was written, so a caller can log the promotion
+   * exactly once without keeping its own flag honest.
+   */
+  recordResolved(runId: string, r: Partial<ResolvedModel>): boolean {
+    const model = r.model ?? null;
+    const cliVersion = r.cliVersion ?? null;
+    if (model === null && cliVersion === null) return false;
+    const meta = this.readMetaFile();
+    const have = meta?.resolved;
+    const next: ResolvedModel = {
+      model: have?.model ?? model,
+      cliVersion: have?.cliVersion ?? cliVersion,
+    };
+    if (have !== undefined && have.model === next.model && have.cliVersion === next.cliVersion) {
+      return false;
+    }
+    try {
+      this.db
+        .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ? WHERE run_id = ?`)
+        .run(next.model, next.cliVersion, runId);
+    } catch {
+      /* a run.sqlite that cannot take the update must not end the episode */
+    }
+    if (meta !== null) {
+      /*
+       * The tuple carries the same answer as an annotation (ADR-0033
+       * amendment), so a reader that already parses comparability does not need
+       * a second lookup. It is excluded from `sameComparability`, which is why
+       * filling it here does not turn every resume into a restamp.
+       */
+      const merged: RunMeta = {
+        ...meta,
+        resolved: next,
+        ...(meta.comparability !== undefined
+          ? { comparability: { ...meta.comparability, resolvedModel: next.model } }
+          : {}),
+      };
+      const safe = JSON.parse(this.scrub(jsonLine(merged))) as RunMeta;
+      writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
+    }
+    this.append({ t: "harness", kind: "resolved_model", ...next });
+    return true;
+  }
+
+  /** meta.json as it stands, or null when it is missing or unreadable. */
+  private readMetaFile(): RunMeta | null {
+    try {
+      return JSON.parse(readFileSync(join(this.dir, "meta.json"), "utf8")) as RunMeta;
+    } catch {
+      return null;
+    }
   }
 
   recordState(runId: string, s: StateLine): void {

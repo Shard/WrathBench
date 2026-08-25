@@ -102,6 +102,15 @@ status.
     and the dashboard's rung 4 and achievement-points derivations. Unblocked;
     the SDK derivation is in hand with another agent.
 
+83. **The fleet has to restart before the resolved model id is stamped**
+    (2026-08-25, ADR-0033 addendum). The write-time half — `meta.resolved`, the
+    two `run.sqlite` columns, `comparability.resolvedModel` — only reaches runs
+    launched by a supervisor running this code. The live fleet predates it, so
+    every run it launches until the next drain/deploy still records the alias
+    alone and is read through the viewer's back-fill instead. Nothing is lost
+    (the trajectory carries the answer either way); the stamp is what makes the
+    id survive without a whole-file scan. Trigger: the next fleet restart.
+
 ## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,

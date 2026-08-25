@@ -598,6 +598,55 @@ describe("scanRunTotals", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("back-fills the resolved model from a claude-code run's init record", async () => {
+    // The backlog case: nothing on meta.json or in the run row, and the only
+    // record of which Claude this was is the CLI's own first word.
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({
+          t: "claude_system", ts: 1050, turn: 1, type: "system", subtype: "init",
+          model: "claude-sonnet-5", claude_code_version: "2.1.239",
+        }),
+        JSON.stringify({ t: "request", ts: 1100, messages: [{ role: "user", content: "hello" }] }),
+        // A later session that resolved differently must not overwrite the
+        // answer the run's score was earned under: first observation wins.
+        JSON.stringify({
+          t: "claude_system", ts: 9000, turn: 9, type: "system", subtype: "init",
+          model: "claude-opus-5", claude_code_version: "2.2.0",
+        }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.resolved).toEqual({ model: "claude-sonnet-5", cliVersion: "2.1.239" });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("back-fills the served model from an openai run's response, and says nothing when none named one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const path = join(dir, "trajectory.jsonl");
+    const responded = (model: string | null): string =>
+      JSON.stringify({
+        t: "response", ts: 1200, message: { role: "assistant", content: "hi" },
+        ...(model === null ? {} : { model }),
+      });
+    writeFileSync(path, [JSON.stringify({ t: "meta", ts: 1000 }), responded("z-ai/glm-5.2"), ""].join("\n"));
+    const totals = await scanRunTotals(path);
+    // No CLI drove it, so there is no version to report — null, not a guess.
+    expect(totals.resolved).toEqual({ model: "z-ai/glm-5.2", cliVersion: null });
+
+    // A run written before the field existed reads "not recorded" rather than
+    // being labelled with the string it was launched under.
+    const old = join(dir, "old.jsonl");
+    writeFileSync(old, [JSON.stringify({ t: "meta", ts: 1000 }), responded(null), ""].join("\n"));
+    expect((await scanRunTotals(old)).resolved).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a missing file is an empty run, not a crash", async () => {
     const totals = await scanRunTotals(join(tmpdir(), "wrathbench-no-such-run", "trajectory.jsonl"));
     expect(totals.entries).toBe(0);

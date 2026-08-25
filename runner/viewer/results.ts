@@ -341,6 +341,14 @@ export function resultRunOf(
   return {
     runId: run.runId,
     model: run.model,
+    /*
+     * Straight off the row, which is where the back-fill has already landed:
+     * the caller merges the trajectory-derived answer into the row before
+     * projecting, so this function stays a pure projection and there is one
+     * place that decides stamped-beats-derived.
+     */
+    resolvedModel: run.resolvedModel,
+    cliVersion: run.cliVersion,
     platform: run.platform,
     harnessVersion: run.harnessVersion,
     harnessSeries: harnessSeries(run.harnessVersion),

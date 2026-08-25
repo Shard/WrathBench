@@ -623,6 +623,27 @@ describe("prompt-cache prefix discipline", () => {
     expect(responses[0]!.provider).toBe("SomeBackend");
   });
 
+  test("the served model in the response body lands on the record and is promoted onto the run", async () => {
+    // OpenRouter answers a request for one slug with the id it actually routed
+    // to, and that — not the config string — is what a chart has to name.
+    let call = 0;
+    const adapter: ChatAdapter = {
+      label: "fake-aggregator",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
+        Promise.resolve({
+          kind: "ok",
+          // A second turn served elsewhere must not revise the run's answer.
+          turn: { content: "done", toolCalls: [], raw: { model: call++ === 0 ? "vendor/alpha-2026-08" : "vendor/other" } },
+        }),
+    };
+    const { dir, options } = setup(adapter, { maxTurns: 2 });
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses[0]!.model).toBe("vendor/alpha-2026-08");
+    expect(readMeta(dir)?.resolved).toEqual({ model: "vendor/alpha-2026-08", cliVersion: null });
+    expect(readTrajectory(dir).filter((r) => r["kind"] === "resolved_model")).toHaveLength(1);
+  });
+
   test("no provider field appears when the body names none", async () => {
     const adapter = new StubAdapter([{ content: "done", toolCalls: [] }]);
     const { dir, options } = setup(adapter, { maxTurns: 1 });

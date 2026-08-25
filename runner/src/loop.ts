@@ -458,6 +458,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   };
 
   let turn = 0;
+  /** Whether the provider's served-model id has already been promoted (first wins). */
+  let promotedResolved = false;
   // Live for the whole episode, not just the model call: a turn's tool calls can
   // be slow too, and the gate inside `sampleState` keeps the row cadence fixed
   // either way. `finished` shuts it up the instant an outcome is decided, ahead
@@ -526,6 +528,18 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // cache, and a cost sweep must be able to tell that from harness prefix
       // instability without replaying per-generation API lookups.
       const servedBy = (outcome.turn.raw as { provider?: unknown } | null | undefined)?.provider;
+      /*
+       * The model the provider says it served, off the same response body. An
+       * aggregator answers a request for one slug with the id it actually
+       * routed to, and that — not the config string — is what a chart needs to
+       * name. Recorded on the record and promoted onto the run the first time,
+       * the same fact the claude-code harness reads out of its `init` event.
+       */
+      const servedModel = (outcome.turn.raw as { model?: unknown } | null | undefined)?.model;
+      if (typeof servedModel === "string" && servedModel.length > 0 && !promotedResolved) {
+        promotedResolved = true;
+        trajectory.recordResolved(runId, { model: servedModel });
+      }
       trajectory.append({
         t: "response",
         turn,
@@ -534,6 +548,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
         ...(typeof servedBy === "string" && servedBy.length > 0 ? { provider: servedBy } : {}),
+        ...(typeof servedModel === "string" && servedModel.length > 0 ? { model: servedModel } : {}),
         ...(outcome.turn.providerRequestId !== undefined
           ? { providerRequestId: outcome.turn.providerRequestId }
           : {}),

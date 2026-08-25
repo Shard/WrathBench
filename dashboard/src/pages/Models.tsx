@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 
@@ -111,6 +111,23 @@ export default function Models() {
                           {row.model}
                           <Show when={row.effort !== null}> · {row.effort}</Show>
                         </div>
+                        {/* The row stays grouped by the roster's model string —
+                            that is the unit the scheduler counts in — and this
+                            says what that string actually resolved to. More than
+                            one id is an alias that moved under the entry. */}
+                        <Show when={resolvedSummary(row.model, row.resolvedModels)}>
+                          {(seen) => (
+                            <div class="dim" title="the id(s) the provider actually served">
+                              {seen().ids.join(", ")}
+                              <Show when={seen().mixed}>
+                                {" "}
+                                <span class="warn" title="this entry's runs were not all on the same model">
+                                  mixed
+                                </span>
+                              </Show>
+                            </div>
+                          )}
+                        </Show>
                       </td>
                       <td class="mono" title={tierTitle(row)}>
                         {tierOf(row)}

@@ -53,6 +53,8 @@ function run(p: Partial<RunRow> = {}): RunRow {
     className: "Paladin",
     characterLabel: "Human Paladin",
     platform: "openrouter",
+    resolvedModel: null,
+    cliVersion: null,
     apiBase: null,
     harnessVersion: "harness-0.2",
     comparability: null,

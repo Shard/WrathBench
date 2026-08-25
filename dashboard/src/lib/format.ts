@@ -126,3 +126,21 @@ export function fmtItems(
   if (rows.length === 0) return "none";
   return rows.map((i) => (i.count > 1 ? `${i.name} ×${i.count}` : i.name)).join(", ");
 }
+
+/**
+ * The resolved model id, when it is worth showing.
+ *
+ * A run records the string it was launched with; the provider answers with what
+ * it actually served. Those are the same string for most rows — an OpenRouter
+ * slug served as itself — and printing it twice is noise. So this returns the
+ * resolved id only where it differs from what was asked for, which is exactly
+ * the case that could not be read off a page before: an alias (`sonnet`) that
+ * the CLI resolved to a real id (`claude-sonnet-5`).
+ */
+export function resolvedLabel(
+  model: string | null | undefined,
+  resolved: string | null | undefined,
+): string | null {
+  if (typeof resolved !== "string" || resolved.length === 0) return null;
+  return resolved === model ? null : resolved;
+}
