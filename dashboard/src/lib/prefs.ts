@@ -22,3 +22,31 @@ export function writeBoolPref(key: string, value: boolean): void {
     /* see readBoolPref: not persisting is the only consequence */
   }
 }
+
+/**
+ * The same, for a small remembered *choice* — a select's value, where `null`
+ * is the control's default ("all"). Stored as the string itself; an empty
+ * string is not a choice, so it reads back as `null` too. What a stored value
+ * means once the data has moved on is the caller's problem: the ladder resolves
+ * a choice its current runs cannot honour back to the default
+ * (`resolveChoice`), so remembering one can never empty a table for no
+ * visible reason.
+ */
+
+export function readChoicePref(key: string, fallback: string | null = null): string | null {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null || v === "" ? fallback : v;
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeChoicePref(key: string, value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* see readBoolPref: not persisting is the only consequence */
+  }
+}

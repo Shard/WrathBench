@@ -276,6 +276,24 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .ladderchart-pt:hover text { text-decoration: underline; }
 .ladderchart-caption { font-size: 12px; margin: 0 0 12px; }
 
+/* The ladder's episode buttons: the axis the page turns on, so they are centred
+   and a size larger than a chip row that merely narrows something. */
+.chips.episodes { justify-content: center; gap: 8px; margin: 14px 0 8px; }
+.chips.episodes button { font-size: 15px; padding: 5px 16px; }
+
+/* Its filters: one line, hard right, directly above the chart they narrow. */
+.ladder-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+                   justify-content: flex-end; margin: 0 0 6px; font-size: 12px; }
+.ladder-controls > .dim:first-child { margin-right: auto; }
+.filter { display: inline-flex; align-items: center; gap: 6px; }
+.filter select {
+  font: inherit; color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
+}
+.filter select:focus-visible { outline: 1px solid var(--accent); }
+.filter.check { cursor: pointer; }
+.filter.check input { accent-color: var(--accent); cursor: pointer; }
+
 .runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }
 .runview-logs { flex: 0 1 var(--log-col); min-width: 0; overflow-y: auto; }
 .runview-side { flex: 1 1 0; min-width: 240px; overflow-y: auto; }

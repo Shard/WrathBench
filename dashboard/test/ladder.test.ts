@@ -11,11 +11,15 @@ import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-ty
 import {
   EXPANSION_MAPS,
   RUNGS,
-  byCharacter,
-  characterOptions,
+  billingKnown,
+  classOptions,
+  filterRuns,
+  harnessOptions,
   ladderChartLayout,
   ladderPoints,
   ladderRows,
+  raceOptions,
+  resolveChoice,
   runCostReading,
   scored,
   xpEarnedOf,
@@ -176,28 +180,88 @@ describe("ladderRows", () => {
   });
 });
 
-describe("the character filter (ADR-0034's extras cycle)", () => {
+describe("the ladder's filters", () => {
   const rows = [
-    run({ runId: "base", levels: [mark(5, 10, 1000)] }),
-    run({ runId: "extra", extra: true, race: 3, raceName: "Dwarf", class: 3, className: "Hunter", characterLabel: "Dwarf Hunter", levels: [mark(5, 4, 400)] }),
+    run({ runId: "base", levels: [mark(5, 10, 1000)], billing: "paid" }),
+    run({
+      runId: "extra",
+      extra: true,
+      race: 3,
+      raceName: "Dwarf",
+      class: 3,
+      className: "Hunter",
+      characterLabel: "Dwarf Hunter",
+      levels: [mark(5, 4, 400)],
+      harness: "claude-code",
+      billing: "paid",
+    }),
+    run({ runId: "gratis", model: "qwen/qwen3:free", billing: "free" }),
     run({ runId: "old", race: null, raceName: null, class: null, className: null, characterLabel: null }),
   ];
+  const all = { race: null, klass: null, harness: null, excludeFree: false };
 
-  test("the options are the labels actually present, sorted, with unrecorded runs offering none", () => {
-    expect(characterOptions(rows)).toEqual(["Dwarf Hunter", "Human Paladin"]);
+  test("the options are the values actually present, sorted, with unrecorded runs offering none", () => {
+    expect(raceOptions(rows)).toEqual(["Dwarf", "Human"]);
+    expect(classOptions(rows)).toEqual(["Hunter", "Paladin"]);
+    expect(harnessOptions(rows)).toEqual(["claude-code", "wrathbench"]);
   });
 
-  test("all is the default and keeps every run, including the ones with no character recorded", () => {
-    expect(byCharacter(rows, null).map((r) => r.runId)).toEqual(["base", "extra", "old"]);
+  test("all is the default and keeps every run, including the ones recording nothing", () => {
+    expect(filterRuns(rows, all).map((r) => r.runId)).toEqual(["base", "extra", "gratis", "old"]);
   });
 
-  test("a chip narrows to that character and drops the unrecorded ones rather than guessing", () => {
-    expect(byCharacter(rows, "Dwarf Hunter").map((r) => r.runId)).toEqual(["extra"]);
-    expect(byCharacter(rows, "Human Paladin").map((r) => r.runId)).toEqual(["base"]);
+  test("a pick narrows to that value and drops the unrecorded ones rather than guessing", () => {
+    expect(filterRuns(rows, { ...all, race: "Dwarf" }).map((r) => r.runId)).toEqual(["extra"]);
+    expect(filterRuns(rows, { ...all, klass: "Paladin" }).map((r) => r.runId)).toEqual(["base", "gratis"]);
+    expect(filterRuns(rows, { ...all, harness: "claude-code" }).map((r) => r.runId)).toEqual(["extra"]);
   });
 
-  test("a ladder row labels the characters its model was played on", () => {
-    expect(ladderRows(rows)[0]!.characters).toEqual(["Dwarf Hunter", "Human Paladin"]);
+  test("race and class are independent, so a pair nothing ran is empty rather than impossible", () => {
+    expect(filterRuns(rows, { ...all, race: "Dwarf", klass: "Paladin" })).toEqual([]);
+    expect(filterRuns(rows, { ...all, race: "Human", klass: "Paladin" }).map((r) => r.runId)).toEqual([
+      "base",
+      "gratis",
+    ]);
+  });
+
+  test("exclude free drops the free runs and keeps the ones a viewer could not answer for", () => {
+    // `old` carries no `billing` at all: an older viewer does not report that a
+    // run was free, and dropping what it cannot answer would shrink the ladder.
+    expect(filterRuns(rows, { ...all, excludeFree: true }).map((r) => r.runId)).toEqual([
+      "base",
+      "extra",
+      "old",
+    ]);
+  });
+
+  test("a feed that answers billing on no run at all is reported, not filtered", () => {
+    expect(billingKnown(rows)).toBe(true);
+    expect(billingKnown([run({ runId: "old" })])).toBe(false);
+    expect(filterRuns([run({ runId: "old" })], { ...all, excludeFree: true }).map((r) => r.runId)).toEqual(["old"]);
+  });
+
+  test("a remembered choice this episode cannot honour resolves back to all", () => {
+    expect(resolveChoice(raceOptions(rows), "Dwarf")).toBe("Dwarf");
+    expect(resolveChoice(raceOptions(rows), "Gnome")).toBeNull();
+    expect(resolveChoice(raceOptions(rows), null)).toBeNull();
+  });
+
+  test("filtering happens before the rows, so the ranking is over what is on screen", () => {
+    const set = [
+      run({ runId: "p", model: "paid-model", levels: [mark(5, 1, 1)], maxLevel: 5, billing: "paid" }),
+      run({ runId: "f", model: "free-model", levels: [mark(20, 1, 1)], maxLevel: 20, billing: "free" }),
+    ];
+    expect(ladderRows(filterRuns(set, all)).map((r) => r.model)).toEqual(["free-model", "paid-model"]);
+    expect(ladderRows(filterRuns(set, { ...all, excludeFree: true })).map((r) => r.model)).toEqual([
+      "paid-model",
+    ]);
+  });
+
+  test("a ladder row still labels the characters its model was played on", () => {
+    expect(ladderRows(rows.filter((r) => r.model === "m"))[0]!.characters).toEqual([
+      "Dwarf Hunter",
+      "Human Paladin",
+    ]);
   });
 });
 
