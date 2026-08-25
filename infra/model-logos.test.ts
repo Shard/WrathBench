@@ -128,6 +128,13 @@ describe("selectIcons", () => {
     const typo: ModelLineup = { ...LINEUP, families: [{ id: "alpha", name: "Alpha", vendor: "A Co", icon: "alpha-colour", match: ["a/*"] }] };
     expect(() => selectIcons(typo, readTar(ARCHIVE))).toThrow(/family alpha.*alpha-colour/);
   });
+
+  test("the packaged <title> is stripped so the badge's own tooltip wins", () => {
+    const titled = '<svg viewBox="0 0 24 24"><title>Alpha</title><path d="M0 0h1v1H0z"/></svg>';
+    const archive = tar(tarEntry(iconPath("alpha-color"), titled), tarEntry(iconPath("beta"), SVG_B));
+    const [alpha] = selectIcons(LINEUP, readTar(archive));
+    expect(text(alpha!.svg)).toBe('<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z"/></svg>');
+  });
 });
 
 describe("planAssets", () => {
