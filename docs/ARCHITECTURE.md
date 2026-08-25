@@ -56,8 +56,9 @@ the SPA owns everything that is UI.
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  on 2026-08-22, the only UI: fleet overview, the episodes page (the per-run
-  grain), results, ladder, models, run detail, and the ADR-0019 map.
+  on 2026-08-22, the only UI: fleet overview, episodes (the tiers, ADR-0047),
+  runs (the per-run grain, ADR-0047), ladder, models, run detail, and the
+  ADR-0019 map.
   It imports two modules from the viewer rather than copying them — the API wire
   types and the world→tile transform — so drift between the two sides is a
   compile error. It is the only place in the repository with a dependency graph;

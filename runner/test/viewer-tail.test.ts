@@ -7,11 +7,15 @@ import { platformOf, readRun } from "../viewer/runs";
 import {
   TrajectoryTail,
   playtimeMs,
+  areaFactsFrom,
+  achievementFactsFrom,
+  taxiFactsFrom,
   scanRunTotals,
   segmentsFrom,
   splitLines,
   summarize,
   tokenTotals,
+  tokensPerSecond,
 } from "../viewer/tail";
 
 function tempFile(): string {
@@ -316,6 +320,253 @@ describe("tokenTotals", () => {
     expect(t.cacheWriteTokens).toBe(50);
     expect(t.promptTokens).toBe(1900);
   });
+
+  /*
+   * FOLLOW-UPS 82: the claude-code driver writes one reply as several
+   * `response` records, only the last of which carries usage, and that figure
+   * is the running total for the whole message (`adapter-claude.ts`).
+   */
+  test("a reply split across envelopes counts its completion once", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      // Two envelopes of one message: text, then the tool_use that carries the usage.
+      res(1, 40000),
+      summarize(
+        { t: "response", ts: 2, message: { role: "assistant", content: "done" }, usage: { prompt_tokens: 900, completion_tokens: 260 } },
+        2,
+        0,
+        1,
+      ),
+    ]);
+    // 260, not 260 + the 10k characters of the envelope already inside it.
+    expect(t.completionTokens).toBe(260);
+    // Same rule on the prompt: the reported figure replaces the request's
+    // estimate however many records after the request it lands.
+    expect(t.promptTokens).toBe(900);
+  });
+
+  test("several messages in one span each keep their reported total", () => {
+    // A span is not a message: the CLI can answer one tool result with several
+    // API calls, and each carries its own running total, so they sum.
+    const t = tokenTotals([
+      summarize({ t: "snippet_result", ts: 1, name: "run_snippet", text: "ok" }, 0, 0, 1),
+      summarize({ t: "response", ts: 2, message: {}, usage: { completion_tokens: 100 } }, 1, 0, 1),
+      summarize({ t: "response", ts: 3, message: {}, usage: { completion_tokens: 250 } }, 2, 0, 1),
+    ]);
+    expect(t.completionTokens).toBe(350);
+  });
+
+  test("a span whose last envelope reports nothing still uses the reported total", () => {
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize(
+        { t: "response", ts: 1, message: { role: "assistant", content: "x" }, usage: { completion_tokens: 260 } },
+        1,
+        0,
+        1,
+      ),
+      // The held-back envelope flushed at shutdown carries no usage of its own.
+      res(2, 40000),
+    ]);
+    expect(t.completionTokens).toBe(260);
+  });
+
+  test("a span nothing reported usage for is still estimated from characters", () => {
+    const t = tokenTotals([req(0, 4000), res(1, 4000), res(2, 4000)]);
+    expect(t.source).toBe("estimated");
+    expect(t.completionTokens).toBe(2000);
+  });
+
+  test("the openai-compatible shape totals exactly as it did before the span fix", () => {
+    // One request, one response, usage on the response: the fixed loop's whole
+    // vocabulary. Every field is asserted because the span fix touches the
+    // prompt as well as the completion.
+    const t = tokenTotals([
+      req(0, 4000),
+      summarize(
+        {
+          t: "response", ts: 1, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 1200, completion_tokens: 250, cached_tokens: 400 },
+        },
+        1, 0, 1,
+      ),
+      summarize({ t: "request", ts: 2, messages: [{ role: "user", content: "y".repeat(7996) }] }, 2, 0, 1),
+      summarize(
+        {
+          t: "response", ts: 3, message: { role: "assistant", content: "ok" },
+          usage: { prompt_tokens: 1500, completion_tokens: 300, cached_tokens: 600 },
+        },
+        3, 0, 1,
+      ),
+    ]);
+    expect(t).toEqual({
+      source: "reported",
+      contextTokens: 1500,
+      promptTokens: 2700,
+      completionTokens: 550,
+      totalTokens: 3250,
+      cacheReadTokens: 1000,
+      cacheWriteTokens: null,
+      turns: 2,
+    });
+  });
+});
+
+describe("tokensPerSecond", () => {
+  const req = (ts: number, turn: number) =>
+    summarize({ t: "request", ts, turn, messages: [{ role: "user", content: "hi" }] }, ts, 0, 1);
+  const res = (ts: number, turn: number, completion: number) =>
+    summarize(
+      { t: "response", ts, turn, message: { role: "assistant", content: "y" }, usage: { prompt_tokens: 10, completion_tokens: completion } },
+      ts,
+      0,
+      1,
+    );
+  /** A response with no usage block at all: the estimate path. */
+  const bare = (ts: number, chars: number) =>
+    summarize({ t: "response", ts, turn: 1, message: { role: "assistant", content: "z".repeat(chars) } }, ts, 0, 1);
+
+  test("one reply: output tokens over the wait-to-reply span", () => {
+    const t = tokensPerSecond([req(1000, 1), res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // 400 tokens over 2s
+    expect(t.recent).toBe(200);
+    expect(t.recentReplies).toBe(1);
+  });
+
+  test("a reply split across several response records is timed to its LAST one", () => {
+    // The claude-code driver appends one record per content block; the span
+    // runs to the final block, not the first.
+    const t = tokensPerSecond([req(1000, 1), res(2000, 1, 30), res(3000, 1, 70), res(5000, 1, 300)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(100); // 400 tokens over 4s
+  });
+
+  test("a multi-envelope reply takes the provider's running total, never total-plus-estimate", () => {
+    // adapter-claude.ts: the earlier envelopes of one message go out WITHOUT
+    // usage and the last carries the running total for the whole reply, so
+    // adding an estimate for the earlier ones would count their text twice.
+    const t = tokensPerSecond([req(1000, 1), bare(2000, 4000), res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // 400 tokens over 2s — the 1000-token estimate is not added
+  });
+
+  test("a reply with no reported usage at all is estimated from characters", () => {
+    const t = tokensPerSecond([req(1000, 1), bare(3000, 400)]);
+    expect(t.replies).toBe(1);
+    // chars ÷ 4 over 2 seconds; `messageChars` counts the message's own text.
+    expect(t.overall).toBeGreaterThan(45);
+    expect(t.overall).toBeLessThan(55);
+  });
+
+  test("a request with no reply yet has no rate, and does not end the previous span", () => {
+    const inflight = tokensPerSecond([req(1000, 1)]);
+    expect(inflight.replies).toBe(0);
+    expect(inflight.overall).toBeNull();
+    expect(inflight.recent).toBeNull();
+
+    const t = tokensPerSecond([req(1000, 1), res(3000, 1, 400), req(9000, 2)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200);
+  });
+
+  test("under the claude-code driver a span opens at the result the CLI was waiting on", () => {
+    // One request, many replies, each one timed from the tool result before it
+    // — never from the request, which on that driver spans the whole episode.
+    const result = (ts: number) => summarize({ t: "snippet_result", ts, turn: 1, text: "ok" }, ts, 0, 1);
+    const t = tokensPerSecond([
+      req(1000, 1),
+      res(3000, 1, 400),
+      summarize({ t: "tool_call", ts: 3100, turn: 1, name: "eval_snippet" }, 3, 0, 1),
+      result(4000),
+      res(6000, 1, 400),
+    ]);
+    expect(t.replies).toBe(2);
+    // 800 tokens over 4s of model time — not over the 5s the run has existed.
+    expect(t.overall).toBe(200);
+  });
+
+  test("an ambient record mid-reply does not restart the clock", () => {
+    // A `state` sample lands on a timer while the model is still generating; on
+    // the live deepseek-pro run, treating one as a boundary read a third fast.
+    const sample = summarize({ t: "state", ts: 2000, level: 4 }, 2, 0, 1);
+    const t = tokensPerSecond([req(1000, 1), sample, res(3000, 1, 400)]);
+    expect(t.replies).toBe(1);
+    expect(t.overall).toBe(200); // timed from the request, not from the sample
+  });
+
+  test("recent is the last ten replies, summed — not a mean of per-reply rates", () => {
+    const entries = [];
+    // Twelve replies: the first two are slow (10 tok/s), the last ten fast (100).
+    for (let i = 0; i < 12; i++) {
+      const start = 100_000 + i * 100_000;
+      const fast = i >= 2;
+      entries.push(req(start, i + 1), res(start + (fast ? 1000 : 10_000), i + 1, 100));
+    }
+    const t = tokensPerSecond(entries);
+    expect(t.replies).toBe(12);
+    expect(t.recentReplies).toBe(10);
+    expect(t.recent).toBe(100); // 1000 tokens over 10s
+    // The whole run: 1200 tokens over 30s, dragged down by the two slow replies.
+    expect(t.overall).toBe(40);
+  });
+
+  test("a pause between a request and its reply drops that span", () => {
+    const pause = summarize({ t: "pause", ts: 5000, reason: "rate-limit" }, 5, 0, 1);
+    const resume = summarize({ t: "resume", ts: 3_605_000 }, 6, 0, 1);
+    const t = tokensPerSecond([
+      req(1000, 1),
+      res(3000, 1, 400),
+      req(4000, 2),
+      pause,
+      resume,
+      // The reply that would otherwise be timed across the whole hour parked.
+      res(3_606_000, 2, 400),
+      req(3_607_000, 3),
+      res(3_609_000, 3, 400),
+    ]);
+    expect(t.replies).toBe(2);
+    expect(t.overall).toBe(200);
+  });
+
+  test("scanRunTotals carries the same figure off its single pass", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-tps-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({ t: "request", ts: 2000, turn: 1, messages: [{ role: "user", content: "hello" }] }),
+        JSON.stringify({
+          t: "response", ts: 4000, turn: 1, message: { role: "assistant", content: "hi" },
+          usage: { prompt_tokens: 500, completion_tokens: 200 },
+        }),
+        // A second reply, opened by the snippet result the model was waiting on.
+        JSON.stringify({ t: "snippet_result", ts: 5000, turn: 1, text: "ok" }),
+        JSON.stringify({
+          t: "response", ts: 7000, turn: 1, message: { role: "assistant", content: "hi again" },
+          usage: { prompt_tokens: 500, completion_tokens: 400 },
+        }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.tps.replies).toBe(2);
+    expect(totals.tps.overall).toBe(150); // 600 tokens over 4s of model time
+    // The same entries through the incremental path the run page uses. Tokens
+    // too: both derivations read the same spans, so the single pass and the
+    // tail must not be able to disagree about what one reply produced.
+    const tail = new TrajectoryTail(path);
+    const scanned = await tail.scan();
+    expect(tokensPerSecond(scanned)).toEqual(totals.tps);
+    expect(tokenTotals(scanned)).toEqual(totals.tokens);
+    expect(totals.tokens.completionTokens).toBe(600);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("an empty run has no rate at all", () => {
+    expect(tokensPerSecond([])).toEqual({ overall: null, recent: null, replies: 0, recentReplies: 0 });
+  });
 });
 
 describe("scanRunTotals", () => {
@@ -344,6 +595,55 @@ describe("scanRunTotals", () => {
     expect(totals.tokens.totalTokens).toBe(520);
     expect(totals.tokens.cacheReadTokens).toBe(100);
     expect(totals.tokens.cacheWriteTokens).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("back-fills the resolved model from a claude-code run's init record", async () => {
+    // The backlog case: nothing on meta.json or in the run row, and the only
+    // record of which Claude this was is the CLI's own first word.
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({
+          t: "claude_system", ts: 1050, turn: 1, type: "system", subtype: "init",
+          model: "claude-sonnet-5", claude_code_version: "2.1.239",
+        }),
+        JSON.stringify({ t: "request", ts: 1100, messages: [{ role: "user", content: "hello" }] }),
+        // A later session that resolved differently must not overwrite the
+        // answer the run's score was earned under: first observation wins.
+        JSON.stringify({
+          t: "claude_system", ts: 9000, turn: 9, type: "system", subtype: "init",
+          model: "claude-opus-5", claude_code_version: "2.2.0",
+        }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.resolved).toEqual({ model: "claude-sonnet-5", cliVersion: "2.1.239" });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("back-fills the served model from an openai run's response, and says nothing when none named one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const path = join(dir, "trajectory.jsonl");
+    const responded = (model: string | null): string =>
+      JSON.stringify({
+        t: "response", ts: 1200, message: { role: "assistant", content: "hi" },
+        ...(model === null ? {} : { model }),
+      });
+    writeFileSync(path, [JSON.stringify({ t: "meta", ts: 1000 }), responded("z-ai/glm-5.2"), ""].join("\n"));
+    const totals = await scanRunTotals(path);
+    // No CLI drove it, so there is no version to report — null, not a guess.
+    expect(totals.resolved).toEqual({ model: "z-ai/glm-5.2", cliVersion: null });
+
+    // A run written before the field existed reads "not recorded" rather than
+    // being labelled with the string it was launched under.
+    const old = join(dir, "old.jsonl");
+    writeFileSync(old, [JSON.stringify({ t: "meta", ts: 1000 }), responded(null), ""].join("\n"));
+    expect((await scanRunTotals(old)).resolved).toBeNull();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -404,6 +704,20 @@ describe("active segments and playtime", () => {
       { start: 1_000, end: 2_000 },
       { start: 5_000, end: 6_000 },
     ]);
+  });
+
+  test("the pause-mark meta written right after a pause does not reopen the segment", () => {
+    // run.ts appends `pause`, then `writeMeta({ pause })` a few ms later, which
+    // appends another `meta`. The quota wait between them and `resume` is not
+    // playtime (this over-read paused runs past 100% of budget until 08-25).
+    const segs = segmentsFrom(
+      marks(["meta", 1_000], ["pause", 2_000], ["meta", 2_005], ["resume", 9_000], ["meta", 9_001], ["pause", 9_500], ["meta", 9_510]),
+    );
+    expect(segs).toEqual([
+      { start: 1_000, end: 2_000 },
+      { start: 9_000, end: 9_500 },
+    ]);
+    expect(playtimeMs(segs, { lastTs: 9_510, live: true, now: 99_000 })).toBe(1_500);
   });
 
   test("a trajectory with no meta falls back to its first record", () => {
@@ -529,5 +843,158 @@ describe("readRun", () => {
     expect(row.error).toBeUndefined();
     // The rest of the row still reads normally against the older schema.
     expect(row.level).toBe(2);
+  });
+});
+
+describe("zone and area milestones (FOLLOW-UPS 35)", () => {
+  const ms = (kind: "zone" | "area", to: number, from?: number) =>
+    JSON.stringify({ t: "milestone", ts: 2000, kind, to: { id: to }, ...(from === undefined ? {} : { from: { id: from } }), turn: 1 });
+
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-milestone-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+
+  test("a run that never left its first area records that, and it is not a blank", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      ms("zone", 12),
+      ms("area", 9),
+      ms("area", 9),
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas).not.toBeNull();
+    expect(areas!.startArea).toBe(9);
+    expect(areas!.distinctAreas).toBe(1);
+    expect(areas!.leftStartArea).toBe(false);
+    expect(areas!.capitalZone).toBeNull();
+  });
+
+  test("a capital zone and a departed start area are both seen", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      ms("area", 9),
+      ms("area", 24, 9),
+      ms("zone", 12),
+      ms("zone", 1519, 12), // Stormwind
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas!.leftStartArea).toBe(true);
+    expect(areas!.distinctAreas).toBe(2);
+    expect(areas!.capitalZone).toBe(1519);
+  });
+
+  test("a trajectory from before the producer yields null, never false", async () => {
+    const path = fileWith([
+      JSON.stringify({ t: "meta", ts: 1000 }),
+      JSON.stringify({ t: "state", ts: 1100, level: 3 }),
+      JSON.stringify({ t: "quest_complete", ts: 1200, questId: 7 }),
+    ]);
+    const { areas } = await scanRunTotals(path);
+    expect(areas).toBeNull();
+  });
+
+  test("a resume re-emits a `from`-less mark, and the FIRST one is the start", () => {
+    // `lastAreaId` is per process, so a resumed run opens with no `from` again.
+    const facts = areaFactsFrom([
+      { kind: "area", to: 9, from: null },
+      { kind: "area", to: 24, from: 9 },
+      { kind: "area", to: 24, from: null }, // the resumed process, still in 24
+      { kind: "zone", to: 12, from: null },
+      { kind: "zone", to: 12, from: null },
+    ])!;
+    expect(facts.startArea).toBe(9);
+    expect(facts.leftStartArea).toBe(true);
+    expect(facts.distinctAreas).toBe(2);
+    expect(facts.areaMarks).toBe(3);
+    expect(facts.zoneMarks).toBe(2);
+  });
+
+  test("zone marks with no area mark leave `leftStartArea` unanswered", () => {
+    const facts = areaFactsFrom([{ kind: "zone", to: 1637, from: null }])!;
+    expect(facts.startArea).toBeNull();
+    expect(facts.leftStartArea).toBeNull();
+    expect(facts.distinctAreas).toBe(0);
+    expect(facts.capitalZone).toBe(1637); // Orgrimmar
+  });
+
+  test("no marks at all is null, not an empty reading", () => {
+    expect(areaFactsFrom([])).toBeNull();
+  });
+});
+
+describe("achievement and flight milestones (ADR-0048, issue #8)", () => {
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-achievement-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+  const meta = JSON.stringify({ t: "meta", ts: 1000 });
+  const login = (ids: number[], points: number) =>
+    JSON.stringify({ t: "milestone", ts: 1100, kind: "achievements_at_login", ids, points, turn: 1 });
+  const earn = (id: number, points?: number) =>
+    JSON.stringify({ t: "milestone", ts: 1200, kind: "achievement", id, ...(points === undefined ? {} : { points }), turn: 2 });
+  const takeoff = JSON.stringify({ t: "milestone", ts: 1300, kind: "taxi", from: { areaId: 9 }, turn: 3 });
+  const landed = JSON.stringify({ t: "milestone", ts: 1400, kind: "taxi_landed", to: { areaId: 1519 }, turn: 4 });
+
+  test("a run from before the taps has neither reading — null, never zero", async () => {
+    const { achievements, taxi } = await scanRunTotals(
+      fileWith([meta, JSON.stringify({ t: "milestone", ts: 1100, kind: "area", to: { id: 9 } })]),
+    );
+    expect(achievements).toBeNull();
+    expect(taxi).toBeNull();
+  });
+
+  test("a login backlog plus one earn: the union is what the character holds", async () => {
+    const { achievements, taxi } = await scanRunTotals(fileWith([meta, login([6, 7], 25), earn(12, 10)]));
+    expect(achievements).toEqual({ earned: 3, points: 35, ids: [6, 7, 12] });
+    // The backlog record proves the taps were live, so zero flights is a
+    // reading rather than a blank.
+    expect(taxi).toEqual({ flights: 0 });
+  });
+
+  test("an earn whose points the module could not name adds none rather than a guess", async () => {
+    const { achievements } = await scanRunTotals(fileWith([meta, login([], 0), earn(12)]));
+    expect(achievements).toEqual({ earned: 1, points: 0, ids: [12] });
+  });
+
+  test("a resumed run's second backlog is a superset, and its points are not added twice", () => {
+    const facts = achievementFactsFrom([
+      { kind: "login", ids: [6], points: 10 },
+      { kind: "earned", id: 12, points: 10 },
+      { kind: "login", ids: [6, 12], points: 20 }, // the resumed process's backlog
+      { kind: "earned", id: 15, points: 5 },
+    ])!;
+    expect(facts).toEqual({ earned: 3, points: 25, ids: [6, 12, 15] });
+  });
+
+  test("flights count takeoffs; a landing only witnesses that the taps were live", async () => {
+    const { taxi } = await scanRunTotals(fileWith([meta, takeoff, landed, takeoff]));
+    expect(taxi).toEqual({ flights: 2 });
+  });
+
+  test("landings alone still read as a recording, at zero takeoffs", () => {
+    expect(taxiFactsFrom(["taxi_landed"], false)).toEqual({ flights: 0 });
+    expect(taxiFactsFrom([], false)).toBeNull();
+    expect(taxiFactsFrom([], true)).toEqual({ flights: 0 });
+  });
+
+  test("no achievement mark at all is null, not an empty reading", () => {
+    expect(achievementFactsFrom([])).toBeNull();
+  });
+
+  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+    const path = fileWith([meta, login([6], 10), earn(12, 10), takeoff]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    const totals = await scanRunTotals(path);
+    expect(tail.achievements).toEqual(totals.achievements);
+    expect(tail.taxi).toEqual(totals.taxi);
+    // A second scan of an unchanged file adds nothing.
+    await tail.scan();
+    expect(tail.achievements).toEqual(totals.achievements);
   });
 });

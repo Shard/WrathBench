@@ -38,7 +38,12 @@ Convention:
   left, meta/comparability/tokens/cost/inventory/controls right), autoscroll fixed to
   the log column with scroll-driven on/off, a full-width cumulative-XP chart with level
   bands on the y-axis, inventory folded into the sidebar.
-- [2026-08-25](worklogs/2026-08-25.md) — run feed composite rows: turn headers (request
-  + context events as one line), tool-call cards (call/snippet/result merged, input over
-  result), latency figures on responses and calls, honest suppression for post-hoc
-  writers; pairing pure over the window so live tails and window edges self-heal.
+- [2026-08-25](worklogs/2026-08-25.md) — ladder scatter: cost per run against xp earned,
+  one point per model per tier; `all`/overridden/harness controls and the filter note
+  dropped from the ladder; episodes counts lead to the ladder; viewer `xpEarned` and
+  `expectedCost` on `ResultRun` (restart owed). Model logos across the dashboard:
+  `infra/model-lineup.json` as the data-driven identity catalog (ADR-0045) with a
+  `bun run model-logos` CLI fetching pinned, committed SVG assets; icon pucks replace
+  anonymous pips on the map. Run feed composite rows: turn headers, merged tool-call
+  cards (call/snippet/result as one), latency figures with honest suppression for
+  post-hoc writers; pairing pure over the window so live tails and edges self-heal.

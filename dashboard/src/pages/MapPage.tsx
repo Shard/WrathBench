@@ -33,6 +33,7 @@
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { cursorMemory } from "../lib/cursormemory";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
@@ -59,6 +60,8 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
+import { useSeriesFilter } from "../components/SeriesSelect";
+import { useClock } from "../lib/clock";
 import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
 
 const POLL_MS = 5000;
@@ -90,7 +93,8 @@ export default function MapPage() {
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [ageTick, setAgeTick] = createSignal(Date.now());
+  // The sidebar's "last update" ages between polls, so it needs its own tick.
+  const ageTick = useClock();
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
   // owns the map — one feed reaches the renderer, never two.
@@ -99,8 +103,19 @@ export default function MapPage() {
     POLL_MS,
   );
 
+  /*
+   * The shell's harness series (ADR-0046) narrows the live feed, so the map
+   * agrees with every other page about which runs exist. Never during a replay:
+   * a replay is one named run the reader asked for by id, and hiding it because
+   * of a header control would look like a broken link.
+   */
+  const seriesFilter = useSeriesFilter(feedList, () => replayId() === undefined);
+  const liveSeries = seriesFilter.series;
+  const shownList = seriesFilter.kept;
+  const seriesHidden = seriesFilter.filteredOut;
+
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
-    feed: feedList,
+    feed: shownList,
     track,
     pinned: pinnedMap,
     selectedId,
@@ -129,7 +144,7 @@ export default function MapPage() {
   let needsDraw = true;
   let W = 0;
   let H = 0;
-  let theme = { grid: "#1a1d22", gridline: "#23272e", dim: "#8a94a3", fg: "#d8dee6", bg: "#14161a" };
+  let theme = { grid: "#1a1d22", gridline: "#23272e", dim: "#8a94a3", fg: "#d8dee6", bg: "#14161a", line: "#2b3038" };
 
   /*
    * Tiles: an LRU of Image objects with misses remembered in the same map.
@@ -172,6 +187,7 @@ export default function MapPage() {
       dim: get("--dim", "#8a94a3"),
       fg: get("--fg", "#d8dee6"),
       bg: get("--bg", "#14161a"),
+      line: get("--line", "#2b3038"),
     };
     needsDraw = true;
   }
@@ -302,25 +318,50 @@ export default function MapPage() {
       const stale = now - pip.data.ts > STALE_MS;
       const on = sel !== null && pip.runId === sel.runId;
       ctx.globalAlpha = stale ? 0.4 : 1;
-      ctx.beginPath();
-      ctx.arc(p.sx, p.sy, on ? 7 : 5, 0, Math.PI * 2);
-      ctx.fillStyle = colorOf(pip.runId);
-      ctx.fill();
-      if (on) {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = theme.fg;
+      /*
+       * The model's logo where the position names a model we recognise and its
+       * asset has decoded (ADR-0045), and the colored dot everywhere else — an
+       * unknown model, or a logo still loading, is the pip the map always had.
+       * The puck is light on purpose: a mono icon paints `currentColor`, which
+       * an image document resolves to black, so it needs a light ground in both
+       * themes. Run identity stays with the colour — the trail and the
+       * sidebar's swatch are still the run's, not the model's.
+       */
+      const logo = logoImageOf(pip.data.model);
+      if (logo !== null) {
+        const r = on ? 11 : 9;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.lineWidth = on ? 2 : 1;
+        ctx.strokeStyle = on ? theme.fg : theme.line;
         ctx.stroke();
+        const s = on ? 14 : 12;
+        ctx.drawImage(logo, p.sx - s / 2, p.sy - s / 2, s, s);
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, on ? 7 : 5, 0, Math.PI * 2);
+        ctx.fillStyle = colorOf(pip.runId);
+        ctx.fill();
+        if (on) {
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = theme.fg;
+          ctx.stroke();
+        }
       }
       const name = pip.data.character ?? pip.runId;
+      // Clear of whatever was drawn: the puck is wider than the dot it replaces.
+      const edge = logo !== null ? (on ? 12 : 10) : 9;
       // The label chip takes the page's own background and foreground so it
       // stays legible when the viewer flips to the light scheme.
       ctx.fillStyle = theme.bg;
       ctx.globalAlpha = stale ? 0.3 : 0.75;
       const w = ctx.measureText(name).width;
-      ctx.fillRect(p.sx + 9, p.sy - 8, w + 6, 16);
+      ctx.fillRect(p.sx + edge, p.sy - 8, w + 6, 16);
       ctx.globalAlpha = stale ? 0.4 : 1;
       ctx.fillStyle = theme.fg;
-      ctx.fillText(name, p.sx + 12, p.sy + 1);
+      ctx.fillText(name, p.sx + edge + 3, p.sy + 1);
       ctx.globalAlpha = 1;
     }
   }
@@ -333,6 +374,12 @@ export default function MapPage() {
 
     const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
     mq?.addEventListener("change", readTheme);
+
+    // A logo that decodes after the frame that wanted it has no signal to
+    // invalidate, so it asks for a redraw the same way a tile does.
+    const offLogo = onLogoLoaded(() => {
+      needsDraw = true;
+    });
 
     let raf = 0;
     const frame = (): void => {
@@ -363,13 +410,11 @@ export default function MapPage() {
     };
     raf = requestAnimationFrame(frame);
 
-    const ageTimer = setInterval(() => setAgeTick(Date.now()), 1000);
-
     onCleanup(() => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
-      clearInterval(ageTimer);
+      offLogo();
     });
   });
 
@@ -626,7 +671,9 @@ export default function MapPage() {
             <span class="err">{String(feed.error)}</span>
           ) : (
             <>
-              {count()} {count() === 1 ? "agent" : "agents"} · drag to pan · scroll to zoom · click a pip
+              {count()} {count() === 1 ? "agent" : "agents"}
+              <Show when={seriesHidden() > 0}> · {seriesHidden()} hidden by series {liveSeries()}</Show>
+              {" "}· drag to pan · scroll to zoom · click a pip
             </>
           )}
         </div>
@@ -643,7 +690,10 @@ export default function MapPage() {
                 {p().character ?? p().runId}
               </h3>
               <div class="k">model</div>
-              <div class="v">{p().model ?? "—"}</div>
+              <div class="v">
+                <ModelIcon model={p().model} />
+                {p().model ?? "—"}
+              </div>
               <div class="k">level / xp</div>
               <div class="v mono">
                 {num(p().level)} · {num(p().xp)}

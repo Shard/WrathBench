@@ -12,7 +12,15 @@
  * as long as the bytes after the last newline are carried over untouched.
  */
 
-import type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+import type {
+  AchievementFacts,
+  AreaFacts,
+  EntrySummary,
+  ReportedUsage,
+  TaxiFacts,
+  TokenTotals,
+  TpsFacts,
+} from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
@@ -28,7 +36,7 @@ const MAX_ARRAY = 8;
  * The summary, usage and totals shapes live in `api-types.ts` — the type-only
  * contract the dashboard imports too — and are re-exported here unchanged.
  */
-export type { EntrySummary, ReportedUsage, TokenTotals } from "./api-types";
+export type { AchievementFacts, AreaFacts, EntrySummary, ReportedUsage, TaxiFacts, TokenTotals, TpsFacts } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -298,19 +306,110 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
 }
 
 /**
+ * One measured reply: what the model produced between the record that handed
+ * it something to answer and the last response before the next such record.
+ *
+ * Two consumers read these spans and they have to agree about what one reply
+ * is: `tokenTotals` (how many output tokens the run produced) and
+ * `tokensPerSecond` (how fast it produced them). See `tokensPerSecond` for why
+ * the span, rather than the turn, is the unit, and `TPS_SPAN_OPENERS` for what
+ * opens one.
+ */
+export interface ReplySpan {
+  /** Sum of `usage.completion` over the span's records that reported usage. */
+  reported: number;
+  /** Sum of `chars / 4` over the records that reported none. */
+  estimated: number;
+  /** Whether anything in the span reported usage; decides which of the two counts. */
+  sawUsage: boolean;
+  /** The opener's timestamp; 0 when it had none, and on responses that had no opener at all. */
+  start: number;
+  /** The last response's timestamp, or null where the span has no responses yet. */
+  last: number | null;
+}
+
+/**
+ * The run's replies, in order.
+ *
+ * A span's tokens are provider-reported where ANY of its records reported
+ * usage, and `chars / 4` only where none did — never both. The claude-code
+ * driver splits one reply across several `response` records where only the
+ * last carries usage, and that last figure is the RUNNING TOTAL for the whole
+ * message (`adapter-claude.ts`), so adding an estimate for the earlier
+ * envelopes counts their text twice (FOLLOW-UPS 82).
+ *
+ * Reported figures are SUMMED, not taken from the last: one span can hold
+ * several messages — several API calls — and each carries its own running
+ * total, so taking the last would drop every message but one.
+ *
+ * Responses with no opener before them still make a span, with `start` 0: they
+ * produced tokens, which `tokenTotals` must count, but they time nothing,
+ * which is why `tokensPerSecond` requires a `start`.
+ */
+export function replySpans(entries: readonly EntrySummary[]): ReplySpan[] {
+  const spans: ReplySpan[] = [];
+  let open: ReplySpan | null = null;
+  const close = (): void => {
+    if (open !== null) spans.push(open);
+    open = null;
+  };
+
+  for (const e of entries) {
+    if (e.t === "response") {
+      open ??= { reported: 0, estimated: 0, sawUsage: false, start: 0, last: null };
+      const usage = e["usage"] as ReportedUsage | undefined;
+      if (usage !== undefined) {
+        open.sawUsage = true;
+        open.reported += usage.completion;
+      } else {
+        open.estimated += estimateTokens(Number(e["outChars"] ?? 0));
+      }
+      if (e.ts > 0) open.last = e.ts;
+      continue;
+    }
+    // A record that opens or closes an active stretch ends the span it lands
+    // in: whatever comes next was written on the far side of a pause.
+    if (SEGMENT_MARKS.has(e.t)) {
+      close();
+      continue;
+    }
+    // Ambient telemetry mid-reply is not a boundary; see `tokensPerSecond`.
+    if (!TPS_SPAN_OPENERS.has(e.t)) continue;
+    close();
+    const usage = e["usage"] as ReportedUsage | undefined;
+    // Some adapters report the whole reply's usage on the record that opened it.
+    open = {
+      reported: usage?.completion ?? 0,
+      estimated: 0,
+      sawUsage: usage !== undefined,
+      start: e.ts > 0 ? e.ts : 0,
+      last: null,
+    };
+  }
+  close();
+  return spans;
+}
+
+/**
  * Token accounting for a whole run. Prompt tokens are summed per turn, so the
  * total is what a provider would bill, not the size of the final context.
+ *
+ * Completion tokens come from `replySpans`, so a reply split across several
+ * `response` records counts once (FOLLOW-UPS 82). Prompt tokens carry the same
+ * rule: a request's `chars / 4` estimate is held until something reports a
+ * prompt for it, and dropped when one does — under claude-code the reporting
+ * envelope is a record or more after the first, and consuming the estimate on
+ * the first would have counted both.
  */
 export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   let prompt = 0;
-  let completion = 0;
   let context = 0;
   let turns = 0;
   let reported = false;
   let cacheRead: number | null = null;
   let cacheWrite: number | null = null;
   // The provider reports a turn's prompt size on the *response*, so a request's
-  // estimate is held until the response either confirms or replaces it.
+  // estimate is held until a response either confirms or replaces it.
   let pending: number | null = null;
 
   for (const e of entries) {
@@ -320,38 +419,34 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
       if (usage.cacheWrite !== undefined) cacheWrite = (cacheWrite ?? 0) + usage.cacheWrite;
     }
     if (e.t === "request") {
-      if (pending !== null) prompt += pending; // a turn that never got a response
+      if (pending !== null) prompt += pending; // a turn nothing ever reported a prompt for
       turns++;
       const est = estimateTokens(Number(e["promptChars"] ?? 0));
       if (usage !== undefined) {
         reported = true;
         prompt += usage.prompt;
-        completion += usage.completion;
         context = usage.prompt;
         pending = null;
       } else {
         pending = est;
         context = est;
       }
-    } else if (e.t === "response") {
-      if (usage !== undefined) {
-        reported = true;
-        if (usage.prompt > 0) {
-          prompt += usage.prompt;
-          context = usage.prompt;
-        } else if (pending !== null) {
-          prompt += pending;
-        }
-        completion += usage.completion;
-      } else {
-        if (pending !== null) prompt += pending;
-        completion += estimateTokens(Number(e["outChars"] ?? 0));
+    } else if (e.t === "response" && usage !== undefined) {
+      reported = true;
+      if (usage.prompt > 0) {
+        prompt += usage.prompt;
+        context = usage.prompt;
+        // The reported figure replaces the request's estimate rather than
+        // joining it, however many records after the request it lands.
+        pending = null;
       }
-      pending = null;
     }
   }
-  // A request still in flight has already been sent, so it counts.
+  // A request nothing reported a prompt for has still been sent, so it counts.
   if (pending !== null) prompt += pending;
+
+  let completion = 0;
+  for (const s of replySpans(entries)) completion += s.sawUsage ? s.reported : s.estimated;
 
   return {
     source: reported ? "reported" : "estimated",
@@ -363,6 +458,81 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
     cacheWriteTokens: cacheWrite,
     turns,
   };
+}
+
+/**
+ * How many model replies the `recent` half of `TpsFacts` is measured over.
+ *
+ * Ten because the question it answers is "how is this run going *now*", and a
+ * reply is tens of seconds: fewer would swing on one long one, more would
+ * average across a stretch of the run the operator has stopped caring about.
+ */
+export const TPS_RECENT_REPLIES = 10;
+
+/**
+ * Output tokens per second, whole-run and over the last few replies.
+ *
+ * The unit measured is one REPLY, not one turn, because a turn is not the same
+ * thing under the two drivers. The fixed loop writes one `request` and one
+ * `response` per turn, but the claude-code driver hands the CLI a single
+ * request and then logs whatever the session emits: on
+ * `fleet-sonnet-e360-sonnet-20260824` that is one `request` and 2,833
+ * `response` records, so timing "a turn" there would time the whole six-hour
+ * episode — the run's elapsed clock wearing a label that says it is the
+ * model's, which is exactly what this figure must never be.
+ *
+ * So a span opens at one of the records that hand the model something to answer
+ * (`TPS_SPAN_OPENERS`: the `request` on the fixed loop, the `snippet_result` or
+ * `tool_result` the CLI was waiting on under claude-code) and closes at the
+ * last of the responses before the next opener. That is the wait plus the
+ * reply: the model was working for that span and for nothing outside it. On the
+ * fixed loop this is exactly request-to-response.
+ *
+ * Everything else — a `state` sample, a `milestone`, a `claude_system` line —
+ * is ignored rather than treated as a boundary, which matters: those are
+ * written by timers and taps while the model is mid-reply, and letting one
+ * restart the clock would shorten the span and read as a speed the model never
+ * had (on the live deepseek-pro run, by a third).
+ *
+ * A span whose responses never arrived is in flight and counts for nothing; so
+ * is one a `pause`, `resume` or `termination` (`SEGMENT_MARKS`) landed inside,
+ * whose reply sits on the far side of however long the run sat parked.
+ *
+ * Tokens come from `replySpans`, which `tokenTotals` reads too, so the two
+ * figures can never disagree about what one reply produced: provider-reported
+ * where ANY record of the span reported usage, and `chars ÷ 4` only where none
+ * did, never both.
+ */
+export const TPS_SPAN_OPENERS = new Set(["request", "snippet_result", "tool_result"]);
+
+export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
+  /**
+   * One measured reply: what it produced, and how long the model took over it.
+   *
+   * A span with no opener timestamp times nothing, and neither does one whose
+   * responses never arrived (in flight) or whose reply landed on the far side
+   * of a pause — `replySpans` closes the span at the mark, so the responses
+   * after it open a span with no start.
+   */
+  const replies: { tokens: number; ms: number }[] = [];
+  for (const s of replySpans(entries)) {
+    if (s.start <= 0 || s.last === null || s.last <= s.start) continue;
+    replies.push({ tokens: s.sawUsage ? s.reported : s.estimated, ms: s.last - s.start });
+  }
+
+  /** Summed both ways round, never a mean of rates: one short reply must not carry the figure. */
+  const rate = (window: readonly { tokens: number; ms: number }[]): number | null => {
+    let tokens = 0;
+    let ms = 0;
+    for (const r of window) {
+      tokens += r.tokens;
+      ms += r.ms;
+    }
+    return ms > 0 ? tokens / (ms / 1000) : null;
+  };
+
+  const recent = replies.slice(-TPS_RECENT_REPLIES);
+  return { overall: rate(replies), recent: rate(recent), replies: replies.length, recentReplies: recent.length };
 }
 
 /**
@@ -450,9 +620,15 @@ export interface SegmentMark {
  * or `termination`. The last segment stays open when the run neither paused nor
  * ended — `playtimeMs` decides what to close it at.
  *
- * The "only if none is open" guard is load-bearing, not defensive: a resume
- * that regenerates the session token writes a *second* `meta` record mid-file
- * (run.ts), and without the guard that would open a duplicate segment.
+ * Only the FIRST `meta` opens a segment. `writeMeta` appends a `meta` record
+ * every time it is called, and run.ts calls it mid-file for two reasons that
+ * must not count as driving: a resume that regenerates the session token
+ * (which follows the `resume` mark and would otherwise open a duplicate), and
+ * the pause mark itself, written milliseconds after the `pause` record (commit
+ * 08cd691). That second case is what over-read every paused run at 100%+ of
+ * its budget on the fleet page until 2026-08-25: pause closed the segment and
+ * the pause-mark `meta` reopened it, so the whole quota wait counted as
+ * playtime. Reopening after a pause is `resume`'s job alone.
  *
  * A trajectory whose first record is neither `meta` nor `resume` — an older or
  * truncated file — opens its first segment at that record, so playtime degrades
@@ -463,8 +639,10 @@ export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
   let open: number | null = null;
   for (const m of marks) {
     if (m.ts <= 0) continue;
-    if (m.t === "meta" || m.t === "resume") {
+    if (m.t === "resume") {
       if (open === null) open = m.ts;
+    } else if (m.t === "meta") {
+      if (open === null && out.length === 0) open = m.ts;
     } else if (m.t === "pause" || m.t === "termination") {
       if (open !== null) {
         out.push({ start: open, end: m.ts });
@@ -509,6 +687,195 @@ export function playtimeMs(
   return total;
 }
 
+/* --------------------------------------------------- the resolved model id */
+
+/**
+ * What a run was *really* on, as the trajectory recorded it.
+ *
+ * A run records the roster's string — often an alias (`sonnet`, `opus`) that
+ * the Claude Code CLI resolves at launch — so nothing on a page could say which
+ * Claude a row was. Runs launched from 2026-08-25 promote the answer onto
+ * `meta.json` and the `run` row at write time; every run before that carries it
+ * only inside its trajectory, and this is what back-fills those at read time.
+ * Nothing rewrites an old run: the derivation is the reader's, and a stamped
+ * value always wins over it.
+ */
+export interface ResolvedMark {
+  model: string | null;
+  cliVersion: string | null;
+}
+
+/**
+ * Read one record as a resolved-model mark, or null when it is not one.
+ *
+ * Two producers, one shape:
+ * - `claude_system` — the CLI's own `init` event, which names the id it
+ *   resolved the alias to (`model`) and its own version (`claude_code_version`).
+ * - `response` — an OpenAI-compatible body's top-level `model`, the id the
+ *   provider says it actually served (an aggregator may route a slug elsewhere).
+ *   Only written since 2026-08-25, so older openai runs derive nothing and read
+ *   as "not recorded" rather than being labelled with their config string.
+ *
+ * First observation wins at the call site; this function only projects.
+ */
+export function resolvedMarkOf(rec: Record<string, unknown>): ResolvedMark | null {
+  const t = rec["t"];
+  if (t !== "claude_system" && t !== "response") return null;
+  const model = rec["model"];
+  const cli = rec["claude_code_version"];
+  if (typeof model !== "string" && typeof cli !== "string") return null;
+  return {
+    model: typeof model === "string" && model.length > 0 ? model : null,
+    cliVersion: typeof cli === "string" && cli.length > 0 ? cli : null,
+  };
+}
+
+/* ------------------------------------------------------- zone/area milestones */
+
+/**
+ * One `milestone` record of kind `zone` or `area`, projected down to the ids.
+ *
+ * The producer (`runner/src/loop.ts`, FOLLOW-UPS 35, 2026-08-23) writes one on
+ * every change of `self.zone` / `self.area`, `from` absent on the first
+ * observation of a process. Kinds beyond these two are ignored here.
+ */
+export interface AreaMark {
+  kind: "zone" | "area";
+  to: number;
+  from: number | null;
+}
+
+/**
+ * Zone and area ids for 3.3.5a capitals — the two factions' five each, plus the
+ * two neutral hubs. Zone ids, so a `kind: "zone"` milestone answers rung 4.
+ */
+export const CAPITAL_ZONES = new Set([
+  1519, // Stormwind
+  1537, // Ironforge
+  1657, // Darnassus
+  3557, // The Exodar
+  1637, // Orgrimmar
+  1638, // Thunder Bluff
+  1497, // Undercity
+  3487, // Silvermoon City
+  3703, // Shattrath City
+  4395, // Dalaran
+]);
+
+/**
+ * Derive the facts from a run's zone/area marks, or null when it has none.
+ *
+ * `startArea` is the **first** area mark's destination, not "the mark with no
+ * `from`": a resumed run opens a second process whose `lastAreaId` starts
+ * unset, so several marks can carry no `from` and only the first of them is the
+ * run's start. Everything else follows from that one id.
+ */
+export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
+  if (marks.length === 0) return null;
+  const areas = marks.filter((m) => m.kind === "area");
+  const zones = marks.filter((m) => m.kind === "zone");
+  const startArea = areas.length > 0 ? areas[0]!.to : null;
+  const distinct = new Set(areas.map((m) => m.to));
+  const capital = zones.find((m) => CAPITAL_ZONES.has(m.to));
+  return {
+    startArea,
+    distinctAreas: distinct.size,
+    leftStartArea: startArea === null ? null : areas.some((m) => m.to !== startArea),
+    capitalZone: capital?.to ?? null,
+    zoneMarks: zones.length,
+    areaMarks: areas.length,
+  };
+}
+
+/** Read one trajectory record as an `AreaMark`, or null when it is not one. */
+export function areaMarkOf(rec: Record<string, unknown>): AreaMark | null {
+  const kind = rec["kind"];
+  if (kind !== "zone" && kind !== "area") return null;
+  const to = (rec["to"] as { id?: unknown } | undefined)?.id;
+  if (typeof to !== "number") return null;
+  const from = (rec["from"] as { id?: unknown } | undefined)?.id;
+  return { kind, to, from: typeof from === "number" ? from : null };
+}
+
+/* ------------------------------------------- achievement and taxi milestones */
+
+/**
+ * One achievement milestone, projected to what a derivation needs: an own earn
+ * (`kind: "earned"`, with the points when the module could name them) or the
+ * login backlog (`kind: "login"`, ids plus the aggregate points).
+ */
+export type AchievementMark =
+  | { kind: "earned"; id: number; points: number | null }
+  | { kind: "login"; ids: number[]; points: number };
+
+/** Read one trajectory record as an `AchievementMark`, or null when it is not one. */
+export function achievementMarkOf(rec: Record<string, unknown>): AchievementMark | null {
+  const kind = rec["kind"];
+  if (kind === "achievement") {
+    const id = rec["id"];
+    if (typeof id !== "number") return null;
+    const points = rec["points"];
+    return { kind: "earned", id, points: typeof points === "number" ? points : null };
+  }
+  if (kind === "achievements_at_login") {
+    const ids = rec["ids"];
+    if (!Array.isArray(ids)) return null;
+    const points = rec["points"];
+    return {
+      kind: "login",
+      ids: ids.filter((v): v is number => typeof v === "number"),
+      points: typeof points === "number" ? points : 0,
+    };
+  }
+  return null;
+}
+
+/** `taxi` (a takeoff) or `taxi_landed`, or null when the record is neither. */
+export function taxiMarkOf(rec: Record<string, unknown>): "taxi" | "taxi_landed" | null {
+  const kind = rec["kind"];
+  return kind === "taxi" || kind === "taxi_landed" ? kind : null;
+}
+
+/**
+ * Derive a run's achievement facts, or null when it recorded none.
+ *
+ * Points come from the **last** login record plus every earn outside that
+ * record's id set: a resumed run writes one backlog record per process and the
+ * later one is the superset, so adding them all would count the same
+ * achievement's points once per resume. `earned` is the union of every id seen,
+ * which is what the character holds.
+ */
+export function achievementFactsFrom(marks: readonly AchievementMark[]): AchievementFacts | null {
+  if (marks.length === 0) return null;
+  const logins = marks.filter((m): m is Extract<AchievementMark, { kind: "login" }> => m.kind === "login");
+  const lastLogin = logins.length > 0 ? logins[logins.length - 1]! : null;
+  const backlog = new Set(lastLogin?.ids ?? []);
+  const ids = new Set<number>();
+  for (const m of marks) {
+    if (m.kind === "login") for (const id of m.ids) ids.add(id);
+    else ids.add(m.id);
+  }
+  let points = lastLogin?.points ?? 0;
+  for (const m of marks) {
+    if (m.kind === "earned" && !backlog.has(m.id) && m.points !== null) points += m.points;
+  }
+  return { earned: ids.size, points, ids: [...ids].sort((a, b) => a - b) };
+}
+
+/**
+ * Derive a run's flight facts. `flights` counts takeoffs; landings only witness
+ * that the taps were live. Null when nothing proves they were — no taxi record
+ * and no achievement record — because a run from before the deploy and a run
+ * that never flew would otherwise read the same (see `TaxiFacts`).
+ */
+export function taxiFactsFrom(
+  marks: readonly ("taxi" | "taxi_landed")[],
+  sawAchievementRecord: boolean,
+): TaxiFacts | null {
+  if (marks.length === 0 && !sawAchievementRecord) return null;
+  return { flights: marks.filter((m) => m === "taxi").length };
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -539,6 +906,28 @@ export interface RunTotals {
   /** How many responses did and did not carry a per-call charge; see
    * `responseCostCoverage`. */
   responseCost: { costed: number; uncosted: number };
+  /** Output tokens per second, whole-run and recent; see `tokensPerSecond`. */
+  tps: TpsFacts;
+  /**
+   * Where the run went, from its zone/area milestone records; null when it
+   * wrote none — a run from before the producer shipped (2026-08-23), which
+   * must read as "not recorded" and never as "never left". See `AreaFacts`.
+   */
+  areas: AreaFacts | null;
+  /**
+   * Achievements and flights from the same pass over the milestone records
+   * (ADR-0048); null when the run wrote none of each — "not recorded", never
+   * zero. See `AchievementFacts` / `TaxiFacts`.
+   */
+  achievements: AchievementFacts | null;
+  taxi: TaxiFacts | null;
+  /**
+   * The model the provider actually served and the CLI version that drove it,
+   * from the first record that named either (`resolvedMarkOf`). Null on a run
+   * whose trajectory names neither — "not recorded", never the config string.
+   * The read-time back-fill for runs written before the fields were stamped.
+   */
+  resolved: ResolvedMark | null;
 }
 
 /**
@@ -552,7 +941,14 @@ export interface RunTotals {
  * bytes and a finished run never changes.
  */
 export async function scanRunTotals(path: string): Promise<RunTotals> {
-  const projections: EntrySummary[] = [];
+  /*
+   * What `replySpans` reads, and through it both `tokenTotals` and
+   * `tokensPerSecond`: the request/response projections plus the records that
+   * open a span or close one — the result the model was waiting on, and the
+   * pause marks. Everything else is ambient and the derivation ignores it, so
+   * it is never collected.
+   */
+  const spanMarks: EntrySummary[] = [];
   const marks: SegmentMark[] = [];
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -563,6 +959,16 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let costUsd: number | null = null;
   let costed = 0;
   let uncosted = 0;
+  /*
+   * First-wins, and read before the request/response filter below: a
+   * `claude_system` is neither, and the run's answer is settled by its first
+   * turn. Two `let`s rather than a mark list — there is one answer per run.
+   */
+  let resolvedModel: string | null = null;
+  let resolvedCli: string | null = null;
+  const areaMarks: AreaMark[] = [];
+  const achievementMarks: AchievementMark[] = [];
+  const taxiMarks: ("taxi" | "taxi_landed")[] = [];
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -594,8 +1000,29 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       const v = rec["costUsd"];
       if (typeof v === "number" && Number.isFinite(v)) costUsd = (costUsd ?? 0) + v;
     }
-    if (t !== "request" && t !== "response") return;
-    const p: EntrySummary = { i: projections.length, t, ts, start: 0, end: 0 };
+    // Same reason, one record kind further: a `milestone` is neither a request
+    // nor a response, so it has to be read before the early return below. Only
+    // the ids are kept — tens of marks per run, not one per line.
+    if (resolvedModel === null || resolvedCli === null) {
+      const mark = resolvedMarkOf(rec);
+      if (mark !== null) {
+        resolvedModel ??= mark.model;
+        resolvedCli ??= mark.cliVersion;
+      }
+    }
+    if (t === "milestone") {
+      const mark = areaMarkOf(rec);
+      if (mark !== null) areaMarks.push(mark);
+      const ach = achievementMarkOf(rec);
+      if (ach !== null) achievementMarks.push(ach);
+      const taxi = taxiMarkOf(rec);
+      if (taxi !== null) taxiMarks.push(taxi);
+    }
+    if (t !== "request" && t !== "response") {
+      if (TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t)) spanMarks.push({ i: 0, t, ts, start: 0, end: 0 });
+      return;
+    }
+    const p: EntrySummary = { i: spanMarks.length, t, ts, start: 0, end: 0 };
     if (t === "request") {
       const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
       p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
@@ -616,7 +1043,7 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
         costUsd = (costUsd ?? 0) + usage.cost;
       }
     }
-    projections.push(p);
+    spanMarks.push(p);
   };
 
   try {
@@ -632,7 +1059,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   take(carry);
 
   return {
-    tokens: tokenTotals(projections),
+    // Over `spanMarks` rather than requests and responses alone: the span
+    // openers are what tell one reply from the next, and a completion figure
+    // derived without them is not the one the run page shows.
+    tokens: tokenTotals(spanMarks),
     firstTs,
     lastTs,
     entries,
@@ -642,6 +1072,14 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     segments: segmentsFrom(marks),
     reportedCostUsd: costUsd,
     responseCost: { costed, uncosted },
+    tps: tokensPerSecond(spanMarks),
+    areas: areaFactsFrom(areaMarks),
+    achievements: achievementFactsFrom(achievementMarks),
+    taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
+    resolved:
+      resolvedModel === null && resolvedCli === null
+        ? null
+        : { model: resolvedModel, cliVersion: resolvedCli },
   };
 }
 
@@ -653,6 +1091,15 @@ function unparseable(text: string, i: number, start: number, end: number): Entry
 export class TrajectoryTail {
   readonly path: string;
   readonly entries: EntrySummary[] = [];
+  /**
+   * Achievement and flight milestones seen so far (ADR-0048), accumulated as
+   * the file is indexed so the run page reads them without the whole-file
+   * `scanRunTotals` pass a live run would miss the cache on every poll. Same
+   * pure derivations the results page uses, so the two cannot disagree — the
+   * principle this file already applies to `segmentsFrom` / `playtimeMs`.
+   */
+  private readonly achievementMarks: AchievementMark[] = [];
+  private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
   /** Bytes consumed as complete lines. */
   private consumed = 0;
   /** Bytes after the last newline: an entry still being written. */
@@ -683,6 +1130,10 @@ export class TrajectoryTail {
       this.entries.length = 0;
       this.consumed = 0;
       this.pending = new Uint8Array(0);
+      // The accumulators are part of the index: a truncated or rotated file is
+      // re-read whole, and keeping them would double-count everything in it.
+      this.achievementMarks.length = 0;
+      this.taxiMarks.length = 0;
     }
     if (size === this.size) return [];
 
@@ -701,7 +1152,14 @@ export class TrajectoryTail {
       const i = this.entries.length;
       let summary: EntrySummary;
       try {
-        summary = summarize(JSON.parse(text) as Record<string, unknown>, i, start, end);
+        const rec = JSON.parse(text) as Record<string, unknown>;
+        if (rec["t"] === "milestone") {
+          const ach = achievementMarkOf(rec);
+          if (ach !== null) this.achievementMarks.push(ach);
+          const taxi = taxiMarkOf(rec);
+          if (taxi !== null) this.taxiMarks.push(taxi);
+        }
+        summary = summarize(rec, i, start, end);
       } catch {
         summary = unparseable(text, i, start, end);
       }
@@ -711,6 +1169,16 @@ export class TrajectoryTail {
     this.consumed = offset;
     this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     return added;
+  }
+
+  /** Achievements this run's records account for; null when it wrote none. */
+  get achievements(): AchievementFacts | null {
+    return achievementFactsFrom(this.achievementMarks);
+  }
+
+  /** Flights taken; null when flights were not recorded for this run. */
+  get taxi(): TaxiFacts | null {
+    return taxiFactsFrom(this.taxiMarks, this.achievementMarks.length > 0);
   }
 
   /** The raw JSON text of one entry, read back from disk. */

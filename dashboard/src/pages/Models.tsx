@@ -18,10 +18,12 @@
 import { A } from "@solidjs/router";
 import { For, Show, createSignal, onMount } from "solid-js";
 import { api, type ModelRowView, type ModelsResponse } from "../api/client";
-import { HarnessTag } from "../components/EpisodePicker";
+import { HarnessTag } from "../components/HarnessTag";
+import { ModelIcon } from "../components/ModelIcon";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
-import { EPISODE_COLUMNS, countedOf, extrasOf, isPromoted, noteOf, resultsHref, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
+import { runsHref } from "../lib/runs";
 
 /** The roster moves when a run ends or an operator edits the config. */
 const POLL_MS = 30_000;
@@ -29,7 +31,8 @@ const POLL_MS = 30_000;
 export default function Models() {
   const feed = poll(() => api.models(), POLL_MS);
   const body = (): ModelsResponse | undefined => feed.latest;
-  const rows = (): ModelRowView[] => body()?.models ?? [];
+  // Copied before sorting: the array is the poll signal's own payload.
+  const rows = (): ModelRowView[] => [...(body()?.models ?? [])].sort(compareModelRows);
   const [open, setOpen] = createSignal<string | null>(null);
 
   // A link from a run page arrives as `/models#<name>`: open that row.
@@ -80,17 +83,8 @@ export default function Models() {
           <table>
             <thead>
               <tr>
-                <th>status</th>
-                <th>model</th>
-                <th>billing</th>
-                <th>tier</th>
-                <th>platform</th>
-                <th>harness</th>
-                <For each={EPISODE_COLUMNS}>{(t) => <th class="right">{t}</th>}</For>
-                <th class="right">extras</th>
-                <th>schedulable</th>
-                <th>note</th>
-                <th>newest run</th>
+                {/* From the array, so the header cannot outnumber the body again. */}
+                <For each={MODEL_COLUMNS}>{(c) => <th class={columnClass(c)}>{c}</th>}</For>
               </tr>
             </thead>
             <tbody>
@@ -107,17 +101,36 @@ export default function Models() {
                         <span class={`badge ${statusClass(row.status)}`}>{row.status}</span>
                       </td>
                       <td>
+                        {/* The family's mark, from the model id rather than the roster name (ADR-0045). */}
+                        <ModelIcon model={row.model} />
                         {row.name}
                         <Show when={isPromoted(row)}>
                           {" "}
                           <span class="ok" title="climbed a rung: it earned this tier">
-                            ↑{row.tier}
+                            ↑{highestTierOf(row)}
                           </span>
                         </Show>
                         <div class="dim">
                           {row.model}
                           <Show when={row.effort !== null}> · {row.effort}</Show>
                         </div>
+                        {/* The row stays grouped by the roster's model string —
+                            that is the unit the scheduler counts in — and this
+                            says what that string actually resolved to. More than
+                            one id is an alias that moved under the entry. */}
+                        <Show when={resolvedSummary(row.model, row.resolvedModels)}>
+                          {(seen) => (
+                            <div class="dim" title="the id(s) the provider actually served">
+                              {seen().ids.join(", ")}
+                              <Show when={seen().mixed}>
+                                {" "}
+                                <span class="warn" title="this entry's runs were not all on the same model">
+                                  mixed
+                                </span>
+                              </Show>
+                            </div>
+                          )}
+                        </Show>
                       </td>
                       <td class="mono" title={tierTitle(row)}>
                         {tierOf(row)}
@@ -133,7 +146,7 @@ export default function Models() {
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
                                 <A
-                                  href={resultsHref({ model: row.model, effort: row.effort, episode: t })}
+                                  href={runsHref({ model: row.model, effort: row.effort, episode: t })}
                                 >
                                   {countedOf(st())}
                                 </A>
@@ -161,7 +174,7 @@ export default function Models() {
                     </tr>
                     <Show when={open() === row.name}>
                       <tr>
-                        <td colSpan={9 + EPISODE_COLUMNS.length}>
+                        <td colSpan={MODEL_COLUMNS.length}>
                           <Detail row={row} />
                         </td>
                       </tr>
@@ -187,8 +200,9 @@ export default function Models() {
               .
             </Show>{" "}
             A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
-            an operator moves it, and the rung it earned still counts when they do. A row's tier cell
-            links to that model's runs on the results page; the row itself opens its runs below. Cooling is
+            an operator moves it, and the rung it earned still counts when they do. Rows are ordered by
+            tier, highest first; an episode cell links to that model's runs on the runs page, and the
+            row itself opens its runs below. Cooling is
             the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
             {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more
             no-progress attempt at the ceiling retires the model until an operator clears it.

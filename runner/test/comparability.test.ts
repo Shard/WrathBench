@@ -289,3 +289,21 @@ describe("harnessSeries (ADR-0034: the schedule keys on major.minor)", () => {
     expect(harnessSeries("")).toBeNull();
   });
 });
+
+describe("the resolved model id", () => {
+  test("annotates the tuple but is not compared: a filled one still equals its launch stamp", () => {
+    const config = loadRunConfig({ driver: "claude-code", model: "sonnet" });
+    const launched = comparabilityOf(config, "v");
+    // Stamped at launch with nothing: the CLI has not spoken yet.
+    expect(launched.resolvedModel).toBeUndefined();
+    const observed: Comparability = { ...launched, resolvedModel: "claude-sonnet-5" };
+    // Filling it in mid-episode must not read as a restamp on the next resume —
+    // it is observed, not stamped, so it sits outside the comparison.
+    expect(sameComparability(launched, observed)).toBe(true);
+    expect(sameComparability(observed, { ...observed, resolvedModel: "claude-opus-5" })).toBe(true);
+    // ...while a stamped field still separates two tuples.
+    expect(sameComparability(observed, { ...observed, effort: "high" })).toBe(false);
+    // And it survives the round trip through meta.json like any other field.
+    expect(parseComparability(JSON.parse(JSON.stringify(observed)))?.resolvedModel).toBe("claude-sonnet-5");
+  });
+});

@@ -19,8 +19,9 @@ status.
 
 1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
    ADR-0027 flips to accepted on that run.
-2. **35** — milestone records; rungs 2/4/6 of the ladder read "not instrumented" until
-   they exist.
+2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
+   grouping and instance records exist, and death/level-up/spell/talent are still
+   unwritten.
 3. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
 
@@ -91,6 +92,25 @@ status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
+79. **Second track for the achievement/taxi taps** (2026-08-25, ADR-0048, issue #8).
+    The module half is deployed (`harness-0.5-34-g9be594e`) and gated:
+    `infra/smoke/achievements-taxi.ts` PASS on PROBE 2026-08-25 (login list
+    named from Achievement.dbc, reply 0, `taxiFlight` flips on a values-only
+    update for self's guid). What remains: SDK schemas for the three opcodes,
+    runner milestone records (achievements only for `self: true`; flight start
+    = reply 0 then `taxiFlight` true on self's guid, landing = the flip back),
+    and the dashboard's rung 4 and achievement-points derivations. Unblocked;
+    the SDK derivation is in hand with another agent.
+
+83. **The fleet has to restart before the resolved model id is stamped**
+    (2026-08-25, ADR-0033 addendum). The write-time half — `meta.resolved`, the
+    two `run.sqlite` columns, `comparability.resolvedModel` — only reaches runs
+    launched by a supervisor running this code. The live fleet predates it, so
+    every run it launches until the next drain/deploy still records the alias
+    alone and is read through the viewer's back-fill instead. Nothing is lost
+    (the trajectory carries the answer either way); the stamp is what makes the
+    id survive without a whole-file scan. Trigger: the next fleet restart.
+
 ## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
@@ -115,7 +135,6 @@ status.
      agents run under: comparable within a harness if the operator partitions, never
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
-
 
 32. **Dashboard parity gaps against the deleted pages** (2026-08-22, ADR-0022; the
     pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
@@ -143,7 +162,24 @@ status.
     from the state cache's `self.zone` / `self.area` on every change, including the
     first observation (`from` undefined), alongside `quest_complete`
     (`runner/src/loop.ts`, `Trajectory.recordMilestone`). Death, level-up, spell,
-    talent and the firsts are still unwritten; the dashboard reads none of them yet.
+    talent and the firsts are still unwritten. **First consumer (2026-08-25):**
+    `scanRunTotals` reads the zone/area marks in its existing streaming pass and
+    `ResultRun.areas` carries `{ startArea, distinctAreas, leftStartArea,
+    capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
+    `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
+    (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
+    `false`. **Achievements and flights (2026-08-25, ADR-0048, issue #8):** the
+    loop also writes `{ kind: "achievement", id, name?, points?, categoryId? }`
+    per own earn, `{ kind: "achievements_at_login", ids, points }` once per
+    process (written even when the backlog is empty — it is what says the taps
+    were live for the run), and `{ kind: "taxi", from: { areaId } }` /
+    `{ kind: "taxi_landed", to: { areaId } }` from `self.taxiFlight` flipping
+    after an accepted reply. `ResultRun.achievements` / `.taxi` and
+    `RunDetailResponse` carry them (`achievementFactsFrom`, `taxiFactsFrom`),
+    rung 4 now derives fully (capital **and** a flight), and achievement points
+    are displayed only — no ordering reads them. Death, level-up, spell learned,
+    talent spent and the remaining firsts are still unwritten, and rung 6 is
+    still nobody's.
 
 
 67. **Freeplay characters do not persist between sessions, which is what the

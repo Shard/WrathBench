@@ -12,6 +12,8 @@ import type { FleetJobView, FleetResponse, FleetServerView, RunListRow } from ".
 import type { FleetRow } from "../src/lib/fleet";
 import {
   FLEET_COLUMNS,
+  tpsLabel,
+  tpsTitle,
   HEARTBEAT_STALE_MS,
   deployWindowOpen,
   fleetRows,
@@ -77,6 +79,7 @@ function run(over: Partial<RunListRow> = {}): RunListRow {
     xp: 546,
     playtimeMs: 60_000,
     tokens: { totalTokens: 103_744 },
+    tps: { overall: 41.5, recent: 128.4, replies: 60, recentReplies: 10 },
     cost: { actual: { usd: 0.42, basis: "reported", note: "" } },
     ...over,
   } as unknown as RunListRow;
@@ -84,7 +87,7 @@ function run(over: Partial<RunListRow> = {}): RunListRow {
 
 describe("columns", () => {
   test("state leads; one table carries the job, its account and the run it is driving", () => {
-    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "cost", "elapsed"]);
+    expect([...FLEET_COLUMNS]).toEqual(["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"]);
     // The process is bookkeeping, not something an operator scans a table for;
     // the source (file, queue, policy) maps to the account class and says nothing more.
     expect(FLEET_COLUMNS).not.toContain("pid");
@@ -103,6 +106,17 @@ describe("the model cell", () => {
 
   test("a job with no models resolved falls back to the ref it was called by", () => {
     expect(jobModelLabel(job({ ref: "a+b", models: [] }))).toBe("a+b");
+  });
+
+  test("the ids travel beside the label, in roster order, for the cell's icons", () => {
+    // The pre-joined string is the truncated *label*; identity is read from the
+    // list, so a rotating job can show one mark per family (ADR-0045).
+    const row = fleetRows(fleet({ jobs: [job({ models: ["opus", "sonnet", "openai/gpt-5.6-luna"] })] }), [])[0]!;
+    expect(row.models).toBe("opus, sonnet +1");
+    expect(row.modelList).toEqual(["opus", "sonnet", "openai/gpt-5.6-luna"]);
+    // An idle account holds no model; a paused one holds exactly the run's.
+    const rows = fleetRows(fleet(), []);
+    expect(rows.find((r) => r.account === "RUNNER2")!.modelList).toEqual([]);
   });
 });
 
@@ -157,7 +171,7 @@ describe("the rows", () => {
       elapsedMs: 60_000,
     });
     // A run the runs feed has not caught up with still gets its row.
-    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, costUsd: null, elapsedMs: null });
+    expect(fleetRows(fleet(), [])[0]).toMatchObject({ level: null, xp: null, tokens: null, costUsd: null, elapsedMs: null, tps: null });
   });
 
   test("cost is the actual figure only: an unreported or absent cost is null, never the estimate", () => {
@@ -198,7 +212,7 @@ describe("the rows", () => {
       ],
     });
     const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
-    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
+    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", modelList: ["hy3-free"], runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
     expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
   });
 });
@@ -480,5 +494,49 @@ describe("episode progress in the state cell", () => {
     expect(rowProgress(row)).toBeNull();
     // A recorded null episodeMs (the watchdog disabled) is the same nothing.
     expect(rowProgress(rowFor(fleet(), [budgeted(null, { playtimeMs: 30 * 60_000 })]))).toBeNull();
+  });
+});
+
+describe("the tok/s cell", () => {
+  test("the cell is the recent figure; the run's own average is in the title", () => {
+    const row = fleetRows(fleet(), [run()])[0]!;
+    expect(row.tps).toEqual({ overall: 41.5, recent: 128.4, replies: 60, recentReplies: 10 });
+    expect(tpsLabel(row.tps)).toBe("128");
+    expect(tpsTitle(row.tps)).toContain("128 tok/s over the last 10 repl(ies)");
+    expect(tpsTitle(row.tps)).toContain("41.5 tok/s over the run's 60");
+    expect(tpsTitle(row.tps)).toContain("output tokens ÷ wall time of model replies");
+  });
+
+  test("a row with no run, or a run with no measured reply, shows no rate at all", () => {
+    // A job the runs feed has not caught up with: never a number, and nothing
+    // in the title either — a blank that explains itself by being blank.
+    expect(tpsLabel(null)).toBe("—");
+    expect(tpsTitle(null)).toBe("");
+    const fresh = { overall: null, recent: null, replies: 0, recentReplies: 0 };
+    expect(tpsLabel(fresh)).toBe("—");
+    expect(tpsTitle(fresh)).toBe("");
+  });
+
+  test("a paused row keeps the rate its trajectory last showed", () => {
+    // The figure is a fact about the run's turns, not a claim that it is still
+    // producing; the state badge is what says it stopped.
+    const paused = fleet({
+      jobs: [],
+      paused: [
+        {
+          runId: "fleet-ox-alpha-e90-20260823",
+          model: "stealth/ox-alpha",
+          account: "RUNNER",
+          reason: "rate-limit",
+          pauseCount: 1,
+          resumeAfter: null,
+          elapsedMs: 60_000,
+          budgetMs: null,
+          why: "provider said no",
+        },
+      ],
+    } as unknown as Partial<FleetResponse>);
+    const row = fleetRows(paused, [run()]).find((r) => r.state === "paused")!;
+    expect(tpsLabel(row.tps)).toBe("128");
   });
 });

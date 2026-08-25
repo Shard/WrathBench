@@ -77,6 +77,14 @@ interface Pending {
  * `bun` (PATH), a home/temp for the runtime, and the WRATHBENCH_* knobs. The
  * SDK reads no env. WRATHBENCH_* is forwarded as a prefix so operators (and
  * the storm-control tests) can tune the fault knobs from the parent.
+ *
+ * The one hole the prefix forwarding would otherwise open is WRATHBENCH_DB_*:
+ * the `fleet` and `runner` services carry the database host/user/password so
+ * the preflight gate's smokes can stage a fixture, and an episode is a child of
+ * one of those. Root on acore_characters is exactly the server-side shortcut
+ * docs/CONTRACTS.md forbids — a snippet holding it could write its own level
+ * and money — so those four are dropped here, at the one place every snippet
+ * child is spawned, rather than by keeping the credentials off a service.
  */
 export function sandboxChildEnv(
   parent: Record<string, string | undefined>,
@@ -88,7 +96,7 @@ export function sandboxChildEnv(
     if (v !== undefined) out[key] = v;
   }
   for (const [k, v] of Object.entries(parent)) {
-    if (v !== undefined && k.startsWith("WRATHBENCH_")) out[k] = v;
+    if (v !== undefined && k.startsWith("WRATHBENCH_") && !k.startsWith("WRATHBENCH_DB_")) out[k] = v;
   }
   return { ...out, ...explicit };
 }

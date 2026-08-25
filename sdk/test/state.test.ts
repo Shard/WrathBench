@@ -1832,3 +1832,114 @@ describe("units(): NPC roles from UNIT_NPC_FLAGS", () => {
     expect(() => cache().units({ role: "flight master" as never })).toThrow(/role received "flight master", expected one of/);
   });
 });
+
+describe("achievements and flight paths (ADR-0048)", () => {
+  const earned = (seq: number, id: number, self: boolean, extra: Record<string, unknown> = {}) => ({
+    seq,
+    opcode: "SMSG_ACHIEVEMENT_EARNED",
+    opcodeId: 0x468,
+    ts: 2000 + seq,
+    data: {
+      guid: self ? SEED.guid : "999",
+      self,
+      achievement: { achievementId: id, date: 123, time: "2026-08-25 10:00", ...extra },
+    },
+  });
+  const backlog = (seq: number, ids: number[]) => ({
+    seq,
+    opcode: "SMSG_ALL_ACHIEVEMENT_DATA",
+    opcodeId: 0x47d,
+    ts: 2000 + seq,
+    data: {
+      count: ids.length,
+      achievements: ids.map((id) => ({ achievementId: id, date: 1, points: 10 })),
+    },
+  });
+  const taxiReply = (seq: number, reply: number) => ({
+    seq,
+    opcode: "SMSG_ACTIVATETAXIREPLY",
+    opcodeId: 0x1ae,
+    ts: 2000 + seq,
+    data: { reply, ok: reply === 0 },
+  });
+  /** A self values block carrying `unitFlags` (and the module's named bit). */
+  const unitFlags = (seq: number, flags: number) => ({
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 2000 + seq,
+    data: {
+      blocks: 1,
+      objects: [
+        {
+          update: "values",
+          guid: SEED.guid,
+          fields: { unitFlags: flags, taxiFlight: (flags & 0x0010_0000) !== 0 },
+        },
+      ],
+    },
+  });
+
+  test("the login backlog and our own earns land in self.achievements, with the points total", () => {
+    const cache = StateCache.replay(
+      toEvents([backlog(1, [6, 7]), earned(2, 12, true, { name: "Explore Elwynn Forest", points: 10, categoryId: 97 })]),
+      { seed: SEED },
+    );
+    const a = cache.self.achievements!;
+    expect(a.loginSeen).toBe(true);
+    expect(a.entries.map((e) => [e.achievementId, e.source])).toEqual([
+      [6, "login"],
+      [7, "login"],
+      [12, "earned"],
+    ]);
+    expect(a.points).toBe(30);
+    expect(a.entries[2]!.name).toBe("Explore Elwynn Forest");
+    expect(a.entries[2]!.categoryId).toBe(97);
+  });
+
+  test("a say-range broadcast for another player is not ours and is dropped", () => {
+    // SMSG_ACHIEVEMENT_EARNED reaches every client in say range; `self` is the
+    // only thing that makes it this character's.
+    const cache = StateCache.replay(toEvents([earned(1, 99, false, { points: 50 })]), { seed: SEED });
+    expect(cache.self.achievements).toBeUndefined();
+  });
+
+  test("an empty backlog is observed, which is not the same as no backlog", () => {
+    const cache = StateCache.replay(toEvents([backlog(1, [])]), { seed: SEED });
+    expect(cache.self.achievements).toEqual({ entries: [], points: 0, loginSeen: true });
+    expect(StateCache.replay(toEvents([]), { seed: SEED }).self.achievements).toBeUndefined();
+  });
+
+  test("an id already in the backlog is not double-counted by a later earn", () => {
+    const cache = StateCache.replay(toEvents([backlog(1, [6]), earned(2, 6, true, { points: 10 })]), {
+      seed: SEED,
+    });
+    expect(cache.self.achievements!.entries).toHaveLength(1);
+    expect(cache.self.achievements!.points).toBe(10);
+    expect(cache.self.achievements!.entries[0]!.source).toBe("login");
+  });
+
+  test("taxiFlight is the UNIT_FLAG_TAXI_FLIGHT bit on self, with the reply beside it", () => {
+    const cache = StateCache.replay(
+      toEvents([unitFlags(1, 0x8), taxiReply(2, 0), unitFlags(3, 0x0010_0008), unitFlags(4, 0x8)]),
+      { seed: SEED },
+    );
+    expect(cache.self.taxiReply?.value).toEqual({ reply: 0, ok: true });
+    // The last word is the landing; the flip itself is the runner's to read.
+    expect(cache.self.taxiFlight).toEqual({ value: false, seq: 4, ts: 2004 });
+  });
+
+  test("a refused flight is an ok:false reply and no flag", () => {
+    const cache = StateCache.replay(toEvents([taxiReply(1, 3)]), { seed: SEED });
+    expect(cache.self.taxiReply?.value).toEqual({ reply: 3, ok: false });
+    expect(cache.self.taxiFlight).toBeUndefined();
+  });
+
+  test("a block with no unitFlags leaves taxiFlight alone rather than reading it as false", () => {
+    const cache = StateCache.replay(
+      toEvents([unitFlags(1, 0x0010_0000), selfProgress]),
+      { seed: SEED },
+    );
+    expect(cache.self.taxiFlight).toEqual({ value: true, seq: 1, ts: 2001 });
+  });
+});
