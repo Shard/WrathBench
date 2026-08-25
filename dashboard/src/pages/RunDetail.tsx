@@ -28,8 +28,9 @@ import {
 import { HarnessTag } from "../components/EpisodePicker";
 import { Sparkline } from "../components/Sparkline";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, num, shortHarness, stamp } from "../lib/format";
 import { modelsHref, rosterNameFor } from "../lib/models";
+import { groupFeed, type CallGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { atBottom } from "../lib/runview";
 
 const WINDOW = 200;
@@ -260,7 +261,27 @@ export default function RunDetail() {
                     </Show>
                   </h2>
                   <div class="feed">
-                    <For each={entries()}>{(e) => <Entry entry={e} runId={run().runId} />}</For>
+                    {/*
+                      The composite view (lib/feedgroup.ts): a turn header per
+                      request, one card per tool call, everything else as-is.
+                      Re-derived from the whole window on every change, which is
+                      what lets a pair split by the live tail or the window edge
+                      heal instead of needing pairing state.
+                    */}
+                    <For each={groupFeed(entries())}>
+                      {(g) => {
+                        switch (g.kind) {
+                          case "turn":
+                            return <TurnRow g={g} runId={run().runId} />;
+                          case "response":
+                            return <ResponseRow g={g} runId={run().runId} />;
+                          case "call":
+                            return <CallCard g={g} runId={run().runId} />;
+                          default:
+                            return <Entry entry={g.entry} runId={run().runId} />;
+                        }
+                      }}
+                    </For>
                   </div>
                 </div>
 
@@ -575,11 +596,43 @@ function bodyOf(e: FeedEntry): { text: string; bad: boolean; head: string } {
 
 const FOLD_LINES = 3;
 
-function Entry(props: { entry: FeedEntry; runId: string }) {
+/** A foldable pre block — the body treatment every card shares. */
+function FoldBlock(props: { text: string }) {
   const [open, setOpen] = createSignal(false);
-  const parts = createMemo(() => bodyOf(props.entry));
-  const lines = createMemo(() => parts().text.split("\n").length);
+  const lines = createMemo(() => props.text.split("\n").length);
   const foldable = (): boolean => lines() > FOLD_LINES;
+  return (
+    <>
+      <pre class={`block ${foldable() && !open() ? "fold" : ""}`}>{props.text}</pre>
+      <Show when={foldable()}>
+        <button class="toggle" onClick={() => setOpen(!open())}>
+          {open() ? "collapse" : `expand · ${lines()} lines`}
+        </button>
+      </Show>
+    </>
+  );
+}
+
+/** The raw-line link for one constituent of a composite row. */
+function RawLink(props: { runId: string; i: number; label?: string }) {
+  return (
+    <a
+      href={`/api/run/${encodeURIComponent(props.runId)}/raw/${props.i}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {props.label ?? "raw"}
+    </a>
+  );
+}
+
+/** The timestamp cell every head row ends with. */
+function When(props: { ts: number }) {
+  return <span title={stamp(props.ts)}>{new Date(props.ts).toLocaleTimeString()}</span>;
+}
+
+function Entry(props: { entry: FeedEntry; runId: string }) {
+  const parts = createMemo(() => bodyOf(props.entry));
   return (
     <div class={`entry ${parts().bad ? "bad" : ""}`}>
       <div class="head">
@@ -589,26 +642,147 @@ function Entry(props: { entry: FeedEntry; runId: string }) {
         </Show>
         <span>{parts().head}</span>
         <span class="spacer" style={{ flex: 1 }} />
-        <span title={stamp(props.entry.ts)}>{new Date(props.entry.ts).toLocaleTimeString()}</span>
+        <When ts={props.entry.ts} />
         <Show when={props.entry.clipped === true}>
-          <a
-            href={`/api/run/${encodeURIComponent(props.runId)}/raw/${props.entry.i}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            raw
-          </a>
+          <RawLink runId={props.runId} i={props.entry.i} />
         </Show>
       </div>
       <Show when={parts().text.length > 0}>
         <div class="body">
-          <pre class={`block ${foldable() && !open() ? "fold" : ""}`}>{parts().text}</pre>
-          <Show when={foldable()}>
-            <button class="toggle" onClick={() => setOpen(!open())}>
-              {open() ? "collapse" : `expand · ${lines()} lines`}
-            </button>
-          </Show>
+          <FoldBlock text={parts().text} />
         </div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * One turn's header: the request and the context events that were packed
+ * inside it, as a single head-only line. Everything in a `request` body is
+ * text the reader has already scrolled past (the whole re-sent history), so
+ * the row carries only the counts — the full messages stay one click away
+ * behind the raw links.
+ */
+function TurnRow(props: { g: TurnGroup; runId: string }) {
+  const req = (): TurnGroup["request"] => props.g.request;
+  return (
+    <div class="entry">
+      <div class="head">
+        <span class="t">turn {req().turn ?? "?"}</span>
+        <span>
+          {req().messageCount ?? "?"} msgs · {fmtTokens(req().promptChars ?? null)} chars
+        </span>
+        <Show when={props.g.events}>
+          {(ev) => (
+            <span>
+              {ev().count ?? 0} events · {(ev().opcodes ?? []).join(" ")}
+              <Show when={(ev().moreOpcodes ?? 0) > 0}> +{ev().moreOpcodes} kinds</Show>
+            </span>
+          )}
+        </Show>
+        <span class="spacer" style={{ flex: 1 }} />
+        <When ts={req().ts} />
+        <Show when={props.g.events?.clipped === true}>
+          <RawLink runId={props.runId} i={props.g.events!.i} label="raw events" />
+        </Show>
+        <Show when={req().clipped === true}>
+          <RawLink runId={props.runId} i={req().i} label="raw request" />
+        </Show>
+      </div>
+    </div>
+  );
+}
+
+/** The model's reply, with how long the model took to produce it. */
+function ResponseRow(props: { g: ResponseGroup; runId: string }) {
+  const e = (): ResponseGroup["entry"] => props.g.entry;
+  return (
+    <div class="entry">
+      <div class="head">
+        <span class="t">response</span>
+        <Show when={e().turn !== undefined}>
+          <span>turn {e().turn}</span>
+        </Show>
+        <Show when={props.g.latencyMs !== null}>
+          <span class="lat">{fmtLatency(props.g.latencyMs)}</span>
+        </Show>
+        <span>{(e().tools ?? []).join(", ")}</span>
+        <span class="spacer" style={{ flex: 1 }} />
+        <When ts={e().ts} />
+        <Show when={e().clipped === true}>
+          <RawLink runId={props.runId} i={e().i} />
+        </Show>
+      </div>
+      <Show when={(e().text ?? "").length > 0}>
+        <div class="body">
+          <FoldBlock text={e().text ?? ""} />
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * One tool call as one card: the input on top, the result under a dashed rule.
+ * For run_snippet the input is the snippet's code and the call's args are not
+ * shown — they are the same code again, which is exactly the duplication this
+ * card exists to remove. The duration is `result.ts − call.ts` and only shown
+ * when the writer recorded the call before running it (see lib/feedgroup.ts).
+ */
+function CallCard(props: { g: CallGroup; runId: string }) {
+  const g = (): CallGroup => props.g;
+  /** The input text: the snippet's code, else the call's args. */
+  const input = createMemo((): string => {
+    const snip = g().snippet;
+    if (snip !== null) return snip.code ?? "";
+    const args = g().call?.args;
+    if (args === undefined) return "";
+    return typeof args === "string" ? args : JSON.stringify(args);
+  });
+  const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
+  return (
+    <div class={`entry ${g().isError ? "bad" : ""}`}>
+      <div class="head">
+        <span class="t">{g().name}</span>
+        <Show when={g().turn !== undefined}>
+          <span>turn {g().turn}</span>
+        </Show>
+        <Show when={g().call?.call !== undefined}>
+          <span>call {g().call!.call}</span>
+        </Show>
+        <Show when={g().durationMs !== null}>
+          <span class="lat">{fmtLatency(g().durationMs)}</span>
+        </Show>
+        <span class="spacer" style={{ flex: 1 }} />
+        <When ts={anyTs()} />
+        <Show when={g().call?.clipped === true}>
+          <RawLink runId={props.runId} i={g().call!.i} label="raw call" />
+        </Show>
+        <Show when={g().snippet?.clipped === true}>
+          <RawLink runId={props.runId} i={g().snippet!.i} label="raw code" />
+        </Show>
+        <Show when={g().result?.clipped === true}>
+          <RawLink runId={props.runId} i={g().result!.i} label="raw result" />
+        </Show>
+      </div>
+      <Show when={input().length > 0}>
+        <div class="body">
+          <FoldBlock text={input()} />
+        </div>
+      </Show>
+      <Show
+        when={g().result}
+        fallback={
+          // A live tail that has the call but not yet the result — or a run
+          // that died mid-call and never wrote one.
+          <div class="body pending">no result yet</div>
+        }
+      >
+        {(r) => (
+          <div class="body">
+            <FoldBlock text={r().text ?? ""} />
+          </div>
+        )}
       </Show>
     </div>
   );
