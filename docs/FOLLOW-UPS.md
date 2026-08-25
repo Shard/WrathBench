@@ -202,16 +202,6 @@ status.
     (and a viewer restart) at a moment with no live runs, so the long-running
     supervisor and viewer pick up the new reason sets.
 
-77. **The openai-compatible adapter samples state only between turns** (2026-08-24,
-    log sweep of the first 0.5 runs). A 485s LM Studio call left the qwen3 run an
-    8.1-minute observability blackout: no state row, no XP signal, ~9% of the
-    episode invisible. `adapter-claude.ts:737` grew an independent `setInterval`
-    ticker for exactly this ("claude-code turns can run long"); the openai path
-    still calls `sampleState()` once per turn from `loop.ts`, serialized behind
-    the in-flight HTTP request. Next action: port the ticker pattern to the
-    openai-compatible path (or hoist it into the loop so both drivers share it).
-    Matters most for the local box, whose turns are inference-bound and slow.
-
 80. **The running fleet and viewer keep the pre-ADR-0049 behaviour until they are
     recreated** (2026-08-25, shipping ADR-0049 during a worldserver deploy). The
     supervisor in flight still resumes scored runs and still lists a stale pause

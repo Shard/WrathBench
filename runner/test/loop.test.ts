@@ -483,6 +483,59 @@ describe("runLoop", () => {
     }
     options.trajectory.close();
   });
+
+  test("a turn longer than the tick still lands state samples, one at a time (FOLLOW-UPS 77)", async () => {
+    // The openai-compatible failure this fixes: one 485s provider call left the
+    // run with no state row and no XP signal for eight minutes, because the only
+    // sample was the turn preamble's. The ticker samples through the request.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { self: { guid: "1", level: { value: 1 } }, lastSeq: -1, eventCount: 0 };
+      },
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+
+    let calls = 0;
+    const slow: ChatAdapter = {
+      label: "slow",
+      complete: async (): Promise<AdapterOutcome> => {
+        calls += 1;
+        if (calls > 1) return { kind: "stub-complete" };
+        await new Promise((r) => setTimeout(r, 300));
+        return { kind: "ok", turn: { content: "took a while", toolCalls: [] } };
+      },
+    };
+
+    const { dir, options } = setup(slow, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    (options as { stateTickMs?: number }).stateTickMs = 25;
+    await runLoop(options);
+
+    const records = readTrajectory(dir);
+    const requestAt = records.findIndex((r) => r.t === "request");
+    const responseAt = records.findIndex((r) => r.t === "response");
+    expect(requestAt).toBeGreaterThanOrEqual(0);
+    expect(responseAt).toBeGreaterThan(requestAt);
+    // Samples taken while the provider call was in flight: same shape as any
+    // other `state` record, stamped with the turn that was in flight.
+    const midTurn = records.slice(requestAt + 1, responseAt).filter((r) => r.t === "state");
+    expect(midTurn.length).toBeGreaterThanOrEqual(1);
+    for (const r of midTurn) expect(r["turn"]).toBe(1);
+    // Never two snapshots at once: the ticker joins the preamble's sample.
+    expect(maxInFlight).toBe(1);
+    options.trajectory.close();
+  });
 });
 
 describe("itemSample", () => {

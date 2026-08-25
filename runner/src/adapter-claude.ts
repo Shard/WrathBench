@@ -69,7 +69,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
-import { ContextBuilder, stopRequestOf, type LoopOutcome } from "./loop";
+import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
 import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
 import { TOOLS, type ToolContext } from "./tools";
@@ -742,23 +742,20 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   })();
 
   const stdin = proc.stdin;
-  // Coarse timer alongside the per-tool-call check: it samples the world on
-  // `stateIntervalMs` so a long turn still produces state rows (and so `no-xp`
-  // has data), and it catches a wall-clock watchdog during a turn that is
-  // making no tool calls at all.
-  let ticking = false;
-  const ticker = setInterval(() => {
-    if (done() || ticking) return;
-    ticking = true;
-    void builder
-      .sampleState()
-      .catch(() => null)
-      .finally(() => {
-        ticking = false;
-        const verdict = watchdogs.check();
-        if (verdict !== null) endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
-      });
-  }, o.watchdogTickMs ?? 5_000);
+  // The shared state ticker (loop.ts), alongside the per-tool-call check: it
+  // samples the world on `stateIntervalMs` so a long turn still produces state
+  // rows (and so `no-xp` has data). This driver additionally *enforces* on each
+  // sample — it can kill the CLI from outside the turn — which catches a
+  // wall-clock watchdog during a turn that is making no tool calls at all.
+  const stopTicker = startStateTicker({
+    builder,
+    tickMs: o.watchdogTickMs,
+    stopped: done,
+    onSample: () => {
+      const verdict = watchdogs.check();
+      if (verdict !== null) endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+    },
+  });
 
   /**
    * The end of every path through this function, and the only place the child
@@ -785,7 +782,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // A turn cut short mid-message still has its newest response entry held
     // back one envelope. It goes to the trajectory, usage and all.
     flushPendingResponse();
-    clearInterval(ticker);
+    stopTicker();
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
       stdin.end();
