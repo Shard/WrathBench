@@ -41,7 +41,7 @@ export interface BillableRun {
   apiBase?: string | null;
   /** `runner/src/platform.ts`'s label; `"local"` is the operator's own box. */
   platform?: string | null;
-  /** The harness tag (ADR-0035). */
+  /** The harness tag. */
   harness?: string | null;
   driver?: string | null;
 }

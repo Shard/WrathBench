@@ -1,5 +1,5 @@
 /**
- * Probe for the achievement and taxi taps (issue #8 first half, ADR-0048):
+ * Probe for the achievement and taxi taps (issue #8 first half):
  * `SMSG_ALL_ACHIEVEMENT_DATA` at login, `SMSG_ACTIVATETAXIREPLY` after a raw
  * `CMSG_ACTIVATETAXI`, and the `taxiFlight` reading on self in
  * `SMSG_UPDATE_OBJECT`.

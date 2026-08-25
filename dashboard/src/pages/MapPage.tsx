@@ -1,7 +1,7 @@
 /**
  * The live map, ported from the hand-written `/map` page onto Solid.
  *
- * ADR-0019's two rules hold unchanged. The renderer consumes a *position feed*
+ * The map view's two rules hold unchanged. The renderer consumes a *position feed*
  * and nothing else: `positions()` is the only thing that fetches, every draw
  * function takes what it draws as an argument, and no draw path asks whether a
  * run is live — a replay mode swaps the feed and this file does not change. And
@@ -121,7 +121,7 @@ export default function MapPage() {
   );
 
   /*
-   * The shell's harness series (ADR-0046) narrows the live feed, so the map
+   * The shell's harness series narrows the live feed, so the map
    * agrees with every other page about which runs exist. Never during a replay:
    * a replay is one named run the reader asked for by id, and hiding it because
    * of a header control would look like a broken link.
@@ -337,7 +337,7 @@ export default function MapPage() {
       ctx.globalAlpha = stale ? 0.4 : 1;
       /*
        * The model's logo where the position names a model we recognise and its
-       * asset has decoded (ADR-0045), and the colored dot everywhere else — an
+       * asset has decoded, and the colored dot everywhere else — an
        * unknown model, or a logo still loading, is the pip the map always had.
        * The puck is light on purpose: a mono icon paints `currentColor`, which
        * an image document resolves to black, so it needs a light ground in both

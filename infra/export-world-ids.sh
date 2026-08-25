@@ -7,7 +7,7 @@
 #
 # The wiki build admits a page written after the era cutoff when an id the page
 # states about itself exists in this server's world DB **and the DB's name for
-# that id agrees with the page's subject** (ADR-0042). The name is what makes
+# that id agrees with the page's subject**. The name is what makes
 # the rule worth having: an id alone admits every Cataclysm page that inherited
 # a 3.3.5 entry or copy-pasted someone else's infobox.
 #

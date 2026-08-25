@@ -147,7 +147,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 {/* A hit target wider than the mark. */}
                 <circle cx={d.cx} cy={d.cy} r={HIT_R} fill="transparent" />
                 {/*
-                 * The mark is the model's logo on a puck (ADR-0045), and the
+                 * The mark is the model's logo on a puck, and the
                  * harness keeps the point's colour as the puck's ring, so the
                  * legend below still says what it always said. Three circles
                  * and not one: the outer page-coloured ring is what separates

@@ -1,5 +1,5 @@
 /**
- * The fixed system prompt. Part of the harness version (ADR-0004): identical
+ * The fixed system prompt. Part of the harness version: identical
  * for every model, changed only deliberately and never per model. It explains
  * the world, the snippet runtime surface, the tools, and the goal — nothing
  * else. No strategy hints beyond what the tools themselves imply.
@@ -9,7 +9,7 @@ import type { EpisodeId } from "./episodes";
 
 /**
  * The standing goal. Fixed, identical for every model and every run: it names
- * no formula and no named task (ADR-0018).
+ * no formula and no named task.
  */
 export const GOAL_SECTION = `You are an agent controlling one character in World of Warcraft 3.3.5a on a private benchmark server. The world is live and does not pause for you. Your goal is to progress your character over the long run — leveling up, completing quests, acquiring better gear, accumulating wealth, and growing in capability. The server is the source of truth for what actually happened. There is no single number to maximize; play the game well and make broad, durable progress.
 
@@ -66,7 +66,7 @@ export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${BODY}`;
 /**
  * The delimited block an operator objective is rendered into. One shape, one
  * place, verbatim text: the prompt a model sees for a given objective does not
- * depend on which model or which driver it is (ADR-0024).
+ * depend on which model or which driver it is.
  */
 export function objectiveSection(objective: string): string {
   return (
@@ -78,7 +78,7 @@ export function objectiveSection(objective: string): string {
 }
 
 /**
- * What the episode tier tells the model about itself (ADR-0034, EPISODES.md).
+ * What the episode tier tells the model about itself (docs/EPISODES.md).
  * Facts a player has — the clock and the rule — not an objective: the standing
  * goal and the scoring are unchanged. Identical for every model; it varies only
  * with `episode`, which the comparability tuple already carries. The steered
@@ -122,7 +122,7 @@ export function buildSystemPrompt(objective?: string | undefined, episode?: Epis
  * The launch session note for a fresh episode: what the model is told about
  * the character it is about to create.
  *
- * ADR-0050: the NAME is the model's own — a name it chose is one it may feel
+ * The NAME is the model's own — a name it chose is one it may feel
  * some ownership of, and fixed per-model names collided across accounts the
  * moment fresh attempts stopped returning to the account their predecessor
  * used. The race and class are NOT: they are the episode's comparability

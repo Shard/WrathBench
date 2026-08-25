@@ -1,5 +1,5 @@
 /**
- * Probe campaigns: the commissioned middle lane (ADR-0041).
+ * Probe campaigns: the commissioned middle lane.
  *
  * A campaign is an objective swept over a set of **cells** by a set of models.
  * It is commissioned, runs to completion, and is then switched off — which is
@@ -90,7 +90,7 @@ export const campaignSchema = z
     runsPerCell: z.number().int().positive().default(1),
     /**
      * Resume a run of this campaign that pauses, instead of ending it as a
-     * failed attempt and sweeping the cell again (ADR-0049). Default false,
+     * failed attempt and sweeping the cell again. Default false,
      * like the scored lanes: a probe that paused for two hours is usually
      * better re-run than continued, and a campaign that genuinely wants
      * continuity — a long dungeon crawl, a travel probe — says so here. Only

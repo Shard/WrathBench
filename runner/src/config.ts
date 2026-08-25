@@ -1,7 +1,7 @@
 /**
  * All runner configuration in one place, validated with zod at the boundary.
  *
- * Two kinds of knob live here and the distinction is load-bearing (ADR-0004):
+ * Two kinds of knob live here and the distinction is load-bearing:
  *
  *  - Run config: which model, which character, where the module is. Varies per
  *    run, recorded in the run's metadata.
@@ -11,7 +11,7 @@
  *
  * What deliberately does NOT live here: the context policy (event window,
  * message window, summary format). That is fixed in `context.ts` and written
- * down in docs/decisions/ADR-0012-context-policy.md, because it is part of the
+ * down in docs/METHODOLOGY.md ("Context policy"), because it is part of the
  * harness version, not a knob.
  */
 
@@ -54,8 +54,8 @@ export const watchdogConfigSchema = z.object({
 export type WatchdogConfig = z.infer<typeof watchdogConfigSchema>;
 
 /**
- * A partial watchdog override, as a roster entry or fleet job may carry it
- * (ADR-0024). Same vocabulary as the full config, every key optional, unknown
+ * A partial watchdog override, as a roster entry or fleet job may carry it.
+ * Same vocabulary as the full config, every key optional, unknown
  * keys refused so a typo in fleet.json is a config error rather than a
  * silently-ignored knob.
  */
@@ -80,10 +80,10 @@ export const TERMINATION_REASONS = [
   "stub-complete", // the scripted stub adapter played its last response
   "adapter-error", // fatal, non-retryable model API error
   "harness-error", // an unexpected error in the runner itself
-  "stale-character", // a fresh episode found a used character (ADR-0006 violated); never the model's fault
+  "stale-character", // a fresh episode found a used character (precondition violated); never the model's fault
   "manual", // operator stopped the run (SIGINT / classify CLI)
-  "attempt-failed", // a scored run paused and was not resumed (ADR-0049); the model's attempt, spent
-  "stale", // nothing came back for it: the fleet was down or the host slept past its budget (ADR-0049)
+  "attempt-failed", // a scored run paused and was not resumed; the model's attempt, spent
+  "stale", // nothing came back for it: the fleet was down or the host slept past its budget
   "environment-defect", // manually assigned after reading the trajectory
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
@@ -139,9 +139,10 @@ const driverSchema = z.string().superRefine((v, ctx) => {
 }).transform((v) => v as Driver);
 
 /**
- * The harness: what owns the agent loop and the context management (ADR-0035).
+ * The harness: what owns the agent loop and the context management.
  *
- *  - `wrathbench`: our fixed loop, ADR-0012's context policy. The `openai` and
+ *  - `wrathbench`: our fixed loop, with the fixed context policy
+ *    (docs/METHODOLOGY.md "Context policy"). The `openai` and
  *    `stub` drivers run under it.
  *  - `claude-code`: the Claude Code CLI scaffold, with its own history and
  *    compaction. There is no separate driver under it — the CLI is the
@@ -193,7 +194,7 @@ export const runConfigSchema = z.object({
   class: z.number().int().min(1).max(11).default(2),
 
   /**
-   * Which driver reaches the model (ADR-0035).
+   * Which driver reaches the model.
    *
    *  - `openai`: the fixed loop (the `wrathbench` harness) over an
    *    OpenAI-compatible endpoint.
@@ -212,7 +213,7 @@ export const runConfigSchema = z.object({
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
   /**
    * An operator-set objective for this one run — a run dimension, not a
-   * per-model prompt (ADR-0024). The same text is rendered into the same
+   * per-model prompt. The same text is rendered into the same
    * place in the same fixed prompt for every model and every driver; it never
    * replaces the standing goal, it is added to it. Because a run steered at a
    * named task is not comparable with a free-play run, a run that carries one
@@ -220,7 +221,7 @@ export const runConfigSchema = z.object({
    */
   objective: z.string().min(1).max(4000).optional(),
   /**
-   * Whether `search_reference` serves wiki-recorded coordinates (ADR-0028).
+   * Whether `search_reference` serves wiki-recorded coordinates.
    * Default false — names-first: the scored tiers measure whether a model can
    * find things, and exact yards would make every model converge on
    * "search, read a number, moveTo". Freeplay/unscored jobs may turn it on.
@@ -228,7 +229,7 @@ export const runConfigSchema = z.object({
    */
   wikiCoords: z.boolean().default(false),
   /**
-   * An extra run (ADR-0034): the scheduling policy launched it past the
+   * An extra run: the scheduling policy launched it past the
    * model's target, for a free model with nothing else to do. It is a normal
    * scored run of its tier — same prompt, same leash — and it is stamped so
    * the projection can report it apart and never count it toward a target.
@@ -237,7 +238,7 @@ export const runConfigSchema = z.object({
 
   /**
    * The probe campaign that commissioned this run, and which of its cells this
-   * is (ADR-0041). Both present or both absent; set only on a `probing` run.
+   * is. Both present or both absent; set only on a `probing` run.
    *
    * Recorded on the run rather than derived, for two reasons. It is what the
    * scheduler counts to know what a sweep still owes, so it has to survive a
@@ -259,7 +260,8 @@ export const runConfigSchema = z.object({
    * something the harness knows rather than a convention held in fleet.json.
    * Absent means the run was launched flag-by-flag and belongs to no tier; the
    * reader may still *derive* one for such a run (viewer/results.ts), but nothing
-   * writes it back (ADR-0026).
+   * writes it back — the tuple records what was launched, never what a reader
+   * inferred.
    *
    * The tier supplies watchdog *defaults*: a threshold given explicitly still
    * wins, and the run is then stamped `episodeOverride` so it cannot pass as a
@@ -328,7 +330,7 @@ export const STUB_STAMP = "unscored (scripted stub)";
 /**
  * The stamp carried by a run with an operator objective. It is a probe, not a
  * result: the run was steered at a named task, so it can never enter a scored
- * comparison against free-play runs (ADR-0024).
+ * comparison against free-play runs.
  */
 export const OBJECTIVE_STAMP = "unscored (operator objective)";
 
@@ -449,7 +451,7 @@ export function loadRunConfig(raw: unknown): RunConfig {
   return runConfigSchema.parse(withEpisodeDefaults(raw));
 }
 
-/** True when this driver's runs can never be read as a score (ADR-0035: only `stub`). */
+/** True when this driver's runs can never be read as a score (only `stub`). */
 export function isUnscoredDriver(driver: Driver): boolean {
   return driver === "stub";
 }
@@ -459,9 +461,9 @@ export function isUnscoredDriver(driver: Driver): boolean {
  *
  * Two independent reasons a run never scores, and a run can carry both: the
  * driver is the scripted stub, and/or the operator steered the run with an
- * objective (ADR-0033). The driver's stamp stays the *prefix* so anything
+ * objective. The driver's stamp stays the *prefix* so anything
  * matching on it keeps matching. The harness is *not* a reason: a
- * `claude-code` run scores within its own group (ADR-0035).
+ * `claude-code` run scores within its own group.
  */
 export function unscoredStamp(driver: Driver, objective?: string | undefined): string | undefined {
   const byDriver = driver === "stub" ? STUB_STAMP : undefined;

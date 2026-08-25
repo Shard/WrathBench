@@ -4,7 +4,7 @@
  * change on disk.
  *
  * Nothing here touches the network or the filesystem, so the CLI's decisions
- * are testable from fixtures (ADR-0045).
+ * are testable from fixtures.
  */
 
 // ------------------------------------------------------------------ lineup

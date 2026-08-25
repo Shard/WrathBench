@@ -1,5 +1,5 @@
 /**
- * The campaign fan-out (ADR-0041).
+ * The campaign fan-out.
  *
  * The assertions worth having here are about the three properties the design
  * rests on rather than about the plumbing: that completion is derived from runs
@@ -53,7 +53,7 @@ describe("parsing", () => {
   test("defaults are the safe ones: enabled, all models, one run per cell, skip unhealthy", () => {
     const [c] = parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }] } });
     // `resume: false` with the rest: a probe that pauses is re-swept, not
-    // continued, unless the campaign says otherwise (ADR-0049).
+    // continued, unless the campaign says otherwise.
     expect(c).toMatchObject({ enabled: true, models: "all", runsPerCell: 1, excludeUnhealthy: true, resume: false });
     expect(parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }], resume: true } })[0]!.resume).toBe(true);
   });

@@ -1,5 +1,5 @@
 /**
- * The era revision slot: which revision supplies the prose (ADR-0040).
+ * The era revision slot: which revision supplies the prose.
  *
  * All fixtures are synthetic and invented, like every other fixture here.
  */
@@ -295,7 +295,7 @@ describe("the Wrath snapshot decides redirect-ness", () => {
 
 /**
  * The third slot: the newest pre-cutoff revision with no post-Wrath signal on
- * it (ADR-0040).
+ * it.
  */
 describe("the signal-free revision slot", () => {
   test("the beta rewrite takes the era slot; the revision before it takes the free one", async () => {

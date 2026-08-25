@@ -49,7 +49,7 @@ const { createMapState, clearReplayState, replayHrefFor } = await import("../src
 
 const SCREEN = { w: 800, h: 600 };
 
-/* Anvilmar, from ADR-0019: map 0, x ≈ -6240, y ≈ 380 → tile row 43.70, col 31.29. */
+/* Anvilmar, the map view's verified known zone: map 0, x ≈ -6240, y ≈ 380 → tile row 43.70, col 31.29. */
 const ANVILMAR = { x: -6240, y: 380 };
 
 describe("project", () => {
@@ -67,7 +67,7 @@ describe("project", () => {
     expect(s.sy).toBeCloseTo(p.py * 0.5 - 20, 5);
   });
 
-  test("Anvilmar lands in the row/col the ADR names", () => {
+  test("Anvilmar lands in the verified row/col", () => {
     const p = worldToPixel(ANVILMAR.x, ANVILMAR.y);
     expect(p.py / 256).toBeCloseTo(43.7, 1);
     expect(p.px / 256).toBeCloseTo(31.29, 1);

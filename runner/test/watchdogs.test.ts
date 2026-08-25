@@ -114,7 +114,7 @@ describe("Watchdogs episode clock across a pause", () => {
   });
 });
 
-describe("Watchdogs fresh-character precondition (ADR-0006)", () => {
+describe("Watchdogs fresh-character precondition", () => {
   test("not armed: a level-6 first sight is fine (resumed run)", () => {
     const w = new Watchdogs(cfg, clock().now);
     w.noteFirstLive({ guid: "294", level: 6 });

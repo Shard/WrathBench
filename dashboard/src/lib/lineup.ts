@@ -1,5 +1,5 @@
 /**
- * Model identity: which family a model id belongs to (ADR-0045).
+ * Model identity: which family a model id belongs to.
  *
  * The catalog is `infra/model-lineup.json` and this is the whole of the code
  * that reads it. Matching is data-driven and dumb on purpose — lowercase the

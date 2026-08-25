@@ -110,7 +110,7 @@ describe("the model cell", () => {
 
   test("the ids travel beside the label, in roster order, for the cell's icons", () => {
     // The pre-joined string is the truncated *label*; identity is read from the
-    // list, so a rotating job can show one mark per family (ADR-0045).
+    // list, so a rotating job can show one mark per family.
     const row = fleetRows(fleet({ jobs: [job({ models: ["opus", "sonnet", "openai/gpt-5.6-luna"] })] }), [])[0]!;
     expect(row.models).toBe("opus, sonnet +1");
     expect(row.modelList).toEqual(["opus", "sonnet", "openai/gpt-5.6-luna"]);
@@ -419,7 +419,7 @@ describe("episode progress in the state cell", () => {
 
   test("a probing row shows real progress: unscored is not uncapped", () => {
     // The gate is capped-ness, not scored-ness. A campaign sets an enforced
-    // clock and the run ends on it (ADR-0041), so the percentage is a fact
+    // clock and the run ends on it, so the percentage is a fact
     // about that run — nav-probe's six hours is this row, not the freeplay one.
     const row = rowFor(
       fleet({ jobs: [job({ episode: "probing" })] }),

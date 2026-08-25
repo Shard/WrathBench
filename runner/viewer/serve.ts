@@ -42,7 +42,7 @@ const runsDir = process.env["WRATHBENCH_RUNS_DIR"] ?? "data/runs";
  */
 const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
 /*
- * The built SPA, and since ADR-0022 the only UI there is. Its absence is not a
+ * The built SPA, and the only UI there is. Its absence is not a
  * startup failure: the API keeps serving, and every page route answers with the
  * notice that says how to build it.
  */
@@ -51,7 +51,7 @@ const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
 /** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
 const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
 /*
- * The fleet config `/api/models` reads its roster from (ADR-0031). Absent, or
+ * The fleet config `/api/models` reads its roster from. Absent, or
  * a config that predates the roster map, is a labelled empty state on the page
  * rather than a startup failure — the viewer runs on machines that have no
  * fleet at all. (Until the 0.5 rename this preferred a staged

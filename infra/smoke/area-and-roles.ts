@@ -22,7 +22,7 @@
  * deployed run disagrees, the server's answer wins and this file is corrected
  * — the names here are the client's `AreaTable.dbc` text for those ids.
  *
- * Preflight-gate ready (ADR-0023 amendment): reads MODULE_ACCOUNT the way the
+ * Preflight-gate ready: reads MODULE_ACCOUNT the way the
  * supervisor's spawnSmoke injects it, deletes last run's character through the
  * real CMSG_CHAR_DELETE path before creating this run's, and only logs out at
  * the end (a disconnected character lingers 60s in the core's expireTime,

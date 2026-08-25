@@ -8,9 +8,9 @@
  * Only the four tier ids are offered. There is no `all` and no "+ overridden":
  * a rung reached in six hours is not the same claim as one reached in ninety
  * minutes, and a run whose leash was overridden is not a member of the tier
- * it is stamped with (ADR-0030) — so neither can share a chart, and a choice
- * the chart cannot honour is not a choice. The runs page is where every run
- * is listed regardless.
+ * it is stamped with — so neither can share a chart, and a choice the chart
+ * cannot honour is not a choice. The runs page is where every run is listed
+ * regardless.
  */
 
 import type { EpisodeIdView } from "../api/client";

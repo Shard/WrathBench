@@ -112,9 +112,9 @@ export WRATHBENCH_HARNESS_VERSION
 
 # ------------------------------------------------------------------ preflight
 
-# `claude-subscription` is the pre-ADR-0035 spelling of `claude-code`; the runner reads both.
+# `claude-subscription` is the old spelling of `claude-code`; the runner reads both.
 if [ "${DRIVER}" = "claude-code" ] || [ "${DRIVER}" = "claude-subscription" ]; then
-  echo "run-episode.sh: driver claude-code — the Claude Code CLI is the harness for this run (ADR-0035); it is tagged, not excluded." >&2
+  echo "run-episode.sh: driver claude-code — the Claude Code CLI is the harness for this run; it is tagged, not excluded (see docs/METHODOLOGY.md)." >&2
   token_help() {
     cat >&2 <<'EOF'
 run-episode.sh: CLAUDE_CODE_OAUTH_TOKEN is not available to the runner.

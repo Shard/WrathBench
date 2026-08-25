@@ -69,7 +69,7 @@ export interface ItemSample {
 
 /**
  * A world-state transition the loop noticed between two samples (FOLLOW-UPS
- * 35; ADR-0018). Kinds are additive; derivations (first capital, zone
+ * 35). Kinds are additive; derivations (first capital, zone
  * coverage) come later and read these. `from`/`to` carry ids only — never
  * names — so the record stays what the server said, and a rendering choice
  * (which locale, which DBC) never changes a trajectory after the fact.
@@ -77,11 +77,11 @@ export interface ItemSample {
 /**
  * One `{ t: "milestone", ... }` trajectory record (FOLLOW-UPS 35). Kinds are
  * additive and every consumer ignores the ones it does not know, so a new kind
- * never invalidates a run (ADR-0018 rule 3).
+ * never invalidates a run.
  *
  * - `zone` / `area`: a change of `self.zone` / `self.area`, ids only, `from`
  *   absent on the first observation of a process.
- * - `achievement`: one of **our own** earns (ADR-0048). Never another player's:
+ * - `achievement`: one of **our own** earns. Never another player's:
  *   `SMSG_ACHIEVEMENT_EARNED` is a say-range broadcast.
  * - `achievements_at_login`: the backlog `SMSG_ALL_ACHIEVEMENT_DATA` carried,
  *   written once per process so a resumed run's history is visible without its
@@ -119,7 +119,7 @@ export interface RunMeta {
   /**
    * Everything that has to match before two runs share a chart: harness
    * version, prompt hash, episode budget, context engine, effort, and whether
-   * an operator objective steered the run (ADR-0026). Absent on runs written
+   * an operator objective steered the run. Absent on runs written
    * before the stamp existed, which read as "not recorded" rather than being
    * recomputed against today's prompt.
    */
@@ -128,8 +128,8 @@ export interface RunMeta {
    * The unscored stamp (`unscoredStamp` in config.ts): set for a stub run or
    * an operator-objective run. Present in meta.json, in the `shakeout` column
    * of run.sqlite and in the timeline header, so such a run cannot be mistaken
-   * for a score. The key keeps its pre-ADR-0035 name because old runs carry
-   * it; the harness (`wrathbench` | `claude-code`) is a separate dimension in
+   * for a score. The key keeps its name from before the harness/driver
+   * split because old runs carry it; the harness (`wrathbench` | `claude-code`) is a separate dimension in
    * the comparability tuple, never a stamp here.
    */
   shakeout?: string;
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS run (
   driver TEXT,
   shakeout TEXT,
   model TEXT,
-  -- The operator objective this run was steered with, if any (ADR-0024). Its
+  -- The operator objective this run was steered with, if any. Its
   -- own column for the same reason the driver has one: a cross-run SELECT must
   -- be able to exclude steered runs without parsing config_json.
   objective TEXT,
@@ -381,9 +381,9 @@ export class Trajectory {
     }
     if (meta !== null) {
       /*
-       * The tuple carries the same answer as an annotation (ADR-0033
-       * amendment), so a reader that already parses comparability does not need
-       * a second lookup. It is excluded from `sameComparability`, which is why
+       * The tuple carries the same answer as an annotation, so a reader that
+       * already parses comparability does not need a second lookup. It is
+       * excluded from `sameComparability`, which is why
        * filling it here does not turn every resume into a restamp.
        */
       const merged: RunMeta = {
@@ -437,7 +437,7 @@ export class Trajectory {
   }
 
   /**
-   * The character the run is actually playing (ADR-0050: the model names it).
+   * The character the run is actually playing (the model names it).
    *
    * The launch config carries only the harness's suggestion, so every reader
    * of "which character was this" — the runs page and the positions feed off
@@ -515,8 +515,8 @@ export class Trajectory {
   /**
    * The most recent state sample this run recorded, or null. Read on
    * `--resume` so the resumed session note can tell the model where its
-   * character was left (ADR-0036: the character survives a pause, so the note
-   * has to name it).
+   * character was left (the character survives a pause, so the note has to
+   * name it).
    */
   lastState(runId: string): { level?: number; xp?: number } | null {
     try {

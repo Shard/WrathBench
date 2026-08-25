@@ -1,7 +1,7 @@
 /**
  * The ladder of docs/VISION.md, with the highest rung each model has reached.
  *
- * Rungs are read from one episode tier at a time — e90 by default (ADR-0030) —
+ * Rungs are read from one episode tier at a time — e90 by default —
  * because a rung reached in six hours is not the same claim as the same rung
  * reached in ninety minutes. There is no "all" and no overridden view: neither
  * is a comparability group, so neither can be a ladder. The runs page lists
@@ -11,19 +11,19 @@
  * average XP earned, one point per roster entry (`components/LadderChart`).
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
- * derivation over recorded signals, versioned with `lib/ladder.ts` (ADR-0018
- * amendment). The two tie-breaks are printed in their own columns so the order
- * is legible rather than mysterious, and neither is added to anything: there is
- * no aggregate score.
+ * derivation over recorded signals, versioned with `lib/ladder.ts`. The two
+ * tie-breaks are printed in their own columns so the order is legible rather
+ * than mysterious, and neither is added to anything: there is no aggregate
+ * score.
  *
  * One of the eight rungs cannot be answered by anything the harness records
  * today — group joins and instance clears are not in the trajectory, and the
  * harness runs one character per session. It reads "not instrumented" rather
  * than being approximated by a level threshold. Rung 2 reads the zone/area
  * milestone records (FOLLOW-UPS 35) and rung 4 reads those plus the flight
- * milestones (ADR-0048), so 4 now tests both clauses of its title. Every
- * derived rung prints the exact rule it applied so a reader can disagree with
- * the derivation.
+ * milestones, so 4 now tests both clauses of its title. Every derived rung
+ * prints the exact rule it applied so a reader can disagree with the
+ * derivation.
  */
 
 import { A, useSearchParams } from "@solidjs/router";
@@ -79,7 +79,7 @@ export default function Ladder() {
   const feed = poll(() => api.ladder(episode()), POLL_MS);
   createEffect(on(episode, () => feed.refresh(), { defer: true }));
   const body = (): ResultsResponse | undefined => feed.latest;
-  // The shell's harness series (ADR-0046), applied before anything else reads
+  // The shell's harness series, applied before anything else reads
   // the rows: a rung reached on 0.4 is not evidence about 0.5.
   const served = (): ResultRun[] => body()?.runs ?? [];
   const seriesFilter = useSeriesFilter(served);
@@ -90,7 +90,7 @@ export default function Ladder() {
    * runs we paid for (`ResultRun.billing`, `runner/src/billing.ts` — a
    * `claude-code` subscription counts as paid there). All four are applied
    * BEFORE `ladderRows`, so the ranking is computed over exactly the rows on
-   * screen; the order itself is untouched (ADR-0043: highest rung, XP, gold).
+   * screen; the order itself is untouched (highest rung, XP, gold).
    *
    * None is a row key. A model's row is its best run whatever it was played
    * on, because the baseline character is the comparison set.
@@ -162,7 +162,7 @@ export default function Ladder() {
           options={harnesses()}
           value={resolveChoice(harnesses(), harness())}
           onPick={pick(setHarness, HARNESS_KEY)}
-          title="The harness tag (ADR-0035). A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
+          title="The harness tag. A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
         />
         <label class="filter check" title="Keep only the runs that cost money. A claude-code run counts as paid: a subscription is a bill (runner/src/billing.ts).">
           <input

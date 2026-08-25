@@ -915,9 +915,9 @@ export interface RunTotals {
    */
   areas: AreaFacts | null;
   /**
-   * Achievements and flights from the same pass over the milestone records
-   * (ADR-0048); null when the run wrote none of each — "not recorded", never
-   * zero. See `AchievementFacts` / `TaxiFacts`.
+   * Achievements and flights from the same pass over the milestone records;
+   * null when the run wrote none of each — "not recorded", never zero. See
+   * `AchievementFacts` / `TaxiFacts`.
    */
   achievements: AchievementFacts | null;
   taxi: TaxiFacts | null;
@@ -1092,7 +1092,7 @@ export class TrajectoryTail {
   readonly path: string;
   readonly entries: EntrySummary[] = [];
   /**
-   * Achievement and flight milestones seen so far (ADR-0048), accumulated as
+   * Achievement and flight milestones seen so far, accumulated as
    * the file is indexed so the run page reads them without the whole-file
    * `scanRunTotals` pass a live run would miss the cache on every poll. Same
    * pure derivations the results page uses, so the two cannot disagree — the

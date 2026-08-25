@@ -92,47 +92,47 @@ the new one. Nothing has to be drained to swap a bundle.
 
 ## Decisions
 
+The rules below state themselves; the fuller reasoning behind the reference bundle
+lives in docs/METHODOLOGY.md "The reference bundle".
+
 - **Era cutoff 2010-10-12, and prose is split from structure.** A surviving page is
   built from two revisions: the newest before the cutoff (patch 4.0.1) supplies the
   prose, the newest supplies the coordinates, entity ids and quest infobox, where a
-  decade of corrections lives and where 30% of the coordinates only exist. ADR-0040.
+  decade of corrections lives and where 30% of the coordinates only exist.
 - **Drop, do not label.** A note costs the model a line in every snippet, does not
   survive a snippet window that starts after it, and leaves the wrong world in the
-  index anyway. Out-of-game pages go the same way, which retracts ADR-0029's
-  exact-title carve-out for them. ADR-0040.
+  index anyway. Out-of-game pages go the same way — an earlier rule kept them
+  reachable by exact title, and that carve-out is retracted.
 - **A page that predates the Cataclysm announcement is a Wrath page.** A post-Wrath
   signal never drops it, because Stormwind City picked up `|patch=4.0.1` in its own
   2010 history and the city is standing here. The line is `CATACLYSM_ANNOUNCED =
   2009-08-21`, not the beta: of the 588 pages in that pocket, 119 were created on or
-  after the announcement and were mostly Cataclysm content. ADR-0040.
+  after the announcement and were mostly Cataclysm content.
 - **A protected page steps back to the last signal-free revision** — the page before
   the beta rewrote it — refused when that revision is under **a quarter** of the
-  newer one's length, since a stub or a blanking is worse than a rewrite. ADR-0040.
+  newer one's length, since a stub or a blanking is worse than a rewrite.
 - **Cataclysm's own coinages are vetoed by exact title in ns 0**, before the
   protection and as a redirect source too: a name with no pre-Cataclysm meaning has
   no revision about this world. Deepholm, Uldum, Kezan, Gilneas, Mount Hyjal, Tol
   Barad and Grim Batol are deliberately not on that list — they are this world's own
-  lore, gated by `verify.ts` phrases instead. ADR-0040.
+  lore, gated by `verify.ts` phrases instead.
 - **Out-of-world sections are trimmed, and a page the trim empties is kept.** Link
   farms, patch records, lore and media sections go; but trimming them says nothing
   about which world the page is from, so the row stays with empty text and keeps its
   title, ids, coordinates and quest infobox. Only the era cuts drop a page.
-  ADR-0040.
 - **Names survive page moves.** When Cataclysm took the bare title of a rebuilt
   dungeon, the era rules drop the page correctly and lose the name. Redirect
   recovery from the newest revision and from an `(original)`/`(old)` sibling put the
   name back — never the page — resolved through the one bounded chain walk in two
   passes, since whether a title answers is only known once its chain is resolved.
-  ADR-0040.
 - **The build may ask the world DB whether an id exists, and the name has to
   agree.** A late page stating an id this server has *under a name that matches the
   page's subject* is admitted. The id alone was 0.62 precise over an exhaustive
   151-row review (94 true, 57 false); name agreement refuses 53 and admits 95 pages,
   of which about 15 are known false admits kept by design — roughly 0.85. The server
-  is read once, offline, into a file. ADR-0042.
+  is read once, offline, into a file.
 - **A rebuild is a harness minor bump.** The reference surface changes for every lane
   at once, so runs before and after are not comparable on what the model could read.
-  ADR-0033.
 - **Every rule counts itself in `meta`, and the counters close.** Six admission and
   drop reasons plus `empty_pages` account for every page the parser yields except
   those that were a `#REDIRECT` at the cutoff, asserted as an identity by the build
@@ -181,7 +181,7 @@ the new one. Nothing has to be drained to swap a bundle.
     (`questbox`, `questinfo`) — `{{questlong|…}}` is a list-item template on index
     pages — and it **never infers `end` from `start`**: 11,013 quest pages state a
     giver, 6,637 state an ender, and search says "not stated on this page" for the
-    rest rather than guessing the giver. See ADR-0029.
+    rest rather than guessing the giver.
   - **Entity ids** (`extractIds`): the numeric ids a page states about itself
     (`|id=`, `|itemid=`, `|npcid=`, `|questid=`, `|entry=`) into `page_ids`, tagged
     with the kind the enclosing template implies. Without this an id can only be
@@ -191,7 +191,7 @@ the new one. Nothing has to be drained to swap a bundle.
 Nothing here reads the AzerothCore DB, DBC tables or Questie; it is all
 deterministic parsing of the wikitext. The world-id export is the one place the
 build reads the server, and it decides only *whether a page is in the bundle* — no
-value off it ever reaches a row, a snippet or the model (ADR-0042).
+value off it ever reaches a row, a snippet or the model.
 
 ## The cuts inside a surviving page
 

@@ -350,7 +350,7 @@ export default function RunDetail() {
                       <div class="k">character</div>
                       <div class="v">
                         {run().character ?? "—"}
-                        {/* Race and class: the baseline is Human Paladin; extras cycle (ADR-0034). */}
+                        {/* Race and class: the baseline is Human Paladin; the extras cycle varies it. */}
                         <Show when={run().characterLabel !== null}>
                           <span class="dim"> · {run().characterLabel}</span>
                         </Show>
@@ -370,11 +370,10 @@ export default function RunDetail() {
                       <div class="sub">carrying: {fmtItems(run().items, false)}</div>
                       <div class="sub">equipped: {fmtItems(run().items, true)}</div>
                       {/*
-                        Achievements and flights from this run's milestone records
-                        (ADR-0048). "not recorded" is not zero: a run from before the
-                        taps wrote neither kind of record, and nothing here guesses a
-                        number for it. Points are a displayed signal only — no ranking
-                        reads them (ADR-0018/0043).
+                        Achievements and flights from this run's milestone records.
+                        "not recorded" is not zero: a run from before the taps wrote
+                        neither kind of record, and nothing here guesses a number for
+                        it. Points are a displayed signal only — no ranking reads them.
                       */}
                       <div class="sub">{achievementLine(detail())}</div>
                     </div>
@@ -476,8 +475,7 @@ export default function RunDetail() {
 }
 
 /**
- * The worldserver this run actually drove against, when known (ADR-0026,
- * FOLLOW-UPS 42).
+ * The worldserver this run actually drove against, when known (FOLLOW-UPS 42).
  *
  * A run stamped with its own `comparability.serverBuild` states that as fact —
  * it is what `/health` reported at this run's own launch or resume, not a
@@ -518,7 +516,7 @@ function ServerFooter(props: { info: ApiInfoResponse | undefined; run: RunDetail
 
 /**
  * The comparability tuple: everything that has to match before this run may be
- * charted beside another (ADR-0026).
+ * charted beside another.
  *
  * A run whose metadata predates the stamp says "not recorded" and stops there.
  * Nothing is recomputed from today's harness — a prompt hash taken against the
@@ -563,8 +561,8 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
             {t().wikiCoords === undefined
               ? "not recorded (predates the coordinates tier)"
               : t().wikiCoords
-                ? "coordinates served (ADR-0028)"
-                : "names-first, coordinates withheld (ADR-0028)"}
+                ? "coordinates served"
+                : "names-first, coordinates withheld"}
           </dd>
           <dt>server build</dt>
           <dd class="mono">

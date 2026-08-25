@@ -1,9 +1,9 @@
 /**
  * Fleet overview: what the supervisor is running, right now.
  *
- * One grain per page (ADR-0022 amendment, 2026-08-23). This one is the fleet's:
- * one table keyed by the job (ADR-0034) with the idle accounts under it, the
- * paused and ended runs. The per-run grain is the episodes page, and a job's
+ * One grain per page (2026-08-23). This one is the fleet's:
+ * one table keyed by the job with the idle accounts under it, the
+ * paused and ended runs. The per-run grain is the runs page, and a job's
  * run link is the only per-run reference here.
  *
  * The table is the page. The supervisor's liveness, the deploy phase, the
@@ -94,7 +94,7 @@ export default function Fleet() {
                 )}
               </Show>
 
-              {/* The gate (ADR-0023) only when it blocks: a PASS is not news. */}
+              {/* The gate only when it blocks: a PASS is not news. */}
               <Show when={gateVerdict(f().preflight) === "FAIL"}>
                 <div class="banner bad">
                   preflight FAIL — jobs blocked
@@ -122,7 +122,7 @@ export default function Fleet() {
               </p>
 
               {/*
-                Paused runs the supervisor is not resuming, and why (ADR-0036); the
+                Paused runs the supervisor is not resuming, and why; the
                 ones it ended instead. Both fold away: they are worth having on the
                 page and not worth reading every time, and the count in the heading
                 is the whole of what a closed pane has to say.
@@ -212,7 +212,7 @@ function FleetRowView(props: { row: FleetRow }) {
       </td>
       <td title={r().note ?? ""}>{r().job ?? "—"}</td>
       {/*
-        One mark per family (ADR-0045), so a job rotating two Claude models
+        One mark per family, so a job rotating two Claude models
         shows one Claude icon rather than the same logo twice; the cell's own
         "+N" already says how many more there are.
       */}

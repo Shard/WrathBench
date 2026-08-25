@@ -192,7 +192,7 @@ describe("strict schemas", () => {
 });
 
 /**
- * The ambient-movement fold, shared with the context window (ADR-0012): the
+ * The ambient-movement fold, shared with the context window: the
  * tool used to serve up to 200 raw lines, of which SMSG_MONSTER_MOVE alone was
  * 69% on gate2-ox-1.
  */

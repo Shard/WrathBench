@@ -147,7 +147,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("achievements: the login backlog is one record and own earns are firsts (ADR-0048)", async () => {
+  test("achievements: the login backlog is one record and own earns are firsts", async () => {
     const adapter = new StubAdapter([
       { content: "t1", toolCalls: [] },
       { content: "t2", toolCalls: [] },
@@ -432,7 +432,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted (ADR-0036)", async () => {
+  test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted", async () => {
     const abort = new AbortController();
     let calls = 0;
     const slow: ChatAdapter = {
@@ -683,7 +683,7 @@ describe("prompt-cache prefix discipline", () => {
       const prev = (reqs[i - 1]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
       const next = (reqs[i]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
       if (next.length < prev.length) {
-        trims++; // the one deliberate cache miss per block (ADR-0012)
+        trims++; // the one deliberate cache miss per block (hysteretic window)
         continue;
       }
       expect(next.slice(0, prev.length)).toEqual(prev);
@@ -751,7 +751,7 @@ describe("runLoop fresh-character precondition", () => {
     expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("stale-character");
   });
 
-  test("the name the model chose is recorded over the harness's suggestion (ADR-0050)", async () => {
+  test("the name the model chose is recorded over the harness's suggestion", async () => {
     const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
     const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Grimjaw", level: { value: 1 } } });
     await runLoop(options);

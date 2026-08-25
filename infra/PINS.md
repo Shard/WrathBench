@@ -12,7 +12,7 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 ## Bun
 
 - Version: 1.4.0, pinned in `.bun-version` and `package.json` (to be created with the workspace scaffold).
-- Patch bumps are deliberate; see ADR-0005.
+- Patch bumps are deliberate; the pin rationale is in CLAUDE.md's toolchain section.
 
 ## Server data directory (not in repo)
 

@@ -1,5 +1,5 @@
 /**
- * The claude-code driver: the Claude Code CLI as harness and transport (ADR-0035).
+ * The claude-code driver: the Claude Code CLI as harness and transport.
  *
  * Runs launched here belong to the `claude-code` harness — a comparability
  * group of their own, scored against each other and never against the fixed
@@ -16,7 +16,7 @@
  * one long-lived `claude` process and feeds it the harness's context message
  * once per driver turn, while every other piece of the harness — sandbox,
  * watchdogs, trajectory, scratchpad, named termination/pause reasons, the
- * fixed system prompt, the six tools, the ADR-0012 context assembly — is the
+ * fixed system prompt, the six tools, the fixed context assembly — is the
  * same machinery the fixed loop uses.
  *
  * ## How it is wired
@@ -42,10 +42,10 @@
  * `mcp__wrathbench__<tool>`. What remains that the fixed loop does not have:
  *
  *  1. Claude Code keeps its own conversation history across turns and applies
- *     its own compaction. ADR-0012's 24-message window is therefore NOT in
- *     force. This is the big one: an unversioned, model-side summarizer sits
- *     inside the scaffold, which is why these runs are their own harness
- *     group rather than `wrathbench` rows (ADR-0035).
+ *     its own compaction. The context policy's 24-message window is therefore
+ *     NOT in force. This is the big one: an unversioned, model-side summarizer
+ *     sits inside the scaffold, which is why these runs are their own harness
+ *     group rather than `wrathbench` rows.
  *  2. Two system blocks precede our prompt: a billing header and
  *     "You are a Claude agent, built on Anthropic's Claude Agent SDK."
  *  3. Every user message is prefixed with a `<system-reminder>` block (the
