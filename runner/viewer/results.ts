@@ -16,6 +16,7 @@
  *   playtime comes from is what is integrated here, so the two agree.
  */
 
+import { runBilling } from "../src/billing";
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { NOT_THE_MODELS_FAULT } from "../src/lapse";
@@ -379,6 +380,14 @@ export function resultRunOf(
     tokens: listing?.tokens ?? null,
     actualCost: listing?.actualCost ?? null,
     expectedCost: listing?.expectedCost ?? null,
+    // Did we pay for this run? Not the scheduler's `billingOf` — see billing.ts.
+    billing: runBilling({
+      model: run.model,
+      apiBase: run.apiBase,
+      platform: run.platform,
+      harness: run.harness,
+      driver: run.driver,
+    }),
     areas,
     achievements,
     taxi,

@@ -1,6 +1,6 @@
 /**
  * The ladder's derivation (ADR-0018): the rung rules, the row order, and the
- * character helpers it shares with nothing else now. Pure, so what the release
+ * filter helpers the page's controls are made of. Pure, so what the release
  * page claims is testable without a browser or a server.
  *
  * The one rule this module exists to enforce: **a row never mixes runs that
@@ -18,26 +18,93 @@ export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
 }
 
-/* --------------------------------------------------------------- character */
+/* ----------------------------------------------------------------- filters */
 
 /**
- * The starting characters present, as chip labels: "Dwarf Hunter", sorted.
+ * The four controls above the chart, as pure functions.
  *
- * Race and class vary only as a *pair* — the extras cycle (ADR-0034) hands out
- * `{ race, class }` combinations from a fixed list — so one chip row of pairs
- * is the filter, not two rows that would offer combinations no run can have.
- * Runs whose metadata never recorded a character contribute no option; they
- * are kept by "all" and dropped by any specific chip, which is what "not
- * recorded" has to mean if it is not to be guessed at.
+ * Race and class are separate selects rather than the one chip row of
+ * `Race Class` pairs this page used to carry. The pair was the honest control
+ * while the extras cycle (ADR-0034) was the only thing varying a character;
+ * a probe campaign (ADR-0041) varies race and class independently, so the pair
+ * had become a chip row nobody could read. Offering a combination no run has
+ * is not a problem the options can create: each list is the DISTINCT values
+ * actually present, and an empty result is the honest answer to a pair nothing
+ * ran.
+ *
+ * Options are computed from the page's runs BEFORE any of these filters is
+ * applied, so picking a race does not prune the class list under the reader's
+ * cursor. A run that never recorded a race, a class, or a harness contributes
+ * no option there: it is kept by "all" and dropped by any specific pick, which
+ * is what "not recorded" has to mean if it is not to be guessed at — the same
+ * rule the character chips carried.
  */
-export function characterOptions(runs: readonly ResultRun[]): string[] {
-  return [...new Set(runs.map((r) => r.characterLabel).filter((l): l is string => l !== null))].sort();
+
+/** Null is "all". A stored choice the current runs cannot honour resolves to it. */
+export type FilterChoice = string | null;
+
+function distinct(values: readonly (string | null)[]): string[] {
+  return [...new Set(values.filter((v): v is string => v !== null && v.length > 0))].sort();
 }
 
-/** Narrow to one character label. Null (the default) keeps every run. */
-export function byCharacter(runs: readonly ResultRun[], label: string | null): ResultRun[] {
-  if (label === null) return [...runs];
-  return runs.filter((r) => r.characterLabel === label);
+export function raceOptions(runs: readonly ResultRun[]): string[] {
+  return distinct(runs.map((r) => r.raceName));
+}
+
+export function classOptions(runs: readonly ResultRun[]): string[] {
+  return distinct(runs.map((r) => r.className));
+}
+
+/** The harness tags present (ADR-0035): `wrathbench`, `claude-code`, … */
+export function harnessOptions(runs: readonly ResultRun[]): string[] {
+  return distinct(runs.map((r) => r.harness));
+}
+
+/**
+ * A remembered choice, resolved against what this episode actually has.
+ *
+ * A selection restored from `localStorage` can name a class no run on the
+ * current tier was played on, and an empty table with no visible cause is the
+ * worst outcome of remembering anything. It falls back to "all", and the
+ * control shows "all", which is the same rule `displayedChoice` applies to a
+ * stale harness series in `lib/harness.ts`.
+ */
+export function resolveChoice(options: readonly string[], choice: FilterChoice): FilterChoice {
+  return choice !== null && options.includes(choice) ? choice : null;
+}
+
+export interface LadderFilter {
+  race: FilterChoice;
+  klass: FilterChoice;
+  harness: FilterChoice;
+  /** Keep only runs we paid for. See `ResultRun.billing`. */
+  excludeFree: boolean;
+}
+
+/** Whether the feed can answer the billing question at all. */
+export function billingKnown(runs: readonly ResultRun[]): boolean {
+  return runs.some((r) => r.billing !== undefined);
+}
+
+/**
+ * The page's runs, narrowed — applied before `ladderRows`, so the ranking is
+ * computed over exactly the set on screen (ADR-0043's order is untouched:
+ * highest rung, then XP, then gold).
+ *
+ * `excludeFree` drops runs whose `billing` says `free` and keeps `undefined`:
+ * a viewer that predates the field does not report that a run was free, and
+ * dropping what it cannot answer would quietly shrink the ladder. The page
+ * says so when that is the case rather than showing a filter that filters
+ * nothing.
+ */
+export function filterRuns(runs: readonly ResultRun[], f: LadderFilter): ResultRun[] {
+  return runs.filter(
+    (r) =>
+      (f.race === null || r.raceName === f.race) &&
+      (f.klass === null || r.className === f.klass) &&
+      (f.harness === null || r.harness === f.harness) &&
+      (!f.excludeFree || r.billing !== "free"),
+  );
 }
 
 /** The distinct characters in a set of runs, sorted — a row's label. */
