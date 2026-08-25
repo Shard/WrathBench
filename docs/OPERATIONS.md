@@ -1009,7 +1009,7 @@ Its environment is the compose service's, and the two must stay in agreement:
 | `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record, read-only |
 | `WRATHBENCH_FLEET_CONFIG` | `infra/fleet.json` | the roster names the models the pages label |
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
-| `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` | `--loop` cadence; the harness's own floor is 30–60s, so a faster push buys nothing |
+| `WRATHBENCH_PUBLISH_INTERVAL_MS` | `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
 | `S3_BUCKET` | `wrathbench-public` | |
 | `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname, and unchanged between the two shapes |
