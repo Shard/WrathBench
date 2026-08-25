@@ -11,6 +11,13 @@
  * Long blocks fold to a few lines with a click to expand. The old page kept a
  * whole-feed expand preset in localStorage; that has not been ported (see
  * docs/FOLLOW-UPS.md).
+ *
+ * The public build is this page without the feed and without the tail: the
+ * summary, the charts, the states and the costs all publish, the entries do
+ * not (docs/DATA-AND-LEGAL.md), and the panel says so where they would be. The
+ * withheld routes are never called rather than called and refused — see the
+ * three `SNAPSHOT_MODE` guards below, and why an awaited 403 would have cost
+ * the rest of the page.
  */
 
 import { A, useLocation, useParams } from "@solidjs/router";
@@ -19,6 +26,7 @@ import { subscribeTail } from "../api/live";
 import {
   api,
   rawPath,
+  SNAPSHOT_MODE,
   type ApiInfoResponse,
   type ComparabilityView,
   type EventsServedEntry,
@@ -201,10 +209,25 @@ export default function RunDetail() {
       .then(async (d) => {
         setDetail(d);
         setTokens(d.tokens);
-        const page = await api.entries(params.id, undefined, WINDOW);
-        setEntries(page.entries);
-        setFrom(page.from);
-        setTotal(page.total);
+        /*
+         * The feed is the one part of this page the public site does not
+         * publish: an entry carries model output and verbatim game text, which
+         * docs/DATA-AND-LEGAL.md does not let out of the lab. Not asked for
+         * rather than asked for and refused — the withheld route answers 403,
+         * and awaiting it here would reject this whole continuation, taking the
+         * summary, the charts and the live poll down with it and reporting a
+         * published boundary as a page error. The panel says so plainly
+         * instead; the count still comes off the detail, which is the same
+         * `entries.length` the feed would have reported.
+         */
+        if (SNAPSHOT_MODE) {
+          setTotal(d.total);
+        } else {
+          const page = await api.entries(params.id, undefined, WINDOW);
+          setEntries(page.entries);
+          setFrom(page.from);
+          setTotal(page.total);
+        }
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
         runWithOwner(owner, () => {
@@ -215,6 +238,10 @@ export default function RunDetail() {
           });
         });
         // Only a live run needs the tail; a finished one never grows again.
+        // The public build has no tail to open at all: a bucket of published
+        // JSON serves no stream, and an EventSource against it would be a
+        // reconnect loop against a 404.
+        if (SNAPSHOT_MODE) return;
         stop = subscribeTail(api.streamUrl(params.id), {
           onEntries: (added, tot) => {
             setEntries((prev) => [...prev, ...added]);
@@ -233,6 +260,10 @@ export default function RunDetail() {
   });
 
   const loadEarlier = (): void => {
+    // Unreachable in the public build — its window never opens, so the button
+    // that calls this never renders — and guarded anyway: every route into the
+    // withheld feed is closed at the call site, not at the fetch.
+    if (SNAPSHOT_MODE) return;
     const start = Math.max(0, from() - WINDOW);
     if (start === from()) return;
     void api.entries(params.id, start, from() - start).then((page) => {
@@ -315,22 +346,34 @@ export default function RunDetail() {
                       <button onClick={loadEarlier}>load earlier</button>
                     </Show>
                   </h2>
-                  <div class="feed">
-                    <For each={groups()}>
-                      {(g) => {
-                        switch (g.kind) {
-                          case "turn":
-                            return <TurnRow g={g} runId={run().runId} />;
-                          case "response":
-                            return <ResponseRow g={g} runId={run().runId} />;
-                          case "call":
-                            return <CallCard g={g} runId={run().runId} />;
-                          default:
-                            return <Entry entry={g.entry} runId={run().runId} />;
-                        }
-                      }}
-                    </For>
-                  </div>
+                  {/*
+                    A statement of what this build publishes, not a failure:
+                    the public site never asks for the entries, so nothing went
+                    wrong and nothing is worth retrying. Plainly styled for the
+                    same reason — an error colour here would send readers
+                    looking for a fault that does not exist.
+                  */}
+                  <Show
+                    when={!SNAPSHOT_MODE}
+                    fallback={<p class="dim">Trajectory entries are withheld on the public site.</p>}
+                  >
+                    <div class="feed">
+                      <For each={groups()}>
+                        {(g) => {
+                          switch (g.kind) {
+                            case "turn":
+                              return <TurnRow g={g} runId={run().runId} />;
+                            case "response":
+                              return <ResponseRow g={g} runId={run().runId} />;
+                            case "call":
+                              return <CallCard g={g} runId={run().runId} />;
+                            default:
+                              return <Entry entry={g.entry} runId={run().runId} />;
+                          }
+                        }}
+                      </For>
+                    </div>
+                  </Show>
                 </div>
 
                 {/* Right column: controls and everything about the run, always in view. */}
