@@ -53,3 +53,5 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 ## Decisions
 Methodological decisions — anything that shapes what a result means — live in `docs/METHODOLOGY.md`, organized by principle and edited in place: fold a new decision into the section it belongs to, prune what it obsoletes, and let git history hold the past. Component-level "why" (build, ops, protocol) lives in the doc that owns the component. If you are about to make a choice a future contributor would ask "why did they do that" about, record it in the right one of those two places; do not start a new append-only record series.
 
+**Methodology changes are the operator's, explicitly.** An agent never changes a methodological decision — anything in `docs/METHODOLOGY.md` — on its own initiative. Edit that document only to record a decision the operator has explicitly made, citing when. If work in flight would require changing or contradicting one, stop and put the question to the operator instead of proceeding. Wording fixes that change no meaning are fine; when in doubt, ask.
+
