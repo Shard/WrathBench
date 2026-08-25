@@ -12,6 +12,19 @@
  */
 
 /**
+ * The envelope a published public snapshot stamps onto every response body it
+ * renders (`runner/viewer/snapshot.ts`). Optional on the response interfaces
+ * that carry it, following this file's convention: the live API never sends
+ * either field, and a consumer of either surface must render without them.
+ */
+export interface SnapshotEnvelope {
+  /** When the snapshot was rendered (epoch ms). */
+  generatedAt?: number;
+  /** `PUBLIC_ATTRIBUTION` from `runner/viewer/public-projection.ts`. */
+  attribution?: string;
+}
+
+/**
  * The comparability tuple a run was stamped with.
  *
  * Structurally identical to `Comparability` in `runner/src/comparability.ts`,
@@ -94,7 +107,7 @@ export interface CampaignRowView {
 }
 
 /** `/api/campaigns`: the probe lane, grouped by what commissioned each run. */
-export interface CampaignsResponse {
+export interface CampaignsResponse extends SnapshotEnvelope {
   campaigns: CampaignRowView[];
   /** Probe runs that recorded no campaign at all — a launch that should not exist. */
   orphans: number;
@@ -104,7 +117,7 @@ export interface CampaignsResponse {
 }
 
 /** `/api/episodes`: the table, plus how many runs are tagged against each tier. */
-export interface EpisodesResponse {
+export interface EpisodesResponse extends SnapshotEnvelope {
   episodes: (EpisodeTierView & {
     /**
      * Runs that are *members* of this tier's comparability group: stamped with
@@ -560,6 +573,13 @@ export interface RunListRow extends RunRow {
    * zero-or-not.
    */
   modelResponses: number | null;
+  /**
+   * Where a public snapshot placed this run's detail and track bodies (bucket
+   * keys, no leading slash) — stamped by `runner/viewer/snapshot.ts` and
+   * present only in published snapshots, never on the live API. Optional for
+   * the reason `tps` is: consumers of either surface must render without it.
+   */
+  snapshot?: { detail: string; track: string };
 }
 
 /**
@@ -567,7 +587,7 @@ export interface RunListRow extends RunRow {
  * without a single model response is archived by the runner as it exits, so it
  * never reaches a listing at all.
  */
-export interface RunsResponse {
+export interface RunsResponse extends SnapshotEnvelope {
   runs: RunListRow[];
 }
 
@@ -575,7 +595,7 @@ export interface PositionsResponse {
   positions: AgentPosition[];
 }
 
-export interface RunDetailResponse {
+export interface RunDetailResponse extends SnapshotEnvelope {
   run: RunRow;
   states: StatePoint[];
   total: number;
@@ -797,7 +817,7 @@ export interface FleetResponse {
 }
 
 /** What the API says about itself: capability flags the SPA branches on. */
-export interface ApiInfoResponse {
+export interface ApiInfoResponse extends SnapshotEnvelope {
   /** Harness version the viewer process was built from, when it can tell. */
   service: "wrathbench-viewer";
   /** True when raw bodies, scratchpads and tiles are withheld (public mode). */
@@ -1097,7 +1117,7 @@ export interface ResultRun {
   pauseReason: string | null;
 }
 
-export interface ResultsResponse {
+export interface ResultsResponse extends SnapshotEnvelope {
   runs: ResultRun[];
   /** The tier the response was filtered to, or "all". Echoed so a page can
    * render what it actually asked for rather than what it meant to ask for. */
@@ -1128,7 +1148,7 @@ export interface TrackPoint {
   turn: number | null;
 }
 
-export interface TrackResponse {
+export interface TrackResponse extends SnapshotEnvelope {
   runId: string;
   character: string | null;
   model: string | null;
@@ -1295,7 +1315,7 @@ export interface ModelRowView {
   lastError: ModelLastErrorView | null;
 }
 
-export interface ModelsResponse {
+export interface ModelsResponse extends SnapshotEnvelope {
   models: ModelRowView[];
   /** Where the roster came from. A fleet config without a `roster` map is `unreadable`. */
   roster: {
