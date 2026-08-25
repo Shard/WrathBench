@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
-import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize } from "../viewer/tail";
+import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
 function tokens(t: Partial<TokenTotals>): TokenTotals {
@@ -259,11 +259,50 @@ describe("runCost", () => {
 });
 
 describe("reportedCostUsd", () => {
-  test("sums the claude_result records and returns null when there are none", () => {
+  test("one CLI session costs its LAST record, not the sum of them", () => {
     expect(reportedCostUsd([{ t: "response" }, { t: "snippet" }])).toBeNull();
+    // `total_cost_usd` is cumulative within a session and lands once per
+    // harness turn, so summing three records bills the session three times over
+    // (on the 2026-08-25 haiku run: $69.30 for a session that charged $4.35).
+    const session = [
+      { t: "claude_system", session_id: "s1", subtype: "init" },
+      { t: "claude_result", costUsd: 0.95, sessionId: "s1" },
+      { t: "response" },
+      { t: "claude_result", costUsd: 2.51, sessionId: "s1" },
+      { t: "claude_result", costUsd: 4.35, sessionId: "s1" },
+    ];
+    expect(reportedCostUsd(session)).toBe(4.35);
+
+    // A pause and resume opens a NEW session, which starts its own
+    // accumulation — those figures are summed, and always were.
     expect(
-      reportedCostUsd([{ t: "claude_result", costUsd: 1.5 }, { t: "response" }, { t: "claude_result", costUsd: 2.25 }]),
-    ).toBe(3.75);
+      reportedCostUsd([
+        ...session,
+        { t: "pause", reason: "rate-limit" },
+        { t: "claude_system", session_id: "s2", subtype: "init" },
+        { t: "claude_result", costUsd: 0.4, sessionId: "s2" },
+        { t: "claude_result", costUsd: 1.1, sessionId: "s2" },
+      ]),
+    ).toBeCloseTo(5.45, 9);
+  });
+
+  test("a backlog run gets its sessions from the claude_system envelopes", () => {
+    // `sessionId` on the result record only exists from 2026-08-25. Before it,
+    // the session in force is whatever the last `claude_system` said — and the
+    // CLI emits one of those per harness turn, all carrying the one session id.
+    expect(
+      reportedCostUsd([
+        { t: "claude_system", session_id: "old", subtype: "init" },
+        { t: "claude_result", costUsd: 1.5 },
+        { t: "claude_system", session_id: "old", subtype: "init" },
+        { t: "claude_result", costUsd: 2.25 },
+      ]),
+    ).toBe(2.25);
+    // With nothing saying otherwise, one anonymous session: the maximum, never
+    // the sum. A cumulative series read as separate charges is the bug.
+    expect(
+      reportedCostUsd([{ t: "claude_result", costUsd: 1.5 }, { t: "claude_result", costUsd: 2.25 }]),
+    ).toBe(2.25);
   });
 
   test("a recorded zero reads as zero, not as absent", () => {
@@ -276,6 +315,29 @@ describe("reportedCostUsd", () => {
     const e = summarize({ t: "claude_result", ts: 1, costUsd: 43.903071, usageRaw: { input_tokens: 1810 } }, 0, 0, 0);
     expect(e["costUsd"]).toBe(43.903071);
     expect(reportedCostUsd([e])).toBe(43.903071);
+  });
+
+  test("scanRunTotals reads sessions the same way the entry path does", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "wrathbench-pricing-cum-")), "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1 }),
+        JSON.stringify({ t: "driver", ts: 2, driver: "claude-code" }),
+        JSON.stringify({ t: "claude_system", ts: 3, subtype: "init", session_id: "s1" }),
+        JSON.stringify({ t: "request", ts: 4, turn: 1, messages: [{ role: "user", content: "hi" }] }),
+        JSON.stringify({ t: "response", ts: 5, turn: 1, message: { content: "ok" }, usage: { input_tokens: 10, output_tokens: 3 } }),
+        JSON.stringify({ t: "claude_result", ts: 6, turn: 1, sessionId: "s1", costUsd: 0.95, durationMs: 2, usageRaw: { output_tokens: 900 } }),
+        JSON.stringify({ t: "claude_result", ts: 7, turn: 2, sessionId: "s1", costUsd: 2.51, durationMs: 2, usageRaw: { output_tokens: 800 } }),
+        JSON.stringify({ t: "claude_result", ts: 8, turn: 3, sessionId: "s1", costUsd: 4.35, durationMs: 2, usageRaw: { output_tokens: 700 } }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    expect(totals.reportedCostUsd).toBe(4.35);
+    // And the listing agrees with the run page, which reads the other path.
+    const tail = new TrajectoryTail(path);
+    expect(reportedCostUsd(await tail.scan())).toBe(4.35);
   });
 
   test("scanRunTotals picks it up even though the token projection drops the record", async () => {

@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode } from "../src/adapter-claude";
+import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { SYSTEM_PROMPT } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
@@ -163,9 +163,23 @@ describe("claude-code driver", () => {
     expect(snippetResult?.["text"]).toContain('ran:await sdk.say("turn 1")');
     const result = records.find((r) => r.t === "claude_result");
     expect(result?.["numTurns"]).toBe(2);
+    // Both clocks: `duration_ms` covers the tool round trips too, and the
+    // viewer prefers the API one when reading how fast the model wrote.
+    expect(result?.["durationMs"]).toBe(12);
+    expect(result?.["durationApiMs"]).toBe(7);
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("turn-limit");
     trajectory.close();
   }, 20_000);
+
+  test("claudeArgs: a level is a flag, `none` is not", () => {
+    const of = (effort?: string) =>
+      claudeArgs({ mcpConfigPath: "/tmp/mcp.json", ...(effort !== undefined ? { effort } : {}) });
+    expect(of("xhigh")).toContain("--effort");
+    expect(of("xhigh")).toContain("xhigh");
+    expect(of("none")).not.toContain("--effort");
+    expect(of("none")).not.toContain("none");
+    expect(of()).not.toContain("--effort");
+  });
 
   test("a declared effort reaches the CLI as --effort; an undeclared one sends no flag", async () => {
     const plain = setupEpisode("tools", { maxTurns: 1 });
@@ -183,6 +197,34 @@ describe("claude-code driver", () => {
       JSON.parse(String(low.trajectory.runRow("run-test")?.["config_json"])).effort,
     ).toBe("low");
     low.trajectory.close();
+  }, 30_000);
+
+  test("effort none is thinking off: no --effort, MAX_THINKING_TOKENS=0, and nothing else moves", async () => {
+    const none = setupEpisode("tools", { maxTurns: 1, effort: "none" });
+    await runClaudeEpisode(none.options);
+    const record = readRecord(none.recordPath);
+    // The CLI has no such level, so the flag stays off the line entirely.
+    expect(record["effort"]).toBeNull();
+    const env = record["env"] as Record<string, unknown>;
+    expect(env["maxThinkingTokens"]).toBe("0");
+    // Still the same lane, and still no API-key credential in there.
+    expect(env["hasOauthToken"]).toBe(true);
+    expect(env["hasAnthropicApiKey"]).toBe(false);
+    expect(env["hasAwsBearer"]).toBe(false);
+    // And it is run identity like any other level: one more (model, effort) row.
+    expect(readMeta(none.runDir)?.config.effort).toBe("none");
+    expect(
+      JSON.parse(String(none.trajectory.runRow("run-test")?.["config_json"])).effort,
+    ).toBe("none");
+    none.trajectory.close();
+
+    // Every other level is untouched: the flag goes, the budget does not.
+    const high = setupEpisode("tools", { maxTurns: 1, effort: "high" });
+    await runClaudeEpisode(high.options);
+    const other = readRecord(high.recordPath);
+    expect(other["effort"]).toBe("high");
+    expect((other["env"] as Record<string, unknown>)["maxThinkingTokens"]).toBeNull();
+    high.trajectory.close();
   }, 30_000);
 
   test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {
@@ -467,6 +509,18 @@ describe("childEnv", () => {
     expect(env["CLAUDE_CONFIG_DIR"]).toBe("/runs/x/claude-config");
   });
 
+  test("the thinking budget comes from the run's effort, never from the shell", () => {
+    const parent = { PATH: "/usr/bin", MAX_THINKING_TOKENS: "31999", CLAUDE_CODE_OAUTH_TOKEN: "oauth" };
+    // An operator's variable is not a run dimension anybody recorded.
+    expect(childEnv(parent, { configDir: "/c" })["MAX_THINKING_TOKENS"]).toBeUndefined();
+    // `effort: "none"` is the one thing that sets it.
+    expect(
+      childEnv(parent, { configDir: "/c", extra: thinkingEnv("none") })["MAX_THINKING_TOKENS"],
+    ).toBe("0");
+    expect(thinkingEnv("high")).toEqual({});
+    expect(thinkingEnv(undefined)).toEqual({});
+  });
+
   test("a second subscription lane arrives under the one name the CLI knows", () => {
     const parent = {
       PATH: "/usr/bin",
@@ -509,6 +563,15 @@ describe("driver selection and stamping", () => {
     expect(isUnscoredDriver("openai")).toBe(false);
     expect(isUnscoredDriver("stub")).toBe(true);
     expect(unscoredStamp("claude-code")).toBeUndefined();
+  });
+
+  test("every effort level parses, `none` included, and an invented one does not", () => {
+    for (const effort of ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+      expect(loadRunConfig({ effort }).effort).toBe(effort);
+    }
+    // Absent is not a level: it is the provider's own default.
+    expect(loadRunConfig({}).effort).toBeUndefined();
+    expect(() => loadRunConfig({ effort: "off" })).toThrow();
   });
 
   test("meta, sqlite and the timeline carry the stub stamp; a claude-code run carries none", () => {

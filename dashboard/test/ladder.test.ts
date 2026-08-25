@@ -16,6 +16,11 @@ import {
   classOptions,
   filterRuns,
   harnessOptions,
+  COST_CEILING_MIN,
+  COST_FLOOR,
+  FREE_GUTTER_W,
+  costScale,
+  fmtCostTick,
   ladderChartLayout,
   ladderPoints,
   ladderRows,
@@ -426,16 +431,25 @@ describe("ladderChartLayout", () => {
     key, model: key, effort: null, x, y, runs: 1, costRuns: 1, xpRuns: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
   });
 
-  test("zero cost sits on the y axis, the top-right point sits at the plot's top-right tick", () => {
-    const l = ladderChartLayout([pt("free", 0, 0), pt("paid", 8, 2500)], box);
+  test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
+    const l = ladderChartLayout([pt("free", 0, 0), pt("paid", 10, 2500)], box);
     const free = l.placed.find((d) => d.point.key === "free")!;
-    expect(free.cx).toBe(box.x0);
+    expect(l.hasFree).toBe(true);
+    expect(free.cx).toBe(l.freeX);
     expect(free.cy).toBe(box.y0);
-    expect(l.xMax).toBe(8);
+    expect(l.xMax).toBe(10);
     expect(l.yMax).toBe(2500);
     const paid = l.placed.find((d) => d.point.key === "paid")!;
-    expect(paid.cx).toBe(box.x1);
+    expect(paid.cx).toBeCloseTo(box.x1, 9);
     expect(paid.cy).toBe(box.y1);
+  });
+
+  test("the layout carries the cost axis the ticks are drawn against", () => {
+    const l = ladderChartLayout([pt("cheap", 0.4, 100), pt("dear", 60, 2000)], box);
+    expect(l.hasFree).toBe(false);
+    expect(l.axisX0).toBe(box.x0);
+    expect(l.xTicks).toEqual([0.01, 0.1, 1, 10, 100]);
+    expect(l.xMinorTicks.every((t) => t < l.xMax)).toBe(true);
   });
 
   test("labels of coincident points do not share a slot", () => {
@@ -457,5 +471,70 @@ describe("ladderChartLayout", () => {
   test("a label at the plot's right edge is anchored to its left", () => {
     const l = ladderChartLayout([pt("a-fairly-long-model-name", 8, 2500), pt("other", 0, 0)], box);
     expect(l.placed.find((d) => d.point.key.startsWith("a-fairly"))!.anchor).toBe("end");
+  });
+});
+
+describe("costScale", () => {
+  const [x0, x1] = [60, 960];
+
+  test("the ceiling is the smallest decade at or above the dearest entry, never under $10", () => {
+    expect(costScale([0.004], x0, x1).ceiling).toBe(COST_CEILING_MIN);
+    expect(costScale([], x0, x1).ceiling).toBe(COST_CEILING_MIN);
+    expect(costScale([0], x0, x1).ceiling).toBe(COST_CEILING_MIN);
+    expect(costScale([8], x0, x1).ceiling).toBe(10);
+    // The exact decades: a point at $10 or $100 lands on the right edge rather
+    // than opening a whole empty decade above itself.
+    expect(costScale([1], x0, x1).ceiling).toBe(10);
+    expect(costScale([10], x0, x1).ceiling).toBe(10);
+    expect(costScale([60], x0, x1).ceiling).toBe(100);
+    expect(costScale([100], x0, x1).ceiling).toBe(100);
+    expect(costScale([101], x0, x1).ceiling).toBe(1000);
+  });
+
+  test("anything positive under a cent is clamped onto the floor, not dropped", () => {
+    const s = costScale([0.0004, 60], x0, x1);
+    expect(s.floor).toBe(COST_FLOOR);
+    expect(s.px(0.0004)).toBe(s.px(COST_FLOOR));
+    expect(s.px(COST_FLOOR)).toBe(s.axisX0);
+    // And the ceiling clamps the other way.
+    expect(s.px(1e6)).toBeCloseTo(x1, 9);
+  });
+
+  test("decades are evenly spaced and the map rises with cost", () => {
+    const s = costScale([60], x0, x1);
+    expect(s.ticks).toEqual([0.01, 0.1, 1, 10, 100]);
+    const step = s.px(0.1) - s.px(0.01);
+    expect(s.px(1) - s.px(0.1)).toBeCloseTo(step, 9);
+    expect(s.px(100) - s.px(10)).toBeCloseTo(step, 9);
+    for (const [a, b] of [[0.02, 0.05], [0.5, 2], [9, 11]] as const) expect(s.px(a)).toBeLessThan(s.px(b));
+  });
+
+  test("minor lines are the 2x and 5x inside the axis, and stop below the ceiling", () => {
+    const s = costScale([8], x0, x1);
+    expect(s.ticks).toEqual([0.01, 0.1, 1, 10]);
+    expect(s.minorTicks).toEqual([0.02, 0.05, 0.2, 0.5, 2, 5]);
+  });
+
+  test("the free gutter exists only when something cost nothing, and holds the zeroes", () => {
+    const none = costScale([0.5, 60], x0, x1);
+    expect(none.hasFree).toBe(false);
+    expect(none.axisX0).toBe(x0);
+    expect(none.px(0)).toBe(x0);
+
+    const some = costScale([0, 60], x0, x1);
+    expect(some.hasFree).toBe(true);
+    expect(some.axisX0).toBe(x0 + FREE_GUTTER_W);
+    expect(some.px(0)).toBe(some.freeX);
+    // The gutter is left of the axis, with the divider between the two.
+    expect(some.freeX).toBeLessThan(some.dividerX);
+    expect(some.dividerX).toBeLessThan(some.axisX0);
+    // A free entry is never interpolated against the decades.
+    expect(some.px(0)).toBeLessThan(some.px(COST_FLOOR));
+  });
+});
+
+describe("fmtCostTick", () => {
+  test("cents below a dollar, dollars at and above one", () => {
+    expect([0.01, 0.1, 1, 10, 100].map(fmtCostTick)).toEqual(["1\u00a2", "10\u00a2", "$1", "$10", "$100"]);
   });
 });

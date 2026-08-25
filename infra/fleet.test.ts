@@ -690,7 +690,7 @@ describe("the shipped fleet files", () => {
     // A trial is one line and one line only: tier t0, and nothing else in the
     // file arranges it — no queue job, no account pin, no billing flip. This is
     // the acceptance test for the whole refactor.
-    for (const name of ["gpt-luna", "gemini-flash", "deepseek-flash"]) {
+    for (const name of ["gemini-flash", "deepseek-flash"]) {
       const e = config.roster[name]!;
       expect(e.tier).toBe("t0");
       expect(e.idle).toBe("none");
@@ -726,6 +726,13 @@ describe("the shipped fleet files", () => {
       expect(st.eligible).toEqual(["e90"]);
       expect(st.status).not.toBe("promoted");
     }
+
+    // And leaving the trial is the same one line: gpt-luna went to t1 by
+    // operator decision on 2026-08-25 (d183fbd). Everything else about it is
+    // unchanged, which is the mechanism working rather than an exception to it.
+    expect(config.roster["gpt-luna"]!.tier).toBe("t1");
+    expect(poolJobs(config).some((j) => j.refs.includes("gpt-luna"))).toBe(false);
+    expect(Object.values(config.accounts.pinned)).not.toContain("gpt-luna-e90");
 
     // Account classes, which billing still governs — and only these.
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
