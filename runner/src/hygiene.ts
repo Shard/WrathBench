@@ -2,9 +2,9 @@
  * Episode hygiene: clear the account's characters before a fresh episode
  * (one fresh level-1 character per episode).
  *
- * The one invariant that matters is that the ASSIGNED name is gone when the
- * run starts, and "gone" has exactly one witness: an OK `/characters` listing
- * that does not carry the name. Anything else is unknown, never "clear":
+ * The invariant that matters is that the account was actually LOOKED AT when
+ * the run starts, and that has exactly one witness: an OK `/characters`
+ * listing. Anything else is unknown, never "clear":
  *
  * - A refused listing (`account_in_use` while the core still holds the
  *   previous episode's session — the post-logout linger of up to ~a minute,
@@ -12,8 +12,8 @@
  *   2026-08-24 defect that let `fleet-sonnet-e90-sonnet-20260824-a8` start on
  *   the level-6 character its predecessor had left standing 39s earlier: the
  *   delete timed out (the player was still loaded, so the core silently drops
- *   `CMSG_CHAR_DELETE`), the re-list was refused, and `[]` passed the survivor
- *   check.
+ *   `CMSG_CHAR_DELETE`), the re-list was refused, and `[]` read as an account
+ *   with nothing left on it.
  * - A delete that does not answer `deleted: true` proves nothing either way; a
  *   timed-out delete may still have landed. The listing decides.
  *
@@ -29,8 +29,6 @@ export interface HygieneOptions {
   /** The run's session secret; per-call throwaway tokens derive from it. */
   token: string;
   account: string;
-  /** The assigned character name; the only survivor that blocks the run. */
-  character: string;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
@@ -43,7 +41,10 @@ export type HygieneOutcome =
       ok: true;
       /** Characters deleted (confirmed by a later OK listing). */
       cleared: number;
-      /** Survivors other than the assigned name — slot-eaters, not blockers. */
+      /**
+       * Survivors — slot-eaters, and the names the model must not pick
+       * (`createSession` reuses a character of the name it is given).
+       */
       leftover: string[];
       /** name (lower-cased) -> guid of every character a listing showed. */
       seen: Map<string, string>;
@@ -61,7 +62,6 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
   const log = o.log ?? (() => {});
   const maxAttempts = o.maxAttempts ?? 6;
   const seen = new Map<string, string>();
-  const assigned = o.character.toLowerCase();
 
   const list = async (i: number): Promise<Listing> => {
     try {
@@ -137,15 +137,7 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
   if (last === null || !last.ok) {
     return {
       ok: false,
-      reason: `hygiene: could not obtain a character listing for ${o.account} (${last === null ? "no attempt" : (last as { error: string }).error}) — cannot prove ${o.character} is gone`,
-      seen,
-    };
-  }
-  const survivor = last.chars.find((c) => c.name.toLowerCase() === assigned);
-  if (survivor !== undefined) {
-    return {
-      ok: false,
-      reason: `hygiene: assigned character ${survivor.name} survived deletion — a scored run must not start on a used character`,
+      reason: `hygiene: could not obtain a character listing for ${o.account} (${last === null ? "no attempt" : (last as { error: string }).error}) — cannot prove the account is clear`,
       seen,
     };
   }

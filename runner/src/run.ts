@@ -54,7 +54,7 @@ import {
   type WatchdogOverride,
 } from "./config";
 import { runLoop, type StopRequest } from "./loop";
-import { freshCharacterNote } from "./prompt";
+import { freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
@@ -138,7 +138,6 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
         ? args["module-url"]
         : process.env["WRATHBENCH_MODULE_URL"] ?? undefined,
     token: typeof args["token"] === "string" ? args["token"] : newSessionToken(),
-    character: typeof args["character"] === "string" ? args["character"] : undefined,
     account: typeof args["account"] === "string" ? args["account"] : undefined,
     race: num(args["race"]),
     class: num(args["class"]),
@@ -520,11 +519,11 @@ async function main(): Promise<void> {
   if (!resumed) {
     // Episode hygiene (fresh character per episode): the account has
     // ~10 character slots and every character on it is disposable between
-    // episodes. Clear them so the model can always create its assigned one.
+    // episodes. Clear them so whatever name the model picks is free.
     //
-    // Best-effort for slot-eaters, strict for the assigned name: the run
-    // starts only once an OK listing shows the name gone (hygiene.ts has the
-    // 2026-08-24 history — a refused listing during the core's post-logout
+    // Best-effort on what it deletes, strict on what it BELIEVES: the run
+    // starts only once an OK listing has actually been read (hygiene.ts has
+    // the 2026-08-24 history — a refused listing during the core's post-logout
     // linger used to read as "clear", and three scored e90s started on their
     // predecessor's character). A refusal terminates the run as a
     // zero-response `stale-character`, which the stillborn path below
@@ -535,7 +534,6 @@ async function main(): Promise<void> {
       moduleUrl: config.moduleUrl,
       token: config.token,
       account: config.account,
-      character: config.character,
       log: (line) => console.error(`[wrathbench] ${line}`),
     });
     if (!hygiene.ok) {
@@ -558,21 +556,13 @@ async function main(): Promise<void> {
     takenNames = hygiene.leftover;
     if (hygiene.leftover.length > 0) {
       console.error(
-        `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the assigned name is free`,
+        `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the model is told not to pick them`,
       );
     }
     watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
   }
 
-  /*
-   * The resumed run's session note. It carries the same character facts the
-   * fresh-launch note does, and for the same reason: a resumed model has no
-   * conversation history, so anything the note leaves out it has to guess.
-   * `nav-probe-freeplay-sonnet-20260823-c3` guessed — the old note said
-   * `createSession({...})` with no name — and rolled a second, wrong character
-   * next to the one the pause had preserved, which is exactly the loss
-   * pause-and-resume exists to prevent.
-   */
+  /* The resumed run's session note (prompt.ts owns the wording). */
   const resumeNote = (): string => {
     const spentM = Math.round(elapsedBeforeMs / 60_000);
     const budgetMs = config.watchdogs.episodeMs;
@@ -587,19 +577,15 @@ async function main(): Promise<void> {
         : ` It was last observed at level ${last.level ?? "?"}` +
           (last.xp !== undefined ? ` with ${last.xp} xp` : "") +
           `, and that progress is still there.`;
-    const race = raceName(config.race);
-    const klass = className(config.class);
-    return (
-      `the runner process was restarted and this run resumed after a pause, ${clock}. ` +
-      `Conversation history was not preserved; your scratchpad was. ` +
-      `Your character for this episode is unchanged and was NOT deleted: name "${config.character}", ` +
-      `race ${config.race}${race !== null ? ` (${race})` : ""}, class ${config.class}` +
-      `${klass !== null ? ` (${klass})` : ""}.${seen} Do not create a different one. ` +
-      `Run \`await connect()\`, then ` +
-      `\`await sdk.createSession({ character: "${config.character}", race: ${config.race}, class: ${config.class} })\` ` +
-      `— it reuses the existing character of that name; a \`token_in_use\` error means the session is ` +
-      `still alive and you can simply keep acting through \`sdk\`.`
-    );
+    return resumeSessionNote({
+      character: config.character,
+      race: config.race,
+      class: config.class,
+      clock,
+      seen,
+      raceName: raceName(config.race),
+      className: className(config.class),
+    });
   };
 
   const initialNotices = resumed
@@ -615,7 +601,6 @@ async function main(): Promise<void> {
             ts: Date.now(),
             kind: "session_note",
             text: freshCharacterNote({
-              character: config.character,
               race: config.race,
               class: config.class,
               taken: takenNames,

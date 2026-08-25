@@ -122,11 +122,14 @@ export function buildSystemPrompt(objective?: string | undefined, episode?: Epis
  * The launch session note for a fresh episode: what the model is told about
  * the character it is about to create.
  *
- * The NAME is the model's own — a name it chose is one it may feel
- * some ownership of, and fixed per-model names collided across accounts the
- * moment fresh attempts stopped returning to the account their predecessor
- * used. The race and class are NOT: they are the episode's comparability
- * dimensions and every run is read against them.
+ * The NAME is the model's own, and nothing but the model's — a name it chose
+ * is one it may feel some ownership of, and fixed per-model names collided
+ * across accounts the moment fresh attempts stopped returning to the account
+ * their predecessor used. No name travels with the launch any more, not even
+ * as a suggestion: a suggestion is a name the harness has to invent, keep
+ * valid and keep unique, and an invalid one took a whole fleet.json down on
+ * 2026-08-25. The race and class are NOT the model's: they are the episode's comparability dimensions
+ * and every run is read against them.
  *
  * `taken` are the names episode hygiene could not clear off the account.
  * `createSession` reuses an existing character of the name it is given, so a
@@ -134,12 +137,12 @@ export function buildSystemPrompt(objective?: string | undefined, episode?: Epis
  * attempt as `stale-character` — hence they are named, not left to be
  * discovered.
  */
-export function freshCharacterNote(o: { character: string; race: number; class: number; taken?: readonly string[] }): string {
+export function freshCharacterNote(o: { race: number; class: number; taken?: readonly string[] }): string {
   const taken = o.taken ?? [];
   return (
     `name your character: 2-12 letters, no spaces, no three identical letters in a row — ` +
-    `pick something you like, it is yours for the episode ("${o.character}" is the harness's ` +
-    `suggestion if you would rather not choose). Your race and class are not yours to choose: ` +
+    `pick something you like and be creative, it is yours for the episode. ` +
+    `Your race and class are not yours to choose: ` +
     `race ${o.race}, class ${o.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin) are ` +
     `this episode's fixed dimensions and every run is compared on them. Create the character with ` +
     `\`await sdk.createSession({ character: "<your name>", race: ${o.race}, class: ${o.class} })\` ` +
@@ -151,5 +154,52 @@ export function freshCharacterNote(o: { character: string; race: number; class: 
       : "") +
     ` The game account is assigned and bound for you by the harness — do not pass an account; ` +
     `createSession is issued on the correct one automatically.`
+  );
+}
+
+/**
+ * The resumed run's session note: what a model with no conversation history is
+ * told about the character it already has.
+ *
+ * It carries the same character facts the fresh-launch note does, and for the
+ * same reason: anything the note leaves out the model has to guess.
+ * `nav-probe-freeplay-sonnet-20260823-c3` guessed — the old note said
+ * `createSession({...})` with no name — and rolled a second, wrong character
+ * next to the one the pause had preserved, which is exactly the loss
+ * pause-and-resume exists to prevent.
+ *
+ * `character` is the name the run RECORDED (`trajectory.setCharacter`). A run
+ * that paused before `createSession` ever landed has none, and there is
+ * nothing to preserve or reuse: it gets the fresh-launch note instead of one
+ * that interpolates a name it does not have.
+ */
+export function resumeSessionNote(o: {
+  character: string | undefined;
+  race: number;
+  class: number;
+  /** e.g. "40 minutes elapsed of 90". */
+  clock: string;
+  /** The last observed level/xp sentence, or "" when nothing was observed. */
+  seen: string;
+  raceName?: string | null;
+  className?: string | null;
+}): string {
+  const head =
+    `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
+    `Conversation history was not preserved; your scratchpad was. `;
+  if (o.character === undefined) {
+    return head + freshCharacterNote({ race: o.race, class: o.class });
+  }
+  const race = o.raceName ?? null;
+  const klass = o.className ?? null;
+  return (
+    head +
+    `Your character for this episode is unchanged and was NOT deleted: name "${o.character}", ` +
+    `race ${o.race}${race !== null ? ` (${race})` : ""}, class ${o.class}` +
+    `${klass !== null ? ` (${klass})` : ""}.${o.seen} Do not create a different one. ` +
+    `Run \`await connect()\`, then ` +
+    `\`await sdk.createSession({ character: "${o.character}", race: ${o.race}, class: ${o.class} })\` ` +
+    `— it reuses the existing character of that name; a \`token_in_use\` error means the session is ` +
+    `still alive and you can simply keep acting through \`sdk\`.`
   );
 }
