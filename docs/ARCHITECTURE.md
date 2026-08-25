@@ -57,8 +57,8 @@ the SPA owns everything that is UI.
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  on 2026-08-22, the only UI: fleet overview, the episodes page (the per-run
-  grain), results, ladder, models, run detail, and the map view — minimap
+  on 2026-08-22, the only UI: fleet overview, episodes (the tiers), runs (the
+  per-run grain), ladder, models, run detail, and the map view — minimap
   tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
   drawn on plain canvas behind a position-feed interface so replay can later
   plug a trajectory reader into the renderer that serves live runs.
@@ -68,6 +68,41 @@ the SPA owns everything that is UI.
   the harness itself still runs with no build step. Without a build on disk the
   viewer serves the API as usual and answers page routes with a plain-text
   notice naming `bun run --cwd dashboard build`; there is no fallback UI.
+- **One page per grain, and the runs have their own.** The fleet page is what
+  is running *now* and links to a run without listing them; `/runs` is the runs
+  — one row per recorded run of every kind, opening on all of them newest
+  first, every header sortable, the sort and every filter in the URL, and a
+  value in a cell the link that narrows to it; `/episodes` is the tiers, what
+  each id fixes and how many runs sit against it, listing no runs of its own;
+  `/ladder` is the aggregates. Runs had been listed in two places and neither
+  was where all of them were, while the aggregate page had become a wall of
+  chips that opened with most of its rows filtered away — so the aggregate page
+  became the runs table, `/results` redirects to `/runs` with its query intact,
+  and the cost-per-level chart was deleted rather than moved: the ladder's own
+  columns already say how far each model got, and a cost view worth having is a
+  page with its own reason, not a chart smuggled onto another one.
+- **The harness series is one shell-wide filter, not a per-page control.** The
+  series — `major.minor` of a version stamp — is already the comparability
+  group every page of runs is a view of, so the selector lives once, in the top
+  bar, and filters every page that shows runs. Four pickers that could disagree
+  about what a shared link meant is the failure the episode filter was
+  consolidated to prevent. `latest` is stored as the token rather than the
+  series it resolves to today, so it follows a minor bump instead of freezing;
+  the newest series also appears under its own number, because `latest` tracks
+  and a number pins. The choice lives in `?series=` so a link is shareable and
+  in `localStorage` so a tab reopens where it was, URL first. A run whose stamp
+  names no series belongs to no group and appears only under `all`, and what
+  the filter removed is always stated on the page — the rule binds harder here
+  because the control doing the dropping is in the header rather than on the
+  page being read. Filtering is client-side over rows the API already carries,
+  with `/api/info` (the route the shell already polls) naming the series that
+  have runs, rather than a poller or a route parameter per control. Two pages
+  are deliberately unfiltered: the fleet page is the deployed series by
+  construction, and the models page is the scheduler's verdict computed
+  server-side, where a client-side filter would make the counts and the list
+  disagree. This is a different dimension from the harness filter, which
+  selects which *loop* owned a run; both exist and compose, which is why the
+  new one is spelled `series` everywhere.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet

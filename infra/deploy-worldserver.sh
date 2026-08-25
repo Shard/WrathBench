@@ -423,13 +423,12 @@ run_smokes_directly() {
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # even with errexit off, and only a tested command is exempt from both.
     # The gate smokes stage their characters through infra/fixtures (item 45),
-    # which needs the db service. The runner service deliberately carries no DB
-    # env (docs/CONTRACTS.md); it is passed per-exec here, exactly as the fleet
-    # service has it for its own gate, and reaches the smoke process only.
+    # which needs the db service. Those four WRATHBENCH_DB_* vars are on the
+    # `runner` service itself now (compose.yml's *wb-db anchor), so only the
+    # account is passed here — the gate runs each smoke as its own SMOKE-N,
+    # which is not the smokes' own PROBE default.
     if timeout "${left}" "${COMPOSE[@]}" exec -T \
         -e "MODULE_ACCOUNT=${account}" \
-        -e "WRATHBENCH_DB_HOST=db" -e "WRATHBENCH_DB_PORT=3306" -e "WRATHBENCH_DB_USER=root" \
-        -e "WRATHBENCH_DB_PASSWORD=${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}" \
         runner bun "${smoke}"; then
       src=0
     else

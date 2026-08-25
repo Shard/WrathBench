@@ -13,7 +13,7 @@ import { toJsonSafe } from "../src/jsonsafe";
 import { ContextBuilder, itemSample, runLoop } from "../src/loop";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import { Trajectory, readTrajectory } from "../src/trajectory";
+import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
 function fakeSandbox(snapshot: Record<string, unknown> = {}): SandboxHost {
@@ -144,6 +144,103 @@ describe("runLoop", () => {
       ["area", undefined, { id: 9 }],
     ]);
     expect(JSON.stringify(ms)).not.toContain("Elwynn");
+    options.trajectory.close();
+  });
+
+  test("achievements: the login backlog is one record and own earns are firsts", async () => {
+    const adapter = new StubAdapter([
+      { content: "t1", toolCalls: [] },
+      { content: "t2", toolCalls: [] },
+    ]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      {
+        self: {
+          achievements: {
+            loginSeen: true,
+            points: 35,
+            entries: [
+              { achievementId: 6, name: "Level 10", points: 10, categoryId: 92, source: "login" },
+              { achievementId: 7, points: 15, source: "login" },
+              { achievementId: 12, name: "Explore Elwynn Forest", points: 10, source: "earned" },
+            ],
+          },
+        },
+      },
+    );
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone");
+    const backlog = ms.filter((r) => r["kind"] === "achievements_at_login");
+    // Once, however many samples the run took: a resumed run's history is
+    // visible without its past being re-emitted as fresh firsts.
+    expect(backlog).toHaveLength(1);
+    expect(backlog[0]!["ids"]).toEqual([6, 7]);
+    expect(backlog[0]!["points"]).toBe(25);
+    const earns = ms.filter((r) => r["kind"] === "achievement");
+    expect(earns).toHaveLength(1);
+    expect(earns[0]!["id"]).toBe(12);
+    expect(earns[0]!["name"]).toBe("Explore Elwynn Forest");
+    expect(earns[0]!["points"]).toBe(10);
+    options.trajectory.close();
+  });
+
+  test("an empty login backlog is still recorded: it is what says the taps were live", async () => {
+    const adapter = new StubAdapter([{ content: "t1", toolCalls: [] }]);
+    const { dir, options } = setup(
+      adapter,
+      {},
+      { self: { achievements: { loginSeen: true, points: 0, entries: [] } } },
+    );
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "achievements_at_login");
+    expect(ms).toHaveLength(1);
+    expect(ms[0]!["ids"]).toEqual([]);
+    expect(ms[0]!["points"]).toBe(0);
+    options.trajectory.close();
+  });
+
+  test("a flight is the flag flipping on after an accepted reply; a first sight of it is not a takeoff", async () => {
+    const ok = { value: { reply: 0, ok: true }, seq: 5, ts: 5 };
+    const snapshots: Record<string, unknown>[] = [
+      // Already flying when the process opened (a resume mid-flight): seeded,
+      // never a takeoff — nothing said this flight began here.
+      { self: { taxiFlight: { value: true, seq: 1, ts: 1 }, taxiReply: ok } },
+      // The landing IS an observation, even though the takeoff was not seen.
+      { self: { taxiFlight: { value: false, seq: 2, ts: 2 }, area: { value: { id: 24 } }, taxiReply: ok } },
+      // On without an accepted reply: no packet said a flight was accepted.
+      { self: { taxiFlight: { value: true, seq: 3, ts: 3 } } },
+      { self: { taxiFlight: { value: false, seq: 4, ts: 4 } } },
+      // Accepted, then the flag on: the flight a client would see start.
+      { self: { taxiFlight: { value: true, seq: 5, ts: 5 }, area: { value: { id: 9 } }, taxiReply: ok } },
+    ];
+    let i = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () =>
+        Promise.resolve({ lastSeq: -1, eventCount: 0, ...snapshots[Math.min(i++, snapshots.length - 1)]! }),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    const adapter = new StubAdapter(
+      Array.from({ length: snapshots.length }, (_, n) => ({ content: `t${n}`, toolCalls: [] })),
+    );
+    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    let clock = 0;
+    (options as { now?: () => number }).now = () => (clock += 1000);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter(
+      (r) => r.t === "milestone" && (r["kind"] === "taxi" || r["kind"] === "taxi_landed"),
+    );
+    expect(ms.map((r) => [r["kind"], r["from"], r["to"]])).toEqual([
+      ["taxi_landed", undefined, { areaId: 24 }],
+      ["taxi_landed", undefined, undefined],
+      ["taxi", { areaId: 9 }, undefined],
+    ]);
     options.trajectory.close();
   });
 
@@ -470,6 +567,59 @@ describe("runLoop", () => {
     }
     options.trajectory.close();
   });
+
+  test("a turn longer than the tick still lands state samples, one at a time (FOLLOW-UPS 77)", async () => {
+    // The openai-compatible failure this fixes: one 485s provider call left the
+    // run with no state row and no XP signal for eight minutes, because the only
+    // sample was the turn preamble's. The ticker samples through the request.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { self: { guid: "1", level: { value: 1 } }, lastSeq: -1, eventCount: 0 };
+      },
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+
+    let calls = 0;
+    const slow: ChatAdapter = {
+      label: "slow",
+      complete: async (): Promise<AdapterOutcome> => {
+        calls += 1;
+        if (calls > 1) return { kind: "stub-complete" };
+        await new Promise((r) => setTimeout(r, 300));
+        return { kind: "ok", turn: { content: "took a while", toolCalls: [] } };
+      },
+    };
+
+    const { dir, options } = setup(slow, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    (options as { stateTickMs?: number }).stateTickMs = 25;
+    await runLoop(options);
+
+    const records = readTrajectory(dir);
+    const requestAt = records.findIndex((r) => r.t === "request");
+    const responseAt = records.findIndex((r) => r.t === "response");
+    expect(requestAt).toBeGreaterThanOrEqual(0);
+    expect(responseAt).toBeGreaterThan(requestAt);
+    // Samples taken while the provider call was in flight: same shape as any
+    // other `state` record, stamped with the turn that was in flight.
+    const midTurn = records.slice(requestAt + 1, responseAt).filter((r) => r.t === "state");
+    expect(midTurn.length).toBeGreaterThanOrEqual(1);
+    for (const r of midTurn) expect(r["turn"]).toBe(1);
+    // Never two snapshots at once: the ticker joins the preamble's sample.
+    expect(maxInFlight).toBe(1);
+    options.trajectory.close();
+  });
 });
 
 describe("itemSample", () => {
@@ -557,11 +707,73 @@ describe("prompt-cache prefix discipline", () => {
     expect(responses[0]!.provider).toBe("SomeBackend");
   });
 
+  test("the served model in the response body lands on the record and is promoted onto the run", async () => {
+    // OpenRouter answers a request for one slug with the id it actually routed
+    // to, and that — not the config string — is what a chart has to name.
+    let call = 0;
+    const adapter: ChatAdapter = {
+      label: "fake-aggregator",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
+        Promise.resolve({
+          kind: "ok",
+          // A second turn served elsewhere must not revise the run's answer.
+          turn: { content: "done", toolCalls: [], raw: { model: call++ === 0 ? "vendor/alpha-2026-08" : "vendor/other" } },
+        }),
+    };
+    const { dir, options } = setup(adapter, { maxTurns: 2 });
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses[0]!.model).toBe("vendor/alpha-2026-08");
+    expect(readMeta(dir)?.resolved).toEqual({ model: "vendor/alpha-2026-08", cliVersion: null });
+    expect(readTrajectory(dir).filter((r) => r["kind"] === "resolved_model")).toHaveLength(1);
+  });
+
   test("no provider field appears when the body names none", async () => {
     const adapter = new StubAdapter([{ content: "done", toolCalls: [] }]);
     const { dir, options } = setup(adapter, { maxTurns: 1 });
     await runLoop(options);
     const responses = readTrajectory(dir).filter((r) => r.t === "response");
     expect(responses[0]!).not.toHaveProperty("provider");
+  });
+});
+
+describe("runLoop fresh-character precondition", () => {
+  test("a used character on first sight terminates stale-character before the model gets a turn", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, {}, { self: { guid: "294", level: { value: 6 } } });
+    options.watchdogs.expectFreshCharacter(new Set(["294"]));
+    const outcome = await runLoop(options);
+    expect(outcome.kind).toBe("terminated");
+    if (outcome.kind !== "terminated") throw new Error("unreachable");
+    expect(outcome.reason).toBe("stale-character");
+    const records = readTrajectory(dir);
+    expect(records.filter((r) => r.t === "request")).toHaveLength(0);
+    expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("stale-character");
+  });
+
+  test("the name the model chose is recorded over the harness's suggestion", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Grimjaw", level: { value: 1 } } });
+    await runLoop(options);
+    // The runs page and the positions feed read the run row; a resumed runner
+    // reads meta.json. Both must name the character that is in the world.
+    expect(options.trajectory.runRow("run-test")?.["character"]).toBe("Grimjaw");
+    expect(readMeta(dir)?.config.character).toBe("Grimjaw");
+    expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(1);
+  });
+
+  test("a character whose name matches the launch config is not re-recorded", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { dir, options } = setup(adapter, { character: "Fleetsonnet" }, { self: { guid: "301", name: "Fleetsonnet", level: { value: 1 } } });
+    await runLoop(options);
+    expect(readTrajectory(dir).filter((r) => r.t === "character")).toHaveLength(0);
+  });
+
+  test("a fresh level-1 character with an unlisted guid plays on", async () => {
+    const adapter = new StubAdapter([{ content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] }]);
+    const { options } = setup(adapter, {}, { self: { guid: "301", level: { value: 1 } } });
+    options.watchdogs.expectFreshCharacter(new Set(["294"]));
+    const outcome = await runLoop(options);
+    expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
   });
 });

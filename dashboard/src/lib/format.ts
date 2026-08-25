@@ -76,6 +76,17 @@ export function fmtTokens(n: number | null | undefined): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+/**
+ * Output tokens per second. One decimal below a hundred and none above it: the
+ * difference between 12.4 and 12 tok/s is worth reading, the difference between
+ * 340 and 340.2 is not. A dash where there is no rate — a run with no completed
+ * turn has not been slow, it has produced nothing yet.
+ */
+export function fmtTps(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "—";
+  return v < 100 ? v.toFixed(1) : String(Math.round(v));
+}
+
 /** "2h ago", "yesterday" — with the exact stamp left for a title attribute. */
 export function fmtWhen(ts: number | null, now = Date.now()): string {
   if (ts === null) return "—";
@@ -114,4 +125,22 @@ export function fmtItems(
   const rows = items.filter((i) => i.equipped === equipped);
   if (rows.length === 0) return "none";
   return rows.map((i) => (i.count > 1 ? `${i.name} ×${i.count}` : i.name)).join(", ");
+}
+
+/**
+ * The resolved model id, when it is worth showing.
+ *
+ * A run records the string it was launched with; the provider answers with what
+ * it actually served. Those are the same string for most rows — an OpenRouter
+ * slug served as itself — and printing it twice is noise. So this returns the
+ * resolved id only where it differs from what was asked for, which is exactly
+ * the case that could not be read off a page before: an alias (`sonnet`) that
+ * the CLI resolved to a real id (`claude-sonnet-5`).
+ */
+export function resolvedLabel(
+  model: string | null | undefined,
+  resolved: string | null | undefined,
+): string | null {
+  if (typeof resolved !== "string" || resolved.length === 0) return null;
+  return resolved === model ? null : resolved;
 }

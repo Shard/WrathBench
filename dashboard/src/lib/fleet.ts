@@ -13,8 +13,8 @@
  * rows keep their maths in `format.ts` (see dashboard/README.md).
  */
 
-import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView } from "@viewer/api-types";
-import { fmtDuration } from "./format";
+import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";
+import { fmtDuration, fmtTps } from "./format";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -91,7 +91,7 @@ export function pausedLabel(p: FleetPausedView): string {
 }
 
 /** The fleet table, left to right. State leads: it is what an operator scans for. */
-export const FLEET_COLUMNS = ["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "cost", "elapsed"] as const;
+export const FLEET_COLUMNS = ["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"] as const;
 
 /**
  * What a row is doing.
@@ -139,6 +139,16 @@ export interface FleetRow {
   xp: number | null;
   /** The run's token total, from the runs feed; null when there is no run or no trajectory. */
   tokens: number | null;
+  /**
+   * How fast the model is producing, from the runs feed (`TpsFacts`): the cell
+   * shows the recent figure and the title carries the run's own average, because
+   * on a live run the question is how it is going *now*. Null when there is no
+   * run, no trajectory, or no measurable reply — never a rate for a row driving
+   * nothing. A paused or exited row keeps whatever its trajectory last showed,
+   * which is a fact about the run and not a claim that it is still producing;
+   * the state badge is what says it stopped.
+   */
+  tps: TpsFacts | null;
   /** What the provider said it charged (the actual figure, as the episodes page shows it); null when unreported. */
   costUsd: number | null;
   /** Why the cost is blank, in the pricing layer's words; "" when there is a figure. */
@@ -259,6 +269,24 @@ export function progressTitle(p: FleetProgress | null, row: Pick<FleetRow, "elap
     : `ETA: ${fmtDuration(p.remainingMs)} — ${of}`;
 }
 
+/** The tok/s cell: the recent figure, because a live run's speed now is the question. */
+export function tpsLabel(tps: TpsFacts | null): string {
+  return fmtTps(tps?.recent ?? null);
+}
+
+/**
+ * The cell's title: the run's own average behind the recent figure, and how
+ * many replies each is measured over, so a rate off two replies is not read as
+ * a settled one. "" where there is nothing to say — a row with no run, or one
+ * whose run has produced no measurable reply. `overall` is non-null whenever
+ * `recent` is (the recent window is a slice of the same replies), so the guard
+ * above is the only one needed.
+ */
+export function tpsTitle(tps: TpsFacts | null): string {
+  if (tps === null || tps.recent === null) return "";
+  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} tok/s over the run's ${tps.replies} — output tokens ÷ wall time of model replies`;
+}
+
 /** How many models a job names before the rest become a count. */
 const MODELS_SHOWN = 2;
 
@@ -272,6 +300,16 @@ export function jobModelLabel(job: Pick<FleetJobView, "ref" | "models">): string
   if (models.length === 0) return job.ref;
   if (models.length <= MODELS_SHOWN) return models.join(", ");
   return `${models.slice(0, MODELS_SHOWN).join(", ")} +${models.length - MODELS_SHOWN}`;
+}
+
+/**
+ * A model cell's tooltip, with the id the provider actually served appended
+ * when it says something the label does not. Same rule as `resolvedLabel`:
+ * an id identical to what was asked for is not worth a second mention.
+ */
+export function withServed(title: string, resolved: string | null | undefined): string {
+  if (typeof resolved !== "string" || resolved.length === 0 || resolved === title) return title;
+  return title.length === 0 ? `served as ${resolved}` : `${title} · served as ${resolved}`;
 }
 
 /** Only a row with a run has somewhere to click through to. */
@@ -371,7 +409,13 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       state,
       job: job.name,
       models: jobModelLabel(job),
-      modelsTitle: job.models.join(", "),
+      /*
+       * The tooltip is where the resolved id lands on this page (the cell
+       * itself is already truncated): the roster's strings, then what the run
+       * on this account was actually served — which for an alias is the only
+       * place the strip says which Claude is in flight.
+       */
+      modelsTitle: withServed(job.models.join(", "), run?.resolvedModel),
       episode: job.episode ?? null,
       account: job.account,
       accountClass: job.accountClass,
@@ -380,6 +424,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       level: run?.level ?? null,
       xp: run?.xp ?? null,
       tokens: run?.tokens?.totalTokens ?? null,
+      tps: run?.tps ?? null,
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: run?.playtimeMs ?? null,
@@ -404,7 +449,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       state: here === undefined ? "idle" : "paused",
       job: null,
       models: here?.model ?? "—",
-      modelsTitle: here?.model ?? "",
+      modelsTitle: withServed(here?.model ?? "", run?.resolvedModel),
       episode: null,
       account: a.account,
       accountClass: a.class,
@@ -413,6 +458,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       level: run?.level ?? null,
       xp: run?.xp ?? null,
       tokens: run?.tokens?.totalTokens ?? null,
+      tps: run?.tps ?? null,
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,

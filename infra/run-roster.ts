@@ -51,6 +51,8 @@ import { Database } from "bun:sqlite";
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
+import { Trajectory } from "../runner/src/trajectory";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -113,6 +115,14 @@ export interface RosterSpec {
    */
   campaign?: string;
   cell?: string;
+  /**
+   * Whether a run of this entry that pauses is resumed. The fleet
+   * writes it from the lane: `freeplay` yes, a probe campaign only if it asked
+   * (`campaigns.<name>.resume`), a scored eval never. Absent falls back to
+   * `resumesOnPause(episode)`, so a hand-written roster with no episode keeps
+   * the lane's behaviour.
+   */
+  resumeOnPause?: boolean;
 }
 
 export interface Resolved {
@@ -136,6 +146,8 @@ export interface Resolved {
   episode: string | undefined;
   campaign: string | undefined;
   cell: string | undefined;
+  /** Resolved once here, so no caller has to remember the fallback. */
+  resumeOnPause: boolean;
 }
 
 type Outcome =
@@ -440,6 +452,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       episode: s.episode,
       campaign: s.campaign,
       cell: s.cell,
+      resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
     });
   }
   return out;
@@ -1093,6 +1106,26 @@ async function freeSession(spec: { runId: string; model: string }, why: string, 
     say(`dry-run: would free module session for ${spec.runId} (${why})`);
     return;
   }
+  const detail = await releaseRunSession(spec.runId);
+  if (detail.startsWith("failed:")) {
+    say(`could not free session for ${spec.runId}: ${detail}`);
+    record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail });
+    return;
+  }
+  say(`freed session for ${spec.runId} (${why}) — ${detail}`);
+  record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `${why}; ${detail}` });
+}
+
+/**
+ * DELETE the module session a run's token names, and return what happened.
+ *
+ * The transport only — no roster logging, no defer bookkeeping — so the fleet
+ * supervisor can release the account of a run it just ended without
+ * pulling the roster's own log with it. Best effort by construction: a failure
+ * comes back as a `failed: …` string rather than throwing, because the caller
+ * is always doing something else that matters more.
+ */
+export async function releaseRunSession(runId: string): Promise<string> {
   // Inside the container the module is one fetch away; on the host it is only
   // reachable from the compose network, hence the exec hop.
   if (CONTAINER) {
@@ -1101,17 +1134,12 @@ async function freeSession(spec: { runId: string; model: string }, why: string, 
       const r = await fetch(url, {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: tokenOfRun(spec.runId) }),
+        body: JSON.stringify({ token: tokenOfRun(runId) }),
       });
-      const detail = `delete-session ${r.status} ${(await r.text()).trim()}`;
-      say(`freed session for ${spec.runId} (${why}) — ${detail}`);
-      record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `${why}; ${detail}` });
+      return `delete-session ${r.status} ${(await r.text()).trim()}`;
     } catch (e) {
-      const detail = e instanceof Error ? e.message : String(e);
-      say(`could not free session for ${spec.runId}: ${detail}`);
-      record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `failed: ${detail}` });
+      return `failed: ${e instanceof Error ? e.message : String(e)}`;
     }
-    return;
   }
 
   const code = `const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/session";
@@ -1119,32 +1147,15 @@ const r=await fetch(url,{method:"DELETE",headers:{"content-type":"application/js
 console.log("delete-session",r.status,await r.text());`;
   try {
     const p = Bun.spawn(
-      [
-        "docker",
-        "compose",
-        "-f",
-        COMPOSE_FILE,
-        "exec",
-        "-T",
-        "-e",
-        `WB_TOKEN=${tokenOfRun(spec.runId)}`,
-        "runner",
-        "bun",
-        "-e",
-        code,
-      ],
+      ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-e", `WB_TOKEN=${tokenOfRun(runId)}`, "runner", "bun", "-e", code],
       { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     const out = (await new Response(p.stdout).text()).trim();
     const err = (await new Response(p.stderr).text()).trim();
     const rc = await p.exited;
-    const detail = rc === 0 ? out : `exit ${rc}: ${err || out}`;
-    say(`freed session for ${spec.runId} (${why}) — ${detail || "no output"}`);
-    record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `${why}; ${detail}` });
+    return rc === 0 ? out || "no output" : `failed: exit ${rc}: ${err || out}`;
   } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e);
-    say(`could not free session for ${spec.runId}: ${detail}`);
-    record({ runId: spec.runId, model: spec.model, outcome: "session-freed", detail: `failed: ${detail}` });
+    return `failed: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -1218,7 +1229,9 @@ async function attemptSpec(
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchTs = Date.now();
     say(
-      `launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ` (character ${spec.character})`}`,
+      // The name is the model's own; what the roster carries
+      // is the suggestion the notice offers, so the line says so.
+      `launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ` (suggested character ${spec.character})`}`,
     );
     const code = await runEpisode(spec, resume);
     const verdict = classify(spec, code);
@@ -1243,7 +1256,8 @@ async function attemptSpec(
       return "done";
     }
     if (verdict.kind === "terminated") {
-      const failed = verdict.reason === "adapter-error" || verdict.reason === "harness-error";
+      const failed =
+        verdict.reason === "adapter-error" || verdict.reason === "harness-error" || verdict.reason === "stale-character";
       say(
         `done ${spec.runId}: terminated ${verdict.reason}${level !== undefined ? `, level ${level}` : ""}`,
       );
@@ -1258,6 +1272,40 @@ async function attemptSpec(
     }
 
     // paused
+    //
+    // A run of a lane that does not resume is a FAILED ATTEMPT, not
+    // a suspension. It is ended here — through the runner's own termination
+    // writer, the one path anything writes a termination on — its session is
+    // freed so the account and character go back, and the scheduler gives the
+    // model a fresh attempt with a new run id and a full clock. That covers
+    // every pause reason at once, so none of the branches below (the operator
+    // pause, the claude-code no-defer rule, the in-place retry, the defer
+    // ladder) is reachable for a scored eval any more: each of them ends in
+    // `--resume <this run id>`, which is exactly what this record forbids.
+    if (!spec.resumeOnPause) {
+      const lapse = classifyLapse({ episode: spec.episode, pause: { reason: verdict.reason }, staleForMs: null });
+      const reason = lapse.reason ?? "attempt-failed";
+      say(`failed attempt ${spec.runId}: ${verdict.reason} — ${lapse.detail ?? reason}`);
+      await freeSession(spec, `failed attempt (${verdict.reason})`, opts.dryRun);
+      try {
+        const t = new Trajectory(runDir(spec.runId));
+        try {
+          t.setTermination(spec.runId, reason, lapse.detail);
+        } finally {
+          t.close();
+        }
+      } catch (e) {
+        say(`could not write the termination for ${spec.runId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "done-failed",
+        ...(level !== undefined ? { level } : {}),
+        detail: `${reason}: ${lapse.detail ?? verdict.reason}; turns ${turns}`,
+      });
+      return "done";
+    }
     if (verdict.reason === "operator-pause") {
       // The supervisor stopped under it (or an operator SIGTERMed the runner):
       // the run is suspended with its clock and session released by the
@@ -1477,7 +1525,7 @@ async function main(): Promise<void> {
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
-          `   character ${s.character} (race ${s.race}, class ${s.class})\n` +
+          `   character ${s.character} suggested (the model names its own); race ${s.race}, class ${s.class} fixed\n` +
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +

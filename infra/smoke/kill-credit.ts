@@ -48,14 +48,13 @@
  * and the arc are sequential, and their sum must close under the gate's
  * `preflight.timeoutMs`.
  *
- * Run (the fixture tool needs the DB env; see compose.yml's `fixtures`
- * service, and the `fleet` service which carries it for this gate):
+ * Run. The DB env the fixture tool needs is on the `runner` service itself
+ * (compose.yml's *wb-db anchor), so only a non-default account needs a flag:
  *
- *   docker compose -f infra/compose.yml exec \
- *     -e MODULE_ACCOUNT=SMOKE2 \
- *     -e WRATHBENCH_DB_HOST=db -e WRATHBENCH_DB_PORT=3306 \
- *     -e WRATHBENCH_DB_USER=root -e WRATHBENCH_DB_PASSWORD=wrathbench \
- *     runner bun infra/smoke/kill-credit.ts [--character Smokekc]
+ *   docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts [--character Smokekc]
+ *
+ * The preflight gate runs it as SMOKE2 (`-e MODULE_ACCOUNT=SMOKE2`); by hand it
+ * logs in as PROBE.
  */
 
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";

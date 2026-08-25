@@ -36,6 +36,15 @@ export class Watchdogs {
   private lastProgressAt: number | null = null;
   private lastProgress: { level: number; xp: number } | null = null;
   private sandboxRestarts = 0;
+  /**
+   * Fresh-episode precondition. Set by `expectFreshCharacter` on a
+   * non-resumed run; `noteFirstLive` evaluates the first in-world observation
+   * against it once and, if it fails, `check()` ends the run as
+   * `stale-character` from then on. A resumed run never arms it: its
+   * character is meant to have history.
+   */
+  private fresh: { staleGuids: ReadonlySet<string>; checked: boolean } | null = null;
+  private stale: string | null = null;
 
   /**
    * `elapsedBeforeMs` is the episode clock a paused run had already spent:
@@ -78,6 +87,34 @@ export class Watchdogs {
     }
   }
 
+  /**
+   * Arm the fresh-character precondition. `staleGuids` are the character guids
+   * episode hygiene listed on the account before the run (the ones it tried to
+   * delete): seeing one of them in the world is proof the run is on a used
+   * character, whatever its level.
+   */
+  expectFreshCharacter(staleGuids: ReadonlySet<string>): void {
+    this.fresh = { staleGuids, checked: false };
+  }
+
+  /**
+   * The first observation with a character in the world. A fresh level-1
+   * character has exactly level 1; hygiene's guids can never be its. `level`
+   * alone is the tripwire (not xp or quests): the first live sample can trail
+   * the login by a whole turn on the openai-compatible path (FOLLOW-UPS 77),
+   * long enough for a kill or a turn-in, but not for level 2.
+   */
+  noteFirstLive(obs: { guid: string | undefined; level: number | undefined }): void {
+    if (this.fresh === null || this.fresh.checked) return;
+    this.fresh.checked = true;
+    const guid = obs.guid === undefined ? undefined : String(obs.guid);
+    if (guid !== undefined && this.fresh.staleGuids.has(guid)) {
+      this.stale = `character guid ${guid} is one episode hygiene listed before the run — the previous episode's character, not a fresh one`;
+    } else if (obs.level !== undefined && obs.level > 1) {
+      this.stale = `first observation is level ${obs.level}; a fresh episode starts at level 1`;
+    }
+  }
+
   noteSandboxRestart(): void {
     this.sandboxRestarts++;
   }
@@ -89,6 +126,8 @@ export class Watchdogs {
   /** Evaluate all watchdogs. First tripped wins, in severity order. */
   check(): WatchdogVerdict | null {
     const t = this.now();
+    // Integrity first: nothing this run does afterwards is a result.
+    if (this.stale !== null) return { reason: "stale-character", detail: this.stale };
     if (this.sandboxRestarts >= this.cfg.maxSandboxRestarts) {
       return {
         reason: "snippet-runaway",

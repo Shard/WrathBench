@@ -108,15 +108,22 @@ export interface EpisodesResponse {
   episodes: (EpisodeTierView & {
     /**
      * Runs that are *members* of this tier's comparability group: stamped with
-     * the id and never overridden. This is the count a chart may use.
+     * the id, never overridden, and a recorded episode rather than a spent
+     * attempt. This is the count a chart may use.
      */
     members: number;
     /** Stamped with the id but given a leash the id does not describe. */
     overrides: number;
     /**
+     * Stamped with the id but never a recorded episode: the run
+     * lapsed and was ended, an operator cut it, or the harness failed. An
+     * attempt spent on this tier, counted apart from its members.
+     */
+    lapsed: number;
+    /**
      * Labeled with the id by the reader rather than stamped at launch — an
-     * older run that looks like this tier. Countable, never a member (past
-     * runs are not back-labeled).
+     * older run that looks like this tier. Countable, never a member: past
+     * runs are not back-labeled.
      */
     derived: number;
   })[];
@@ -149,7 +156,7 @@ export interface ComparabilityView {
    */
   wikiCoords?: boolean;
   /**
-   * Which reference bundle the run read, off the bundle's own `meta` table.
+   * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild is paired with a harness
    * minor bump, which is what actually groups. Null when the run had no bundle;
    * absent on runs stamped before the field existed.
@@ -173,6 +180,13 @@ export interface ComparabilityView {
    * that predates this field.
    */
   serverBuild: { build: string; startedAtMs: number } | null;
+  /**
+   * The model id the provider actually served (2026-08-25).
+   * An annotation like `wikiBundle`, and the one field here that is observed
+   * mid-episode rather than stamped at launch, so it is excluded from tuple
+   * equality. Absent on runs stamped before the field existed.
+   */
+  resolvedModel?: string | null;
 }
 
 /** One run, as the listing and the detail endpoint report it. */
@@ -187,8 +201,8 @@ export interface RunRow {
   /** The operator objective this run was steered with, or null. */
   objective: string | null;
   /**
-   * The probe campaign that commissioned this run and which of its cells it
-   * is, or null on anything else. Read off the run's own config, which
+   * The probe campaign that commissioned this run and which of its cells it is
+   * or null on anything else. Read off the run's own config, which
    * is what lets a campaign's results outlive the deletion of its config entry:
    * this page is built from the run directory, not from the roster.
    */
@@ -212,6 +226,18 @@ export interface RunRow {
   characterLabel: string | null;
   /** Where the model was served from: "openrouter", "anthropic", the api host, or the driver. */
   platform: string | null;
+  /**
+   * The model id the provider actually served, where `model` is the string the
+   * run was launched with. The Claude Code CLI resolves a roster alias
+   * (`sonnet`) to a real id (`claude-sonnet-5`) at launch and names it only in
+   * its own `init` event; an OpenAI-compatible provider names the served id on
+   * each response. Stamped on the run since 2026-08-25 and back-filled by the
+   * reader from the trajectory for everything older. Null is "not recorded" —
+   * never the config string, which is the question this field exists to answer.
+   */
+  resolvedModel: string | null;
+  /** The Claude Code CLI's own version, from the same record. Null on any other driver. */
+  cliVersion: string | null;
   apiBase: string | null;
   harnessVersion: string | null;
   /**
@@ -291,6 +317,37 @@ export interface TokenTotals {
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
   turns: number;
+}
+
+/**
+ * How fast a run's model is producing: output tokens divided by the wall time
+ * the model spent on its replies — the wait it was answering plus the reply
+ * itself — and never by the run's elapsed time, most of which the harness
+ * spends driving the game.
+ *
+ * The unit is one REPLY rather than one turn, because a turn is not the same
+ * thing under the two drivers: the fixed loop writes a `request` and a
+ * `response` per turn, while the claude-code driver hands the CLI one request
+ * and logs thousands of responses under it. See `tokensPerSecond` in
+ * `runner/viewer/tail.ts` for how a span is opened and closed.
+ *
+ * Two figures because a live run's speed now is a different question from the
+ * average it has managed so far: `recent` is the last `TPS_RECENT_REPLIES`
+ * measured replies, summed the same way (Σ tokens ÷ Σ seconds over the window,
+ * never a mean of per-reply rates, which one short reply would dominate).
+ *
+ * Null on either figure when nothing in it is measurable — a run whose first
+ * request is still in flight has no rate, and zero would claim it had stalled.
+ */
+export interface TpsFacts {
+  /** Output tokens per second over every measured reply; null when there are none. */
+  overall: number | null;
+  /** The same over the last `TPS_RECENT_REPLIES` replies. */
+  recent: number | null;
+  /** Measured replies behind `overall`. Not `TokenTotals.turns`: see above. */
+  replies: number;
+  /** Measured replies behind `recent` (at most `TPS_RECENT_REPLIES`). */
+  recentReplies: number;
 }
 
 /** The four priced components of a run's tokens, in dollars. */
@@ -459,6 +516,13 @@ export interface AgentPosition {
 /** A run row as the listing serves it: the row plus whole-file totals. */
 export interface RunListRow extends RunRow {
   tokens: TokenTotals | null;
+  /**
+   * Output tokens per second, whole-run and recent; see `TpsFacts`. Null when
+   * the trajectory could not be read or no turn has completed. Optional for the
+   * reason `ResultRun.xpEarned` is: a dashboard built against a viewer that
+   * predates the field must still render.
+   */
+  tps?: TpsFacts | null;
   /** The run's cost, on the same basis the run page shows. Null when unreadable. */
   cost: CostView | null;
   firstTs: number | null;
@@ -500,6 +564,20 @@ export interface RunDetailResponse {
   cost: CostView;
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
+  /**
+   * Achievements and flights from this run's milestone records,
+   * accumulated by the same incremental tail the entry feed rides, so a live
+   * run's line grows with it. Null on a run that recorded none — never zero.
+   * Optional for the reason `ResultRun.areas` is: an older viewer has neither.
+   */
+  achievements?: AchievementFacts | null;
+  taxi?: TaxiFacts | null;
+  /**
+   * Output tokens per second (`TpsFacts`), off the same incremental tail as the
+   * tokens above, so a live run's rate advances with its trajectory. Null when
+   * no turn has completed; optional for the reason `achievements` is.
+   */
+  tps?: TpsFacts | null;
 }
 
 export interface EntriesResponse {
@@ -509,8 +587,8 @@ export interface EntriesResponse {
 }
 
 /**
- * One job with a process, as the supervisor publishes it (the job
- * is the one unit of work; an account, with a class, is where it runs). A job
+ * One job with a process, as the supervisor publishes it (the job is the one
+ * unit of work; an account, with a class, is where it runs). A job
  * names the roster entry it is running, the tier, the account it landed on,
  * where it came from — the file's pinned list, the manual queue, or the
  * policy's own pick — and the process that runs it.
@@ -554,7 +632,7 @@ export interface FleetJobView {
 
 /**
  * One account and what holds it, as the supervisor's `accounts` block records
- * it (the account classes). `job` is null when nothing is on it — which is what
+ * it, with its class. `job` is null when nothing is on it — which is what
  * the fleet table's idle rows are made of.
  */
 export interface FleetAccountView {
@@ -726,6 +804,21 @@ export interface ApiInfoResponse {
    * unreachable from the viewer or predates the field (cached briefly).
    */
   worldserver: { build: string; startedAtMs: number } | null;
+  /**
+   * Every harness series (`major.minor` of a version stamp) that recorded
+   * runs, newest first, with how many runs each holds.
+   *
+   * The shell's series selector is a global filter, so it needs the list of
+   * series before any page has loaded its own rows. It rides on `/api/info`
+   * for the reason the build stamp does: the shell already polls this route,
+   * and a poller per shell control is exactly the budget the dashboard is
+   * built not to spend. Runs whose stamp names no series are not listed —
+   * they belong to no group, and only the "all" selection shows them.
+   *
+   * Optional: a dashboard built against a viewer that predates this field must
+   * still work, so it is absent rather than empty on an older process.
+   */
+  harnessSeries?: { series: string; runs: number }[];
   now: number;
 }
 
@@ -747,10 +840,81 @@ export interface LevelMark {
   playtimeMs: number | null;
 }
 
+/**
+ * What a run's zone/area milestones say about where it went.
+ *
+ * A **lower bound in every field**: the producer reads the state cache on
+ * `stateIntervalMs` (60s) alongside `recordState`, not on the movement itself,
+ * so an excursion that began and ended between two samples leaves no record at
+ * all. Same convention as `results.ts`: first observation, not first reach.
+ *
+ * Null fields are "never recorded", never zero or false — a run from before the
+ * producer existed has no `AreaFacts` at all, and `leftStartArea: null` is a run
+ * whose zone was seen and whose area never was.
+ */
+export interface AreaFacts {
+  /** The first area observed. Null when no `area` milestone was written. */
+  startArea: number | null;
+  /** Distinct area ids over the whole run, `startArea` included. */
+  distinctAreas: number;
+  /** Whether any area other than `startArea` was observed. Null when none was. */
+  leftStartArea: boolean | null;
+  /** The first capital zone entered, or null when none was. */
+  capitalZone: number | null;
+  /** How many records of each kind fed the above. */
+  zoneMarks: number;
+  areaMarks: number;
+}
+
+/**
+ * What a run's achievement milestones say it holds (issue #8).
+ *
+ * `earned` is the union of the login backlog and the run's own earns, so on a
+ * resumed run it is what the character holds, not what it earned this episode.
+ * `points` is the last backlog record's total plus the points of every earn
+ * outside that backlog — a **lower bound**, because the module serves points
+ * only where it could read `Achievement.dbc`.
+ *
+ * Null (no `AchievementFacts` at all) is "no achievement record in this run":
+ * every run before the taps were deployed, and any run whose login packet the
+ * cache missed. It is never zero.
+ */
+export interface AchievementFacts {
+  earned: number;
+  points: number;
+  /** The ids behind `earned`, ascending. */
+  ids: number[];
+}
+
+/**
+ * Flights taken, from the `taxi` milestone records.
+ *
+ * `flights` counts takeoffs — a `taxi` record, i.e. an accepted reply followed
+ * by the taxi flag turning on — not landings, and it is a lower bound: the
+ * producer samples on `stateIntervalMs`, so a hop that began and ended between
+ * two samples leaves nothing behind, the same convention as `AreaFacts`.
+ *
+ * Null is "flights were not recorded for this run", which is not the same fact
+ * as `{ flights: 0 }`. The two are told apart by the achievement records: a run
+ * on a worldserver with the taps writes an `achievements_at_login` milestone
+ * even when the backlog is empty, so achievement records **or** taxi records
+ * prove the taps were live and zero becomes representable.
+ */
+export interface TaxiFacts {
+  flights: number;
+}
+
 /** One run as the results charts read it: identity, comparability, level marks. */
 export interface ResultRun {
   runId: string;
   model: string | null;
+  /**
+   * The id the provider actually served, where `model` is what the run asked
+   * for; see `RunRow.resolvedModel`. Optional for the reason `xpEarned` is: a
+   * dashboard built against a viewer that predates the field must still render.
+   */
+  resolvedModel?: string | null;
+  cliVersion?: string | null;
   platform: string | null;
   harnessVersion: string | null;
   /**
@@ -810,6 +974,14 @@ export interface ResultRun {
   /** Why this run cannot be scored, or null when it can. */
   unscored: string | null;
   startedAt: number | null;
+  /**
+   * The listing's own reading of whether the file is still being written, and
+   * when the run ended (the runs page's status column). Optional: a dashboard built
+   * against a viewer that predates them must still work, and reads the
+   * recorded reasons instead.
+   */
+  endedAt?: number | null;
+  live?: boolean;
   terminationReason: string | null;
   levels: LevelMark[];
   maxLevel: number | null;
@@ -821,6 +993,17 @@ export interface ResultRun {
    */
   xp: number | null;
   /**
+   * XP earned over the whole run, as a **lower bound**: the last observed
+   * within-level xp of every level below `maxLevel`, plus the xp within it —
+   * the same reconstruction the run page's cumulative chart draws
+   * (`dashboard/src/lib/runview.ts`), computed here so the ladder's scatter
+   * and that chart cannot disagree. Under-counts by whatever was earned
+   * between a level's last sample and the ding, never over-counts. Null when
+   * no sample carried both a level and an xp reading. Optional: a dashboard
+   * built against a viewer that predates the field must still work.
+   */
+  xpEarned?: number | null;
+  /**
    * Copper on the newest sample that carried a reading — the same number the
    * fleet listing and the run page show, not a peak (no state sample the results
    * surface reads carries money, so a peak is not derivable). Null when never
@@ -831,9 +1014,9 @@ export interface ResultRun {
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];
   /*
-   * The listing columns. The episodes page is the per-run grain (one page per
-   * grain, 2026-08-23), so the facts the fleet's run table used to carry
-   * ride on this row rather than being joined against `/api/runs` in a page.
+   * The listing columns. The runs page is the per-run grain, so the facts
+   * the fleet's run table used to carry ride on this row rather than being
+   * joined against `/api/runs` in a page.
    */
   /** The character's name, where `characterLabel` is its race and class. */
   character: string | null;
@@ -849,6 +1032,47 @@ export interface ResultRun {
    * `basis: "none"` (with `note` saying which nothing) is the blank.
    */
   actualCost: CostFigure | null;
+  /**
+   * `CostView.expected` — the price table applied to the run's own tokens,
+   * `$0` with `asIfMetered` for a free tier or local hardware. The runs table
+   * never shows it (a listing of what runs cost may not show a guess); the
+   * ladder's scatter reads it only where no provider figure exists, and says
+   * so. Optional for the reason `xpEarned` is.
+   */
+  expectedCost?: CostFigure | null;
+  /**
+   * Whether this run cost the operator money (`runner/src/billing.ts`). Derived
+   * from the model id, the api base, and the harness — a subscription counts as
+   * paid here, which is deliberately the opposite of the scheduler's verdict in
+   * `runner/src/model-cost.ts`; that one answers "does this consume the paid
+   * concurrency budget". The ladder's "exclude free" toggle reads this.
+   * Optional for the reason `xpEarned` is: a dashboard built against a viewer
+   * that predates the field must still work, and reads `undefined` as unknown
+   * rather than as free.
+   */
+  billing?: "free" | "paid";
+  /**
+   * Where the run went, from its zone/area milestone records (FOLLOW-UPS 35):
+   * the ladder's rungs 2 and 4 read this. `null` is a run that wrote no such
+   * record — everything before the producer shipped on 2026-08-23 — and must
+   * not be read as "never left"; `undefined` is a viewer that predates the
+   * field, the same convention `xpEarned` and `expectedCost` use.
+   */
+  areas?: AreaFacts | null;
+  /**
+   * Achievements the run's records account for. `null` is a run that
+   * wrote none — everything before the achievement taps were deployed — and
+   * must not be read as zero; `undefined` is a viewer that predates the field.
+   * A displayed signal only: nothing in the ladder's ordering reads it
+   * (highest rung, then XP, then gold).
+   */
+  achievements?: AchievementFacts | null;
+  /**
+   * Flights taken, from the same records; `null` when flights were not recorded
+   * for this run. Rung 4's second half. See `TaxiFacts` for why null and zero
+   * are different facts.
+   */
+  taxi?: TaxiFacts | null;
   /** Why a run is suspended, when it ended for no other reason. */
   pauseReason: string | null;
 }
@@ -956,6 +1180,12 @@ export interface ModelRunView {
   class?: number | null;
   className?: string | null;
   characterLabel?: string | null;
+  /**
+   * The id the provider actually served for this run (`RunRow.resolvedModel`),
+   * attached by the route from the same run rows the listing reads. Optional
+   * for the reason `cost` is: the scheduler's projection does not carry it.
+   */
+  resolvedModel?: string | null;
   startedAt: number;
   endedAt: number | null;
   /** Wall clock, start to end — not active time; the run page owns that. */
@@ -982,7 +1212,7 @@ export interface ModelLastErrorView {
 }
 
 export interface ModelRowView {
-  /** The roster name (the fleet config's `roster` map key) — the row's identity. */
+  /** The roster name (the config's `roster` map key) — the row's identity. */
   name: string;
   model: string;
   effort: string | null;
@@ -990,9 +1220,16 @@ export interface ModelRowView {
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;
   /**
-   * Free or paid (`runner/src/model-cost.ts`). This says only
+   * Free or paid (`runner/src/model-cost.ts`). Since the tier became the only
+   * budget this says only
    * where a run may physically execute — the account class and the rate-limit
    * key. It buys no runs and costs none: that is the tier.
+   *
+   * NOT the same verdict as `ResultRun.billing`, and the two disagree on
+   * purpose: this one answers "does this consume the paid concurrency budget",
+   * so a `claude-code` subscription reads `free` here; that one answers "did we
+   * pay for this run", so the same entry's runs read `paid` there
+   * (`runner/src/billing.ts`).
    */
   billing: "free" | "paid";
   /** The tier the config admitted this model to. */
@@ -1022,6 +1259,16 @@ export interface ModelRowView {
    * to run is an extra past the target.
    */
   schedulable: { ok: boolean; why: string; extras: boolean };
+  /**
+   * Every distinct id this roster entry's runs actually resolved to, sorted.
+   *
+   * The row stays keyed on the roster's `model` string — that is the unit the
+   * scheduler counts in — but an alias resolves at launch, so one row can hold
+   * runs from two different Claudes. More than one entry here is that drift,
+   * shown rather than averaged away. Empty when no run of this entry recorded
+   * one; optional for the reason `ModelRunView.cost` is.
+   */
+  resolvedModels?: string[];
   /** This model's stamped runs, newest first. */
   runs: ModelRunView[];
   newestRunId: string | null;

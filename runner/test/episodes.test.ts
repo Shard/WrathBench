@@ -22,7 +22,7 @@ function runRow(over: Partial<RunRow> = {}): RunRow {
   return {
     runId: "r", model: "m", driver: "openai", harness: "wrathbench", shakeout: null,
     objective: null, campaign: null, cell: null, extra: false, character: "c", race: 1, raceName: "Human", class: 2,
-    className: "Paladin", characterLabel: "Human Paladin", platform: "p", apiBase: null, harnessVersion: "v",
+    className: "Paladin", characterLabel: "Human Paladin", platform: "p", resolvedModel: null, cliVersion: null, apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,
     terminationDetail: null, pauseReason: null, level: null, xp: null, money: null,
     questsCompleted: null, items: null, mtime: null, bytes: null, live: false,

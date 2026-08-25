@@ -630,7 +630,8 @@ not need it, docs/CONTRACTS.md):
 
 - all objects: `entry`, `scale`
 - units and players: `health`, `maxHealth`, `power1`..`power7`,
-  `maxPower1`..`maxPower7`, `level`, `faction`, `unitFlags`, `displayId`,
+  `maxPower1`..`maxPower7`, `level`, `faction`, `unitFlags` (with
+  `taxiFlight`, the `UNIT_FLAG_TAXI_FLIGHT` bit named), `displayId`,
   `dynamicFlags`, `npcFlags`, `targetGuid`, `race`, `class`, `gender`,
   `powerType` (the last four unpacked from UNIT_FIELD_BYTES_0)
 - players additionally: `playerFlags`
@@ -891,6 +892,31 @@ knowledge, like item-template fields:
 | `SMSG_COOLDOWN_EVENT` | 0x135 | `{ "spellId", "guid" }` — "start the timer you already know for this spell": the duration is Spell.dbc knowledge the module does not serve |
 | `SMSG_CLEAR_COOLDOWN` | 0x1DE | `{ "spellId", "guid" }` |
 | `SMSG_TALENTS_INFO` | 0x4C0 | `{ "pet": false, "unspentPoints", "specCount", "activeSpec", "specs": [{ "talents": [{ "talentId", "rank" }] }] }` — `rank` is 0-based; glyph slots are consumed and not served. The pet form is `{ "pet": true }` only (no pet surface). Sent on login, level-up, after every `CMSG_LEARN_TALENT`, and on spec change |
+
+Achievements and flight paths (2026-08-25, issue #8 first half):
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_ACHIEVEMENT_EARNED` | 0x468 | `{ "guid", "self": <bool>, "achievement": { "achievementId", "date": <u32>, "time": "YYYY-MM-DD HH:MM", "name"?, "points"?, "categoryId"? } }` — the core broadcasts this in say range, so `guid` may be another player's; `self` is the equality with the session's own guid, nothing more |
+| `SMSG_ALL_ACHIEVEMENT_DATA` | 0x47D | `{ "count", "achievements": [ <same achievement object> ] }` — sent to self once during login: every achievement already earned. Only the completed block (to its 0xFFFFFFFF terminator) is decoded; the criteria-progress block that follows is consumed and not served |
+| `SMSG_ACTIVATETAXIREPLY` | 0x1AE | `{ "reply": <u32>, "ok": <bool> }` — the answer to `CMSG_ACTIVATETAXI[EXPRESS]` (raw). `ActivateTaxiReply`: 0 ok, 1 server error, 2 no such path, 3 not enough money, 4 too far away, 5 no vendor nearby, 6 not visited, 7 busy, 8 mounted, 9 shapeshifted, 10 moving, 11 same node, 12 not standing |
+
+`date` is the wire's packed bitfield (`AppendPackedTime`: `(year-2000)<<24 |
+month<<20 | (day-1)<<14 | weekday<<11 | hour<<6 | minute`); `time` is its
+reading, a client-local decode. `name`, `points` and `categoryId` are what a
+client reads from its own `Achievement.dbc` for the id — the module loads that
+file from the data volume beside `AreaTable.dbc` (`dbc/Achievement.dbc`,
+62 fields, record size 248; the loader refuses any other layout) and serves
+ids only when it is absent. Category names (`Achievement_Category.dbc`) are
+not served.
+
+The flight itself has no event: `taxiFlight` on self in `SMSG_UPDATE_OBJECT`
+`fields` (below) is `UNIT_FLAG_TAXI_FLIGHT` read off `unitFlags`, so a
+`reply` of 0 followed by `taxiFlight: true` is the flight starting and the
+flip back to `false` is the landing, exactly as a client sees them. Nothing is
+inferred from the server's taxi state. `SMSG_CRITERIA_UPDATE` (0x46A),
+`SMSG_SHOWTAXINODES` and `SMSG_TAXINODE_STATUS` are not tapped: the agent finds
+flight masters the way it finds anything, and learns a node by visiting it.
 
 Death:
 

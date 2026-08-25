@@ -36,6 +36,8 @@ interface Synth {
   detail?: string;
   startedAt: number;
   endedAt: number;
+  /** The id the CLI's init record named, for the back-fill. */
+  resolved?: string;
 }
 
 function writeRun(runsDir: string, r: Synth): void {
@@ -54,6 +56,14 @@ function writeRun(runsDir: string, r: Synth): void {
     }),
   );
   const lines: string[] = [`{"t":"meta","ts":${r.startedAt}}`];
+  if (r.resolved !== undefined) {
+    lines.push(
+      JSON.stringify({
+        ts: r.startedAt, t: "claude_system", type: "system", subtype: "init",
+        model: r.resolved, claude_code_version: "2.1.239",
+      }),
+    );
+  }
   for (let i = 0; i < r.responses; i++) {
     lines.push(JSON.stringify({ ts: r.startedAt + 1 + i, t: "response", text: "x" }));
   }
@@ -189,6 +199,28 @@ describe("readFleetRoster", () => {
     const p = join(root, "fleet.json");
     writeFileSync(p, "{ not json");
     expect(readFleetRoster(p).shape).toBe("unreadable");
+  });
+});
+
+describe("/api/models and the resolved model id", () => {
+  test("a row keeps its roster grouping and shows every id its runs were really on", async () => {
+    const { runsDir, fleetPath } = fixture(ROSTER);
+    // One roster entry, two ids: the alias moved under it between runs. That is
+    // exactly the drift the page must show rather than average into one row.
+    writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 2, level: 3, reason: "episode-limit", resolved: "vendor/alpha-2026-05", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+    writeRun(runsDir, { id: "a-2", model: "vendor/alpha", responses: 2, level: 2, reason: "idle", resolved: "vendor/alpha-2026-08", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
+    // A different entry, and a run that named nothing: "not recorded", never
+    // back-labelled with the string it was launched under.
+    writeRun(runsDir, { id: "b-1", model: "vendor/beta", responses: 2, level: 2, reason: "idle", startedAt: NOW - 2 * HOUR, endedAt: NOW - HOUR });
+
+    const body = await models(runsDir, fleetPath);
+    const alpha = body.models.find((m) => m.name === "alpha")!;
+    expect(alpha.model).toBe("vendor/alpha");
+    expect(alpha.resolvedModels).toEqual(["vendor/alpha-2026-05", "vendor/alpha-2026-08"]);
+    expect(new Map(alpha.runs.map((r) => [r.runId, r.resolvedModel])).get("a-1")).toBe("vendor/alpha-2026-05");
+    const beta = body.models.find((m) => m.name === "beta")!;
+    expect(beta.resolvedModels).toEqual([]);
+    expect(beta.runs[0]!.resolvedModel).toBeNull();
   });
 });
 

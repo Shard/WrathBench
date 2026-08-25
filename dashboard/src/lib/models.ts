@@ -5,25 +5,66 @@
  * Nothing here decides anything about a model. The status, the counts, the
  * cooling deadline and the retirement reason all arrive decided from
  * `/api/models`, which serves the same projection the fleet supervisor
- * schedules on. What this file does is phrase them, and phrase them
- * once, so the table and the detail panel cannot word the same fact two ways.
+ * schedules on. What this file does is phrase them, and phrase them once, so
+ * the table and the detail panel cannot word the same fact two ways.
  */
 
-import type { ModelEpisodeView, ModelRowView, ModelStatusView } from "@viewer/api-types";
+import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
 
 /**
- * The table, left to right. Status leads: it is what an operator scans for.
- * The same columns `run-fleet --status` prints — billing, the tier, status, the
- * episodes, extras, the verdict — plus where the model is served and its
- * newest run.
+ * The table, left to right, as the header prints it — these are labels, not
+ * keys, the way `FLEET_COLUMNS` is. The page renders its header from this
+ * array, so the header and the body cells cannot number their columns
+ * differently.
  *
- * On the word "tier": here it means a rung of the EVIDENCE ladder
- * (t0/t1/t2), never an episode. The episode columns are named by their ids.
+ * Status leads because it is what an operator scans for, and the tier follows
+ * the name because it is the second question asked of a row. Billing is not a
+ * column: it says only where a run may execute, which is the platform's
+ * business, and the tier is what buys runs.
+ *
+ * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
+ * never an episode. The episode columns are named by their ids.
  */
-export const MODEL_COLUMNS = ["status", "model", "billing", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest"] as const;
+export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"] as const;
 
 /** The episodes the page shows a counted/target cell for, in policy order. */
 export const EPISODE_COLUMNS = ["e90", "e360"] as const;
+
+/** Numbers are right-aligned; the header has to say so too, or it drifts off its column. */
+export function columnClass(column: (typeof MODEL_COLUMNS)[number]): string {
+  return column === "extras" || (EPISODE_COLUMNS as readonly string[]).includes(column) ? "right" : "";
+}
+
+/** The ladder's order, so "higher" is a comparison rather than a string sort. */
+const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
+
+/**
+ * The highest tier this model has actually stood on.
+ *
+ * Today the server derives `tier` from `declaredTier` advanced at most once, so
+ * this is usually just `tier` — but "usually" is not a contract, and a config
+ * edit that lowers a model's declared tier must not make the page report that
+ * it un-climbed. A max over both is the honest reading either way.
+ *
+ * What it is not: a tier the model could reach. `earnedRung1` is a rung, not a
+ * tier, and a witness the model has not been allowed to spend buys it nothing.
+ */
+export function highestTierOf(row: Pick<ModelRowView, "tier" | "declaredTier">): TierView {
+  return TIER_RANK[row.declaredTier] > TIER_RANK[row.tier] ? row.declaredTier : row.tier;
+}
+
+/**
+ * The table's order: the highest tier first, then the name.
+ *
+ * Tier is the budget, so tier-descending puts the models the fleet spends most
+ * on at the top and leaves the t0 long tail below — the order an operator reads
+ * the roster in. The name breaks ties so the table is stable across polls
+ * rather than reshuffling every 30 seconds on the server's iteration order.
+ */
+export function compareModelRows(a: ModelRowView, b: ModelRowView): number {
+  const byTier = TIER_RANK[highestTierOf(b)] - TIER_RANK[highestTierOf(a)];
+  return byTier !== 0 ? byTier : a.name.localeCompare(b.name);
+}
 
 /** A status the CSS has a badge colour for; anything else falls back to plain. */
 export function statusClass(status: ModelStatusView): string {
@@ -78,28 +119,41 @@ export function schedulableOf(row: ModelRowView): string {
 /**
  * Whether the ladder actually moved this model — the marker beside its name.
  * Not "is it eligible for e360": a model an operator placed on t2 by hand is
- * eligible without having earned anything, and must not wear the badge.
+ * eligible without having earned anything, and must not wear the badge. A rank
+ * comparison, the same one `highestTierOf` uses, so a declared tier lowered by
+ * a config edit cannot read as a climb.
  */
-export function isPromoted(row: ModelRowView): boolean {
-  return row.tier !== row.declaredTier;
+export function isPromoted(row: Pick<ModelRowView, "tier" | "declaredTier">): boolean {
+  return TIER_RANK[row.tier] > TIER_RANK[row.declaredTier];
 }
 
 /**
- * The tier cell: a climb as the move it was, a held witness as `t0*`. A trial
- * model that has earned its rung is exactly the row an operator scans for when
- * deciding what to promote, so it gets a mark of its own rather than hiding
- * behind a status word it is not allowed to have.
+ * The tier cell: the highest tier the model has reached, and nothing else —
+ * the climb itself moved to the hover, and the ↑ beside the name still marks a
+ * row that moved.
+ *
+ * The `*` stays: a held witness (`t0*`) is a trial model that has earned a rung
+ * its tier will not let it spend, which is exactly the row an operator scans for
+ * when deciding what to promote. It is a rung, not a second tier. A model that
+ * is both promoted and holding an unspent witness (declared t2, scheduled back
+ * to t1, `earnedRung1`) shows the star: the witness is still true of it.
  */
 export function tierOf(row: ModelRowView): string {
-  if (row.tier !== row.declaredTier) return `${row.declaredTier}→${row.tier}`;
-  return row.earnedRung1 ? `${row.tier}*` : row.tier;
+  const tier = highestTierOf(row);
+  return row.earnedRung1 && !isPromoted(row) ? `${tier}*` : tier;
 }
 
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
 export function tierTitle(row: ModelRowView): string {
   const budget = (t: string): string => `tier ${t}`;
   const earned = row.earnedRung1 ? "earned rung 1 (a counted e90 reached the promotion level)" : "has not earned rung 1";
-  if (row.tier !== row.declaredTier) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
+  if (isPromoted(row)) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
+  // The mirror case: a config edit lowered the declared tier below where the
+  // model is scheduled. The `*` still reads the highest tier reached, so the
+  // hover has to say the same thing rather than naming the lower one.
+  if (TIER_RANK[row.declaredTier] > TIER_RANK[row.tier]) {
+    return `${budget(row.declaredTier)} in the config, scheduled on ${row.tier} — ${earned}`;
+  }
   if (row.earnedRung1) return `${budget(row.tier)} — ${earned}, but this tier holds the ladder: move it up to spend that`;
   return `${budget(row.tier)} — ${earned}`;
 }
@@ -108,8 +162,8 @@ export function tierTitle(row: ModelRowView): string {
  * The roster name for a run's `(model, effort)` pair, or null.
  *
  * This is the key `matchesRoster` in `runner/src/models.ts` uses, and the only
- * way a run page or an results row can link to `/models#<name>`: a run records the
- * model string it was launched with, never the roster name that chose it. Two
+ * way a run page or a runs-table row can link to `/models#<name>`: a run records
+ * the model string it was launched with, never the roster name that chose it. Two
  * roster entries can legitimately share the pair, in which case the first is
  * taken — a link has to go somewhere, and both rows show the same runs anyway.
  */
@@ -132,44 +186,21 @@ export function modelsHref(name: string | null): string {
 }
 
 /**
- * The query every cross-page run filter is spelled with.
+ * What a row should say about the ids its runs actually resolved to.
  *
- * One builder, because the pages that link to each other must not disagree
- * about what "this row's runs" means. `effort` travels with `model` and is not
- * optional in spirit: `(model, effort)` is the pair the projection matches runs
- * on (`matchesRoster` in `runner/src/models.ts`), so a link from a `sonnet-low`
- * row that dropped it would show `sonnet`'s runs too. Absent effort is its own
- * value — the entry with no effort — never "any effort".
- *
- * `harness` and `episode` are omitted at their server defaults, so a link is
- * the shortest URL that means what it says.
+ * A row is keyed on the model *string* — the roster's, or the one the run
+ * recorded — and that string can be an alias the CLI resolves at launch. Null
+ * when there is nothing to add: no run recorded an id, or the only id is the
+ * string already printed. `mixed` is the case worth flagging: one key whose
+ * runs were not all on the same model, which is drift a reader must see rather
+ * than a difference two rows quietly average together.
  */
-export function runFilterQuery(f: {
-  model?: string | null;
-  effort?: string | null;
-  episode?: string | null;
-  harness?: string | null;
-}): string {
-  const q = new URLSearchParams();
-  if (f.episode != null && f.episode !== "") q.set("episode", f.episode);
-  if (f.model != null && f.model !== "") q.set("model", f.model);
-  if (f.effort != null && f.effort !== "") q.set("effort", f.effort);
-  if (f.harness != null && f.harness !== "" && f.harness !== "all") q.set("harness", f.harness);
-  const s = q.toString();
-  return s === "" ? "" : `?${s}`;
-}
-
-/** The aggregate view, filtered. */
-export function resultsHref(f: Parameters<typeof runFilterQuery>[0]): string {
-  return `/results${runFilterQuery(f)}`;
-}
-
-/**
- * The per-run view, filtered — the drill-down under an aggregate row.
- *
- * The episodes page is the per-run grain (one page per grain), so "show me the
- * runs behind this number" is a link there rather than an expander here.
- */
-export function episodesHref(f: Parameters<typeof runFilterQuery>[0]): string {
-  return `/episodes${runFilterQuery(f)}`;
+export function resolvedSummary(
+  model: string | null,
+  ids: readonly string[] | undefined,
+): { ids: string[]; mixed: boolean } | null {
+  const seen = [...new Set((ids ?? []).filter((id) => id.length > 0))].sort();
+  if (seen.length === 0) return null;
+  if (seen.length === 1 && seen[0] === model) return null;
+  return { ids: seen, mixed: seen.length > 1 };
 }

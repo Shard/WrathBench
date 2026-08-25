@@ -322,7 +322,7 @@ export function readRunFactsCached(
 // ------------------------------------------------------------ last error
 
 /** Termination reasons that are an error the operator would want the text of. */
-export const ERROR_REASONS: ReadonlySet<string> = new Set(["adapter-error", "harness-error"]);
+export const ERROR_REASONS: ReadonlySet<string> = new Set(["adapter-error", "harness-error", "stale-character"]);
 
 /** How much of a provider's error text is worth carrying to a table cell. */
 export const ERROR_MAX_CHARS = 300;

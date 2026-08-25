@@ -74,12 +74,42 @@ export interface ItemSample {
  * names — so the record stays what the server said, and a rendering choice
  * (which locale, which DBC) never changes a trajectory after the fact.
  */
-export interface MilestoneLine {
-  kind: "zone" | "area";
-  from: { id: number } | undefined;
-  to: { id: number };
-  turn?: number | undefined;
-}
+/**
+ * One `{ t: "milestone", ... }` trajectory record (FOLLOW-UPS 35). Kinds are
+ * additive and every consumer ignores the ones it does not know, so a new kind
+ * never invalidates a run.
+ *
+ * - `zone` / `area`: a change of `self.zone` / `self.area`, ids only, `from`
+ *   absent on the first observation of a process.
+ * - `achievement`: one of **our own** earns. Never another player's:
+ *   `SMSG_ACHIEVEMENT_EARNED` is a say-range broadcast.
+ * - `achievements_at_login`: the backlog `SMSG_ALL_ACHIEVEMENT_DATA` carried,
+ *   written once per process so a resumed run's history is visible without its
+ *   past being re-emitted as fresh firsts. Written even when the backlog is
+ *   empty — it is the record that says the taps were live for this run, which
+ *   is what lets a reader tell "flew nowhere" from "flights were not recorded".
+ * - `taxi` / `taxi_landed`: `taxiFlight` on self flipping on after an accepted
+ *   reply, and flipping back. The area id is keyed `areaId`, not `id`, so no
+ *   consumer can mistake a flight record for a zone/area mark.
+ */
+export type MilestoneLine =
+  | {
+      kind: "zone" | "area";
+      from: { id: number } | undefined;
+      to: { id: number };
+      turn?: number | undefined;
+    }
+  | {
+      kind: "achievement";
+      id: number;
+      name?: string | undefined;
+      points?: number | undefined;
+      categoryId?: number | undefined;
+      turn?: number | undefined;
+    }
+  | { kind: "achievements_at_login"; ids: number[]; points: number; turn?: number | undefined }
+  | { kind: "taxi"; from?: { areaId: number } | undefined; turn?: number | undefined }
+  | { kind: "taxi_landed"; to?: { areaId: number } | undefined; turn?: number | undefined };
 
 export interface RunMeta {
   runId: string;
@@ -118,6 +148,28 @@ export interface RunMeta {
    * least one fresh restart somewhere in its life.
    */
   resumedFresh?: boolean;
+  /**
+   * What the *provider* said it actually served, as opposed to what the run
+   * asked for. `config.model` is the roster's string — often an alias (`sonnet`,
+   * `opus`) that the Claude Code CLI resolves at launch — so nothing in run
+   * metadata said which Claude a run was on. The CLI's `init` event names the
+   * resolved id and its own version; an OpenAI-compatible provider names the
+   * served id on every response. First observation wins and is never revised:
+   * a run has one answer, and a second look would only ever be a later segment
+   * disagreeing with the one the score was earned under.
+   *
+   * Absent on every run written before this existed. The viewer back-fills
+   * those at read time from the trajectory rather than rewriting them.
+   */
+  resolved?: ResolvedModel;
+}
+
+/** The provider's own answer to "what ran", promoted onto the run. */
+export interface ResolvedModel {
+  /** The resolved model id (`claude-sonnet-5`), or null when none was named. */
+  model: string | null;
+  /** The Claude Code CLI's version. Null on any other driver. */
+  cliVersion: string | null;
 }
 
 export interface PauseMark {
@@ -156,6 +208,12 @@ CREATE TABLE IF NOT EXISTS run (
   -- not have to parse a blob or re-derive a rule that could drift.
   character TEXT,
   platform TEXT,
+  -- What the provider actually served (RunMeta.resolved), promoted out of the
+  -- driver's own first word: the CLI resolves the alias 'sonnet' to the id
+  -- 'claude-sonnet-5' at launch, and a column means a cross-run SELECT can ask which Claude a row
+  -- was on without replaying the trajectory.
+  resolved_model TEXT,
+  resolved_cli_version TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
@@ -193,6 +251,10 @@ CREATE TABLE IF NOT EXISTS state (
 const RUN_ADDED_COLUMNS: Record<string, string> = {
   character: "TEXT",
   platform: "TEXT",
+  // Added at 0.5: promoted from the driver's first word mid-episode, so a run
+  // launched by an older build (and any run resumed by this one) gains them here.
+  resolved_model: "TEXT",
+  resolved_cli_version: "TEXT",
 };
 
 /**
@@ -262,8 +324,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -276,9 +338,75 @@ export class Trajectory {
         meta.config.objective ?? null,
         meta.config.character ?? null,
         platformOf(meta.config.apiBase, meta.config.driver),
+        meta.resolved?.model ?? null,
+        meta.resolved?.cliVersion ?? null,
         this.scrub(jsonLine(meta.config)),
       );
     this.append({ t: "meta", ...meta });
+  }
+
+  /**
+   * Promote what the provider said it served onto the run, once.
+   *
+   * Not folded into `writeMeta`: the answer arrives mid-episode (the CLI's
+   * `init` event, the first response body), long after the launch write, and
+   * `writeMeta`'s conflict path deliberately updates only `harness_version`.
+   * So this owns both halves — the `run` row and `meta.json` — and is the only
+   * writer of either field. First observation wins: a call that would overwrite
+   * an already-recorded value with a different one is ignored, and the run
+   * keeps the id it was launched under.
+   *
+   * Returns whether anything was written, so a caller can log the promotion
+   * exactly once without keeping its own flag honest.
+   */
+  recordResolved(runId: string, r: Partial<ResolvedModel>): boolean {
+    const model = r.model ?? null;
+    const cliVersion = r.cliVersion ?? null;
+    if (model === null && cliVersion === null) return false;
+    const meta = this.readMetaFile();
+    const have = meta?.resolved;
+    const next: ResolvedModel = {
+      model: have?.model ?? model,
+      cliVersion: have?.cliVersion ?? cliVersion,
+    };
+    if (have !== undefined && have.model === next.model && have.cliVersion === next.cliVersion) {
+      return false;
+    }
+    try {
+      this.db
+        .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ? WHERE run_id = ?`)
+        .run(next.model, next.cliVersion, runId);
+    } catch {
+      /* a run.sqlite that cannot take the update must not end the episode */
+    }
+    if (meta !== null) {
+      /*
+       * The tuple carries the same answer as an annotation, so a reader that
+       * already parses comparability does not need a second lookup. It is
+       * excluded from `sameComparability`, which is why
+       * filling it here does not turn every resume into a restamp.
+       */
+      const merged: RunMeta = {
+        ...meta,
+        resolved: next,
+        ...(meta.comparability !== undefined
+          ? { comparability: { ...meta.comparability, resolvedModel: next.model } }
+          : {}),
+      };
+      const safe = JSON.parse(this.scrub(jsonLine(merged))) as RunMeta;
+      writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
+    }
+    this.append({ t: "harness", kind: "resolved_model", ...next });
+    return true;
+  }
+
+  /** meta.json as it stands, or null when it is missing or unreadable. */
+  private readMetaFile(): RunMeta | null {
+    try {
+      return JSON.parse(readFileSync(join(this.dir, "meta.json"), "utf8")) as RunMeta;
+    } catch {
+      return null;
+    }
   }
 
   recordState(runId: string, s: StateLine): void {
@@ -306,6 +434,31 @@ export class Trajectory {
         s.area ?? null,
         s.items === undefined ? null : JSON.stringify(s.items),
       );
+  }
+
+  /**
+   * The character the run is actually playing (the model names it).
+   *
+   * The launch config carries only the harness's suggestion, so every reader
+   * of "which character was this" — the runs page and the positions feed off
+   * `run.character`, and the resume note off `meta.json` — has to be told the
+   * name the model chose, once, at the first sight of it in the world.
+   * Recorded in all three places because they are read by different processes:
+   * a resumed runner reads meta.json before any database is open.
+   */
+  setCharacter(runId: string, character: string): void {
+    this.append({ t: "character", character });
+    this.db.query(`UPDATE run SET character = ? WHERE run_id = ?`).run(character, runId);
+    const path = join(this.dir, "meta.json");
+    try {
+      const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
+      if (meta.config?.character === character) return;
+      const next = { ...meta, config: { ...meta.config, character } };
+      writeFileSync(path, `${JSON.stringify(toJsonSafe(next), null, 2)}\n`, "utf8");
+    } catch {
+      // No meta.json yet (a test harness, a torn write): the database row and
+      // the trajectory record still carry the name.
+    }
   }
 
   setTermination(runId: string, reason: TerminationReason, detail?: string): void {

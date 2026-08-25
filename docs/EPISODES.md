@@ -36,8 +36,13 @@ everything else is derived from it — no list of names decides what counts.
   Tool-call ceiling 3000 (1000 per 30 minutes): a runaway guard sized so no legitimately fast model can reach it; tool calls per episode are reported, not scored.
 - **Ends.** Normally on `episode-limit`. Also on `idle` or `no-xp` (the model
   stopped, or stopped making progress), `adapter-error` (fatal model API error)
-  or `harness-error` (our defect). A `quota-exhausted` or `rate-limited` pause
-  is not an end — the run is suspended and resumable.
+  or `harness-error` (our defect). A run that **pauses** — its provider refused,
+  or the fleet stopped under it — ends too: a scored episode does not resume.
+  It is a **failed attempt** (`attempt-failed`, or `manual` when the
+  harness stopped it, or `stale` when nothing came back for it), its account and
+  character go back, and the model gets a fresh attempt with a new run id and a
+  full clock. Three counted failures on an episode and the model is tainted for
+  it until an operator clears the model.
 - **Scoring.** Scored.
 - **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
   climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
@@ -98,8 +103,9 @@ because that would silently re-scope every score already carrying this label.
 - **Tool-call ceiling.** None pinned; the campaign's own stands.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always** — the `scored: false` flag is what excludes
-  it from Results, the Ladder and every chart, through the same predicate that
-  excludes `freeplay`. Nothing about a probe is a second mechanism.
+  it from the Ladder and every chart, through the same predicate that excludes
+  `freeplay`. It still appears in the runs table, which lists every
+  run regardless of scorability. Nothing about a probe is a second mechanism.
 - **Promotion.** None in either direction, and no target: no tier can buy a
   `probing` run, which is enforced by the type of a tier's run counts rather
   than by a check someone has to remember (`ScoredEpisodeId`).
@@ -131,7 +137,7 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Ends.** Anything, including `manual`.
 - **Scoring.** **Unscored, always.** The run carries the same `unscored`
   labeling machinery as every other steered run, so a freeplay result cannot
-  drift into a results chart by being forgotten about.
+  drift into the Ladder by being forgotten about.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
 - **Extras.** A model whose entry says `idle: "unlimited"` takes its extras
@@ -160,9 +166,29 @@ separates them — steering is. `e360` is the standing goal with a longer clock;
 A run that terminates without a single model response is archived by the runner
 as it exits (`data/runs/archive/`), so it never appears in a listing, a count or
 a chart: it is a launch that did not happen, not a short episode. A *paused* run
-with no response yet is not one — it is resumed. The scheduler still reads the
-archive, because consecutive such launches are what the defer ladder backs off
-from (`docs/OPERATIONS.md`, the scheduling policy).
+with no response yet is not one — it is still in progress until the supervisor
+decides what becomes of it. The scheduler still reads the archive, because
+consecutive such launches are what the defer ladder backs off from
+(`docs/OPERATIONS.md`, the scheduling policy).
+
+## Runs that lapsed
+
+A run can also stop without a verdict: it pauses, or it goes quiet because the
+host slept or the fleet was down. What happens next is the **lane's** rule,
+not the model's or the operator's (docs/METHODOLOGY.md, "Episodes, lanes, and
+evidence"):
+
+| lane | a pause | a stale run |
+|---|---|---|
+| `e90`, `e360` | failed attempt, retried fresh | ended, retried fresh |
+| `probing` | failed attempt unless `campaigns.<name>.resume` | ended |
+| `freeplay` | resumed | ended; the next tick starts a fresh session |
+
+A failed attempt is an **attempt spent**: it numbers a run id, it shows on the
+runs page with its reason, and it is never a recorded episode — the ladder, the
+episodes grain and every chart drop it, the same way they drop a freeplay run.
+Only a provider's refusal (`quota-exhausted`, `rate-limited`) counts toward the
+three strikes; a fleet stop and an offline gap are the harness's doing.
 
 ## Runs launched without an episode
 

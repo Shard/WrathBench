@@ -88,6 +88,15 @@ export const campaignSchema = z
     excludeUnhealthy: z.boolean().default(true),
     /** Counted probe runs wanted per (model, cell). */
     runsPerCell: z.number().int().positive().default(1),
+    /**
+     * Resume a run of this campaign that pauses, instead of ending it as a
+     * failed attempt and sweeping the cell again. Default false,
+     * like the scored lanes: a probe that paused for two hours is usually
+     * better re-run than continued, and a campaign that genuinely wants
+     * continuity — a long dungeon crawl, a travel probe — says so here. Only
+     * `freeplay` resumes without asking.
+     */
+    resume: z.boolean().default(false),
     cells: z.array(campaignCellSchema).min(1),
     /**
      * Pin the whole campaign to one account. Absent means it draws from the

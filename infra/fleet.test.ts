@@ -40,6 +40,12 @@ import {
   planTick,
   jobSpawn,
   planResumes,
+  planStaleRuns,
+  retryNumbers,
+  applyEnded,
+  statesAfterSweep,
+  failedAttemptsFor,
+  formatEndedRun,
   formatPaused,
   formatEnded,
   endRuns,
@@ -48,6 +54,11 @@ import {
   withResume,
   planQueue,
   planPolicy,
+  affinityFrom,
+  affinityOf,
+  takeAccount,
+  planNameSweeps,
+  sweepNames,
   policyJob,
   rosterModels,
   eligibleFrom,
@@ -78,7 +89,7 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
-import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,6 +131,7 @@ describe("parseFleet", () => {
     expect(config.jobs.map((l) => l.name)).toEqual(["son-freeplay", "glm-e90"]);
     expect(config.jobs[0]).toMatchObject({ account: "SHAKEOUT", repeat: "loop", source: "pinned", enabled: true });
     expect(jobSpawn(config.jobs[0]!, config.roster, "SHAKEOUT", "20260101")).toMatchObject({ name: "son-freeplay", account: "SHAKEOUT", loop: true });
+    expect(jobSpawn(config.jobs[0]!, config.roster, "SHAKEOUT", "20260101").entries[0]!.resumeOnPause).toBe(true);
   });
 
   test("two enabled jobs sharing an account: the LATER one is refused, the file survives", () => {
@@ -356,6 +368,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
       live: false,
       pause: null,
       account: null,
+      character: null,
       episodeMs: null,
       campaign: "probe1",
       cell: "c1",
@@ -689,6 +702,7 @@ describe("the shipped fleet files", () => {
         live: false,
         pause: null,
         account: null,
+        character: null,
         episodeMs: null,
         campaign: null,
         cell: null,
@@ -737,6 +751,10 @@ describe("the shipped fleet files", () => {
       episode: "probing",
       campaign: "nav-probe",
       cell: "coldridge",
+      // The lane's resume rule travels with the spec: this campaign
+      // does not ask to resume, so a pause ends the cell's run and it is swept
+      // again. A scored spawn is false the same way; freeplay is true.
+      resumeOnPause: false,
       wikiCoords: true,
       maxToolCalls: 2500,
       character: "Navprobe",
@@ -920,6 +938,11 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // thing that every scored surface then needs a branch for.
     expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code", objective: "ride" } }, queue: [] }))).toThrow(/must not carry an objective/);
     expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", wikiCoords: true } }, queue: [] }))).toThrow(/must not carry wikiCoords/);
+    // Resuming is the lane's rule: neither an entry, a job nor the
+    // policy may claim it, and each says so by name rather than ignoring it.
+    expect(() => parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", resume: true } }, queue: [] }))).toThrow(/must not carry resume/);
+    expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90", resume: true }] }))).toThrow(/must not carry resume/);
+    expect(() => parseFleet(nextShape({ policy: { resume: true } }))).toThrow(/policy.resume is not a key/);
     expect(() => parseFleet(nextShape({ policy: { runsPerEpisode: { e90: 3 } } }))).toThrow(/policy.runsPerEpisode is not a 0.5 key/);
     expect(() => parseFleet(nextShape({ policy: { extras: { characters: [] } } }))).toThrow(/policy.extras is not a 0.5 key/);
     expect(() => parseFleet(nextShape({ policy: { paid: { runsPerEpisode: { e90: 3 } } } }))).toThrow(/policy.paid.runsPerEpisode is not a 0.5 key/);
@@ -1238,6 +1261,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     live: false,
     pause: null,
     account: null,
+    character: null,
     episodeMs: null,
     campaign: null,
     cell: null,
@@ -1622,6 +1646,7 @@ describe("pause and resume across a fleet stop", () => {
     bestLevel: 3,
     live: false,
     pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 },
+    character: null,
     episodeMs: 90 * 60_000,
     campaign: null,
     cell: null,
@@ -1635,26 +1660,33 @@ describe("pause and resume across a fleet stop", () => {
   });
   const held = (): string | undefined => undefined;
 
-  test("boot: a policy model's paused run resumes on its own account, ahead of the policy, with its run id", () => {
-    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260823-a2", model: "z-ai/glm-5.2:free", account: "RUNNER4" });
+  test("boot: a policy model's paused e90 run is ended as a failed attempt, never resumed", () => {
+    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260823-a2", model: "z-ai/glm-5.2:free", account: "RUNNER4", pause: { reason: "quota-exhausted", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 } });
     const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
     expect(plan.listed).toEqual([]);
-    expect(plan.resume).toHaveLength(1);
-    const r = plan.resume[0]!;
-    expect(r.account).toBe("RUNNER4");
-    expect(r.job).toMatchObject({ name: "glm-e90", source: "policy", attempt: 2, resume: { runId: run.runId, model: "z-ai/glm-5.2:free" } });
-    expect(r.why).toContain("operator-pause, 41m elapsed of 1h30m");
-    // The spawn: the paused run id on the first entry, the roster told to reattach.
-    const resumeSpawn = jobSpawn(r.job, roster, "RUNNER4", "20260823");
-    expect(resumeSpawn.resumeRunId).toBe(run.runId);
-    expect(resumeSpawn.entries[0]?.runId).toBe(run.runId);
-    expect(jobArgv(resumeSpawn, { stamp: "20260823", until: undefined })).toContain("--resume-roster");
-    // Ordering: the tick's plan gives the resume its account before the queue or the policy can.
+    expect(plan.end).toHaveLength(1);
+    expect(plan.end[0]).toMatchObject({ runId: run.runId, episode: "e90", reason: "attempt-failed", counts: true, account: "RUNNER4" });
+    expect(formatEndedRun(plan.end[0]!, 2)).toBe(
+      "failed attempt: quota-exhausted: not resumed — a scored run that pauses is a failed attempt, retry 2/3",
+    );
+    // A sweep after an outage numbers the batch it is about to write, not the
+    // projection it read before writing any of it: three failures of one model
+    // in one tick read 1/3, 2/3, 3/3 — tainted — and not "retry 1/3" thrice.
+    const batch = [plan.end[0]!, { ...plan.end[0]!, runId: "b" }, { ...plan.end[0]!, runId: "c" }];
+    expect(retryNumbers(batch, () => 0)).toEqual([1, 2, 3]);
+    expect(formatEndedRun(batch[2]!, 3)).toContain("retry 3/3 — tainted");
+    // An operator-pause in the middle spends an attempt without advancing the count.
+    expect(retryNumbers([batch[0]!, { ...batch[1]!, reason: "manual", counts: false }, batch[2]!], () => 0)).toEqual([1, 2, 2]);
+    // An operator-pause is the harness's own doing: the attempt is spent, the model is not blamed.
+    const stopped = planResumes({ runs: [{ ...run, pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 41 * 60_000 } }], config: config(), running: new Map(), held, now: NOW });
+    expect(stopped.end[0]).toMatchObject({ reason: "manual", counts: false });
+    // The tick still holds the model this pass — the pause fact is only gone
+    // once the termination is written — and gives it a fresh attempt after.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
     const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
     const tick = planTick(cfg, states, held, "20260823", plan.resume);
-    expect(tick.policy.map((p) => p.account)).toEqual(["RUNNER3"]);
-    expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox"]); // glm is held by its paused run, never rescheduled
+    expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox", "nav"]); // glm is held by its paused run for one more tick
   });
 
   test("a pinned job's paused run replaces the job's spawn with a resume spawn on the pinned account", () => {
@@ -1672,56 +1704,129 @@ describe("pause and resume across a fleet stop", () => {
     expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
   });
 
-  test("not in config: listed for the operator, never resumed, never counted", () => {
-    const run = paused({ runId: "fleet-gone-e90-old-model-20260823", model: "gone/model", account: "RUNNER3" });
+  test("a hand-launched paused run is the operator's: listed, never ended by the supervisor", () => {
+    const run = paused({ runId: "roster-old-model-20260823", model: "gone/model", account: "RUNNER3" });
     const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
     expect(plan.listed).toHaveLength(1);
-    expect(plan.listed[0]!.why).toBe("paused, not in config — resume by hand or archive");
-    expect(formatPaused(plan.listed)[1]).toContain("fleet-gone-e90-old-model-20260823 — gone/model on RUNNER3: operator-pause, 41m elapsed of 1h30m");
+    expect(plan.listed[0]!.why).toContain("hand-launched, so the supervisor leaves it");
+    // A fleet run of a model the file no longer names is still the fleet's to end.
+    const mine = paused({ runId: "fleet-gone-e90-old-model-20260823", model: "gone/model", account: "RUNNER3" });
+    expect(planResumes({ runs: [mine], config: config(), running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
     const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
     expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 
-  test("a stale pause (older than twice the budget) is listed, not resumed; the model is free again", () => {
+  test("a stale run — the host slept, the fleet was down — is ended, not resumed", () => {
     const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260822", model: "z-ai/glm-5.2:free", account: "RUNNER3", pause: { reason: "operator-pause", at: NOW - 4 * H, count: 1, episodeElapsedMs: 10 * 60_000 } });
     const plan = planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
-    expect(plan.listed[0]!.why).toContain("stale: paused 4h00m ago, past twice its 1h30m budget — resume by hand (--resume fleet-glm-e90-z-ai-glm-5-2-free-20260822) or archive");
+    expect(plan.listed).toEqual([]);
+    // An offline gap is the harness's weather: ended `stale`, never counted.
+    expect(plan.end[0]).toMatchObject({ reason: "stale", counts: false });
+    expect(plan.end[0]!.detail).toContain("no activity for 4h00m");
+    // Waiting on its provider when the lights went out: the model's problem after all.
+    const onQuota = planResumes({ runs: [{ ...run, pause: { reason: "quota-exhausted", at: NOW - 4 * H, count: 1, episodeElapsedMs: 10 * 60_000 } }], config: config(), running: new Map(), held, now: NOW });
+    expect(onQuota.end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
     expect(states.find((s) => s.name === "glm")?.paused).toBeUndefined();
+    // A run with no pause record at all — the machine died under it — is the same case.
+    const dead = { ...run, runId: "fleet-ox-e90-stealth-ox-alpha-20260822", model: "stealth/ox-alpha", pause: null, endedAt: NOW - 4 * H };
+    const staleRuns = planStaleRuns({ runs: [dead], refs: Object.keys(roster), now: NOW });
+    expect(staleRuns).toHaveLength(1);
+    expect(staleRuns[0]).toMatchObject({ reason: "stale", counts: false, ref: "ox" });
+    // Not while a live job holds its account.
+    expect(planStaleRuns({ runs: [dead], busyAccounts: new Set(["RUNNER3"]), now: NOW })).toEqual([]);
   });
 
-  test("provider pauses resume on the roster's defer ladder by pause count; past the ladder they are listed", () => {
-    const base = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3" });
+  test("provider pauses resume on the defer ladder — for the lanes that resume at all", () => {
+    // The ladder is unchanged; what changed is who rides it. A
+    // freeplay run under a pinned job still comes back on it.
+    const job: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER", source: "pinned" };
+    const base = paused({ runId: "fleet-nav-freeplay-sonnet-20260823", model: "sonnet", account: "RUNNER", episode: "freeplay", episodeMs: null });
     const at = NOW - 2 * 60_000;
     // First rate-limited pause: 1m rung, already due.
-    let plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    let plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } }], config: config([job]), running: new Map(), held, now: NOW });
     expect(plan.resume.map((r) => r.runId)).toEqual([base.runId]);
-    expect(plan.resume[0]!.why).toContain("rate-limited, 0m elapsed of 1h30m");
     // Fourth pause: 10m rung, not yet due.
-    plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    plan = planResumes({ runs: [{ ...base, pause: { reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 } }], config: config([job]), running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
     expect(plan.listed[0]!.why).toContain("rate-limited, pause 4: resuming after");
     expect(resumeNotBefore({ reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 })).toBe(at + 10 * 60_000);
     // Past the ladder: by hand.
-    plan = planResumes({ runs: [{ ...base, pause: { reason: "quota-exhausted", at, count: 10, episodeElapsedMs: 0 } }], config: config(), running: new Map(), held, now: NOW });
+    plan = planResumes({ runs: [{ ...base, pause: { reason: "quota-exhausted", at, count: 10, episodeElapsedMs: 0 } }], config: config([job]), running: new Map(), held, now: NOW });
     expect(plan.listed[0]!.why).toContain("past the defer ladder");
     expect(resumeNotBefore({ reason: "operator-pause", at, count: 10, episodeElapsedMs: 0 })).toBeNull();
+    // A scored run never reaches the ladder at all: it is a failed attempt on the first pause.
+    const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
   });
 
   test("a resume waits for its own account — never a different one — and a running job handles its own pause", () => {
-    const run = paused({ runId: "fleet-glm-e90-z-ai-glm-5-2-free-20260823", model: "z-ai/glm-5.2:free", account: "RUNNER3" });
-    let plan = planResumes({ runs: [run], config: config(), running: new Map([["ox-e90", "RUNNER3"]]), held, now: NOW });
+    const job: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, source: "queue" };
+    const run = paused({ runId: "fleet-nav-freeplay-sonnet-20260823", model: "sonnet", account: "RUNNER3", episode: "freeplay", episodeMs: null });
+    let plan = planResumes({ runs: [run], config: config([job]), running: new Map([["ox-e90", "RUNNER3"]]), held, now: NOW });
     expect(plan.resume).toEqual([]);
     expect(plan.listed[0]!.why).toBe("waiting: account RUNNER3 is busy (ox-e90)");
-    plan = planResumes({ runs: [run], config: config(), running: new Map(), held: (a) => (a === "RUNNER3" ? "run-by-hand" : undefined), now: NOW });
+    plan = planResumes({ runs: [run], config: config([job]), running: new Map(), held: (a) => (a === "RUNNER3" ? "run-by-hand" : undefined), now: NOW });
     expect(plan.listed[0]!.why).toBe("waiting: account RUNNER3 is held by run run-by-hand");
     // The job's own roster is running (mid-retry): nothing to do, nothing to list.
-    plan = planResumes({ runs: [run], config: config(), running: new Map([["glm-e90", "RUNNER3"]]), held, now: NOW });
+    plan = planResumes({ runs: [run], config: config([job]), running: new Map([["nav-freeplay", "RUNNER3"]]), held, now: NOW });
     expect(plan).toEqual({ resume: [], listed: [], end: [] });
+  });
+
+  test("the strike a tick writes is in the projection that tick schedules from", () => {
+    // The 2026-08-25 bug: the sweep logged `retry 3/3 — tainted` for
+    // nemotron-ultra and the policy spawned its ninth attempt one second
+    // later, because the projection behind the pick was built before the
+    // terminations were written and still counted zero.
+    const ended = (i: number): RunFact =>
+      paused({
+        runId: `fleet-ox-e90-stealth-ox-alpha-2026082${i}`,
+        model: "stealth/ox-alpha",
+        account: "RUNNER3",
+        pause: null,
+        terminationReason: "attempt-failed",
+        endedAt: NOW - (10 - i) * H,
+      });
+    const third = paused({
+      runId: "fleet-ox-e90-stealth-ox-alpha-20260825",
+      model: "stealth/ox-alpha",
+      account: "RUNNER3",
+      pause: { reason: "quota-exhausted", at: NOW - 60_000, count: 1, episodeElapsedMs: 12 * 60_000 },
+    });
+    const runs = [ended(1), ended(2), third];
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
+    const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW });
+    expect(plan.end).toHaveLength(1);
+    expect(retryNumbers(plan.end, (e) => failedAttemptsFor(modelStatesOf(rosterModels(roster), runs, NOW), e) ?? 0)).toEqual([3]);
+
+    // Before the fix: the same tick's pre-sweep projection would schedule it.
+    const before = modelStatesOf(rosterModels(roster), runs, NOW);
+    expect(before.find((st) => st.name === "ox")!.perEpisode.e90).toMatchObject({ failed: 2, tainted: false });
+
+    // After: the ends are applied, the third strike lands, and nothing spawns
+    // for that model in this tick.
+    const after = statesAfterSweep(cfg, runs, plan.end, NOW, { version: 1, cleared: {} });
+    const ox = after.find((st) => st.name === "ox")!;
+    expect(ox.perEpisode.e90).toMatchObject({ failed: 3, tainted: true });
+    const v = schedulability(ox);
+    expect(v.verdict).toBe("blocked");
+    expect(v.why).toContain("tainted on e90 (3 failed attempts)");
+    const tick = planTick(cfg, after, held, "20260825");
+    expect(tick.policy.map((p) => p.job.ref)).not.toContain("ox");
+    // The reverse race: the run the sweep ended holds neither its model nor
+    // its account, so RUNNER3 is free for the next model in the same tick.
+    expect(ox.paused).toBeUndefined();
+    expect(tick.policy.map((p) => p.account).sort()).toEqual(["RUNNER3", "RUNNER4"]);
+    expect(applyEnded(runs, plan.end, NOW).find((f) => f.runId === third.runId)).toMatchObject({
+      terminationReason: "attempt-failed",
+      pause: null,
+      live: false,
+    });
   });
 
   test("a paused run whose ref now names another model is ENDED by the supervisor, never resumed or listed", () => {
@@ -1731,13 +1836,29 @@ describe("pause and resume across a fleet stop", () => {
     const plan = planResumes({ runs: [run], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
     expect(plan.listed).toEqual([]);
-    expect(plan.end).toEqual([{ runId: run.runId, model: "stealth/ox-alpha", ref: "ox", detail: "ended by the supervisor: model stealth/ox-alpha no longer under ref ox" }]);
+    expect(plan.end).toEqual([
+      {
+        runId: run.runId,
+        model: "stealth/ox-alpha",
+        effort: null,
+        ref: "ox",
+        episode: "e90",
+        reason: "manual",
+        detail: "ended by the supervisor: model stealth/ox-alpha no longer under ref ox",
+        counts: false,
+        account: "RUNNER3",
+      },
+    ]);
     expect(formatEnded(plan.end, false)[1]).toContain("fleet-ox-e90-ox-alpha-20260823-a2 — ended by the supervisor: model stealth/ox-alpha no longer under ref ox");
+    expect(formatEnded(plan.end, false)[0]).toContain("lapsed runs the supervisor will end when it starts (1)");
     // An effort change is a different entry too.
     const lowRun = paused({ runId: "fleet-ox-e90-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3" });
     expect(planResumes({ runs: [lowRun], config: { ...config(), roster: { ...roster, ox: { model: "stealth/ox-alpha", effort: "low", tier: "t1", idle: "none" } satisfies FleetRosterEntry } }, running: new Map(), held, now: NOW }).end).toHaveLength(1);
-    // The same model under the same ref resumes as before; a run launched outside the fleet (no ref prefix) is not this rule's.
-    expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).resume).toHaveLength(1);
+    // The same model under the same ref is still ended — as a failed attempt
+    // now, with a different reason: the re-pointed rule is about which run has
+    // no job to come back to, not about whether a scored run resumes.
+    expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual", counts: false });
+    // A run launched outside the fleet is not this rule's, and not the supervisor's to end.
     const hand = paused({ runId: "hand-ox-1", model: "stealth/ox-alpha", account: "RUNNER3" });
     expect(planResumes({ runs: [hand], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW }).end).toEqual([]);
     // The ref is read off the id's prefix; the longest matching ref wins.
@@ -1754,7 +1875,7 @@ describe("pause and resume across a fleet stop", () => {
     t.setPause(runId, "rate-limited", "429", 41 * 60_000);
     t.close();
     const detail = "ended by the supervisor: model stealth/ox-alpha no longer under ref ox";
-    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha", ref: "ox", detail }])).toEqual([{ runId }]);
+    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
     const after = new Trajectory(join(runsDir, runId));
     const row = after.runRow(runId)!;
     after.close();
@@ -1766,7 +1887,11 @@ describe("pause and resume across a fleet stop", () => {
     // plain file fails for every uid — `/nonexistent` is creatable by root.
     const blocked = join(runsDir, "not-a-dir");
     writeFileSync(blocked, "");
-    expect(endRuns(join(blocked, "runs"), [{ runId: "x", model: "m", ref: "r", detail }])[0]!.error).toBeDefined();
+    expect(
+      endRuns(join(blocked, "runs"), [
+        { runId: "x", model: "m", effort: null, ref: "r", episode: "e90", reason: "manual", detail, counts: false, account: null },
+      ])[0]!.error,
+    ).toBeDefined();
   });
 
   test("withResume puts the paused entry first so a rotation-mate's fresh launch cannot wipe its character", () => {
@@ -1783,5 +1908,171 @@ describe("pause and resume across a fleet stop", () => {
     const out = withResume(mix, { runId: "fleet-mix-b-low-20260823", model: "b", effort: "low" });
     expect(out.entries?.map((e) => e.runId)).toEqual(["fleet-mix-b-low-20260823", "fleet-mix-a-20260823"]);
     expect(out.resumeRunId).toBe("fleet-mix-b-low-20260823");
+  });
+});
+
+// ---------------------------------------------- account affinity
+
+describe("account affinity and cross-account name hygiene", () => {
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
+    ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
+    mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
+  };
+  const fact = (model: string, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `${model}-${over.startedAt ?? 0}`,
+    model,
+    effort: null,
+    episode: "e90",
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW - 3_600_000,
+    endedAt: NOW - 1_800_000,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 3,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    ...over,
+  });
+  const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
+    refs: [over.ref],
+    episode: "e90",
+    repeat: 1,
+    name: `${over.ref}-${over.episode ?? "e90"}`,
+    enabled: true,
+    source: "queue",
+    ...over,
+  });
+  const base = { roster, pool: ["RUNNER", "RUNNER2", "RUNNER3"], finished: new Set<string>(), held: () => undefined, cooling: () => undefined };
+  const empty = { assign: [], waiting: [], skipped: [] };
+
+  test("the latest run of a model names the account its character is standing on", () => {
+    const runs = [
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 7_200_000, account: "RUNNER", character: "Oldname" }),
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 3_600_000, account: "RUNNER5", character: "Grimjaw" }),
+      // No account recorded: no evidence, and it must not win on recency.
+      fact("z-ai/glm-5.2:free", { startedAt: NOW - 60_000, character: "Ghost" }),
+      fact("stealth/ox-alpha", { startedAt: NOW - 600_000, account: "RUNNER2", character: "Zeliana" }),
+    ];
+    const map = affinityFrom(runs, roster);
+    expect(map.get("glm")).toEqual({ account: "RUNNER5", character: "Grimjaw" });
+    expect(map.get("ox")).toEqual({ account: "RUNNER2", character: "Zeliana" });
+    expect(map.get("mimo")).toBeUndefined();
+    expect(affinityOf(map)("glm")).toBe("RUNNER5");
+    expect(affinityOf(map)("mimo")).toBeUndefined();
+  });
+
+  test("takeAccount prefers the affine account and otherwise gives the first, as shift did", () => {
+    const free = ["RUNNER", "RUNNER2", "RUNNER3"];
+    expect(takeAccount(free, "runner2")).toBe("RUNNER2");
+    expect(free).toEqual(["RUNNER", "RUNNER3"]);
+    // A preference that is not free falls through to the first free account.
+    expect(takeAccount(free, "RUNNER5")).toBe("RUNNER");
+    expect(takeAccount([], "RUNNER")).toBeUndefined();
+  });
+
+  test("a queue job goes back to the free account its model's character is on", () => {
+    const affinity = affinityOf(
+      affinityFrom([fact("mimo-v2.5-free", { account: "RUNNER3", character: "Grimjaw" })], roster),
+    );
+    const plan = planQueue({ ...base, queue: [job({ ref: "glm" }), job({ ref: "mimo" })], running: new Map(), affinity });
+    expect(plan.assign.map((a) => [a.job.name, a.account])).toEqual([["glm-e90", "RUNNER"], ["mimo-e90", "RUNNER3"]]);
+    // Without affinity the pool order stands: mimo would have taken RUNNER2.
+    const plain = planQueue({ ...base, queue: [job({ ref: "glm" }), job({ ref: "mimo" })], running: new Map() });
+    expect(plain.assign.map((a) => a.account)).toEqual(["RUNNER", "RUNNER2"]);
+  });
+
+  test("an affine account that is busy is not waited for — the next free one is taken", () => {
+    const affinity = affinityOf(
+      affinityFrom([fact("z-ai/glm-5.2:free", { account: "RUNNER3", character: "Grimjaw" })], roster),
+    );
+    const plan = planQueue({
+      ...base,
+      queue: [job({ ref: "glm" })],
+      running: new Map(),
+      held: (a) => (a === "RUNNER3" ? "another run" : undefined),
+      affinity,
+    });
+    expect(plan.assign.map((a) => a.account)).toEqual(["RUNNER"]);
+    expect(plan.waiting).toEqual([]);
+  });
+
+  test("a policy pick keeps its own account too", () => {
+    const states = modelStatesOf(rosterModels(roster));
+    const affinity = affinityOf(
+      affinityFrom([fact("stealth/ox-alpha", { account: "RUNNER3", character: "Zeliana" })], roster),
+    );
+    const picks = planPolicy({
+      states: states.filter((s) => s.name === "ox"),
+      pool: ["RUNNER", "RUNNER2", "RUNNER3"],
+      running: new Map(),
+      held: () => undefined,
+      queuePlan: empty,
+      runningRefs: new Set(),
+      affinity,
+    });
+    expect(picks.map((p) => [p.job.ref, p.account])).toEqual([["ox", "RUNNER3"]]);
+  });
+
+  test("a sweep is planned only for a name on an account this tick calls free, never the launching one", () => {
+    const affinity = affinityFrom(
+      [
+        fact("z-ai/glm-5.2:free", { account: "RUNNER5", character: "Grimjaw" }),
+        fact("stealth/ox-alpha", { account: "RUNNER6", character: "Zeliana" }),
+        fact("mimo-v2.5-free", { account: "RUNNER2", character: "Bramble" }),
+      ],
+      roster,
+    );
+    const sweeps = planNameSweeps({
+      assign: [
+        // glm launches on RUNNER3 while Grimjaw stands on a free RUNNER5.
+        { ref: "glm", account: "RUNNER3" },
+        // ox's old account is busy: nothing may be deleted there.
+        { ref: "ox", account: "RUNNER4" },
+        // mimo went back to its own account: its own hygiene owns it.
+        { ref: "mimo", account: "RUNNER2" },
+      ],
+      affinity,
+      isFree: (a) => a !== "RUNNER6",
+    });
+    expect(sweeps).toEqual([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }]);
+    // A model with no recorded character sweeps nothing.
+    expect(planNameSweeps({ assign: [{ ref: "mimo", account: "RUNNER" }], affinity: new Map(), isFree: () => true })).toEqual([]);
+  });
+
+  test("the sweep deletes through the module's client delete path, with a token the module will accept", async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const f = ((url: string, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, deleted: true }), { status: 200 }));
+    }) as unknown as typeof fetch;
+    const said: string[] = [];
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), f);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toEndWith("/character-delete");
+    expect(calls[0]!.body["account"]).toBe("RUNNER5");
+    expect(calls[0]!.body["character"]).toBe("Grimjaw");
+    // The module refuses tokens under 32 characters (`weak_token`).
+    expect(String(calls[0]!.body["token"]).length).toBeGreaterThanOrEqual(32);
+    expect(said[0]).toContain("deleted Grimjaw on RUNNER5");
+  });
+
+  test("a refused delete is logged and never throws — the model can pick another name", async () => {
+    const f = (() => Promise.resolve(new Response(JSON.stringify({ ok: false, error: "account_in_use" }), { status: 409 }))) as unknown as typeof fetch;
+    const said: string[] = [];
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), f);
+    expect(said[0]).toContain("could not delete Grimjaw on RUNNER5 (account_in_use)");
+    const boom = (() => Promise.reject(new Error("econnrefused"))) as unknown as typeof fetch;
+    await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), boom);
+    expect(said[1]).toContain("could not reach the module");
   });
 });

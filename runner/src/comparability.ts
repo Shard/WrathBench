@@ -2,12 +2,12 @@
  * The comparability tuple: everything that has to match before two runs may be
  * put on the same chart.
  *
- * Scores are comparable *within a harness version*. In practice
- * the harness version alone is not the whole story — a run also carries an
- * episode budget, a reasoning effort, a harness and possibly an operator
- * objective, and each of those changes what the number means. This
- * module names that tuple once, stamps it into run metadata at launch, and is
- * the only place that decides what belongs in it.
+ * docs/METHODOLOGY.md ("What WrathBench measures") says scores are comparable
+ * *within a harness version*. In practice the harness version alone is not the
+ * whole story — a run also carries an episode budget, a reasoning effort, a
+ * harness and possibly an operator objective, and each of those changes what
+ * the number means. This module names that tuple once, stamps it into run
+ * metadata at launch, and is the only place that decides what belongs in it.
  *
  * Two properties are deliberate:
  *
@@ -28,11 +28,12 @@ import { buildSystemPrompt } from "./prompt";
 import type { WikiBundleMeta } from "./wiki";
 
 /**
- * Harness as the tuple records it: which machinery decided what the
- * model saw each turn. `wrathbench` applies the fixed context policy (event
- * window, hysteretic message window, regenerated per-turn context); `claude-code` is the Claude
- * Code CLI, which owns its own history and compaction. Two harnesses are two
- * comparability groups; neither is a scoring penalty.
+ * Harness as the tuple records it: which machinery decided what the model saw
+ * each turn. `wrathbench` applies its own context policy (docs/METHODOLOGY.md,
+ * "Context policy": event window, hysteretic message window, regenerated
+ * per-turn context); `claude-code` is the Claude Code CLI, which owns its own
+ * history and compaction. Two harnesses are two comparability groups; neither
+ * is a scoring penalty.
  */
 export const harnessSchema = z.enum(HARNESSES);
 
@@ -62,9 +63,9 @@ export type ServerBuild = z.infer<typeof serverBuildSchema>;
 
 /**
  * The reference bundle's identity as the tuple annotates it (docs/METHODOLOGY.md,
- * "Episodes, lanes, and evidence"). Every field nullable: this is evidence about the
- * file the run read, and a bundle that cannot describe itself must read as
- * "not recorded" rather than making the whole tuple unparseable.
+ * "Episodes, lanes, and evidence"). Every field nullable: this is evidence
+ * about the file the run read, and a bundle that cannot describe itself must
+ * read as "not recorded" rather than making the whole tuple unparseable.
  */
 export const wikiBundleSchema = z
   .object({
@@ -107,9 +108,9 @@ export const comparabilitySchema = z.object({
    * changes is a behaviour change, and behaviour changes are already grouped by
    * the harness series, so a text-changing rebuild is paired with a harness
    * minor bump and this field is the evidence of what that bump was about.
-   * Note that `sameComparability` is whole-tuple equality and so is
-   * stricter: a rebuild between launch and resume restamps. Null when there was
-   * no bundle; absent on tuples stamped before the field existed.
+   * Note that `sameComparability` compares every stamped field and so is
+   * stricter: a rebuild between launch and resume restamps. Null when there
+   * was no bundle; absent on tuples stamped before the field existed.
    */
   wikiBundle: wikiBundleSchema.optional(),
   /**
@@ -132,6 +133,23 @@ export const comparabilitySchema = z.object({
    * rather than failing the run.
    */
   serverBuild: serverBuildSchema,
+  /**
+   * The model id the provider said it actually served — `claude-sonnet-5` for a
+   * run launched as `sonnet`.
+   *
+   * An **annotation**, in exactly the sense the wiki bundle is one: it answers
+   * "which model was this really", which the roster alias cannot, and it is
+   * evidence rather than a grouping key. It is also the one field here that is
+   * *observed*, not stamped — the CLI resolves the alias at launch and names
+   * the result in its `init` event, minutes after the tuple is written — so it
+   * is filled in once when first seen and is deliberately excluded from
+   * `sameComparability`. Including it would make every resume of an aliased run
+   * emit a `comparability_restamped` record saying nothing.
+   *
+   * Null when nothing named a model; absent on tuples stamped before the field
+   * existed, which the viewer back-fills at read time and never rewrites.
+   */
+  resolvedModel: z.string().nullable().optional(),
 });
 export type Comparability = z.infer<typeof comparabilitySchema>;
 
@@ -160,8 +178,8 @@ export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Pr
  * The harness *series* of a version stamp: `harness-0.3-114-gda93f0a-dirty`
  * is series `"0.3"`. Commits within a series are fixes and instrumentation;
  * a minor bump is a change to what the run measures. The scheduler keys its
- * targets on the series of the checkout it runs from (a bump
- * restarts the evidence, a fix commit does not), and the results surface groups
+ * targets on the series of the checkout it runs from (a bump restarts the
+ * evidence, a fix commit does not), and the results surface groups
  * by it, labelling rows with the exact versions they hold. Null when the
  * stamp has no recognisable major.minor (the unversioned fallback included),
  * so a reader says "no series" rather than inventing one.
@@ -250,7 +268,20 @@ export function harnessOfRun(meta: {
   return null;
 }
 
+/**
+ * The tuple minus the fields that are observed rather than stamped.
+ *
+ * `resolvedModel` is filled in mid-episode from what the driver reports, so a
+ * launch tuple and the same run's tuple an hour later differ in it by
+ * construction. Comparing on it would turn every resume of an aliased run into
+ * a restamp, which is noise in a record whose whole job is signal.
+ */
+function stamped(t: Comparability): Omit<Comparability, "resolvedModel"> {
+  const { resolvedModel: _observed, ...rest } = t;
+  return rest;
+}
+
 /** Whether two tuples describe runs that may share a chart. Order-independent. */
 export function sameComparability(a: Comparability, b: Comparability): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return JSON.stringify(stamped(a)) === JSON.stringify(stamped(b));
 }

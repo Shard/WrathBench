@@ -1,9 +1,9 @@
 /**
  * Fleet overview: what the supervisor is running, right now.
  *
- * One grain per page (decided 2026-08-23). This one is the fleet's:
+ * One grain per page (2026-08-23). This one is the fleet's:
  * one table keyed by the job with the idle accounts under it, the
- * paused and ended runs. The per-run grain is the episodes page, and a job's
+ * paused and ended runs. The per-run grain is the runs page, and a job's
  * run link is the only per-run reference here.
  *
  * The table is the page. The supervisor's liveness, the deploy phase, the
@@ -16,13 +16,14 @@
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
  * published view — jobs, accounts, a heartbeat, the gate — shared with the
  * badge through `lib/feeds.ts` so it is polled once. `/api/runs` is the
- * filesystem's view, read because the job rows carry the level, xp and
- * elapsed time of the run each job is driving.
+ * filesystem's view, read because the job rows carry the level, xp, tokens per
+ * second and elapsed time of the run each job is driving.
  */
 
 import { A, useNavigate } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type FleetResponse } from "../api/client";
+import { Collapsible } from "../components/Collapsible";
 import {
   FLEET_COLUMNS,
   fleetRows,
@@ -34,6 +35,8 @@ import {
   rowStateLabel,
   runHref,
   serverBanner,
+  tpsLabel,
+  tpsTitle,
   type FleetRow,
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
@@ -62,7 +65,7 @@ export default function Fleet() {
       <Show when={fleet.latest !== undefined && serverBanner(fleet.latest.server)}>
         {(b) => (
           <Show when={b().tone !== "dim"}>
-            <div class={b().tone === "bad" ? "banner bad" : "banner warn"}>{b().text}</div>
+            <div class={`banner ${b().tone}`}>{b().text}</div>
           </Show>
         )}
       </Show>
@@ -89,7 +92,7 @@ export default function Fleet() {
                 )}
               </Show>
 
-              {/* The preflight gate only when it blocks: a PASS is not news. */}
+              {/* The gate only when it blocks: a PASS is not news. */}
               <Show when={gateVerdict(f().preflight) === "FAIL"}>
                 <div class="banner bad">
                   preflight FAIL — jobs blocked
@@ -112,37 +115,52 @@ export default function Fleet() {
                 </table>
               </div>
               <p class="dim">
-                <A href="/episodes?episode=all">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
+                <A href="/runs">{runs.latest?.length ?? "—"} runs recorded</A> · the{" "}
                 <A href="/models">models table</A> carries the scheduler's verdict per roster entry.
               </p>
 
-              {/* Paused runs the supervisor is not resuming, and why; the ones it ended instead. */}
+              {/*
+                Paused runs the supervisor is not resuming, and why; the
+                ones it ended instead. Both fold away: they are worth having on the
+                page and not worth reading every time, and the count in the heading
+                is the whole of what a closed pane has to say.
+              */}
               <Show when={f().paused.length > 0}>
-                <p class="dim">paused runs not resumed ({f().paused.length}):</p>
-                <ul class="dim">
-                  <For each={f().paused}>
-                    {(p) => (
-                      <li>
-                        <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
-                        <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
-                        {fmtDuration(p.elapsedMs)} elapsed
-                        <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
-                      </li>
-                    )}
-                  </For>
-                </ul>
+                <Collapsible
+                  title="paused runs not resumed"
+                  summary={`${f().paused.length} run(s)`}
+                  storageKey="wrathbench.fleet.paused"
+                >
+                  <ul class="dim">
+                    <For each={f().paused}>
+                      {(p) => (
+                        <li>
+                          <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> — {p.model}
+                          <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
+                          {fmtDuration(p.elapsedMs)} elapsed
+                          <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Collapsible>
               </Show>
               <Show when={f().ended.length > 0}>
-                <p class="dim">ended by the supervisor this session ({f().ended.length}):</p>
-                <ul class="dim">
-                  <For each={f().ended}>
-                    {(e) => (
-                      <li>
-                        <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
-                      </li>
-                    )}
-                  </For>
-                </ul>
+                <Collapsible
+                  title="ended by the supervisor this session"
+                  summary={`${f().ended.length} run(s)`}
+                  storageKey="wrathbench.fleet.ended"
+                >
+                  <ul class="dim">
+                    <For each={f().ended}>
+                      {(e) => (
+                        <li>
+                          <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Collapsible>
               </Show>
             </>
           );
@@ -210,6 +228,12 @@ function FleetRowView(props: { row: FleetRow }) {
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
       <td class="right mono dim">{fmtTokens(r().tokens)}</td>
+      {/*
+        Speed, as output tokens per second: the recent window in the cell (a live
+        run's rate now is what an operator is asking about) with the run's own
+        average in the title. Blank on a row driving nothing.
+      */}
+      <td class="right mono dim" title={tpsTitle(r().tps)}>{tpsLabel(r().tps)}</td>
       {/* The actual figure only, as the episodes page shows it; blank is "not reported", never an estimate. */}
       <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : fmtUsd(r().costUsd)}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
