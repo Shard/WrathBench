@@ -1013,11 +1013,19 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               subtype: msg["subtype"],
               isError: msg["is_error"] === true,
               numTurns: msg["num_turns"],
+              // Which CLI session this turn belongs to. `total_cost_usd` below
+              // is cumulative WITHIN a session, so a reader needs the boundary
+              // to know when a figure restarts (`ClaudeCostTally` in the
+              // viewer). A pause and resume opens a new one.
+              sessionId: msg["session_id"],
               durationMs: msg["duration_ms"],
               // Wall clock the CLI spent inside API calls, as against
               // `duration_ms` which also covers every tool round trip the turn
               // made. The closest thing the driver reports to model time.
               durationApiMs: msg["duration_api_ms"],
+              // CUMULATIVE for the session, not this turn's charge: it climbs
+              // across the turns of one CLI invocation, so a run's cost is the
+              // last figure per session and not the sum of the records.
               costUsd: msg["total_cost_usd"],
               // Raw for fidelity; normalised so a reader never has to know two
               // token vocabularies. This covers ONE harness turn — one CLI
