@@ -1191,6 +1191,12 @@ export interface ModelRowView {
    * Free or paid (`runner/src/model-cost.ts`). Since ADR-0043 this says only
    * where a run may physically execute — the account class and the rate-limit
    * key. It buys no runs and costs none: that is the tier.
+   *
+   * NOT the same verdict as `ResultRun.billing`, and the two disagree on
+   * purpose: this one answers "does this consume the paid concurrency budget",
+   * so a `claude-code` subscription reads `free` here; that one answers "did we
+   * pay for this run", so the same entry's runs read `paid` there
+   * (`runner/src/billing.ts`).
    */
   billing: "free" | "paid";
   /** The tier the config admitted this model to (ADR-0043). */
