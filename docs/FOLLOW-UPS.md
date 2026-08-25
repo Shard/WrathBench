@@ -102,16 +102,6 @@ status.
     and the dashboard's rung 4 and achievement-points derivations. Unblocked;
     the SDK derivation is in hand with another agent.
 
-81. **The launch note changed, so the harness series has not** (2026-08-25,
-    ADR-0050). The model now names its own character and is told so at launch,
-    which is a change to what every model is told — a harness minor under the
-    series rule. The version stamp is `git describe`, so the bump is a tag plus
-    the per-series `group`/`schedule` in `fleet.json`, and it is Mark's call:
-    a 0.6 splits the schedule and the ladder from every 0.5 run recorded so far.
-    Trigger: before the next scored night is planned on 0.5 numbers. Until then
-    runs either side of the notice change share a series and are not strictly
-    comparable.
-
 ## Episodes and results
 
 8. **Context policy is not applied on the claude-code harness** (ADR-0035: recorded,
