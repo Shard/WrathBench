@@ -210,6 +210,12 @@ describe("sandbox evaluation", () => {
     // value into test output.
     process.env["WB_CANARY_SECRET"] = "canary-do-not-leak-42";
     process.env["OPENROUTER_KEY"] = "sk-or-must-not-leak";
+    // WRATHBENCH_DB_PASSWORD is the one credential the WRATHBENCH_* prefix
+    // forwarding would otherwise admit: the `runner` and `fleet` services carry
+    // it so the gate's smokes can stage a fixture, and an episode is a child of
+    // one of those. Root on acore_characters would let a snippet write its own
+    // level — the server-side shortcut docs/CONTRACTS.md forbids.
+    process.env["WRATHBENCH_DB_PASSWORD"] = "must-not-leak";
     try {
       const host = makeHost();
       const res = await host.evalSnippet('Object.keys(process.env).sort().join(",")');
@@ -232,9 +238,11 @@ describe("sandbox evaluation", () => {
       expect(keys).not.toContain("OPENROUTER_KEY");
       expect(keys).not.toContain("OPENCODE_KEY");
       expect(keys).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(keys.filter((k) => k.startsWith("WRATHBENCH_DB_"))).toEqual([]);
     } finally {
       delete process.env["WB_CANARY_SECRET"];
       delete process.env["OPENROUTER_KEY"];
+      delete process.env["WRATHBENCH_DB_PASSWORD"];
     }
   });
 

@@ -12,7 +12,7 @@ parsers kept in deliberate sync (the supervisor's, the viewer's, and the two
 
 Meanwhile the dashboard wants model identity everywhere: an icon beside the
 roster name on the models page, beside the model cell on the fleet page, in the
-results chart's label gutter, and on the map instead of an anonymous colored
+runs and ladder tables, and on the map instead of an anonymous colored
 pip. The repo had no place that knows "openai/gpt-5.6-luna is a GPT model from
 OpenAI" — the only model-name knowledge in code is scheduling classification
 (`isClaudeFamily`, the billing suffix rules) and the pricing table's display
@@ -50,6 +50,10 @@ trails and falls back to the colored pip when a position's model is unknown.
 
 - Recognizing a new model is a data edit: add or extend a family, run the
   fetch CLI, commit. No code changes, no per-model branches.
+- The render sites are the runs table's model column, the ladder table's rungs
+  rows, the fleet page's model cells and paused list, the models page's roster
+  names, the run page's model card, and the map's pips and sidebar; the ladder
+  *scatter* keeps its plain dots, whose colour is the harness legend.
 - The icon package version is pinned like every other pin; bumping it is a
   deliberate edit to the lineup file.
 - Brand logos remain trademarks of their owners; the package license (MIT)

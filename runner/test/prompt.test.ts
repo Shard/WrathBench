@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { SYSTEM_PROMPT } from "../src/prompt";
+import { SYSTEM_PROMPT, freshCharacterNote } from "../src/prompt";
 
 /**
  * The prompt is harness surface (ADR-0004), so the facts a run proved models
@@ -98,5 +98,41 @@ describe("episode sentence", () => {
     expect(goal).toBe(0);
     expect(tier).toBeGreaterThan(goal);
     expect(obj).toBeGreaterThan(tier);
+  });
+});
+
+describe("the fresh-launch session note (ADR-0050: the model names its character)", () => {
+  const note = (taken: string[] = []) => freshCharacterNote({ character: "Fleetsonnet", race: 1, class: 2, taken });
+
+  test("invites the model to name the character, in the game's own naming rules", () => {
+    expect(note()).toContain("name your character");
+    expect(note()).toContain("2-12 letters, no spaces, no three identical letters in a row");
+    expect(note()).toContain("it is yours for the episode");
+  });
+
+  test("the roster name is offered as a suggestion, not as an assignment", () => {
+    expect(note()).toContain('"Fleetsonnet" is the harness\'s suggestion');
+    expect(note()).not.toContain("your assigned character");
+    expect(note()).not.toContain("Use exactly these values");
+  });
+
+  test("race and class stay fixed — they are the episode's comparability dimensions", () => {
+    expect(note()).toContain("race and class are not yours to choose");
+    expect(note()).toContain("race 1, class 2");
+    expect(note()).toContain('createSession({ character: "<your name>", race: 1, class: 2 })');
+  });
+
+  test("a taken name is a retry the note names in advance", () => {
+    expect(note()).toContain("char_create_failed_code_50");
+    expect(note()).toContain("pick a different one");
+  });
+
+  test("survivors episode hygiene could not clear are named, because createSession reuses them", () => {
+    expect(note(["Grimjaw", "Zeliana"])).toContain("already taken on this account and must not be used: Grimjaw, Zeliana");
+    expect(note()).not.toContain("must not be used");
+  });
+
+  test("the model is still never told the account", () => {
+    expect(note()).toContain("do not pass an account");
   });
 });

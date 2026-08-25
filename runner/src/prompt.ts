@@ -117,3 +117,39 @@ export function buildSystemPrompt(objective?: string | undefined, episode?: Epis
   parts.push(BODY);
   return parts.join("\n\n");
 }
+
+/**
+ * The launch session note for a fresh episode: what the model is told about
+ * the character it is about to create.
+ *
+ * ADR-0050: the NAME is the model's own — a name it chose is one it may feel
+ * some ownership of, and fixed per-model names collided across accounts the
+ * moment fresh attempts stopped returning to the account their predecessor
+ * used. The race and class are NOT: they are the episode's comparability
+ * dimensions and every run is read against them.
+ *
+ * `taken` are the names episode hygiene could not clear off the account.
+ * `createSession` reuses an existing character of the name it is given, so a
+ * model that picked one of these would land on a used character and burn the
+ * attempt as `stale-character` — hence they are named, not left to be
+ * discovered.
+ */
+export function freshCharacterNote(o: { character: string; race: number; class: number; taken?: readonly string[] }): string {
+  const taken = o.taken ?? [];
+  return (
+    `name your character: 2-12 letters, no spaces, no three identical letters in a row — ` +
+    `pick something you like, it is yours for the episode ("${o.character}" is the harness's ` +
+    `suggestion if you would rather not choose). Your race and class are not yours to choose: ` +
+    `race ${o.race}, class ${o.class} (numeric ids; e.g. race 1 = Human, class 2 = Paladin) are ` +
+    `this episode's fixed dimensions and every run is compared on them. Create the character with ` +
+    `\`await sdk.createSession({ character: "<your name>", race: ${o.race}, class: ${o.class} })\` ` +
+    `after \`await connect()\` — the name is required, so supply one. If the server answers ` +
+    `\`char_create_failed_code_50\` the name is already in use: pick a different one and call ` +
+    `createSession again.` +
+    (taken.length > 0
+      ? ` These names are already taken on this account and must not be used: ${taken.join(", ")}.`
+      : "") +
+    ` The game account is assigned and bound for you by the harness — do not pass an account; ` +
+    `createSession is issued on the correct one automatically.`
+  );
+}

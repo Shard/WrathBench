@@ -16,12 +16,15 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { harnessSeries } from "../src/comparability";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
+import { NOT_THE_MODELS_FAULT } from "../src/lapse";
 import type {
   ApiInfoResponse,
   CampaignRowView,
   CampaignsResponse,
+  CostFigure,
   EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
@@ -37,7 +40,9 @@ import type {
   ModelsResponse,
   RunDetailResponse,
   RunListRow,
+  RunRow,
   RunsResponse,
+  TokenTotals,
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
 import { campaignComplete, campaignModels } from "../src/campaigns";
@@ -57,6 +62,7 @@ import {
   scanRunTotals,
   segmentsFrom,
   tokenTotals,
+  tokensPerSecond,
   type RunTotals,
 } from "./tail";
 
@@ -210,6 +216,40 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
   cache.mtime = mtime;
   cache.id = id;
   return id;
+}
+
+/**
+ * How long one series census stands in for the next.
+ *
+ * Minutes, not seconds: a new series appears on a deploy, never on a tick, and
+ * the census opens the run metadata for every run on disk. `/api/info` is the
+ * route every open tab polls — the one whose build id is already memoised for
+ * exactly that reason.
+ */
+export const SERIES_CACHE_MS = 300_000;
+
+/**
+ * The harness series present in the run directory, newest first, with counts.
+ *
+ * The shell's global series selector (ADR-0046) needs this before any page has
+ * fetched rows of its own, so it rides on `/api/info`. Cached on a window
+ * because that route is polled by every open tab and the answer changes only
+ * when a run starts; the census reads run metadata, never a trajectory.
+ */
+export function harnessSeriesCensus(rows: readonly { harnessVersion: string | null }[]): { series: string; runs: number }[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const s = harnessSeries(r.harnessVersion);
+    if (s === null) continue;
+    counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  return [...counts]
+    .map(([series, runs]) => ({ series, runs }))
+    .sort((a, b) => {
+      const [am, an] = a.series.split(".").map((n) => Number.parseInt(n, 10));
+      const [bm, bn] = b.series.split(".").map((n) => Number.parseInt(n, 10));
+      return (bm! - am!) || (bn! - an!);
+    });
 }
 
 /**
@@ -432,6 +472,16 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
+  // The series census for /api/info, on a window: every open tab polls that
+  // route, and the answer only moves when a run starts.
+  let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
+  const seriesCensus = (): { series: string; runs: number }[] => {
+    const now = Date.now();
+    if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
+      seriesCache = { at: now, value: harnessSeriesCensus(listRuns(runsDir, now)) };
+    }
+    return seriesCache.value;
+  };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
@@ -492,6 +542,57 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   }
 
   /**
+   * A run row with the resolved model id filled in.
+   *
+   * Stamped beats derived, in one place: a run launched since 2026-08-25 has
+   * the answer on `meta.json` and in its `run` row, and everything older only
+   * inside its trajectory, where `scanRunTotals` picked it up on the pass the
+   * listing already pays for. Nothing is written back — an old run is read
+   * differently, not rewritten (the same rule the episode tier follows).
+   */
+  function withResolved(row: RunRow, totals: RunTotals | null): RunRow {
+    if (row.resolvedModel !== null && row.cliVersion !== null) return row;
+    const seen = totals?.resolved ?? null;
+    if (seen === null) return row;
+    return {
+      ...row,
+      resolvedModel: row.resolvedModel ?? seen.model,
+      cliVersion: row.cliVersion ?? seen.cliVersion,
+    };
+  }
+
+  /**
+   * The listing facts a `ResultRun` carries: playtime, tokens, and the cost.
+   *
+   * `runCost` is the listing's own, over the same memoised totals, so no page
+   * can quote different dollars for one run. Both figures ride on the row but
+   * under their own names: `actualCost` is what the provider charged — the
+   * only figure the runs table shows, because an estimate standing in for a
+   * bill is the one thing a listing must not do — and `expectedCost` is the
+   * price table applied to the tokens, which the ladder's scatter reads only
+   * where no provider figure exists (a free tier, local hardware, a
+   * subscription) and labels as such.
+   */
+  function listingFacts(
+    row: RunRow,
+    totals: RunTotals,
+    now: number,
+  ): { playtimeMs: number | null; tokens: TokenTotals | null; actualCost: CostFigure; expectedCost: CostFigure } {
+    const cost = runCost({
+      run: row,
+      tokens: totals.tokens,
+      reportedUsd: totals.reportedCostUsd,
+      coverage: totals.responseCost,
+    });
+    return {
+      playtimeMs: playtimeMs(totals.segments, { lastTs: totals.lastTs, live: row.live, now }),
+      tokens: totals.tokens,
+      actualCost: cost.actual,
+      expectedCost: cost.expected,
+    };
+  }
+
+  /**
    * Every run projected onto the results surface.
    *
    * Built inside this closure on purpose: it reuses the same memoised
@@ -504,9 +605,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
-    for (const row of listRuns(runsDir)) {
-      const dir = runDir(runsDir, row.runId);
-      const totals = dir === null ? null : await runTotals(row.runId, dir);
+    for (const raw of listRuns(runsDir)) {
+      const dir = runDir(runsDir, raw.runId);
+      const totals = dir === null ? null : await runTotals(raw.runId, dir);
+      const row = withResolved(raw, totals);
       out.push(
         resultRunOf(
           row,
@@ -521,27 +623,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
               },
           totals === null
             ? null
-            : {
-                playtimeMs: playtimeMs(totals.segments, {
-                  lastTs: totals.lastTs,
-                  live: row.live,
-                  now,
-                }),
-                tokens: totals.tokens,
-                /*
-                 * The actual figure only: what the provider says it charged.
-                 * The episodes listing is a record of what runs cost, and an
-                 * estimate standing in for a bill is the one thing it must not
-                 * show. `runCost` is the listing's own, over the same memoised
-                 * totals, so the two pages cannot quote different dollars.
-                 */
-                actualCost: runCost({
-                  run: row,
-                  tokens: totals.tokens,
-                  reportedUsd: totals.reportedCostUsd,
-                  coverage: totals.responseCost,
-                }).actual,
-              },
+            : listingFacts(row, totals, now),
+          totals?.areas ?? null,
+          totals?.achievements ?? null,
+          totals?.taxi ?? null,
         ),
       );
     }
@@ -633,9 +718,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       episodes: EPISODE_LIST.map((tier) => {
         const tagged = all.filter((r) => r.episode === tier.id);
         const stamped = tagged.filter((r) => r.episodeSource === "stamped");
+        // An attempt that never became an episode is not a member of the tier's
+        // group (ADR-0049) — the same predicate the ladder filters on, so this
+        // count and that chart hold the same runs.
+        const lapsed = (r: (typeof stamped)[number]): boolean =>
+          r.terminationReason !== null && NOT_THE_MODELS_FAULT.has(r.terminationReason);
         return {
           ...tier,
-          members: stamped.filter((r) => !r.episodeOverride).length,
+          members: stamped.filter((r) => !r.episodeOverride && !lapsed(r)).length,
+          lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
           overrides: stamped.filter((r) => r.episodeOverride).length,
           derived: tagged.length - stamped.length,
         };
@@ -746,13 +837,17 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
 
   async function listWithTotals(): Promise<RunListRow[]> {
     const out: RunListRow[] = [];
-    for (const row of listRuns(runsDir)) {
-      const dir = runDir(runsDir, row.runId);
-      const totals = dir === null ? null : await runTotals(row.runId, dir);
+    for (const raw of listRuns(runsDir)) {
+      const dir = runDir(runsDir, raw.runId);
+      const totals = dir === null ? null : await runTotals(raw.runId, dir);
+      const row = withResolved(raw, totals);
       out.push({
         ...row,
         modelResponses: totals?.modelResponses ?? null,
         tokens: totals?.tokens ?? null,
+        // Off the same memoised whole-file pass as the tokens; the fleet page's
+        // speed column and the run page's read one derivation.
+        tps: totals?.tps ?? null,
         cost:
           totals === null
             ? null
@@ -790,6 +885,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
+        harnessSeries: seriesCensus(),
         now: Date.now(),
       };
       return json(body);
@@ -803,7 +899,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     if (path === "/api/campaigns") return await campaignsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
-     * derivation stays client-side (`dashboard/src/lib/results.ts`, where its rung
+     * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its rung
      * rules and their tests already live); the route exists so the episode
      * filter has one spelling per page rather than the ladder page having to
      * know it is really asking the results endpoint.
@@ -868,7 +964,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           const totals = dir === null ? null : await runTotals(r.runId, dir);
           // The run's own record, not the roster entry: whether a model is local
           // is a fact about the `apiBase` it was actually served from.
-          const runRow = rows.get(r.runId);
+          const rawRow = rows.get(r.runId);
+          const runRow = rawRow === undefined ? undefined : withResolved(rawRow, totals);
           r.cost =
             totals === null || runRow === undefined
               ? null
@@ -888,7 +985,17 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           r.class = runRow?.class ?? null;
           r.className = runRow?.className ?? null;
           r.characterLabel = runRow?.characterLabel ?? null;
+          /*
+           * Which model this run was really on. The row keeps its roster
+           * grouping — that is the unit the scheduler counts in — and the ids
+           * are collected below, so an alias that resolved two ways shows both
+           * rather than one of them standing for the other.
+           */
+          r.resolvedModel = runRow?.resolvedModel ?? null;
         }
+        row.resolvedModels = [
+          ...new Set(row.runs.map((r) => r.resolvedModel).filter((m): m is string => typeof m === "string")),
+        ].sort();
       }
       return json(body);
     }
@@ -903,7 +1010,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
 
     if (rest === "" || rest === "/") {
       await scan(runId, tail);
-      const run = readRun(runsDir, runId);
+      /*
+       * The resolved model is the one fact here that does not grow: it is
+       * observed once, in the run's first turn, and never revised. So it comes
+       * off the memoised whole-file totals rather than the incremental tail —
+       * one derivation, shared with the listing — and a run that stamped it at
+       * write time short-circuits the scan entirely.
+       */
+      const run = withResolved(readRun(runsDir, runId), await runTotals(runId, dir));
       /*
        * Playtime comes off the tail's own index rather than `runTotals`: the
        * tail is incremental, where a live run misses the (size, mtime) totals
@@ -940,6 +1054,13 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           coverage: responseCostCoverage(entries),
         }),
         playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
+        // Same incremental path as tokens and cost: the tail accumulates the
+        // milestone marks as it indexes, so a live run's line grows with it.
+        achievements: tail.achievements,
+        taxi: tail.taxi,
+        // Same incremental path again: a live run's rate advances with the tail
+        // rather than waiting on the (size, mtime) totals cache to miss.
+        tps: tokensPerSecond(entries),
       };
       return json(body);
     }

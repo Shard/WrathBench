@@ -136,8 +136,12 @@ emit({
   session_id: "fake-session",
   tools: (record["allowedTools"] as string[]) ?? [],
   mcp_servers: [{ name: "wrathbench", status: mcp === null ? "failed" : "connected" }],
-  model: record["model"] ?? "fake",
+  // The real CLI resolves an alias (`opus`) to an id (`claude-opus-5`) and
+  // names the resolved one here, which is the whole reason the driver promotes
+  // it onto the run. $WB_FAKE_RESOLVED_MODEL stands in for that resolution.
+  model: Bun.env["WB_FAKE_RESOLVED_MODEL"] ?? record["model"] ?? "fake",
   apiKeySource: Bun.env["CLAUDE_CODE_OAUTH_TOKEN"] !== undefined ? "oauth" : "none",
+  claude_code_version: Bun.env["WB_FAKE_CLI_VERSION"] ?? "0.0.0-fake",
 });
 
 if (mcp !== null) {

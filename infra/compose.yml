@@ -21,6 +21,16 @@ x-db-info: &db-info
   AC_WORLD_DATABASE_INFO: "db;3306;root;${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench};acore_world"
   AC_CHARACTER_DATABASE_INFO: "db;3306;root;${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench};acore_characters"
 
+# The four values every WrathBench-side tool needs to reach the database
+# directly (bootstrap, fixtures, and the smokes that stage a fixture through
+# infra/fixtures/apply.ts). One definition, referenced by every service that
+# needs it, so the password lives in exactly one place.
+x-wb-db: &wb-db
+  WRATHBENCH_DB_HOST: db
+  WRATHBENCH_DB_PORT: "3306"
+  WRATHBENCH_DB_USER: root
+  WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
+
 x-ac-build: &ac-build
   context: ..
   dockerfile: infra/docker/server.Dockerfile
@@ -77,10 +87,7 @@ services:
     working_dir: /wrathbench
     command: ["bun", "run", "infra/bootstrap/bootstrap.ts"]
     environment:
-      WRATHBENCH_DB_HOST: db
-      WRATHBENCH_DB_PORT: "3306"
-      WRATHBENCH_DB_USER: root
-      WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
+      <<: *wb-db
       WRATHBENCH_AUTH_DB: acore_auth
       WRATHBENCH_REALM_ID: ${WRATHBENCH_REALM_ID:-1}
       WRATHBENCH_REALM_NAME: ${WRATHBENCH_REALM_NAME:-WrathBench}
@@ -122,10 +129,7 @@ services:
     working_dir: /wrathbench
     entrypoint: ["bun", "run", "infra/fixtures/apply.ts"]
     environment:
-      WRATHBENCH_DB_HOST: db
-      WRATHBENCH_DB_PORT: "3306"
-      WRATHBENCH_DB_USER: root
-      WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
+      <<: *wb-db
       WRATHBENCH_CHARACTERS_DB: acore_characters
     volumes:
       - ..:/wrathbench
@@ -261,6 +265,15 @@ services:
       dockerfile: infra/docker/runner.Dockerfile
     working_dir: /wrathbench
     command: ["sleep", "infinity"]
+    # The smokes under infra/smoke/ are run by `docker compose exec runner bun
+    # infra/smoke/<name>.ts`, and the ones that stage a fixture shell out to
+    # infra/fixtures/apply.ts, which writes acore_characters directly. Carrying
+    # the four vars here is what makes that invocation need no `-e` flags. An
+    # episode exec'd into this container cannot pass them on: sandboxChildEnv
+    # (runner/src/sandbox/host.ts) drops WRATHBENCH_DB_* from the snippet
+    # child's env, the same protection the `fleet` service relies on.
+    environment:
+      <<: *wb-db
     volumes:
       - ..:/wrathbench
       # The repo mount above already carries data/wiki and data/runs. These are
@@ -300,16 +313,14 @@ services:
     command: ["bun", "infra/run-fleet.ts", "infra/fleet.json"]
     environment:
       WRATHBENCH_IN_CONTAINER: "1"
-      # For the preflight gate's fixture staging only: kill-credit.ts starts
-      # from the `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts`
-      # writes the characters DB directly (same four vars as the `fixtures`
-      # service). The supervisor itself never touches the DB, and `runner`
-      # deliberately does not carry these: a benchmark episode must not be able
-      # to reach a fixture tool.
-      WRATHBENCH_DB_HOST: db
-      WRATHBENCH_DB_PORT: "3306"
-      WRATHBENCH_DB_USER: root
-      WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
+      # For the preflight gate's fixture staging: kill-credit.ts starts from the
+      # `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts` writes the
+      # characters DB directly. The supervisor itself never touches the DB.
+      # A benchmark episode cannot reach these: the snippet sandbox drops every
+      # WRATHBENCH_DB_* var before spawning the child (runner/src/sandbox/host.ts
+      # sandboxChildEnv), which is what keeps a model off the database on this
+      # service and on `runner` alike.
+      <<: *wb-db
       # git lives in the image and the repo mount carries .git, so every episode
       # is stamped with a real `git describe` (dirty trees included) rather than
       # a version frozen at `up` time. The repo is uid 1000 and so is `bun`, but

@@ -107,8 +107,8 @@ export const comparabilitySchema = z.object({
    * changes is a behaviour change, and behaviour changes are already grouped by
    * the harness series, so a text-changing rebuild is paired with a harness
    * minor bump and this field is the evidence of what that bump was about
-   * (ADR-0033). Note that `sameComparability` is whole-tuple equality and so is
-   * stricter: a rebuild between launch and resume restamps. Null when there was
+   * (ADR-0033). Note that `sameComparability` compares every stamped field and
+   * so is stricter: a rebuild between launch and resume restamps. Null when there was
    * no bundle; absent on tuples stamped before the field existed.
    */
   wikiBundle: wikiBundleSchema.optional(),
@@ -132,6 +132,23 @@ export const comparabilitySchema = z.object({
    * rather than failing the run.
    */
   serverBuild: serverBuildSchema,
+  /**
+   * The model id the provider said it actually served — `claude-sonnet-5` for a
+   * run launched as `sonnet` (ADR-0033 amendment, 2026-08-25).
+   *
+   * An **annotation**, in exactly the sense the wiki bundle is one: it answers
+   * "which model was this really", which the roster alias cannot, and it is
+   * evidence rather than a grouping key. It is also the one field here that is
+   * *observed*, not stamped — the CLI resolves the alias at launch and names
+   * the result in its `init` event, minutes after the tuple is written — so it
+   * is filled in once when first seen and is deliberately excluded from
+   * `sameComparability`. Including it would make every resume of an aliased run
+   * emit a `comparability_restamped` record saying nothing.
+   *
+   * Null when nothing named a model; absent on tuples stamped before the field
+   * existed, which the viewer back-fills at read time and never rewrites.
+   */
+  resolvedModel: z.string().nullable().optional(),
 });
 export type Comparability = z.infer<typeof comparabilitySchema>;
 
@@ -250,7 +267,20 @@ export function harnessOfRun(meta: {
   return null;
 }
 
+/**
+ * The tuple minus the fields that are observed rather than stamped.
+ *
+ * `resolvedModel` is filled in mid-episode from what the driver reports, so a
+ * launch tuple and the same run's tuple an hour later differ in it by
+ * construction. Comparing on it would turn every resume of an aliased run into
+ * a restamp, which is noise in a record whose whole job is signal.
+ */
+function stamped(t: Comparability): Omit<Comparability, "resolvedModel"> {
+  const { resolvedModel: _observed, ...rest } = t;
+  return rest;
+}
+
 /** Whether two tuples describe runs that may share a chart. Order-independent. */
 export function sameComparability(a: Comparability, b: Comparability): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return JSON.stringify(stamped(a)) === JSON.stringify(stamped(b));
 }
