@@ -1,7 +1,7 @@
 # Methodology
 
 The decisions that shape what a WrathBench result means, and the principles
-behind them. This is the successor to the numbered ADR series (51 records,
+behind them. This is the successor to the numbered ADR series (50 records,
 consolidated 2026-08-25; the full texts are in git history under
 `docs/decisions/`, and `docs/WORKLOG.md` holds the table mapping each old
 number to where its decision lives now). It is edited in place: a change to

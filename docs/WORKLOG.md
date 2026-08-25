@@ -48,7 +48,7 @@ Convention:
   `expectedCost` on `ResultRun` (restart owed). Model logos across the dashboard:
   `infra/model-lineup.json` as the data-driven identity catalog with a
   `bun run model-logos` CLI fetching pinned, committed SVG assets; icon pucks replace
-  anonymous pips on the map. The 51 ADRs consolidated into `docs/METHODOLOGY.md`
+  anonymous pips on the map. The 50 ADRs consolidated into `docs/METHODOLOGY.md`
   and the owning component docs; `docs/decisions/` deleted; every ADR citation
   outside the worklogs replaced or removed.
 
@@ -112,4 +112,4 @@ history of `docs/decisions/`.
 | 0047 | The runs page is the runs grain, episodes the episodes | docs/ARCHITECTURE.md (dashboard) |
 | 0048 | Achievements and flight use are observed, not inferred | METHODOLOGY.md — Client fidelity, Scoring; module/PROTOCOL.md |
 | 0049 | A scored run that pauses is a failed attempt | METHODOLOGY.md — Episodes, lanes, and evidence; docs/OPERATIONS.md, docs/EPISODES.md (the mechanics) |
-| 0050 | The model names its character | METHODOLOGY.md — Episodes, lanes, and evidence; docs/CONTRACTS.md, docs/OPERATIONS.md |
+| 0050 | The model names its character | METHODOLOGY.md — Episodes, lanes, and evidence; docs/OPERATIONS.md (the roster's suggestion, account affinity) |
