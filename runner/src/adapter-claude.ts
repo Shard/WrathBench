@@ -63,6 +63,37 @@
  *
  * That list is why `harness: "claude-code"` is in the comparability tuple, and
  * why the tool-call ceiling exists at all.
+ *
+ * ## Winding down instead of killing mid-turn
+ *
+ * The whole episode is usually ONE CLI turn, and the only place the finished
+ * output count, the metered cost and the turn clock ever appear is the
+ * stream-json `result` envelope that closes it (`claude_result`). So killing
+ * the CLI the instant a watchdog fires threw all three away: on 2026-08-25, 6
+ * of 9 lane-2 runs fell back to `tokens.source: "snapshot"` — the API's
+ * `message_start` snapshots, ~300× low — with no cost at all.
+ *
+ * So a watchdog or the tool-call ceiling firing WHILE A TURN IS IN FLIGHT no
+ * longer sends SIGTERM. The termination is recorded first, exactly as before —
+ * same reason, same `termination` record, and playtime closes at it — and then
+ * the driver winds down:
+ *
+ * - every subsequent MCP `tools/call` is refused with an `isError` result that
+ *   tells the model the episode is over and to stop calling tools. Nothing is
+ *   dispatched to the sandbox, so no observation or action reaches the game
+ *   after the termination (docs/CONTRACTS.md);
+ * - the driver keeps reading the CLI's stream for a bounded grace
+ *   (`windDownGraceMs`, 90s) so the closing `result` can land;
+ * - it ends on that `result`, on the CLI exiting, or on the grace expiring,
+ *   and tears down through the same `shutdown()` either way.
+ *
+ * One `wind-down` record says which of the three happened and how long it
+ * waited. The grace is not playtime: the `termination` record that closes the
+ * active segment was written before it started.
+ *
+ * Operator intent keeps the old behaviour: a signalled stop or pause
+ * (`pauseEpisode`, the abort handler) kills immediately, because the operator
+ * asked for the process to go, not for one more measurement.
  */
 
 import type { Database } from "bun:sqlite";
@@ -271,6 +302,9 @@ function assistantUsage(msg: Record<string, unknown>): ClaudeUsage | undefined {
   return normalizeClaudeUsage(message?.usage);
 }
 
+/** The envelope type `wakeReader` pushes; not a CLI message, and acted on nowhere. */
+const WAKE_TYPE = "__wrathbench_wake";
+
 /** A tiny async queue: the stdout reader pushes, the turn loop pulls. */
 class MessageQueue {
   private readonly items: Record<string, unknown>[] = [];
@@ -421,6 +455,12 @@ export interface ClaudeEpisodeOptions {
   /** Grace between SIGTERM and SIGKILL when tearing the CLI down. */
   killGraceMs?: number;
   /**
+   * Grace given to the CLI to close its turn with a `result` envelope after a
+   * watchdog or the tool-call ceiling ended the episode mid-turn. Tool calls
+   * are refused throughout; see the header. 0 restores the old immediate kill.
+   */
+  windDownGraceMs?: number;
+  /**
    * Aborting ends the episode as `manual` — the runner's own SIGINT/SIGTERM
    * handler, so an externally killed run still finalises its termination
    * record instead of leaving the trajectory open.
@@ -428,10 +468,35 @@ export interface ClaudeEpisodeOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * How long the CLI is given to close its turn after the harness has ended the
+ * episode under it. Long because the point is to get the `result` envelope
+ * that carries the only true output/cost figures the driver ever sees: the
+ * model has to notice a refused tool call, stop, and let the API return. Not
+ * the 5s SIGTERM→SIGKILL grace, which is about a process that will not die;
+ * this is about a measurement that has not arrived. Nothing in it is playtime
+ * and nothing in it can be scored.
+ */
+export const DEFAULT_WIND_DOWN_GRACE_MS = 90_000;
+
+/**
+ * A wind-down in progress: the episode is over and recorded, the CLI has NOT
+ * been signalled, and the driver is reading its stream until the deadline in
+ * the hope of a closing `result`.
+ */
+interface WindDown {
+  /** Wall clock (real, not the injected `now`) at which the grace runs out. */
+  deadline: number;
+  since: number;
+  /** The termination already on record; unchanged by anything that follows. */
+  reason: TerminationReason;
+}
+
 export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOutcome> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
+  const windDownGraceMs = o.windDownGraceMs ?? DEFAULT_WIND_DOWN_GRACE_MS;
 
   /**
    * The single end-of-episode seam.
@@ -451,17 +516,47 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
    */
   let pausedAs: { reason: PauseReason; detail: string } | null = null;
   let killClaude: () => void = () => undefined;
+  /**
+   * Wake the turn's read loop when nothing is arriving on the CLI's stream.
+   * A wind-down starts from a timer or a socket callback while the loop is
+   * parked on `queue.next()`, and a CLI that is looping on tool calls without
+   * emitting envelopes would park it there past the deadline. Assigned once
+   * the queue exists, like `killClaude`.
+   */
+  let wakeReader: () => void = () => undefined;
   /** Whether the CLI's own `init` word has already been promoted onto the run. */
   let promotedResolved = false;
+  /** Whether the driver is inside a turn's read loop, i.e. can observe a `result`. */
+  let turnInFlight = false;
+  /**
+   * The wind-down, when one is running: the deadline the read loop races and
+   * the reason it is winding down for. Non-null means the episode is over, the
+   * CLI has NOT been signalled, and every tool call is being refused.
+   */
+  let windDown: WindDown | null = null;
   const endEpisode = (
     reason: TerminationReason,
     detail?: string,
     record?: Record<string, unknown> & { t: string },
+    opts?: { windDown?: boolean },
   ): void => {
     if (ended !== null) return;
     ended = { reason, detail };
     if (record !== undefined) trajectory.append(record);
     trajectory.setTermination(runId, reason, detail);
+    // The termination is on record either way. What differs is whether the CLI
+    // is killed now or given a bounded chance to close its turn — see the
+    // header. Only the harness's own limits wind down, and only mid-turn:
+    // between turns nobody is reading the stream, and a signalled stop is the
+    // operator asking for the process to go.
+    if (opts?.windDown === true && turnInFlight && windDownGraceMs > 0) {
+      // A real clock, deliberately: this is a bounded wait on another process,
+      // not episode pacing, and the injected `now` is a test's fake clock.
+      const since = Date.now();
+      windDown = { deadline: since + windDownGraceMs, since, reason };
+      wakeReader();
+      return;
+    }
     killClaude();
   };
   const pauseEpisode = (reason: PauseReason, detail: string): void => {
@@ -533,7 +628,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     if (done()) return false;
     const verdict = watchdogs.check();
     if (verdict !== null) {
-      endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+      endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict }, { windDown: true });
       return false;
     }
     if (toolCalls >= config.maxToolCallsPerEpisode) {
@@ -541,6 +636,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         "tool-call-limit",
         `${toolCalls} tool calls (cap ${config.maxToolCallsPerEpisode})`,
         { t: "limit", kind: "tool-call-limit", toolCalls, cap: config.maxToolCallsPerEpisode },
+        { windDown: true },
       );
       return false;
     }
@@ -599,9 +695,23 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             }
             if (method === "tools/call") {
               if (!enforceLimits()) {
-                // Refuse rather than run: the episode is over, and a refused
-                // call is honest about why. The CLI is being killed anyway.
+                // Refuse rather than run: the episode is over, nothing here
+                // reaches the game, and a refused call is honest about why.
+                //
+                // The text is the mechanism, not decoration. While the driver
+                // is winding down (see the header) this is the only thing that
+                // tells the model to stop, and whether the closing `result`
+                // arrives in seconds or never turns on it — so it is final and
+                // imperative. It stays an MCP result with `isError`, never a
+                // JSON-RPC error, which the CLI could read as the transport
+                // failing rather than as something to tell the model.
                 if (id !== undefined) {
+                  // A pause is not an ending — the run resumes — so it keeps
+                  // the plain sentence it always had.
+                  const why =
+                    pausedAs !== null && ended === null
+                      ? `run paused by the harness: ${pausedAs.reason}. This call was not executed.`
+                      : `run terminated by the harness: ${ended?.reason ?? "?"}. The episode is over: this call was not executed, no further tool call will be, and nothing more can be scored. Stop calling tools and end your turn now.`;
                   socket.write(
                     `${JSON.stringify({
                       jsonrpc: "2.0",
@@ -610,10 +720,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                         content: [
                           {
                             type: "text",
-                            text:
-                              pausedAs !== null && ended === null
-                                ? `run paused by the harness: ${pausedAs.reason}`
-                                : `run terminated by the harness: ${ended?.reason ?? "?"}`,
+                            text: why,
                           },
                         ],
                         isError: true,
@@ -757,6 +864,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   }
 
   const queue = new MessageQueue();
+  // Ignored by the turn loop's switch (`default`), and never written anywhere:
+  // its only job is to unpark a reader so it re-reads the wind-down deadline.
+  wakeReader = (): void => queue.push({ type: WAKE_TYPE });
   const stderrChunks: string[] = [];
   let limit: { reason: PauseReason; detail: string } | null = null;
 
@@ -798,7 +908,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     stopped: done,
     onSample: () => {
       const verdict = watchdogs.check();
-      if (verdict !== null) endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict });
+      if (verdict !== null)
+        endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict }, { windDown: true });
     },
   });
 
@@ -871,6 +982,47 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
   };
 
+  /**
+   * The wind-down's three ends, in one place: `result` (the CLI closed its
+   * turn — the whole point), `grace-expired` (we waited the full grace and it
+   * did not), and `exit` for everything else that stops the wait without a
+   * result — the CLI's stream ending, or the read loop leaving because a
+   * usage-limit line turned up on stderr. One record either way, so a reader
+   * can tell a run whose figures are real from one whose CLI never came back.
+   */
+  const finishWindDown = (outcome: "result" | "exit" | "grace-expired"): void => {
+    const wd = windDown as WindDown | null;
+    if (wd === null) return;
+    windDown = null;
+    trajectory.append({
+      t: "wind-down",
+      turn,
+      reason: wd.reason,
+      outcome,
+      graceMs: windDownGraceMs,
+      waitedMs: Date.now() - wd.since,
+    });
+    killClaude();
+  };
+
+  /** Pulled from the queue, or the grace expiring first. */
+  const GRACE_EXPIRED = Symbol("wind-down grace expired");
+  const nextBefore = (deadline: number): Promise<Record<string, unknown> | null | typeof GRACE_EXPIRED> => {
+    const ms = deadline - Date.now();
+    if (ms <= 0) return Promise.resolve(GRACE_EXPIRED);
+    return new Promise((res) => {
+      // A real timer, like `waitMs` above and for the same reason: the injected
+      // sleep is episode pacing and tests make it instant, which would expire
+      // every grace at once and never exercise the path that gets a `result`.
+      const timer = setTimeout(() => res(GRACE_EXPIRED), ms);
+      timer.unref?.();
+      void queue.next().then((m) => {
+        clearTimeout(timer);
+        res(m);
+      });
+    });
+  };
+
   try {
     for (;;) {
       if (done()) return finish();
@@ -909,9 +1061,24 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       // Read this turn's stream until its `result` message.
       let turnEnded = false;
       let sawOutput = false;
+      // From here the driver can observe a `result`, which is what makes a
+      // wind-down worth attempting rather than an immediate kill.
+      turnInFlight = true;
       while (!turnEnded) {
-        const msg = await queue.next();
-        if (msg === null) break; // process ended mid-turn
+        // Cast like `finish()` does for `ended`: it is assigned from a
+        // closure the compiler does not follow, so the narrowing is a lie.
+        const wd = windDown as WindDown | null;
+        const msg = wd === null ? await queue.next() : await nextBefore(wd.deadline);
+        if (msg === GRACE_EXPIRED) {
+          finishWindDown("grace-expired");
+          break;
+        }
+        if (msg === null) {
+          // The process ended. During a wind-down that IS an ending: the CLI
+          // went away rather than closing its turn.
+          finishWindDown("exit");
+          break; // process ended mid-turn
+        }
         switch (msg["type"]) {
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
@@ -1038,6 +1205,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
               usage: normalizeClaudeUsage(msg["usage"]),
               text: resultText.slice(0, 2_000),
             });
+            // The record this whole wind-down existed to collect. It is on
+            // disk now, so stop waiting and tear down.
+            finishWindDown("result");
             // Gated on is_error: a successful turn's text is model output.
             if (msg["is_error"] === true) limit ??= detectLimit(resultText);
             if (msg["is_error"] === true && limit === null) {
@@ -1054,8 +1224,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             // already records tool calls and results authoritatively.
             break;
         }
-        if (limit !== null || done()) break;
+        // A wind-down is `done()` by construction — the termination is already
+        // recorded — and breaking here is exactly what used to throw the
+        // closing `result` away. Keep reading until `finishWindDown` runs.
+        if (limit !== null || (done() && (windDown as WindDown | null) === null)) break;
       }
+      turnInFlight = false;
+      // Nothing else can resolve a wind-down once the read loop is out.
+      finishWindDown("exit");
 
       // A recorded termination (or pause) wins: the reason is already in the trajectory.
       if (done()) return finish();

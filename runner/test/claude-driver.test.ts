@@ -399,6 +399,133 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 30_000);
 
+  test("a watchdog mid-turn winds the CLI down: the closing result lands, tools stay refused", async () => {
+    // The defect this exists for: the whole episode is one CLI turn, and
+    // SIGTERM at the watchdog threw away the only record that carries finished
+    // output tokens and the metered cost.
+    const { runDir, recordPath, trajectory, options } = setupEpisode("wind-down", {
+      watchdogs: { episodeMs: 300 },
+    });
+    const outcome = await runClaudeEpisode({
+      ...options,
+      watchdogTickMs: 25,
+      killGraceMs: 200,
+      windDownGraceMs: 10_000,
+    });
+    // The termination is unchanged: same reason, once, and recorded BEFORE the
+    // wind-down rather than after it.
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(1);
+    expect(records.find((r) => r.t === "termination")?.["reason"]).toBe("episode-limit");
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("episode-limit");
+
+    // ...and the figures the kill used to destroy are on disk.
+    const result = records.find((r) => r.t === "claude_result");
+    expect(result).toBeDefined();
+    expect((result?.["usageRaw"] as { output_tokens?: number }).output_tokens).toBe(20_000);
+    expect(result?.["costUsd"]).toBe(1.25);
+    expect(result?.["durationApiMs"]).toBe(2_121);
+
+    // The wind-down is visible, and it ended on the result rather than the clock.
+    const wind = records.filter((r) => r.t === "wind-down");
+    expect(wind).toHaveLength(1);
+    expect(wind[0]?.["outcome"]).toBe("result");
+    expect(wind[0]?.["reason"]).toBe("episode-limit");
+    expect(wind[0]?.["graceMs"]).toBe(10_000);
+
+    // Ordering: termination first, then the result, then the wind-down record.
+    const at = (t: string): number => records.findIndex((r) => r.t === t);
+    expect(at("termination")).toBeLessThan(at("claude_result"));
+    expect(at("claude_result")).toBeLessThan(at("wind-down"));
+
+    // CONTRACTS: nothing reached the game after the termination. Asserted on
+    // what the CLI was handed rather than on trajectory order — a dispatch that
+    // passed the check a moment before the watchdog can still land after the
+    // termination record — so the property is monotonic refusal: once one call
+    // is refused, every later one is too, and none of them ran.
+    const results = readRecord(recordPath)["toolResults"] as {
+      isError?: boolean;
+      content?: { text?: string }[];
+    }[];
+    const textOf = (r: { content?: { text?: string }[] }): string => r.content?.[0]?.text ?? "";
+    const first = results.findIndex((r) => r.isError === true && textOf(r).includes("episode is over"));
+    expect(first).toBeGreaterThanOrEqual(0);
+    for (const r of results.slice(first)) {
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toContain("Stop calling tools and end your turn now");
+      expect(textOf(r)).not.toContain("ran:");
+    }
+    trajectory.close();
+  }, 30_000);
+
+  test("a CLI that ignores the refusal is killed when the grace expires", async () => {
+    const { runDir, recordPath, trajectory, options } = setupEpisode("wind-down-deaf", {
+      watchdogs: { episodeMs: 300 },
+    });
+    const started = Date.now();
+    const outcome = await runClaudeEpisode({
+      ...options,
+      watchdogTickMs: 25,
+      killGraceMs: 200,
+      windDownGraceMs: 400,
+    });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
+    // Bounded: the grace is a bound, not a wait for a CLI that never stops.
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const records = readTrajectory(runDir);
+    const wind = records.filter((r) => r.t === "wind-down");
+    expect(wind).toHaveLength(1);
+    expect(wind[0]?.["outcome"]).toBe("grace-expired");
+    expect(Number(wind[0]?.["waitedMs"])).toBeGreaterThanOrEqual(300);
+    // No result was ever emitted, so nothing pretends one was.
+    expect(records.filter((r) => r.t === "claude_result")).toHaveLength(0);
+    expect(records.filter((r) => r.t === "termination")).toHaveLength(1);
+    // and it kept being refused the whole way down
+    const results = readRecord(recordPath)["toolResults"] as {
+      isError?: boolean;
+      content?: { text?: string }[];
+    }[];
+    const last = results[results.length - 1];
+    expect(last?.isError).toBe(true);
+    expect(last?.content?.[0]?.text ?? "").toContain("The episode is over");
+    // the CLI and its MCP child are gone regardless
+    const record = readRecord(recordPath);
+    for (const pid of [record["pid"], record["mcpPid"]].filter((x): x is number => typeof x === "number")) {
+      expect(await gone(pid)).toBe(true);
+    }
+    trajectory.close();
+  }, 30_000);
+
+  test("windDownGraceMs 0 keeps the old immediate kill, and an operator stop always does", async () => {
+    // The ceiling with no grace: killed at once, no wind-down record.
+    const off = setupEpisode("wind-down-deaf", { maxToolCallsPerEpisode: 2 });
+    const outcome = await runClaudeEpisode({
+      ...off.options,
+      watchdogTickMs: 50,
+      killGraceMs: 200,
+      windDownGraceMs: 0,
+    });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
+    expect(readTrajectory(off.runDir).filter((r) => r.t === "wind-down")).toHaveLength(0);
+    off.trajectory.close();
+
+    // An operator stop is intent, not a measurement opportunity: it kills now.
+    const stop = setupEpisode("wind-down", {});
+    const abort = new AbortController();
+    setTimeout(() => abort.abort("SIGTERM"), 300);
+    const stopped = await runClaudeEpisode({
+      ...stop.options,
+      signal: abort.signal,
+      watchdogTickMs: 50,
+      killGraceMs: 200,
+      windDownGraceMs: 10_000,
+    });
+    expect(stopped).toEqual({ kind: "terminated", reason: "manual", detail: "SIGTERM" });
+    expect(readTrajectory(stop.runDir).filter((r) => r.t === "wind-down")).toHaveLength(0);
+    stop.trajectory.close();
+  }, 40_000);
+
   test("the world is sampled on the clock during a long turn, not once per turn", async () => {
     const { runDir, trajectory, options } = setupEpisode("long-turn", {
       maxToolCallsPerEpisode: 12,
