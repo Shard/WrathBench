@@ -1327,9 +1327,11 @@ export function schedulability(
     // Idle work is the model's own axis now, not a consequence of its billing
     // or its account class: what it does with a spare account is what its entry
     // says it does. A paid model defaults to `none` and so buys nothing extra.
-    const extras = s.idle !== "none";
-    const how = s.idle === "unlimited" ? " — unlimited sessions while its account is idle" : " — extra characters when its class is idle";
-    return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${extras ? how : ""}` };
+    // One idle mode past `none`, so one thing to say. (The retired third,
+    // `idle: "characters"`, is a probe campaign now — nothing here rolls a
+    // start state, and nothing anywhere names a character.)
+    const how = s.idle === "none" ? "" : " — unlimited sessions while its account is idle";
+    return { verdict: "free", why: `targets met on ${s.eligible.join(", ")}${how}` };
   }
   return { verdict: "eval", why: `schedulable on ${open.join(", ")}` };
 }
@@ -1355,7 +1357,7 @@ export function schedulableView(v: Verdict, s: ModelState): { ok: boolean; why: 
   return { ok: v.verdict === "eval", why: v.why, extras: wantsIdle(v, s) };
 }
 
-/** Extras made so far across every episode, which is what the character cycle indexes. */
+/** Extras made so far across every episode, which is what numbers the next one. */
 export function extrasSoFar(s: ModelState): number {
   return STATS_EPISODES.reduce((n, ep) => n + (s.perEpisode[ep]?.extras ?? 0), 0);
 }
