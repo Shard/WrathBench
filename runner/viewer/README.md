@@ -101,11 +101,12 @@ is mid-reply, and one restarting the clock reads as a speed the model never had.
 A span still in flight, and one a `pause`/`resume`/`termination` landed inside,
 count for nothing. Two figures ride together: the whole run, and the last ten
 replies, each summed as Σ tokens ÷ Σ seconds rather than averaged over replies.
-Tokens are provider-reported where any response of the span reported usage and
+Tokens are provider-reported where any record of the span reported usage and
 `chars ÷ 4` only where none did — the claude-code driver's last envelope carries
 the running total for the whole reply, so estimating the earlier ones alongside
-it would count their text twice (which `TokenTotals.completionTokens` still
-does; FOLLOW-UPS 82).
+it would count their text twice. `tokenTotals` reads the same spans
+(`replySpans`), so the run's completion total and its rate can never disagree
+about what one reply produced.
 
 The figure is comparable within a lane and NOT between the two drivers: a
 claude-code span runs from the result the CLI was handed to the reply that came
