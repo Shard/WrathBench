@@ -172,6 +172,11 @@ a bare clone like everything else.
 
 ## The gated interim shape (no domain on the account)
 
+**This shape is scaffolding, and it is not what launches.** It exists so a
+private preview can be shared before there is a domain; the launch shape is the
+one described above, and the reasons are load-bearing rather than aesthetic. See
+item 85 in `docs/FOLLOW-UPS.md` for the retirement steps.
+
 Everything above assumes a zone. The account has none, and that is not a
 detail to route around: on Cloudflare, access control, WAF, and cache are all
 **custom-domain features**. The managed `r2.dev` development URL has none of
@@ -195,6 +200,16 @@ The interim shape, called **Gated** in the runbook:
   instead, which incidentally answers the `Cache-Control` problem in "Bucket
   layout": Bun's `S3Client` cannot send the header, so the Worker sends it;
 - no edge cache and no CORS. One origin, few readers, free-tier bucket reads.
+
+Every one of those bullets is a cost, and the reason the Open shape is the one
+that launches. A Worker in the read path means every request — page loads,
+static assets, artifacts — is billed compute with a per-day free ceiling, and
+nothing is held at the edge, so a spike converts directly into invocations and
+bucket reads. The push-based design exists precisely so that a spike is absorbed
+by cache in front of immutable objects, at roughly zero marginal cost and with
+no compute in the path to saturate. The gate trades that away to buy a password,
+which is the right trade for a preview shared with a handful of people and the
+wrong one for a launch.
 
 This inverts the design's "no Worker in the read path" for the read path only.
 The projection, the snapshot renderer, the publisher, and the SPA source are

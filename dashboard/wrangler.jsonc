@@ -3,6 +3,10 @@
 // dashboard". The private dashboard is unaffected — it is still the same bundle
 // served same-origin by runner/viewer over loopback.
 //
+// The `main` below is TEMPORARY and is not what launches — see item 85 in
+// docs/FOLLOW-UPS.md. The launch shape keeps no Worker in the read path so that
+// a traffic spike is absorbed by the edge cache rather than billed as compute.
+//
 // This is the INTERIM, zoneless shape. The design doc's shape — R2 behind a
 // custom domain, zone cache rules carrying the TTLs, an assets-only Worker with
 // no fetch handler and therefore nothing invoked in the read path — needs a

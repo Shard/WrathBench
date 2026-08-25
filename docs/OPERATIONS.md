@@ -855,7 +855,11 @@ world-readable to anyone who learns the hostname. There is no password in front
 of an `r2.dev` bucket, and enabling one alongside any other gate simply routes
 around it.
 
-So there are two shapes, and the steps below are marked for whichever applies:
+So there are two shapes, and the steps below are marked for whichever applies.
+**Gated is temporary**: it is how a private preview is shared before there is a
+domain. **Open is what launches** — no Worker in the read path, so a traffic
+spike is absorbed by the edge cache rather than converted into per-request
+compute. Retiring the gate is item 85 in `docs/FOLLOW-UPS.md`.
 
 | | **Gated** (no domain — what is deployed today) | **Open** (needs a zone — the design doc's) |
 | --- | --- | --- |

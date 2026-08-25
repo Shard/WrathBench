@@ -241,6 +241,26 @@ status.
 
 ## Docs and release
 
+85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
+    direction). The public dashboard currently runs the **Gated** shape —
+    `dashboard/worker/index.ts` serving both the SPA and `/v1/*` from a private
+    R2 binding behind a shared password — because the account has no zone and,
+    on Cloudflare, access control and cache are custom-domain features. That is
+    scaffolding for a private preview and **not what launches**. The launch
+    shape is the design doc's **Open** one: R2 behind a custom domain with cache
+    rules, an assets-only Worker with no `main`, and therefore no Worker
+    invocation anywhere in the read path — so a traffic spike is absorbed by the
+    edge cache at ~$0 and never reaches the lab or a per-request compute bill.
+    Unblocked by a zone on the account (a nameserver move for an existing domain
+    or a new registration; `shard.page` was considered and declined 2026-08-25
+    because it points elsewhere). Then: attach the data custom domain, add the
+    two cache rules, apply `infra/cloudflare/r2-cors.json` with the real origin,
+    rebuild with `VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.<zone>`, drop
+    `main` and the `r2_buckets` binding from `dashboard/wrangler.jsonc`, delete
+    `dashboard/worker/`, and remove `dashboard/worker` from the root typecheck
+    loop. Gated by issue #10 (entries/game-text) in the same breath, since
+    removing the gate is what makes the deploy genuinely public.
+
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). Shipped so far: the module refuses
     tokens under 32 characters (`400 weak_token`) and the runner issues random tokens
