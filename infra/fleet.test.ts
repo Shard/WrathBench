@@ -97,6 +97,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
+import { parseCampaigns } from "../runner/src/campaigns";
 import { episodeArgv, resolve } from "./run-roster";
 
 /**
@@ -428,19 +429,27 @@ describe("roster policy", () => {
     expect(tripsBreaker(Array.from({ length: BREAKER_TRIPS }, (_, i) => NOW - BREAKER_WINDOW_MS + i), NOW)).toBe(true);
   });
 
-  test("a character the runner would refuse is a config error at load, not a respawn loop", () => {
-    // `Fleetsonnetlo` (13 chars) passed the fleet, failed the runner's Zod
-    // boundary every launch, and the roster exited 0 — so the policy retried
-    // it every tick for two hours (2026-08-24). The name dies here now.
-    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleetsonnetlo" }])).toThrow(
-      /character must be 2-12 letters/,
+  test("a roster entry must not carry a character at all — the model names its own", () => {
+    // History, and why the refusal is at LOAD. `Fleetsonnetlo` (13 chars)
+    // passed the fleet, failed the runner's Zod boundary every launch, and the
+    // roster exited 0 — so the policy retried it every tick for two hours
+    // (2026-08-24); `Fleetsonnno` (a triple) took the whole file down on
+    // 2026-08-25. A name the config does not carry cannot do either.
+    const entry = (character: string) => ({
+      accounts: { pool: ["RUNNER"] },
+      roster: { x: { tier: "t1", model: "sonnet", driver: "claude-code", character } },
+      policy: {},
+    });
+    expect(() => parseFleet(entry("Fleetsonnlo"))).toThrow(/character is not a key/);
+    expect(() => parseFleet(entry("Fleetsonnetlo"))).toThrow(/the model names its own character/);
+    // A cell may not carry one either, and it is refused by name rather than
+    // as a generic unrecognized key.
+    expect(() =>
+      parseCampaigns({ probe: { cells: [{ id: "coldridge", character: "Navprobe" }] } }),
+    ).toThrow(/cell coldridge: character is not a key/);
+    expect(() => parseCampaigns({ probe: { character: "Navprobe", cells: [{ id: "coldridge" }] } })).toThrow(
+      /campaign probe: character is not a key/,
     );
-    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "X" }])).toThrow(/character/);
-    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Benchy1" }])).toThrow(/character/);
-    // The other rule the server enforces: CHAR_NAME_THREE_CONSECUTIVE (create
-    // result 98) — the same triple that rolled back the 0.5 worldserver deploy.
-    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleettt" }])).toThrow(/three identical/);
-    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-code", character: "Fleetsonnlo" }])).not.toThrow();
   });
 
   test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
@@ -778,7 +787,6 @@ describe("the shipped fleet files", () => {
       resumeOnPause: false,
       wikiCoords: true,
       maxToolCalls: 2500,
-      character: "Navprobe",
       watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
     });
 
@@ -1787,7 +1795,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", character: "Qwenlocal", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
       },
       policy: {},
     };
