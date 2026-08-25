@@ -22,9 +22,10 @@ A thin bridge. It does two things and should never learn to do a third.
 
 It knows about opcodes and sessions. It does not know what a quest, a rotation, or a route is.
 
-How it attaches to the core (ADR-0009): a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
+How it attaches to the core: a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
 
-The mover (ADR-0010, ADR-0027): `move_to` resolves a path once with `PathGenerator` on the world thread; only a fully normal path whose endpoint lands within 4y (2D) of the request is accepted, a straight-line request beyond ~250y is `too_far`, a partial path is subdivided once. It then sends `MSG_MOVE_START_FORWARD`, a heartbeat every ~500ms and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position (3s deadline after the stop); >15y of drift between server and interpolation ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
+The mover (why the module owns movement and navigation detail:
+`docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread; only a fully normal path whose endpoint lands within 4y (2D) of the request is accepted, a straight-line request beyond ~250y is `too_far`, a partial path is subdivided once. It then sends `MSG_MOVE_START_FORWARD`, a heartbeat every ~500ms and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position (3s deadline after the stop); >15y of drift between server and interpolation ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
 
 ### sdk/ (Bun/TypeScript, MIT)
 
@@ -44,7 +45,7 @@ The SDK is versioned. Its surface is part of the harness version.
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
 The operator's read-only window on runs, live and finished. Split in two along
-one line (ADR-0022): the Bun process owns everything that needs the filesystem,
+one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api` (run listing, run
@@ -56,19 +57,88 @@ the SPA owns everything that is UI.
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  on 2026-08-22, the only UI: fleet overview, episodes (the tiers, ADR-0047),
-  runs (the per-run grain, ADR-0047), ladder, models, run detail, and the
-  ADR-0019 map.
+  on 2026-08-22, the only UI: fleet overview, episodes (the tiers), runs (the
+  per-run grain), ladder, models, run detail, and the map view — minimap
+  tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
+  drawn on plain canvas behind a position-feed interface so replay can later
+  plug a trajectory reader into the renderer that serves live runs.
   It imports two modules from the viewer rather than copying them — the API wire
   types and the world→tile transform — so drift between the two sides is a
   compile error. It is the only place in the repository with a dependency graph;
   the harness itself still runs with no build step. Without a build on disk the
   viewer serves the API as usual and answers page routes with a plain-text
   notice naming `bun run --cwd dashboard build`; there is no fallback UI.
+- **One page per grain, and the runs have their own.** The fleet page is what
+  is running *now* and links to a run without listing them; `/runs` is the runs
+  — one row per recorded run of every kind, opening on all of them newest
+  first, every header sortable, the sort and every filter in the URL, and a
+  value in a cell the link that narrows to it; `/episodes` is the tiers, what
+  each id fixes and how many runs sit against it, listing no runs of its own;
+  `/ladder` is the aggregates. Runs had been listed in two places and neither
+  was where all of them were, while the aggregate page had become a wall of
+  chips that opened with most of its rows filtered away — so the aggregate page
+  became the runs table, `/results` redirects to `/runs` with its query intact,
+  and the cost-per-level chart was deleted rather than moved: the ladder's own
+  columns already say how far each model got, and a cost view worth having is a
+  page with its own reason, not a chart smuggled onto another one.
+- **The harness series is one shell-wide filter, not a per-page control.** The
+  series — `major.minor` of a version stamp — is already the comparability
+  group every page of runs is a view of, so the selector lives once, in the top
+  bar, and filters every page that shows runs. Four pickers that could disagree
+  about what a shared link meant is the failure the episode filter was
+  consolidated to prevent. `latest` is stored as the token rather than the
+  series it resolves to today, so it follows a minor bump instead of freezing;
+  the newest series also appears under its own number, because `latest` tracks
+  and a number pins. The choice lives in `?series=` so a link is shareable and
+  in `localStorage` so a tab reopens where it was, URL first. A run whose stamp
+  names no series belongs to no group and appears only under `all`, and what
+  the filter removed is always stated on the page — the rule binds harder here
+  because the control doing the dropping is in the header rather than on the
+  page being read. Filtering is client-side over rows the API already carries,
+  with `/api/info` (the route the shell already polls) naming the series that
+  have runs, rather than a poller or a route parameter per control. Two pages
+  are deliberately unfiltered: the fleet page is the deployed series by
+  construction, and the models page is the scheduler's verdict computed
+  server-side, where a client-side filter would make the counts and the list
+  disagree. This is a different dimension from the harness filter, which
+  selects which *loop* owned a run; both exist and compose, which is why the
+  new one is spelled `series` everywhere.
+- **`infra/model-lineup.json` is the model identity catalog; `fleet.json` stays
+  a scheduling catalog.** Every roster field in `fleet.json` is a scheduling
+  fact and presentation has always been absent from its schema, so a cosmetic
+  field there would be the first — and it would have to survive the four
+  parsers kept deliberately in sync. The lineup file instead defines *families*
+  (`{ id, name, vendor, icon, match }`) keyed by model-id glob patterns rather
+  than roster names, so it recognizes an id wherever it turns up: the roster,
+  run history, a map position. Matching is data-driven and dumb on purpose —
+  lowercase the id, strip a trailing `:free`, take the first family whose
+  pattern matches, file order being precedence — and an id no family matches
+  gets a neutral monogram rather than a special case in code, which is the
+  per-model override the harness forbids. Recognizing a new model is a data
+  edit, never a code change. The mark appears wherever a model is the row —
+  the runs table's model column, the ladder table's rungs rows, the fleet
+  page's model cells and paused list, the models page's roster names, the run
+  page's model card, the map's pips and sidebar, and the ladder scatter, whose
+  marks are logo pucks. The scatter shipped first with plain dots to keep the
+  harness colour legend; the logo arrived by moving that colour to the puck's
+  ring, so the legend reads as a ring rather than a fill and still says exactly
+  what it said. Logos are fetched rather than drawn:
+  `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
+  at the version pinned in the lineup's own `icons` block and extracts exactly
+  the icons the lineup names; the SVGs are committed, because they are a few
+  hundred bytes each and the dashboard has to build from a bare clone with no
+  network. The CLI prunes assets no family references and has a `--check` mode
+  so drift is detectable offline. The artwork is MIT-licensed and the brands
+  remain their owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
+  The pricing table's display ids and the scheduler's family test stay where
+  they are — billing and scheduling facts, not presentation, and folding them
+  in would couple scheduling to a cosmetic file.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet
-  decided; ADR-0022 carries the constraints.
+  decided; the open question — tiles are Blizzard textures, and entry
+  summaries carry model output and game text — is docs/DATA-AND-LEGAL.md's to
+  settle, and the first public deployment is gated on it.
 
 ### wiki/ (Bun/TypeScript, MIT)
 
@@ -81,6 +151,10 @@ Tooling for local map assets used by the viewer. The assets themselves are suppl
 ### infra/
 
 Compose file for worldserver, authserver, database, module build, and runner. The server data directory is supplied by the operator under `data/`. Smoke script that drives one quest end to end through the SDK.
+
+The core is stock AzerothCore, pinned by commit — no playerbots fork, so there
+is one dependency tree; the party question waits for encounter work and will
+be answered with data from real runs.
 
 The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation of upstream AzerothCore's own multi-stage Dockerfile with the build context at our repo root: it copies the pinned submodule plus `module/` as `modules/mod-wrathbench` and keeps upstream's stage names, base image, toolchain, runtime user and filesystem layout, so upstream docker fixes diff cleanly against ours at each submodule bump. Two departures: `-DWITHOUT_GIT=1`, because a submodule checkout has no usable `.git` (version strings read `unknown`; the submodule pointer and `infra/PINS.md` are the pin), and a 10G ccache mount, because upstream's 1G thrashes on a full core build and module iteration is the hot path. RelWithDebInfo is kept because symbols matter when the module crashes the worldserver. A `db-import` target is built alongside because upstream's boot flow expects it.
 
@@ -104,6 +178,16 @@ Phase 0: every episode starts with a freshly created character at level 1 in its
 - Run metadata and periodic state in `bun:sqlite` under `data/runs/`.
 - Trajectories as JSONL next to it.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
+
+The files under `data/runs/` are the evidence record — the thing a result
+claim points at — and stay authoritative. The staged plan for when reads
+outgrow directory scans (proposed, not yet decided): first a single typed
+`runs/` reader plus published JSON snapshots so the dashboard stops opening
+run files in a request path (which is also the public-hosting shape); then
+Parquet exports queried with DuckDB so analysis becomes checked-in SQL instead
+of ad-hoc JSONL scripts; ClickHouse only when the Parquet set outgrows a
+laptop or the public dashboard needs live aggregates. Every stage is a derived
+view; no store ever becomes the only copy of a trajectory.
 
 ## What is deliberately absent in Phase 0
 

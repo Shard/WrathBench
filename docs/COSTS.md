@@ -21,7 +21,7 @@ record.
   `claude_result` (natural completion). A watchdog kill cuts the stream before
   that record lands, so most subscription episodes have no as-metered figure.
 - Estimates and provider-reported actuals are different species and are never
-  presented as each other (ADR-0038 draws the line; the viewer falls back to
+  presented as each other (the deploy-window design draws the line; the viewer falls back to
   an estimate only where the provider reported nothing, and labels it).
 
 ## 2. Rules, each paid for
@@ -36,7 +36,7 @@ record.
   output figure undercounted real output ~6.8x on the one run with ground
   truth. Per-response blocks are good for the SHAPE of context growth, never
   for absolute $.
-- **Cost control is external to the fleet by decision** (ADR-0043): a tier is
+- **Cost control is external to the fleet by decision** (operator, 2026-08-24): a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
   not as a new tier.
@@ -58,7 +58,7 @@ sporadicity is measured, not assumed (FOLLOW-UPS 78, run
 `fleet-deepseek-flash-e90-deepseek-v4-flash-0731-20260824-a4`, 150 calls). The harness's side is
 clean: replaying every consecutive request pair from the trajectory, the serialized message array
 was byte-identical up to the append point in all 139 non-trim pairs — the prefix the context
-policy promises (ADR-0012) is the prefix that goes over the wire, and a loop-level test now pins
+policy promises (`docs/METHODOLOGY.md`, "Context policy") is the prefix that goes over the wire, and a loop-level test now pins
 it. The misses decompose as: (1) the 11 block trims, one designed miss per ~11-turn block; (2)
 OpenRouter routing the same model slug across backends — correlating each call's generation id
 with OpenRouter's generation API, every `cached_tokens: 128` stretch was a different serving
@@ -72,12 +72,12 @@ mid-run `prompt_tokens` drop this item flagged is class 1 — the trim working a
 Separately: Anthropic models via OpenRouter still need explicit `cache_control` breakpoints
 (memory: 0%→89% measured); the open models cache implicitly, no opt-in involved.
 
-**claude-code harness (Sonnet/Opus via the Claude Code CLI on a subscription; ADR-0035):** no trimming
+**claude-code harness (Sonnet/Opus via the Claude Code CLI on a subscription):** no trimming
 — the full conversation replays every turn and grows essentially unbounded. `roster-sonnet-20260822`
 (e90, episode-limit segment): `prompt_tokens` 4,092 → 66,685 → 126,748 → 160,932 → 206,116 over the
 turn window, ending near 200k right before the 500-tool-call cap. `roster-opus-20260822` similarly
 grows into the six-figure range. This is a genuinely different context policy, not a tuning
-difference — it is what makes `claude-code` a harness of its own in the run's tag (ADR-0035), and
+difference — it is what makes `claude-code` a harness of its own in the run's tag, and
 it explains these numbers rather than unscoring the rows. Nothing compacts the claude-code conversation today (docs/worklogs/2026-08-21.md: the
 compaction gate wasn't tripped by the fixed-context lanes, but "the subscription-lane amendment of
 2026-08-22 arguably trips them already").

@@ -7,12 +7,12 @@
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
  *   bun runner/src/run.ts --resume <run-id>
  *
- * Two run dimensions are recorded and never model-specific (ADR-0024):
+ * Two run dimensions are recorded and never model-specific:
  * `--objective "<text>"` renders one delimited operator objective into the
  * fixed prompt and stamps the run unscored, and `--watchdogs-json '{...}'`
  * (or the individual `--idle-ms`/`--no-xp-ms`/`--episode-ms` flags) overrides
- * watchdog thresholds, where `null`/`0` disables one. A third, `--wiki-coords`
- * (ADR-0028), serves wiki-recorded coordinates through `search_reference`;
+ * watchdog thresholds, where `null`/`0` disables one. A third, `--wiki-coords`,
+ * serves wiki-recorded coordinates through `search_reference`;
  * the default is names-first, and the choice is stamped into the
  * comparability tuple so the two never share a chart.
  *
@@ -26,7 +26,7 @@
  * meta.json, keeps its token (so a still-alive module session is reattached by
  * the model's next createSession call), keeps its scratchpad and trajectory,
  * and starts the message window empty with a harness notice saying so — the
- * scratchpad, not the chat history, is the durable memory (ADR-0011).
+ * scratchpad, not the chat history, is the durable memory.
  */
 
 import { join } from "node:path";
@@ -97,7 +97,7 @@ function num(v: string | boolean | undefined): number | undefined {
  * object in one flag. The individual `--idle-ms`/`--no-xp-ms`/`--episode-ms`
  * flags still work and are applied first; this one wins where they overlap,
  * because it is the only spelling that can carry `null` (disable) through
- * argv, and the roster emits it for exactly that reason (ADR-0024).
+ * argv, and the roster emits it for exactly that reason.
  */
 function watchdogOverrides(v: string | boolean | undefined): WatchdogOverride {
   if (typeof v !== "string") return {};
@@ -153,12 +153,12 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity, like model and effort: an objective steers what the whole
     // run was for, so a resumed run keeps the one it was launched with.
     objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
-    // Identity too (ADR-0028): what the reference surface served is part of
+    // Identity too: what the reference surface served is part of
     // what the run was, so a resume keeps the stored value.
     wikiCoords: flag(args["wiki-coords"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
-    // A probe campaign's identity (ADR-0041), both or neither.
+    // A probe campaign's identity, both or neither.
     campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
     cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
@@ -424,7 +424,7 @@ async function main(): Promise<void> {
   }
 
   // A stopped runner must still leave a run that says what happened to it.
-  // Two signals, two meanings (ADR-0036):
+  // Two signals, two meanings:
   //  - SIGTERM is what a supervisor sends — `docker compose stop`, a drain, a
   //    recreate. The run PAUSES as `operator-pause`: clock stopped, session
   //    released, resumable with --resume. The fleet's stop must not cost a run.
@@ -495,12 +495,12 @@ async function main(): Promise<void> {
   console.error(`[wrathbench] trajectory: ${runDir}`);
 
   // Names still standing on the account after hygiene (slot-eaters it could
-  // not delete). The model chooses its own name (ADR-0050), so these are the
+  // not delete). The model chooses its own name, so these are the
   // ones it must not choose: `createSession` REUSES an existing character of
   // that name, and landing on one is a `stale-character` attempt burned.
   let takenNames: string[] = [];
   if (!resumed) {
-    // Episode hygiene (ADR-0006 fresh character per episode): the account has
+    // Episode hygiene (fresh character per episode): the account has
     // ~10 character slots and every character on it is disposable between
     // episodes. Clear them so the model can always create its assigned one.
     //
@@ -552,8 +552,8 @@ async function main(): Promise<void> {
    * conversation history, so anything the note leaves out it has to guess.
    * `nav-probe-freeplay-sonnet-20260823-c3` guessed — the old note said
    * `createSession({...})` with no name — and rolled a second, wrong character
-   * next to the one the pause had preserved, which is exactly the loss ADR-0036
-   * exists to prevent.
+   * next to the one the pause had preserved, which is exactly the loss
+   * pause-and-resume exists to prevent.
    */
   const resumeNote = (): string => {
     const spentM = Math.round(elapsedBeforeMs / 60_000);

@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
+  MARK_RING_R,
   RUNGS,
   billingKnown,
   classOptions,
@@ -134,7 +135,7 @@ describe("ladderRows", () => {
     expect(left.highest).toBe(2);
   });
 
-  test("rung 4 needs both halves: a capital zone AND a recorded flight (ADR-0048)", () => {
+  test("rung 4 needs both halves: a capital zone AND a recorded flight", () => {
     const both = ladderRows([
       run({ model: "cap", areas: areas({ capitalZone: 1519 }), taxi: { flights: 1 } }),
     ])[0]!;
@@ -164,7 +165,7 @@ describe("ladderRows", () => {
     expect(cell.runId).toBe("post");
   });
 
-  test("achievement points are a displayed signal and change no ordering (ADR-0018/0043)", () => {
+  test("achievement points are a displayed signal and change no ordering", () => {
     const rows = ladderRows([
       run({ model: "decorated", maxLevel: 4, achievements: { earned: 40, points: 400, ids: [1] } }),
       run({ model: "plain", maxLevel: 12, achievements: null }),
@@ -441,6 +442,16 @@ describe("ladderChartLayout", () => {
     const l = ladderChartLayout([pt("one", 1, 100), pt("two", 1, 100), pt("three", 1, 100), pt("far", 2, 200)], box);
     const slots = new Set(l.placed.map((d) => `${d.anchor}:${d.labelY.toFixed(1)}`));
     expect(slots.size).toBe(4);
+  });
+
+  test("every label clears the mark it belongs to, both ways", () => {
+    const l = ladderChartLayout([pt("one", 1, 100), pt("two", 4, 1200), pt("three", 6, 2000)], box);
+    for (const d of l.placed) {
+      // Against the mark's outer edge, not the puck: a thicker separation ring
+      // has to move the labels too, and this is the test that says so.
+      expect(Math.abs(d.labelX - d.cx)).toBeGreaterThan(MARK_RING_R);
+      expect(Math.abs(d.labelY - d.cy)).toBeGreaterThan(MARK_RING_R);
+    }
   });
 
   test("a label at the plot's right edge is anchored to its left", () => {

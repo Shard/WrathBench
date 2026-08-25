@@ -5,8 +5,8 @@
  * Nothing here decides anything about a model. The status, the counts, the
  * cooling deadline and the retirement reason all arrive decided from
  * `/api/models`, which serves the same projection the fleet supervisor
- * schedules on (ADR-0032). What this file does is phrase them, and phrase them
- * once, so the table and the detail panel cannot word the same fact two ways.
+ * schedules on. What this file does is phrase them, and phrase them once, so
+ * the table and the detail panel cannot word the same fact two ways.
  */
 
 import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
@@ -19,11 +19,11 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "
  *
  * Status leads because it is what an operator scans for, and the tier follows
  * the name because it is the second question asked of a row. Billing is not a
- * column: since ADR-0043 it says only where a run may execute, which is the
- * platform's business, and the tier is what buys runs.
+ * column: it says only where a run may execute, which is the platform's
+ * business, and the tier is what buys runs.
  *
- * On the word "tier": since ADR-0043 it means a rung of the EVIDENCE ladder
- * (t0/t1/t2), never an episode. The episode columns are named by their ids.
+ * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
+ * never an episode. The episode columns are named by their ids.
  */
 export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"] as const;
 
@@ -35,7 +35,7 @@ export function columnClass(column: (typeof MODEL_COLUMNS)[number]): string {
   return column === "extras" || (EPISODE_COLUMNS as readonly string[]).includes(column) ? "right" : "";
 }
 
-/** The ladder's order (ADR-0043), so "higher" is a comparison rather than a string sort. */
+/** The ladder's order, so "higher" is a comparison rather than a string sort. */
 const TIER_RANK: Record<TierView, number> = { t0: 0, t1: 1, t2: 2 };
 
 /**
@@ -104,8 +104,8 @@ export function noteOf(row: ModelRowView): string | null {
 
 /**
  * Extras across every episode: attempts the policy made past the target, never
- * counted. Not just the tier columns — a local model's extras are freeplay runs
- * (ADR-0034), and they belong in the same number.
+ * counted. Not just the tier columns — a local model's extras are freeplay
+ * runs, and they belong in the same number.
  */
 export function extrasOf(row: ModelRowView): number {
   return Object.values(row.perEpisode).reduce((n, st) => n + (st?.extras ?? 0), 0);

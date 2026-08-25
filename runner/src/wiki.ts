@@ -49,7 +49,7 @@ export function openWikiBundle(path: string): Database | undefined {
  * was in the file: the same path holds a different reference surface after
  * every rebuild, and a rebuild that changes page text changes what a model
  * could read. This record is the evidence, annotated onto the comparability
- * tuple (ADR-0033, "The wiki bundle's identity").
+ * tuple (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
  *
  * Everything is nullable on purpose. `era_cutoff` is written only by bundles
  * built with an era cutoff, `schema_version` is TEXT in the bundle and stays a

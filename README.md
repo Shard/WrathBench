@@ -13,7 +13,7 @@ Status: Phase 0, pre-alpha. Private repository. See `docs/PHASE-0.md`.
 - `docs/PHASE-0.md`: current scope, task list, and the gate
 - `docs/DATA-AND-LEGAL.md`: data handling posture
 - `docs/WORKLOG.md`: index of the per-day worklogs in `docs/worklogs/` — what shipped and what broke, with commits
-- `docs/decisions/`: architecture decision records
+- `docs/METHODOLOGY.md`: the methodological decisions behind the benchmark and the principles behind them
 
 ## Quick start
 

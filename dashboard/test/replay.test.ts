@@ -1,7 +1,7 @@
 /**
  * Map replay's cursor maths (FOLLOW-UPS 22).
  *
- * The property that keeps ADR-0019 intact is that a cursor produces the same
+ * The property that keeps the one-renderer design intact is that a cursor produces the same
  * `AgentPosition[]` shape the live feed produces — these pin that, plus the
  * two things a scrubber gets wrong: a cursor before the first sample, and a
  * route drawn across a continent change.

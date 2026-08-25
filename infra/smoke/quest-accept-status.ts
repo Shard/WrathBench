@@ -1,5 +1,5 @@
 /**
- * Fast-gate smoke A (ADR-0023 amendment, 2026-08-23): the quest-accept /
+ * Fast-gate smoke A (added to the gate 2026-08-23): the quest-accept /
  * questgiver-status / turn-in surface, with no combat. Runs on its own account
  * in parallel with kill-credit.ts; together they are the per-tick preflight
  * gate. The deploy-time full arc stays module-quest.ts.

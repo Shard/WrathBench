@@ -1,5 +1,5 @@
 /**
- * @wrathbench/runner — the fixed harness (ADR-0004). Everything here is
+ * @wrathbench/runner — the fixed harness. Everything here is
  * model-agnostic; the only per-run variables are the adapter config and the
  * character. Entry points:
  *

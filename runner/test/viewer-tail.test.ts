@@ -925,7 +925,7 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
   });
 });
 
-describe("achievement and flight milestones (ADR-0048, issue #8)", () => {
+describe("achievement and flight milestones (issue #8)", () => {
   function fileWith(lines: string[]): string {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-achievement-"));
     const path = join(dir, "trajectory.jsonl");

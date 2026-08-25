@@ -23,7 +23,7 @@ export interface ToolDef {
 
 /**
  * The one sentence of the `search_reference` description that depends on the
- * run's `wikiCoords` dimension (ADR-0028). Model-agnostic and fixed per
+ * run's `wikiCoords` dimension. Model-agnostic and fixed per
  * value, so a model never searches for numbers a names-first run withholds,
  * and a coords run is told what the numbers are (reference notes, not a
  * live observation).
@@ -39,7 +39,7 @@ export const WIKI_COORDS_SENTENCE = {
  * The standing era sentence on `search_reference`, fixed for every run.
  *
  * The bundle is built from the Wrath-era revisions of a 2020 dump and drops
- * what it can identify as later (ADR-0040), so the tool no longer warns about
+ * what it can identify as later, so the tool no longer warns about
  * labels in the result text — there are none. What it still cannot catch is a
  * 2010 page describing an announced expansion without naming it, which is why
  * "prefer what you can observe in game" stays.
@@ -147,8 +147,9 @@ export const TOOLS: ToolDef[] = [
 // required" instead of being told about its unknown key. Aliases are
 // normalized (normalizeToolArgs) BEFORE this validation runs.
 /**
- * Booleanish, deterministically (ADR-0016). NOT z.coerce.boolean(): that is JS
- * truthiness, so the string "false" — which models do send — would read true.
+ * Booleanish, deterministically — repair only the deterministic. NOT
+ * z.coerce.boolean(): that is JS truthiness, so the string "false" — which
+ * models do send — would read true.
  */
 const booleanish = z
   .union([z.boolean(), z.string(), z.number()])
@@ -458,7 +459,7 @@ export interface ToolContext {
   /** Wiki bundle; absent means search_reference reports unavailability. */
   wiki?: Database | undefined;
   /**
-   * Whether search_reference serves wiki-recorded coordinates (ADR-0028).
+   * Whether search_reference serves wiki-recorded coordinates.
    * Absent reads as false: names-first is the default everywhere.
    */
   wikiCoords?: boolean | undefined;

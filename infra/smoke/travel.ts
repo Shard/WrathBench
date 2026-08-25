@@ -62,7 +62,7 @@
  * `apply.ts` rewrites its rows on every run. The session is still closed with
  * DELETE /session at the end, as on the legacy path.
  *
- * Run (this is N1 of ADR-0027 / FOLLOW-UPS 38). The module's HTTP port is not
+ * Run (this is N1 of the navigation plan, FOLLOW-UPS 38). The module's HTTP port is not
  * published to the host, so the smoke runs inside the runner container:
  *
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3

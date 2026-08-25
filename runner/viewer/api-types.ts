@@ -12,11 +12,11 @@
  */
 
 /**
- * The comparability tuple a run was stamped with (ADR-0026).
+ * The comparability tuple a run was stamped with.
  *
  * Structurally identical to `Comparability` in `runner/src/comparability.ts`,
  * which is where it is defined and validated. It is mirrored rather than
- * imported because this module is import-free by construction (ADR-0022) —
+ * imported because this module is import-free by construction —
  * the dashboard bundles it for a browser and must not pull `zod`, `bun:sqlite`
  * or the prompt text in behind it. `runner/test/comparability.test.ts` pins
  * the two shapes to each other.
@@ -50,7 +50,7 @@ export interface EpisodeTierView {
 }
 
 /**
- * One probe campaign as `/api/campaigns` serves it (ADR-0041).
+ * One probe campaign as `/api/campaigns` serves it.
  *
  * Built from the RUN DIRECTORY, not from the config, which is the whole point:
  * a campaign that has been completed, switched off and deleted from the file
@@ -115,15 +115,15 @@ export interface EpisodesResponse {
     /** Stamped with the id but given a leash the id does not describe. */
     overrides: number;
     /**
-     * Stamped with the id but never a recorded episode (ADR-0049): the run
+     * Stamped with the id but never a recorded episode: the run
      * lapsed and was ended, an operator cut it, or the harness failed. An
      * attempt spent on this tier, counted apart from its members.
      */
     lapsed: number;
     /**
      * Labeled with the id by the reader rather than stamped at launch — an
-     * older run that looks like this tier. Countable, never a member (ADR-0030:
-     * past runs are not back-labeled).
+     * older run that looks like this tier. Countable, never a member: past
+     * runs are not back-labeled.
      */
     derived: number;
   })[];
@@ -133,7 +133,7 @@ export interface EpisodesResponse {
 }
 
 /**
- * The harness a run ran under (ADR-0035): `wrathbench` is the fixed loop,
+ * The harness a run ran under: `wrathbench` is the fixed loop,
  * `claude-code` the Claude Code CLI scaffold. Literal union rather than an
  * import, because this module is import-free by construction.
  */
@@ -144,20 +144,20 @@ export interface ComparabilityView {
   harnessVersion: string;
   promptHash: string;
   promptChars: number;
-  /** Which loop owned the run (ADR-0035). */
+  /** Which loop owned the run. */
   harness: HarnessView;
   effort: string | null;
   budget: EpisodeBudgetView;
   /** True when an operator objective steered the run, which makes it unscored. */
   objective: boolean;
   /**
-   * Whether `search_reference` served wiki coordinates (ADR-0028). Absent on
+   * Whether `search_reference` served wiki coordinates. Absent on
    * runs stamped before the field existed.
    */
   wikiCoords?: boolean;
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
-   * (ADR-0033). An annotation: a text-changing rebuild is paired with a harness
+   * An annotation: a text-changing rebuild is paired with a harness
    * minor bump, which is what actually groups. Null when the run had no bundle;
    * absent on runs stamped before the field existed.
    */
@@ -181,7 +181,7 @@ export interface ComparabilityView {
    */
   serverBuild: { build: string; startedAtMs: number } | null;
   /**
-   * The model id the provider actually served (ADR-0033 amendment, 2026-08-25).
+   * The model id the provider actually served (2026-08-25).
    * An annotation like `wikiBundle`, and the one field here that is observed
    * mid-episode rather than stamped at launch, so it is excluded from tuple
    * equality. Absent on runs stamped before the field existed.
@@ -194,25 +194,25 @@ export interface RunRow {
   runId: string;
   model: string | null;
   driver: string | null;
-  /** The harness tag (ADR-0035): from the tuple, else the driver. Null when neither was recorded. */
+  /** The harness tag: from the tuple, else the driver. Null when neither was recorded. */
   harness: HarnessView | null;
   /** The unscored stamp (the key keeps the old column name). Null when the run can score. */
   shakeout: string | null;
-  /** The operator objective this run was steered with (ADR-0024), or null. */
+  /** The operator objective this run was steered with, or null. */
   objective: string | null;
   /**
    * The probe campaign that commissioned this run and which of its cells it is
-   * (ADR-0041), or null on anything else. Read off the run's own config, which
+   * or null on anything else. Read off the run's own config, which
    * is what lets a campaign's results outlive the deletion of its config entry:
    * this page is built from the run directory, not from the roster.
    */
   campaign: string | null;
   cell: string | null;
-  /** An extra run (ADR-0034): past the policy target, scored like any other, never counted by the fleet. */
+  /** An extra run: past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
   /**
-   * The starting character the run was launched with (ADR-0034's extras cycle
+   * The starting character the run was launched with (the extras cycle
    * gives free models a different one per extra run). Ids are the client's own
    * 3.3.5a race/class ids; the names are `runner/viewer/characters.ts`
    * resolving them, with an id no table knows rendering as its own number.
@@ -508,7 +508,7 @@ export type FeedEntry =
   | EventsServedEntry
   | OtherEntry;
 
-/** One agent, at one moment (ADR-0019's position feed). */
+/** One agent, at one moment (the map's position feed). */
 export interface AgentPosition {
   runId: string;
   character: string | null;
@@ -579,7 +579,7 @@ export interface RunDetailResponse {
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
   /**
-   * Achievements and flights from this run's milestone records (ADR-0048),
+   * Achievements and flights from this run's milestone records,
    * accumulated by the same incremental tail the entry feed rides, so a live
    * run's line grows with it. Null on a run that recorded none — never zero.
    * Optional for the reason `ResultRun.areas` is: an older viewer has neither.
@@ -601,8 +601,8 @@ export interface EntriesResponse {
 }
 
 /**
- * One job with a process, as the supervisor publishes it (ADR-0034: the job
- * is the one unit of work; an account, with a class, is where it runs). A job
+ * One job with a process, as the supervisor publishes it (the job is the one
+ * unit of work; an account, with a class, is where it runs). A job
  * names the roster entry it is running, the tier, the account it landed on,
  * where it came from — the file's pinned list, the manual queue, or the
  * policy's own pick — and the process that runs it.
@@ -623,12 +623,12 @@ export interface FleetJobView {
    */
   episode: string | null;
   account: string;
-  /** The class of the account it landed on (ADR-0034): pool, paid, local, or pinned. */
+  /** The class of the account it landed on: pool, paid, local, or pinned. */
   accountClass: "pinned" | "pool" | "paid" | "local";
   source: string;
   /** The n-th attempt on (model, episode); absent on a job from the file. */
   attempt?: number;
-  /** The paused run this spawn is resuming (ADR-0036), when it is resuming one. */
+  /** The paused run this spawn is resuming, when it is resuming one. */
   resuming?: string;
   /** The models behind `ref`, in roster order. */
   models: string[];
@@ -646,7 +646,7 @@ export interface FleetJobView {
 
 /**
  * One account and what holds it, as the supervisor's `accounts` block records
- * it (ADR-0034's classes). `job` is null when nothing is on it — which is what
+ * it, with its class. `job` is null when nothing is on it — which is what
  * the fleet table's idle rows are made of.
  */
 export interface FleetAccountView {
@@ -657,7 +657,7 @@ export interface FleetAccountView {
 }
 
 /**
- * A paused run the supervisor is holding rather than resuming (ADR-0036), as
+ * A paused run the supervisor is holding rather than resuming, as
  * `--status` lists it. A paused run holds no account, so it shows against the
  * idle account it paused on rather than as a job.
  */
@@ -691,7 +691,7 @@ export interface FleetEndedView {
   detail: string;
 }
 
-/** The preflight gate's last result (ADR-0023), as the supervisor recorded it. */
+/** The preflight gate's last result, as the supervisor recorded it. */
 export interface FleetPreflightView {
   at: number;
   serverIdentity: string;
@@ -819,14 +819,14 @@ export interface ApiInfoResponse {
    */
   worldserver: { build: string; startedAtMs: number } | null;
   /**
-   * Every harness series (ADR-0034's `major.minor`) that recorded runs, newest
-   * first, with how many runs each holds.
+   * Every harness series (`major.minor` of a version stamp) that recorded
+   * runs, newest first, with how many runs each holds.
    *
-   * The shell's series selector (ADR-0046) is a global filter, so it needs the
-   * list of series before any page has loaded its own rows. It rides on
-   * `/api/info` for the reason the build stamp does: the shell already polls
-   * this route, and a poller per shell control is exactly the budget ADR-0022
-   * says not to spend. Runs whose stamp names no series are not listed —
+   * The shell's series selector is a global filter, so it needs the list of
+   * series before any page has loaded its own rows. It rides on `/api/info`
+   * for the reason the build stamp does: the shell already polls this route,
+   * and a poller per shell control is exactly the budget the dashboard is
+   * built not to spend. Runs whose stamp names no series are not listed —
    * they belong to no group, and only the "all" selection shows them.
    *
    * Optional: a dashboard built against a viewer that predates this field must
@@ -881,7 +881,7 @@ export interface AreaFacts {
 }
 
 /**
- * What a run's achievement milestones say it holds (ADR-0048, issue #8).
+ * What a run's achievement milestones say it holds (issue #8).
  *
  * `earned` is the union of the login backlog and the run's own earns, so on a
  * resumed run it is what the character holds, not what it earned this episode.
@@ -932,15 +932,15 @@ export interface ResultRun {
   platform: string | null;
   harnessVersion: string | null;
   /**
-   * `major.minor` of the harness version (ADR-0034): the comparability group
+   * `major.minor` of the harness version: the comparability group
    * the charts key on, with the exact versions listed on the row. Null when
    * the stamp has none.
    */
   harnessSeries: string | null;
-  /** An extra run past the policy target (ADR-0034); scored like any other, reported apart by the fleet. */
+  /** An extra run past the policy target; scored like any other, reported apart by the fleet. */
   extra: boolean;
   /**
-   * The run's starting character (ADR-0034's extras cycle). Ids as recorded,
+   * The run's starting character (the extras cycle). Ids as recorded,
    * names resolved by `runner/viewer/characters.ts`; null is "not recorded".
    * A dimension the charts *label and filter on*, never a group key: the
    * baseline character is the comparison set.
@@ -952,19 +952,19 @@ export interface ResultRun {
   /** "Dwarf Hunter", or null when neither id was recorded. */
   characterLabel: string | null;
   /**
-   * The probe campaign that commissioned this run and its cell (ADR-0041), or
+   * The probe campaign that commissioned this run and its cell, or
    * null. A grouping key for the campaigns page and nothing else: a probe is
    * unscored, so these never reach a chart.
    */
   campaign: string | null;
   cell: string | null;
   effort: string | null;
-  /** The harness tag (ADR-0035). A tag on the row, not a partition. */
+  /** The harness tag. A tag on the row, not a partition. */
   harness: HarnessView | null;
   promptHash: string | null;
-  /** The worldserver build this run was stamped against, or null (ADR-0026). */
+  /** The worldserver build this run was stamped against, or null. */
   serverBuild: string | null;
-  /** Whether wiki coordinates were served (ADR-0028); null when not recorded. */
+  /** Whether wiki coordinates were served; null when not recorded. */
   wikiCoords: boolean | null;
   /**
    * The run's episode tier: stamped when the run was launched with `--episode`,
@@ -985,12 +985,12 @@ export interface ResultRun {
   snippets: number | null;
   /** `response` records; see `RunListRow.modelResponses`. */
   modelResponses: number | null;
-  /** Why this run cannot be scored, or null when it can (ADR-0004, ADR-0024). */
+  /** Why this run cannot be scored, or null when it can. */
   unscored: string | null;
   startedAt: number | null;
   /**
    * The listing's own reading of whether the file is still being written, and
-   * when the run ended (ADR-0047's status column). Optional: a dashboard built
+   * when the run ended (the runs page's status column). Optional: a dashboard built
    * against a viewer that predates them must still work, and reads the
    * recorded reasons instead.
    */
@@ -1002,7 +1002,7 @@ export interface ResultRun {
   /**
    * XP *within* `maxLevel`: the highest reading any sample carried at that
    * level. Together with `maxLevel` it is the ladder's total-XP ordering
-   * (ADR-0018 amendment) — the pair is lexicographic because xp resets at each
+   * — the pair is lexicographic because xp resets at each
    * level and level never goes down. Null when no sample recorded xp there.
    */
   xp: number | null;
@@ -1028,9 +1028,9 @@ export interface ResultRun {
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];
   /*
-   * The listing columns. The episodes page is the per-run grain (ADR-0022
-   * amendment, 2026-08-23), so the facts the fleet's run table used to carry
-   * ride on this row rather than being joined against `/api/runs` in a page.
+   * The listing columns. The runs page is the per-run grain, so the facts
+   * the fleet's run table used to carry ride on this row rather than being
+   * joined against `/api/runs` in a page.
    */
   /** The character's name, where `characterLabel` is its race and class. */
   character: string | null;
@@ -1074,11 +1074,11 @@ export interface ResultRun {
    */
   areas?: AreaFacts | null;
   /**
-   * Achievements the run's records account for (ADR-0048). `null` is a run that
+   * Achievements the run's records account for. `null` is a run that
    * wrote none — everything before the achievement taps were deployed — and
    * must not be read as zero; `undefined` is a viewer that predates the field.
    * A displayed signal only: nothing in the ladder's ordering reads it
-   * (ADR-0018/0043 — highest rung, then XP, then gold).
+   * (highest rung, then XP, then gold).
    */
   achievements?: AchievementFacts | null;
   /**
@@ -1087,7 +1087,7 @@ export interface ResultRun {
    * are different facts.
    */
   taxi?: TaxiFacts | null;
-  /** Why a run is suspended, when it ended for no other reason (ADR-0036). */
+  /** Why a run is suspended, when it ended for no other reason. */
   pauseReason: string | null;
 }
 
@@ -1143,11 +1143,11 @@ export interface ApiError {
  * the projection lives and the only place any of it is decided. The route adds
  * the run ids behind each count and the last error text; it computes no number
  * of its own, so the page and `run-fleet --status` cannot disagree about why a
- * model is not running (ADR-0031, ADR-0030).
+ * model is not running.
  */
 export type ModelStatusView = "new" | "active" | "cooling" | "promoted" | "retired";
 
-/** A rung of the evidence ladder (ADR-0043); mirrors `TIERS` in `runner/src/models.ts`. */
+/** A rung of the evidence ladder; mirrors `TIERS` in `runner/src/models.ts`. */
 export type TierView = "t0" | "t1" | "t2";
 
 /** What a model does with an account once its tier is spent; mirrors `IDLE_MODES`. */
@@ -1182,7 +1182,7 @@ export interface ModelRunView {
   harnessVersion: string | null;
   /** The series the run's version belongs to; the schedule counts only the current one. */
   harnessSeries: string | null;
-  /** An extra run (ADR-0034): an attempt past the target, never counted. */
+  /** An extra run: an attempt past the target, never counted. */
   extra: boolean;
   /**
    * The run's starting character, attached by the route from the same run rows
@@ -1226,15 +1226,16 @@ export interface ModelLastErrorView {
 }
 
 export interface ModelRowView {
-  /** The roster name (ADR-0031's `roster` map key) — the row's identity. */
+  /** The roster name (the config's `roster` map key) — the row's identity. */
   name: string;
   model: string;
   effort: string | null;
   platform: string | null;
-  /** The harness this roster entry's runs go through (ADR-0035), from its driver. */
+  /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;
   /**
-   * Free or paid (`runner/src/model-cost.ts`). Since ADR-0043 this says only
+   * Free or paid (`runner/src/model-cost.ts`). Since the tier became the only
+   * budget this says only
    * where a run may physically execute — the account class and the rate-limit
    * key. It buys no runs and costs none: that is the tier.
    *
@@ -1245,7 +1246,7 @@ export interface ModelRowView {
    * (`runner/src/billing.ts`).
    */
   billing: "free" | "paid";
-  /** The tier the config admitted this model to (ADR-0043). */
+  /** The tier the config admitted this model to. */
   declaredTier: TierView;
   /** The tier it is scheduled under: `declaredTier` advanced once if it earned rung 1. */
   tier: TierView;
@@ -1309,7 +1310,7 @@ export interface ModelsResponse {
     series: string | null;
     /** The paid throttle when the file turns it on; null is no split. Only a cap — never a budget. */
     paid: { maxConcurrent: number } | null;
-    /** The ladder itself (ADR-0043), so a page can name a tier's budget without hardcoding it. */
+    /** The ladder itself, so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
     /**
      * `policy.maxConcurrent`: streams the policy may have in flight per

@@ -20,8 +20,8 @@ import {
 /* ---------- coordinates ---------- */
 
 describe("worldmap", () => {
-  test("Anvilmar lands where the ADR says it does", () => {
-    // map 0, x ≈ -6240, y ≈ 380 — the reference point in ADR-0019.
+  test("Anvilmar lands at the recorded reference point", () => {
+    // map 0, x ≈ -6240, y ≈ 380 — the map view's recorded reference point.
     const t = worldToTile(-6240, 380);
     expect(t.row).toBeCloseTo(43.7, 3);
     expect(t.col).toBeCloseTo(31.2875, 3);
@@ -76,7 +76,7 @@ describe("worldmap", () => {
 });
 
 /*
- * The replay seam (ADR-0019): the transform must be usable with nothing else
+ * The replay seam: the transform must be usable with nothing else
  * loaded — no runs directory, no sqlite, no viewer. A future trajectory reader
  * imports exactly this and nothing more.
  */
@@ -158,7 +158,7 @@ interface FixtureRun {
   character?: string;
   /** [ts, level, xp, map, x, y, z, money, quests] — nulls allowed. */
   states?: (number | null)[][];
-  /** Omit the position columns entirely, as a pre-ADR-0018 run does. */
+  /** Omit the position columns entirely, as a run from before position recording does. */
   noPositionColumns?: boolean;
   /** Add the `items` column (FOLLOW-UPS 50) and set it on the newest state row. */
   items?: string | null;
@@ -210,7 +210,7 @@ function fixture(runs: FixtureRun[]): string {
 describe("readPositions", () => {
   const NOW = 1_700_000_000_000;
 
-  test("returns the ADR-0019 shape for a live run", () => {
+  test("returns the map-view shape for a live run", () => {
     const runsDir = fixture([
       {
         id: "live-1",

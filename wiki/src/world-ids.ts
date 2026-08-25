@@ -3,7 +3,7 @@
  *
  * The wiki tooling reads nothing from the server at run time and never will
  * (CONTRACTS.md). This is a **build-time** input and the one deliberate crack
- * in that rule, approved by the operator on 2026-08-24 (ADR-0042): of the
+ * in that rule, approved by the operator on 2026-08-24: of the
  * 20,407 pages with no pre-cutoff revision, ~18,700 say nothing about their era
  * either way, and the only evidence that separates the ones that are in this
  * world is what they say about themselves — an id, and the name that id has.

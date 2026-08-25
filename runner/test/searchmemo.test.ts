@@ -164,7 +164,7 @@ describe("an id the reference does not record", () => {
   });
 });
 
-describe("the wikiCoords run dimension (ADR-0028)", () => {
+describe("the wikiCoords run dimension", () => {
   test("names-first by default: no coords line, prose pairs redacted", async () => {
     const res = await search(context(bundle()), "Example Person Delta");
     expect(res.text).toContain("# Example Person Delta");

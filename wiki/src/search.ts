@@ -14,7 +14,7 @@
  * Out-of-game pages (patch notes, addon/UI documentation, boxed products,
  * real-world topics) used to be a fifth band, labelled and sunk. They are no
  * longer in the bundle at all: `classifyMetaPage` runs at build time and the
- * build does not emit them (ADR-0040).
+ * build does not emit them.
  *
  * The bands exist because bm25 alone put a page whose only connection to
  * "quest 783" was the digits 783 inside an arithmetic example above the quest

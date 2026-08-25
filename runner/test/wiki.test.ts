@@ -52,7 +52,7 @@ describe("openWikiBundle", () => {
 });
 
 /**
- * The bundle's identity, for the comparability tuple (ADR-0033). Annotation,
+ * The bundle's identity, for the comparability tuple. Annotation,
  * never a gate: every failure mode here reads as "not recorded".
  */
 describe("wikiBundleMeta", () => {

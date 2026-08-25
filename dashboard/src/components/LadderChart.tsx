@@ -14,7 +14,8 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import { type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { MARK_R, MARK_RING_R, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { logoHrefOf } from "./ModelIcon";
 import { fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
@@ -23,7 +24,12 @@ const VB_H = 380;
 const M = { top: 16, right: 24, bottom: 40, left: 64 };
 const BOX = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
 
-/** The colour of a point: the harness that owned its runs, or neither when mixed. */
+/** The logo inside a puck. Square, a little inside the ring, so a wide mark's art still fits. */
+const LOGO_S = 7.5;
+/** The transparent hit target: comfortably wider than the mark, which is small. */
+const HIT_R = 12;
+
+/** The colour of a point's ring: the harness that owned its runs, or neither when mixed. */
 function harnessColour(harnesses: readonly string[]): string {
   if (harnesses.length === 1 && harnesses[0] === "claude-code") return "var(--claude)";
   if (harnesses.length === 1 && harnesses[0] === "wrathbench") return "var(--accent)";
@@ -139,8 +145,47 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
               >
                 <title>{hoverText(d.point, props.episode)}</title>
                 {/* A hit target wider than the mark. */}
-                <circle cx={d.cx} cy={d.cy} r={12} fill="transparent" />
-                <circle cx={d.cx} cy={d.cy} r={5} fill={harnessColour(d.point.harnesses)} stroke="var(--bg)" stroke-width="1.5" />
+                <circle cx={d.cx} cy={d.cy} r={HIT_R} fill="transparent" />
+                {/*
+                 * The mark is the model's logo on a puck, and the
+                 * harness keeps the point's colour as the puck's ring, so the
+                 * legend below still says what it always said. Three circles
+                 * and not one: the outer page-coloured ring is what separates
+                 * two pucks that land on top of each other, which is the job
+                 * the old dot's `var(--bg)` stroke was doing. The puck itself
+                 * is light in both themes on purpose — these SVGs paint
+                 * `currentColor`, which an image document resolves to black.
+                 * A model no family claims has no logo and keeps the coloured
+                 * dot, the same fallback every other render site takes.
+                 */}
+                <Show
+                  when={logoHrefOf(d.point.model)}
+                  fallback={
+                    <circle cx={d.cx} cy={d.cy} r={5} fill={harnessColour(d.point.harnesses)} stroke="var(--bg)" stroke-width="1.5" />
+                  }
+                >
+                  {(href) => (
+                    <>
+                      <circle cx={d.cx} cy={d.cy} r={MARK_RING_R} fill="none" stroke="var(--bg)" stroke-width="1.5" />
+                      <circle
+                        cx={d.cx}
+                        cy={d.cy}
+                        r={MARK_R}
+                        fill="#ffffff"
+                        stroke={harnessColour(d.point.harnesses)}
+                        stroke-width="1.5"
+                      />
+                      <image
+                        href={href()}
+                        x={d.cx - LOGO_S / 2}
+                        y={d.cy - LOGO_S / 2}
+                        width={LOGO_S}
+                        height={LOGO_S}
+                        preserveAspectRatio="xMidYMid meet"
+                      />
+                    </>
+                  )}
+                </Show>
                 <text x={d.labelX} y={d.labelY} text-anchor={d.anchor} font-size="11" fill="var(--fg)">
                   {d.point.key}
                 </text>
@@ -155,7 +200,8 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         avg cost per {props.episode} run (USD) · avg xp earned, means over each entry's counted runs on{" "}
         {props.episode}. Cost is what the provider charged, else the list price applied to the run's own
         tokens ($0 for a free tier or local hardware, as-if-metered for a subscription); xp earned is the run
-        page's lower bound. <span style={{ color: "var(--accent)" }}>●</span> wrathbench{" "}
+        page's lower bound. Each mark is the model's logo; ring:{" "}
+        <span style={{ color: "var(--accent)" }}>●</span> wrathbench{" "}
         <span style={{ color: "var(--claude)" }}>●</span> claude-code{" "}
         <span style={{ color: "var(--dim)" }}>●</span> both.
         <Show when={model().omitted.length > 0}>

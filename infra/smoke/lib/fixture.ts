@@ -11,7 +11,7 @@
  * its own "create this character and log straight back out" step. The retry
  * budget is a parameter too, deliberately — travel is a long probe and can
  * wait twenty minutes for a contended account, while the preflight gate runs
- * every tick and a slow failure there is the expensive kind (ADR-0023).
+ * every tick and a slow failure there is the expensive kind.
  *
  * Operator tooling. `apply.ts` writes the characters DB directly and refuses
  * any account outside the SMOKE/PROBE pattern; nothing in `runner/` or `sdk/`

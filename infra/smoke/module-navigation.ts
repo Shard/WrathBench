@@ -34,7 +34,7 @@
  * provides the deck. `WB_AREATRIGGER` is also the gate's: no DBC trigger lies
  * within 400y of either starter zone.
  *
- * Preflight-gate ready (ADR-0023 amendment, 2026-08-23): reads MODULE_ACCOUNT
+ * Preflight-gate ready (2026-08-23): reads MODULE_ACCOUNT
  * the way the supervisor's spawnSmoke injects it, deletes last run's character
  * through the real CMSG_CHAR_DELETE path before creating this run's (the same
  * pattern as quest-accept-status.ts / kill-credit.ts), and only logs out at
@@ -274,7 +274,7 @@ async function main() {
   if (back.meshZ !== undefined) fail(`plain arrival should not carry meshZ: ${JSON.stringify(back)}`);
   log("PASS plain walk after the failures -> arrived, no meshZ");
 
-  // 5b. OPTIONAL LEG — a route that steps off a ledge is `drop` (ADR-0027
+  // 5b. OPTIONAL LEG — a route that steps off a ledge is `drop` (typed-cause
   //     amendment 2026-08-23, nav-probe c4). The guard is |dz| > 2.0y and
   //     |dz| > 1.2x the segment's 2D length. Candidates are points a few yards
   //     past a lip near the abbey (UNVERIFIED: none has been confirmed to

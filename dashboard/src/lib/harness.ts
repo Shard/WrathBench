@@ -1,13 +1,13 @@
 /**
- * The harness *series* selection: one global filter, in the top bar (ADR-0046).
+ * The harness *series* selection: one global filter, in the top bar.
  *
  * A series is the `major.minor` of a harness version stamp — `harness-0.5-12-gabc`
- * is series `0.5`. ADR-0034 makes it the comparability group: a minor bump
- * changes what a run measures and restarts the evidence, a fix commit does not.
- * Every page that shows runs is therefore a view of one series, and the operator
- * decided that choice belongs once in the shell rather than on each page.
+ * is series `0.5`. This is the comparability group: a minor bump changes what
+ * a run measures and restarts the evidence, a fix commit does not. Every page
+ * that shows runs is therefore a view of one series, and the operator decided
+ * that choice belongs once in the shell rather than on each page.
  *
- * Not to be confused with the `?harness=` filter (ADR-0035, `wrathbench` vs
+ * Not to be confused with the `?harness=` filter (`wrathbench` vs
  * `claude-code`), which selects which *loop* owned a run. Different dimension,
  * unfortunate shared word; both filters coexist.
  *
@@ -140,8 +140,8 @@ export function seriesOptions(available: readonly string[], current?: SeriesChoi
 /**
  * Keep only the rows in a series. `null` keeps everything.
  *
- * A run whose stamp names no series is a member of no group (ADR-0034), so it
- * survives only under "all" — the same rule ADR-0030 applies to untiered runs.
+ * A run whose stamp names no series is a member of no group, so it survives
+ * only under "all" — the same rule applies to untiered runs.
  */
 export function filterBySeries<T extends { harnessSeries?: string | null; harnessVersion?: string | null }>(
   rows: readonly T[],

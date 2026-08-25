@@ -1,5 +1,5 @@
 /**
- * The identity catalog's matcher (ADR-0045).
+ * The identity catalog's matcher.
  *
  * The cases are the roster as it actually stands (infra/fleet.json): the ids
  * the fleet runs, the `:free` billing suffixes they carry, and the stealth ids

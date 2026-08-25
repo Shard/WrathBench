@@ -3,7 +3,7 @@
 #
 # Build context is the repository root. Adapted from the upstream
 # deps/azerothcore/apps/docker/Dockerfile so stage names, paths, and the
-# runtime layout match stock AzerothCore; see docs/decisions/ADR-0008.
+# runtime layout match stock AzerothCore; see docs/ARCHITECTURE.md (infra).
 #
 # Targets:
 #   worldserver -> wrathbench/worldserver

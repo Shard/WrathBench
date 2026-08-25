@@ -300,7 +300,7 @@ describe("routes", () => {
     expect(res.status).toBe(404);
   });
 
-  test("/api/info lists the harness series that have runs, newest first (ADR-0046)", async () => {
+  test("/api/info lists the harness series that have runs, newest first", async () => {
     const runs = fixture();
     const res = await api(runs)(new Request("http://x/api/info"));
     const b = (await res.json()) as { harnessSeries: { series: string; runs: number }[] };
@@ -634,7 +634,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(d.states[0]!.turn).toBeNull();
   });
 
-  test("achievement and flight milestones cross the wire on both the results row and the run page (ADR-0048)", async () => {
+  test("achievement and flight milestones cross the wire on both the results row and the run page", async () => {
     const runs = fixture();
     // Appended, not rewritten: this is what the loop adds to a live file.
     appendFileSync(
@@ -786,7 +786,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e90.runs).toHaveLength(0);
   });
 
-  test("harness is a tag on every results row; ?harness= is an optional filter defaulting to all (ADR-0035)", async () => {
+  test("harness is a tag on every results row, not a partition; ?harness= is an optional filter defaulting to all", async () => {
     const runs = fixture();
     stamped(runs, { ...TUPLE, harness: "claude-code" });
 
@@ -833,8 +833,9 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e90.minutes).toBe(90);
     expect(e90.toolCalls).toBe(3000);
     expect(e90.summary.length).toBeGreaterThan(80);
-    // `lapsed` is the ADR-0049 bucket: stamped with the id, never a recorded
-    // episode. Nothing in the fixture ended that way, so it is zero here.
+    // `lapsed` is the attempt-not-episode bucket: stamped with the id, never
+    // a recorded episode. Nothing in the fixture ended that way, so it is
+    // zero here.
     expect(e90).toMatchObject({ members: 0, overrides: 1, derived: 0, lapsed: 0 });
     expect(body.untiered).toBe(0);
   });
