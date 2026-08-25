@@ -161,6 +161,19 @@ export function iconPath(slug: string): string {
 }
 
 /**
+ * The packaged icons each embed a `<title>` ("Claude"), which browsers treat
+ * as the tooltip when the SVG is inlined — hijacking the richer label the
+ * dashboard puts on the badge itself. The icon is decorative there, so the
+ * title comes out at extraction; every consumer and the idempotence compare
+ * then see the same bytes.
+ */
+export function prepareSvg(svg: Uint8Array): Uint8Array {
+  const text = new TextDecoder().decode(svg);
+  const stripped = text.replace(/<title[^>]*>[\s\S]*?<\/title>/g, "");
+  return stripped === text ? svg : new TextEncoder().encode(stripped);
+}
+
+/**
  * The icon each family asks for, in lineup order. A slug the package does not
  * carry is a hard error: silently shipping a lineup that names a typo would
  * leave the dashboard with a missing logo and no way to notice.
@@ -179,7 +192,7 @@ export function selectIcons(lineup: ModelLineup, entries: readonly TarEntry[]): 
         `family ${family.id}: icon "${family.icon}" is not in ${lineup.icons.package}@${lineup.icons.version} (no ${path} in the tarball)`,
       );
     }
-    out.push({ familyId: family.id, slug: family.icon, path, svg });
+    out.push({ familyId: family.id, slug: family.icon, path, svg: prepareSvg(svg) });
   }
   return out;
 }
