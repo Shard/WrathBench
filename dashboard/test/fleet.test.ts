@@ -18,6 +18,7 @@ import {
   deployWindowOpen,
   fleetRows,
   gateVerdict,
+  heartbeatAge,
   jobModelLabel,
   pausedLabel,
   progressLabel,
@@ -269,9 +270,37 @@ describe("the row order", () => {
 
 describe("the --status indicators", () => {
   test("the supervisor is alive by heartbeat inside three ticks; no heartbeat is not running", () => {
-    expect(supervisorAlive({ heartbeatAt: 1000 }, 1000 + HEARTBEAT_STALE_MS - 1)).toBe(true);
-    expect(supervisorAlive({ heartbeatAt: 1000 }, 1000 + HEARTBEAT_STALE_MS)).toBe(false);
-    expect(supervisorAlive({}, 1000)).toBe(false);
+    expect(supervisorAlive({ heartbeatAt: 1000, now: 1000 + HEARTBEAT_STALE_MS - 1 })).toBe(true);
+    expect(supervisorAlive({ heartbeatAt: 1000, now: 1000 + HEARTBEAT_STALE_MS })).toBe(false);
+    expect(supervisorAlive({ now: 1000 })).toBe(false);
+  });
+
+  /*
+   * The clock the verdict is read on. Both readings come out of one response,
+   * so a browser hours out of step — or a snapshot pushed a minute ago and
+   * read from a CDN — sees the fleet the way the server saw it.
+   */
+  test("the heartbeat's age is the response's own clock, not the reader's", () => {
+    /*
+     * A healthy fleet, rendered once and then read late: a snapshot pushed a
+     * minute ago, a CDN that held it another thirty seconds, a browser clock
+     * an hour out of step. None of that is in the response, so none of it can
+     * age the heartbeat — five seconds of silence stays five seconds however
+     * long the reading takes to arrive. Ageing it against `Date.now()` in the
+     * browser is what used to read a live fleet as dead.
+     */
+    const fresh = { heartbeatAt: 1_000_000 - 5_000, now: 1_000_000 };
+    expect(heartbeatAge(fresh)).toBe(5_000);
+    expect(supervisorAlive(fresh)).toBe(true);
+    /*
+     * A supervisor that really did stop is still caught: the viewer's clock
+     * runs on and writes a newer `now` into every response while the
+     * heartbeat stands still, so the gap widens inside the body.
+     */
+    const stopped = { heartbeatAt: 1_000_000, now: 1_000_000 + HEARTBEAT_STALE_MS };
+    expect(heartbeatAge(stopped)).toBe(HEARTBEAT_STALE_MS);
+    expect(supervisorAlive(stopped)).toBe(false);
+    expect(heartbeatAge({ now: 1_000_000 })).toBe(null);
   });
 
   test("the gate verdict is the CLI's word: PASS, FAIL, SKIPPED, or none recorded", () => {
