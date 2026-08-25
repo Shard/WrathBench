@@ -561,13 +561,23 @@ async function runPrune(
   concurrency: number,
   log: (line: string) => void,
 ): Promise<void> {
-  const targets = [...new Set([...state.pendingDeletes, ...planPrune(state, limits)])].sort();
+  /*
+   * A pending delete that names a key this pass re-uploaded is dropped rather
+   * than retried: the key is current again (`uploaded` is the record of that),
+   * and retrying the delete would remove an object the manifest just
+   * advertised. Rare — it needs a delete to have failed and the same content
+   * to come back under the same key — but the failure mode is a torn
+   * generation, so it is worth the one filter.
+   */
+  const retries = state.pendingDeletes.filter((p) => state.uploaded[p] === undefined);
+  state.pendingDeletes = retries;
+  const targets = [...new Set([...retries, ...planPrune(state, limits)])].sort();
   if (targets.length === 0) {
     trimHistory(state, limits);
     return;
   }
 
-  const stillPending = new Set(state.pendingDeletes);
+  const stillPending = new Set(retries);
   const { ok, failed } = await pooled(targets, concurrency, async (path) => {
     await store.delete(path);
   });
