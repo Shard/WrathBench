@@ -234,7 +234,18 @@ export default function RunDetail() {
           const detailPoll = poll(() => api.run(params.id), DETAIL_POLL_MS);
           createEffect(() => {
             const next = detailPoll.latest;
-            if (next !== undefined) setDetail(next);
+            if (next === undefined) return;
+            setDetail(next);
+            /*
+             * In the public build the tail that advances the token card and
+             * the entry count never opens, so the polled detail is the only
+             * thing that moves them — without this they freeze at the first
+             * load while the rest of the page keeps up.
+             */
+            if (SNAPSHOT_MODE) {
+              setTokens(next.tokens);
+              setTotal(next.total);
+            }
           });
         });
         // Only a live run needs the tail; a finished one never grows again.
@@ -260,10 +271,10 @@ export default function RunDetail() {
   });
 
   const loadEarlier = (): void => {
-    // Unreachable in the public build — its window never opens, so the button
-    // that calls this never renders — and guarded anyway: every route into the
-    // withheld feed is closed at the call site, not at the fetch.
-    if (SNAPSHOT_MODE) return;
+    // No SNAPSHOT_MODE guard: the public build's window never opens (`from`
+    // never leaves 0), so the button that calls this never renders — the
+    // `Show` gate is the boundary, and a guard here would be dead code
+    // implying a route into the withheld feed that does not exist.
     const start = Math.max(0, from() - WINDOW);
     if (start === from()) return;
     void api.entries(params.id, start, from() - start).then((page) => {

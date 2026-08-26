@@ -44,6 +44,7 @@ import {
   createSnapshotClient,
   projectResults,
   snapshotBanner,
+  sweepExpired,
 } from "../src/api/snapshot-client";
 
 const BASE = "https://data.example";
@@ -263,6 +264,21 @@ describe("the memo", () => {
     const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => 0 });
     await Promise.all([c.info(), c.info(), c.episodes()]);
     expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, snapUrl("info.json"), snapUrl("episodes.json")]);
+  });
+
+  test("expired entries are swept, not only overwritten: old generations leave the cache", () => {
+    // Overwrite-on-reuse alone does not bound the memo: generation- and
+    // version-addressed URLs are never asked for again once the manifest moves
+    // on, so a long-lived tab would keep every generation's parsed bodies.
+    const cache = new Map([
+      [snapUrl("info.json"), { at: 0 }],
+      [`${BASE}/v1/snap/g-43/info.json`, { at: 40_000 }],
+    ]);
+    sweepExpired(cache, 40_000, 30_000);
+    expect([...cache.keys()]).toEqual([`${BASE}/v1/snap/g-43/info.json`]);
+    // Inside the window nothing is touched.
+    sweepExpired(cache, 40_000 + 29_999, 30_000);
+    expect(cache.size).toBe(1);
   });
 
   test("a failed fetch is not remembered: the next poll is the retry", async () => {
@@ -499,13 +515,23 @@ describe("the public build's call sites", () => {
     // The first window: taken only on the private path, with the entry count
     // coming off the published detail instead.
     expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{[\s\S]{0,120}\} else \{[\s\S]{0,200}api\.entries\(/);
-    // "load earlier": guarded at the call site, not left to an unreachable button.
-    expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,300}api\.entries\(/);
+    // "load earlier" needs no guard of its own: `from` never leaves 0 in the
+    // public build, so the `Show` window that renders the button never opens.
     // The tail: no EventSource is constructed in the public build.
     expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,400}subscribeTail\(/);
     // The panel, stated plainly and not in the page's error styling.
     expect(src).toContain("Trajectory entries are withheld on the public site.");
     expect(src).toMatch(/fallback=\{<p class="dim">Trajectory entries are withheld/);
+  });
+
+  test("a live run's summary poll advances the token card and entry count", () => {
+    // The tail is what moves `tokens` and `total` in the private build, and it
+    // never opens here — so the polled detail must move them, or they freeze
+    // at the first load while the rest of the page keeps up.
+    const src = read("../src/pages/RunDetail.tsx");
+    expect(src).toMatch(
+      /detailPoll\.latest[\s\S]{0,700}if \(SNAPSHOT_MODE\) \{\s*setTokens\(next\.tokens\);\s*setTotal\(next\.total\);/,
+    );
   });
 
   test("the map draws its labelled grid without asking for a tile", () => {

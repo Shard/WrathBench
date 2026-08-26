@@ -21,6 +21,31 @@ export const MAX_SCALE = 8;
 /** How stale a reading may be before its pip is drawn dimmed. */
 export const STALE_MS = 120_000;
 
+/** The feed's own reference clock: when the response was rendered, and when this tab received it. */
+export interface FeedClock {
+  /** The snapshot envelope's `generatedAt` (server clock). */
+  generatedAt: number;
+  /** When this browser got the body (browser clock). */
+  fetchedAt: number;
+}
+
+/**
+ * How old a position reading is, for the stale dimming.
+ *
+ * Against the browser's clock alone the public build reads healthy agents as
+ * stale: the snapshot pipeline's legitimate worst case — a 60s publish cadence
+ * plus 30s at the edge plus the 30s client memo — is exactly `STALE_MS`, with
+ * zero margin for the reading's own age. When the feed carries its envelope,
+ * the age is measured the way `snapshotBanner` separates the same two clocks:
+ * how old the reading was on the server's clock when the snapshot was rendered,
+ * plus how long this tab has been holding the response on its own. Without an
+ * envelope (the live API, replays) the plain arithmetic stands.
+ */
+export function positionAgeMs(ts: number, now: number, clock: FeedClock | null): number {
+  if (clock === null) return now - ts;
+  return clock.generatedAt - ts + (now - clock.fetchedAt);
+}
+
 /** Below this on-screen tile size a 256px tile carries no information. */
 export const TILE_MIN_PX = 96;
 

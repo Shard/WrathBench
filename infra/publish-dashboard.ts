@@ -31,7 +31,7 @@
 
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
-import { renderSnapshot } from "../runner/viewer/snapshot";
+import { createRenderer } from "../runner/viewer/snapshot";
 import { publishLoop, type ObjectStore, type SnapshotResult } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
@@ -76,12 +76,14 @@ const store: ObjectStore = {
   },
 };
 
-const render = (): Promise<SnapshotResult> =>
-  renderSnapshot({
-    runsDir: RUNS_DIR,
-    ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
-    ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
-  });
+// One renderer for the process, not one per pass: the viewer handle inside it
+// holds the trajectory mtime caches, so a finished run is read once and a live
+// one only as it grows.
+const render: () => Promise<SnapshotResult> = createRenderer({
+  runsDir: RUNS_DIR,
+  ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
+  ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
+});
 
 const abort = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
