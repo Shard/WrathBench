@@ -108,8 +108,10 @@ status.
     defaults to false, and class-probe does not set it — so a probe that pauses on a
     provider rate limit ends `attempt-failed` and the cell is swept again. 43 of
     class-probe's 60 launches ended that way, which is what made the missing attempt
-    cap visible in the first place. The cap (`maxAttemptsPerCell: 3`, shipped
-    2026-08-26) bounds the damage but does not answer the question: a two-hour pause
+    cap visible in the first place. The cap (`maxAttemptsPerCell`, code shipped
+    2026-08-26 in c2eae8e; the `: 3` line is held OUT of fleet.json until the
+    supervisor restarts on that code, because the live supervisor's strict schema
+    rejected the whole file — re-add it in the same deploy window) bounds the damage but does not answer the question: a two-hour pause
     on a probe is arguably worth continuing, since `probing` is unscored and there is
     no comparability claim to protect. Operator's call whether class-probe — or
     campaigns generally — gets `resume: true`; the lane default stays as it is either
