@@ -594,21 +594,27 @@ export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campa
 }
 
 /**
- * Counted probe runs, in the shape `campaignWork` reads them: `ref` is the
+ * Every probe run on disk, in the shape `campaignWork` reads them: `ref` is the
  * roster name whose credentials the run used. Recovered by matching the
  * fact's model and effort against the roster the way `matchesRoster`
  * (models.ts, not exported) does — over every roster entry, catalog-only ones
  * included, since a campaign may name a model that carries no tier.
+ *
+ * Failed launches come through too, carrying `counted: false`. The fan-out
+ * needs both questions answered: `runsPerCell` is about counted runs, and
+ * `maxAttemptsPerCell` is about launches. Filtering here — which is what this
+ * did — is exactly how a cell that could never produce a counted run was
+ * re-picked thirty-seven times.
  */
 export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): ProbeRun[] {
   const entries = Object.entries(roster);
-  // Probe runs only. Every counted run would be correct — `campaignWork`
-  // ignores a null campaign — but it would also walk the roster once per run in
-  // the whole history on every tick, to learn nothing about the runs that are
-  // not campaign work.
-  return runs.filter((f) => f.campaign !== null && isCounted(f)).map((f) => {
+  // Probe runs only. Every run would be correct — `campaignWork` ignores a null
+  // campaign — but it would also walk the roster once per run in the whole
+  // history on every tick, to learn nothing about the runs that are not
+  // campaign work.
+  return runs.filter((f) => f.campaign !== null).map((f) => {
     const match = entries.find(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null));
-    return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null };
+    return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null, counted: isCounted(f) };
   });
 }
 
@@ -1450,7 +1456,7 @@ export function planPolicy(opts: {
   paidRunning?: number;
   /** The enabled, unpinned campaigns the policy may schedule. */
   campaigns?: readonly Campaign[];
-  /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
+  /** Probe runs on disk, counted or not: what a campaign's remaining work is derived from. */
   probeRuns?: readonly ProbeRun[];
   /** The account a pick's model would rather have (`affinityOf`). */
   affinity?: AccountAffinity;

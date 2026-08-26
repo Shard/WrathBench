@@ -1022,15 +1022,15 @@ describe("probe campaigns in the schedule", () => {
   });
 
   test("a completed cell is not re-run, and the next cell is taken instead", () => {
-    const probeRuns = [{ campaign: "class-probe", cell: "human-warrior", ref: "a" }];
+    const probeRuns = [{ campaign: "class-probe", cell: "human-warrior", ref: "a", counted: true }];
     const plan = planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns });
     expect(plan.jobs[0]!.probe).toEqual({ campaign: "class-probe", cell: "dwarf-rogue" });
   });
 
   test("a campaign with every cell done schedules nothing at all", () => {
     const probeRuns = [
-      { campaign: "class-probe", cell: "human-warrior", ref: "a" },
-      { campaign: "class-probe", cell: "dwarf-rogue", ref: "a" },
+      { campaign: "class-probe", cell: "human-warrior", ref: "a", counted: true },
+      { campaign: "class-probe", cell: "dwarf-rogue", ref: "a", counted: true },
     ];
     expect(planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns }).jobs).toEqual([]);
   });

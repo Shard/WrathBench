@@ -288,7 +288,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
     const config = parseFleet(
       fleetJson([], { campaigns: { nav: { cells: [{ id: "coldridge" }], account: "SHAKEOUT", models: ["son"] } } }),
     );
-    expect(pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son" }])).toEqual([]);
+    expect(pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son", counted: true }])).toEqual([]);
   });
 
   test("an unpinned campaign is never built into a job here", () => {
@@ -345,7 +345,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
       }),
     );
     const first = pinnedCampaignJobs(config, [])[0]!;
-    const second = pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son" }])[0]!;
+    const second = pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son", counted: true }])[0]!;
     expect(first.name).toBe("nav-coldridge");
     expect(second.name).toBe("nav-loch");
     expect(policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "nav", cell: "loch" } }).name).toBe(
@@ -383,11 +383,15 @@ describe("campaigns: probe sweeps as the third lane", () => {
     });
     const matched = fact({});
     const unmatched = fact({ runId: "r2", model: "unknown/model" });
-    // A run that never produced a response is not counted, so it never reaches probeRunsOf's output.
+    // A run that never produced a response is not counted — but it IS an
+    // attempt, so it comes through carrying `counted: false`. That is what
+    // `maxAttemptsPerCell` reads, and filtering it out here is what let a cell
+    // that could never produce a counted run be relaunched indefinitely.
     const stillborn = fact({ runId: "r3", modelResponses: 0 });
     expect(probeRunsOf([matched, unmatched, stillborn], roster)).toEqual([
-      { campaign: "probe1", cell: "c1", ref: "glm" },
-      { campaign: "probe1", cell: "c1", ref: null },
+      { campaign: "probe1", cell: "c1", ref: "glm", counted: true },
+      { campaign: "probe1", cell: "c1", ref: null, counted: true },
+      { campaign: "probe1", cell: "c1", ref: "glm", counted: false },
     ]);
   });
 });

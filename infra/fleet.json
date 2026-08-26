@@ -65,12 +65,14 @@
     "  of the file in effect.",
     "",
     "campaigns: probe campaigns, the third lane (see docs/EPISODES.md). { <name>: { enabled, models \"all\"|[refs],",
-    "  runsPerCell, cells [{ id, race?, class?, objective?, ... }], account?, objective?,",
+    "  runsPerCell, maxAttemptsPerCell?, cells [{ id, race?, class?, objective?, ... }], account?, objective?,",
     "  wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing` episode, so a",
     "  campaign is never re-armed by a harness bump — that is what separates a probe from an eval.",
     "  Precedence: episode-table defaults < campaign < cell. account set = PINNED (same rules as a",
     "  pinned job); absent = the policy schedules it, between the evals and the idle work.",
-    "  Completion is DERIVED (cells x models x runsPerCell vs counted probe runs on disk). A finished",
+    "  Completion is DERIVED (cells x models x runsPerCell vs counted probe runs on disk), and a cell is",
+    "  ABANDONED once it has had maxAttemptsPerCell launches (counted or not) — without that key a cell whose",
+    "  launches keep failing is swept forever, since a failed launch is not a counted run. A finished",
     "  campaign gets enabled:false and KEEPS its results — see the /campaigns page.",
     "",
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }.",
@@ -153,6 +155,7 @@
       "enabled": true,
       "models": ["ox-alpha", "x-preview-f", "muse-spark"],
       "runsPerCell": 1,
+      "maxAttemptsPerCell": 3,
       "cells": [
         { "id": "human-warrior", "race": 1, "class": 1 },
         { "id": "dwarf-rogue", "race": 3, "class": 4 },
@@ -160,7 +163,7 @@
         { "id": "gnome-mage", "race": 7, "class": 8 },
         { "id": "human-warlock", "race": 1, "class": 9 },
         { "id": "dwarf-paladin", "race": 3, "class": 2 },
-        { "id": "nightelf-hunter", "race": 4, "class": 4 },
+        { "id": "nightelf-hunter", "race": 4, "class": 3 },
         { "id": "human-priest", "race": 1, "class": 5 }
       ]
     }
