@@ -1080,12 +1080,50 @@ export const CAPITAL_ZONES = new Set([
 ]);
 
 /**
+ * Area ids that make up one "tutorial region" — the handful of areas a 3.3.5a
+ * newbie zone is split into, which a character normally wanders between while
+ * doing the intro quests without that being "leaving the start" in any
+ * meaningful sense. Only the two clusters the fleet has actually walked are
+ * listed (conservative on purpose, per docs/METHODOLOGY.md: no invented
+ * framework beyond what's observed) — an area outside every listed cluster
+ * falls back to a region of just itself, i.e. the old id-equality behavior.
+ *
+ * `1` (the zone-wide "Dun Morogh" area id, distinct from the `1` zone id
+ * coincidence) is deliberately excluded from the Coldridge cluster: it is the
+ * generic area AreaTable.dbc falls back to once a character is out of both
+ * named Coldridge subzones, i.e. actually outside the tutorial.
+ */
+const TUTORIAL_REGIONS: ReadonlySet<number>[] = [
+  new Set([9, 24, 59, 34]), // Northshire Valley / Abbey / Vineyards / Echo Ridge Mine (human, Elwynn Forest)
+  new Set([132, 800]), // Coldridge Valley / Coldridge Pass (dwarf, Dun Morogh)
+];
+
+function tutorialRegionOf(areaId: number): ReadonlySet<number> {
+  return TUTORIAL_REGIONS.find((region) => region.has(areaId)) ?? new Set([areaId]);
+}
+
+/**
  * Derive the facts from a run's zone/area marks, or null when it has none.
  *
  * `startArea` is the **first** area mark's destination, not "the mark with no
  * `from`": a resumed run opens a second process whose `lastAreaId` starts
  * unset, so several marks can carry no `from` and only the first of them is the
  * run's start. Everything else follows from that one id.
+ *
+ * `leftStartArea` is a **sustained-exit** test, not a single-sample one: it is
+ * true only when at least two *consecutive* area milestones both carry an id
+ * outside `startArea`'s tutorial region (`tutorialRegionOf`, above). A lone
+ * milestone outside the region — sandwiched between two inside it — reads as
+ * a transient bounce (e.g. a loading-screen glitch or a same-region hop that
+ * momentarily reports the parent zone's fallback id) and does not count;
+ * bouncing between a newbie zone's own subzones — e.g. Northshire Valley to
+ * the Abbey — does not count either, since both sides of the region test are
+ * inside the same region. The pair may occur anywhere in the run, not only at
+ * the end: once a genuine two-milestone exit has happened, a later return
+ * home does not erase it. This is deliberately conservative in the id sense
+ * (only the two documented clusters are known regions; everything else is
+ * compared by bare id) but liberal in the position sense (any sustained pair
+ * anywhere counts, not just a trailing one).
  */
 export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
   if (marks.length === 0) return null;
@@ -1094,10 +1132,21 @@ export function areaFactsFrom(marks: readonly AreaMark[]): AreaFacts | null {
   const startArea = areas.length > 0 ? areas[0]!.to : null;
   const distinct = new Set(areas.map((m) => m.to));
   const capital = zones.find((m) => CAPITAL_ZONES.has(m.to));
+  let leftStartArea: boolean | null = null;
+  if (startArea !== null) {
+    const region = tutorialRegionOf(startArea);
+    leftStartArea = false;
+    for (let i = 1; i < areas.length; i++) {
+      if (!region.has(areas[i - 1]!.to) && !region.has(areas[i]!.to)) {
+        leftStartArea = true;
+        break;
+      }
+    }
+  }
   return {
     startArea,
     distinctAreas: distinct.size,
-    leftStartArea: startArea === null ? null : areas.some((m) => m.to !== startArea),
+    leftStartArea,
     capitalZone: capital?.to ?? null,
     zoneMarks: zones.length,
     areaMarks: areas.length,
