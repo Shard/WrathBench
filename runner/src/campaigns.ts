@@ -18,9 +18,12 @@
  *   supplies the task shape itself, so `objective` never enters the catalog.
  * - **Completion is derived, never recorded.** Remaining work is
  *   `runsPerCell` minus the counted probe runs already on disk for that
- *   (campaign, cell, model). Nothing is written back, so deleting a campaign
- *   from the config cannot orphan a bookkeeping file, and re-adding it resumes
- *   exactly where it stopped.
+ *   (campaign, cell, model) — and, when the campaign sets
+ *   `maxAttemptsPerCell`, nothing at all once that many launches have been
+ *   made, so a cell that only ever fails is abandoned instead of swept
+ *   forever. Nothing is written back, so deleting a campaign from the config
+ *   cannot orphan a bookkeeping file, and re-adding it resumes exactly where
+ *   it stopped.
  * - **A finished campaign is not archived.** `enabled: false` stops the
  *   scheduling; the results stay visible. Directory-moving (`archiveRun`) hides
  *   a run from every viewer surface unconditionally, which is the opposite of
@@ -83,6 +86,17 @@ export const campaignSchema = z
     excludeUnhealthy: z.boolean().default(true),
     /** Counted probe runs wanted per (model, cell). */
     runsPerCell: z.number().int().positive().default(1),
+    /**
+     * Give up on a (model, cell) after this many LAUNCHES, counted or not.
+     * Absent means never: the cell is swept until it produces its counted
+     * runs. A cell whose launches keep failing — a model that cannot start,
+     * a class the harness trips over, a provider that rate-limits every
+     * attempt into `attempt-failed` — otherwise re-sweeps forever, because
+     * completion is derived from counted runs alone and the fan-out always
+     * re-picks the first incomplete cell. The cap is the campaign saying how
+     * much evidence of "this does not work" is enough.
+     */
+    maxAttemptsPerCell: z.number().int().positive().optional(),
     /**
      * Resume a run of this campaign that pauses, instead of ending it as a
      * failed attempt and sweeping the cell again. Default false,
@@ -169,12 +183,19 @@ export function campaignModels(
   return named.filter((m) => eligible(m));
 }
 
-/** A probe run already on disk, as the fan-out counts it. */
+/** A probe run already on disk, as the fan-out reads it. */
 export interface ProbeRun {
   campaign: string | null;
   cell: string | null;
   /** Roster name this run was launched as, when it recorded one. */
   ref: string | null;
+  /**
+   * Whether the run counts toward `runsPerCell` (`isCounted`). Every campaign
+   * run is passed in, counted or not, because a launch that failed is still
+   * evidence the cell was tried — which is the only thing that can stop a
+   * failing cell being swept forever.
+   */
+  counted: boolean;
 }
 
 /** One (campaign, model, cell) with work left on it. */
@@ -187,6 +208,10 @@ export interface CampaignWork {
   done: number;
   /** `runsPerCell`: how many are wanted. */
   want: number;
+  /** Launches already made for this triple, counted or not. */
+  attempts: number;
+  /** `maxAttemptsPerCell`, when the campaign set one. */
+  maxAttempts?: number;
   /** Declaration order of the campaign, for tie-breaks. */
   order: number;
 }
@@ -201,25 +226,31 @@ export interface CampaignWork {
  * interrupted holding breadth. So the first sort key is how much this model has
  * already done in this campaign, and cells are only ordered within that.
  *
- * `counted` is the same predicate every other surface uses, which is what makes
- * a stillborn or operator-cut probe re-run without any special case here.
+ * Two tallies, over the same runs, asked different questions. `done` and the
+ * sweep order count only what `isCounted` counts, so "how much of this campaign
+ * exists" keeps its meaning and a stillborn or operator-cut probe still re-runs.
+ * `attempts` counts every launch the cell has had, and is what
+ * `maxAttemptsPerCell` reads: a cell whose launches keep failing is abandoned
+ * rather than swept forever.
  */
 export function campaignWork(
   campaigns: readonly Campaign[],
   catalog: readonly string[],
-  counted: readonly ProbeRun[],
+  probeRuns: readonly ProbeRun[],
   eligible?: (name: string) => boolean,
 ): CampaignWork[] {
   const key = (campaign: string, model: string, cell: string): string => `${campaign}\u0000${model}\u0000${cell}`;
   const tally = new Map<string, number>();
-  for (const r of counted) {
+  const attempted = new Map<string, number>();
+  for (const r of probeRuns) {
     if (r.campaign === null || r.cell === null || r.ref === null) continue;
     const k = key(r.campaign, r.ref, r.cell);
-    tally.set(k, (tally.get(k) ?? 0) + 1);
+    attempted.set(k, (attempted.get(k) ?? 0) + 1);
+    if (r.counted) tally.set(k, (tally.get(k) ?? 0) + 1);
   }
   const perModel = new Map<string, number>();
-  for (const r of counted) {
-    if (r.campaign === null || r.ref === null) continue;
+  for (const r of probeRuns) {
+    if (r.campaign === null || r.ref === null || !r.counted) continue;
     const k = `${r.campaign}\u0000${r.ref}`;
     perModel.set(k, (perModel.get(k) ?? 0) + 1);
   }
@@ -232,10 +263,26 @@ export function campaignWork(
     if (!c.enabled) return;
     for (const model of campaignModels(c, catalog, eligible)) {
       c.cells.forEach((cell, cellIdx) => {
-        const done = tally.get(key(c.name, model, cell.id)) ?? 0;
+        const k = key(c.name, model, cell.id);
+        const done = tally.get(k) ?? 0;
         if (done >= c.runsPerCell) return;
+        // Abandoned: the cell has had its launches and still owes counted runs.
+        // Skipped exactly the way a finished cell is, so `campaignComplete`,
+        // the pinned-campaign job and the policy loop all inherit it without
+        // any of them learning a second word for "nothing left here".
+        const attempts = attempted.get(k) ?? 0;
+        if (c.maxAttemptsPerCell !== undefined && attempts >= c.maxAttemptsPerCell) return;
         cellAt.set(`${c.name}\u0000${cell.id}`, cellIdx);
-        out.push({ campaign: c.name, model, cell, done, want: c.runsPerCell, order });
+        out.push({
+          campaign: c.name,
+          model,
+          cell,
+          done,
+          want: c.runsPerCell,
+          attempts,
+          ...(c.maxAttemptsPerCell !== undefined ? { maxAttempts: c.maxAttemptsPerCell } : {}),
+          order,
+        });
       });
     }
   });
@@ -251,17 +298,18 @@ export function campaignWork(
 }
 
 /**
- * Whether a campaign has nothing left to do. Derived, and deliberately not a
+ * Whether a campaign has nothing left to do — done or abandoned, since a cell
+ * past its attempt cap is not work either. Derived, and deliberately not a
  * state anyone writes: a campaign whose config entry is edited (a cell added, a
  * model added) simply stops being complete, with no record to reconcile.
  */
 export function campaignComplete(
   c: Campaign,
   catalog: readonly string[],
-  counted: readonly ProbeRun[],
+  probeRuns: readonly ProbeRun[],
   eligible?: (name: string) => boolean,
 ): boolean {
-  return campaignWork([c], catalog, counted, eligible).length === 0;
+  return campaignWork([c], catalog, probeRuns, eligible).length === 0;
 }
 
 /** The run dimensions a work item launches under: the campaign's, then the cell's. */

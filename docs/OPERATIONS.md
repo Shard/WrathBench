@@ -120,15 +120,17 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, models "all"|[refs], runsPerCell,
-            cells [{ id, race?, class?, objective?, ... }], account?, objective?,
+            maxAttemptsPerCell?, cells [{ id, race?, class?, objective?, ... }], account?, objective?,
             wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
             episode; the campaign owns its whole task shape, so a catalog entry's own objective
             or leash never leaks into one. Precedence: episode defaults < campaign < cell.
             With `account` the campaign is PINNED to it and follows the pinned-job account rules;
             without, the policy schedules it between the evals and the idle work. Completion is
             DERIVED (cells x models x runsPerCell against the counted probe runs on disk) — set
-            `enabled: false` when a sweep is done and its results stay visible. Progress is on
-            the /campaigns page.
+            `enabled: false` when a sweep is done and its results stay visible. A failed launch
+            is not a counted run, so a cell that always fails would be swept forever:
+            `maxAttemptsPerCell` ABANDONS a (model, cell) after that many launches, counted or
+            not. Absent means no cap. Progress is on the /campaigns page.
 queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? }. With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always

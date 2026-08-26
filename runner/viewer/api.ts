@@ -793,12 +793,31 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 // it does not launch the same cell twice; a page must not
                 // announce a sweep complete while one of its runs could still
                 // end `manual` and re-open the cell.
+                //
+                // `counted` mirrors `isCounted` over the fields a result row
+                // has. It cannot be `unscored`, which is non-null for every
+                // probe (`probing` is an unscored episode) — and it must not
+                // be a blanket `true`, because that is what made this page
+                // report a cell swept while the scheduler was still relaunching
+                // it. `attempts` (`maxAttemptsPerCell`) reads every row here
+                // either way.
                 complete: campaignComplete(
                   c,
                   catalog,
                   mine
                     .filter((r) => r.terminationReason !== null)
-                    .map((r) => ({ campaign: r.campaign, cell: r.cell, ref: refOf(roster, r) })),
+                    .map((r) => ({
+                      campaign: r.campaign,
+                      cell: r.cell,
+                      ref: refOf(roster, r),
+                      counted:
+                        r.pauseReason === null &&
+                        !r.extra &&
+                        !r.episodeOverride &&
+                        r.modelResponses !== null &&
+                        r.modelResponses > 0 &&
+                        !(r.terminationReason !== null && NOT_THE_MODELS_FAULT.has(r.terminationReason)),
+                    })),
                 ),
                 account: c.account ?? null,
               },

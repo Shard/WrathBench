@@ -103,6 +103,22 @@ status.
     and the dashboard's rung 4 and achievement-points derivations. Unblocked;
     the SDK derivation is in hand with another agent.
 
+87. **class-probe does not resume, so every OpenCode rate-limit pause is a failed
+    attempt** (2026-08-26, from the 37-relaunch finding). `campaigns.<name>.resume`
+    defaults to false, and class-probe does not set it — so a probe that pauses on a
+    provider rate limit ends `attempt-failed` and the cell is swept again. 43 of
+    class-probe's 60 launches ended that way, which is what made the missing attempt
+    cap visible in the first place. The cap (`maxAttemptsPerCell: 3`, shipped
+    2026-08-26) bounds the damage but does not answer the question: a two-hour pause
+    on a probe is arguably worth continuing, since `probing` is unscored and there is
+    no comparability claim to protect. Operator's call whether class-probe — or
+    campaigns generally — gets `resume: true`; the lane default stays as it is either
+    way. Sibling, same decision: the three campaign models (`ox-alpha`,
+    `x-preview-f`, `muse-spark`) all carry `idle: "none"`, so when the sweep completes
+    or is abandoned they go idle rather than falling through to freeplay. That is a
+    roster change, not a campaign one, and worth making deliberately rather than
+    noticing an empty fleet.
+
 
 ## Episodes and results
 

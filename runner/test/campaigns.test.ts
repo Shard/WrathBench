@@ -39,7 +39,9 @@ function campaign(over: Partial<Campaign> = {}): Campaign {
   } as Campaign;
 }
 
-const ran = (campaign: string, ref: string, cell: string): ProbeRun => ({ campaign, ref, cell });
+const ran = (campaign: string, ref: string, cell: string): ProbeRun => ({ campaign, ref, cell, counted: true });
+/** A launch that failed: it spends an attempt and satisfies no cell. */
+const failed = (campaign: string, ref: string, cell: string): ProbeRun => ({ campaign, ref, cell, counted: false });
 
 describe("parsing", () => {
   test("declaration order is preserved, because it is the last tie-break", () => {
@@ -56,6 +58,12 @@ describe("parsing", () => {
     // continued, unless the campaign says otherwise.
     expect(c).toMatchObject({ enabled: true, models: "all", runsPerCell: 1, excludeUnhealthy: true, resume: false });
     expect(parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }], resume: true } })[0]!.resume).toBe(true);
+    // No attempt cap unless the campaign asks for one: the default is the old
+    // behaviour, sweep until the counted runs exist.
+    expect(c!.maxAttemptsPerCell).toBeUndefined();
+    expect(
+      parseCampaigns({ p: { objective: "o", cells: [{ id: "a" }], maxAttemptsPerCell: 3 } })[0]!.maxAttemptsPerCell,
+    ).toBe(3);
   });
 
   test("an unknown key is refused rather than ignored", () => {
@@ -134,9 +142,9 @@ describe("the fan-out", () => {
 
   test("a run that recorded no campaign or cell is ignored rather than miscounted", () => {
     const loose: ProbeRun[] = [
-      { campaign: null, cell: "human-warrior", ref: "a" },
-      { campaign: "class-probe", cell: null, ref: "a" },
-      { campaign: "class-probe", cell: "human-warrior", ref: null },
+      { campaign: null, cell: "human-warrior", ref: "a", counted: true },
+      { campaign: "class-probe", cell: null, ref: "a", counted: true },
+      { campaign: "class-probe", cell: "human-warrior", ref: null, counted: true },
     ];
     expect(campaignWork([campaign()], ["a"], loose).length).toBe(2);
   });
@@ -148,10 +156,66 @@ describe("the fan-out", () => {
     expect(w.map((x) => x.campaign)).toEqual(["first", "second"]);
   });
 
+  test("a failed launch satisfies nothing, so an uncapped cell is swept again", () => {
+    // The behaviour the cap exists to bound, asserted so the cap cannot be
+    // mistaken for a change in what `done` means.
+    const w = campaignWork([campaign()], ["a"], [failed("class-probe", "a", "human-warrior")]);
+    const hw = w.find((x) => x.cell.id === "human-warrior")!;
+    expect(hw).toMatchObject({ done: 0, want: 1, attempts: 1 });
+    expect(hw.maxAttempts).toBeUndefined();
+  });
+
+  test("a cell that keeps failing is abandoned once it has had its launches", () => {
+    const c = campaign({ maxAttemptsPerCell: 3, cells: [{ id: "human-warrior", race: 1, class: 1 }] });
+    const tries = (n: number): ProbeRun[] =>
+      Array.from({ length: n }, () => failed("class-probe", "a", "human-warrior"));
+    // Two failures: still work, and the attempt count is reported.
+    expect(campaignWork([c], ["a"], tries(2))[0]).toMatchObject({ done: 0, attempts: 2, maxAttempts: 3 });
+    // Three: abandoned, and it stays abandoned however many more arrive.
+    expect(campaignWork([c], ["a"], tries(3))).toEqual([]);
+    expect(campaignWork([c], ["a"], tries(37))).toEqual([]);
+  });
+
+  test("the cap counts launches, not failures: a counted run spends an attempt too", () => {
+    // `runsPerCell: 2` with the cap at 2 — one good run and one failure is two
+    // launches, so the second counted run is never asked for. This is the cap
+    // doing what it says rather than a failure-only counter.
+    const c = campaign({ runsPerCell: 2, maxAttemptsPerCell: 2, cells: [{ id: "x" }] });
+    expect(campaignWork([c], ["a"], [ran("class-probe", "a", "x")])[0]).toMatchObject({ done: 1, attempts: 1 });
+    expect(campaignWork([c], ["a"], [ran("class-probe", "a", "x"), failed("class-probe", "a", "x")])).toEqual([]);
+  });
+
+  test("a capped cell that succeeds completes on its counted runs, not its attempts", () => {
+    const c = campaign({ maxAttemptsPerCell: 3, cells: [{ id: "x" }] });
+    const runs = [failed("class-probe", "a", "x"), ran("class-probe", "a", "x")];
+    expect(campaignWork([c], ["a"], runs)).toEqual([]);
+    expect(campaignComplete(c, ["a"], runs)).toBe(true);
+  });
+
+  test("failures do not reorder the sweep: breadth is measured in counted runs", () => {
+    // `a` has only failed, so it has told us nothing — it is not "ahead" of `b`
+    // and the tie falls back to catalog order.
+    const w = campaignWork([campaign()], catalog, [failed("class-probe", "a", "human-warrior")]);
+    expect(w[0]!.model).toBe("a");
+  });
+
   test("campaignComplete is the same question asked of one campaign", () => {
     const c = campaign({ cells: [{ id: "x" }] });
     expect(campaignComplete(c, ["a"], [])).toBe(false);
     expect(campaignComplete(c, ["a"], [ran("class-probe", "a", "x")])).toBe(true);
+  });
+
+  test("a campaign whose every cell is done or abandoned reports finished", () => {
+    const c = campaign({ maxAttemptsPerCell: 2 });
+    const runs = [
+      ran("class-probe", "a", "human-warrior"),
+      failed("class-probe", "a", "dwarf-rogue"),
+      failed("class-probe", "a", "dwarf-rogue"),
+    ];
+    expect(campaignComplete(c, ["a"], runs)).toBe(true);
+    // Without the cap the same runs leave the campaign owing its second cell
+    // forever: absent `maxAttemptsPerCell`, nothing here changes.
+    expect(campaignComplete(campaign(), ["a"], runs)).toBe(false);
   });
 });
 
