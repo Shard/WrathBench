@@ -381,7 +381,7 @@ services:
       # What was uploaded last, so a pass PUTs only what changed. On the bind
       # mount so a restart re-uploads nothing.
       WRATHBENCH_PUBLISH_STATE: /wrathbench/data/publish/state.json
-      WRATHBENCH_PUBLISH_INTERVAL_MS: "60000"
+      WRATHBENCH_PUBLISH_INTERVAL_MS: "300000"
       # S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET and S3_ENDPOINT are
       # Bun.S3Client's own variable names and are NOT set here: Bun autoloads
       # /wrathbench/.env inside the container, which is where the R2 key pair
