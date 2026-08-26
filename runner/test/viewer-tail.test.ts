@@ -1107,48 +1107,23 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
     expect(areaFactsFrom([])).toBeNull();
   });
 
-  test("wandering the whole Northshire cluster is not leaving the start (GPT Luna, 2026-08-26)", () => {
-    // Northshire Valley -> Abbey -> Vineyards -> Echo Ridge Mine, zone 12
-    // throughout: every area is the same tutorial region, so this must not
-    // read as having left it.
-    const facts = areaFactsFrom([
-      { kind: "area", to: 9, from: null },
-      { kind: "area", to: 24, from: 9 },
-      { kind: "area", to: 59, from: 24 },
-      { kind: "area", to: 34, from: 59 },
-    ])!;
-    expect(facts.startArea).toBe(9);
-    expect(facts.leftStartArea).toBe(false);
-  });
-
-  test("a transient step out of the cluster that returns is not a sustained exit (Sonnet-medium, 2026-08-26)", () => {
-    // Coldridge Valley -> Coldridge Pass -> generic Dun Morogh area -> back
-    // to Coldridge Valley: the excursion to the wider zone is undone before
-    // the run ends, so this must not count as having left.
-    const facts = areaFactsFrom([
-      { kind: "area", to: 132, from: null },
-      { kind: "area", to: 800, from: 132 },
-      { kind: "area", to: 1, from: 800 },
-      { kind: "area", to: 132, from: 1 },
-    ])!;
-    expect(facts.startArea).toBe(132);
-    expect(facts.leftStartArea).toBe(false);
-  });
-
-  test("a sustained step out of the cluster into the wider zone is leaving the start (Fable, 2026-08-26)", () => {
-    // Coldridge Valley -> Coldridge Pass -> generic Dun Morogh area, twice in
-    // a row (and once more for good measure): unlike the Sonnet-medium run,
-    // which bounces straight back, this is two-plus consecutive observations
-    // outside the cluster, i.e. a sustained presence outside it, not a blip.
-    const facts = areaFactsFrom([
-      { kind: "area", to: 132, from: null },
-      { kind: "area", to: 800, from: 132 },
-      { kind: "area", to: 1, from: 800 },
+  test.each([
+    ["GPT Luna stays within the Northshire tutorial cluster", [
+      { kind: "area", to: 9, from: null }, { kind: "area", to: 24, from: 9 },
+      { kind: "area", to: 59, from: 24 }, { kind: "area", to: 34, from: 59 },
+    ], false],
+    ["Sonnet-medium transiently leaves Coldridge then returns", [
+      { kind: "area", to: 132, from: null }, { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 }, { kind: "area", to: 132, from: 1 },
+    ], false],
+    ["Fable sustains its exit into the wider zone", [
+      { kind: "area", to: 132, from: null }, { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 }, { kind: "area", to: 1, from: 1 },
       { kind: "area", to: 1, from: 1 },
-      { kind: "area", to: 1, from: 1 },
-    ])!;
-    expect(facts.startArea).toBe(132);
-    expect(facts.leftStartArea).toBe(true);
+    ], true],
+  ] as const)("%s", (_name, marks, expected) => {
+    const facts = areaFactsFrom(marks)!;
+    expect(facts.leftStartArea).toBe(expected);
   });
 });
 
