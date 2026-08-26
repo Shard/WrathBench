@@ -26,26 +26,31 @@ export interface ServiceStatus {
   word: string;
 }
 
-/** What the badge is derived from: the feed's last value and whether its last poll failed. */
+/** What the badge is derived from: the feed's last value and how its polling is faring. */
 export interface StatusInput {
   fleet: FleetResponse | undefined;
   /** The fleet poll's most recent error (`Poll.error`); undefined when the last poll succeeded. */
   error: unknown;
+  /** The fleet poll's stall verdict (`Poll.stalled`): no poll has settled for a long stretch. */
+  stalled: boolean;
 }
 
 /**
  * Colour and word, in the order the facts outrank each other:
  *
  *   1 the API cannot be reached        — red "unreachable" (a stale value is no comfort)
- *   2 nothing has arrived yet          — grey "loading"
- *   3 the fleet has never run here     — red "down"
- *   4 a deploy verdict stands          — red "failed" / "rolled back"
- *   5 a deploy window is open          — yellow with the phase word; "paused for
+ *   2 the feed itself has stalled      — red "stalled" (nothing settles, so nothing
+ *                                        below can be believed; without this a wedged
+ *                                        fetch would freeze the badge on its last word)
+ *   3 nothing has arrived yet          — grey "loading"
+ *   4 the fleet has never run here     — red "down"
+ *   5 a deploy verdict stands          — red "failed" / "rolled back"
+ *   6 a deploy window is open          — yellow with the phase word; "paused for
  *                                        deploy" once the fleet's heartbeat is gone,
  *                                        which is the window's doing, not a fault
- *   6 no heartbeat at all              — red "down"
- *   7 a heartbeat past the stale bound — red "stale"
- *   8 otherwise                        — green "running"
+ *   7 no heartbeat at all              — red "down"
+ *   8 a heartbeat past the stale bound — red "stale"
+ *   9 otherwise                        — green "running"
  *
  * The stale bound is `HEARTBEAT_STALE_MS` (three supervisor ticks), the same
  * one `run-fleet --status` and the fleet table use, so the badge and the
@@ -53,11 +58,14 @@ export interface StatusInput {
  *
  * Every age here is measured on the response's own clock (`heartbeatAge`), so
  * the badge reports the fleet and not the gap between two machines' clocks.
- * The one thing still on the browser's clock is rule 1: a poll that failed is
- * a fact about this tab, and a stale value is no comfort.
+ * The only things on the browser's clock are rules 1 and 2, and they have to
+ * be: a poll that fails or stops settling is a fact about this tab, not about
+ * the fleet — which is why a stalled feed gets its own word rather than
+ * borrowing "stale", the heartbeat's.
  */
 export function serviceStatus(input: StatusInput): ServiceStatus {
   if (input.error !== undefined) return { tone: "red", word: "unreachable" };
+  if (input.stalled) return { tone: "red", word: "stalled" };
   const f = input.fleet;
   if (f === undefined) return { tone: "grey", word: "loading" };
   if (!f.present) return { tone: "red", word: "down" };
@@ -95,9 +103,13 @@ const STALE_WORD = "stale";
  */
 export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined): StatusRow[] {
   const f = input.fleet;
-  if (f === undefined) return [{ label: "api", value: input.error === undefined ? "loading" : String(input.error) }];
+  const stalledRow = "stalled: no poll has settled for a while — the values below are frozen";
+  if (f === undefined) {
+    return [{ label: "api", value: input.error !== undefined ? String(input.error) : input.stalled ? stalledRow : "loading" }];
+  }
   const rows: StatusRow[] = [];
   if (input.error !== undefined) rows.push({ label: "api", value: `unreachable: ${String(input.error)}` });
+  else if (input.stalled) rows.push({ label: "api", value: stalledRow });
   if (!f.present) {
     rows.push({ label: "fleet", value: "no fleet-state.json — never run here" });
   } else {

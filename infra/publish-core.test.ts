@@ -122,6 +122,35 @@ function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate"
 /** Index of a key in a call transcript; -1 when it never happened. */
 const at = (paths: string[], path: string): number => paths.indexOf(path);
 
+/** A body hash `needsPut` may ask for. */
+const hash = (h: string) => (): string => h;
+
+/** A body hash `needsPut` must never ask for — hashing it would be the bug. */
+const unhashable = (): string => {
+  throw new Error("hashed a body whose key already decided the question");
+};
+
+/**
+ * Wrap a rendered result so every read of an artifact's body is counted.
+ * Hashing a body reads it, so a key whose count stays at zero was decided
+ * without hashing — which is the property the immutable regime exists for.
+ */
+function countingBodies(result: SnapshotResult): { result: SnapshotResult; reads: (path: string) => number } {
+  const reads = new Map<string, number>();
+  const artifacts = result.artifacts.map((a) => {
+    const wrapped = { path: a.path, contentType: a.contentType, cacheControl: a.cacheControl } as SnapshotArtifact;
+    Object.defineProperty(wrapped, "body", {
+      enumerable: true,
+      get: (): string => {
+        reads.set(a.path, (reads.get(a.path) ?? 0) + 1);
+        return a.body;
+      },
+    });
+    return wrapped;
+  });
+  return { result: { gen: result.gen, artifacts }, reads: (path) => reads.get(path) ?? 0 };
+}
+
 // ---------------------------------------------------------------------- layout
 
 describe("classifyPath", () => {
@@ -292,32 +321,33 @@ describe("diffing", () => {
 // ------------------------------------------------------- path-addressed skipping
 
 describe("needsPut", () => {
-  test("an immutable key already in the bucket is skipped whatever its body says", () => {
+  test("an immutable key already in the bucket is skipped without its body ever being hashed", () => {
     const state = emptyState();
     state.uploaded["v1/run/runA/v1/detail.json"] = "old-hash";
     state.uploaded["v1/snap/gen1/runs.json"] = "old-hash";
-    expect(needsPut("v1/run/runA/v1/detail.json", "new-hash", state, "gen1")).toBe(false);
-    expect(needsPut("v1/snap/gen1/runs.json", "new-hash", state, "gen1")).toBe(false);
+    expect(needsPut("v1/run/runA/v1/detail.json", unhashable, state, "gen1")).toBe(false);
+    expect(needsPut("v1/snap/gen1/runs.json", unhashable, state, "gen1")).toBe(false);
   });
 
-  test("an immutable key the bucket has never held is always written", () => {
+  test("an immutable key the bucket has never held is written, again without hashing", () => {
     const state = emptyState();
-    expect(needsPut("v1/run/runA/v1/detail.json", "h", state, "gen1")).toBe(true);
-    expect(needsPut("v1/snap/gen1/runs.json", "h", state, "gen1")).toBe(true);
+    expect(needsPut("v1/run/runA/v1/detail.json", unhashable, state, "gen1")).toBe(true);
+    expect(needsPut("v1/snap/gen1/runs.json", unhashable, state, "gen1")).toBe(true);
   });
 
   test("the manifest is skipped when the generation it advertises is already this one", () => {
     const state = emptyState();
     state.uploaded[MANIFEST_PATH] = "old-hash";
     state.lastGen = "gen1";
-    expect(needsPut(MANIFEST_PATH, "new-hash", state, "gen1")).toBe(false);
-    expect(needsPut(MANIFEST_PATH, "new-hash", state, "gen2")).toBe(true);
+    // Decided by the generation, so this one is not hashed either.
+    expect(needsPut(MANIFEST_PATH, unhashable, state, "gen1")).toBe(false);
+    expect(needsPut(MANIFEST_PATH, hash("new-hash"), state, "gen2")).toBe(true);
   });
 
   test("a manifest we have no record of writing is written even at an unchanged gen", () => {
     const state = emptyState();
     state.lastGen = "gen1";
-    expect(needsPut(MANIFEST_PATH, "h", state, "gen1")).toBe(true);
+    expect(needsPut(MANIFEST_PATH, hash("h"), state, "gen1")).toBe(true);
   });
 
   test("live.json and unrecognized keys stay on body-hash diffing", () => {
@@ -325,10 +355,10 @@ describe("needsPut", () => {
     state.uploaded[LIVE_PATH] = "h";
     state.uploaded["v1/attribution.json"] = "h";
     state.lastGen = "gen1";
-    expect(needsPut(LIVE_PATH, "h", state, "gen1")).toBe(false);
-    expect(needsPut(LIVE_PATH, "moved-on", state, "gen1")).toBe(true);
-    expect(needsPut("v1/attribution.json", "h", state, "gen1")).toBe(false);
-    expect(needsPut("v1/attribution.json", "moved-on", state, "gen1")).toBe(true);
+    expect(needsPut(LIVE_PATH, hash("h"), state, "gen1")).toBe(false);
+    expect(needsPut(LIVE_PATH, hash("moved-on"), state, "gen1")).toBe(true);
+    expect(needsPut("v1/attribution.json", hash("h"), state, "gen1")).toBe(false);
+    expect(needsPut("v1/attribution.json", hash("moved-on"), state, "gen1")).toBe(true);
   });
 });
 
@@ -359,6 +389,27 @@ describe("immutable keys are addressed by path, not by body", () => {
     store.reset();
     for (let pass = 1; pass <= 10; pass++) await publish(snapshot("gen1", runs, "agg", `t${pass}`), store, state);
     expect(store.puts()).toEqual(Array.from({ length: 10 }, () => LIVE_PATH));
+  });
+
+  test("an idle pass hashes nothing it is going to skip", async () => {
+    // The skip is only cheap if deciding it is: hashing the corpus to discover
+    // that none of it needs writing would put the whole cost back.
+    const store = new FakeStore();
+    const state = emptyState();
+    const runs = [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v2" }];
+    await publish(snapshot("gen1", runs, "agg", "t0"), store, state);
+
+    const { result, reads } = countingBodies(snapshot("gen1", runs, "agg", "t1"));
+    const report = await publish(result, store, state);
+
+    expect(report.put).toEqual([LIVE_PATH]);
+    for (const a of result.artifacts) {
+      if (a.path === LIVE_PATH) continue;
+      expect([a.path, reads(a.path)]).toEqual([a.path, 0]);
+    }
+    // The one key that did need deciding is hashed once and the answer reused:
+    // three body reads (diff, PUT, byte count), not the four a second hash costs.
+    expect(reads(LIVE_PATH)).toBe(3);
   });
 
   test("an unchanged generation skips the manifest but still counts as flipped, and still prunes", async () => {
@@ -625,6 +676,39 @@ describe("pruning against the bucket", () => {
     expect(store.deletes()).toEqual([]);
   });
 
+  test("versions a pass never flipped cannot crowd the live one out of the keep window", async () => {
+    // History is what flipped. If a failed pass could still spend one of the
+    // two slots a run keeps, a run of failures would push the version the live
+    // manifest still names out of the window, and the next flip's prune would
+    // delete an object readers on that manifest are still asking for.
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
+    expect(store.objects.get(MANIFEST_PATH)).toContain("gen1");
+
+    for (const ver of ["v2", "v3"]) {
+      store.failPuts.add(`v1/snap/${ver}gen/ladder.json`);
+      await expect(publish(snapshot(`${ver}gen`, [{ id: "runA", ver }]), store, state)).rejects.toThrow(PublishError);
+      store.failPuts.clear();
+    }
+    // Nothing flipped, so the bucket still serves gen1 — which names runA v1.
+    expect(state.lastGen).toBe("gen1");
+    expect(state.runVersions["runA"]).toEqual(["v1"]);
+
+    // The content settles back to what gen1 rendered: this pass flips (on a
+    // manifest that already advertises gen1) and therefore prunes.
+    store.reset();
+    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "later"), store, state);
+
+    expect(report.flipped).toBe(true);
+    expect(report.deleted).not.toContain("v1/run/runA/v1/detail.json");
+    expect(store.objects.has("v1/run/runA/v1/detail.json")).toBe(true);
+    expect(store.objects.has("v1/run/runA/v1/track.json")).toBe(true);
+    // The never-flipped versions are surplus instead, and are swept here.
+    expect(report.deleted).toContain("v1/run/runA/v2/detail.json");
+    expect(state.runVersions["runA"]).toEqual(["v1"]);
+  });
+
   test("`prune: false` uploads and flips but deletes nothing", async () => {
     const store = new FakeStore();
     const state = emptyState();
@@ -653,6 +737,33 @@ describe("a delete that fails", () => {
     expect(store.deletes()).toContain("v1/snap/gen1/runs.json");
     expect(state.pendingDeletes).toEqual([]);
     expect(report.flipped).toBe(true);
+  });
+
+  test("is dropped, not retried, once the key it names has been written again", async () => {
+    // Keys are content-addressed, so a key comes back whenever its content
+    // does. A retry queued against the version we just re-PUT would delete a
+    // live object out from under the manifest this very pass flipped.
+    const store = new FakeStore();
+    const state = emptyState();
+    const detail = "v1/run/runA/v1/detail.json";
+    store.failDeletes.add(detail);
+    for (const [gen, ver] of [["gen1", "v1"], ["gen2", "v2"], ["gen3", "v3"]] as const) {
+      await publish(snapshot(gen, [{ id: "runA", ver }], gen), store, state);
+    }
+    // v1 fell out of the keep window on the third pass and refused to delete.
+    expect(state.pendingDeletes).toEqual([detail]);
+    expect(store.objects.has(detail)).toBe(true);
+
+    // The run's content reverts to what v1 addressed, so v1 is offered again.
+    store.failDeletes.clear();
+    store.reset();
+    const report = await publish(snapshot("gen4", [{ id: "runA", ver: "v1" }], "agg4"), store, state);
+
+    expect(report.put).toContain(detail);
+    expect(store.deletes()).not.toContain(detail);
+    expect(store.objects.get(detail)).toBe(store.calls.find((c) => c.op === "put" && c.path === detail)?.body);
+    expect(state.pendingDeletes).toEqual([]);
+    expect(state.uploaded[detail]).toBeDefined();
   });
 
   test("is reported rather than thrown", async () => {

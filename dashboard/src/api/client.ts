@@ -86,13 +86,15 @@ export interface ClientOptions {
   base?: string;
 }
 
-async function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
-  const f = opts.fetch ?? globalThis.fetch;
-  const res = await f(`${opts.base ?? ""}${path}`, {
-    headers: { accept: "application/json" },
-  });
+/**
+ * The one JSON GET both clients share (the snapshot client wraps it to record
+ * each body's envelope). Exported so the bucket-backed client does not keep a
+ * near-verbatim copy that drifts.
+ */
+export async function getJson<T>(url: string, f: typeof globalThis.fetch = globalThis.fetch): Promise<T> {
+  const res = await f(url, { headers: { accept: "application/json" } });
   if (!res.ok) {
-    // The API answers errors as `{ error }`; a proxy in the way may not.
+    // The API answers errors as `{ error }`; a proxy or a bucket in the way may not.
     let detail = `${res.status}`;
     try {
       const body = (await res.json()) as { error?: unknown };
@@ -100,9 +102,13 @@ async function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
     } catch {
       /* a non-JSON error body is still an error */
     }
-    throw new ApiError(res.status, `${path}: ${detail}`);
+    throw new ApiError(res.status, `${url}: ${detail}`);
   }
   return (await res.json()) as T;
+}
+
+function get<T>(path: string, opts: ClientOptions = {}): Promise<T> {
+  return getJson<T>(`${opts.base ?? ""}${path}`, opts.fetch ?? globalThis.fetch);
 }
 
 /** The shared `?episode=`/`?includeOverrides=`/`?harness=` query. */
