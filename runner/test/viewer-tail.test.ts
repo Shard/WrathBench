@@ -1052,10 +1052,13 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
   });
 
   test("a capital zone and a departed start area are both seen", async () => {
+    // 501/502 are placeholders outside every known tutorial region, so this
+    // is testing plain id-inequality, not the Northshire/Coldridge grouping.
     const path = fileWith([
       JSON.stringify({ t: "meta", ts: 1000 }),
-      ms("area", 9),
-      ms("area", 24, 9),
+      ms("area", 501),
+      ms("area", 502, 501),
+      ms("area", 502, 502),
       ms("zone", 12),
       ms("zone", 1519, 12), // Stormwind
     ]);
@@ -1077,14 +1080,15 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
 
   test("a resume re-emits a `from`-less mark, and the FIRST one is the start", () => {
     // `lastAreaId` is per process, so a resumed run opens with no `from` again.
+    // 501/502 are placeholders outside every known tutorial region.
     const facts = areaFactsFrom([
-      { kind: "area", to: 9, from: null },
-      { kind: "area", to: 24, from: 9 },
-      { kind: "area", to: 24, from: null }, // the resumed process, still in 24
+      { kind: "area", to: 501, from: null },
+      { kind: "area", to: 502, from: 501 },
+      { kind: "area", to: 502, from: null }, // the resumed process, still in 502
       { kind: "zone", to: 12, from: null },
       { kind: "zone", to: 12, from: null },
     ])!;
-    expect(facts.startArea).toBe(9);
+    expect(facts.startArea).toBe(501);
     expect(facts.leftStartArea).toBe(true);
     expect(facts.distinctAreas).toBe(2);
     expect(facts.areaMarks).toBe(3);
@@ -1101,6 +1105,50 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
 
   test("no marks at all is null, not an empty reading", () => {
     expect(areaFactsFrom([])).toBeNull();
+  });
+
+  test("wandering the whole Northshire cluster is not leaving the start (GPT Luna, 2026-08-26)", () => {
+    // Northshire Valley -> Abbey -> Vineyards -> Echo Ridge Mine, zone 12
+    // throughout: every area is the same tutorial region, so this must not
+    // read as having left it.
+    const facts = areaFactsFrom([
+      { kind: "area", to: 9, from: null },
+      { kind: "area", to: 24, from: 9 },
+      { kind: "area", to: 59, from: 24 },
+      { kind: "area", to: 34, from: 59 },
+    ])!;
+    expect(facts.startArea).toBe(9);
+    expect(facts.leftStartArea).toBe(false);
+  });
+
+  test("a transient step out of the cluster that returns is not a sustained exit (Sonnet-medium, 2026-08-26)", () => {
+    // Coldridge Valley -> Coldridge Pass -> generic Dun Morogh area -> back
+    // to Coldridge Valley: the excursion to the wider zone is undone before
+    // the run ends, so this must not count as having left.
+    const facts = areaFactsFrom([
+      { kind: "area", to: 132, from: null },
+      { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 },
+      { kind: "area", to: 132, from: 1 },
+    ])!;
+    expect(facts.startArea).toBe(132);
+    expect(facts.leftStartArea).toBe(false);
+  });
+
+  test("a sustained step out of the cluster into the wider zone is leaving the start (Fable, 2026-08-26)", () => {
+    // Coldridge Valley -> Coldridge Pass -> generic Dun Morogh area, twice in
+    // a row (and once more for good measure): unlike the Sonnet-medium run,
+    // which bounces straight back, this is two-plus consecutive observations
+    // outside the cluster, i.e. a sustained presence outside it, not a blip.
+    const facts = areaFactsFrom([
+      { kind: "area", to: 132, from: null },
+      { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 },
+      { kind: "area", to: 1, from: 1 },
+      { kind: "area", to: 1, from: 1 },
+    ])!;
+    expect(facts.startArea).toBe(132);
+    expect(facts.leftStartArea).toBe(true);
   });
 });
 

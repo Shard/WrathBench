@@ -897,7 +897,15 @@ export interface AreaFacts {
   startArea: number | null;
   /** Distinct area ids over the whole run, `startArea` included. */
   distinctAreas: number;
-  /** Whether any area other than `startArea` was observed. Null when none was. */
+  /**
+   * Whether the run has at least two *consecutive* observed areas both
+   * outside `startArea`'s tutorial region (see `tutorialRegionOf` in
+   * `runner/viewer/tail.ts`) — a sustained exit, not "any area seen that
+   * differs": a lone milestone outside the region does not count, nor does
+   * wandering between a newbie zone's own subzones. The pair may occur
+   * anywhere in the run; a later return home does not erase it. Null when no
+   * area was observed.
+   */
   leftStartArea: boolean | null;
   /** The first capital zone entered, or null when none was. */
   capitalZone: number | null;
