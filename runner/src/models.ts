@@ -1447,7 +1447,7 @@ export interface NextJobsOptions {
    * here. Absent means no campaign work, which is what an older config gets.
    */
   campaigns?: readonly Campaign[];
-  /** Counted probe runs on disk: what a campaign's remaining work is derived from. */
+  /** Probe runs on disk, counted or not: what a campaign's remaining work is derived from. */
   probeRuns?: readonly ProbeRun[];
 }
 
@@ -1613,7 +1613,7 @@ export function planNextJobs(
       episode: "probing",
       account,
       attempt: (st?.attempts ?? 0) + 1,
-      why: `campaign ${w.campaign} cell ${w.cell.id} (${w.done}/${w.want})`,
+      why: `campaign ${w.campaign} cell ${w.cell.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
       probe: { campaign: w.campaign, cell: w.cell.id },
     });
   }
