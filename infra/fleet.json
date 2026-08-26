@@ -155,7 +155,6 @@
       "enabled": true,
       "models": ["ox-alpha", "x-preview-f", "muse-spark"],
       "runsPerCell": 1,
-      "maxAttemptsPerCell": 3,
       "cells": [
         { "id": "human-warrior", "race": 1, "class": 1 },
         { "id": "dwarf-rogue", "race": 3, "class": 4 },
