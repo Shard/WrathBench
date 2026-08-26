@@ -13,10 +13,19 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IMMUTABLE_CACHE, MUTABLE_CACHE, renderSnapshot, type SnapshotResult } from "../viewer/snapshot";
+import {
+  createRenderer,
+  hash12,
+  IMMUTABLE_CACHE,
+  MUTABLE_CACHE,
+  renderSnapshot,
+  type SnapshotResult,
+} from "../viewer/snapshot";
+import { createApi } from "../viewer/api";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 
 const DEAD_RUN = "snap-run-dead";
@@ -355,5 +364,107 @@ describe("renderSnapshot", () => {
     const detailOf = (r: SnapshotResult): unknown =>
       strip(r.artifacts.find((a) => a.path === deadPaths(r)[0])!.body);
     expect(detailOf(second)).toEqual(detailOf(first));
+  });
+
+  test("a version key is the first 12 hex of SHA-256, whatever hashes it", () => {
+    // The keys under `v1/snap/` and `v1/run/` are immutable for a year, so a
+    // client that cached one must land on it again after any change to the
+    // hasher underneath. Pinned against a reference digest rather than against
+    // yesterday's output, which no test can hold.
+    for (const s of ["", "a", '{"now":0}', "poison-ünïcode-✓", "x".repeat(10_000)]) {
+      expect(hash12(s)).toBe(createHash("sha256").update(s, "utf8").digest("hex").slice(0, 12));
+    }
+    expect(hash12("")).toBe("e3b0c44298fc");
+  });
+});
+
+describe("createRenderer", () => {
+  test("renders pass after pass from one handle, on one address", async () => {
+    // What the publisher's loop does: build once, render every interval. The
+    // handle carries the viewer's trajectory memos, so it must survive a pass
+    // — and surviving must not make the second pass differ from the first.
+    const runs = fixture(false);
+    const render = createRenderer({ runsDir: runs });
+    const first = await render(111);
+    const second = await render(222);
+    expect(second.gen).toBe(first.gen);
+    expect(second.artifacts.map((a) => a.path).sort()).toEqual(first.artifacts.map((a) => a.path).sort());
+    // Only the clock moves: `generatedAt` is stamped per pass, outside the hash.
+    const stampOf = (r: SnapshotResult): unknown =>
+      (JSON.parse(r.artifacts.find((a) => a.path === "v1/manifest.json")!.body) as { generatedAt: unknown })
+        .generatedAt;
+    expect(stampOf(first)).toBe(111);
+    expect(stampOf(second)).toBe(222);
+    // And the one-shot wrapper is the same render.
+    const once = await renderSnapshot({ runsDir: runs, now: 333 });
+    expect(once.gen).toBe(first.gen);
+  });
+
+  test("a run archived mid-pass costs its own artifacts and nothing else", async () => {
+    /*
+     * The runner archives a finished run by moving its directory out of the
+     * runs directory, which can land between the listing and the per-run GETs
+     * of one pass. Reproduced literally: the wrapped handle removes the run
+     * the moment the listing has been served, so the per-run routes answer a
+     * real 404 for a run that is really still on the listing this pass holds.
+     */
+    const runs = fixture();
+    const api = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "tiles-unused"),
+      publicMode: true,
+      moduleUrl: "http://127.0.0.1:1",
+    });
+    let archived = false;
+    const handle = async (req: Request): Promise<Response> => {
+      const res = await api(req);
+      if (new URL(req.url).pathname === "/api/runs") {
+        rmSync(join(runs, DEAD_RUN), { recursive: true, force: true });
+        archived = true;
+      }
+      return res;
+    };
+    const out = await createRenderer({ runsDir: runs, api: handle })(111);
+    expect(archived).toBe(true);
+
+    // The pass still happened: the poll keys are there, and so is the snap set.
+    const paths = out.artifacts.map((a) => a.path);
+    expect(paths).toContain("v1/manifest.json");
+    expect(paths).toContain("v1/live.json");
+    for (const name of SNAP_NAMES) expect(paths).toContain(`v1/snap/${out.gen}/${name}`);
+    // The archived run's artifacts are gone; the surviving run's are not.
+    expect(paths.filter((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toEqual([]);
+    expect(paths.filter((p) => p.startsWith(`v1/run/${LIVE_RUN}/`))).toHaveLength(2);
+
+    /*
+     * The row itself stays — the listing is the pass's, and rewriting it would
+     * be inventing a listing nobody served — but pointerless, which is the
+     * degrade the snapshot client already answers with its own 404.
+     */
+    const listed = JSON.parse(out.artifacts.find((a) => a.path === `v1/snap/${out.gen}/runs.json`)!.body) as {
+      runs: { runId: string; snapshot?: { detail: string; track: string } }[];
+    };
+    expect(listed.runs.map((r) => r.runId).sort()).toEqual([DEAD_RUN, LIVE_RUN].sort());
+    expect(listed.runs.find((r) => r.runId === DEAD_RUN)!.snapshot).toBeUndefined();
+    const live = listed.runs.find((r) => r.runId === LIVE_RUN)!;
+    expect(paths).toContain(live.snapshot!.detail);
+    expect(paths).toContain(live.snapshot!.track);
+  });
+
+  test("a per-run status that is not 404 still fails the pass", async () => {
+    // Only the archive race is tolerated. A route answering 500 is a broken
+    // viewer, and publishing a snapshot that quietly omits runs would hide it.
+    const runs = fixture(false);
+    const api = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "tiles-unused"),
+      publicMode: true,
+      moduleUrl: "http://127.0.0.1:1",
+    });
+    const handle = async (req: Request): Promise<Response> => {
+      if (new URL(req.url).pathname.startsWith("/api/run/")) return new Response("boom", { status: 500 });
+      return await api(req);
+    };
+    await expect(createRenderer({ runsDir: runs, api: handle })(111)).rejects.toThrow(/answered 500/);
   });
 });
