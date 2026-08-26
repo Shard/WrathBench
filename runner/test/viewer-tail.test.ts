@@ -1052,10 +1052,13 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
   });
 
   test("a capital zone and a departed start area are both seen", async () => {
+    // 501/502 are placeholders outside every known tutorial region, so this
+    // is testing plain id-inequality, not the Northshire/Coldridge grouping.
     const path = fileWith([
       JSON.stringify({ t: "meta", ts: 1000 }),
-      ms("area", 9),
-      ms("area", 24, 9),
+      ms("area", 501),
+      ms("area", 502, 501),
+      ms("area", 502, 502),
       ms("zone", 12),
       ms("zone", 1519, 12), // Stormwind
     ]);
@@ -1077,14 +1080,15 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
 
   test("a resume re-emits a `from`-less mark, and the FIRST one is the start", () => {
     // `lastAreaId` is per process, so a resumed run opens with no `from` again.
+    // 501/502 are placeholders outside every known tutorial region.
     const facts = areaFactsFrom([
-      { kind: "area", to: 9, from: null },
-      { kind: "area", to: 24, from: 9 },
-      { kind: "area", to: 24, from: null }, // the resumed process, still in 24
+      { kind: "area", to: 501, from: null },
+      { kind: "area", to: 502, from: 501 },
+      { kind: "area", to: 502, from: null }, // the resumed process, still in 502
       { kind: "zone", to: 12, from: null },
       { kind: "zone", to: 12, from: null },
     ])!;
-    expect(facts.startArea).toBe(9);
+    expect(facts.startArea).toBe(501);
     expect(facts.leftStartArea).toBe(true);
     expect(facts.distinctAreas).toBe(2);
     expect(facts.areaMarks).toBe(3);
@@ -1101,6 +1105,25 @@ describe("zone and area milestones (FOLLOW-UPS 35)", () => {
 
   test("no marks at all is null, not an empty reading", () => {
     expect(areaFactsFrom([])).toBeNull();
+  });
+
+  test.each([
+    ["GPT Luna stays within the Northshire tutorial cluster", [
+      { kind: "area", to: 9, from: null }, { kind: "area", to: 24, from: 9 },
+      { kind: "area", to: 59, from: 24 }, { kind: "area", to: 34, from: 59 },
+    ], false],
+    ["Sonnet-medium transiently leaves Coldridge then returns", [
+      { kind: "area", to: 132, from: null }, { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 }, { kind: "area", to: 132, from: 1 },
+    ], false],
+    ["Fable sustains its exit into the wider zone", [
+      { kind: "area", to: 132, from: null }, { kind: "area", to: 800, from: 132 },
+      { kind: "area", to: 1, from: 800 }, { kind: "area", to: 1, from: 1 },
+      { kind: "area", to: 1, from: 1 },
+    ], true],
+  ] as const)("%s", (_name, marks, expected) => {
+    const facts = areaFactsFrom(marks)!;
+    expect(facts.leftStartArea).toBe(expected);
   });
 });
 
