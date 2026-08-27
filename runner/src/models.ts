@@ -155,25 +155,10 @@ export function effectiveTier(declared: Tier, earnedRung1: boolean): Tier {
  * the cells are named in the config and the runs are unscored.
  *
  * - `none` — nothing. The default, and what a paid model wants.
- * - `unlimited` — a freeplay session, unscored, up to `UNLIMITED_SESSION_MS`.
+ * - `unlimited` — a freeplay session, unscored, governed by its idle watchdog.
  */
 export const IDLE_MODES = ["none", "unlimited"] as const;
 export type IdleMode = (typeof IDLE_MODES)[number];
-
-/**
- * The wall clock an `unlimited` idle session gets, on every account class.
- *
- * It is a clock rather than the unbounded run local extras used to get, because
- * a class governs the next pick and never a run in flight: an
- * endless session ended only by a 20-minute idle watchdog — which a model that
- * keeps playing never trips — holds its account forever, and after a series
- * bump the re-armed scored targets would queue behind it indefinitely. Six
- * hours is `e360`'s constant, and the tier pins no clock of its own
- * (docs/EPISODES.md), so nothing about comparability changes. Long-horizon
- * continuity is meant to come from resuming the character, not from one run
- * that never ends (FOLLOW-UPS 67).
- */
-export const UNLIMITED_SESSION_MS = 6 * 60 * 60_000;
 
 export interface SchedulingPolicy {
   /** The level an e90 run must reach to promote the model up its tier. */
@@ -1636,7 +1621,7 @@ export function planNextJobs(
       episode: c.ep,
       account,
       attempt: st.attempts + 1,
-      why: `extra #${n + 1}: unlimited session (targets met; one at a time, up to ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
+      why: `extra #${n + 1}: unlimited session (targets met; one continuous session, idle watchdog only)`,
     });
   }
   return { jobs, held };
