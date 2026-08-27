@@ -128,6 +128,13 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Duration.** Uncapped by the id. A `freeplay` run may set any wall clock or
   none; the navigation probe runs six hours because that is a convenient
   session, not because the id requires it.
+- **Ceilings.** Per job, not per id. A `freeplay` run that names no
+  `maxToolCalls` gets the runner's own 500-call runaway guard, exactly as a
+  `probing` run does — the id pins nothing. The one exception is the
+  policy-generated session in the `idle: "unlimited"` lane below, which
+  materialises with no ceiling at all. It is the *job* that earns this, not the
+  ref: a freeplay job written into the fleet file that names an idle-capable
+  ref is an ordinary experiment and keeps the 500.
 - **Start state.** Whatever the experiment needs.
 - **Objective.** Allowed. One of the two steered ids where the operator may tell
   the agent where to go, and where `wikiCoords` may be on (the run-dimension
@@ -146,10 +153,17 @@ standing sandbox that never finishes. Duration separates neither pair.
   spare account on a scored run with the next race/class in a code-side cycle.
   That was an unscored question asked in the scored lane, so it became
   the class-probe campaign instead.) Once a model has met its tier's targets the
-  policy gives it one continuous freeplay session at a time, with no episode
-  wall-clock cap. It is governed by the 20-minute idle watchdog; when the model
-  remains active, its character and progress continue beyond six hours. When
-  that session ends, the next tick starts another. Such a run is stamped `extra: true` — an attempt, shown as an extra
+  policy gives it one continuous freeplay session at a time, with **no episode
+  wall-clock cap and no tool-call ceiling** — a runaway guard sized in calls per
+  thirty minutes means nothing on a session with no minutes, and it was ending
+  these sessions in its own right: four of the first six `sub-opus-low`
+  freeplay runs terminated `tool-call-limit` at 500 calls, after which the fleet
+  started a fresh run on a fresh level-1 character. A policy-generated freeplay
+  job on such a ref materialises with `maxToolCalls: null`, and only that
+  combination does — a hand-written freeplay job on the same ref does not. It is governed by the 20-minute
+  idle watchdog; when the model remains active, its character and progress
+  continue beyond six hours. When that session ends, the next tick starts
+  another. Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.

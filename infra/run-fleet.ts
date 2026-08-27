@@ -622,7 +622,12 @@ export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, Fle
  * runner/src/episodes.ts), passed alongside `--episode <id>` until the runner
  * owns the id. e90: 90m, idle 20m, no-xp 20m, 3000 calls. e360: 6h, idle 20m,
  * no-xp off — ceilings are a runaway guard at 1000 calls per 30 min (e90
- * 3000, e360 12000; docs/EPISODES.md). freeplay: no wall clock, unscored, ceiling left to the entry (the runner has no "unbounded").
+ * 3000, e360 12000; docs/EPISODES.md). freeplay: no wall clock, unscored, and
+ * no tool-call ceiling either — a guard sized in calls-per-minute is
+ * meaningless on a session with no minutes. That null reaches only a
+ * POLICY-GENERATED freeplay job on an `idle: "unlimited"` ref; `jobSpawn`
+ * drops it for every other freeplay job, including a hand-written one on that
+ * same ref, which keeps stating its own leash (docs/EPISODES.md).
  */
 export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "watchdogs" | "maxToolCalls"> {
   switch (id) {
@@ -635,7 +640,7 @@ export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "
       // campaign that names none inherits (`EPISODES.probing`).
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
     case "freeplay":
-      return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
+      return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: null };
   }
 }
 
@@ -1681,9 +1686,26 @@ export function jobSpawn(
     // Freeplay has no episode wall clock, so the run stays continuous and its
     // only automatic stop is the idle watchdog. The entry's own watchdogs still
     // win, as they do for every other episode.
+    //
+    // The tier's uncapped ceiling belongs to that lane and only that lane: it
+    // is what keeps the session from ending `tool-call-limit` at 500 and being
+    // replaced by a fresh level-1 character.
+    //
+    // All three conditions, not two. The lane is the session the *policy*
+    // grants a spent-tier ref, so an idle-capable ref is necessary and not
+    // sufficient: a freeplay job written in the fleet file that happens to name
+    // the same ref is the operator's own experiment, states its own leash, and
+    // keeps the runner's 500 default. `source: "policy"` is set only on a job
+    // the scheduler made up, which is exactly the distinction wanted here.
+    const uncappedLane =
+      job.source === "policy" && job.episode === "freeplay" && roster[r]!.idle === "unlimited";
+    const laneDims =
+      job.episode === "freeplay" && !uncappedLane
+        ? (({ maxToolCalls: _drop, ...rest }) => rest)(dims)
+        : dims;
     const base: RosterSpec = {
       ...spec,
-      ...dims,
+      ...laneDims,
       watchdogs: { ...dims.watchdogs, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
@@ -1996,7 +2018,18 @@ export function planResumes(opts: {
     const refs = Object.entries(config.roster)
       .filter(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null))
       .map(([name]) => name);
-    const fromFile = config.jobs.find((j) => j.refs.some((r) => refs.includes(r)) && j.episode === f.episode);
+    // The ref the run id NAMES is the authority, and it is the authority on
+    // BOTH paths below. Two roster entries may share a model and an effort
+    // while sitting in different lanes, so matching on model+effort alone lets
+    // a configured job written for one of them claim a run launched under the
+    // other — taking its job name, lane, account and credentials with it, none
+    // of which the run was launched with. Model+effort is the fallback for a
+    // run id no ref matches, and nothing else.
+    //
+    // A rotation job that genuinely lists the authoritative ref still claims
+    // the run: this narrows which refs may be matched, not which jobs.
+    const candidates = launchedUnder !== undefined ? [launchedUnder] : refs;
+    const fromFile = config.jobs.find((j) => j.refs.some((r) => candidates.includes(r)) && j.episode === f.episode);
     let job: FleetJob | undefined;
     let account: string | null = f.account;
     if (fromFile !== undefined) {
@@ -2011,8 +2044,19 @@ export function planResumes(opts: {
       job = fromFile;
       account = fromFile.account ?? f.account;
     } else {
-      const ref = refs.find((r) => policyNames.has(r));
-      if (ref === undefined || (f.episode !== "e90" && f.episode !== "e360")) {
+      // Only the ref the run was launched under decides whether it may come
+      // back — under its own job name, which is what the run id, the log path
+      // and the defer sidecar all hang off.
+      //
+      // The policy makes freeplay runs too — the one continuous `idle:
+      // "unlimited"` session an eligible ref gets — so a paused one comes back
+      // under the same synthetic job as an e90/e360 lapse, on its own account
+      // and its own run id. Without this a fleet restart stranded the session
+      // and the policy started the next attempt on a fresh character, which is
+      // the continuity the unlimited lane exists for. A ref not in that lane
+      // owes no freeplay session, so its run is listed rather than resumed.
+      const ref = candidates.find((r) => policyNames.has(r) && (f.episode !== "freeplay" || config.roster[r]?.idle === "unlimited"));
+      if (ref === undefined || (f.episode !== "e90" && f.episode !== "e360" && f.episode !== "freeplay")) {
         list("paused, not in config — resume by hand or archive");
         continue;
       }

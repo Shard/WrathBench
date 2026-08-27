@@ -29,7 +29,7 @@ bun runner/src/run.ts --driver stub --stub runner/fixtures/stub-live-check.json
 
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
 # for the whole episode (default 500; the meaningful bound for an external
-# scaffold that owns its own tool loop)
+# scaffold that owns its own tool loop). `0` disables the ceiling outright.
 bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
 
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
@@ -132,7 +132,14 @@ actually returns to the runner:
 - **`--max-tool-calls` / `maxToolCallsPerEpisode`** (default 500) caps tool
   calls for the whole episode and terminates as `tool-call-limit`. It is a
   runaway guard, not a task budget. The fixed loop ignores it; its bound is
-  `maxTurns`.
+  `maxTurns`. **`--max-tool-calls 0` disables the ceiling**, and nothing else
+  does: leaving the flag off means the 500, on a launch and on a `--resume`
+  alike. Argv cannot carry a null, so `0` is the transport spelling and the
+  runner normalises it to `null` on read — the config, `meta.json`, the
+  comparability tuple and the API only ever hold `null` or a positive number.
+  A run with the ceiling off is still bounded by its watchdogs, the
+  snippet-runaway guard and every fatal path; the only lane that asks for it is
+  the policy's `idle: "unlimited"` freeplay session (`docs/EPISODES.md`).
 - A tool call counts as model output, so `idle` means what it says here too: a
   turn that streams tool calls for twenty minutes without a word of assistant
   text is working, not idle.
