@@ -289,8 +289,7 @@ tier, never a silent change.
 `e360`) re-arm on every series bump and feed the charts. Probe campaigns — a
 commissioned objective swept over cells by a set of models — run to
 completion and are never re-armed. Freeplay never finishes and never counts.
-Not duration and not steering: `e360` and `freeplay` are both often six
-hours; `probing` and `freeplay` are both unscored. Each episode id is a
+Not duration and not steering: `e360` is six hours while `freeplay` has no episode wall-clock cap; `probing` and `freeplay` are both unscored. Each episode id is a
 comparability group — scores never mix across ids, nor across series within
 one — and a wrong default is replaced by a *new id*, never widened in place,
 because widening silently re-scopes every existing score. Definitions:
