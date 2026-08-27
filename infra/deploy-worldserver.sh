@@ -320,7 +320,8 @@ ROLLED_BACK=0
 # roll back if the swap happened, verify the restored build with the gate
 # smokes, and leave through the EXIT trap (which starts the fleet).
 fail_closed() {
-  local why="$1"
+  local why="$1" i
+  local -a gate_pairs
   trap - ERR
   set +e
   FAIL_WHY="${why}"
@@ -357,7 +358,10 @@ fail_closed() {
   CURRENT_PHASE=rolled-back
   PHASE_PREFIX="${why}; verifying the old build: "
   if [[ "${#SMOKES[@]}" -gt 0 ]] && [[ "${RUN_SMOKE}" -eq 1 ]]; then
-    mapfile -t gate_pairs < <(pairs SMOKES SMOKE_ACCOUNTS)
+    gate_pairs=()
+    for (( i = 0; i < ${#SMOKES[@]}; i++ )); do
+      gate_pairs+=("${SMOKES[$i]}" "${SMOKE_ACCOUNTS[$i]}")
+    done
     if run_smokes_directly "${PREFLIGHT_TIMEOUT_S}" "gate" "${gate_pairs[@]}" && [[ "${RAN}" -gt 0 ]]; then
       VERIFIED_BY="${RAN} direct smoke(s)"
     fi
@@ -444,13 +448,6 @@ run_smokes_directly() {
   done
 }
 
-# Interleave two index-aligned arrays into script/account pairs.
-pairs() {
-  local -n _scripts="$1" _accounts="$2"
-  local i
-  for (( i = 0; i < ${#_scripts[@]}; i++ )); do printf '%s\n%s\n' "${_scripts[$i]}" "${_accounts[$i]}"; done
-}
-
 # ----------------------------------------------------------------- 2. drain
 CURRENT_PHASE=draining
 PHASE_PREFIX=""
@@ -525,7 +522,10 @@ if [[ "${#SMOKES[@]}" -eq 0 ]]; then
   fail_closed "preflight has no smokes configured, and --no-smoke was not given"
 fi
 say "running the preflight smokes directly (docker compose exec runner)"
-mapfile -t gate_pairs < <(pairs SMOKES SMOKE_ACCOUNTS)
+gate_pairs=()
+for (( i = 0; i < ${#SMOKES[@]}; i++ )); do
+  gate_pairs+=("${SMOKES[$i]}" "${SMOKE_ACCOUNTS[$i]}")
+done
 run_smokes_directly "${PREFLIGHT_TIMEOUT_S}" "gate" "${gate_pairs[@]}" || fail_closed "gate smoke failed on ${NEW_BUILD}"
 [[ "${RAN}" -gt 0 ]] || fail_closed "no smoke actually executed — refusing to call this verified"
 VERIFIED_BY="${RAN} direct smoke(s)"
@@ -535,7 +535,10 @@ VERIFIED_BY="${RAN} direct smoke(s)"
 # passed. A failure here rolls back exactly like a gate failure.
 if [[ "${#DEPLOY_SMOKES[@]}" -gt 0 ]]; then
   say "running the deploy-time full arc (${#DEPLOY_SMOKES[@]} smoke(s), budget ${DEPLOY_TIMEOUT_S}s)"
-  mapfile -t deploy_pairs < <(pairs DEPLOY_SMOKES DEPLOY_SMOKE_ACCOUNTS)
+  deploy_pairs=()
+  for (( i = 0; i < ${#DEPLOY_SMOKES[@]}; i++ )); do
+    deploy_pairs+=("${DEPLOY_SMOKES[$i]}" "${DEPLOY_SMOKE_ACCOUNTS[$i]}")
+  done
   run_smokes_directly "${DEPLOY_TIMEOUT_S}" "full-arc" "${deploy_pairs[@]}" || fail_closed "full-arc smoke failed on ${NEW_BUILD}"
   VERIFIED_BY="${VERIFIED_BY} + ${RAN} full-arc smoke(s)"
 fi
