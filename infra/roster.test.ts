@@ -124,9 +124,12 @@ describe("episodeArgv", () => {
     expect(inContainer({ WRATHBENCH_IN_CONTAINER: "1" })).toBe(true);
   });
 
-  test("a resume passes only the run id — identity comes from meta.json", () => {
+  test("a resume passes the run id and the current leash — identity comes from meta.json", () => {
+    // Identity is the stored run's. The leash is not: run.ts keeps whatever
+    // watchdogs meta.json holds unless a flag overrides them, so the roster
+    // restates today's clock on every resume — here the numeric spelling.
     const [s] = resolve([{ model: "opus", driver: "claude-code" }], "20260101");
-    expect(episodeArgv(s!, true).slice(1)).toEqual(["--resume", "roster-opus-20260101"]);
+    expect(episodeArgv(s!, true).slice(1)).toEqual(["--resume", "roster-opus-20260101", "--episode-ms", "5400000"]);
   });
 });
 
@@ -230,8 +233,56 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(episodeArgv(s!, false)[episodeArgv(s!, false).indexOf("--max-tool-calls") + 1]).toBe("2500");
   });
 
-  test("a resumed episode carries none of them: identity comes back from meta.json", () => {
-    const [s] = resolve([{ model: "m", objective: OBJECTIVE, watchdogs: { noXpMs: null } }], "20260101");
-    expect(episodeArgv(s!, true)).toEqual([expect.any(String), "--resume", s!.runId]);
+  test("maxToolCalls null is no ceiling, and travels as --max-tool-calls 0 on both paths", () => {
+    // argv cannot carry null, so 0 is the transport spelling — the same trick
+    // `--no-xp-ms 0` uses — and run.ts normalises it back to null on read. It
+    // has to be restated on a resume for the same reason `--watchdogs-json`
+    // is: run.ts reloads the stored config and only overrides what a flag
+    // names, so a run stored under the old 500 keeps the 500 without it.
+    const [s] = resolve([{ model: "m", episode: "freeplay", maxToolCalls: null, watchdogs: { episodeMs: null } }], "20260101");
+    expect(s!.maxToolCalls).toBeNull();
+    const fresh = episodeArgv(s!, false);
+    expect(fresh[fresh.indexOf("--max-tool-calls") + 1]).toBe("0");
+    const resumed = episodeArgv(s!, true);
+    expect(resumed[resumed.indexOf("--max-tool-calls") + 1]).toBe("0");
+    expect(resumed[resumed.indexOf("--resume") + 1]).toBe(s!.runId);
+  });
+
+  test("a resumed freeplay episode restates the leash: episodeMs null in the JSON, never a numeric cap", () => {
+    // run.ts reloads the stored meta.json config on --resume and only overrides
+    // a watchdog when the flag is explicitly present. A freeplay run created
+    // before the six-hour cap was removed stored `episodeMs: 21600000`, so the
+    // ABSENCE of --episode-ms is not the absence of a cap — it just leaves the
+    // stored one standing. Only `--watchdogs-json {"episodeMs":null}` migrates
+    // that run onto today's no-wall-clock freeplay policy.
+    const [s] = resolve(
+      [{ model: "opus", effort: "low", episode: "freeplay", watchdogs: { idleMs: 1_200_000, noXpMs: null, episodeMs: null } }],
+      "20260101",
+    );
+    const argv = episodeArgv(s!, true);
+    expect(argv[argv.indexOf("--resume") + 1]).toBe(s!.runId);
+    expect(argv).not.toContain("--episode-ms");
+    expect(JSON.parse(argv[argv.indexOf("--watchdogs-json") + 1]!)).toEqual({
+      idleMs: 1_200_000,
+      noXpMs: null,
+      episodeMs: null,
+    });
+  });
+
+  test("a resumed episode carries the leash but none of the identity: that comes back from meta.json", () => {
+    const [s] = resolve([{ model: "m", objective: OBJECTIVE, maxToolCalls: 2500, watchdogs: { noXpMs: null } }], "20260101");
+    // Identity — driver, model, account, effort, objective, wiki, race/class,
+    // episode, campaign/cell — is the stored run's and is never restated.
+    expect(episodeArgv(s!, true)).toEqual([
+      expect.any(String),
+      "--resume",
+      s!.runId,
+      "--max-tool-calls",
+      "2500",
+      "--episode-ms",
+      "5400000",
+      "--watchdogs-json",
+      JSON.stringify({ noXpMs: null }),
+    ]);
   });
 });

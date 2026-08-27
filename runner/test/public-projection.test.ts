@@ -498,6 +498,30 @@ describe("projectRuns", () => {
 });
 
 describe("projectRunDetail", () => {
+  test("a disabled tool-call ceiling survives projection as null", () => {
+    // The projection copies the budget key by key, so a value it cannot
+    // represent would land as undefined and the page would render nothing at
+    // all where it should say "unlimited". The policy freeplay lane is the
+    // only run that carries this, and it is exactly the run an operator opens
+    // the page to check on.
+    const run = runRowFixture();
+    const input: RunDetailResponse = smuggle<RunDetailResponse>({
+      run: smuggle({
+        ...run,
+        comparability: smuggle({ ...run.comparability!, budget: smuggle({ ...run.comparability!.budget, maxToolCalls: null }) }),
+      }),
+      states: [],
+      total: 0,
+      tokens: tokensFixture(),
+      cost: costViewFixture(),
+      playtimeMs: 1000,
+      achievements: { earned: 0, points: 0, ids: [] },
+      taxi: { flights: 0 },
+      tps: { overall: 0, recent: 0, replies: 0, recentReplies: 0 },
+    });
+    expect(projectRunDetail(input).run.comparability!.budget.maxToolCalls).toBeNull();
+  });
+
   test("emits exactly the allowlist and none of the poisoned values", () => {
     const input: RunDetailResponse = smuggle<RunDetailResponse>({
       run: runRowFixture(),

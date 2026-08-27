@@ -213,9 +213,10 @@ status.
 
 67. **Superseded: freeplay characters do not persist between sessions** (2026-08-24;
     superseded 2026-08-27). The idle `unlimited` lane is now one continuous
-    freeplay session with no episode wall-clock cap, governed by the idle
-    watchdog. This removes the artificial six-hour rollover that recreated a
-    level-1 character and discarded continuity; scored episodes remain fresh.
+    freeplay session with no episode wall-clock cap and no tool-call ceiling,
+    governed by the idle watchdog. This removes the artificial six-hour rollover
+    that recreated a level-1 character and discarded continuity, and the 500-call
+    ceiling that was doing the same thing sooner; scored episodes remain fresh.
 
 
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
