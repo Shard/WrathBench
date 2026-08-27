@@ -13,6 +13,8 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { comparabilityOf } from "../src/comparability";
+import { configFromArgs } from "../src/run";
 import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 
@@ -67,6 +69,61 @@ function fixture(): string {
   ]);
   db.close();
   return runs;
+}
+
+/** A results/episodes fixture covering every scoreability boundary. */
+function scoreabilityFixture(): string {
+  const runs = mkdtempSync(join(tmpdir(), "viewer-scoreability-"));
+  const now = Date.now();
+  const comparability = comparabilityOf(configFromArgs(["--episode", "e90", "--model", "m"]), "harness-0.5");
+  const write = (id: string, responses: number, terminationReason: string | null, pauseReason: string | null): void => {
+    const dir = join(runs, id);
+    mkdirSync(dir, { recursive: true });
+    const startedAt = now - 10_000;
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({ runId: id, harnessVersion: "harness-0.5", startedAt, config: { model: "m", driver: "openai" }, comparability }),
+    );
+    if (responses >= 0) {
+      const lines = [{ ts: startedAt, t: "meta", runId: id }, ...Array.from({ length: responses }, (_, i) => ({ ts: startedAt + i + 1, t: "response", turn: i + 1 }))];
+      writeFileSync(join(dir, "trajectory.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    }
+    const db = new Database(join(dir, "run.sqlite"));
+    db.run(`CREATE TABLE run (run_id TEXT PRIMARY KEY, model TEXT, driver TEXT, harness_version TEXT, started_at INTEGER, ended_at INTEGER, termination_reason TEXT, pause_reason TEXT, config_json TEXT)`);
+    db.run(`CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, turn INTEGER)`);
+    db.run(`INSERT INTO run VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, "m", "openai", "harness-0.5", startedAt, terminationReason === null ? null : now - 1_000, terminationReason, pauseReason, null]);
+    db.close();
+  };
+  write("paused-response", 2, null, "rate-limited");
+  write("paused-zero", 0, null, "rate-limited");
+  write("zero-response", 0, "episode-limit", null);
+  write("unknown-response", -1, "episode-limit", null);
+  write("live-response", 2, null, null);
+  write("environment-defect", 2, "environment-defect", null);
+  return runs;
+}
+
+/** Put two rows from the scoreability fixture on one campaign for API coverage. */
+function campaignizeScoreabilityFixture(runs: string): string {
+  for (const id of ["live-response", "environment-defect"]) {
+    const path = join(runs, id, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { config: Record<string, unknown> };
+    writeFileSync(
+      path,
+      JSON.stringify({ ...meta, config: { ...meta.config, campaign: "scoreability", cell: "cell" } }),
+    );
+  }
+  const fleetPath = join(runs, "fleet.json");
+  writeFileSync(
+    fleetPath,
+    JSON.stringify({
+      roster: { m: { model: "m", tier: "t1" } },
+      campaigns: {
+        scoreability: { enabled: true, models: ["m"], runsPerCell: 1, cells: [{ id: "cell" }] },
+      },
+    }),
+  );
+  return fleetPath;
 }
 
 function api(runs: string, publicMode = false, dashboardDir?: string, moduleUrl?: string): (r: Request) => Promise<Response> {
@@ -275,6 +332,88 @@ describe("playtime", () => {
     // The fixture's files are fresh, so it reads live and counts to now.
     expect(detail.run.live).toBe(true);
     expect(detail.playtimeMs).toBeGreaterThan(Date.now() - 1000 - 5_000);
+  });
+});
+
+describe("scoreability projection", () => {
+  test("results keep every invalid historical row visible but episodes exclude all tainted members", async () => {
+    const runs = scoreabilityFixture();
+    try {
+      const handle = api(runs);
+      const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+        runs: { runId: string; unscored: string | null }[];
+      };
+      expect(results.runs).toHaveLength(6);
+      expect(Object.fromEntries(results.runs.map((r) => [r.runId, r.unscored]))).toEqual({
+        "paused-response": "unscored (paused)",
+        "paused-zero": "unscored (paused)",
+        "zero-response": "unscored (no model responses)",
+        "unknown-response": "unscored (model responses unknown)",
+        "live-response": "unscored (live)",
+        "environment-defect": "unscored (environment-defect)",
+      });
+
+      const episodes = (await (await handle(new Request("http://x/api/episodes"))).json()) as {
+        episodes: { id: string; members: number }[];
+      };
+      expect(episodes.episodes.find((episode) => episode.id === "e90")!.members).toBe(0);
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+
+  test("/api/ladder keeps tainted e90 rows visible with their explicit unscored reasons", async () => {
+    const runs = scoreabilityFixture();
+    try {
+      const ladder = (await (await api(runs)(new Request("http://x/api/ladder?episode=e90"))).json()) as {
+        episode: string;
+        runs: { runId: string; unscored: string | null }[];
+      };
+      expect(ladder.episode).toBe("e90");
+      expect(ladder.runs).toHaveLength(6);
+      expect(Object.fromEntries(ladder.runs.map((r) => [r.runId, r.unscored]))).toEqual({
+        "paused-response": "unscored (paused)",
+        "paused-zero": "unscored (paused)",
+        "zero-response": "unscored (no model responses)",
+        "unknown-response": "unscored (model responses unknown)",
+        "live-response": "unscored (live)",
+        "environment-defect": "unscored (environment-defect)",
+      });
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+
+  test("/api/campaigns leaves a live and environment-defect probe out of counted completion", async () => {
+    const runs = scoreabilityFixture();
+    try {
+      const fleetPath = campaignizeScoreabilityFixture(runs);
+      const handle = createApi({
+        runsDir: runs,
+        tilesDir: join(runs, "..", "minimap"),
+        fleetConfigPath: fleetPath,
+      });
+      const res = await handle(new Request("http://x/api/campaigns"));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        campaigns: {
+          campaign: string;
+          runs: number;
+          live: number;
+          config: { complete: boolean } | null;
+          cells: { cell: string; runs: number; models: string[] }[];
+        }[];
+      };
+      const row = body.campaigns.find((campaign) => campaign.campaign === "scoreability")!;
+      expect(row).toMatchObject({ campaign: "scoreability", runs: 1, live: 1 });
+      // The ended environment-defect row reaches campaignComplete as counted:false
+      // through the production taintOf path; the live row remains visible separately.
+      expect(row.config).toMatchObject({ complete: false });
+      expect(row.cells).toHaveLength(1);
+      expect(row.cells).toMatchObject([{ cell: "cell", runs: 2, models: ["m"] }]);
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
   });
 });
 
@@ -690,7 +829,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     };
     const row = body.runs.find((r) => r.runId === RUN_ID)!;
     expect(row.effort).toBe("high");
-    expect(row.unscored).toBeNull();
+    expect(row.unscored).toBe("unscored (live)");
     expect(row.maxLevel).toBe(3);
     expect(row.levels).toHaveLength(1);
     // Active time is integrated over the trajectory's own segments, not wall clock.
@@ -797,7 +936,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(all.harness).toBe("all");
     const row = all.runs.find((r) => r.runId === RUN_ID)!;
     expect(row.harness).toBe("claude-code");
-    expect(row.unscored).toBeNull();
+    expect(row.unscored).toBe("unscored (live)");
 
     const only = (await (await api(runs)(new Request("http://x/api/results?episode=all&harness=claude-code"))).json()) as {
       harness: string; runs: { runId: string }[]; filteredOut: number;

@@ -91,6 +91,16 @@ describe("scored", () => {
     const rows = [run({ runId: "a" }), run({ runId: "b", unscored: "unscored (scripted stub)" })];
     expect(scored(rows).map((r) => r.runId)).toEqual(["a"]);
   });
+
+  test("tainted rows cannot enter the public ladder ranking", () => {
+    const rows = [
+      run({ runId: "good", model: "good", maxLevel: 5 }),
+      run({ runId: "live", model: "tainted", maxLevel: 80, unscored: "unscored (live)" }),
+      run({ runId: "environment", model: "tainted", maxLevel: 80, unscored: "unscored (environment-defect)" }),
+    ];
+    expect(scored(rows).map((r) => r.runId)).toEqual(["good"]);
+    expect(ladderRows(rows).map((r) => r.model)).toEqual(["good"]);
+  });
 });
 
 describe("the resolved model id on a ladder row", () => {

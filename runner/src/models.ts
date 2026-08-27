@@ -60,7 +60,7 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
-import { NOT_THE_MODELS_FAULT, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
@@ -951,7 +951,7 @@ export function stillbornOf(f: RunFact): boolean | null {
   return f.modelResponses === 0;
 }
 
-/** A run that counts toward a target: a member of its tier's group that got off the ground. */
+/** A completed run that is safe scoring evidence for its target. */
 // The set of "not the model's fault" terminations lives with the lapse rule,
 // because the viewer's scored-ness predicate reads it too and the two must
 // not drift. Re-exported here so every existing importer is unchanged.
@@ -1000,10 +1000,15 @@ export function isFailedAttempt(f: RunFact): boolean {
 }
 
 export function isCounted(f: RunFact): boolean {
-  if (f.pause !== null) return false;
-  if (f.extra || f.episodeOverride || f.modelResponses === null || f.modelResponses <= 0) return false;
-  if (f.terminationReason !== null && NOT_THE_MODELS_FAULT.has(f.terminationReason)) return false;
-  return true;
+  if (f.extra || f.episodeOverride) return false;
+  return (
+    badEvidenceReason({
+      live: f.live,
+      paused: f.pause !== null,
+      modelResponses: f.modelResponses,
+      terminationReason: f.terminationReason,
+    }) === null
+  );
 }
 
 /** A finished attempt the ladder reads as "no progress". */
