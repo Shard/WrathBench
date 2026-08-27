@@ -17,12 +17,10 @@
  * - `freeplay` — resume, exactly as before.
  * - `probing` — resume only when the campaign says `resume: true`.
  *
- * The whole of "does this failure count against the model" is one predicate:
- * the termination reason is `attempt-failed`. An `operator-pause` is the
- * harness's own doing (a fleet stop, a deploy) and ends as `manual`, which is
- * already in `NOT_THE_MODELS_FAULT`; an offline gap ends as `stale`. Neither
- * counts. That is why the cause is not parsed back out of a detail string
- * anywhere: the reason IS the verdict, and the detail is prose.
+ * The shared scoreability rule below answers the broader question — whether a
+ * run is safe evidence at all — for both the scheduler and viewer. The
+ * termination reason is one of its inputs, not the whole answer: paused,
+ * active, and unreadable or empty trajectories are also not evidence.
  */
 
 import { EPISODES, isEpisodeId } from "./episodes";
@@ -40,7 +38,7 @@ export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 /** Pause reasons that are the provider's doing, and therefore the model's problem. */
 export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited"]);
 
-/** Terminations this record writes. `attempt-failed` is the only one that counts toward taint. */
+/** Terminations this record writes. These are the runner's lapse/attempt states. */
 export const ATTEMPT_FAILURE_REASONS: ReadonlySet<string> = new Set(["attempt-failed", "stale"]);
 
 /**
@@ -58,8 +56,45 @@ export const NOT_THE_MODELS_FAULT: ReadonlySet<string> = new Set([
   "manual",
   "harness-error",
   "stale-character",
+  "environment-defect",
   ...ATTEMPT_FAILURE_REASONS,
 ]);
+
+/**
+ * The facts needed to decide whether a run can be evidence. `undefined` means
+ * a metadata-only caller did not supply a response count; `null` means the
+ * caller explicitly knows the response count could not be read.
+ */
+export interface EvidenceFacts {
+  live: boolean;
+  paused: boolean;
+  modelResponses?: number | null;
+  terminationReason: string | null;
+}
+
+/**
+ * Why a run is bad evidence, or null when it is a completed model result.
+ *
+ * This is deliberately below both the scheduler and viewer: the scheduler's
+ * counted target and the viewer's unscored reason must not grow separate lists
+ * of reasons or disagree about an in-progress run. Extra/override are not
+ * taint: they remain membership questions at their existing callers.
+ */
+export function badEvidenceReason(f: EvidenceFacts): string | null {
+  // Viewer rows currently expose `live: true` for a fresh paused directory, so
+  // pause wins to preserve the more useful historical reason on that surface.
+  if (f.paused) return "paused";
+  if (f.live) return "live";
+  if (f.terminationReason !== null && NOT_THE_MODELS_FAULT.has(f.terminationReason)) {
+    return f.terminationReason;
+  }
+  if (f.modelResponses === null) return "model responses unknown";
+  if (f.modelResponses !== undefined) {
+    if (f.modelResponses <= 0) return "no model responses";
+    if (f.terminationReason === null) return "in-progress";
+  }
+  return null;
+}
 
 /**
  * How long a run may show no activity before it is cooked. Its OWN recorded

@@ -140,7 +140,9 @@ describe("the listings", () => {
     expect((ev["runs"] as { runId: string }[]).map((r) => r.runId).sort()).toEqual(["spoke-only", "worked"]);
     const eps = await get(runs, "/api/episodes");
     const e90 = (eps["episodes"] as { id: string; members: number }[]).find((e) => e.id === "e90");
-    expect(e90?.members).toBe(2);
+    // Both rows are still visible, but neither has a completion verdict, so
+    // neither can become a scored episode member.
+    expect(e90?.members).toBe(0);
   });
 });
 
