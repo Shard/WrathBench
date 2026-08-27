@@ -71,6 +71,7 @@ import {
   runnableRefs,
   type FleetJob,
   type FleetRosterEntry,
+  type JobSource,
   type FleetConfig,
   type JobSpawn,
   type FleetPreflight,
@@ -1263,6 +1264,12 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(episodeDimensions("e90")).toEqual({ episode: "e90", watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 });
     expect(episodeDimensions("e360").watchdogs).toEqual({ episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null });
     expect(episodeDimensions("freeplay").watchdogs!.episodeMs).toBeNull();
+    // Freeplay is the one id with no ceiling of its own to pin: null is "no
+    // ceiling", and it is what the policy's unlimited lane materialises with.
+    // Probing states nothing — undefined — so a probe keeps the runner's 500
+    // unless its campaign or cell names a number.
+    expect(episodeDimensions("freeplay").maxToolCalls).toBeNull();
+    expect(episodeDimensions("probing").maxToolCalls).toBeUndefined();
   });
 
   test("a pinned job and a pool job are the same thing to diffJobs: one set of drain/rearm semantics", () => {
@@ -1994,6 +2001,14 @@ describe("scheduling policy: defer ladder and retirement", () => {
       episode: "freeplay",
       watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null },
     });
+    // And no tool-call ceiling either. A session with no wall clock cannot be
+    // held to a guard sized for ninety minutes: four of the six historical
+    // sub-opus-low freeplay runs ended `tool-call-limit` at 500 and the fleet
+    // rolled a fresh level-1 character each time.
+    expect(spawn.entries[0]!.maxToolCalls).toBeNull();
+    const freshArgv = episodeArgv(resolve(fillEntries(spawn, "20260101"), "20260101")[0]!, false);
+    // 0 is the argv spelling of "no ceiling"; run.ts normalises it to null.
+    expect(freshArgv[freshArgv.indexOf("--max-tool-calls") + 1]).toBe("0");
     expect(spawn.loop).toBe(false);
     expect(jobArgv(spawn, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-freeplay");
     // A manual freeplay job (the nav probe) is not an extra.
@@ -2094,6 +2109,252 @@ describe("pause and resume across a fleet stop", () => {
     const off = planResumes({ runs: [run], config: config([{ ...job, enabled: false }]), running: new Map(), held, now: NOW });
     expect(off.resume).toEqual([]);
     expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
+  });
+
+  test("a policy freeplay run paused by a fleet restart resumes under a synthetic policy job — same account, same run id", () => {
+    // 2026-08-25 live: fleet-sub-opus-low-freeplay-opus-low-20260825-a6 was
+    // operator-paused by a forced fleet restart, listed as "not in config",
+    // and the policy then launched a7/a8 on fresh characters — the whole point
+    // of an unlimited session lost to a restart.
+    const idleRoster: Record<string, FleetRosterEntry> = {
+      ...roster,
+      "sub-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+    };
+    const cfg = { ...config(), roster: idleRoster };
+    const run = paused({
+      runId: "fleet-sub-opus-low-freeplay-opus-low-20260825-a6",
+      model: "opus",
+      effort: "low",
+      account: "RUNNER3",
+      episode: "freeplay",
+      episodeMs: null,
+      pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: 9 * H },
+    });
+    const plan = planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume.map((r) => [r.job.name, r.job.source, r.job.attempt, r.account, r.runId])).toEqual([
+      ["sub-opus-low-freeplay", "policy", 6, "RUNNER3", run.runId],
+    ]);
+    // The spawn reattaches that exact run, and freeplay keeps its no-wall-clock leash.
+    const spawn = jobSpawn(plan.resume[0]!.job, idleRoster, "RUNNER3", "20260827");
+    expect(spawn.resumeRunId).toBe(run.runId);
+    expect(spawn.entries[0]).toMatchObject({ model: "opus", effort: "low", runId: run.runId, episode: "freeplay" });
+    expect(jobArgv(spawn, { stamp: "20260827", until: undefined })).toContain("--resume-roster");
+    const resolved = resolve(fillEntries(spawn, "20260827"), "20260827")[0]!;
+    // What the roster actually execs for that entry: --resume, that run id, and
+    // nothing that could re-impose a wall clock on it.
+    const resumeArgv = episodeArgv(resolved, true);
+    expect(resumeArgv.slice(1, 3)).toEqual(["--resume", run.runId]);
+    expect(resumeArgv).not.toContain("--episode-ms");
+    // And the leash is restated, or a run stored before the cap came off would
+    // come back under its stored six hours: run.ts keeps meta.json's watchdogs
+    // unless a flag overrides them, which is how the live a6 needed a hand.
+    expect(JSON.parse(resumeArgv[resumeArgv.indexOf("--watchdogs-json") + 1]!)).toEqual({
+      idleMs: 1_200_000,
+      noXpMs: null,
+      episodeMs: null,
+    });
+    // The tool-call ceiling is restated the same way and for the same reason:
+    // a6 was stored with `maxToolCallsPerEpisode: 500` and had reached 410 of
+    // it, so a resume that said nothing would have brought the run back under
+    // the ceiling that has been resetting this lane all along.
+    expect(resumeArgv[resumeArgv.indexOf("--max-tool-calls") + 1]).toBe("0");
+    // Identity is still never restated — it comes back from meta.json.
+    for (const identity of ["--model", "--driver", "--effort", "--account", "--race", "--class", "--episode", "--run-id"]) {
+      expect(resumeArgv).not.toContain(identity);
+    }
+    // And the leash itself is off, so a relaunch of the same entry is unbounded too.
+    expect(resolved.episodeMs).toBeNull();
+    expect(resolved.watchdogs.episodeMs).toBeNull();
+    expect(resolved.maxToolCalls).toBeNull();
+    expect(episodeArgv(resolved, false)).not.toContain("--episode-ms");
+    // Fail-closed still: a ref whose idle lane is off owes no freeplay session.
+    const noIdle = { ...idleRoster, "sub-opus-low": { ...idleRoster["sub-opus-low"]!, idle: "none" as const } };
+    const off = planResumes({ runs: [run], config: { ...cfg, roster: noIdle }, running: new Map(), held, now: NOW });
+    expect(off.resume).toEqual([]);
+    expect(off.listed[0]!.why).toBe("paused, not in config — resume by hand or archive");
+  });
+
+  test("the uncapped ceiling is the policy's unlimited lane only — an arbitrary freeplay job keeps the runner's default", () => {
+    // The narrow contract. Removing the ceiling is a claim about the one
+    // continuous session the policy grants an `idle: "unlimited"` ref, not
+    // about the id: a hand-written freeplay experiment states its own leash
+    // and inherits the runner's 500 when it states none, exactly as before.
+    const mixed: Record<string, FleetRosterEntry> = {
+      ...roster,
+      "sub-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+      "probe-opus": { model: "opus", effort: "high", driver: "claude-code", tier: "t1", idle: "none" },
+      "capped-opus": { model: "opus", effort: "medium", driver: "claude-code", tier: "t1", idle: "none", maxToolCalls: 2500 },
+      "idle-capped": { model: "opus", effort: "xhigh", driver: "claude-code", tier: "t1", idle: "unlimited", maxToolCalls: 1234 },
+    };
+    const freeplayJob = (ref: string, source: JobSource = "policy") => ({
+      name: `${ref}-freeplay`,
+      ref,
+      refs: [ref],
+      episode: "freeplay" as const,
+      repeat: 1 as const,
+      enabled: true,
+      source,
+      ...(source === "policy" ? { attempt: 1 } : {}),
+    });
+    // The unlimited lane: no ceiling, and the argv says so explicitly.
+    const lane = jobSpawn(freeplayJob("sub-opus-low"), mixed, "RUNNER3", "20260827");
+    expect(lane.entries[0]!.maxToolCalls).toBeNull();
+    // But the lane is the POLICY's session, not a property of the ref. A
+    // freeplay job written in the fleet file that happens to name the same
+    // idle-capable ref is an operator's own experiment: it is not the one
+    // continuous session the policy grants, so it keeps the runner's 500 and
+    // its argv says nothing about a ceiling.
+    for (const source of ["pinned", "queue"] as const) {
+      const manual = jobSpawn(freeplayJob("sub-opus-low", source), mixed, "RUNNER3", "20260827");
+      expect(manual.entries[0]!.maxToolCalls).toBeUndefined();
+      const manualArgv = episodeArgv(resolve(fillEntries(manual, "20260827"), "20260827")[0]!, false);
+      expect(manualArgv).not.toContain("--max-tool-calls");
+      expect(manualArgv).not.toContain("0");
+    }
+    // A freeplay ref that is NOT in the unlimited lane: the flag is omitted
+    // entirely, so run.ts applies its own 500 default.
+    const arbitrary = jobSpawn(freeplayJob("probe-opus"), mixed, "RUNNER3", "20260827");
+    expect(arbitrary.entries[0]!.maxToolCalls).toBeUndefined();
+    expect(episodeArgv(resolve(fillEntries(arbitrary, "20260827"), "20260827")[0]!, false)).not.toContain("--max-tool-calls");
+    // A numeric override on the entry is still a number, and still wins.
+    const capped = jobSpawn(freeplayJob("capped-opus"), mixed, "RUNNER3", "20260827");
+    expect(capped.entries[0]!.maxToolCalls).toBe(2500);
+    const cappedArgv = episodeArgv(resolve(fillEntries(capped, "20260827"), "20260827")[0]!, false);
+    expect(cappedArgv[cappedArgv.indexOf("--max-tool-calls") + 1]).toBe("2500");
+    // An entry that names a number wins on both sides of the gate: the policy
+    // session honours it (the tier's null is a default, not an override), and
+    // so does a hand-written job on the same ref.
+    expect(jobSpawn(freeplayJob("idle-capped"), mixed, "RUNNER3", "20260827").entries[0]!.maxToolCalls).toBe(1234);
+    expect(jobSpawn(freeplayJob("idle-capped", "pinned"), mixed, "RUNNER3", "20260827").entries[0]!.maxToolCalls).toBe(1234);
+  });
+
+  test("a configured job for a SIBLING ref never captures a run launched under another — the run id is the authority on both paths", () => {
+    // The authority rule was only enforced on the synthetic-policy path. Before
+    // it, `fromFile` scanned every configured job for one whose refs intersect
+    // *any* roster ref sharing the run's model+effort+episode — so a run
+    // launched under ref A could be picked up by a pinned or queue job written
+    // for ref B, taking B's job name, lane, account and credentials with it.
+    // The run id names the ref; nothing else may overrule it.
+    const twoRefs: Record<string, FleetRosterEntry> = {
+      ...roster,
+      "sub-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+      "alt-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "none" },
+    };
+    // The decoy: a freeplay job in the file for whichever ref the run was NOT
+    // launched under, on its own pinned account.
+    const decoy = (ref: string, source: JobSource, account?: string): FleetJob => ({
+      refs: [ref],
+      ref,
+      episode: "freeplay",
+      repeat: 1,
+      name: `${ref}-freeplay`,
+      enabled: true,
+      source,
+      ...(account !== undefined ? { account } : {}),
+    });
+    const runUnder = (ref: string): RunFact =>
+      paused({
+        runId: `fleet-${ref}-freeplay-opus-low-20260825-a6`,
+        model: "opus",
+        effort: "low",
+        account: "RUNNER3",
+        episode: "freeplay",
+        episodeMs: null,
+        pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: 9 * H },
+      });
+
+    for (const source of ["pinned", "queue"] as const) {
+      const acct = source === "pinned" ? "RUNNER4" : undefined;
+
+      // A: run launched under the unlimited ref, decoy job in the file for the
+      // OTHER ref. The decoy is ignored outright; the run comes back under ITS
+      // OWN synthetic policy job, its own account and its own run id — not the
+      // decoy's name, and not the decoy's pinned account.
+      const a = planResumes({
+        runs: [runUnder("sub-opus-low")],
+        config: { ...config([decoy("alt-opus-low", source, acct)]), roster: twoRefs },
+        running: new Map(),
+        held,
+        now: NOW,
+      });
+      expect(a.end).toEqual([]);
+      expect(a.listed).toEqual([]);
+      expect(a.resume.map((r) => [r.job.name, r.job.ref, r.job.source, r.account, r.runId])).toEqual([
+        ["sub-opus-low-freeplay", "sub-opus-low", "policy", "RUNNER3", "fleet-sub-opus-low-freeplay-opus-low-20260825-a6"],
+      ]);
+
+      // A': mirrored. The run was launched under the ref whose idle lane is
+      // off and which has no job in the file; the decoy is for the unlimited
+      // ref. It owes no freeplay session, so it is LISTED — never resumed
+      // under the sibling's job just because that sibling is configured.
+      const off = planResumes({
+        runs: [runUnder("alt-opus-low")],
+        config: { ...config([decoy("sub-opus-low", source, acct)]), roster: twoRefs },
+        running: new Map(),
+        held,
+        now: NOW,
+      });
+      expect(off.resume).toEqual([]);
+      expect(off.end).toEqual([]);
+      expect(off.listed.map((l) => l.why)).toEqual(["paused, not in config — resume by hand or archive"]);
+    }
+
+    // And the rule does not break a rotation job that genuinely lists the
+    // authoritative ref: one job over both refs still claims the run.
+    const rotation: FleetJob = {
+      refs: ["alt-opus-low", "sub-opus-low"],
+      ref: "alt-opus-low",
+      episode: "freeplay",
+      repeat: 1,
+      name: "rotation-freeplay",
+      enabled: true,
+      source: "queue",
+    };
+    const rot = planResumes({
+      runs: [runUnder("sub-opus-low")],
+      config: { ...config([rotation]), roster: twoRefs },
+      running: new Map(),
+      held,
+      now: NOW,
+    });
+    expect(rot.resume.map((r) => [r.job.name, r.account])).toEqual([["rotation-freeplay", "RUNNER3"]]);
+  });
+
+  test("the ref a paused run id names is the authority, not the first roster entry sharing its model and effort", () => {
+    // Two entries, one model and effort, different idle lanes. Matching by
+    // model+effort would resume a run launched under the `none` ref as if it
+    // were the `unlimited` one — a session continued under a ref that owes no
+    // session, on a job name that is not the one it was launched as.
+    const twoRefs: Record<string, FleetRosterEntry> = {
+      ...roster,
+      "sub-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+      "alt-opus-low": { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "none" },
+    };
+    const cfg = { ...config(), roster: twoRefs };
+    const freeplayRun = (ref: string): RunFact =>
+      paused({
+        runId: `fleet-${ref}-freeplay-opus-low-20260825-a6`,
+        model: "opus",
+        effort: "low",
+        account: "RUNNER3",
+        episode: "freeplay",
+        episodeMs: null,
+        pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: 9 * H },
+      });
+    // Launched under the `none` ref: listed, never resumed under the other one.
+    const wrongLane = planResumes({ runs: [freeplayRun("alt-opus-low")], config: cfg, running: new Map(), held, now: NOW });
+    expect(wrongLane.resume).toEqual([]);
+    expect(wrongLane.end).toEqual([]);
+    expect(wrongLane.listed.map((l) => l.why)).toEqual(["paused, not in config — resume by hand or archive"]);
+    // Launched under the `unlimited` ref: resumed under that ref's own job name.
+    const rightLane = planResumes({ runs: [freeplayRun("sub-opus-low")], config: cfg, running: new Map(), held, now: NOW });
+    expect(rightLane.resume.map((r) => [r.job.ref, r.job.name])).toEqual([["sub-opus-low", "sub-opus-low-freeplay"]]);
+    // A run id no ref matches has no authority to read: model+effort is the fallback.
+    const unnamed = { ...freeplayRun("sub-opus-low"), runId: "fleet-gone-freeplay-opus-low-20260825-a2" };
+    const byModel = planResumes({ runs: [unnamed], config: cfg, running: new Map(), held, now: NOW });
+    expect(byModel.resume.map((r) => [r.job.ref, r.job.attempt, r.runId])).toEqual([["sub-opus-low", 2, unnamed.runId]]);
   });
 
   test("a hand-launched paused run is the operator's: listed, never ended by the supervisor", () => {

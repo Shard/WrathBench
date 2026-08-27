@@ -156,6 +156,16 @@ describe("comparabilityOf", () => {
     });
     expect(c.effort).toBe("high");
   });
+
+  test("a disabled tool-call ceiling is recorded as null, the same spelling a disabled watchdog uses", () => {
+    // The policy freeplay lane. The tuple has to carry it, because "no
+    // ceiling" and "a 500-call ceiling" are two different budgets and a run
+    // that silently changed between them would be comparable to itself.
+    const c = comparabilityOf(loadRunConfig({ driver: "claude-code", episode: "freeplay", maxToolCallsPerEpisode: null }), "v");
+    expect(c.budget.maxToolCalls).toBeNull();
+    // And it round-trips: a stored tuple with a null ceiling still parses.
+    expect(parseComparability(JSON.parse(JSON.stringify(c)))?.budget.maxToolCalls).toBeNull();
+  });
 });
 
 describe("fetchServerBuild", () => {
@@ -267,6 +277,17 @@ describe("parseComparability", () => {
     const a = comparabilityOf(loadRunConfig({ driver: "openai" }), "v");
     const b = comparabilityOf(loadRunConfig({ driver: "openai", maxToolCallsPerEpisode: 9 }), "v");
     expect(sameComparability(a, b)).toBe(false);
+  });
+
+  test("no ceiling is a different budget from the 500-call default", () => {
+    // What the resume migration changes, and why it restamps: a6 came back
+    // under a budget it had not been running under, and that is a tuple
+    // difference the run has to record rather than absorb.
+    const capped = comparabilityOf(loadRunConfig({ driver: "openai" }), "v");
+    const uncapped = comparabilityOf(loadRunConfig({ driver: "openai", maxToolCallsPerEpisode: null }), "v");
+    expect(capped.budget.maxToolCalls).toBe(500);
+    expect(uncapped.budget.maxToolCalls).toBeNull();
+    expect(sameComparability(capped, uncapped)).toBe(false);
   });
 });
 

@@ -96,10 +96,13 @@ export interface RosterSpec {
    * `maxToolCalls` bounds the whole episode's tool calls — the runner's 500
    * default is a runaway guard sized for a 90-minute episode, so a multi-hour
    * entry has to raise it or it terminates `tool-call-limit` mid-probe.
+   * `null` removes the ceiling outright, which only the policy's
+   * `idle: "unlimited"` freeplay lane asks for: absent still means the
+   * runner's own default, so nothing else changes shape.
    */
   objective?: string;
   watchdogs?: WatchdogOverride;
-  maxToolCalls?: number;
+  maxToolCalls?: number | null;
   /**
    * Whether `search_reference` serves wiki coordinates. Absent or
    * false is names-first, the scored default; only freeplay/unscored jobs
@@ -149,7 +152,8 @@ export interface Resolved {
   episodeMs: number | null;
   objective: string | undefined;
   watchdogs: WatchdogOverride;
-  maxToolCalls: number | undefined;
+  /** Undefined = the runner's default; null = no ceiling at all. */
+  maxToolCalls: number | null | undefined;
   wikiCoords: boolean;
   extra: boolean;
   episode: string | undefined;
@@ -477,12 +481,41 @@ export function watchdogsJson(spec: Resolved): string | undefined {
   return Object.keys(out).length === 0 ? undefined : JSON.stringify(out);
 }
 
+/**
+ * The runtime leash: the limit and watchdog flags `run.ts` accepts as EXPLICIT
+ * overrides, on a fresh launch and on a resume alike.
+ *
+ * A resume takes its identity from the stored meta.json, but not its leash. The
+ * runner reloads the stored config and only replaces a watchdog when the flag
+ * is present, so a run stored under an older policy comes back under the older
+ * policy's clock: a freeplay run created before the six-hour cap was removed
+ * kept `episodeMs: 21600000` through every automatic resume, and the absence of
+ * `--episode-ms` said nothing — only `--watchdogs-json {"episodeMs":null}`
+ * migrates it. One helper for both paths, so the two can never drift again.
+ */
+function leashArgv(spec: Resolved): string[] {
+  const argv: string[] = [];
+  // 0 is the argv spelling of "no ceiling": a flag value cannot be null, and
+  // run.ts normalises the sentinel back to null the moment it reads it.
+  if (spec.maxToolCalls !== undefined) {
+    argv.push("--max-tool-calls", spec.maxToolCalls === null ? "0" : String(spec.maxToolCalls));
+  }
+  // The wall clock keeps its own flag when it is a number (that is what every
+  // existing job emits); a disabled one can only travel in the JSON.
+  if (spec.episodeMs !== null) argv.push("--episode-ms", String(spec.episodeMs));
+  const watchdogs = watchdogsJson(spec);
+  if (watchdogs !== undefined) argv.push("--watchdogs-json", watchdogs);
+  return argv;
+}
+
 export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?: boolean } = {}): string[] {
   // Everything after the launcher is identical: run-episode.sh passes its
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
   // are interchangeable and only one of them needs docker.
   const head = opts.container === true ? ["bun", RUNNER_ENTRY] : [EPISODE_SH];
-  if (resume) return [...head, "--resume", spec.runId];
+  // Identity — driver, model, account, effort, objective, wiki, race/class,
+  // episode, campaign/cell — is the resumed run's own and is never restated.
+  if (resume) return [...head, "--resume", spec.runId, ...leashArgv(spec)];
   const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
@@ -493,7 +526,6 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
-  if (spec.maxToolCalls !== undefined) argv.push("--max-tool-calls", String(spec.maxToolCalls));
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.
   if (spec.wikiCoords) argv.push("--wiki-coords", "true");
@@ -509,12 +541,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.cell !== undefined) argv.push("--cell", spec.cell);
   // Race and class only: the name is the model's, and the runner records it.
   argv.push("--race", String(spec.race), "--class", String(spec.class));
-  // The wall clock keeps its own flag when it is a number (that is what every
-  // existing job emits); a disabled one can only travel in the JSON.
-  if (spec.episodeMs !== null) argv.push("--episode-ms", String(spec.episodeMs));
-  const watchdogs = watchdogsJson(spec);
-  if (watchdogs !== undefined) argv.push("--watchdogs-json", watchdogs);
-  return argv;
+  return [...argv, ...leashArgv(spec)];
 }
 
 /** A cycle-2+ copy of a spec: same identity, its own run id. */

@@ -204,6 +204,21 @@ const LIMIT_PATTERNS = [
 ];
 
 /**
+ * Whether the episode's tool-call ceiling has been reached, given how many
+ * calls it has made and the ceiling it is under.
+ *
+ * `cap === null` is "no ceiling" and can never be reached. Extracted because
+ * the comparison this replaces was `toolCalls >= cap` with `cap` widened to
+ * `number | null`, and JS coerces null to 0 there: `0 >= null` is true, so an
+ * uncapped run would have terminated `tool-call-limit` on its very first tool
+ * call — the exact opposite of what the null is for. Enforcement is still one
+ * branch in `enforceLimits`; this is only the question it asks.
+ */
+export function toolCallLimitReached(toolCalls: number, cap: number | null): boolean {
+  return cap !== null && toolCalls >= cap;
+}
+
+/**
  * Subscription usage-window exhaustion, as the CLI reports it — the one place
  * where an exhausted *window* is literally what happened; it is still the same
  * spent-budget condition the API adapter's 402/quota path hits, so it shares
@@ -631,11 +646,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       endEpisode(verdict.reason, verdict.detail, { t: "watchdog", ...verdict }, { windDown: true });
       return false;
     }
-    if (toolCalls >= config.maxToolCallsPerEpisode) {
+    if (toolCallLimitReached(toolCalls, config.maxToolCallsPerEpisode)) {
+      // Non-null by construction: the predicate is false for a null ceiling,
+      // so reaching here means there was a number to reach.
+      const cap = config.maxToolCallsPerEpisode!;
       endEpisode(
         "tool-call-limit",
-        `${toolCalls} tool calls (cap ${config.maxToolCallsPerEpisode})`,
-        { t: "limit", kind: "tool-call-limit", toolCalls, cap: config.maxToolCallsPerEpisode },
+        `${toolCalls} tool calls (cap ${cap})`,
+        { t: "limit", kind: "tool-call-limit", toolCalls, cap },
         { windDown: true },
       );
       return false;

@@ -275,6 +275,23 @@ describe("argv -> run config", () => {
   test("--no-xp-ms 0 is the command-line spelling of disabled", () => {
     expect(configFromArgs(["--model", "m", "--no-xp-ms", "0"]).watchdogs.noXpMs).toBeNull();
   });
+
+  test("--max-tool-calls 0 is the command-line spelling of no ceiling at all", () => {
+    // Argv cannot carry null, so 0 is the transport spelling and it is
+    // normalised the moment it is read: `maxToolCallsPerEpisode` is null or a
+    // positive number, and the sentinel is never stored, compared or served.
+    expect(configFromArgs(["--model", "m", "--max-tool-calls", "0"]).maxToolCallsPerEpisode).toBeNull();
+  });
+
+  test("a ceiling that was given stays a number, and an absent one is still the 500-call guard", () => {
+    // Disabling it is the policy freeplay lane's business (docs/EPISODES.md).
+    // Every other launch keeps the runaway guard it has always had, including
+    // an arbitrary freeplay or probe job that names no ceiling of its own.
+    expect(configFromArgs(["--model", "m", "--max-tool-calls", "250"]).maxToolCallsPerEpisode).toBe(250);
+    expect(configFromArgs(["--model", "m"]).maxToolCallsPerEpisode).toBe(500);
+    expect(configFromArgs(["--episode", "probing"]).maxToolCallsPerEpisode).toBe(500);
+    expect(configFromArgs(["--episode", "freeplay"]).maxToolCallsPerEpisode).toBe(500);
+  });
 });
 
 describe("the viewer's run row", () => {

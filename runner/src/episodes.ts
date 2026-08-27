@@ -50,9 +50,10 @@ export interface EpisodeTier {
   noXpMinutes: number | null;
   /**
    * Tool calls for the whole episode. **Null means the tier does not pin one**
-   * — the job's or the config's own value stands — which is not the same as
-   * "unbounded": `maxToolCallsPerEpisode` is always a positive number, because
-   * it is the runaway guard.
+   * — the job's or the config's own value stands. That is not the same claim
+   * as the config's own `maxToolCallsPerEpisode: null`, which says there is no
+   * ceiling; a tier that pins nothing still leaves the 500-call default in
+   * place for every job that names none.
    */
   toolCalls: number | null;
   /** Whether an operator objective may steer a run of this tier. */
@@ -198,7 +199,8 @@ export function matchesTier(
     idleMs: number | null;
     noXpMs: number | null;
     episodeMs: number | null;
-    maxToolCalls?: number;
+    /** Undefined = not stated; null = no ceiling, which no scored tier is. */
+    maxToolCalls?: number | null;
   },
 ): boolean {
   // An unscored tier states no budget to depart from. Its numbers are defaults

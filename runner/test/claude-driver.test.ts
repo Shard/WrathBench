@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv } from "../src/adapter-claude";
+import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { SYSTEM_PROMPT } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
@@ -396,6 +396,41 @@ describe("claude-code driver", () => {
     expect(outcome.kind === "terminated" && outcome.reason).toBe("tool-call-limit");
     const records = readTrajectory(runDir);
     expect(records.filter((r) => r.t === "snippet")).toHaveLength(1);
+    trajectory.close();
+  }, 30_000);
+
+  test("a null ceiling is no ceiling: the branch the guard takes never trips", () => {
+    // The predicate the enforcement branch reads, tested directly. A run with
+    // the cap off cannot be driven past it end to end in a test — proving it
+    // means letting the fake CLI make more calls than the ceiling it no longer
+    // has — so the branch itself is pinned here and the cap-1/cap-3 cases above
+    // keep covering the finite path all the way through the driver.
+    expect(toolCallLimitReached(0, null)).toBe(false);
+    expect(toolCallLimitReached(500, null)).toBe(false);
+    expect(toolCallLimitReached(1_000_000, null)).toBe(false);
+    // A finite ceiling is unchanged: it trips at the cap, not before it.
+    expect(toolCallLimitReached(2, 3)).toBe(false);
+    expect(toolCallLimitReached(3, 3)).toBe(true);
+    expect(toolCallLimitReached(4, 3)).toBe(true);
+  });
+
+  test("with the ceiling off, a long turn ends on its watchdog and never on tool-call-limit", async () => {
+    // The live shape: fleet-sub-opus-low-freeplay-opus-low-20260825-a6 sat at
+    // 410/500 and would have terminated `tool-call-limit`, after which the
+    // fleet starts a fresh level-1 character. With the ceiling off the session
+    // keeps running and the idle/episode watchdogs are what stop it — which is
+    // the point: this removes one automatic reset, not every stop.
+    const { runDir, trajectory, options } = setupEpisode("long-turn", {
+      maxToolCallsPerEpisode: null,
+      watchdogs: { episodeMs: 600 },
+    });
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
+    const records = readTrajectory(runDir);
+    // It really did dispatch tools: the guard ran and let every one of them by.
+    expect(records.filter((r) => r.t === "snippet").length).toBeGreaterThan(0);
+    expect(records.filter((r) => r.t === "limit")).toHaveLength(0);
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("episode-limit");
     trajectory.close();
   }, 30_000);
 
