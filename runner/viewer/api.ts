@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
 import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
-import { NOT_THE_MODELS_FAULT } from "../src/lapse";
+import { badEvidenceReason } from "../src/lapse";
 import type {
   ApiInfoResponse,
   CampaignRowView,
@@ -135,6 +135,16 @@ export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+/** The one shared scoreability verdict, applied to a projected result row. */
+function taintOf(r: Pick<ResultRun, "live" | "pauseReason" | "modelResponses" | "terminationReason">): string | null {
+  return badEvidenceReason({
+    live: r.live === true,
+    paused: r.pauseReason !== null,
+    modelResponses: r.modelResponses,
+    terminationReason: r.terminationReason,
   });
 }
 
@@ -721,11 +731,11 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // An attempt that never became an episode is not a member of the tier's
         // group — the same predicate the ladder filters on, so this
         // count and that chart hold the same runs.
-        const lapsed = (r: (typeof stamped)[number]): boolean =>
-          r.terminationReason !== null && NOT_THE_MODELS_FAULT.has(r.terminationReason);
+        const tainted = (r: (typeof stamped)[number]): boolean => taintOf(r) !== null;
+        const lapsed = (r: (typeof stamped)[number]): boolean => r.terminationReason !== null && tainted(r);
         return {
           ...tier,
-          members: stamped.filter((r) => !r.episodeOverride && !lapsed(r)).length,
+          members: stamped.filter((r) => !r.episodeOverride && !tainted(r)).length,
           lapsed: stamped.filter((r) => !r.episodeOverride && lapsed(r)).length,
           overrides: stamped.filter((r) => r.episodeOverride).length,
           derived: tagged.length - stamped.length,
@@ -811,12 +821,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                       cell: r.cell,
                       ref: refOf(roster, r),
                       counted:
-                        r.pauseReason === null &&
                         !r.extra &&
                         !r.episodeOverride &&
-                        r.modelResponses !== null &&
-                        r.modelResponses > 0 &&
-                        !(r.terminationReason !== null && NOT_THE_MODELS_FAULT.has(r.terminationReason)),
+                        taintOf(r) === null,
                     })),
                 ),
                 account: c.account ?? null,
