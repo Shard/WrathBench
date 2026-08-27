@@ -351,8 +351,17 @@ export const runConfigSchema = z.object({
    * is this one, enforced at the MCP boundary where the calls
    * actually arrive. Generous by default — it is a runaway guard, not a task
    * budget. Ignored by the fixed loop, whose bound is `maxTurns`.
+   *
+   * `null` disables it outright, and exactly one lane asks for that: the
+   * policy's `idle: "unlimited"` freeplay session, which is meant to be one
+   * continuous character and has no wall clock either. A guard sized for a
+   * ninety-minute episode is not a guard on a session with no end — four of
+   * the six sub-opus-low freeplay runs ended `tool-call-limit` at 500 and the
+   * fleet started a fresh level-1 character each time. Every other launch
+   * keeps the 500. Disabling it does not disable the idle watchdog, the
+   * snippet-runaway guard, or any fatal path: those remain the stops.
    */
-  maxToolCallsPerEpisode: z.number().int().positive().default(500),
+  maxToolCallsPerEpisode: z.number().int().positive().nullable().default(500),
   /** Fixed pacing between model steps; not a tuning knob, an API courtesy. */
   stepIntervalMs: z.number().int().nonnegative().default(3_000),
   /** How often a periodic state line is recorded. */

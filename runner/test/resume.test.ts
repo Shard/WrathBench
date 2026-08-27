@@ -6,7 +6,7 @@
  * never calls a tool never asks for.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
@@ -45,6 +45,45 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
   });
   traj.close();
   return { runsDir, runId, script };
+}
+
+/**
+ * A paused policy-freeplay run as the live ones are actually stored: no wall
+ * clock, and the 500-call ceiling the runner defaulted to when the fleet
+ * emitted no `--max-tool-calls` for the lane. This is the shape
+ * fleet-sub-opus-low-freeplay-opus-low-20260825-a6 was in at 410/500.
+ */
+function pausedFreeplayRun(storedCap: number | null = 500): { runsDir: string; runId: string } {
+  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-resume-freeplay-"));
+  const runId = "fleet-sub-opus-low-freeplay-opus-low-20260825-a6";
+  const script = join(runsDir, "stub.json");
+  writeFileSync(script, JSON.stringify([{ content: "still going", toolCalls: [] }]));
+  const dir = join(runsDir, runId);
+  mkdirSync(dir, { recursive: true });
+  const traj = new Trajectory(dir);
+  const config = loadRunConfig({
+    runId,
+    token: newSessionToken(),
+    driver: "stub",
+    stubScript: script,
+    stepIntervalMs: 0,
+    episode: "freeplay",
+    maxToolCallsPerEpisode: storedCap,
+    runsDir,
+    moduleUrl: "http://127.0.0.1:9",
+    character: "Bramwick",
+    race: 3,
+    class: 2,
+  });
+  traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: 1, config });
+  traj.recordState(runId, { level: 12, xp: 4210 });
+  traj.setPause(runId, "operator-pause", "SIGTERM: supervisor stop", 9 * 3_600_000);
+  traj.writeMeta({
+    ...readMeta(dir)!,
+    pause: { reason: "operator-pause", detail: "SIGTERM: supervisor stop", at: Date.now(), episodeElapsedMs: 9 * 3_600_000 },
+  });
+  traj.close();
+  return { runsDir, runId };
 }
 
 async function resume(runsDir: string, runId: string, extra: string[] = []): Promise<string> {
@@ -113,5 +152,55 @@ describe("--resume after a pause", () => {
     expect(sent).toContain("resumed after a pause, 10 minutes elapsed of 90");
     expect(sent).toContain("last observed at level 4 with 586 xp");
     expect(sent).not.toContain("createSession({...})");
+  }, 30_000);
+});
+
+describe("--resume --max-tool-calls 0 migrates a run off the ceiling it was stored with", () => {
+  test("the same run and the same character come back, with the ceiling rewritten to null", async () => {
+    // The live case. a6 was stored with `maxToolCallsPerEpisode: 500` and had
+    // reached 410 of it; run.ts reloads the stored config on --resume and only
+    // overrides what a flag names, so without the flag it would have come back
+    // under the 500 and ended `tool-call-limit` ninety calls later — at which
+    // point the fleet starts a fresh freeplay run on a fresh level-1
+    // character. The override has to actually rewrite the stored config.
+    const { runsDir, runId } = pausedFreeplayRun(500);
+    await resume(runsDir, runId, ["--max-tool-calls", "0", "--max-turns", "1"]);
+    const dir = join(runsDir, runId);
+    const meta = readMeta(dir)!;
+    // Same run, same character, same account and session: identity is the
+    // stored run's and a leash flag does not touch it.
+    expect(meta.runId).toBe(runId);
+    expect(meta.config.character).toBe("Bramwick");
+    expect(meta.config.race).toBe(3);
+    expect(meta.config.class).toBe(2);
+    // The ceiling is gone, in the config and in the tuple, as null — never as
+    // the argv sentinel 0.
+    expect(meta.config.maxToolCallsPerEpisode).toBeNull();
+    expect(meta.comparability?.budget.maxToolCalls).toBeNull();
+    // The pause is consumed: it came back, it did not stay parked.
+    expect(meta.pause).toBeUndefined();
+    // And nothing fresh was started beside it — one run directory, the one
+    // that was already there.
+    expect(readdirSync(runsDir).filter((e) => e.startsWith("fleet-") || e.startsWith("run-"))).toEqual([runId]);
+    const traj = new Trajectory(dir);
+    expect(traj.runRow(runId)?.["pause_reason"]).toBeNull();
+    traj.close();
+  }, 30_000);
+
+  test("without the override the stored ceiling stands — absence of a flag is not a migration", async () => {
+    // The control, and the reason the flag exists at all: a resume that says
+    // nothing about the ceiling leaves the stored one exactly where it was.
+    const { runsDir, runId } = pausedFreeplayRun(500);
+    await resume(runsDir, runId, ["--max-turns", "1"]);
+    const meta = readMeta(join(runsDir, runId))!;
+    expect(meta.runId).toBe(runId);
+    expect(meta.config.maxToolCallsPerEpisode).toBe(500);
+    expect(meta.comparability?.budget.maxToolCalls).toBe(500);
+  }, 30_000);
+
+  test("a numeric override on a resume is still a number", async () => {
+    const { runsDir, runId } = pausedFreeplayRun(500);
+    await resume(runsDir, runId, ["--max-tool-calls", "1000000", "--max-turns", "1"]);
+    expect(readMeta(join(runsDir, runId))!.config.maxToolCallsPerEpisode).toBe(1_000_000);
   }, 30_000);
 });

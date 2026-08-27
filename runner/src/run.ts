@@ -96,6 +96,23 @@ function num(v: string | boolean | undefined): number | undefined {
 }
 
 /**
+ * `--max-tool-calls`, where `0` means no ceiling at all.
+ *
+ * Argv cannot carry null, so 0 is the transport spelling — the same trick
+ * `--no-xp-ms 0` already uses for a disabled watchdog — and it is normalised
+ * the moment it is read. Nothing past this function ever sees the sentinel:
+ * the config, meta.json, the comparability tuple and the API all hold `null`,
+ * so "disabled" reads the same everywhere it is stored or compared. Undefined
+ * (the flag absent) is left alone, which is what lets the stored config stand
+ * on a resume and the 500 default stand on a launch.
+ */
+function toolCallCap(v: string | boolean | undefined): number | null | undefined {
+  const n = num(v);
+  if (n === undefined) return undefined;
+  return n === 0 ? null : n;
+}
+
+/**
  * `--watchdogs-json '{"noXpMs":null,"idleMs":1200000}'` — the whole override
  * object in one flag. The individual `--idle-ms`/`--no-xp-ms`/`--episode-ms`
  * flags still work and are applied first; this one wins where they overlap,
@@ -169,7 +186,7 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
     maxTurns: num(args["max-turns"]),
-    maxToolCallsPerEpisode: num(args["max-tool-calls"]),
+    maxToolCallsPerEpisode: toolCallCap(args["max-tool-calls"]),
     stepIntervalMs: num(args["step-interval-ms"]),
     stateIntervalMs: num(args["state-interval-ms"]),
     snippetTimeoutMs: num(args["snippet-timeout-ms"]),
@@ -234,8 +251,12 @@ async function main(): Promise<void> {
     // Identity (character, token, driver, model) stays as stored.
     const overrides = {
       ...(num(args["max-turns"]) !== undefined ? { maxTurns: num(args["max-turns"])! } : {}),
-      ...(num(args["max-tool-calls"]) !== undefined
-        ? { maxToolCallsPerEpisode: num(args["max-tool-calls"])! }
+      // `--max-tool-calls 0` migrates a run stored under the old 500 onto the
+      // uncapped lane, the same way `--watchdogs-json {"episodeMs":null}`
+      // migrates one stored under the old six-hour clock. Absence of the flag
+      // leaves the stored ceiling standing, so this is never implicit.
+      ...(toolCallCap(args["max-tool-calls"]) !== undefined
+        ? { maxToolCallsPerEpisode: toolCallCap(args["max-tool-calls"]) as number | null }
         : {}),
       watchdogs: {
         ...c.watchdogs,

@@ -101,9 +101,9 @@ roster      name -> entry, the exact run-roster per-entry schema (model, driver,
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
               under `models` and supplies its own task shape.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
-              what a paid model wants) or `unlimited` (one freeplay session at a time, capped at
-              6h on every class). Never bought by omission. A race/class sweep is a campaign now,
-              not an idle mode.
+              what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
+              with no episode wall clock — the idle watchdog is what ends it). Never bought by
+              omission. A race/class sweep is a campaign now, not an idle mode.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -292,7 +292,14 @@ logs the character out. Nothing is corrupted. What it costs:
   surface; three of *those* would taint a model, and a supervisor kill is not
   one of them (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
 - freeplay, and a probe campaign with `resume: true`, come back where they left
-  off on the same account and character.
+  off on the same account and character. An automatic resume also **restates
+  the current leash** rather than inheriting the stored one: the runner reloads
+  `meta.json` and only replaces a limit a flag names, so a freeplay run created
+  under an older policy would otherwise come back under that policy's clock and
+  ceiling. The roster emits `--watchdogs-json {"episodeMs":null}` and
+  `--max-tool-calls 0` for the `idle: "unlimited"` lane, which rewrites both
+  caps to `null` on the resumed run while its run id, account, character,
+  session token, trajectory and scratchpad are all the stored run's.
 - a preflight smoke in flight dies with the container; the gate re-runs it.
 
 `--no-deps` is not optional on either path: without it compose may decide the
@@ -695,8 +702,9 @@ key. Only runs from the running checkout's harness **series** (`0.3` of
 `harness-0.3-114-g…`) count; a minor bump starts every model's evidence over,
 a fix commit does not. With `policy.paid` set, at most that many paid runs are
 in flight at once — a throttle, never a budget. A model whose entry says
-`idle: "unlimited"` takes one capped freeplay session at a time once its
-targets are met, stamped `extra: true` — an attempt but never counted.
+`idle: "unlimited"` takes one continuous freeplay session at a time once its
+targets are met — no episode wall clock, governed by the idle watchdog —
+stamped `extra: true`: an attempt but never counted.
 Everything it decides is derived from `data/runs/` each tick; nothing is
 stored except an operator's clear.
 
