@@ -204,12 +204,63 @@ describe("unscoredReason", () => {
     // A run that ended on its own clock is untouched.
     expect(unscoredReason(run({ terminationReason: "episode-limit" }))).toBeNull();
   });
+
+  test("bad evidence is explicitly tainted for every incomplete or non-model outcome", () => {
+    const cases = [
+      {
+        name: "paused with responses",
+        row: run({ pauseReason: "rate-limited" }),
+        calls: { toolCalls: 1, snippets: 0, modelResponses: 2 },
+        reason: "unscored (paused)",
+      },
+      {
+        name: "paused with zero responses",
+        row: run({ pauseReason: "rate-limited" }),
+        calls: { toolCalls: 0, snippets: 0, modelResponses: 0 },
+        reason: "unscored (paused)",
+      },
+      {
+        name: "zero responses",
+        row: run({ terminationReason: "episode-limit" }),
+        calls: { toolCalls: 0, snippets: 0, modelResponses: 0 },
+        reason: "unscored (no model responses)",
+      },
+      {
+        name: "unknown responses",
+        row: run({ terminationReason: "episode-limit" }),
+        calls: null,
+        reason: "unscored (model responses unknown)",
+      },
+      {
+        name: "live with responses",
+        row: run({ live: true }),
+        calls: { toolCalls: 1, snippets: 0, modelResponses: 2 },
+        reason: "unscored (live)",
+      },
+      {
+        name: "in-progress with responses",
+        row: run({ live: false, endedAt: null, terminationReason: null }),
+        calls: { toolCalls: 1, snippets: 0, modelResponses: 2 },
+        reason: "unscored (in-progress)",
+      },
+      {
+        name: "environment defect with responses",
+        row: run({ terminationReason: "environment-defect" }),
+        calls: { toolCalls: 1, snippets: 0, modelResponses: 2 },
+        reason: "unscored (environment-defect)",
+      },
+    ] as const;
+    for (const c of cases) {
+      expect(resultRunOf(c.row, [], [], c.calls).unscored, c.name).toBe(c.reason);
+    }
+  });
 });
 
 describe("resultRunOf", () => {
   test("projects identity, comparability fields and the level series", () => {
     const e = resultRunOf(
       run({
+        terminationReason: "episode-limit",
         comparability: {
           harnessVersion: "harness-0.2",
           promptHash: "sha256:abc",
@@ -231,6 +282,7 @@ describe("resultRunOf", () => {
       }),
       [state({ ts: 1000, level: 1, turn: 1, map: 0 }), state({ ts: 2000, level: 5, turn: 9, map: 0 })],
       [{ start: 1000, end: 3000 }],
+      { toolCalls: 0, snippets: 0, modelResponses: 2 },
     );
     expect(e.effort).toBe("high");
     expect(e.harness).toBe("wrathbench");
