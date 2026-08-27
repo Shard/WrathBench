@@ -808,13 +808,14 @@ describe("the shipped fleet files", () => {
     // A trial is one line and one line only: tier t0, and nothing else in the
     // file arranges it — no queue job, no account pin, no billing flip. This is
     // the acceptance test for the whole refactor.
-    for (const name of ["gemini-flash", "deepseek-flash"]) {
+    {
+      const name = "gemini-flash";
       const e = config.roster[name]!;
       expect(e.tier).toBe("t0");
       expect(e.idle).toBe("none");
       expect(poolJobs(config).some((j) => j.refs.includes(name))).toBe(false);
       expect(Object.values(config.accounts.pinned)).not.toContain(`${name}-e90`);
-      // And a t0 model that plays well keeps its witness without spending it.
+      // A t0 model that plays well keeps its witness without spending it.
       const witness: RunFact = {
         runId: `${name}-1`,
         model: e.model,
@@ -843,6 +844,50 @@ describe("the shipped fleet files", () => {
       expect(st.tier).toBe("t0");
       expect(st.eligible).toEqual(["e90"]);
       expect(st.status).not.toBe("promoted");
+    }
+
+    // deepseek-flash is now on the standard t1 budget: three e90 runs and no
+    // e360 until its counted e90 evidence earns the next rung. The shipped
+    // entry is the policy; no queue job or account pin supplements it.
+    {
+      const name = "deepseek-flash";
+      const e = config.roster[name]!;
+      expect(e.tier).toBe("t1");
+      expect(e.idle).toBe("none");
+      expect(TIER_TABLE[e.tier].runsPerEpisode).toEqual({ e90: 3, e360: 0 });
+      expect(poolJobs(config).some((j) => j.refs.includes(name))).toBe(false);
+      expect(Object.values(config.accounts.pinned)).not.toContain(`${name}-e90`);
+      // A t1 model that reaches rung 1 is promoted to t2 by its existing
+      // witness, rather than needing a re-run after the operator's retier.
+      const witness: RunFact = {
+        runId: `${name}-1`,
+        model: e.model,
+        effort: null,
+        episode: "e90",
+        episodeOverride: false,
+        harnessVersion: null,
+        harnessSeries: config.policy.series,
+        extra: false,
+        startedAt: NOW - 2 * 3_600_000,
+        endedAt: NOW - 3_600_000,
+        terminationReason: "episode-limit",
+        modelResponses: 20,
+        bestLevel: 6,
+        live: false,
+        pause: null,
+        account: null,
+        character: null,
+        episodeMs: null,
+        campaign: null,
+        cell: null,
+        subscription: null,
+      };
+      const st = modelStatesOf(rosterModels(config.roster), [witness], NOW, config.policy).find((x) => x.name === name)!;
+      expect(st.declaredTier).toBe("t1");
+      expect(st.earnedRung1).toBe(true);
+      expect(st.tier).toBe("t2");
+      expect(st.eligible).toEqual(["e90", "e360"]);
+      expect(st.status).toBe("promoted");
     }
 
     // And leaving the trial is the same one line: gpt-luna went to t1 by
