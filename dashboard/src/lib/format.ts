@@ -39,6 +39,16 @@ export function fmtDuration(ms: number | null): string {
 }
 
 /**
+ * The tool-call half of the run page's episode-budget line. Null is no ceiling
+ * at all — the policy's `idle: "unlimited"` freeplay lane — and it reads the
+ * way the null `maxTurns` beside it already does, rather than as a blank or a 0
+ * that would look like a ceiling of zero.
+ */
+export function fmtToolCallBudget(n: number | null): string {
+  return n === null ? "unlimited tool calls" : `${n} tool calls`;
+}
+
+/**
  * A short span for the feed's latency figures: "840ms", "12.3s", then
  * `fmtDuration`'s m:ss/h:mm forms. Empty string, not a dash, when there is
  * nothing to say — these render inline in a crowded header where a
