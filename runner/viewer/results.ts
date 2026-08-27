@@ -19,7 +19,7 @@
 import { runBilling } from "../src/billing";
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
-import { NOT_THE_MODELS_FAULT } from "../src/lapse";
+import { badEvidenceReason } from "../src/lapse";
 import { EPISODES } from "../src/episodes";
 import type {
   AchievementFacts,
@@ -254,8 +254,12 @@ export function episodeOf(run: RunRow): EpisodeOf {
  * from the stamp so a stub run launched before the stamp existed still reads
  * as one. The harness is deliberately *not* a reason (it is a tag, not a partition): a
  * `claude-code` run is a tagged row.
+ *
+ * The live results projection passes the response count explicitly. A direct
+ * metadata-only caller may omit it, in which case response-based taint cannot
+ * be inferred, but active/paused and recorded non-model terminations still can.
  */
-export function unscoredReason(run: RunRow): string | null {
+export function unscoredReason(run: RunRow, modelResponses?: number | null): string | null {
   if (run.shakeout !== null) return run.shakeout;
   if (run.driver !== null && isDriver(run.driver) && isUnscoredDriver(run.driver)) return STUB_STAMP;
   if (run.objective !== null) return "unscored (operator objective)";
@@ -273,20 +277,13 @@ export function unscoredReason(run: RunRow): string | null {
   if (ep.episode !== null && !EPISODES[ep.episode].scored) {
     return `unscored (episode ${ep.episode})`;
   }
-  /*
-   * An attempt that never became an episode. It sat
-   * out an unknown share of its clock — a provider window, a deploy, a night
-   * the host slept — so the level it reached is not a reading of ninety
-   * minutes of play. It stays on the runs page with its reason; the ladder and
-   * every chart over episodes drop it here, through the predicate they already
-   * share. The set is the scheduler's own `NOT_THE_MODELS_FAULT`, so a run the
-   * policy has written off and a run the ladder shows can never be the same
-   * run: that covers an operator cut (`manual`) and a harness defect too, both
-   * of which are partial episodes the ladder used to read as finished ones.
-   */
-  if (run.terminationReason !== null && NOT_THE_MODELS_FAULT.has(run.terminationReason)) {
-    return `unscored (${run.terminationReason})`;
-  }
+  const taint = badEvidenceReason({
+    live: run.live,
+    paused: run.pauseReason !== null,
+    modelResponses,
+    terminationReason: run.terminationReason,
+  });
+  if (taint !== null) return `unscored (${taint})`;
   return null;
 }
 
@@ -372,7 +369,7 @@ export function resultRunOf(
     episode: ep.episode,
     episodeSource: ep.source,
     episodeOverride: ep.override,
-    unscored: unscoredReason(run),
+    unscored: unscoredReason(run, calls?.modelResponses ?? null),
     startedAt: run.startedAt,
     endedAt: run.endedAt,
     live: run.live,
