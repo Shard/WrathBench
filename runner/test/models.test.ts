@@ -190,8 +190,8 @@ describe("modelStates", () => {
     expect(by["ox"]).toMatchObject({ harness: "wrathbench" });
     expect(by["sonnet"]!.perEpisode.e90).toMatchObject({ counted: 1, bestLevel: 4, reachedL5: false });
 
-    // A live, answered run counts; t0 buys exactly one of them.
-    expect(by["sonnet-low"]!.perEpisode.e90).toMatchObject({ counted: 1, stillborn: 0, target: 1 });
+    // A live, answered run is still in progress and cannot become score evidence.
+    expect(by["sonnet-low"]!.perEpisode.e90).toMatchObject({ counted: 0, stillborn: 0, target: 1 });
     // No series on the policy: the 0.2 run is an attempt like any other; the extra is an attempt, never counted.
     expect(by["local"]).toMatchObject({ status: "promoted", platform: "local", billing: "free" });
     expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 1, attempts: 2, extras: 1, otherSeries: 0, target: 3, bestLevel: 7 });
@@ -231,7 +231,7 @@ describe("modelStates", () => {
 });
 
 describe("the ladder", () => {
-  const fail = (i: number, endedAt: number, reason: string | null = "adapter-error", responses = 0): RunFact => ({
+  const fail = (i: number, endedAt: number, reason: string | null = "adapter-error", responses: number | null = 0): RunFact => ({
     runId: `f-${i}`,
     model: "m",
     effort: null,
@@ -299,6 +299,18 @@ describe("the ladder", () => {
     expect(isCounted(paused)).toBe(false);
     expect(isNoProgress(paused)).toBe(false);
     expect(stillbornOf(paused)).toBeNull();
+  });
+
+  test("isCounted rejects paused, empty, unknown, live, and environment-defect evidence", () => {
+    const cases: RunFact[] = [
+      { ...fail(10, NOW - 1000, "episode-limit", 2), pause: { reason: "rate-limited", at: NOW - 1000, count: 1, episodeElapsedMs: 1_000 } },
+      fail(11, NOW - 1000, "episode-limit", 0),
+      fail(12, NOW - 1000, "episode-limit", null),
+      { ...fail(13, NOW - 1000, null, 2), endedAt: null, live: true },
+      { ...fail(15, NOW - 1000, null, 2), endedAt: null, live: false },
+      fail(14, NOW - 1000, "environment-defect", 2),
+    ];
+    for (const fact of cases) expect(isCounted(fact)).toBe(false);
   });
 
   test("a stale pause (older than its own budget) no longer holds the model", () => {

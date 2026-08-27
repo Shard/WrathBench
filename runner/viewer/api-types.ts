@@ -1190,7 +1190,7 @@ export type IdleModeView = "none" | "unlimited";
 
 /** One tier's counts for one model, plus the runs behind them. */
 export interface ModelEpisodeView {
-  /** Stamped, un-overridden runs that produced at least one model response. */
+  /** Stamped, un-overridden, completed runs that are safe scoring evidence. */
   counted: number;
   /** Every stamped run on this tier, counted or not. */
   attempts: number;
