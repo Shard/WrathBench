@@ -211,18 +211,11 @@ status.
     still nobody's.
 
 
-67. **Freeplay characters do not persist between sessions, which is what the
-    "ultra long-term sandbox" actually needs** (2026-08-24, from the
-    evidence-budget conversation). `idle: "unlimited"` now gives a model repeated six-hour
-    freeplay sessions, but every episode still deletes and recreates a fresh
-    level-1 character (docs/METHODOLOGY.md, "Episodes, lanes, and evidence"), so
-    session N+1 starts where session 1 did and
-    the long horizon is six hours, not a week. Carry-over is exactly what the
-    scored episodes forbid, so this is not a knob — it needs its own record:
-    what identity a resumable freeplay character has, how its run ids and
-    trajectory relate across sessions, and how the viewer shows a character
-    rather than a run. Out of scope for the tier rule deliberately; the six-hour
-    cap there is what makes the sessions restartable in the first place.
+67. **Superseded: freeplay characters do not persist between sessions** (2026-08-24;
+    superseded 2026-08-27). The idle `unlimited` lane is now one continuous
+    freeplay session with no episode wall-clock cap, governed by the idle
+    watchdog. This removes the artificial six-hour rollover that recreated a
+    level-1 character and discarded continuity; scored episodes remain fresh.
 
 
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone

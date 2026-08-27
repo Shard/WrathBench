@@ -1203,6 +1203,17 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(tight.entries[0]!.watchdogs).toEqual({ episodeMs: 5_400_000, idleMs: 60_000, noXpMs: 1_200_000 });
   });
 
+  test("idle freeplay materializes with only its idle watchdog, not a six-hour episode cap", () => {
+    const freeplayRoster = { ...roster, glm: { ...roster.glm!, idle: "unlimited" as const } };
+    const freeplay = jobSpawn(job({ ref: "glm", episode: "freeplay", name: "glm-freeplay", attempt: 1 }), freeplayRoster, "RUNNER", "20260101");
+    const resolved = resolve(fillEntries(freeplay, "20260101"), "20260101")[0]!;
+    expect(resolved.episode).toBe("freeplay");
+    expect(resolved.resumeOnPause).toBe(true);
+    expect(resolved.watchdogs).toMatchObject({ idleMs: 1_200_000, noXpMs: null, episodeMs: null });
+    expect(resolved.episodeMs).toBeNull();
+    expect(episodeArgv(resolved, false)).not.toContain("--episode-ms");
+  });
+
   test("episode ids map to today's runner flags until the runner owns --episode", () => {
     expect(episodeDimensions("e90")).toEqual({ episode: "e90", watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: 1_200_000 }, maxToolCalls: 3000 });
     expect(episodeDimensions("e360").watchdogs).toEqual({ episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null });
@@ -1899,7 +1910,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { tier: "t1", model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
   });
 
-  test("idle: unlimited — the box past its tier gets one 6h freeplay session at a time", () => {
+  test("idle: unlimited — the box past its tier gets one continuous freeplay session at a time", () => {
     const raw = {
       accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
       roster: {
@@ -1927,9 +1938,8 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(pick.job.extra).toBeUndefined();
     expect(isExtraJob(pick.job)).toBe(true);
     expect(pick.why).toContain("unlimited session");
-    // The spawn: stamped an extra, the entry's own start, and a SIX-HOUR clock
-    // the freeplay id does not pin — a session that never ends would hold its
-    // account past a series bump and starve the scored targets behind it.
+    // The spawn: stamped an extra and the entry's own start. Freeplay has no
+    // episode wall clock, so the character/session continues until idle.
     const spawn = jobSpawn(pick.job, config.roster, "LOCALBOX", "20260101");
     expect(spawn.entries[0]).toMatchObject({
       model: "qwen/q",
@@ -1937,7 +1947,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       class: 2,
       extra: true,
       episode: "freeplay",
-      watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null },
+      watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null },
     });
     expect(spawn.loop).toBe(false);
     expect(jobArgv(spawn, { stamp: "20260101", until: undefined }).join(" ")).toContain("local-freeplay");
@@ -1952,7 +1962,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const line = formatModels(afterStates, new Set(), NOW, new Map(), config.policy).find((l) => l.trimStart().startsWith("local"))!;
     // counted/target on e90, no e360, then the extras column: the freeplay run.
     expect(line).toMatch(/local\s+free\s+t1\s+active\s+3\/3 L3\s+-\s+1\s+free: targets met on e90 — unlimited sessions/);
-    expect(formatModels(afterStates, new Set(), NOW, new Map(), config.policy)[0]).toContain("unlimited 6h");
+    expect(formatModels(afterStates, new Set(), NOW, new Map(), config.policy)[0]).toContain("idle unlimited (idle watchdog only; no wall clock)");
     // The next freeplay run is attempt 2, so its run id cannot collide with the first.
     const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;
     expect(next.job).toMatchObject({ name: "local-freeplay", attempt: 2 });

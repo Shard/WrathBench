@@ -112,7 +112,6 @@ import {
   parseIdle,
   TIERS,
   TIER_TABLE,
-  UNLIMITED_SESSION_MS,
   type Tier,
   type IdleMode,
   parseModelsSidecar,
@@ -1678,16 +1677,14 @@ export function jobSpawn(
     const spec: RosterSpec = isProbe ? credentials : entry;
     // The entry's own leash, kept only when the entry is the authority on it.
     const own = isProbe ? {} : { watchdogs: entry.watchdogs, maxToolCalls: entry.maxToolCalls };
-    // An `idle: "unlimited"` session is the one freeplay run the policy makes,
-    // and it carries a wall clock the tier does not pin: a class governs the
-    // next pick and never a run in flight, so a session ended only by the idle
-    // watchdog would hold its account for as long as the model kept playing.
-    // The entry's own watchdogs still win — this is a default, not a ceiling.
-    const unlimited = isExtraJob(job) && job.episode === "freeplay" ? { episodeMs: UNLIMITED_SESSION_MS } : {};
+    // An `idle: "unlimited"` session is the one freeplay run the policy makes.
+    // Freeplay has no episode wall clock, so the run stays continuous and its
+    // only automatic stop is the idle watchdog. The entry's own watchdogs still
+    // win, as they do for every other episode.
     const base: RosterSpec = {
       ...spec,
       ...dims,
-      watchdogs: { ...dims.watchdogs, ...unlimited, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
+      watchdogs: { ...dims.watchdogs, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
       ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
@@ -2965,7 +2962,7 @@ export function formatModels(
     `models: ${states.length} in roster (policy: tier budgets; series ${series}${policy.series === null ? " — unversioned checkout, every series counts" : ""}; ladder ${LADDER_MS.length} rungs to ${Math.round(LADDER_MS[LADDER_MS.length - 1]! / 3_600_000)}h` +
       `${policy.paid !== null ? `; at most ${policy.paid.maxConcurrent} paid in flight` : "; no paid/free split"}` +
       `; tiers ${TIERS.map((t) => `${t} ${TIER_TABLE[t].runsPerEpisode.e90}/${TIER_TABLE[t].runsPerEpisode.e360}`).join(", ")}` +
-      `; idle unlimited ${Math.round(UNLIMITED_SESSION_MS / 3_600_000)}h)`,
+      `; idle unlimited (idle watchdog only; no wall clock)`,
     `  ${"model".padEnd(w)} ${"billing".padEnd(7)} ${"tier".padEnd(9)} ${"status".padEnd(8)} ${"e90".padEnd(12)} ${"e360".padEnd(12)} ${"extras".padEnd(6)} schedulable`,
   ];
   const ago = (ms: number | null): string => (ms === null ? "never" : `${Math.round((now - ms) / 60_000)}m ago`);
