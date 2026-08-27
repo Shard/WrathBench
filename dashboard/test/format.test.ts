@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtItems, fmtLatency, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -180,6 +180,17 @@ describe("fmtTps", () => {
     expect(fmtTps(12.44)).toBe("12.4");
     expect(fmtTps(99.94)).toBe("99.9");
     expect(fmtTps(340.2)).toBe("340");
+  });
+});
+
+describe("fmtToolCallBudget", () => {
+  test("null reads as unlimited, a number keeps the label it always had", () => {
+    // The run page's episode-budget line already spells a null `maxTurns`
+    // "unlimited turns"; the ceiling now has the same two states and reads the
+    // same way, so the policy freeplay lane is legible on its own page.
+    expect(fmtToolCallBudget(null)).toBe("unlimited tool calls");
+    expect(fmtToolCallBudget(500)).toBe("500 tool calls");
+    expect(fmtToolCallBudget(3000)).toBe("3000 tool calls");
   });
 });
 

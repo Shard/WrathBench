@@ -42,8 +42,13 @@ export const episodeBudgetSchema = z.object({
   /** Driver turns. Null = unlimited (a result run). A claude-code turn is not
    * a fixed-loop turn: one of them has held 168 tool calls. */
   maxTurns: z.number().int().positive().nullable(),
-  /** Tool calls for the whole episode; enforced at the MCP boundary. */
-  maxToolCalls: z.number().int().positive(),
+  /**
+   * Tool calls for the whole episode; enforced at the MCP boundary. Null = no
+   * ceiling, which is the policy's `idle: "unlimited"` freeplay lane and
+   * nothing else. It is part of the budget, so a run that moved between a
+   * ceiling and none restamps rather than staying comparable to itself.
+   */
+  maxToolCalls: z.number().int().positive().nullable(),
   /** Watchdog thresholds as they will actually be evaluated; null = disabled. */
   idleMs: z.number().int().nonnegative().nullable(),
   noXpMs: z.number().int().nonnegative().nullable(),

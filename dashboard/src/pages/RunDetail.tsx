@@ -38,7 +38,7 @@ import {
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
@@ -657,7 +657,7 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
           <dt>episode budget</dt>
           <dd class="mono">
             {t().budget.maxTurns === null ? "unlimited turns" : `${t().budget.maxTurns} turns`} ·{" "}
-            {t().budget.maxToolCalls} tool calls · idle {ms(t().budget.idleMs)} · no-xp{" "}
+            {fmtToolCallBudget(t().budget.maxToolCalls)} · idle {ms(t().budget.idleMs)} · no-xp{" "}
             {ms(t().budget.noXpMs)} · episode {ms(t().budget.episodeMs)}
           </dd>
           <dt>wiki reference</dt>

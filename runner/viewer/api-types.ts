@@ -36,7 +36,8 @@ export interface SnapshotEnvelope {
  */
 export interface EpisodeBudgetView {
   maxTurns: number | null;
-  maxToolCalls: number;
+  /** Null = no ceiling (the policy freeplay lane); never the argv sentinel 0. */
+  maxToolCalls: number | null;
   idleMs: number | null;
   noXpMs: number | null;
   episodeMs: number | null;
