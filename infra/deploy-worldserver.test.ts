@@ -49,7 +49,8 @@ case "$1" in
       touch "\${FAKE_DOCKER_LOG}.stopped"
       # A clean stop: the supervisor writes its final state with no live job.
       if [[ "\${FAKE_STOP_DRAINS:-1}" == "1" && -n "\${FAKE_STATE_JSON:-}" ]]; then
-        sed -i 's/"alive": true/"alive": false/g' "\${FAKE_STATE_JSON}"
+        if ! sed 's/"alive": true/"alive": false/g' "\${FAKE_STATE_JSON}" > "\${FAKE_STATE_JSON}.tmp"; then exit 1; fi
+        mv "\${FAKE_STATE_JSON}.tmp" "\${FAKE_STATE_JSON}" || exit 1
       fi
       exit 0
     fi
