@@ -146,18 +146,17 @@ standing sandbox that never finishes. Duration separates neither pair.
   spare account on a scored run with the next race/class in a code-side cycle.
   That was an unscored question asked in the scored lane, so it became
   the class-probe campaign instead.) Once a model has met its tier's targets the
-  policy gives it one freeplay session at a time,
-  **capped at six hours on every account class** — the id pins no clock, but a
-  session ended only by the idle watchdog would hold its account indefinitely
-  and starve the scored targets behind it. When that session ends the next tick
-  starts another. Such a run is stamped `extra: true` — an attempt, shown as an extra
+  policy gives it one continuous freeplay session at a time, with no episode
+  wall-clock cap. It is governed by the 20-minute idle watchdog; when the model
+  remains active, its character and progress continue beyond six hours. When
+  that session ends, the next tick starts another. Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.
 - **Pins in the tuple.** `episode: "freeplay"` and the unscored reason. The
   other fields are recorded but carry no comparability claim.
 
-`e360` and `freeplay` are both often six hours long. Duration is not what
+`e360` is six hours long; `freeplay` has no episode wall-clock cap. Duration is not what
 separates them — steering is. `e360` is the standing goal with a longer clock;
 `freeplay` is where a human is allowed to point.
 
