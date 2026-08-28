@@ -12,14 +12,11 @@
  * created this way must still track, and must still stop when the root disposes.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
-/* Same reason as `cursormemory.test.ts`: bun resolves the server build of
-   solid-js, whose signals never notify, and a graph test against it passes
-   regardless of whether the code under test is correct. */
-const solid = await import("solid-js/dist/solid.js");
-mock.module("solid-js", () => solid);
-const { createEffect, createRoot, createSignal, getOwner, onCleanup, runWithOwner } = solid;
+/* The reactive build of solid-js stands behind this name for every dashboard
+   test; `test/preload-solid.ts` installs it and says why. */
+import { createEffect, createRoot, createSignal, getOwner, onCleanup, runWithOwner } from "solid-js";
 
 describe("owner captured before an await, reopened after", () => {
   test("an effect created via runWithOwner still tracks its signal", async () => {

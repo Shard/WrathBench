@@ -9,7 +9,7 @@
  * used to write back into signals it read, and the map recursed.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
 import { TILE_PX, TILE_SIZE, worldToPixel } from "../../runner/viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
@@ -37,19 +37,36 @@ import {
   zoomAt,
 } from "../src/lib/mapview";
 
-/*
- * `bun test` resolves `solid-js` under the node condition, which is the server
- * build: its signals never notify, so a test of the derivation graph would pass
- * against it no matter what the graph did. Point the name at the same reactive
- * build the browser gets, then load the derivation — dynamically, because a
- * static import would be hoisted above the redirect and get the server build.
- */
-const solid = await import("solid-js/dist/solid.js");
-mock.module("solid-js", () => solid);
-const { createComputed, createRoot, createSignal } = solid;
-const { createMapState, clearReplayState, replayHrefFor } = await import("../src/lib/mapstate");
+/* The reactive build of solid-js stands behind this name for every dashboard
+   test; `test/preload-solid.ts` installs it and says why. */
+import { createComputed, createRoot, createSignal } from "solid-js";
+import { clearReplayState, createMapState, replayHrefFor } from "../src/lib/mapstate";
 
 const SCREEN = { w: 800, h: 600 };
+
+/*
+ * The canary for every graph test in the suite, this file's and the other
+ * three's. They all rest on `solid-js` resolving to the reactive build, which
+ * `test/preload-solid.ts` arranges and `bunfig.toml` has to reach; without it
+ * signals never notify and the derivation tests fail scattered and far from the
+ * cause, which is exactly how this went unnoticed once already. Asserted here
+ * so the first thing a reader sees is the reason.
+ */
+describe("the test run's solid-js", () => {
+  test("is the reactive build, not the server one", () => {
+    let notified = 0;
+    createRoot((dispose) => {
+      const [value, setValue] = createSignal(0);
+      createComputed(() => {
+        notified++;
+        value();
+      });
+      setValue(1);
+      dispose();
+    });
+    expect(notified).toBe(2);
+  });
+});
 
 /* Anvilmar, the map view's verified known zone: map 0, x ≈ -6240, y ≈ 380 → tile row 43.70, col 31.29. */
 const ANVILMAR = { x: -6240, y: 380 };
