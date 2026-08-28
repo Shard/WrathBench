@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
+import { FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -78,8 +79,13 @@ describe("priceFor", () => {
     expect(p?.output).toBe(0);
   });
 
-  test("a verified-free stealth id (the allowlist) prices as free", () => {
-    expect(priceFor({ model: "stealth/ox-alpha", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })?.id).toBe("free-tier");
+  test("the verified-free allowlist prices as free, and nothing else rides it", () => {
+    // The allowlist is empty today, so a suffixless id it does not name is
+    // priced from the synced table or not at all — never the free tier.
+    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
+      expect(priceFor({ model: id, apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })?.id).toBe("free-tier");
+    }
+    expect(priceFor({ model: "stealth/unlisted-preview", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })).toBeNull();
   });
 
   test("an unknown paid model has no price at all — tokens only, never a guess", () => {

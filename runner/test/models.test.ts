@@ -41,6 +41,7 @@ import {
   CONCURRENCY_KEYS,
   parsePolicyBlock,
 } from "../src/models";
+import { FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
 import type { EpisodeId } from "../src/episodes";
 
 const NOW = 1_800_000_000_000;
@@ -100,7 +101,7 @@ function writeRun(runsDir: string, r: SynthRun): void {
 }
 
 const roster: RosterModel[] = [
-  { name: "ox", model: "stealth/ox-alpha", tier: "t1" },
+  { name: "ox", model: "stealth/ox-alpha:free", tier: "t1" },
   { name: "glm", model: "z-ai/glm:free", apiBase: "https://openrouter.ai/api/v1", tier: "t1" },
   { name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t1" },
   // t0 is the one-run trial tier: the same budget the old per-entry override spelled.
@@ -114,9 +115,9 @@ beforeAll(() => {
   runsDir = mkdtempSync(join(tmpdir(), "wb-models-"));
   const t0 = NOW - 48 * HOUR;
   // ox: two good e90 runs, one reaching level 5 -> promoted; one overridden run (not counted).
-  writeRun(runsDir, { id: "ox-1", model: "stealth/ox-alpha", episode: "e90", responses: 40, level: 5, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
-  writeRun(runsDir, { id: "ox-2", model: "stealth/ox-alpha", episode: "e90", responses: 12, level: 3, reason: "idle", startedAt: t0 + 2 * HOUR, endedAt: t0 + 3 * HOUR });
-  writeRun(runsDir, { id: "ox-3", model: "stealth/ox-alpha", episode: "e90", override: true, responses: 30, level: 6, reason: "episode-limit", startedAt: t0 + 4 * HOUR, endedAt: t0 + 5 * HOUR });
+  writeRun(runsDir, { id: "ox-1", model: "stealth/ox-alpha:free", episode: "e90", responses: 40, level: 5, reason: "episode-limit", startedAt: t0, endedAt: t0 + HOUR });
+  writeRun(runsDir, { id: "ox-2", model: "stealth/ox-alpha:free", episode: "e90", responses: 12, level: 3, reason: "idle", startedAt: t0 + 2 * HOUR, endedAt: t0 + 3 * HOUR });
+  writeRun(runsDir, { id: "ox-3", model: "stealth/ox-alpha:free", episode: "e90", override: true, responses: 30, level: 6, reason: "episode-limit", startedAt: t0 + 4 * HOUR, endedAt: t0 + 5 * HOUR });
   // glm: one stillborn, then a second stillborn 30m ago -> rung 2 (3m) already expired; then a fresh stillborn 1m ago -> rung 3 cooling.
   writeRun(runsDir, { id: "glm-1", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: "adapter-error", startedAt: t0, endedAt: t0 + 60_000 });
   writeRun(runsDir, { id: "glm-2", model: "z-ai/glm:free", episode: "e90", responses: 0, reason: null, startedAt: NOW - 40 * 60_000, endedAt: null, mtime: NOW - 30 * 60_000 });
@@ -135,7 +136,7 @@ beforeAll(() => {
   // An archived run: the runner parks a launch that produced no response.
   // Invisible to a listing, visible to the scheduler (attempt numbers, ladder).
   mkdirSync(join(runsDir, "archive", "ox-archived"), { recursive: true });
-  writeFileSync(join(runsDir, "archive", "ox-archived", "meta.json"), JSON.stringify({ harnessVersion: "harness-0.3-1-gabc", config: { model: "stealth/ox-alpha" }, comparability: { episode: "e90" } }));
+  writeFileSync(join(runsDir, "archive", "ox-archived", "meta.json"), JSON.stringify({ harnessVersion: "harness-0.3-1-gabc", config: { model: "stealth/ox-alpha:free" }, comparability: { episode: "e90" } }));
 });
 
 afterAll(() => {
@@ -508,7 +509,9 @@ describe("paid and free", () => {
     expect(st({ name: "c", model: "x-contributor-free", apiBase: "https://opencode.ai/zen/v1" }, []).billing).toBe("free");
     expect(st({ name: "l", model: "vendor/big", apiBase: "http://10.0.0.5:1234/v1" }, []).billing).toBe("free");
     expect(st({ name: "s", model: "opus", driver: "claude-code" }, []).billing).toBe("free");
-    expect(st({ name: "o", model: "stealth/ox-alpha" }, []).billing).toBe("free");
+    // The allowlist is empty, so a suffixless id — however free it looks — is paid.
+    expect(st({ name: "o", model: "stealth/ox-preview" }, []).billing).toBe("paid");
+    for (const id of FREE_SUFFIXLESS_ALLOWLIST) expect(st({ name: "a", model: id }, []).billing).toBe("free");
     expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
   });
 

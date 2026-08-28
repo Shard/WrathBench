@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { runBilling } from "../src/billing";
-import { billingOf } from "../src/model-cost";
+import { FREE_SUFFIXLESS_ALLOWLIST, billingOf, isAllowlistedFree } from "../src/model-cost";
 
 describe("runBilling", () => {
   const cases: { why: string; run: Parameters<typeof runBilling>[0]; want: "free" | "paid" }[] = [
@@ -49,9 +49,9 @@ describe("runBilling", () => {
       want: "free",
     },
     {
-      why: "a verified-free suffixless id on the allowlist",
+      why: "a suffixless id off the allowlist — a stealth id whose free window has closed",
       run: { model: "stealth/ox-alpha", platform: "openrouter", harness: "wrathbench" },
-      want: "free",
+      want: "paid",
     },
     {
       why: "a paid OpenRouter slug — the default side",
@@ -83,6 +83,17 @@ describe("runBilling", () => {
     expect(billingOf({ model: "openai/gpt-5" })).toBe("paid");
     expect(billingOf({ model: "qwen/qwen3-coder:free" })).toBe("free");
     expect(billingOf({ model: "qwen3-30b", apiBase: "http://192.168.1.20:1234/v1" })).toBe("free");
-    expect(billingOf({ model: "stealth/ox-alpha" })).toBe("free");
+    expect(billingOf({ model: "stealth/ox-alpha" })).toBe("paid");
+  });
+
+  test("the verified-free allowlist is empty, and a member of it would read free on both sides", () => {
+    // Emptiness is the resting state: `stealth/ox-alpha` came out when its free
+    // stealth window closed. A re-add is a deliberate edit here, not drift.
+    expect(FREE_SUFFIXLESS_ALLOWLIST.size).toBe(0);
+    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
+      expect(isAllowlistedFree(id)).toBe(true);
+      expect(billingOf({ model: id })).toBe("free");
+      expect(runBilling({ model: id, platform: "openrouter", harness: "wrathbench" })).toBe("free");
+    }
   });
 });
