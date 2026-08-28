@@ -30,13 +30,21 @@ export type Billing = "free" | "paid";
 
 /**
  * Shared-free-pool model ids that are genuinely free but carry no `-free`
- * suffix. Stealth/preview models are the case: OpenRouter lists
- * `stealth/ox-alpha` at 0/0 (verified 2026-08-22). Membership is an explicit
- * operator assertion; re-verify before adding one and drop it the day the
- * id starts billing. The fleet's roster policy (`infra/run-fleet.ts`) reads the
- * same set.
+ * suffix. Empty today, and that is the resting state: the only case the repo
+ * has ever had was a stealth model priced at 0/0 for its preview window
+ * (`stealth/ox-alpha`, verified 2026-08-22, removed 2026-08-28 when the window
+ * closed and OpenRouter revealed it as ZAI GLM-5.3-Flash at paid rates).
+ *
+ * Membership is an explicit operator assertion that an id billing nothing today
+ * may be scheduled on the free account pool and spend none of the paid
+ * concurrency budget — so it is worth an entry only while a real id is both
+ * genuinely 0/0 and wanted on that pool, and it must come out the day the id
+ * starts billing. Everything not in here is paid, which is the side that never
+ * quietly overspends. The fleet's roster policy (`infra/run-fleet.ts`) reads the
+ * same set, so an entry also decides whether a suffixless id may sit in the
+ * roster without declaring `billing: "paid"`.
  */
-export const FREE_SUFFIXLESS_ALLOWLIST: ReadonlySet<string> = new Set(["stealth/ox-alpha"]);
+export const FREE_SUFFIXLESS_ALLOWLIST: ReadonlySet<string> = new Set<string>();
 
 export function isAllowlistedFree(model: string): boolean {
   return FREE_SUFFIXLESS_ALLOWLIST.has(model.toLowerCase());

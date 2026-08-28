@@ -94,6 +94,7 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
+import { FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -126,7 +127,7 @@ function fleetJson(queue: unknown[], over: Record<string, unknown> = {}): unknow
   return {
     _notes: ["n"],
     accounts: { pool: ["RUNNER", "RUNNER2"] },
-    roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, son: { tier: "t1", model: "sonnet", driver: "claude-code" }, ox: { tier: "t1", model: "stealth/ox-alpha" } },
+    roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, son: { tier: "t1", model: "sonnet", driver: "claude-code" }, ox: { tier: "t1", model: "stealth/ox-alpha:free" } },
     queue,
     ...over,
   };
@@ -463,11 +464,18 @@ describe("roster policy", () => {
   test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
     // A paid-looking id with no free suffix on OpenRouter is a roster-policy error.
     expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2" }])).toThrow(/roster policy/);
-    // The verified-free stealth id is allowlisted and passes.
-    expect(isAllowlistedFree("stealth/ox-alpha")).toBe(true);
-    expect(() => validateEntries("roster:x", [{ model: "stealth/ox-alpha" }])).not.toThrow();
-    // Allowlist membership does not leak to other suffixless ids.
+    // A free suffix is the ordinary way through.
+    expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2:free" }])).not.toThrow();
+    // The allowlist is the other way through, and it is empty today (the one
+    // entry it ever had, a stealth id, started billing) — so no suffixless id
+    // gets in on it, and every member of it would.
+    expect(FREE_SUFFIXLESS_ALLOWLIST.size).toBe(0);
     expect(isAllowlistedFree("stealth/anything-else")).toBe(false);
+    expect(() => validateEntries("roster:x", [{ model: "stealth/anything-else" }])).toThrow(/roster policy/);
+    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
+      expect(isAllowlistedFree(id)).toBe(true);
+      expect(() => validateEntries("roster:x", [{ model: id }])).not.toThrow();
+    }
   });
 
   test("a suffixless model on a shared pool passes when it declares billing paid", () => {
@@ -1020,7 +1028,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     roster: {
       "nav-probe": { tier: "t1", model: "sonnet", driver: "claude-code" },
       glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-      ox: { model: "stealth/ox-alpha", tier: "t2" },
+      ox: { model: "stealth/ox-alpha:free", tier: "t2" },
       qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", apiKeyEnv: "K", tier: "t1" },
     },
     queue: [
@@ -1095,7 +1103,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(policyExclusion(config, "son")).toBeUndefined();
     // Account rules refuse the PIN and keep the file (item 66); shape errors
     // still take the file down, because there is no losing pin to name.
-    const pin = (over: Record<string, unknown>) => ({ accounts: { pool: ["RUNNER"] }, roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, ox: { tier: "t1", model: "stealth/ox-alpha" } }, ...over });
+    const pin = (over: Record<string, unknown>) => ({ accounts: { pool: ["RUNNER"] }, roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, ox: { tier: "t1", model: "stealth/ox-alpha:free" } }, ...over });
     const shared = parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }] }));
     expect(shared.jobs.map((j) => j.enabled)).toEqual([true, false]);
     expect(shared.refusals).toHaveLength(1);
@@ -1150,7 +1158,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
 
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    ox: { model: "stealth/ox-alpha", tier: "t2", idle: "none" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t2", idle: "none" },
     mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
   };
   const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
@@ -1210,7 +1218,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // A multi-ref job runs with the promoted subset; the gated ref is dropped.
     const pair = job({ ref: "glm", refs: ["glm", "ox"], episode: "e360", name: "pair" });
     expect(runnableRefs(pair, roster)).toEqual(["ox"]);
-    expect(jobSpawn(pair, roster, "RUNNER", "20260101").entries.map((e) => e.model)).toEqual(["stealth/ox-alpha"]);
+    expect(jobSpawn(pair, roster, "RUNNER", "20260101").entries.map((e) => e.model)).toEqual(["stealth/ox-alpha:free"]);
   });
 
   test("one stream per model: a ref already running under one job is not started under another", () => {
@@ -1668,7 +1676,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
   });
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t1", idle: "none" },
     mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
   };
   const job = (over: Partial<FleetJob> & { ref: string }): FleetJob => ({
@@ -1683,7 +1691,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
   const empty = { assign: [], waiting: [], skipped: [] };
 
   test("e90 is every model's on arrival; e360 is earned by a level-5 e90 run or forced by tiers", () => {
-    const states = modelStatesOf(rosterModels(roster), [run("stealth/ox-alpha", "e90", 1, { bestLevel: 5 })]);
+    const states = modelStatesOf(rosterModels(roster), [run("stealth/ox-alpha:free", "e90", 1, { bestLevel: 5 })]);
     const eligible = eligibleFrom(states);
     expect(eligible("glm", "e90")).toBe(true);
     expect(eligible("glm", "e360")).toBe(false);
@@ -1766,9 +1774,9 @@ describe("scheduling policy: defer ladder and retirement", () => {
   test("priority and the ladder flow through: stillborn attempts cool a model, a promoted model gets e360 after the fresh ones", () => {
     const runs = [
       // ox: promoted, e90 target met.
-      run("stealth/ox-alpha", "e90", 1, { bestLevel: 5 }),
-      run("stealth/ox-alpha", "e90", 2),
-      run("stealth/ox-alpha", "e90", 3),
+      run("stealth/ox-alpha:free", "e90", 1, { bestLevel: 5 }),
+      run("stealth/ox-alpha:free", "e90", 2),
+      run("stealth/ox-alpha:free", "e90", 3),
       // glm: one stillborn attempt a minute ago -> cooling rung 1.
       run("z-ai/glm-5.2:free", "e90", 1, { modelResponses: 0, terminationReason: "adapter-error", endedAt: NOW - 30_000 }),
     ];
@@ -2035,7 +2043,7 @@ describe("pause and resume across a fleet stop", () => {
   const H = 3_600_000;
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t1", idle: "none" },
     nav: { model: "sonnet", driver: "claude-code", tier: "t1", idle: "none" },
   };
   const paused = (over: Partial<RunFact> & { runId: string; model: string; account: string }): RunFact => ({
@@ -2387,7 +2395,7 @@ describe("pause and resume across a fleet stop", () => {
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
     expect(states.find((s) => s.name === "glm")?.paused).toBeUndefined();
     // A run with no pause record at all — the machine died under it — is the same case.
-    const dead = { ...run, runId: "fleet-ox-e90-stealth-ox-alpha-20260822", model: "stealth/ox-alpha", pause: null, endedAt: NOW - 4 * H };
+    const dead = { ...run, runId: "fleet-ox-e90-stealth-ox-alpha-20260822", model: "stealth/ox-alpha:free", pause: null, endedAt: NOW - 4 * H };
     const staleRuns = planStaleRuns({ runs: [dead], refs: Object.keys(roster), now: NOW });
     expect(staleRuns).toHaveLength(1);
     expect(staleRuns[0]).toMatchObject({ reason: "stale", counts: false, ref: "ox" });
@@ -2414,7 +2422,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(plan.listed[0]!.why).toContain("past the defer ladder");
     expect(resumeNotBefore({ reason: "operator-pause", at, count: 10, episodeElapsedMs: 0 })).toBeNull();
     // A scored run never reaches the ladder at all: it is a failed attempt on the first pause.
-    const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
+    const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
     expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
   });
 
@@ -2439,7 +2447,7 @@ describe("pause and resume across a fleet stop", () => {
     const ended = (i: number): RunFact =>
       paused({
         runId: `fleet-ox-e90-stealth-ox-alpha-2026082${i}`,
-        model: "stealth/ox-alpha",
+        model: "stealth/ox-alpha:free",
         account: "RUNNER3",
         pause: null,
         terminationReason: "attempt-failed",
@@ -2447,7 +2455,7 @@ describe("pause and resume across a fleet stop", () => {
       });
     const third = paused({
       runId: "fleet-ox-e90-stealth-ox-alpha-20260825",
-      model: "stealth/ox-alpha",
+      model: "stealth/ox-alpha:free",
       account: "RUNNER3",
       pause: { reason: "quota-exhausted", at: NOW - 60_000, count: 1, episodeElapsedMs: 12 * 60_000 },
     });
@@ -2483,36 +2491,36 @@ describe("pause and resume across a fleet stop", () => {
   });
 
   test("a paused run whose ref now names another model is ENDED by the supervisor, never resumed or listed", () => {
-    // `ox` was re-pointed from stealth/ox-alpha to stealth/ox-beta; the paused ox-alpha run has no job to come back under.
+    // `ox` was re-pointed from stealth/ox-alpha:free to stealth/ox-beta; the paused ox-alpha run has no job to come back under.
     const repointed = { ...roster, ox: { model: "stealth/ox-beta", tier: "t1", idle: "none" } satisfies FleetRosterEntry };
-    const run = paused({ runId: "fleet-ox-e90-ox-alpha-20260823-a2", model: "stealth/ox-alpha", account: "RUNNER3" });
+    const run = paused({ runId: "fleet-ox-e90-ox-alpha-20260823-a2", model: "stealth/ox-alpha:free", account: "RUNNER3" });
     const plan = planResumes({ runs: [run], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW });
     expect(plan.resume).toEqual([]);
     expect(plan.listed).toEqual([]);
     expect(plan.end).toEqual([
       {
         runId: run.runId,
-        model: "stealth/ox-alpha",
+        model: "stealth/ox-alpha:free",
         effort: null,
         ref: "ox",
         episode: "e90",
         reason: "manual",
-        detail: "ended by the supervisor: model stealth/ox-alpha no longer under ref ox",
+        detail: "ended by the supervisor: model stealth/ox-alpha:free no longer under ref ox",
         counts: false,
         account: "RUNNER3",
       },
     ]);
-    expect(formatEnded(plan.end, false)[1]).toContain("fleet-ox-e90-ox-alpha-20260823-a2 — ended by the supervisor: model stealth/ox-alpha no longer under ref ox");
+    expect(formatEnded(plan.end, false)[1]).toContain("fleet-ox-e90-ox-alpha-20260823-a2 — ended by the supervisor: model stealth/ox-alpha:free no longer under ref ox");
     expect(formatEnded(plan.end, false)[0]).toContain("lapsed runs the supervisor will end when it starts (1)");
     // An effort change is a different entry too.
-    const lowRun = paused({ runId: "fleet-ox-e90-ox-alpha-20260823", model: "stealth/ox-alpha", account: "RUNNER3" });
-    expect(planResumes({ runs: [lowRun], config: { ...config(), roster: { ...roster, ox: { model: "stealth/ox-alpha", effort: "low", tier: "t1", idle: "none" } satisfies FleetRosterEntry } }, running: new Map(), held, now: NOW }).end).toHaveLength(1);
+    const lowRun = paused({ runId: "fleet-ox-e90-ox-alpha-20260823", model: "stealth/ox-alpha:free", account: "RUNNER3" });
+    expect(planResumes({ runs: [lowRun], config: { ...config(), roster: { ...roster, ox: { model: "stealth/ox-alpha:free", effort: "low", tier: "t1", idle: "none" } satisfies FleetRosterEntry } }, running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // The same model under the same ref is still ended — as a failed attempt
     // now, with a different reason: the re-pointed rule is about which run has
     // no job to come back to, not about whether a scored run resumes.
     expect(planResumes({ runs: [run], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual", counts: false });
     // A run launched outside the fleet is not this rule's, and not the supervisor's to end.
-    const hand = paused({ runId: "hand-ox-1", model: "stealth/ox-alpha", account: "RUNNER3" });
+    const hand = paused({ runId: "hand-ox-1", model: "stealth/ox-alpha:free", account: "RUNNER3" });
     expect(planResumes({ runs: [hand], config: { ...config(), roster: repointed }, running: new Map(), held, now: NOW }).end).toEqual([]);
     // The ref is read off the id's prefix; the longest matching ref wins.
     expect(refOfRunId("fleet-ox-e90-ox-alpha-20260823", "e90", ["ox", "o"])).toBe("ox");
@@ -2524,11 +2532,11 @@ describe("pause and resume across a fleet stop", () => {
     const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-fleet-end-"));
     const runId = "fleet-ox-e90-ox-alpha-20260823";
     const t = new Trajectory(join(runsDir, runId));
-    t.writeMeta({ runId, harnessVersion: "harness-0.4-1-gabc", startedAt: NOW - H, config: loadRunConfig({ runId, driver: "openai", model: "stealth/ox-alpha", account: "RUNNER3" }) });
+    t.writeMeta({ runId, harnessVersion: "harness-0.4-1-gabc", startedAt: NOW - H, config: loadRunConfig({ runId, driver: "openai", model: "stealth/ox-alpha:free", account: "RUNNER3" }) });
     t.setPause(runId, "rate-limited", "429", 41 * 60_000);
     t.close();
-    const detail = "ended by the supervisor: model stealth/ox-alpha no longer under ref ox";
-    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
+    const detail = "ended by the supervisor: model stealth/ox-alpha:free no longer under ref ox";
+    expect(endRuns(runsDir, [{ runId, model: "stealth/ox-alpha:free", effort: null, ref: "ox", episode: "e90", reason: "manual", detail, counts: false, account: "RUNNER3" }])).toEqual([{ runId }]);
     const after = new Trajectory(join(runsDir, runId));
     const row = after.runRow(runId)!;
     after.close();
@@ -2570,7 +2578,7 @@ describe("account affinity and cross-account name hygiene", () => {
   const NOW = 1_800_000_000_000;
   const roster: Record<string, FleetRosterEntry> = {
     glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    ox: { model: "stealth/ox-alpha", tier: "t1", idle: "none" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t1", idle: "none" },
     mimo: { model: "mimo-v2.5-free", tier: "t1", idle: "none" },
   };
   const fact = (model: string, over: Partial<RunFact> = {}): RunFact => ({
@@ -2615,7 +2623,7 @@ describe("account affinity and cross-account name hygiene", () => {
       fact("z-ai/glm-5.2:free", { startedAt: NOW - 3_600_000, account: "RUNNER5", character: "Grimjaw" }),
       // No account recorded: no evidence, and it must not win on recency.
       fact("z-ai/glm-5.2:free", { startedAt: NOW - 60_000, character: "Ghost" }),
-      fact("stealth/ox-alpha", { startedAt: NOW - 600_000, account: "RUNNER2", character: "Zeliana" }),
+      fact("stealth/ox-alpha:free", { startedAt: NOW - 600_000, account: "RUNNER2", character: "Zeliana" }),
     ];
     const map = affinityFrom(runs, roster);
     expect(map.get("glm")).toEqual({ account: "RUNNER5", character: "Grimjaw" });
@@ -2663,7 +2671,7 @@ describe("account affinity and cross-account name hygiene", () => {
   test("a policy pick keeps its own account too", () => {
     const states = modelStatesOf(rosterModels(roster));
     const affinity = affinityOf(
-      affinityFrom([fact("stealth/ox-alpha", { account: "RUNNER3", character: "Zeliana" })], roster),
+      affinityFrom([fact("stealth/ox-alpha:free", { account: "RUNNER3", character: "Zeliana" })], roster),
     );
     const picks = planPolicy({
       states: states.filter((s) => s.name === "ox"),
@@ -2681,7 +2689,7 @@ describe("account affinity and cross-account name hygiene", () => {
     const affinity = affinityFrom(
       [
         fact("z-ai/glm-5.2:free", { account: "RUNNER5", character: "Grimjaw" }),
-        fact("stealth/ox-alpha", { account: "RUNNER6", character: "Zeliana" }),
+        fact("stealth/ox-alpha:free", { account: "RUNNER6", character: "Zeliana" }),
         fact("mimo-v2.5-free", { account: "RUNNER2", character: "Bramble" }),
       ],
       roster,

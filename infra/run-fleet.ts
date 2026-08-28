@@ -698,8 +698,9 @@ export function isSharedFreePool(apiBase: string | undefined): boolean {
   return /(^|\/\/|\.)(openrouter\.ai|opencode\.ai)(\/|:|$)/i.test(apiBase);
 }
 
-// `isAllowlistedFree` (suffixless ids verified free, e.g. `stealth/ox-alpha`)
-// lives in runner/src/model-cost.ts, next to the billing verdict it feeds.
+// `isAllowlistedFree` (suffixless ids the operator has verified free) lives in
+// runner/src/model-cost.ts, next to the billing verdict it feeds. The set is
+// empty today, so in practice a suffixless id needs `"billing": "paid"`.
 
 /**
  * Roster-policy and shape checks for roster entries. `where` names the
