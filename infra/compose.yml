@@ -381,6 +381,11 @@ services:
       # What was uploaded last, so a pass PUTs only what changed. On the bind
       # mount so a restart re-uploads nothing.
       WRATHBENCH_PUBLISH_STATE: /wrathbench/data/publish/state.json
+      # 5 minutes (operator, 2026-08-25). Not a freshness preference so much
+      # as a cost one: a pass writes a near-constant ~24 objects whatever the
+      # cadence, because `gen` is one hash over every aggregate and a single
+      # live run moving rewrites all of them. At 60s that measured ~1.2M R2
+      # class-A ops/month against a 1M free tier; at 300s it is ~240k.
       WRATHBENCH_PUBLISH_INTERVAL_MS: "300000"
       # S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET and S3_ENDPOINT are
       # Bun.S3Client's own variable names and are NOT set here: Bun autoloads

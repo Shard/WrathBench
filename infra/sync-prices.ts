@@ -41,9 +41,18 @@ const RUNS = "data/runs";
 const PIN: readonly string[] = [
   "deepseek/deepseek-v4-flash-0731",
   "deepseek/deepseek-v4-flash",
+  // Delisted 2026-08-28: the catalogue no longer carries the stealth id at
+  // all, so the pin no longer prices it and its 0/0/0/0 row in the output is
+  // held by hand. A re-sync drops that row (every 2026-08-20..26 run then
+  // reads as unpriced) until FOLLOW-UPS item 88 is decided.
   "stealth/ox-alpha",
   "openai/gpt-5.6-luna",
   "google/gemini-3.7-flash",
+  // Launch discount: $0.075/$0.25 per Mtok runs to roughly 2026-09-09, after
+  // which the catalogue quotes list ($0.15/$0.50). The table has no as-of-rate
+  // mechanism, so a re-sync past that date re-prices earlier runs at list —
+  // re-sync deliberately, and see FOLLOW-UPS item 88.
+  "z-ai/glm-5.3-flash",
 ];
 
 export interface SyncedPrice {

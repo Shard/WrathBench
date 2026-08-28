@@ -299,25 +299,29 @@ status.
     loop. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
-86. **Live runs re-publish their detail every pass, and nobody has priced it**
-    (2026-08-25, from the `/code-review` pass over PR #20). `renderSnapshot`
-    puts `playtimeMs` — which carries `Date.now()` — at the top level of the
-    run detail payload, and `addressable()` only clock-normalizes a field named
-    `now`. So a *live* run's payload hashes differently every pass: a new
-    `v1/run/<id>/<ver>/` pair is written (2 PUTs) and the pass-before-last is
-    pruned (2 DELETEs), about **4 class-A ops per minute per live run** —
-    roughly 0.5M/month at 3 concurrent runs and ~1M at 6, against R2's 1M/month
-    free class-A tier. Correctness is unaffected: the manifest is still flipped
-    last and never points at a torn generation. What is affected is the cost
-    argument in `infra/publish-dashboard.ts`'s header and
-    `docs/PUBLIC-DASHBOARD.md`'s "Cost" section, both of which reason about an
-    **idle** fleet and are silent on this. Next action is the operator's: decide
-    whether to normalize `playtimeMs` the way `now` is (cheapest — a live run's
-    detail then only changes when something real changes), lengthen the publish
-    interval for live runs, or accept the ops and write the arithmetic down so
-    the next reader is not surprised by an R2 bill. Do this before the publisher
-    loop runs unattended (see item 85's sibling: the loop cannot start from a
-    clean checkout until PR #20 merges).
+86. **The snapshot generation is all-or-nothing, and that is what publishing
+    costs** (2026-08-25; rewritten the same day after measurement — the
+    original filing blamed `playtimeMs`, and that turned out to be the smaller
+    half). `gen` is one hash over *every* aggregate, so a single live run
+    taking a turn changes `runs.json`, `results.json`, `ladder-*.json` and
+    `models.json`, and all ten aggregates are rewritten under a fresh prefix
+    plus a new `manifest.json`. Measured against a real fleet: a steady pass is
+    24 PUTs + ~4 DELETEs — ten aggregates, manifest, `live.json`, and a
+    detail/track pair per live run. Diffing two consecutive generations with
+    the envelope stripped shows the differences are **real data** (token
+    counts, `turns`, `levels`, achievements, cost `basis` flipping to
+    `list-price`), not clock artifacts, so normalizing `playtimeMs` the way
+    `now` is normalized would not have removed them. Mitigated for now by
+    cadence: 60s measured ~1.21M R2 class-A ops/month against a 1M free tier,
+    and the operator moved it to 300s (~242k) on 2026-08-25. What is still
+    worth doing, in order of value: (1) give each aggregate its own content
+    hash instead of one `gen` over all of them, so a pass rewrites only what
+    changed — three of seven aggregates compared were byte-identical, so this
+    is real; it needs the manifest to name a version per artifact rather than a
+    single generation, and the wave ordering must still flip the manifest last.
+    (2) Normalize `playtimeMs` in `addressable()`, which stops a live run's
+    detail churning on passes where nothing else moved. Neither is urgent while
+    the cadence holds the total at a quarter of the free tier.
 
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). Shipped so far: the module refuses
