@@ -57,9 +57,9 @@ export const SNAPSHOT_TTL_MS = 30_000;
  * Past this age the banner turns warning-coloured.
  *
  * Three clocks exist — the supervisor's heartbeat (30–60s), the publisher's
- * push (60s) and the edge TTL (≤60s) — and this one is about the publisher
- * only: five minutes is several missed pushes, which is a publisher that has
- * evidently stopped rather than a slow one.
+ * push (the publish cadence, 5 minutes since 2026-08-25) and the edge TTL
+ * (≤60s) — and this one is about the publisher only: past a whole cadence with
+ * nothing new the publisher has evidently stopped rather than run slow.
  */
 export const SNAPSHOT_STALE_MS = 300_000;
 
@@ -266,10 +266,11 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     if (hit !== undefined && at - hit.at < ttl) return hit.value as Promise<T>;
     /*
      * Sweep the expired on the way past. Every generation mints a fresh set of
-     * URLs — a new one a minute — and each entry holds a whole parsed payload,
-     * so a tab left open all day would otherwise accumulate every generation's
-     * bodies. Only entries past the window go; an in-flight promise is younger
-     * than that and a caller already holding one is unaffected either way.
+     * URLs — a new one every publish cadence — and each entry holds a whole
+     * parsed payload, so a tab left open all day would otherwise accumulate
+     * every generation's bodies. Only entries past the window go; an in-flight
+     * promise is younger than that and a caller already holding one is
+     * unaffected either way.
      */
     for (const [k, e] of cache) if (at - e.at >= ttl) cache.delete(k);
     const value = fetchJson<T>(url);
