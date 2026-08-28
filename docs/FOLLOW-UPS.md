@@ -121,6 +121,27 @@ status.
     roster change, not a campaign one, and worth making deliberately rather than
     noticing an empty fleet.
 
+88. **`prices.openrouter.json` still prices `stealth/ox-alpha` at 0/0**
+    (2026-08-28, with the allowlist fix). The stealth free window closed and the id
+    was revealed as ZAI GLM-5.3-Flash at paid rates, so it came out of
+    `FREE_SUFFIXLESS_ALLOWLIST` and the harness now schedules and bills it as paid.
+    The synced price table is the half that did not follow: the row still reads
+    0/0/0/0, so the viewer reports every run on that id — the whole 2026-08-20..26
+    corpus included — as costing nothing. Next action: a `sync-prices` run against
+    the revealed model, then decide whether the historical runs, which really were
+    free at the time, should keep the zero (the table has no as-of-run rates, so
+    this is a judgement call, not a sync). The id stays pinned in
+    `infra/sync-prices.ts` either way, so the corpus keeps resolving a price.
+    Sibling, and time-sensitive: `infra/fleet.json` at HEAD still carries the roster
+    entry `ox-alpha` (and its name in `campaigns.class-probe.models`), which the
+    roster policy now refuses — `parseFleet` throws on the committed file, so
+    `infra/fleet.test.ts`'s "the shipped fleet files" test is red from a bare clone
+    until the fleet track's own commit lands, and a supervisor restart on that
+    committed pair would reject the whole config. The fleet track's working copy has
+    already dropped both, so the fix is that commit landing, not an edit here; if the
+    id is ever put back it must declare `"billing": "paid"`. Nothing is at risk while
+    the supervisor runs: it holds `run-fleet.ts` in memory and only re-reads the JSON.
+
 
 ## Episodes and results
 
