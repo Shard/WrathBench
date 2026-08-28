@@ -118,6 +118,16 @@ status.
     (roster refresh, below), so the shipped file parses and this item is now only
     about the price table.
 
+    **Amended 2026-08-28**: the id has since left the OpenRouter catalogue entirely, so
+    a sync does not overwrite the zero with paid rates — it DROPS the row, and the
+    corpus then reads unpriced with a note pointing at a sync that cannot fix it. The
+    row is held by hand for now. The live options are: keep the hand-held zero, accept
+    the blank (actual cost still resolves from the provider's own per-response figures;
+    only the expected column goes), or give the synced table the `standardAfter`
+    as-of-rate treatment `CLAUDE_PRICES` already uses for Sonnet's introductory rate —
+    which `z-ai/glm-5.3-flash` will need anyway when its 50% launch discount ends around
+    2026-09-09.
+
 
 ## Episodes and results
 
