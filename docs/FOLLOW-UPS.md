@@ -103,24 +103,6 @@ status.
     and the dashboard's rung 4 and achievement-points derivations. Unblocked;
     the SDK derivation is in hand with another agent.
 
-87. **class-probe does not resume, so every OpenCode rate-limit pause is a failed
-    attempt** (2026-08-26, from the 37-relaunch finding). `campaigns.<name>.resume`
-    defaults to false, and class-probe does not set it — so a probe that pauses on a
-    provider rate limit ends `attempt-failed` and the cell is swept again. 43 of
-    class-probe's 60 launches ended that way, which is what made the missing attempt
-    cap visible in the first place. The cap (`maxAttemptsPerCell`, code shipped
-    2026-08-26 in c2eae8e; the `: 3` line is held OUT of fleet.json until the
-    supervisor restarts on that code, because the live supervisor's strict schema
-    rejected the whole file — re-add it in the same deploy window) bounds the damage but does not answer the question: a two-hour pause
-    on a probe is arguably worth continuing, since `probing` is unscored and there is
-    no comparability claim to protect. Operator's call whether class-probe — or
-    campaigns generally — gets `resume: true`; the lane default stays as it is either
-    way. Sibling, same decision: the three campaign models (`ox-alpha`,
-    `x-preview-f`, `muse-spark`) all carry `idle: "none"`, so when the sweep completes
-    or is abandoned they go idle rather than falling through to freeplay. That is a
-    roster change, not a campaign one, and worth making deliberately rather than
-    noticing an empty fleet.
-
 88. **`prices.openrouter.json` still prices `stealth/ox-alpha` at 0/0**
     (2026-08-28, with the allowlist fix). The stealth free window closed and the id
     was revealed as ZAI GLM-5.3-Flash at paid rates, so it came out of
@@ -132,15 +114,9 @@ status.
     free at the time, should keep the zero (the table has no as-of-run rates, so
     this is a judgement call, not a sync). The id stays pinned in
     `infra/sync-prices.ts` either way, so the corpus keeps resolving a price.
-    Sibling, and time-sensitive: `infra/fleet.json` at HEAD still carries the roster
-    entry `ox-alpha` (and its name in `campaigns.class-probe.models`), which the
-    roster policy now refuses — `parseFleet` throws on the committed file, so
-    `infra/fleet.test.ts`'s "the shipped fleet files" test is red from a bare clone
-    until the fleet track's own commit lands, and a supervisor restart on that
-    committed pair would reject the whole config. The fleet track's working copy has
-    already dropped both, so the fix is that commit landing, not an edit here; if the
-    id is ever put back it must declare `"billing": "paid"`. Nothing is at risk while
-    the supervisor runs: it holds `run-fleet.ts` in memory and only re-reads the JSON.
+    The `ox-alpha` roster entry the new policy refused was removed the same day
+    (roster refresh, below), so the shipped file parses and this item is now only
+    about the price table.
 
 
 ## Episodes and results
@@ -259,6 +235,18 @@ status.
     which is why this is an item and not a change: one line in `Trajectory`'s
     constructor plus the read-only opens, when an actual SQLITE_BUSY shows up in a
     log. Unblocks on first observation.
+
+89. **Seven dashboard mapview tests fail on master** (2026-08-28, found while
+    verifying the roster refresh). `cd dashboard && bun test` reports 366 pass, 7
+    fail — `the map's two URL states > the live control clears the replay and asks
+    for positions now`, three `createMapState` cases, and three `returning to live`
+    cases. They fail with the dashboard suite run ALONE, so this is not the
+    parallel-load flake it was first read as; `dashboard/` is untouched by the
+    2026-08-28 work (no commit and no working-tree change), so it predates it.
+    CLAUDE.md's standard is that `bun test` is green from a bare clone, so this is a
+    real defect and not an accepted red. Next action: bisect which commit turned them
+    red, then fix or delete the assertions deliberately.
+
 
 ## Module
 
