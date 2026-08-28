@@ -818,7 +818,7 @@ describe("the shipped fleet files", () => {
     // file arranges it — no queue job, no account pin, no billing flip. This is
     // the acceptance test for the whole refactor.
     {
-      const name = "gemini-flash";
+      const name = "deepseek-pro";
       const e = config.roster[name]!;
       expect(e.tier).toBe("t0");
       expect(e.idle).toBe("none");
@@ -959,7 +959,12 @@ describe("the shipped fleet files", () => {
     const classes = config.campaigns.find((c) => c.name === "class-probe")!;
     expect(classes.cells).toHaveLength(8);
     expect(classes.account).toBeUndefined();
-    expect(classes.models).toEqual(["ox-alpha", "x-preview-f", "muse-spark"]);
+    expect(classes.models).toEqual(["muse-spark", "nemotron-super"]);
+    // Item 87: a probe that pauses on a provider rate limit is resumed rather
+    // than swept again as a failed attempt, and a cell whose launches keep
+    // failing is abandoned instead of swept forever.
+    expect(classes.resume).toBe(true);
+    expect(classes.maxAttemptsPerCell).toBe(3);
     for (const c of classes.cells) {
       expect(c.race, `${c.id} names a race`).toBeDefined();
       expect(c.class, `${c.id} names a class`).toBeDefined();
