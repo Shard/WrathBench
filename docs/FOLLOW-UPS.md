@@ -246,18 +246,6 @@ status.
     constructor plus the read-only opens, when an actual SQLITE_BUSY shows up in a
     log. Unblocks on first observation.
 
-89. **Seven dashboard mapview tests fail on master** (2026-08-28, found while
-    verifying the roster refresh). `cd dashboard && bun test` reports 366 pass, 7
-    fail — `the map's two URL states > the live control clears the replay and asks
-    for positions now`, three `createMapState` cases, and three `returning to live`
-    cases. They fail with the dashboard suite run ALONE, so this is not the
-    parallel-load flake it was first read as; `dashboard/` is untouched by the
-    2026-08-28 work (no commit and no working-tree change), so it predates it.
-    CLAUDE.md's standard is that `bun test` is green from a bare clone, so this is a
-    real defect and not an accepted red. Next action: bisect which commit turned them
-    red, then fix or delete the assertions deliberately.
-
-
 90. **The freeplay pilot is queued behind class-probe, and one lane cannot do
     both** (2026-08-28, with the roster refresh). `nemotron-super` carries
     `idle: "unlimited"` and is also the only working model left in
