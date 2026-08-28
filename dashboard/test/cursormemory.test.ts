@@ -11,16 +11,14 @@
  * test drives the real reactive graph the page drives.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
 
-/* Same reason as `maproute.test.ts`: bun resolves the server build of solid-js,
-   whose signals never notify, and a graph test against it passes regardless. */
-const solid = await import("solid-js/dist/solid.js");
-mock.module("solid-js", () => solid);
-const { createEffect, createRoot, createSignal } = solid;
-const { clearReplayState } = await import("../src/lib/mapstate");
-const { createCursorMemory } = await import("../src/lib/cursormemory");
+/* The reactive build of solid-js stands behind this name for every dashboard
+   test; `test/preload-solid.ts` installs it and says why. */
+import { createEffect, createRoot, createSignal } from "solid-js";
+import { createCursorMemory } from "../src/lib/cursormemory";
+import { clearReplayState } from "../src/lib/mapstate";
 
 function point(ts: number): TrackPoint {
   return { ts, map: 0, x: 1, y: 1, level: 1, xp: 0, money: null, questsCompleted: null, turn: ts };
