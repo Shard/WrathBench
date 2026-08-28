@@ -13,11 +13,13 @@ the binding constraint set.
 The runs stay on the operator's hardware (the [removed] k8s lab). The public
 site is **push-based**: the lab pushes derived data outward on a timer, and no
 public request ever reaches it — so a traffic spike, however large, is
-Cloudflare's problem and not the lab's. Freshness up to about a minute stale
-is acceptable (the operator's call, and conveniently the harness's own floor:
-state samples land every 60s and the fleet heartbeat every 30–60s, so a 60s
-push loses almost nothing the private dashboard actually has). Budget:
-Cloudflare free tier, with at most a small paid step.
+Cloudflare's problem and not the lab's. Freshness of a few minutes is
+acceptable (the operator's call; the cadence was 60s at first and is 5 minutes
+since 2026-08-25, for the write-cost reason in "Cost" below. The harness's own
+floor is finer than either: state samples land every 60s and the fleet
+heartbeat every 30–60s, so even a 60s push loses almost nothing the private
+dashboard actually has). Budget: Cloudflare free tier, with at most a small
+paid step.
 
 Push-out has a second benefit worth stating: FOLLOW-UPS item 19 (shared secret
 on the module port, token-to-character binding, snippet filesystem sandboxing)
@@ -117,18 +119,22 @@ CORS-free posture (the bucket carries the project's first and only CORS
 policy, scoped to the app hostname).
 
 The public site includes the live fleet and map (operator's choice,
-2026-08-25): pips and fleet state at 60s cadence, the map as the labelled
-grid that `WRATHBENCH_VIEWER_PUBLIC=1` already draws — tiles never leave the
-lab. Two clock fixes keep the staleness story honest, and both are
+2026-08-25): pips and fleet state at the push cadence (5 minutes), the map as
+the labelled grid that `WRATHBENCH_VIEWER_PUBLIC=1` already draws — tiles never
+leave the lab. Two clock fixes keep the staleness story honest, and both are
 improvements for the private dashboard too:
 
 - Fleet-heartbeat staleness must be computed against the response's own
-  `now`, not the browser clock — otherwise a healthy 60s-pushed snapshot
-  trips the 180s fleet-dead threshold in `dashboard/src/lib/fleet.ts`.
+  `now`, not the browser clock — otherwise a healthy snapshot pushed a
+  cadence ago trips the 180s fleet-dead threshold in
+  `dashboard/src/lib/fleet.ts`. This is what makes a slower cadence safe: the
+  age is frozen at render time rather than growing while a reader waits. The
+  map's pip dimming reads the same way, through `positionAgeMs` in
+  `dashboard/src/lib/mapview.ts`.
 - A shell banner in snapshot mode says "data as of Ns ago" from the
   artifact's `generatedAt`, turning warning-coloured when the publisher has
-  evidently stopped pushing. Three clocks exist (heartbeat 30–60s, push 60s,
-  edge TTL ≤60s) and the UI must not conflate them.
+  evidently stopped pushing. Three clocks exist (heartbeat 30–60s, push at
+  the publish cadence, edge TTL ≤60s) and the UI must not conflate them.
 
 Wire-type impact is two optional fields (`generatedAt`, `attribution`) on the
 response envelopes in `runner/viewer/api-types.ts`, following that file's
@@ -237,9 +243,10 @@ to anyone who asks would be that deploy in all but name.
   opposite of reads-at-the-edge; the worst shape for a spike.
 - **KV as primary** — propagation is "up to 60 seconds or more", consuming
   the entire freshness budget before the push cadence spends a cent of it;
-  the free tier's 1,000 writes/day is under a 1-minute cadence's 1,440; and
-  reads bill per key unless fronted by the cache — at which point R2 does the
-  same job with explicit TTLs.
+  the free tier's 1,000 writes/day sat under the original 1-minute cadence's
+  1,440 (at today's 5-minute cadence that particular clause no longer bites,
+  but the others do); and reads bill per key unless fronted by the cache — at
+  which point R2 does the same job with explicit TTLs.
 - **Pages** — no advantage over Workers Static Assets for this shape, and
   the limits work (100k files, etc.) lands on Workers first.
 - **SQLite served over HTTP range requests (sqlite-wasm-http on R2), Turso
@@ -277,6 +284,31 @@ One SKU clarification, because it changes what the budget buys: the $20/month
 includes none of Workers, KV, D1 or R2. It is not the SKU this design needs.
 The plan ladder that matters here is Workers Free (sufficient) → Workers Paid
 ($5, optional insurance).
+
+### The write side, measured
+
+The table above prices **reads** — the spike this design exists to survive. The
+**writes** went unpriced until the loop actually ran, and they are the side that
+has a live-fleet-shaped cost.
+
+Measured 2026-08-25 against a real fleet: a steady pass is **24 PUTs + ~4
+DELETEs**, made of the ten snapshot aggregates, `manifest.json`, `live.json`,
+and a detail/track pair per live run (six, at the time). The count is
+near-constant whatever the cadence, because `gen` is a single hash over every
+aggregate: one live run taking a turn changes `runs.json`, `results.json`,
+`ladder-*.json` and `models.json`, and that rewrites all ten under a fresh
+prefix. Those are real data changes — token counts, turns, levels, cost basis —
+not clock artifacts, so normalizing timestamps does not remove them.
+
+| cadence | class-A ops/month | against the 1M free tier |
+|---|---|---|
+| 60s | ~1.21M | over, about $0.94/month |
+| 300s (current) | ~242k | ~24% |
+
+An **idle** fleet costs one `live.json` PUT per pass at any cadence (~9k/month
+at 300s): the entire write cost is live runs. That is why the cadence, not a
+timestamp fix, was the lever pulled — see item 86 in `docs/FOLLOW-UPS.md` for
+what is still worth doing.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature
