@@ -1,0 +1,6 @@
+# `bun test` from the root runs every workspace's suite in one process, so the
+# dashboard's Solid redirect has to be installed here too — bun reads its config
+# from the working directory, and dashboard/bunfig.toml is not consulted from
+# here. See dashboard/test/preload-solid.ts for what it does and why.
+[test]
+preload = ["./dashboard/test/preload-solid.ts"]

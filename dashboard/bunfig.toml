@@ -1,0 +1,6 @@
+# The dashboard's tests need Solid's reactive build behind the `solid-js` name;
+# see test/preload-solid.ts. Mirrored by the repository root's bunfig.toml,
+# because bun reads this file from the working directory and `bun test` is run
+# both from here and from the root.
+[test]
+preload = ["./test/preload-solid.ts"]

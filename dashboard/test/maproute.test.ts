@@ -16,16 +16,14 @@
  * written; what these tests pin is our half of the contract.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
 
-/* Same reason as `mapview.test.ts`: bun resolves the server build of solid-js,
-   whose signals never notify, and a graph test against it passes regardless. */
-const solid = await import("solid-js/dist/solid.js");
-mock.module("solid-js", () => solid);
-const { createEffect, createMemo, createRoot, createSignal, getOwner, runWithOwner } = solid;
-const { clearReplayState, createLeftReplay, createMapState } = await import("../src/lib/mapstate");
-const { runParam } = await import("../src/lib/replay");
+/* The reactive build of solid-js stands behind this name for every dashboard
+   test; `test/preload-solid.ts` installs it and says why. */
+import { createEffect, createMemo, createRoot, createSignal, getOwner, runWithOwner } from "solid-js";
+import { clearReplayState, createLeftReplay, createMapState } from "../src/lib/mapstate";
+import { runParam } from "../src/lib/replay";
 
 const TRACK: TrackResponse = {
   runId: "run-1",
