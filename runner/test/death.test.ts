@@ -187,11 +187,12 @@ describe("sandbox child: the death window latched from the events", () => {
 });
 
 /** A sandbox whose only job is to hand the loop a queue of drained signals. */
-function fakeSandbox(queue: DeathSignal[][]): SandboxHost {
+function fakeSandbox(queue: DeathSignal[][], snapshot: Record<string, unknown> = {}): SandboxHost {
   const fake = {
     evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
     recentEvents: () => Promise.resolve([]),
-    stateSnapshot: () => Promise.resolve({ self: { guid: "7" }, lastSeq: 1, eventCount: 1 }),
+    stateSnapshot: () =>
+      Promise.resolve({ self: { guid: "7" }, lastSeq: 1, eventCount: 1, ...snapshot }),
     deathSignals: () => Promise.resolve(queue.shift() ?? []),
     totalRestarts: 0,
     consecutiveRestarts: 0,
@@ -201,19 +202,35 @@ function fakeSandbox(queue: DeathSignal[][]): SandboxHost {
   return fake as unknown as SandboxHost;
 }
 
-function builder(queue: DeathSignal[][]) {
+/**
+ * A builder over a fake sandbox and a clock the test moves itself: the sample
+ * is gated on `stateIntervalMs`, and a run's samples are 60s apart, so the
+ * tests step the clock exactly that far rather than racing the millisecond.
+ */
+function builder(queue: DeathSignal[][], snapshot: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-death-loop-"));
-  const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 1 }), runId: "run-test", token: "run-test" };
+  let clock = 1_000_000;
+  const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
   const trajectory = new Trajectory(dir);
   trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
   const ctx = new ContextBuilder({
     config,
-    sandbox: fakeSandbox(queue),
+    sandbox: fakeSandbox(queue, snapshot),
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
     trajectory,
     watchdogs: new Watchdogs(config.watchdogs),
+    now: () => clock,
   });
-  return { dir, ctx, trajectory };
+  return {
+    dir,
+    ctx,
+    trajectory,
+    /** One state sample, a fleet interval after the last. */
+    sample: async (): Promise<void> => {
+      clock += 60_000;
+      await ctx.sampleState();
+    },
+  };
 }
 
 function deathRecords(dir: string): Record<string, unknown>[] {
@@ -224,7 +241,7 @@ function deathRecords(dir: string): Record<string, unknown>[] {
 
 describe("the loop writes what the child latched", () => {
   test("a whole death that opened and closed between two samples is still recorded", async () => {
-    const { dir, ctx, trajectory } = builder([
+    const { dir, sample, trajectory } = builder([
       [],
       [
         {
@@ -240,8 +257,8 @@ describe("the loop writes what the child latched", () => {
         { kind: "resurrect", ts: 4490, seq: 20 },
       ],
     ]);
-    await ctx.sampleState();
-    await ctx.sampleState();
+    await sample();
+    await sample();
     const ms = deathRecords(dir);
     expect(ms.map((r) => r["kind"])).toEqual(["death", "release", "resurrect"]);
     // The death event's own timestamp, not the sample's — the record's `ts` is
@@ -261,8 +278,8 @@ describe("the loop writes what the child latched", () => {
       { kind: "release", ts: t + 5, seq: t + 5 },
       { kind: "resurrect", ts: t + 9, seq: t + 9 },
     ];
-    const { dir, ctx, trajectory } = builder([[...cycle(100), ...cycle(200)]]);
-    await ctx.sampleState();
+    const { dir, sample, trajectory } = builder([[...cycle(100), ...cycle(200)]]);
+    await sample();
     const ms = deathRecords(dir);
     expect(ms.map((r) => r["kind"])).toEqual([
       "death",
@@ -277,14 +294,63 @@ describe("the loop writes what the child latched", () => {
   });
 
   test("the signal's own zone falls back to the sample's when the cache had none", async () => {
-    const { dir, ctx, trajectory } = builder([[{ kind: "death", ts: 7, seq: 7 }]]);
-    await ctx.sampleState();
+    const { dir, sample, trajectory } = builder([[{ kind: "death", ts: 7, seq: 7 }]]);
+    await sample();
     const death = deathRecords(dir)[0]!;
     // The fake snapshot names no zone either, so nothing is invented.
     expect(death["zone"]).toBeUndefined();
     expect(death["position"]).toBeUndefined();
     expect(death["observedTs"]).toBe(7);
     trajectory.close();
+  });
+
+  test("the window read stays silent while the signals own the window", async () => {
+    // The sample a mid-window drain actually lands on: health 0, a corpse the
+    // cache is holding, and `playerFlags` a stale 0 — the ordinary reading,
+    // since an update block need not carry the flag. The window read would call
+    // that stale 0 a resurrect the moment the signals reported the release, and
+    // would re-read the corpse as a second death; both belong to the signals.
+    const midWindow = {
+      self: {
+        guid: "7",
+        fields: { health: { value: 0, seq: 9, ts: 4444 }, playerFlags: { value: 0, seq: 9, ts: 4444 } },
+        corpse: { value: { map: 0, x: -6572, y: 405, z: 387, source: "death_spot" }, seq: 9, ts: 4444 },
+      },
+    };
+    const open = builder(
+      [
+        [],
+        [
+          { kind: "death", ts: 4444, seq: 9 },
+          { kind: "release", ts: 4460, seq: 12, graveyard: { map: 0, x: -6164, y: 336, z: 399 } },
+        ],
+      ],
+      midWindow,
+    );
+    // The first sample seeds the latches from a living reading, so the window
+    // read is armed rather than seeding silently on the dead one.
+    await open.sample();
+    await open.sample();
+    expect(deathRecords(open.dir).map((r) => r["kind"])).toEqual(["death", "release"]);
+    open.trajectory.close();
+
+    // And a whole cycle drained at one sample: the snapshot was taken before
+    // the drain and still shows the corpse, which is not a second death.
+    const closed = builder(
+      [
+        [],
+        [
+          { kind: "death", ts: 4444, seq: 9 },
+          { kind: "release", ts: 4460, seq: 12 },
+          { kind: "resurrect", ts: 4490, seq: 20 },
+        ],
+      ],
+      midWindow,
+    );
+    await closed.sample();
+    await closed.sample();
+    expect(deathRecords(closed.dir).map((r) => r["kind"])).toEqual(["death", "release", "resurrect"]);
+    closed.trajectory.close();
   });
 
   test("a sandbox with no drain at all leaves the window read as the producer", async () => {
@@ -301,7 +367,7 @@ describe("the loop writes what the child latched", () => {
       stop: () => Promise.resolve(),
     } as unknown as SandboxHost;
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-death-nodrain-"));
-    const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 1 }), runId: "run-test", token: "run-test" };
+    const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });
     const ctx = new ContextBuilder({

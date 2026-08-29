@@ -139,6 +139,22 @@ export class ContextBuilder {
   private lastDead: boolean | undefined;
   private lastGhost: boolean | undefined;
   /**
+   * A death window the child's signals opened and have not closed.
+   *
+   * While it stands the sampled window read updates its latches from the
+   * snapshot but writes nothing: the two producers disagree about the same
+   * sample. The signal path sets `lastGhost` from the release it saw, while the
+   * snapshot's `playerFlags` is routinely a stale `0` for the whole window (an
+   * update block need not carry it), so the window read would call that a
+   * resurrect the moment the spirit was released. And the snapshot is taken
+   * before the drain, so a cycle that drained whole leaves a snapshot still
+   * showing a corpse the record has already accounted for. The window that the
+   * signals opened is theirs to close.
+   */
+  private signalWindow = false;
+  /** `sandbox.totalRestarts` as the last sample read it; a change abandons `signalWindow`. */
+  private lastRestarts = 0;
+  /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
    * Set by the driver rather than counted here: the fixed loop and the
@@ -242,16 +258,24 @@ export class ContextBuilder {
     turn: { turn?: number },
     zoneId: number | undefined,
     areaId: number | undefined,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const sandbox = this.o.sandbox as SandboxHost & { deathSignals?: () => Promise<DeathSignal[]> };
-    if (typeof sandbox.deathSignals !== "function") return;
+    // A child that died mid-window took its latches with it and will never
+    // send the resurrect that closes this one, so the fallback gets the window
+    // back rather than being muted for the rest of the run.
+    const restarts = sandbox.totalRestarts ?? 0;
+    if (restarts !== this.lastRestarts) {
+      this.lastRestarts = restarts;
+      this.signalWindow = false;
+    }
+    if (typeof sandbox.deathSignals !== "function") return false;
     let signals: DeathSignal[];
     try {
       signals = await sandbox.deathSignals();
     } catch {
       // A child that cannot answer leaves the window read as the only producer,
       // which is what it is there for.
-      return;
+      return false;
     }
     for (const s of signals) {
       if (s.kind === "death") {
@@ -267,6 +291,7 @@ export class ContextBuilder {
           ...turn,
         });
         this.lastDead = true;
+        this.signalWindow = true;
         if (s.released === true) this.lastGhost = true;
       } else if (s.kind === "release") {
         trajectory.recordMilestone({
@@ -276,12 +301,15 @@ export class ContextBuilder {
         });
         this.lastDead = true;
         this.lastGhost = true;
+        this.signalWindow = true;
       } else {
         trajectory.recordMilestone({ kind: "resurrect", ...turn });
         this.lastDead = false;
         this.lastGhost = false;
+        this.signalWindow = false;
       }
     }
+    return signals.length > 0;
   }
 
   private async doSampleState(): Promise<SnapshotLike | null> {
@@ -414,9 +442,16 @@ export class ContextBuilder {
     // Applied in order and updating the same latches the window read uses, so
     // two complete cycles inside one gap are two deaths, and so the window read
     // that follows sees the state these signals left and repeats nothing.
-    await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
-    // The same window, still read from the sample, as the fallback it now is:
-    // Death (FOLLOW-UPS 35), read as a *window* rather than as a health edge.
+    const drained = await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
+    // The signals own this sample's window if one is still open, and they own
+    // it for the rest of *this* sample even when they closed it: `snap` was
+    // taken before the drain, so a window that opened and closed whole still
+    // reads as a corpse here, and that corpse is already on the record.
+    const signalsOwnWindow = this.signalWindow || drained;
+    // The same window, still read from the sample, as the fallback it now is,
+    // and silent about anything the signals are already accounting for.
+    //
+    // Read as a *window* rather than as a health edge.
     // A sample lands every `stateIntervalMs`, so an edge detector would see
     // almost no deaths at all; but the cache latches the corpse, the graveyard
     // and the reclaim delay from the death until the resurrect clears them, so
@@ -438,7 +473,7 @@ export class ContextBuilder {
       this.lastDead = dead;
       this.lastGhost = ghost;
     } else {
-      if (dead && !this.lastDead) {
+      if (dead && !this.lastDead && !signalsOwnWindow) {
         const c = corpse?.value as
           | { map?: number; x?: number; y?: number; z?: number; source?: unknown }
           | undefined;
@@ -464,7 +499,7 @@ export class ContextBuilder {
           ...turn,
         });
       }
-      if (ghost === true && this.lastGhost === false) {
+      if (ghost === true && this.lastGhost === false && !signalsOwnWindow) {
         const g = snap.self?.graveyard?.value as
           | { map?: number; x?: number; y?: number; z?: number }
           | undefined;
@@ -479,7 +514,7 @@ export class ContextBuilder {
             : {}),
           ...turn,
         });
-      } else if (ghost === false && this.lastGhost === true) {
+      } else if (ghost === false && this.lastGhost === true && !signalsOwnWindow) {
         trajectory.recordMilestone({ kind: "resurrect", ...turn });
       }
       this.lastDead = dead;
