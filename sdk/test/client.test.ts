@@ -281,8 +281,12 @@ describe("client: movement", () => {
     // shape earns: two numbers are a half-written point, not a guid.
     // @ts-expect-error — deliberately wrong
     await expect(client.moveTo(-1205, 981)).rejects.toThrow(/needs a point object \{ x, y, z \}, got number/);
-    // A string is a guid-shaped argument now, so this is rejected as a guid.
-    await expect(client.moveTo("here")).rejects.toThrow(/neither a point nor a decimal guid string/);
+    // A non-numeric string is a name now: nothing in view answers to it, and
+    // moveTo answers an unresolvable target with a value, not a throw.
+    expect(await client.moveTo("here")).toMatchObject({ ok: false, status: "unknown_target" });
+    // A malformed guid on a unit-shaped object is still the loud reject.
+    // @ts-expect-error — deliberately wrong
+    await expect(client.moveTo({ guid: "12abc34" })).rejects.toThrow(/neither a point nor a decimal guid string/);
 
     client.close();
     await stub.stop();
@@ -1194,7 +1198,7 @@ describe("client: killTarget", () => {
   test("a guid string that does not parse is rejected before any opcode", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    await expect(client.killTarget("Kobold Worker")).rejects.toThrow(/killTarget\(guid\).*decimal guid string/s);
+    await expect(client.killTarget("Kobold Worker")).rejects.toThrow(/neither a decimal guid nor the name of anything in view/);
     expect(stub.actions).toHaveLength(0);
     client.close();
     await stub.stop();
@@ -2706,7 +2710,7 @@ describe("client: talents and the raw escape hatch (FOLLOW-UPS 39)", () => {
     stub.push(talentsInfo(60, [{ talentId: 42, rank: 0 }]));
     const result = await pending;
     expect(result.ok).toBe(true);
-    expect(result.talents.talents).toEqual([{ talentId: 42, rank: 0 }]);
+    if (result.ok) expect(result.talents.talents).toEqual([{ talentId: 42, rank: 0 }]);
 
     const refused = client.learnTalent(43, 1, { timeout: 2000 });
     await untilAction(stub, "learn_talent", at + 1);
@@ -3270,8 +3274,9 @@ describe("client: queryTalentTree and resetTalents (item 96)", () => {
     const noOption = client.resetTalents(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "gossip_hello", 1);
     stub.push(menu(530, false));
-    const err = await noOption.catch((e: unknown) => e);
-    expect((err as Error).message).toContain("no option");
+    const noOptionResult = await noOption;
+    expect(noOptionResult).toMatchObject({ ok: false, status: "no_option" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "resetTalents", status: "no_option" });
     client.close();
     await stub.stop();
   });
@@ -3300,7 +3305,8 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
   test("petAttack / petFollow / petCast build the CMSG_PET_ACTION button the pet frame sends; no pet throws", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
-    expect(() => client.petFollow()).toThrow(/no pet/);
+    expect(await client.petFollow()).toMatchObject({ ok: false, status: "no_pet" });
+    expect(client.drainActionHints()[0]?.hint).toContain("summon one first");
     stub.push(petBar(500));
     await client.events.waitForOpcode("SMSG_PET_SPELLS", { timeout: 2000 });
     await client.petAttack(CREATURE_GUID);
@@ -3312,7 +3318,7 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     await client.petCast("fire", CREATURE_GUID);
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(3110 | (0x81 << 24)) + guidHex(CREATURE_GUID) });
-    expect(() => client.petCast("Growl")).toThrow(/does not know/);
+    expect(await client.petCast("Growl")).toMatchObject({ ok: false, status: "unknown_spell" });
     await client.petDismiss();
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(3 | (0x07 << 24)) + guidHex("0") });
@@ -3356,6 +3362,7 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     expect(() => client.mailList()).toThrow(/no mailbox frame/);
+    expect(await client.deleteMail(1)).toMatchObject({ ok: false, status: "no_mailbox" });
     const open = client.openMailbox(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "interact");
     stub.push(frame(520, "SMSG_SHOW_MAILBOX", { guid: CREATURE_GUID }));
@@ -3400,7 +3407,7 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     stub.push(frame(530, "SMSG_SHOW_BANK", { guid: CREATURE_GUID }));
     expect((await open).guid).toBe(CREATURE_GUID);
 
-    expect(() => client.bankDeposit(255, 30)).toThrow(/nothing is carried/);
+    expect(await client.bankDeposit(255, 30)).toMatchObject({ ok: false, status: "no_item" });
     const deposit = client.bankDeposit(255, BACKPACK_SLOT, { timeout: 2000 });
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOBANK_ITEM", payload: "ff" + BACKPACK_SLOT.toString(16) });
@@ -3417,6 +3424,194 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOSTORE_BANK_ITEM", payload: "ff27" });
     stub.push(frame(532, "SMSG_INVENTORY_CHANGE_FAILURE", { result: 4 }));
     expect(await withdraw).toMatchObject({ ok: false, status: "refused", result: 4 });
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: the softened inputs and the harness hints they refuse with (2026-08-29)", () => {
+  const TS = 1_700_000_000_000;
+  const PET_GUID = "17365880163140632999";
+  const frame = (seq: number, opcode: string, data: unknown): string => JSON.stringify({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
+  const guidHex = (g: string) => BigInt(g).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+  const u32Hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0").match(/../g)!.reverse().join("");
+  const carried = () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, inventorySlot, itemCreate, itemQuery]);
+
+  test("a helper target may be the name of something in view; two matches refuse and list them", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // Exact name, case-insensitive and whitespace-tolerant.
+    await client.interact("  thistlebore ");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "interact", guid: CREATURE_GUID });
+
+    // A second unit with a name the query matches makes it two readings.
+    stub.push(
+      frame(601, "SMSG_UPDATE_OBJECT", {
+        blocks: 1,
+        objects: [
+          {
+            update: "create", guid: "17365880163140632777", objectType: "unit", moveFlags: 0, runSpeed: 7.5,
+            pos: { x: -1201.0, y: 981.0, z: 42.0, o: 1.5 },
+            fields: { entry: 777, health: 10, maxHealth: 10, level: 2, faction: 7, unitFlags: 0, displayId: 1, powerType: 0, power1: 1, maxPower1: 1, race: 0, class: 0, gender: 0 },
+          },
+        ],
+      }),
+    );
+    stub.push(frame(602, "SMSG_CREATURE_QUERY_RESPONSE", { entry: 777, found: true, name: "Thistlebore Whelp" }));
+    await client.events.waitFor((e) => e.seq === 602, { timeout: 2000 });
+    await expect(client.killTarget(" thistle ")).rejects.toThrow(/matches 2 things in view/);
+    await expect(client.killTarget("nothing here")).rejects.toThrow(/neither a decimal guid nor the name of anything in view/);
+    client.close();
+    await stub.stop();
+  });
+
+  test("moveTo takes a name and answers an unresolvable one as a value with a hint", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const walk = client.moveTo("Thistlebore", { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify(moveResult("arrived", 1, 700)));
+    expect((await walk).ok).toBe(true);
+    const miss = await client.moveTo("Ragnaros");
+    expect(miss).toMatchObject({ ok: false, status: "unknown_target" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "moveTo", status: "unknown_target" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("an item-taking call takes the item's name; a name that names nothing is a no_item value with a hint", async () => {
+    const stub = startStub({ onConnect: () => carried() });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const equip = client.equipItem("gritstone", undefined, { timeout: 500 });
+    const at = await untilAction(stub, "equip_item");
+    expect(stub.actions[at]).toMatchObject({ action: "equip_item", bag: 255, slot: BACKPACK_SLOT });
+    await equip;
+    client.drainActionHints();
+
+    await client.destroyItem("Gritstone Charm");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "destroy_item", bag: 255, slot: BACKPACK_SLOT });
+
+    const missing = await client.equipItem("Thunderfury");
+    expect(missing).toMatchObject({ ok: false, status: "no_item" });
+    if (!missing.ok && missing.status === "no_item") expect(missing.hint).toContain("Gritstone Charm");
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "equipItem", status: "no_item" });
+    expect(() => client.useItem("Thunderfury")).toThrow(/nothing in state\.bag\(\) is named/);
+    // A numeric bag still needs its slot, and says so instead of guessing one.
+    expect(await client.equipItem(255)).toMatchObject({ ok: false, status: "no_item" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("pet refusals are values with hints: no_pet, unknown_reaction, ambiguous_spell, passive_spell", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    expect(await client.petStay()).toMatchObject({ ok: false, status: "no_pet" });
+    expect(await client.petReact("berserk")).toMatchObject({ ok: false, status: "unknown_reaction" });
+    const early = client.drainActionHints();
+    expect(early.map((h) => `${h.action}:${h.status}`).sort()).toEqual(["petReact:unknown_reaction", "petStay:no_pet"]);
+
+    stub.push(
+      frame(610, "SMSG_PET_SPELLS", {
+        guid: PET_GUID, removed: false, family: 0, durationMs: 0, reactState: 1, commandState: 1, flags: 0, actionBar: [],
+        spells: [
+          { spellId: 3110, active: 0xc1, autocast: true, rank: 1, name: "Firebolt" },
+          { spellId: 3111, active: 0xc1, autocast: false, rank: 2, name: "Firebolt Rank 2" },
+          { spellId: 3112, active: 0x01, autocast: false, rank: 1, name: "Demon Armor" },
+        ],
+        cooldowns: [],
+      }),
+    );
+    await client.events.waitForOpcode("SMSG_PET_SPELLS", { timeout: 2000 });
+    // Case-insensitive react words reach the wire.
+    expect(await client.petReact("  Aggressive ")).toMatchObject({ ok: true, status: "sent" });
+    expect(stub.actions.at(-1)).toMatchObject({ opcode: "CMSG_PET_ACTION", payload: guidHex(PET_GUID) + u32Hex(2 | (0x06 << 24)) + guidHex("0") });
+    const ambiguous = await client.petCast("fire");
+    expect(ambiguous).toMatchObject({ ok: false, status: "ambiguous_spell" });
+    if (!ambiguous.ok) expect(ambiguous.hint).toContain("3111");
+    expect(await client.petCast("Demon Armor")).toMatchObject({ ok: false, status: "passive_spell" });
+    // The exact name still resolves past the substring tie.
+    expect(await client.petCast("Firebolt")).toMatchObject({ ok: true, status: "sent" });
+    expect(client.drainActionHints().map((h) => h.status).sort()).toEqual(["ambiguous_spell", "passive_spell"]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a bank move with no frame open is refused before anything is sent, and hints are labelled per call", async () => {
+    const stub = startStub({ onConnect: () => carried() });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const before = stub.actions.length;
+    const closed = await client.bankDeposit("Gritstone Charm");
+    expect(closed).toMatchObject({ ok: false, status: "no_bank" });
+    if (!closed.ok) expect(closed.hint).toContain("openBank");
+    expect(stub.actions.length).toBe(before);
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "bankDeposit", status: "no_bank" });
+
+    const open = client.openBank(CREATURE_GUID, { timeout: 2000 });
+    let at = await untilAction(stub, "raw");
+    stub.push(frame(620, "SMSG_SHOW_BANK", { guid: CREATURE_GUID }));
+    await open;
+    const deposit = client.bankDeposit("gritstone", undefined, { timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOBANK_ITEM", payload: "ff" + BACKPACK_SLOT.toString(16) });
+    stub.push(frame(621, "SMSG_INVENTORY_CHANGE_FAILURE", { result: 4 }));
+    expect(await deposit).toMatchObject({ ok: false, status: "refused" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "bankDeposit", status: "refused" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("mail refuses without a frame as a value, attaches items by name, and labels its hints per call", async () => {
+    const stub = startStub({ onConnect: () => carried() });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    expect(await client.sendMail("Quilby", "s", "b")).toMatchObject({ ok: false, status: "no_mailbox" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "sendMail", status: "no_mailbox" });
+
+    const open = client.openMailbox(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(frame(630, "SMSG_SHOW_MAILBOX", { guid: CREATURE_GUID }));
+    await open;
+    const send = client.sendMail("  Quilby ", "s", "b", { items: ["gritstone"], timeout: 2000 });
+    const at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_SEND_MAIL" });
+    // The named attachment resolved to the carried item's guid, indexed 0.
+    expect((stub.actions[at] as unknown as { payload: string }).payload).toContain("00" + guidHex(ITEM_GUID));
+    stub.push(frame(631, "SMSG_SEND_MAIL_RESULT", { mailId: 0, action: 0, result: 3 }));
+    expect(await send).toMatchObject({ ok: false, status: "refused" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "sendMail", status: "refused" });
+    expect(await client.sendMail("Quilby", "s", "b", { items: ["Thunderfury"] })).toMatchObject({ ok: false, status: "no_item" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("learnTalent takes a talent by name once the tree is read, and defaults rank to the next point", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // Without the tree a name cannot be resolved, and the refusal says so.
+    expect(await client.learnTalent("Improved Heroic Strike")).toMatchObject({ ok: false, status: "no_tree" });
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "learnTalent", status: "no_tree" });
+
+    const query = client.queryTalentTree({ timeout: 2000 });
+    await untilAction(stub, "talent_tree");
+    stub.push(
+      frame(640, "WB_TALENT_TREE", {
+        class: 1, unspentPoints: 2,
+        tabs: [{ tabId: 161, name: "Arms", page: 0, talents: [{ talentId: 124, name: "Improved Heroic Strike", row: 0, col: 0, maxRank: 3, ranks: [12282, 12663, 12664] }] }],
+      }),
+    );
+    await query;
+    stub.push(frame(641, "SMSG_TALENTS_INFO", { pet: false, unspentPoints: 2, specCount: 1, activeSpec: 0, specs: [{ talents: [{ talentId: 124, rank: 0 }] }] }));
+    await client.events.waitForOpcode("SMSG_TALENTS_INFO", { timeout: 2000 });
+
+    const learn = client.learnTalent("heroic strike", undefined, { timeout: 2000 });
+    const at = await untilAction(stub, "learn_talent");
+    // One point is already in, so the next one is wire rank 1.
+    expect(stub.actions[at]).toMatchObject({ action: "learn_talent", talentId: 124, rank: 1 });
+    stub.push(frame(642, "SMSG_TALENTS_INFO", { pet: false, unspentPoints: 1, specCount: 1, activeSpec: 0, specs: [{ talents: [{ talentId: 124, rank: 1 }] }] }));
+    expect(await learn).toMatchObject({ ok: true, status: "learned", talentId: 124, rank: 1 });
+    expect(await client.learnTalent("Bladestorm")).toMatchObject({ ok: false, status: "unknown_talent" });
     client.close();
     await stub.stop();
   });
