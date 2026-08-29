@@ -115,6 +115,16 @@ legibility work inside the SDK and runner.
       `gossip` and `taxiWindows` already are, cleared on the close the server
       actually sends.
 
+    Status: both halves are written, typechecked and green **in the worktree and
+    uncommitted** — no pathspec separates them from the module agent's in-flight
+    SDK work for 95/96/97/99, so they land unchanged on top of its SDK commit.
+    Nobody should start 101 from scratch; the write-up, including what each half
+    does and why, is in `docs/worklogs/2026-08-29.md`. One open question for the
+    operator: nothing the server sends closes a vendor or trainer frame, so those
+    two folds never expire and read as "last observed" with `seq`/`ts` (the loot
+    window does close, on its release). Making them expire needs a module tap for
+    the close, not a rule invented in the cache.
+
 ## Navigation
 
 38. **Navigation plan — rungs 2–4** (2026-08-22; supersedes item 18). Rung 4 — a
