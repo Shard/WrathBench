@@ -12,16 +12,21 @@
  *
  * Fixture (FOLLOW-UPS 45 pattern): a persistent Human Paladin (default
  * `Smoketalent` on MODULE_ACCOUNT, never deleted) placed by
- * `infra/fixtures/apply.ts --scenario talents-northshire` — level 10, 5g,
- * in front of Brother Sammuel (entry 925), the abbey's paladin trainer.
+ * `infra/fixtures/apply.ts --scenario talents-stormwind` — level 10, 5g,
+ * in front of Katherine the Pure (entry 5492) in Stormwind's cathedral. Not
+ * Brother Sammuel: the abbey trainer's gossip menu (4663) is "Please teach
+ * me." alone, while the city paladin trainers' menus (2304, 4469-4471)
+ * carry the unlearn option (`gossip_menu_option` OptionType 16), and
+ * `HandleTalentWipeConfirmOpcode` needs level 10 and a trainer of the
+ * character's own class — so a respec is only testable here.
  *
  * Arc:
- *   1. login; Sammuel in view with the trainer role;
+ *   1. login; Katherine in view with the trainer role;
  *   2. queryTalentTree -> three tabs (Holy, Protection, Retribution), every
  *      talent named, unspentPoints as SMSG_TALENTS_INFO says;
  *   3. if a point is unspent: learnTalent on a row-0 talent -> learned;
  *      state.talentTree() shows pointsSpent 1 there;
- *   4. resetTalents(Sammuel) -> reset: talents empty, the point back, the
+ *   4. resetTalents(Katherine) -> reset: talents empty, the point back, the
  *      quoted cost gone from state.money;
  *   5. logout. apply.ts resets level and money next run; the reset leaves
  *      the talents clean for it.
@@ -37,8 +42,8 @@ const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.M
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-talent-tree-${crypto.randomUUID()}`;
 const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smoketalent";
-const SCENARIO = "talents-northshire";
-const SAMMUEL = 925;
+const SCENARIO = "talents-stormwind";
+const KATHERINE = 5492;
 const PALADIN_TABS = ["Holy", "Protection", "Retribution"];
 
 const started = Date.now();
@@ -78,9 +83,9 @@ try {
   // 1. Login, the trainer in view, the talents packet from login.
   await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
   log(`in world as ${CHARACTER}, guid ${client.state.self.guid}, level ${client.state.self.level?.value}`);
-  await client.waitForNearby((o) => o.entry?.value === SAMMUEL && o.fields.get("npcFlags") !== undefined, { timeout: 15_000 });
-  const sammuel = client.state.units({ entry: SAMMUEL })[0] ?? fail("Brother Sammuel not in units() — did apply.ts place the character?");
-  if (!sammuel.roles.includes("trainer")) fail(`Sammuel's roles ${JSON.stringify(sammuel.roles)} lack trainer`);
+  await client.waitForNearby((o) => o.entry?.value === KATHERINE && o.fields.get("npcFlags") !== undefined, { timeout: 15_000 });
+  const trainer = client.state.units({ entry: KATHERINE })[0] ?? fail("Katherine the Pure not in units() — did apply.ts place the character?");
+  if (!trainer.roles.includes("trainer")) fail(`Katherine's roles ${JSON.stringify(trainer.roles)} lack trainer`);
   const talents0 = client.state.talents() ?? fail("no SMSG_TALENTS_INFO from login");
   log(`talents at login: unspent ${talents0.unspentPoints}, spent rows ${JSON.stringify(talents0.talents)}`);
 
@@ -115,7 +120,7 @@ try {
   // 4. Respec at the trainer.
   const spent = client.state.talents()?.talents.length ?? 0;
   const moneyBefore = client.state.money?.value ?? fail("money unobserved");
-  const reset = await client.resetTalents(sammuel, { timeout: 10_000 });
+  const reset = await client.resetTalents(trainer, { timeout: 10_000 });
   log(`resetTalents: ${JSON.stringify(reset)}`);
   if (spent === 0) {
     if (reset.ok) fail("a reset with nothing spent should have been refused");

@@ -295,6 +295,7 @@ type CharacterRow = {
   position_z: number;
   orientation: number;
   online: number;
+  logout_time: number;
 };
 
 const SNAPSHOT_COLUMNS = [
@@ -309,6 +310,7 @@ const SNAPSHOT_COLUMNS = [
   "position_z",
   "orientation",
   "online",
+  "logout_time",
 ] as const;
 
 /** `guid, level, ...` optionally qualified; the join needs it, `online` is ambiguous otherwise. */
@@ -346,19 +348,31 @@ async function snapshot(sql: SQL, guid: number): Promise<CharacterRow> {
  * silently did nothing.
  */
 async function waitUntilOffline(sql: SQL, row: CharacterRow, waitMs: number): Promise<void> {
-  if (row.online === 0) return;
+  // A character that has never been saved out (`logout_time` 0) is one the
+  // caller just created and logged straight out of. The login's `online = 1`
+  // is an async execute and the logout save an async transaction, so at the
+  // instant the module acknowledged the logout the row can still read
+  // `online = 0` with the save behind it — and a fixture written now is
+  // overwritten by that save (seen live: the mail smoke's character back at
+  // the start position). The save stamps `logout_time`, so wait for it.
+  const settled = (r: CharacterRow) => r.online === 0 && r.logout_time !== 0;
+  if (settled(row)) return;
   const deadline = Date.now() + waitMs;
-  log(`character is online; waiting up to ${Math.round(waitMs / 1000)}s for the logout save to land`);
+  log(
+    row.online !== 0
+      ? `character is online; waiting up to ${Math.round(waitMs / 1000)}s for the logout save to land`
+      : `character has never been saved out; waiting up to ${Math.round(waitMs / 1000)}s for its first logout save`,
+  );
   for (;;) {
     await Bun.sleep(500);
     const current = await snapshot(sql, row.guid);
-    if (current.online === 0) {
+    if (settled(current)) {
       log("character is offline");
       return;
     }
     if (Date.now() > deadline) {
       throw new Error(
-        `character ${row.guid} is still online after ${Math.round(waitMs / 1000)}s. ` +
+        `character ${row.guid} is still online (or unsaved) after ${Math.round(waitMs / 1000)}s. ` +
           `End the session first (DELETE /session) and retry; fixturing a live character would be ` +
           `overwritten by that session's logout save.`,
       );

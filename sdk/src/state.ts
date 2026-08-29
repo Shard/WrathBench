@@ -754,7 +754,8 @@ export interface MailEntry {
 }
 
 /**
- * The mailbox (item 100): the frame last opened (`SMSG_SHOW_MAILBOX`), the
+ * The mailbox (item 100): the frame last opened (`openMailbox`, or an
+ * `SMSG_SHOW_MAILBOX` when the core does send one), the
  * inbox as last listed (`SMSG_MAIL_LIST_RESULT`), whether new mail has
  * arrived since (`SMSG_RECEIVED_MAIL`), and the last verdict
  * (`SMSG_SEND_MAIL_RESULT`; `mailResultText` names it). `undefined` until any
@@ -2449,6 +2450,45 @@ export class StateCache {
     this.groupState = { ...prev, ...patch, seq, ts };
   }
 
+  /**
+   * Record the mailbox frame as open on `guid`. Called by `openMailbox` when
+   * the first `SMSG_MAIL_LIST_RESULT` answers a `CMSG_GET_MAIL_LIST` on it: the
+   * core sends no `SMSG_SHOW_MAILBOX` for a game-object mailbox, so the list
+   * answering is what proves the box is in reach.
+   */
+  mailboxOpened(guid: GuidKey, seq: number, ts: number): void {
+    this.mailPatch({ guid }, seq, ts);
+  }
+
+  /**
+   * Drop a pending roll the packet names. The core writes the roll guid on
+   * `SMSG_LOOT_START_ROLL` and `SMSG_LOOT_ALL_PASSED` but sends
+   * `ObjectGuid::Empty` ("0") as the source on every `SMSG_LOOT_ROLL` vote
+   * echo and on `SMSG_LOOT_ROLL_WON` (Group::CountRollVote / CountTheRoll —
+   * the field is unused by the client), so those resolve by slot and item.
+   */
+  private closeRoll(d: { rollGuid: string; slot: number; itemId: number }): void {
+    if (d.rollGuid !== "0") {
+      this.rolls.delete(d.rollGuid);
+      return;
+    }
+    for (const [guid, roll] of this.rolls) {
+      if (roll.slot === d.slot && roll.itemId === d.itemId) this.rolls.delete(guid);
+    }
+  }
+
+  /**
+   * Fold the pet's react or command state off our own accepted order. The
+   * core answers `CMSG_PET_ACTION` react and follow/stay buttons with no
+   * packet (a client updates its bar locally — seen live 2026-08-30: no
+   * `SMSG_PET_SPELLS` follows a react change), so the ack is the only signal
+   * the bar has changed. The next `SMSG_PET_SPELLS` replaces it wholesale.
+   */
+  petCommanded(patch: { reactState?: number; commandState?: number }, seq: number, ts: number): void {
+    if (this.petBar === undefined) return;
+    this.petBar = { ...this.petBar, ...patch, seq, ts };
+  }
+
   private mailPatch(patch: Partial<MailboxState>, seq: number, ts: number): void {
     const prev: MailboxState = this.mailState ?? { guid: undefined, mails: [], total: 0, newMail: false, lastResult: undefined, seq, ts };
     this.mailState = { ...prev, ...patch, seq, ts };
@@ -2862,13 +2902,12 @@ export class StateCache {
       case "SMSG_LOOT_ROLL": {
         // Our own counted vote closes the frame on a client; other voters' do not.
         const d = event.data as LootRollData;
-        if (this.self.guid !== undefined && d.playerGuid === this.self.guid) this.rolls.delete(d.rollGuid);
+        if (this.self.guid !== undefined && d.playerGuid === this.self.guid) this.closeRoll(d);
         return;
       }
       case "SMSG_LOOT_ROLL_WON":
       case "SMSG_LOOT_ALL_PASSED": {
-        const d = event.data as LootRollWonData | LootAllPassedData;
-        this.rolls.delete(d.rollGuid);
+        this.closeRoll(event.data as LootRollWonData | LootAllPassedData);
         return;
       }
       case "SMSG_PAGE_TEXT_QUERY_RESPONSE": {

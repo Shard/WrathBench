@@ -96,6 +96,22 @@ describe("state: group loot rolls (item 102)", () => {
       { seed: SEED },
     );
     expect(mine.pendingRolls(TS + 13)).toHaveLength(0);
+    // The core sends ObjectGuid::Empty as the source on vote echoes and on the verdict: slot + item close the frame.
+    const mineEmpty = StateCache.replay(
+      toEvents([...base, frame(12, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: 17922, roll: 41, rollType: 1, autoPass: false })]),
+      { seed: SEED },
+    );
+    expect(mineEmpty.pendingRolls(TS + 13)).toHaveLength(0);
+    const wonEmpty = StateCache.replay(
+      toEvents([...base, frame(12, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 2, itemId: 17922, winnerGuid: OTHER_PLAYER, roll: 77, rollType: 2 })]),
+      { seed: SEED },
+    );
+    expect(wonEmpty.pendingRolls(TS + 13)).toHaveLength(0);
+    const otherSlotEmpty = StateCache.replay(
+      toEvents([...base, frame(12, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 5, itemId: 17922, winnerGuid: OTHER_PLAYER, roll: 77, rollType: 2 })]),
+      { seed: SEED },
+    );
+    expect(otherSlotEmpty.pendingRolls(TS + 13)).toHaveLength(1);
     const won = StateCache.replay(
       toEvents([...base, frame(12, "SMSG_LOOT_ROLL_WON", { rollGuid: ROLL_GUID, slot: 2, itemId: 17922, winnerGuid: OTHER_PLAYER, roll: 77, rollType: 2 })]),
       { seed: SEED },
@@ -159,7 +175,8 @@ describe("client: lootRoll", () => {
     expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_LOOT_ROLL", payload: guidHex(ROLL_GUID) + u32Hex(2) + "02" });
     // Another voter's roll is not our echo.
     stub.push(JSON.stringify(frame(502, "SMSG_LOOT_ROLL", { rollGuid: ROLL_GUID, slot: 2, playerGuid: OTHER_PLAYER, itemId: 17922, roll: 77, rollType: 2, autoPass: false })));
-    stub.push(JSON.stringify(frame(503, "SMSG_LOOT_ROLL", { rollGuid: ROLL_GUID, slot: 2, playerGuid: SELF_GUID, itemId: 17922, roll: 41, rollType: 2, autoPass: false })));
+    // Our echo, with the empty source guid the core actually sends (Group::CountRollVote).
+    stub.push(JSON.stringify(frame(503, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: 17922, roll: 41, rollType: 2, autoPass: false })));
     expect(await rolled).toMatchObject({ ok: true, status: "rolled", rollGuid: ROLL_GUID, choice: "greed", roll: 41, item: { itemId: 17922, name: "Lionfur Armor" }, resolved: { input: "lionfur", name: "Lionfur Armor" } });
     expect(client.state.pendingRolls()).toHaveLength(0);
     client.close();

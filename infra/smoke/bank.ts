@@ -16,8 +16,8 @@
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/bank.ts
  */
 
-import { connect } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { connect, type WrathClient } from "../../sdk/src/index";
+import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
@@ -56,11 +56,12 @@ const fixtureCtx: FixtureContext = {
     }
   },
 };
-await ensureFixtureCharacter(fixtureCtx);
-await applyScenario(fixtureCtx, SCENARIO);
-
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+let session: WrathClient | undefined;
 try {
+  await ensureFixtureCharacter(fixtureCtx);
+  await applyScenario(fixtureCtx, SCENARIO);
+  const client = await connect({ baseUrl: BASE, token: TOKEN });
+  session = client;
   await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
   log(`in world as ${CHARACTER}`);
   await client.waitForNearby((o) => o.entry?.value === BAILEY && o.fields.get("npcFlags") !== undefined, { timeout: 15_000 });
@@ -97,7 +98,7 @@ try {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);
   process.exitCode = 1;
 } finally {
-  await client.logout().catch(() => {});
-  await client.deleteCharacter(CHARACTER, { account: ACCOUNT }).catch((e) => log(`delete failed: ${String(e)}`));
-  client.close();
+  await session?.logout().catch(() => {});
+  session?.close();
+  await deleteFixtureCharacters(fixtureCtx, [CHARACTER]);
 }

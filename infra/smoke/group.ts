@@ -60,7 +60,10 @@ try {
   if (!groupB.inGroup) fail("B not inGroup after accept");
   if (groupB.leaderName !== NAME_A || groupB.leader) fail(`B sees leader ${groupB.leaderName} (leader=${groupB.leader}), expected ${NAME_A}`);
   if (!groupB.members.some((m) => m.name === NAME_A && m.online)) fail(`B's member list lacks ${NAME_A} online: ${JSON.stringify(groupB.members)}`);
-  await a.events.waitFor((e) => e.opcode === "SMSG_GROUP_LIST" && (e.data as any).left === false, { timeout: 10_000 });
+  // A gets a SMSG_GROUP_LIST on the invite already (the core creates the group
+  // with A alone, before B accepts); the one that proves the accept lists B.
+  const listedBy = Date.now() + 10_000;
+  while (!a.state.group()?.members.some((m) => m.name === NAME_B) && Date.now() < listedBy) await Bun.sleep(100);
   const groupA = a.state.group() ?? fail("A has no group state");
   if (!groupA.inGroup || !groupA.leader) fail(`A: inGroup=${groupA.inGroup} leader=${groupA.leader}`);
   if (!groupA.members.some((m) => m.name === NAME_B)) fail(`A's member list lacks ${NAME_B}: ${JSON.stringify(groupA.members)}`);

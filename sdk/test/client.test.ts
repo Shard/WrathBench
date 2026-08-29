@@ -3395,6 +3395,15 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     await client.petFollow();
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(1 | (0x07 << 24)) + guidHex("0") });
+    // No packet answers a react or follow/stay button (seen live); the ack folds the bar.
+    expect(client.state.pet()?.command).toBe("follow");
+    await client.petStay();
+    at = await untilAction(stub, "raw", at + 1);
+    expect(client.state.pet()?.command).toBe("stay");
+    await client.petReact("aggressive");
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(2 | (0x06 << 24)) + guidHex("0") });
+    expect(client.state.pet()?.reaction).toBe("aggressive");
     await client.petCast("fire", CREATURE_GUID);
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(3110 | (0x81 << 24)) + guidHex(CREATURE_GUID) });
@@ -3445,11 +3454,14 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
     expect(await client.deleteMail(1)).toMatchObject({ ok: false, status: "no_mailbox" });
     const open = client.openMailbox(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "interact");
-    stub.push(frame(520, "SMSG_SHOW_MAILBOX", { guid: CREATURE_GUID }));
+    let at = await untilAction(stub, "raw");
+    // No SMSG_SHOW_MAILBOX: the core sends none for a game-object mailbox; the first list answering is the frame.
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_GET_MAIL_LIST", payload: guidHex(CREATURE_GUID) });
+    stub.push(frame(520, "SMSG_MAIL_LIST_RESULT", { total: 0, count: 0, mails: [] }));
     expect((await open).guid).toBe(CREATURE_GUID);
 
     const send = client.sendMail("Quilby", "hi", "text", { money: 100, timeout: 2000 });
-    let at = await untilAction(stub, "raw");
+    at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({
       opcode: "CMSG_SEND_MAIL",
       payload: guidHex(CREATURE_GUID) + "5175696c627900" + "686900" + "7465787400" + u32Hex(41) + u32Hex(0) + "00" + u32Hex(100) + u32Hex(0) + "0000000000000000" + "00",
@@ -3466,12 +3478,16 @@ describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
         mails: [{ mailId: 7, type: 0, senderGuid: "9", cod: 0, stationery: 41, money: 100, flags: 0, read: false, daysLeft: 29, templateId: 0, subject: "hi", body: "text", items: [] }],
       }),
     );
-    expect((await list).mails[0]).toMatchObject({ mailId: 7, money: 100 });
+    // The sender is a guid the module has never named: the list asks CMSG_NAME_QUERY and joins the answer.
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_NAME_QUERY", payload: guidHex("9") });
+    stub.push(frame(523, "SMSG_NAME_QUERY_RESPONSE", { guid: 9, found: true, name: "Ordrick" }));
+    expect((await list).mails[0]).toMatchObject({ mailId: 7, money: 100, senderName: "Ordrick" });
 
     const take = client.takeMailMoney(7, { timeout: 2000 });
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_MAIL_TAKE_MONEY", payload: guidHex(CREATURE_GUID) + u32Hex(7) });
-    stub.push(frame(523, "SMSG_SEND_MAIL_RESULT", { mailId: 7, action: 1, result: 6 }));
+    stub.push(frame(524, "SMSG_SEND_MAIL_RESULT", { mailId: 7, action: 1, result: 6 }));
     expect(await take).toMatchObject({ ok: false, status: "refused", result: 6 });
     client.close();
     await stub.stop();
@@ -3655,10 +3671,11 @@ describe("client: the softened inputs and the harness hints they refuse with (20
 
     const open = client.openMailbox(CREATURE_GUID, { timeout: 2000 });
     await untilAction(stub, "interact");
-    stub.push(frame(630, "SMSG_SHOW_MAILBOX", { guid: CREATURE_GUID }));
+    const opened = await untilAction(stub, "raw");
+    stub.push(frame(630, "SMSG_MAIL_LIST_RESULT", { total: 0, count: 0, mails: [] }));
     await open;
     const send = client.sendMail("  Quilby ", "s", "b", { items: ["gritstone"], timeout: 2000 });
-    const at = await untilAction(stub, "raw");
+    const at = await untilAction(stub, "raw", opened + 1);
     expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_SEND_MAIL" });
     // The named attachment resolved to the carried item's guid, indexed 0.
     expect((stub.actions[at] as unknown as { payload: string }).payload).toContain("00" + guidHex(ITEM_GUID));
