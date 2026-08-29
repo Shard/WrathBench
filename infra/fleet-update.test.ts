@@ -232,6 +232,18 @@ describe("fleet-update.sh", () => {
     expect(parks.pauseFile).toBeNull();
   });
 
+  test("graceful: the supervisor's flag is believed in both directions", () => {
+    // `resumesInPlace: false` on a freeplay row outranks the fallback that
+    // would park it — the fallback is for supervisors that predate the field,
+    // not a second opinion.
+    const r = run({
+      jobs: [{ name: "q-freeplay", episode: "freeplay", source: "queue", draining: true, resumesInPlace: false }],
+      args: ["graceful"],
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("waiting on:      q-freeplay");
+  });
+
   test("graceful: one parked stream and one scored run still waits", () => {
     const r = run({
       jobs: [
