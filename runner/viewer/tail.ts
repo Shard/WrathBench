@@ -15,7 +15,9 @@
 import type {
   AchievementFacts,
   AreaFacts,
+  DeathFacts,
   EntrySummary,
+  LevelUpFacts,
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
@@ -36,7 +38,17 @@ const MAX_ARRAY = 8;
  * The summary, usage and totals shapes live in `api-types.ts` — the type-only
  * contract the dashboard imports too — and are re-exported here unchanged.
  */
-export type { AchievementFacts, AreaFacts, EntrySummary, ReportedUsage, TaxiFacts, TokenTotals, TpsFacts } from "./api-types";
+export type {
+  AchievementFacts,
+  AreaFacts,
+  DeathFacts,
+  EntrySummary,
+  LevelUpFacts,
+  ReportedUsage,
+  TaxiFacts,
+  TokenTotals,
+  TpsFacts,
+} from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
@@ -1242,6 +1254,146 @@ export function taxiFactsFrom(
   return { flights: marks.filter((m) => m === "taxi").length };
 }
 
+/* ---------------------------------------------- level and death milestones */
+
+/**
+ * One `level` milestone, projected to what a derivation needs. `from` is null
+ * on the first observation of a process, which is the run's starting level (or,
+ * on a resumed run, the level it resumed at) and **not** a level-up.
+ */
+export interface LevelUpMark {
+  to: number;
+  from: number | null;
+  xp: number | null;
+  ts: number;
+  turn: number | null;
+}
+
+/** Where a death happened, as the death milestone recorded it. */
+export interface DeathSite {
+  /** The death's own timestamp when the cache carried one, else the record's. */
+  ts: number;
+  turn: number | null;
+  position: { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" } | null;
+  /** The zone/area reading at first observation; the death site only when `released` is false. */
+  zone: number | null;
+  area: number | null;
+  released: boolean | null;
+}
+
+/** A death-family milestone: the death itself, the release, or the resurrect. */
+export type DeathMark =
+  | ({ kind: "death" } & DeathSite)
+  | { kind: "release"; ts: number; turn: number | null }
+  | { kind: "resurrect"; ts: number; turn: number | null };
+
+/** Read one trajectory record as a `LevelUpMark`, or null when it is not one. */
+export function levelUpMarkOf(rec: Record<string, unknown>): LevelUpMark | null {
+  if (rec["kind"] !== "level") return null;
+  const to = rec["to"];
+  if (typeof to !== "number") return null;
+  const from = rec["from"];
+  const xp = rec["xp"];
+  const turn = rec["turn"];
+  const ts = rec["ts"];
+  return {
+    to,
+    from: typeof from === "number" ? from : null,
+    xp: typeof xp === "number" ? xp : null,
+    ts: typeof ts === "number" ? ts : 0,
+    turn: typeof turn === "number" ? turn : null,
+  };
+}
+
+/** Read one trajectory record as a `DeathMark`, or null when it is not one. */
+export function deathMarkOf(rec: Record<string, unknown>): DeathMark | null {
+  const kind = rec["kind"];
+  if (kind !== "death" && kind !== "release" && kind !== "resurrect") return null;
+  const recTs = rec["ts"];
+  const turn = typeof rec["turn"] === "number" ? (rec["turn"] as number) : null;
+  const ts = typeof recTs === "number" ? recTs : 0;
+  if (kind !== "death") return { kind, ts, turn };
+  // The cache's own stamp for the death evidence wins over the record's: the
+  // producer samples on a timer, so the record was written whenever the sample
+  // landed, while `observedTs` is when the server said the character died.
+  const observed = rec["observedTs"];
+  const p = rec["position"] as
+    | { map?: unknown; x?: unknown; y?: unknown; z?: unknown; source?: unknown }
+    | undefined;
+  const source: "corpse_query" | "death_spot" | null =
+    p?.source === "corpse_query" ? "corpse_query" : p?.source === "death_spot" ? "death_spot" : null;
+  const position =
+    p !== undefined &&
+    source !== null &&
+    typeof p.map === "number" &&
+    typeof p.x === "number" &&
+    typeof p.y === "number" &&
+    typeof p.z === "number"
+      ? { map: p.map, x: p.x, y: p.y, z: p.z, source }
+      : null;
+  const zone = (rec["zone"] as { id?: unknown } | undefined)?.id;
+  const area = (rec["area"] as { id?: unknown } | undefined)?.id;
+  const released = rec["released"];
+  return {
+    kind: "death",
+    ts: typeof observed === "number" ? observed : ts,
+    turn,
+    position,
+    zone: typeof zone === "number" ? zone : null,
+    area: typeof area === "number" ? area : null,
+    released: typeof released === "boolean" ? released : null,
+  };
+}
+
+/**
+ * Derive a run's level timeline, or null when it wrote no `level` milestone —
+ * a run from before the producer shipped (2026-08-29), which reads as "not
+ * recorded" and never as "never levelled".
+ *
+ * `levelUps` counts only the marks that carry a `from` **and** climb: the first
+ * mark of every process carries none (it is the level the process opened on),
+ * so a resumed run's second baseline is not a gain.
+ */
+export function levelUpFactsFrom(marks: readonly LevelUpMark[]): LevelUpFacts | null {
+  if (marks.length === 0) return null;
+  let levelUps = 0;
+  let max = marks[0]!.to;
+  for (const m of marks) {
+    if (m.from !== null && m.to > m.from) levelUps++;
+    if (m.to > max) max = m.to;
+  }
+  return {
+    levelUps,
+    startLevel: marks[0]!.to,
+    maxLevel: max,
+    first: marks[0]!,
+    last: marks[marks.length - 1]!,
+    marks: [...marks],
+  };
+}
+
+/**
+ * Derive a run's death facts.
+ *
+ * `sawLevelUpMark` is the liveness witness, the job `achievements_at_login` does
+ * for flights: every run under this producer writes a `level` mark on its first
+ * sample, so a run with a level mark and no death mark genuinely never died and
+ * reads `deaths: 0`, while a run from before the producer has neither and reads
+ * null — "not recorded". Without it the two would be the same row.
+ */
+export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: boolean): DeathFacts | null {
+  if (marks.length === 0 && !sawLevelUpMark) return null;
+  const sites = marks.filter((m): m is { kind: "death" } & DeathSite => m.kind === "death");
+  return {
+    deaths: sites.length,
+    releases: marks.filter((m) => m.kind === "release").length,
+    resurrects: marks.filter((m) => m.kind === "resurrect").length,
+    first: sites[0] ?? null,
+    last: sites[sites.length - 1] ?? null,
+    sites,
+  };
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -1287,6 +1439,13 @@ export interface RunTotals {
    */
   achievements: AchievementFacts | null;
   taxi: TaxiFacts | null;
+  /**
+   * The level timeline and the deaths from the same pass; null when the run
+   * wrote no such record — "not recorded", never zero. See `LevelUpFacts` /
+   * `DeathFacts`.
+   */
+  leveling: LevelUpFacts | null;
+  deaths: DeathFacts | null;
   /**
    * The model the provider actually served and the CLI version that drove it,
    * from the first record that named either (`resolvedMarkOf`). Null on a run
@@ -1336,6 +1495,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   let resolvedModel: string | null = null;
   let resolvedCli: string | null = null;
   const areaMarks: AreaMark[] = [];
+  const levelUpMarks: LevelUpMark[] = [];
+  const deathMarks: DeathMark[] = [];
   const achievementMarks: AchievementMark[] = [];
   const taxiMarks: ("taxi" | "taxi_landed")[] = [];
 
@@ -1391,6 +1552,10 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       if (ach !== null) achievementMarks.push(ach);
       const taxi = taxiMarkOf(rec);
       if (taxi !== null) taxiMarks.push(taxi);
+      const lvl = levelUpMarkOf(rec);
+      if (lvl !== null) levelUpMarks.push(lvl);
+      const death = deathMarkOf(rec);
+      if (death !== null) deathMarks.push(death);
     }
     if (t !== "request" && t !== "response") {
       // `claude_result` rides along with the span openers: it is what tells the
@@ -1465,6 +1630,8 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     areas: areaFactsFrom(areaMarks),
     achievements: achievementFactsFrom(achievementMarks),
     taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
+    leveling: levelUpFactsFrom(levelUpMarks),
+    deaths: deathFactsFrom(deathMarks, levelUpMarks.length > 0),
     resolved:
       resolvedModel === null && resolvedCli === null
         ? null
@@ -1489,6 +1656,8 @@ export class TrajectoryTail {
    */
   private readonly achievementMarks: AchievementMark[] = [];
   private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
+  private readonly levelUpMarks: LevelUpMark[] = [];
+  private readonly deathMarks: DeathMark[] = [];
   /** Bytes consumed as complete lines. */
   private consumed = 0;
   /** Bytes after the last newline: an entry still being written. */
@@ -1523,6 +1692,8 @@ export class TrajectoryTail {
       // re-read whole, and keeping them would double-count everything in it.
       this.achievementMarks.length = 0;
       this.taxiMarks.length = 0;
+      this.levelUpMarks.length = 0;
+      this.deathMarks.length = 0;
     }
     if (size === this.size) return [];
 
@@ -1547,6 +1718,10 @@ export class TrajectoryTail {
           if (ach !== null) this.achievementMarks.push(ach);
           const taxi = taxiMarkOf(rec);
           if (taxi !== null) this.taxiMarks.push(taxi);
+          const lvl = levelUpMarkOf(rec);
+          if (lvl !== null) this.levelUpMarks.push(lvl);
+          const death = deathMarkOf(rec);
+          if (death !== null) this.deathMarks.push(death);
         }
         summary = summarize(rec, i, start, end);
       } catch {
@@ -1568,6 +1743,16 @@ export class TrajectoryTail {
   /** Flights taken; null when flights were not recorded for this run. */
   get taxi(): TaxiFacts | null {
     return taxiFactsFrom(this.taxiMarks, this.achievementMarks.length > 0);
+  }
+
+  /** The level timeline; null when the run wrote no level milestone. */
+  get leveling(): LevelUpFacts | null {
+    return levelUpFactsFrom(this.levelUpMarks);
+  }
+
+  /** Deaths, releases and resurrects; null when none of it was recorded. */
+  get deaths(): DeathFacts | null {
+    return deathFactsFrom(this.deathMarks, this.levelUpMarks.length > 0);
   }
 
   /** The raw JSON text of one entry, read back from disk. */

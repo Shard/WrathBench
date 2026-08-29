@@ -244,6 +244,99 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  /** A loop whose samples walk a fixed list of snapshots, one per turn. */
+  function walk(snapshots: Record<string, unknown>[]) {
+    let i = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () =>
+        Promise.resolve({ lastSeq: -1, eventCount: 0, ...snapshots[Math.min(i++, snapshots.length - 1)]! }),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    const adapter = new StubAdapter(
+      Array.from({ length: snapshots.length }, (_, n) => ({ content: `t${n}`, toolCalls: [] })),
+    );
+    const { dir, options } = setup(adapter, { stateIntervalMs: 1 });
+    options.sandbox = sandbox;
+    let clock = 0;
+    (options as { now?: () => number }).now = () => (clock += 1000);
+    return { dir, options };
+  }
+
+  test("level marks: the first observation is a baseline, a change is a gain, with the XP of the moment", async () => {
+    const { dir, options } = walk([
+      { self: { level: { value: 1, seq: 1, ts: 1 } }, xp: { value: 0, seq: 1, ts: 1 } },
+      { self: { level: { value: 1, seq: 2, ts: 2 } }, xp: { value: 50, seq: 2, ts: 2 } },
+      { self: { level: { value: 2, seq: 3, ts: 3 } }, xp: { value: 10, seq: 3, ts: 3 } },
+    ]);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "level");
+    // The baseline carries no `from` — it is the level the process opened on,
+    // never a level-up — and a sample that changes nothing writes nothing.
+    expect(ms.map((r) => [r["from"], r["to"], r["xp"]])).toEqual([
+      [undefined, 1, 0],
+      [1, 2, 10],
+    ]);
+    options.trajectory.close();
+  });
+
+  test("a death seen mid-window is one record, stamped with the cache's own time", async () => {
+    const dead = {
+      self: {
+        fields: { health: { value: 50, seq: 9, ts: 4500 }, playerFlags: { value: 0x10, seq: 9, ts: 4500 } },
+        corpse: { value: { map: 0, x: 1, y: 2, z: 3, source: "death_spot" }, seq: 9, ts: 4444 },
+        graveyard: { value: { map: 0, x: 10, y: 20, z: 30 }, seq: 9, ts: 4460 },
+        zone: { value: { id: 12 } },
+        area: { value: { id: 9 } },
+      },
+    };
+    const { dir, options } = walk([
+      { self: { fields: { health: { value: 100, seq: 1, ts: 1 }, playerFlags: { value: 0, seq: 1, ts: 1 } } } },
+      // The sample lands *inside* the dead window, not on the transition: the
+      // cache is still holding the corpse, which is what makes the death
+      // recoverable at all at a 60s sampling interval.
+      dead,
+      // Still the same window: a second sample must not invent a second death.
+      dead,
+      { self: { fields: { health: { value: 100, seq: 20, ts: 5000 }, playerFlags: { value: 0, seq: 20, ts: 5000 } } } },
+    ]);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter(
+      (r) => r.t === "milestone" && (r["kind"] === "death" || r["kind"] === "release" || r["kind"] === "resurrect"),
+    );
+    expect(ms.map((r) => r["kind"])).toEqual(["death", "release", "resurrect"]);
+    const death = ms[0]!;
+    // The death's own timestamp, not the sample's — the record's own `ts` is
+    // when the sample landed and is deliberately a different fact.
+    expect(death["observedTs"]).toBe(4444);
+    expect(death["position"]).toEqual({ map: 0, x: 1, y: 2, z: 3, source: "death_spot" });
+    // Released already, so the zone/area reading is the graveyard's; the flag
+    // is what tells a reader which one it is holding.
+    expect(death["released"]).toBe(true);
+    expect(death["zone"]).toEqual({ id: 12 });
+    expect(ms[1]!["graveyard"]).toEqual({ map: 0, x: 10, y: 20, z: 30 });
+    options.trajectory.close();
+  });
+
+  test("a process that opens on a dead character seeds it and records no death", async () => {
+    const dead = {
+      self: {
+        fields: { health: { value: 0, seq: 1, ts: 1 } },
+        corpse: { value: { map: 0, x: 1, y: 2, z: 3, source: "corpse_query" }, seq: 1, ts: 1 },
+      },
+    };
+    const { dir, options } = walk([dead, dead]);
+    await runLoop(options);
+    // Joining a dead window in progress says nothing about when it opened, so
+    // it says nothing — the rule `lastTaxiFlight` already follows.
+    expect(readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "death")).toHaveLength(0);
+    options.trajectory.close();
+  });
+
   test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
     // Three samples: the completion list grows [7,9], stays, then SHRINKS to
     // [11] — the sandbox-restart/cache-rebuild case. Without the reset at
