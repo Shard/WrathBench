@@ -218,8 +218,9 @@ Anything the harness has to say to the model — a per-status hint, a notice —
 reaches it through a channel the model's own code cannot drop. Attaching it
 to a return value and trusting the snippet to keep the field is not delivery:
 a11 (2026-08-29) took 41 refusals carrying the hint that would have unstuck
-it and read none of them, because its loops kept only `.status`. Operator
-decision 2026-08-29.
+it and read none of them, because its loops kept only `.status`. The harness
+channel is in addition to the hint the result already carries, never instead
+of it — result text stays load-bearing surface. Operator decision 2026-08-29.
 
 ## Context policy
 
