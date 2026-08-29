@@ -214,8 +214,11 @@ reboot. Resumes do not care: the run id is read off disk.
 
 It sets the **pause switch**, waits for every run a recreate would *cost* to end
 on its own clock, recreates the container on the new code, waits for the new
-supervisor's first heartbeat, and clears the switch. Nothing is signalled and no
-attempt is spent.
+supervisor's first heartbeat, and clears the switch. No attempt is spent. It is
+not quite true any more that nothing is signalled: the switch itself SIGTERMs a
+freeplay stream at once (it has no episode boundary to drain to), and the
+recreate lands on whatever parked runs are still mid-episode. Nothing *scored*
+is ever signalled, which is the promise that matters.
 
 It does not wait for the runs that come back **where they left off**: the
 freeplay stream and a probe campaign with `resume: true`. Once the switch has
@@ -272,7 +275,7 @@ supervisor writes it non-atomically, so a poll can land mid-write) and a dead
 supervisor's frozen rows both keep waiting rather than recreating over live
 episodes.
 
-Ctrl-C during the wait is safe: nothing has been signalled, the switch stays
+Ctrl-C during the wait is safe: no scored run has been signalled, the switch stays
 set, and `./infra/fleet-update.sh resume` puts the fleet back to work — which
 the script now says, loudly, on the way out. An aborted window that looked like
 nothing happened is how a fleet ends up scheduling nothing until somebody
