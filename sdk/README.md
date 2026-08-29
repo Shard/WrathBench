@@ -80,7 +80,7 @@ class WrathClient {
   moveTo(target: MoveTarget, o?: MoveToOptions): Promise<MoveResult>
   waitForNearby(p: (o: NearbyObject) => boolean, o?: WaitForNearbyOptions): Promise<NearbyObject>
   killTarget(guid, o?: KillTargetOptions): Promise<KillResult>
-  lootCorpse(guid, o?: LootOptions): Promise<LootResult>
+  lootCorpse(guid, o?: LootOptions): Promise<LootResult>              // corpses and chests alike
   questsAvailableFrom(npcGuid, o?: QuestOptions): Promise<{ ok: true; quests: readonly OfferedQuest[] }>
   acceptQuestFrom(npcGuid, questId, o?: QuestOptions): Promise<QuestAcceptResult>
   turnInQuest(npcGuid, questId, rewardIndex?, o?: QuestOptions): Promise<QuestTurnInResult>
@@ -137,7 +137,15 @@ again. The default `timeout` is 25s, deliberately under the runner's 30s
 snippet cap; longer fights belong in a background routine.
 
 `lootCorpse` sends `loot_all` — the module replaying the client's auto-loot
-sequence — and returns once the window has been emptied and released. Its
+sequence — and returns once the window has been emptied and released. A
+chest-type game object goes the way a client opens one: the core ignores
+`CMSG_GAMEOBJ_USE` on a chest and drops `CMSG_LOOT` on a game object guid, so
+the helper casts the lock's Opening spell at it (6478, 3365, 6247, 6477 — one
+per open-hand lock type, tried in order until the server accepts one) and
+sends the store/money/release sequence itself once the window arrives; a
+chest none of them fits is `{ ok: false, status: "not_opened", reason, hint }`.
+`interact(guid)` on a chest is refused with `{ status: "chest" }` and a hint,
+because the ack it would return means nothing. Its
 `items` are what `SMSG_ITEM_PUSH_RESULT` confirmed *stored*, not what the
 window displayed (the window is an offer; the pushes are the receipt — a
 possible no-op is never reported as success). The window contents ride along
