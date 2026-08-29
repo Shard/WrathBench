@@ -8,9 +8,11 @@
  *
  * Arc: fresh Human Paladin -> login -> the starting gear's item queries
  * answer (the module asks on first sight, as a client cache miss) -> the
- * worn weapon has a damage range and a speed, the worn chest has armor,
- * every worn piece has a maxDurability, and the answers parse (no
- * decodeError) -> logout and delete.
+ * worn weapon has a damage range, a speed and a durability; the pants are
+ * the one armored, durable piece (a fresh paladin wears a shirt, pants and
+ * boots — no chest; item_template gives the shirt and Squire's Boots armor 0
+ * and no durability, so those decode as 0 and that is the decode being
+ * right); the answers parse (no decodeError) -> logout and delete.
  *
  * Run from inside the network:
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/item-stats.ts
@@ -23,7 +25,8 @@ const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.M
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-item-stats-${crypto.randomUUID()}`;
 const CHARACTER = probeName("Bi");
-const SLOT_CHEST = 4;
+const SLOT_LEGS = 6;
+const CLASS_ARMOR = 4;
 const SLOT_MAIN_HAND = 15;
 
 const started = Date.now();
@@ -58,11 +61,12 @@ try {
   if (!(weapon.info.damage[0]!.max >= weapon.info.damage[0]!.min && weapon.info.damage[0]!.min > 0)) fail(`bad damage ${JSON.stringify(weapon.info.damage)}`);
   if (!weapon.info.speedMs || weapon.info.speedMs < 1000) fail(`main hand speed ${weapon.info.speedMs}`);
   if (weapon.info.class !== 2) fail(`main hand class ${weapon.info.class}, expected 2 (weapon)`);
-  const chest = infos.find((x) => x.slot === SLOT_CHEST) ?? fail("no chest item");
-  if (!chest.info.armor || chest.info.armor <= 0) fail(`chest ${chest.info.name} armor ${chest.info.armor}`);
-  const noDur = infos.filter((x) => x.info.maxDurability === undefined || x.info.maxDurability === 0);
-  if (noDur.length > 0) fail(`worn piece(s) without maxDurability: ${JSON.stringify(noDur.map((x) => x.info.name))}`);
-  if (chest.info.bonding === undefined) fail("bonding missing");
+  const pants = infos.find((x) => x.slot === SLOT_LEGS) ?? fail("no legs item");
+  if (pants.info.class !== CLASS_ARMOR) fail(`legs class ${pants.info.class}, expected 4 (armor)`);
+  if (!pants.info.armor || pants.info.armor <= 0) fail(`legs ${pants.info.name} armor ${pants.info.armor}`);
+  const noDur = [pants, weapon].filter((x) => x.info.maxDurability === undefined || x.info.maxDurability === 0);
+  if (noDur.length > 0) fail(`durable piece(s) without maxDurability: ${JSON.stringify(noDur.map((x) => x.info.name))}`);
+  if (infos.some((x) => x.info.bonding === undefined)) fail("bonding missing on a worn piece");
   console.log(`PASS: item-stats (${infos.length} worn pieces decoded, ${weapon.info.name} ${weapon.info.damage[0]!.min}-${weapon.info.damage[0]!.max} @ ${weapon.info.speedMs}ms, ${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {
   console.log(`FAIL: ${String(e instanceof Error ? (e.stack ?? e.message) : e)}`);
