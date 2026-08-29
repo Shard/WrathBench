@@ -59,6 +59,21 @@ import {
   type SetFactionStandingData,
   type SetFactionVisibleData,
   type TalentTreeData,
+  type GroupInviteData,
+  type GroupListData,
+  type GroupMemberData,
+  type GroupNameData,
+  type MailEntryData,
+  type MailListResultData,
+  type PartyCommandResultData,
+  type PetActionBarButton,
+  type PetNameQueryResponseData,
+  type PetSpell,
+  type PetSpellsData,
+  type SendMailResultData,
+  type ShowFrameData,
+  type TradeStatusData,
+  type TradeStatusExtendedData,
   type LearnedSpellData,
   type MonsterMoveData,
   type RemovedSpellData,
@@ -446,7 +461,9 @@ export interface QuestCompletion {
 }
 
 /**
- * One occupied inventory slot: equipment and bags are 0-22, the backpack 23-38.
+ * One occupied inventory slot: equipment and bags are 0-22, the backpack 23-38,
+ * the bank 39-66 and the bank bags 67-73 (bank slots since item 100; an older
+ * module serves none).
  *
  * A three-way join, and each leg can be missing: the `invSlot<n>Lo`/`Hi` halves
  * give a guid, the item's own create block gives that guid an `entry`, and an
@@ -595,6 +612,299 @@ export interface ReputationEntry {
   readonly atWar: boolean;
   readonly seq: number;
   readonly ts: number;
+}
+
+
+/** The pet's react state, as the pet frame labels it. */
+export type PetReaction = "passive" | "defensive" | "aggressive";
+/** The pet's standing order, as the pet frame labels it. */
+export type PetCommand = "stay" | "follow" | "attack" | "abandon";
+
+/** One spell of the pet's book, with its name and whether it autocasts. */
+export interface PetSpellEntry {
+  readonly spellId: number;
+  readonly name: string | undefined;
+  readonly rank: number | undefined;
+  readonly autocast: boolean;
+  /** True for a passive (never cast) ability. */
+  readonly passive: boolean;
+}
+
+/**
+ * The pet as the pet frame shows it (item 98): the control bar from the last
+ * `SMSG_PET_SPELLS`, joined at read time to the pet's own unit in view (level,
+ * health, power, the creature template's name) and to the given name the
+ * server answered for its pet number (`SMSG_PET_NAME_QUERY_RESPONSE`).
+ * `undefined` when there is no control bar — no pet, or it died / was
+ * dismissed and the server removed the bar.
+ */
+export interface PetState {
+  readonly guid: GuidKey;
+  /** The given name ("Fluffy"; a warlock demon's is its creature name), when the name query has answered. */
+  readonly name: string | undefined;
+  /** The creature template's name ("Imp", "Wolf"), when the creature query has answered. */
+  readonly creatureName: string | undefined;
+  readonly entry: number | undefined;
+  readonly level: number | undefined;
+  readonly health: number | undefined;
+  readonly maxHealth: number | undefined;
+  readonly power: number | undefined;
+  readonly maxPower: number | undefined;
+  /** `true` only when health was observed and is 0. */
+  readonly dead: boolean | undefined;
+  /** Whether the pet's unit is currently in view (its update blocks are what level/health come from). */
+  readonly inView: boolean;
+  /** CreatureFamily.dbc id (1 wolf, 2 cat, ... ; 0 for demons and vehicles). */
+  readonly family: number;
+  /** 0 for a permanent pet; else how long a temporary summon lasts. */
+  readonly durationMs: number;
+  readonly reaction: PetReaction;
+  readonly command: PetCommand;
+  readonly reactState: number;
+  readonly commandState: number;
+  readonly actionBar: readonly PetActionBarButton[];
+  readonly spells: readonly PetSpellEntry[];
+  readonly cooldowns: readonly { readonly spellId: number; readonly cooldownMs: number; readonly categoryCooldownMs: number }[];
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/** One other member of the party, as `SMSG_GROUP_LIST` lists them (self is never in the list). */
+export interface GroupMember {
+  readonly guid: GuidKey;
+  readonly name: string;
+  readonly online: boolean;
+  readonly subGroup: number;
+  readonly assistant: boolean;
+  readonly leader: boolean;
+}
+
+/**
+ * The party (item 100): the last `SMSG_GROUP_LIST` plus the invitation and
+ * verdict packets around it. `inGroup` false with a `pendingInvite` is the
+ * "X invites you to a group" dialog; `lastResult` is the server's word on the
+ * last invite / uninvite / leave (`partyResultText` names it).
+ * `undefined` until any group packet has been observed.
+ */
+export interface GroupState {
+  readonly inGroup: boolean;
+  readonly raid: boolean;
+  readonly groupGuid: GuidKey | undefined;
+  readonly leaderGuid: GuidKey | undefined;
+  readonly leaderName: string | undefined;
+  /** True when the leader guid is our own. */
+  readonly leader: boolean;
+  readonly members: readonly GroupMember[];
+  readonly lootMethod: number | undefined;
+  readonly pendingInvite: { readonly inviterName: string; readonly seq: number; readonly ts: number } | undefined;
+  readonly lastResult:
+    | { readonly operation: number; readonly name: string; readonly result: number; readonly text: string; readonly seq: number; readonly ts: number }
+    | undefined;
+  /** The last member who declined an invitation from us, by name. */
+  readonly lastDecline: { readonly name: string; readonly seq: number; readonly ts: number } | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/** One attached item of a mail, with the template name joined when the item query has answered. */
+export interface MailItem {
+  readonly index: number;
+  /** What `takeMailItem(mailId, itemGuidLow)` sends. */
+  readonly itemGuidLow: number;
+  readonly itemId: number;
+  readonly name: string | undefined;
+  readonly count: number;
+}
+
+/** One mail of the inbox as the mailbox listed it. */
+export interface MailEntry {
+  readonly mailId: number;
+  /** 0 a player, 2 a creature, 3 a gameobject, 4 an auction, 5 the calendar. */
+  readonly type: number;
+  readonly senderGuid: GuidKey | undefined;
+  /** The sender's name, when a name query has answered for the guid. */
+  readonly senderName: string | undefined;
+  readonly senderId: number | undefined;
+  readonly subject: string;
+  readonly body: string;
+  readonly money: number;
+  readonly cod: number;
+  readonly read: boolean;
+  readonly daysLeft: number;
+  readonly items: readonly MailItem[];
+}
+
+/**
+ * The mailbox (item 100): the frame last opened (`SMSG_SHOW_MAILBOX`), the
+ * inbox as last listed (`SMSG_MAIL_LIST_RESULT`), whether new mail has
+ * arrived since (`SMSG_RECEIVED_MAIL`), and the last verdict
+ * (`SMSG_SEND_MAIL_RESULT`; `mailResultText` names it). `undefined` until any
+ * mail packet has been observed.
+ */
+export interface MailboxState {
+  /** The mailbox object the frame was last opened on. */
+  readonly guid: GuidKey | undefined;
+  readonly mails: readonly MailEntry[];
+  /** How many mails the server holds, including any the list could not fit. */
+  readonly total: number;
+  /** True after `SMSG_RECEIVED_MAIL` until the next list. */
+  readonly newMail: boolean;
+  readonly lastResult:
+    | { readonly mailId: number; readonly action: number; readonly result: number; readonly text: string; readonly inventoryResult: number | undefined; readonly seq: number; readonly ts: number }
+    | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * The bank (item 100): the banker the frame was last opened at
+ * (`SMSG_SHOW_BANK`) and the bank slots, addressed the way the bank opcodes
+ * want them — `bag` 255 with `slot` 39-66 for the main bank, a bank bag's own
+ * slot (67-73) with `slot` 0..numSlots-1 for its contents. The slots come
+ * from the self update fields (a client has them from login), so `items` is
+ * populated whether or not a bank frame is open; depositing and withdrawing
+ * need the frame.
+ */
+export interface BankContents {
+  readonly guid: GuidKey | undefined;
+  readonly items: readonly BagSlotItem[];
+  readonly bags: readonly WornBag[];
+  /** Empty slots across the main bank slots the character has bought and every bank bag of known size. */
+  readonly freeSlots: number;
+  readonly totalSlots: number;
+}
+
+/**
+ * The trade window (item 100): the last `SMSG_TRADE_STATUS`
+ * (`tradeStatusText` names it) and both sides of the window from
+ * `SMSG_TRADE_STATUS_EXTENDED`. `open` is true from the window opening until
+ * a cancel, a completion or a close. `undefined` until any trade packet.
+ */
+export interface TradeState {
+  readonly status: number;
+  readonly statusText: string;
+  readonly open: boolean;
+  readonly traderGuid: GuidKey | undefined;
+  readonly mine: TradeSide | undefined;
+  readonly theirs: TradeSide | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+export interface TradeSide {
+  readonly money: number;
+  readonly items: readonly { readonly slot: number; readonly itemId: number; readonly name: string | undefined; readonly count: number }[];
+  readonly seq: number;
+}
+
+const PET_REACTIONS: readonly PetReaction[] = ["passive", "defensive", "aggressive"];
+const PET_COMMANDS: readonly PetCommand[] = ["stay", "follow", "attack", "abandon"];
+
+const PARTY_RESULT_TEXT: Readonly<Record<number, string>> = {
+  0: "ok",
+  1: "cannot find that player",
+  2: "that player is not in your party",
+  3: "that player is not in your instance",
+  4: "your party is full",
+  5: "that player is already in a group",
+  6: "you are not in a group",
+  7: "you are not the party leader",
+  8: "that player is of the wrong faction",
+  9: "that player is ignoring you",
+  12: "that player is in the dungeon finder queue",
+  13: "invites are restricted",
+  14: "cannot invite while in combat",
+  15: "unknown realm",
+  16: "party server unavailable",
+  17: "the party is busy",
+  18: "ambiguous player name",
+};
+
+const MAIL_RESULT_TEXT: Readonly<Record<number, string>> = {
+  0: "ok",
+  1: "inventory problem (see inventoryResult)",
+  2: "cannot send mail to yourself",
+  3: "not enough money",
+  4: "recipient not found",
+  5: "recipient is not on your faction",
+  6: "internal mail error",
+  14: "mail is disabled for trial accounts",
+  15: "the recipient's mailbox is full",
+  16: "cannot send a wrapped item with COD",
+  17: "mail and chat are suspended",
+  18: "too many attachments",
+  19: "an attachment is invalid",
+  21: "the item has expired",
+};
+
+const TRADE_STATUS_TEXT: Readonly<Record<number, string>> = {
+  0: "busy",
+  1: "begin trade",
+  2: "window open",
+  3: "trade canceled",
+  4: "trade accepted",
+  5: "busy",
+  6: "no target",
+  7: "back to trade",
+  8: "trade complete",
+  9: "trade rejected",
+  10: "target too far away",
+  11: "wrong faction",
+  12: "window closed",
+  14: "target is ignoring you",
+  15: "you are stunned",
+  16: "target is stunned",
+  17: "you are dead",
+  18: "target is dead",
+  19: "you are logging out",
+  20: "target is logging out",
+  21: "trial account",
+  22: "wrong realm",
+  23: "not on the tap list",
+};
+
+const PET_TAME_FAILURE_TEXT: Readonly<Record<number, string>> = {
+  1: "invalid creature",
+  2: "you already have too many pets",
+  3: "that creature is already owned",
+  4: "that creature cannot be tamed",
+  5: "another summon is active",
+  6: "units cannot tame",
+  7: "no pet available",
+  8: "internal error",
+  9: "the creature's level is too high",
+  10: "the creature is dead",
+  11: "the creature is not dead",
+  12: "you cannot control exotic pets",
+  13: "unknown error",
+};
+
+const PET_FEEDBACK_TEXT: Readonly<Record<number, string>> = {
+  0: "none",
+  1: "your pet is dead",
+  2: "there is nothing to attack",
+  3: "your pet cannot attack that target",
+};
+
+/** The client's text for a `SMSG_PARTY_COMMAND_RESULT` code; the code itself when the SDK does not name it. */
+export function partyResultText(result: number): string {
+  return PARTY_RESULT_TEXT[result] ?? `party result ${result}`;
+}
+/** The client's text for a `SMSG_SEND_MAIL_RESULT` result code. */
+export function mailResultText(result: number): string {
+  return MAIL_RESULT_TEXT[result] ?? `mail result ${result}`;
+}
+/** The client's text for a `SMSG_TRADE_STATUS` code. */
+export function tradeStatusText(status: number): string {
+  return TRADE_STATUS_TEXT[status] ?? `trade status ${status}`;
+}
+/** The client's text for a `SMSG_PET_TAME_FAILURE` code. */
+export function petTameFailureText(result: number): string {
+  return PET_TAME_FAILURE_TEXT[result] ?? `tame failure ${result}`;
+}
+/** The client's text for a `SMSG_PET_ACTION_FEEDBACK` code. */
+export function petFeedbackText(feedback: number): string {
+  return PET_FEEDBACK_TEXT[feedback] ?? `pet feedback ${feedback}`;
 }
 
 /** One talent of the class tree, with the ranks this character has taken merged in from the last `SMSG_TALENTS_INFO`. */
@@ -880,6 +1190,14 @@ export interface NearbyObject extends UnitFieldsState {
   motion: Observed<Motion> | undefined;
   targetGuid: Observed<GuidKey> | undefined;
   /**
+   * The master of a summoned or created unit (`UNIT_FIELD_SUMMONEDBY`, else
+   * `UNIT_FIELD_CREATEDBY`): a pet's owner, a totem's shaman. `"0"` reads as
+   * undefined. Item 98.
+   */
+  ownerGuid: Observed<GuidKey> | undefined;
+  /** Who mind-controls this unit (`UNIT_FIELD_CHARMEDBY`), when observed. */
+  charmedByGuid: Observed<GuidKey> | undefined;
+  /**
    * Transports only: the animation clock and `docked`, from the create block's
    * `pathProgress` and then every `WB_TRANSPORT_PROGRESS`. Undefined for
    * everything else and for a transport the module has not yet reported on.
@@ -926,6 +1244,8 @@ export interface UnitView {
   readonly z: number | undefined;
   /** What it is targeting, when observed. `"0"` (no target) reads as undefined. */
   readonly targetGuid: GuidKey | undefined;
+  /** Its master, for a pet, totem or other summon (`UNIT_FIELD_SUMMONEDBY` / `CREATEDBY`); undefined otherwise. */
+  readonly ownerGuid: GuidKey | undefined;
   /**
    * The questgiver marker the client shows over this object, named:
    * `available` (`!`), `reward` (`?` — a quest it ends is ready to turn in),
@@ -1180,6 +1500,11 @@ export interface StateSnapshot {
   readonly talentTree: TalentTree | undefined;
   readonly skills: readonly SkillLine[];
   readonly reputation: readonly ReputationEntry[];
+  readonly pet: PetState | undefined;
+  readonly group: GroupState | undefined;
+  readonly mailbox: MailboxState | undefined;
+  readonly bank: BankContents;
+  readonly trade: TradeState | undefined;
   readonly lastSeq: number;
   readonly eventCount: number;
 }
@@ -1297,6 +1622,21 @@ export class StateCache {
 
   /** The last `WB_TALENT_TREE`, before the learned ranks are merged in. */
   private talentTreeData: (TalentTreeData & { readonly seq: number; readonly ts: number }) | undefined;
+
+  /** The last `SMSG_PET_SPELLS` with a pet in it; cleared by the guid-0 removal (item 98). */
+  private petBar: (PetSpellsData & { readonly seq: number; readonly ts: number }) | undefined;
+
+  /** petNumber -> given name, from `SMSG_PET_NAME_QUERY_RESPONSE`. Never pruned: the module asks once per number. */
+  private readonly petNames = new Map<number, string>();
+
+  private groupState: GroupState | undefined;
+
+  private mailState: MailboxState | undefined;
+
+  /** The banker the bank frame was last opened at. */
+  private bankGuid: { readonly value: GuidKey; readonly seq: number; readonly ts: number } | undefined;
+
+  private tradeState: TradeState | undefined;
 
   /**
    * spellId -> spellbook row. Replaced wholesale by `SMSG_INITIAL_SPELLS`
@@ -1591,7 +1931,7 @@ export class StateCache {
     const inventory = this.inventory;
     // Backpack first, then each worn bag in slot order.
     for (const i of inventory) {
-      if (i.slot >= BACKPACK_FIRST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
+      if (i.slot >= BACKPACK_FIRST_SLOT && i.slot <= BACKPACK_LAST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
     }
     for (const i of inventory) {
       if (i.slot < BAG_FIRST_SLOT || i.slot > BAG_LAST_SLOT) continue;
@@ -1803,6 +2143,198 @@ export class StateCache {
     return partial.length === 1 ? partial[0] : undefined;
   }
 
+  /**
+   * The pet frame (item 98): the control bar the server last sent
+   * (`SMSG_PET_SPELLS`) joined to the pet's unit in view and its given name.
+   * `undefined` when there is no pet — none summoned, or the server removed
+   * the bar (death, dismiss, abandon).
+   */
+  pet(): PetState | undefined {
+    const bar = this.petBar;
+    if (bar === undefined) return undefined;
+    const unit = this.nearby.get(bar.guid);
+    const petNumber = unit?.fields.get("petNumber")?.value;
+    const entry = unit?.entry?.value;
+    const health = unit?.fields.get("health")?.value;
+    const creatureName = entry === undefined ? undefined : this.creatures.get(entry)?.value.name;
+    const spells: PetSpellEntry[] = (bar.spells ?? []).map((sp: PetSpell) => ({
+      spellId: sp.spellId,
+      name: sp.name,
+      rank: sp.rank,
+      autocast: sp.autocast,
+      passive: sp.active === 0x01,
+    }));
+    return {
+      guid: bar.guid,
+      name: petNumber === undefined ? undefined : this.petNames.get(petNumber),
+      creatureName,
+      entry,
+      level: unit?.level?.value,
+      health,
+      maxHealth: unit?.fields.get("maxHealth")?.value,
+      power: unit?.power?.value.current,
+      maxPower: unit?.power?.value.max,
+      dead: health === undefined ? undefined : health === 0,
+      inView: unit !== undefined,
+      family: bar.family ?? 0,
+      durationMs: bar.durationMs ?? 0,
+      reaction: PET_REACTIONS[bar.reactState ?? 0] ?? "passive",
+      command: PET_COMMANDS[bar.commandState ?? 0] ?? "stay",
+      reactState: bar.reactState ?? 0,
+      commandState: bar.commandState ?? 0,
+      actionBar: bar.actionBar ?? [],
+      spells,
+      cooldowns: (bar.cooldowns ?? []).map((c) => ({ spellId: c.spellId, cooldownMs: c.cooldownMs, categoryCooldownMs: c.categoryCooldownMs })),
+      seq: bar.seq,
+      ts: bar.ts,
+    };
+  }
+
+  /**
+   * One of the pet's spells by id or by name (case-insensitive exact, else
+   * unique substring); `undefined` when the pet lacks it or there is no pet.
+   */
+  petSpell(key: number | string): PetSpellEntry | undefined {
+    const all = this.pet()?.spells ?? [];
+    if (typeof key === "number") return all.find((s) => s.spellId === key);
+    const q = key.trim().toLowerCase();
+    const named = all.filter((s) => s.name !== undefined);
+    const exact = named.find((s) => s.name!.toLowerCase() === q);
+    if (exact !== undefined) return exact;
+    const partial = named.filter((s) => s.name!.toLowerCase().includes(q));
+    return partial.length === 1 ? partial[0] : undefined;
+  }
+
+  /** The party (item 100), or `undefined` until any group packet has been observed. */
+  group(): GroupState | undefined {
+    return this.groupState;
+  }
+
+  /**
+   * The mailbox (item 100): the inbox as last listed, with item names and
+   * sender names joined at read time. `undefined` until any mail packet.
+   */
+  mailbox(): MailboxState | undefined {
+    const m = this.mailState;
+    if (m === undefined) return undefined;
+    const mails = m.mails.map((mail) => ({
+      ...mail,
+      senderName: mail.senderGuid === undefined ? undefined : this.names.get(mail.senderGuid)?.value,
+      items: mail.items.map((it) => ({ ...it, name: this.items.get(it.itemId)?.value.name })),
+    }));
+    return { ...m, mails };
+  }
+
+  /**
+   * The bank (item 100): the main bank slots (bag 255, slots 39-66) and each
+   * bank bag's contents (bag = the bank bag's slot 67-73), addressed the way
+   * `bankWithdraw(bag, slot)` takes them. The same three-way join as `bag()`.
+   * `guid` is the banker the frame was last opened at, or undefined.
+   */
+  bank(): BankContents {
+    const items: BagSlotItem[] = [];
+    const bags: WornBag[] = [];
+    const rowOf = (bag: number, slot: number, guid: GuidKey): BagSlotItem => {
+      const item = this.nearby.get(guid);
+      const itemId = item?.entry?.value;
+      const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
+      return { bag, slot, guid, itemId, name: info?.name, count: item?.fields.get("stackCount")?.value, quality: info?.quality };
+    };
+    const inventory = this.inventory;
+    // The main bank: a character starts with 28 slots and buys none (3.3.5
+    // bank *bag* slots are bought; the 28 item slots are free), so every
+    // slot in the range counts toward totalSlots.
+    let totalSlots = BANK_LAST_SLOT - BANK_FIRST_SLOT + 1;
+    for (const i of inventory) {
+      if (i.slot >= BANK_FIRST_SLOT && i.slot <= BANK_LAST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
+    }
+    for (const i of inventory) {
+      if (i.slot < BANK_BAG_FIRST_SLOT || i.slot > BANK_BAG_LAST_SLOT) continue;
+      const container = this.nearby.get(i.guid);
+      const numSlots = container?.fields.get("numSlots")?.value ?? 0;
+      bags.push({ slot: i.slot, numSlots, name: i.name });
+      totalSlots += numSlots;
+      if (!container) continue;
+      for (let n = 0; n < numSlots; n++) {
+        const lo = container.fields.get(`bagSlot${n}Lo`);
+        const hi = container.fields.get(`bagSlot${n}Hi`);
+        if (!lo && !hi) continue;
+        const guid = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
+        if (guid === "0") continue;
+        items.push(rowOf(i.slot, n, guid));
+      }
+    }
+    return { guid: this.bankGuid?.value, items, bags, freeSlots: totalSlots - items.length, totalSlots };
+  }
+
+  /** The trade window (item 100), or `undefined` until any trade packet. */
+  trade(): TradeState | undefined {
+    const t = this.tradeState;
+    if (t === undefined) return undefined;
+    const side = (s: TradeSide | undefined): TradeSide | undefined =>
+      s === undefined ? undefined : { ...s, items: s.items.map((it) => ({ ...it, name: this.items.get(it.itemId)?.value.name })) };
+    return { ...t, mine: side(t.mine), theirs: side(t.theirs) };
+  }
+
+  private foldGroupList(d: GroupListData, seq: number, ts: number): void {
+    const prev = this.groupState;
+    const members: GroupMember[] = d.left
+      ? []
+      : d.members.map((m: GroupMemberData) => ({
+          guid: m.guid,
+          name: m.name,
+          online: m.online,
+          subGroup: m.subGroup,
+          assistant: (m.flags & 0x01) !== 0,
+          leader: m.guid === d.leaderGuid,
+        }));
+    const leaderGuid = d.left || d.leaderGuid === "0" ? undefined : d.leaderGuid;
+    const leaderName =
+      leaderGuid === undefined
+        ? undefined
+        : members.find((m) => m.guid === leaderGuid)?.name ?? (this.self.guid === leaderGuid ? this.self.name : undefined) ?? this.names.get(leaderGuid)?.value;
+    this.groupState = {
+      inGroup: !d.left,
+      raid: d.raid,
+      groupGuid: d.left ? undefined : d.groupGuid,
+      leaderGuid,
+      leaderName,
+      leader: leaderGuid !== undefined && leaderGuid === this.self.guid,
+      members,
+      lootMethod: d.lootMethod,
+      // Joining a group is the invite answered; leaving it clears nothing.
+      pendingInvite: d.left ? prev?.pendingInvite : undefined,
+      lastResult: prev?.lastResult,
+      lastDecline: prev?.lastDecline,
+      seq,
+      ts,
+    };
+  }
+
+  private groupPatch(patch: Partial<GroupState>, seq: number, ts: number): void {
+    const prev: GroupState = this.groupState ?? {
+      inGroup: false,
+      raid: false,
+      groupGuid: undefined,
+      leaderGuid: undefined,
+      leaderName: undefined,
+      leader: false,
+      members: [],
+      lootMethod: undefined,
+      pendingInvite: undefined,
+      lastResult: undefined,
+      lastDecline: undefined,
+      seq,
+      ts,
+    };
+    this.groupState = { ...prev, ...patch, seq, ts };
+  }
+
+  private mailPatch(patch: Partial<MailboxState>, seq: number, ts: number): void {
+    const prev: MailboxState = this.mailState ?? { guid: undefined, mails: [], total: 0, newMail: false, lastResult: undefined, seq, ts };
+    this.mailState = { ...prev, ...patch, seq, ts };
+  }
+
   private foldFactionRow(row: FactionRowLike, seq: number, ts: number): void {
     const prev = this.reputationMap.get(row.repListId);
     const standing = row.standing;
@@ -1864,6 +2396,11 @@ export class StateCache {
       talentTree: this.talentTree(),
       skills: this.skills(),
       reputation: this.reputation(),
+      pet: this.pet(),
+      group: this.groupState,
+      mailbox: this.mailbox(),
+      bank: this.bank(),
+      trade: this.tradeState,
       lastSeq: this.lastSeq,
       eventCount: this.eventCount,
     };
@@ -2167,6 +2704,140 @@ export class StateCache {
       case "WB_TALENT_TREE": {
         const d = event.data as TalentTreeData;
         this.talentTreeData = { ...d, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_PET_SPELLS": {
+        const d = event.data as PetSpellsData;
+        this.petBar = d.removed || d.guid === "0" ? undefined : { ...d, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_PET_NAME_QUERY_RESPONSE": {
+        const d = event.data as PetNameQueryResponseData;
+        if (d.found && d.name !== undefined) this.petNames.set(d.petNumber, d.name);
+        return;
+      }
+      case "SMSG_GROUP_INVITE": {
+        const d = event.data as GroupInviteData;
+        if (d.canAccept) this.groupPatch({ pendingInvite: { inviterName: d.inviterName, seq: event.seq, ts: event.ts } }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_GROUP_LIST": {
+        this.foldGroupList(event.data as GroupListData, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_GROUP_DESTROYED":
+      case "SMSG_GROUP_UNINVITE": {
+        this.groupPatch({ inGroup: false, raid: false, groupGuid: undefined, leaderGuid: undefined, leaderName: undefined, leader: false, members: [], lootMethod: undefined }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_GROUP_SET_LEADER": {
+        const d = event.data as GroupNameData;
+        const prev = this.groupState;
+        const byName = prev?.members.find((m) => m.name === d.name);
+        const leaderGuid = byName?.guid ?? (this.self.name === d.name ? this.self.guid : undefined);
+        this.groupPatch(
+          {
+            leaderName: d.name,
+            leaderGuid: leaderGuid ?? prev?.leaderGuid,
+            leader: this.self.name === d.name,
+            members: (prev?.members ?? []).map((m) => ({ ...m, leader: m.name === d.name })),
+          },
+          event.seq,
+          event.ts,
+        );
+        return;
+      }
+      case "SMSG_GROUP_DECLINE": {
+        const d = event.data as GroupNameData;
+        this.groupPatch({ lastDecline: { name: d.name, seq: event.seq, ts: event.ts } }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_PARTY_COMMAND_RESULT": {
+        const d = event.data as PartyCommandResultData;
+        this.groupPatch(
+          { lastResult: { operation: d.operation, name: d.name, result: d.result, text: partyResultText(d.result), seq: event.seq, ts: event.ts } },
+          event.seq,
+          event.ts,
+        );
+        return;
+      }
+      case "SMSG_SHOW_MAILBOX": {
+        const d = event.data as ShowFrameData;
+        this.mailPatch({ guid: d.guid }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_RECEIVED_MAIL": {
+        this.mailPatch({ newMail: true }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_MAIL_LIST_RESULT": {
+        const d = event.data as MailListResultData;
+        const mails: MailEntry[] = d.mails.map((m: MailEntryData) => ({
+          mailId: m.mailId,
+          type: m.type,
+          senderGuid: m.senderGuid,
+          senderName: undefined,
+          senderId: m.senderId,
+          subject: m.subject,
+          body: m.body,
+          money: m.money,
+          cod: m.cod,
+          read: m.read,
+          daysLeft: m.daysLeft,
+          items: m.items.map((it) => ({ index: it.index, itemGuidLow: it.itemGuidLow, itemId: it.itemId, name: undefined, count: it.count })),
+        }));
+        this.mailPatch({ mails, total: d.total, newMail: false }, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_SEND_MAIL_RESULT": {
+        const d = event.data as SendMailResultData;
+        const prev = this.mailState;
+        // The inbox the client shows updates itself off the verdict: taken
+        // money zeroes it, a taken item leaves the list, a delete removes the mail.
+        let mails = prev?.mails ?? [];
+        if (d.result === 0) {
+          if (d.action === 1) mails = mails.map((m) => (m.mailId === d.mailId ? { ...m, money: 0 } : m));
+          else if (d.action === 2) mails = mails.map((m) => (m.mailId === d.mailId ? { ...m, items: m.items.filter((it) => it.itemGuidLow !== d.itemGuidLow) } : m));
+          else if (d.action === 3 || d.action === 4) mails = mails.filter((m) => m.mailId !== d.mailId);
+        }
+        this.mailPatch(
+          {
+            mails,
+            lastResult: { mailId: d.mailId, action: d.action, result: d.result, text: mailResultText(d.result), inventoryResult: d.inventoryResult, seq: event.seq, ts: event.ts },
+          },
+          event.seq,
+          event.ts,
+        );
+        return;
+      }
+      case "SMSG_SHOW_BANK": {
+        const d = event.data as ShowFrameData;
+        this.bankGuid = { value: d.guid, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_TRADE_STATUS": {
+        const d = event.data as TradeStatusData;
+        const prev = this.tradeState;
+        // 1 begin (the other side proposed), 2 the window opened, 7 back to
+        // trade; everything else ends or refuses it.
+        const open = d.status === 2 || d.status === 7 || d.status === 4 || (d.status === 1 && (prev?.open ?? false));
+        this.tradeState = {
+          status: d.status,
+          statusText: tradeStatusText(d.status),
+          open,
+          traderGuid: d.traderGuid ?? (open ? prev?.traderGuid : undefined),
+          mine: open ? prev?.mine : undefined,
+          theirs: open ? prev?.theirs : undefined,
+          seq: event.seq,
+          ts: event.ts,
+        };
+        return;
+      }
+      case "SMSG_TRADE_STATUS_EXTENDED": {
+        const d = event.data as TradeStatusExtendedData;
+        const prev = this.tradeState ?? { status: 2, statusText: tradeStatusText(2), open: true, traderGuid: undefined, mine: undefined, theirs: undefined, seq: event.seq, ts: event.ts };
+        const side: TradeSide = { money: d.money, items: d.items.map((it) => ({ slot: it.slot, itemId: it.itemId, name: undefined, count: it.count })), seq: event.seq };
+        this.tradeState = { ...prev, open: true, mine: d.theirs ? prev.mine : side, theirs: d.theirs ? side : prev.theirs, seq: event.seq, ts: event.ts };
         return;
       }
       case "SMSG_INITIALIZE_FACTIONS": {
@@ -2938,6 +3609,18 @@ export class StateCache {
         if (m !== null) this.skillNames.set(Number(m[1]), raw);
         continue;
       }
+      // Owner guids (item 98): joined u64 halves the module serves as guid
+      // strings. SUMMONEDBY is the pet's master; CREATEDBY is the fallback
+      // the client draws the same conclusion from.
+      if (typeof raw === "string" && target !== this.self && "ownerGuid" in target) {
+        const obj = target as NearbyObject;
+        if (key === "summonedByGuid" || (key === "createdByGuid" && obj.ownerGuid?.value === undefined)) {
+          obj.ownerGuid = raw === "0" ? undefined : { value: raw, seq, ts };
+        } else if (key === "charmedByGuid") {
+          obj.charmedByGuid = raw === "0" ? undefined : { value: raw, seq, ts };
+        }
+        continue;
+      }
       // Unknown extras a newer module serves come through the loose schema as
       // non-numbers; only decoded numeric fields belong in the field record.
       if (typeof raw !== "number") continue;
@@ -3075,6 +3758,8 @@ export class StateCache {
         health: undefined,
         power: undefined,
         targetGuid: undefined,
+        ownerGuid: undefined,
+        charmedByGuid: undefined,
         transport: undefined,
         questGiver: undefined,
         fields: new Map<string, Observed<number>>(),
@@ -3118,6 +3803,7 @@ function toUnitView(obj: NearbyObject, from: UnitPosition | undefined): UnitView
     y: point?.y,
     z: point?.z,
     targetGuid: target === undefined || target === "0" ? undefined : target,
+    ownerGuid: obj.ownerGuid?.value,
     questGiver: obj.questGiver === undefined ? undefined : questGiverStatusName(obj.questGiver.value),
     questGiverStatus: obj.questGiver?.value,
     roles: npcRolesOf(obj.fields.get("npcFlags")?.value),
@@ -3492,7 +4178,8 @@ const QUEST_LOG_SLOTS = 25;
 /** The quest log's completion bit, the one the probe verified live. */
 const QUEST_STATE_COMPLETE = 1;
 /** Equipment + bags are 0-22, backpack 23-38 (PROTOCOL.md). */
-const INVENTORY_LAST_SLOT = 38;
+/** The last `invSlot<n>` the module serves: the bank bags (item 100). Older modules stop at 38. */
+const INVENTORY_LAST_SLOT = 73;
 /** `PLAYER_SKILL_INFO_1_1` holds 128 skill slots of three packed u32s each. */
 const SKILL_SLOTS = 128;
 
@@ -3511,6 +4198,12 @@ interface FactionRowLike {
 /** First/last backpack slot in the `invSlot<n>` numbering, and its size. */
 const BACKPACK_FIRST_SLOT = 23;
 const BACKPACK_SIZE = 16;
+const BACKPACK_LAST_SLOT = BACKPACK_FIRST_SLOT + BACKPACK_SIZE - 1;
+/** Bank item slots (`BANK_SLOT_ITEM_START..END`) and bank bag slots (`BANK_SLOT_BAG_START..END`), the core's numbering. */
+const BANK_FIRST_SLOT = 39;
+const BANK_LAST_SLOT = 66;
+const BANK_BAG_FIRST_SLOT = 67;
+const BANK_BAG_LAST_SLOT = 73;
 /** `INVENTORY_SLOT_BAG_0` on the wire: the bag id the item actions take for the backpack. */
 const BACKPACK_BAG = 255;
 /** Worn-bag equipment slots (`INVENTORY_SLOT_BAG_START..END`): the bag ids the item actions take for them. */

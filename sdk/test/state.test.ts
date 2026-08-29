@@ -20,6 +20,11 @@ import {
   inventorySlot,
   ITEM_ENTRY,
   ITEM_GUID,
+  ITEM_GUID_HI,
+  ITEM_GUID_LO,
+  BAG_GUID_HI,
+  BAG_GUID_LO,
+  nameQuery,
   itemCreate,
   itemQuery,
   monsterMove,
@@ -2317,5 +2322,230 @@ describe("skills, talent tree, item stats, reputation (items 95-99)", () => {
     const short = { ...full, data: { itemId: 2028, found: true, name: "Wooden Mallet", quality: 1 } };
     const old = StateCache.replay(toEvents([short]), { seed: SEED });
     expect(old.items.get(2028)?.value).toMatchObject({ name: "Wooden Mallet", stats: undefined, damage: undefined, requiredSkill: undefined });
+  });
+});
+
+describe("pets, group, mail, bank, trade (items 98 and 100)", () => {
+  const TS = 1_700_000_000_000;
+  const PET_GUID = "17365880163140632999";
+  const frame = (seq: number, opcode: string, data: unknown) => ({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
+  const petCreate = (seq: number) =>
+    frame(seq, "SMSG_UPDATE_OBJECT", {
+      blocks: 1,
+      objects: [
+        {
+          update: "create",
+          guid: PET_GUID,
+          objectType: "unit",
+          pos: { x: -1201, y: 981, z: 42, o: 0 },
+          fields: { entry: 416, health: 80, maxHealth: 90, level: 3, power1: 100, maxPower1: 120, powerType: 0, petNumber: 77, summonedByGuid: SELF_GUID, createdByGuid: SELF_GUID },
+        },
+      ],
+    });
+  const petBar = (seq: number) =>
+    frame(seq, "SMSG_PET_SPELLS", {
+      guid: PET_GUID,
+      removed: false,
+      family: 0,
+      durationMs: 0,
+      reactState: 1,
+      commandState: 1,
+      flags: 0,
+      actionBar: [
+        { slot: 0, type: 7, command: 2 },
+        { slot: 1, type: 7, command: 1 },
+        { slot: 2, type: 7, command: 0 },
+        { slot: 3, type: 0xc1, spellId: 3110, autocast: true, rank: 1, name: "Firebolt" },
+        { slot: 7, type: 6, reaction: 2 },
+      ],
+      spells: [
+        { spellId: 3110, active: 0xc1, autocast: true, rank: 1, name: "Firebolt" },
+        { spellId: 4511, active: 0x01, autocast: false, name: "Phase Shift" },
+      ],
+      cooldowns: [{ spellId: 3110, category: 0, cooldownMs: 1500, categoryCooldownMs: 0 }],
+    });
+
+  test("the control bar joins the pet's unit, its creature name and its given name into pet(); the removal clears it", () => {
+    const cache = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        petCreate(10),
+        frame(11, "SMSG_CREATURE_QUERY_RESPONSE", { entry: 416, found: true, name: "Imp", subname: "" }),
+        frame(12, "SMSG_PET_NAME_QUERY_RESPONSE", { petNumber: 77, found: true, name: "Zilkip" }),
+        petBar(13),
+      ]),
+      { seed: SEED },
+    );
+    const pet = cache.pet();
+    expect(pet).toMatchObject({
+      guid: PET_GUID,
+      name: "Zilkip",
+      creatureName: "Imp",
+      entry: 416,
+      level: 3,
+      health: 80,
+      maxHealth: 90,
+      power: 100,
+      maxPower: 120,
+      dead: false,
+      inView: true,
+      reaction: "defensive",
+      command: "follow",
+      seq: 13,
+    });
+    expect(pet!.spells.map((s) => [s.spellId, s.name, s.autocast, s.passive])).toEqual([
+      [3110, "Firebolt", true, false],
+      [4511, "Phase Shift", false, true],
+    ]);
+    expect(cache.petSpell("fire")?.spellId).toBe(3110);
+    expect(cache.petSpell(4511)?.name).toBe("Phase Shift");
+    expect(cache.nearbyUnits().find((u) => u.guid === PET_GUID)?.ownerGuid?.value).toBe(SELF_GUID);
+    expect(cache.units().find((u) => u.guid === PET_GUID)?.ownerGuid).toBe(SELF_GUID);
+    expect(cache.snapshot().pet?.name).toBe("Zilkip");
+
+    cache.apply(toEvents([frame(14, "SMSG_PET_SPELLS", { guid: "0", removed: true })])[0]!);
+    expect(cache.pet()).toBeUndefined();
+    expect(cache.petSpell("fire")).toBeUndefined();
+  });
+
+  test("a bar for a pet not yet in view still reads, with inView false and nothing invented", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, petBar(5)]), { seed: SEED });
+    expect(cache.pet()).toMatchObject({ guid: PET_GUID, inView: false, name: undefined, health: undefined, level: undefined });
+  });
+
+  test("invite, list, leader change, decline, result and destroy fold into group()", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence]), { seed: SEED });
+    expect(cache.group()).toBeUndefined();
+    const fold = (f: unknown) => cache.apply(toEvents([f])[0]!);
+    fold(frame(20, "SMSG_GROUP_INVITE", { canAccept: true, inviterName: "Ordrick" }));
+    expect(cache.group()).toMatchObject({ inGroup: false, pendingInvite: { inviterName: "Ordrick", seq: 20 } });
+    fold(
+      frame(21, "SMSG_GROUP_LIST", {
+        groupType: 0,
+        left: false,
+        raid: false,
+        subGroup: 0,
+        memberFlags: 0,
+        roles: 0,
+        groupGuid: "1",
+        counter: 1,
+        members: [{ name: "Ordrick", guid: "9", online: true, subGroup: 0, flags: 0, roles: 0 }],
+        leaderGuid: "9",
+        lootMethod: 0,
+        looterGuid: "0",
+        lootThreshold: 2,
+        dungeonDifficulty: 0,
+        raidDifficulty: 0,
+      }),
+    );
+    expect(cache.group()).toMatchObject({ inGroup: true, leaderGuid: "9", leaderName: "Ordrick", leader: false, pendingInvite: undefined, lootMethod: 0 });
+    expect(cache.group()!.members).toEqual([{ guid: "9", name: "Ordrick", online: true, subGroup: 0, assistant: false, leader: true }]);
+    fold(frame(22, "SMSG_GROUP_SET_LEADER", { name: "Fenwick" }));
+    expect(cache.group()).toMatchObject({ leader: true, leaderName: "Fenwick", leaderGuid: SELF_GUID });
+    expect(cache.group()!.members[0]!.leader).toBe(false);
+    fold(frame(23, "SMSG_PARTY_COMMAND_RESULT", { operation: 0, name: "Quilby", result: 5, value: 0 }));
+    expect(cache.group()!.lastResult).toMatchObject({ result: 5, text: "that player is already in a group", name: "Quilby" });
+    fold(frame(24, "SMSG_GROUP_DECLINE", { name: "Quilby" }));
+    expect(cache.group()!.lastDecline?.name).toBe("Quilby");
+    fold(frame(25, "SMSG_GROUP_LIST", { groupType: 0x10, left: true, raid: false, subGroup: 0, memberFlags: 0, roles: 0, groupGuid: "1", counter: 2, members: [], leaderGuid: "0" }));
+    expect(cache.group()).toMatchObject({ inGroup: false, members: [], leaderGuid: undefined, seq: 25 });
+    fold(frame(26, "SMSG_GROUP_DESTROYED", {}));
+    expect(cache.group()!.inGroup).toBe(false);
+  });
+
+  test("the mailbox frame, the inbox with joined names, new-mail, and the verdicts edit the list the way the client does", () => {
+    const cache = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        nameQuery,
+        frame(30, "SMSG_SHOW_MAILBOX", { guid: "555" }),
+        frame(31, "SMSG_MAIL_LIST_RESULT", {
+          total: 1,
+          count: 1,
+          mails: [
+            {
+              mailId: 42,
+              type: 0,
+              senderGuid: "9",
+              cod: 0,
+              stationery: 41,
+              money: 300,
+              flags: 0,
+              read: false,
+              daysLeft: 29.9,
+              templateId: 0,
+              subject: "hello",
+              body: "a body",
+              items: [{ index: 0, itemGuidLow: 4321, itemId: ITEM_ENTRY, count: 2 }],
+            },
+          ],
+        }),
+        itemQuery,
+      ]),
+      { seed: SEED },
+    );
+    let box = cache.mailbox()!;
+    expect(box.guid).toBe("555");
+    expect(box.mails[0]).toMatchObject({ mailId: 42, senderName: "Ordrick", money: 300, subject: "hello" });
+    expect(box.mails[0]!.items[0]!.name).toBeDefined();
+    const fold = (f: unknown) => cache.apply(toEvents([f])[0]!);
+    fold(frame(40, "SMSG_RECEIVED_MAIL", {}));
+    expect(cache.mailbox()!.newMail).toBe(true);
+    fold(frame(41, "SMSG_SEND_MAIL_RESULT", { mailId: 42, action: 1, result: 0 }));
+    box = cache.mailbox()!;
+    expect(box.mails[0]!.money).toBe(0);
+    expect(box.lastResult).toMatchObject({ action: 1, result: 0, text: "ok" });
+    fold(frame(42, "SMSG_SEND_MAIL_RESULT", { mailId: 42, action: 2, result: 0, itemGuidLow: 4321, count: 2 }));
+    expect(cache.mailbox()!.mails[0]!.items).toEqual([]);
+    fold(frame(43, "SMSG_SEND_MAIL_RESULT", { mailId: 42, action: 4, result: 0 }));
+    expect(cache.mailbox()!.mails).toEqual([]);
+    fold(frame(44, "SMSG_SEND_MAIL_RESULT", { mailId: 0, action: 0, result: 3 }));
+    expect(cache.mailbox()!.lastResult).toMatchObject({ result: 3, text: "not enough money" });
+    expect(cache.snapshot().mailbox?.total).toBe(1);
+  });
+
+  test("bank slots 39-73 fold into bank() and stay out of bag(); the frame's banker rides along", () => {
+    const selfValues = (seq: number, fields: Record<string, number>) => frame(seq, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields }] });
+    const cache = StateCache.replay(
+      toEvents([
+        ...loginSequence,
+        selfValues(50, { invSlot40Lo: ITEM_GUID_LO, invSlot40Hi: ITEM_GUID_HI, invSlot67Lo: BAG_GUID_LO, invSlot67Hi: BAG_GUID_HI }),
+        itemCreate,
+        itemQuery,
+        wornBagCreate,
+        wornBagQuery,
+        frame(60, "SMSG_SHOW_BANK", { guid: "777" }),
+      ]),
+      { seed: SEED },
+    );
+    const bank = cache.bank();
+    expect(bank.guid).toBe("777");
+    expect(bank.items.map((i) => [i.bag, i.slot, i.guid, i.itemId])).toEqual([
+      [255, 40, ITEM_GUID, ITEM_ENTRY],
+      [67, 2, BAGGED_GUID, ITEM_ENTRY],
+    ]);
+    expect(bank.bags).toEqual([{ slot: 67, numSlots: BAG_NUM_SLOTS, name: expect.any(String) }]);
+    expect(bank.totalSlots).toBe(28 + BAG_NUM_SLOTS);
+    expect(bank.freeSlots).toBe(28 + BAG_NUM_SLOTS - 2);
+    expect(cache.bag().items).toEqual([]);
+    expect(cache.inventory.map((i) => i.slot)).toEqual([40, 67]);
+    expect(cache.snapshot().bank.items).toHaveLength(2);
+  });
+
+  test("trade status and both sides of the window fold into trade(); a cancel closes it", () => {
+    const cache = StateCache.replay(toEvents([...loginSequence, itemQuery]), { seed: SEED });
+    const fold = (f: unknown) => cache.apply(toEvents([f])[0]!);
+    fold(frame(70, "SMSG_TRADE_STATUS", { status: 1, traderGuid: "9" }));
+    expect(cache.trade()).toMatchObject({ status: 1, statusText: "begin trade", open: false, traderGuid: "9" });
+    fold(frame(71, "SMSG_TRADE_STATUS", { status: 2 }));
+    expect(cache.trade()).toMatchObject({ open: true, traderGuid: "9" });
+    fold(frame(72, "SMSG_TRADE_STATUS_EXTENDED", { theirs: true, money: 500, spellId: 0, items: [{ slot: 0, itemId: ITEM_ENTRY, count: 1, wrapped: false }] }));
+    fold(frame(73, "SMSG_TRADE_STATUS_EXTENDED", { theirs: false, money: 0, spellId: 0, items: [] }));
+    const t = cache.trade()!;
+    expect(t.theirs).toMatchObject({ money: 500 });
+    expect(t.theirs!.items[0]!.name).toBeDefined();
+    expect(t.mine).toMatchObject({ money: 0, items: [] });
+    fold(frame(74, "SMSG_TRADE_STATUS", { status: 3 }));
+    expect(cache.trade()).toMatchObject({ open: false, statusText: "trade canceled", mine: undefined, theirs: undefined });
   });
 });

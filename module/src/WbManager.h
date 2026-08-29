@@ -222,6 +222,7 @@ namespace WrathBench
         std::unordered_set<uint32_t> queriedCreatures;           // creature entries
         std::unordered_set<uint64_t> queriedNames;               // player guids
         std::unordered_set<uint32_t> queriedItems;               // item entries
+        std::unordered_set<uint32_t> queriedPetNumbers;          // pet numbers whose name was asked (FOLLOW-UPS 98)
         std::unordered_set<uint32_t> queriedGameObjects;         // gameobject entries
 
         // loot_all: on the next SMSG_LOOT_RESPONSE the tap replays the client's

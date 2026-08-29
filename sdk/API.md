@@ -66,6 +66,18 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
 | `queryTalentTree` | `queryTalentTree(options?): Promise<TalentTree>` | The class talent frame: tabs [{ tabId, name, page, pointsSpent, talents: [{ talentId, name, row, col, maxRank, ranks, pointsSpent, dependsOn, dependsOnRank }] }] plus unspentPoints; static per class, also state.talentTree(). |
 | `resetTalents` | `resetTalents(npcGuid: GuidOrUnit, options?): Promise<ResetTalentsResult>` | Unlearn all talents at a class trainer the way a client does (gossip, the unlearn option, confirm at the quoted cost); returns reset with the new state.talents(), or refused (nothing to unlearn / not enough money). |
+| `inviteToGroup` | `inviteToGroup(name, options?): Promise<InviteResult>` | Invite a player by name and return the server's verdict on the invite (invited = delivered, not yet accepted; refused carries the reason). Their answer lands in state.group(): inGroup, or lastDecline. |
+| `acceptGroupInvite` | `acceptGroupInvite(options?): Promise<GroupState>` | Accept the pending invitation (state.group().pendingInvite) and return the party once the server lists it. |
+| `leaveGroup` | `leaveGroup(options?): Promise<GroupState>` | Leave the party and return the state once the server confirms. |
+| `openMailbox` | `openMailbox(mailbox: GuidOrUnit, options?): Promise<MailboxState>` | Use a mailbox game object (goType "mailbox", within reach) and wait for its frame; every other mail helper needs this open. |
+| `sendMail` | `sendMail(to, subject, body, { money?, cod?, items?: [{ bag, slot }] }?): Promise<MailResult>` | Send a mail from the open mailbox with optional money, COD and up to 12 carried items; returns sent, or refused with the server's reason (postage 30c comes out of state.money). |
+| `mailList` | `mailList(options?): Promise<MailboxState>` | List the inbox at the open mailbox: mails [{ mailId, senderName, subject, body, money, cod, read, items: [{ itemGuidLow, itemId, name, count }] }]. |
+| `takeMailMoney` | `takeMailMoney(mailId, options?): Promise<MailResult>` | Take the money out of one mail (money_taken, or refused). |
+| `takeMailItem` | `takeMailItem(mailId, itemGuidLow, options?): Promise<MailResult>` | Take one attached item out of a mail into the bags (item_taken, or refused with the inventory reason). |
+| `deleteMail` | `deleteMail(mailId, options?): Promise<MailResult>` | Delete one mail (deleted, or refused). |
+| `openBank` | `openBank(npcGuid: GuidOrUnit, options?): Promise<BankContents>` | Open the bank at a banker (state.units({ role: "banker" }), within reach) and return it; deposits and withdrawals need this open. |
+| `bankDeposit` | `bankDeposit(bag, slot, options?): Promise<BankMoveResult>` | Put a carried item (bag/slot as state.bag() lists it) in the bank; returns where it landed in state.bank(), or refused with the inventory reason. |
+| `bankWithdraw` | `bankWithdraw(bag, slot, options?): Promise<BankMoveResult>` | Take an item out of the bank (bag/slot as state.bank() lists it) into the bags; returns where it landed in state.bag(), or refused. |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
 | `waitForTransfer` | `waitForTransfer({ timeout?, sinceSeq?, expectMap? }): Promise<TransferResult>` | Wait for a map transfer's server verdict: transferred (SMSG_NEW_WORLD) / aborted / waiting / no_transfer / wrong_map. moveTo already does this when a portal takes the character. |
@@ -115,6 +127,13 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `trainerBuySpellAsync` | `trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>` | Buy a spell without waiting (prefer buySpell). |
 | `learnTalentAsync` | `learnTalentAsync(talentId, rank): Promise<ActionResponse>` | Spend a talent point without waiting (prefer learnTalent). |
 | `talentTreeAsync` | `talentTreeAsync(): Promise<ActionResponse>` | Ask for the class talent tree without waiting for the WB_TALENT_TREE answer (prefer queryTalentTree). |
+| `petAttack` | `petAttack(target: GuidOrUnit): Promise<RawActionResponse>` | Order the pet (state.pet()) to attack a unit; a refusal arrives as SMSG_PET_ACTION_FEEDBACK. Throws when there is no pet. |
+| `petFollow` | `petFollow(): Promise<RawActionResponse>` | Order the pet to follow you. |
+| `petStay` | `petStay(): Promise<RawActionResponse>` | Order the pet to stay where it is. |
+| `petReact` | `petReact("passive" | "defensive" | "aggressive"): Promise<RawActionResponse>` | Set the pet's react state. |
+| `petCast` | `petCast(spellNameOrId, target?: GuidOrUnit): Promise<RawActionResponse>` | Have the pet cast one of its own spells (state.pet().spells, by name or id) at a unit or at nothing; a refusal arrives as SMSG_PET_CAST_FAILED. Throws when the pet lacks the spell. |
+| `petDismiss` | `petDismiss(): Promise<ActionResponse>` | Send the pet away: a hunter casts Dismiss Pet (the pet can be called back), any other pet is abandoned (a demon or temporary summon just goes). state.pet() is undefined once the bar is removed. |
+| `declineGroupInvite` | `declineGroupInvite(): Promise<RawActionResponse>` | Decline the pending invitation. |
 | `raw` | `raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>` | Escape hatch: send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: "x" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md "raw". The answer arrives on sdk.events only if its opcode is whitelisted there. |
 
 ## State reads (`state.*`)
@@ -152,6 +171,12 @@ zero.
 | `skill` | `state.skill(idOrName): SkillLine | undefined` | One skill line by id or name (exact, else unique substring); undefined when the character lacks it. |
 | `reputation` | `state.reputation(): ReputationEntry[]` | The reputation pane: [{ factionId, name, standing, base, reputation, rank: "Hated"…"Exalted", visible, atWar }] from login's SMSG_INITIALIZE_FACTIONS and every SMSG_SET_FACTION_STANDING since; visible factions first. |
 | `reputationWith` | `state.reputationWith(factionIdOrName): ReputationEntry | undefined` | One reputation row by faction id or name (exact, else unique substring). |
+| `pet` | `state.pet(): PetState | undefined` | The pet frame: { guid, name, creatureName, level, health, maxHealth, power, maxPower, dead, inView, reaction: "passive"|"defensive"|"aggressive", command: "stay"|"follow"|"attack", actionBar, spells: [{ spellId, name, rank, autocast, passive }], cooldowns }; undefined when there is no pet (none summoned, or its bar was removed). |
+| `petSpell` | `state.petSpell(idOrName): PetSpellEntry | undefined` | One of the pet's spells by id or name (exact, else unique substring). |
+| `group` | `state.group(): GroupState | undefined` | The party: { inGroup, raid, leaderGuid, leaderName, leader (you), members: [{ guid, name, online, leader, assistant }], pendingInvite: { inviterName }, lastResult: { operation, name, result, text }, lastDecline }; undefined until any group packet. |
+| `mailbox` | `state.mailbox(): MailboxState | undefined` | The mailbox: { guid (the open mailbox), mails: [{ mailId, senderName, subject, body, money, cod, read, daysLeft, items }], total, newMail, lastResult: { action, result, text } }; undefined until any mail packet. |
+| `bank` | `state.bank(): BankContents` | The bank: { guid (the banker the frame was opened at), items: [{ bag (255 for the main bank, else the bank bag's slot 67-73), slot, guid, itemId, name, count }], bags, freeSlots, totalSlots }; the slots are known from login, moving items needs openBank. |
+| `trade` | `state.trade(): TradeState | undefined` | The trade window: { status, statusText, open, traderGuid, mine: { money, items }, theirs: { money, items } }; undefined until any trade packet. |
 | `nameOf` | `state.nameOf(guid): string | undefined` | The name for a guid, if a name query ever returned one. |
 | `snapshot` | `state.snapshot(): StateSnapshot` | A frozen plain-object copy of the whole cache. |
 | `target` | `get state.target: NearbyObject | undefined` | The object our own target points at, when it is also in view. |
