@@ -8,9 +8,11 @@
  * follows the same file over the viewer's SSE tail, which also heartbeats every
  * second so a quiet run can be told from a dead connection.
  *
- * Long blocks fold to a few lines with a click to expand. The old page kept a
- * whole-feed expand preset in localStorage; that has not been ported (see
- * docs/FOLLOW-UPS.md).
+ * Long blocks fold to a few lines with a click to expand, and the expand
+ * preset over the feed ("minimal / responses / snippets / all", remembered in
+ * localStorage) sets where they all start; a per-block click still overrides
+ * it. State samples and harness notices get their own compact rows rather than
+ * the generic JSON dump — see `lib/feedview.ts` for both.
  *
  * The public build is this page without the feed and without the tail: the
  * summary, the charts, the states and the costs all publish, the entries do
@@ -42,6 +44,19 @@ import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
+import {
+  EXPAND_LABELS,
+  EXPAND_PRESETS,
+  expandedBy,
+  harnessFields,
+  isHarnessEntry,
+  noticeView,
+  readExpandPref,
+  splitNotices,
+  stateLine,
+  writeExpandPref,
+  type ExpandPreset,
+} from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 
@@ -141,6 +156,16 @@ export default function RunDetail() {
   const [lastWrite, setLastWrite] = createSignal(Date.now());
   const [now, setNow] = createSignal(Date.now());
   const [follow, setFollow] = createSignal(readFollowPref());
+  /*
+   * Where every foldable block in the feed starts. Remembered, and it only
+   * ever sets a default: each block keeps its own toggle, so a reader can open
+   * one snippet under "minimal" and close one under "all" (see `FoldBlock`).
+   */
+  const [expand, setExpand] = createSignal<ExpandPreset>(readExpandPref());
+  const chooseExpand = (v: ExpandPreset): void => {
+    setExpand(v);
+    writeExpandPref(v);
+  };
   const [disconnected, setDisconnected] = createSignal(false);
 
   /*
@@ -356,6 +381,20 @@ export default function RunDetail() {
                       {" "}
                       <button onClick={loadEarlier}>load earlier</button>
                     </Show>
+                    {/* No control in the public build: there is no feed under it to expand. */}
+                    <Show when={!SNAPSHOT_MODE}>
+                      <label class="filter expand-preset">
+                        <span class="dim">expand</span>
+                        <select
+                          value={expand()}
+                          onChange={(e) => chooseExpand(e.currentTarget.value as ExpandPreset)}
+                        >
+                          <For each={EXPAND_PRESETS}>
+                            {(p) => <option value={p}>{EXPAND_LABELS[p]}</option>}
+                          </For>
+                        </select>
+                      </label>
+                    </Show>
                   </h2>
                   {/*
                     A statement of what this build publishes, not a failure:
@@ -375,11 +414,19 @@ export default function RunDetail() {
                             case "turn":
                               return <TurnRow g={g} runId={run().runId} />;
                             case "response":
-                              return <ResponseRow g={g} runId={run().runId} />;
+                              return <ResponseRow g={g} runId={run().runId} preset={expand()} />;
                             case "call":
-                              return <CallCard g={g} runId={run().runId} />;
+                              return <CallCard g={g} runId={run().runId} preset={expand()} />;
                             default:
-                              return <Entry entry={g.entry} runId={run().runId} />;
+                              // The two records with a shape worth drawing rather
+                              // than dumping; everything else is still generic.
+                              if (g.entry.t === "state") {
+                                return <StateRow entry={g.entry} runId={run().runId} preset={expand()} />;
+                              }
+                              if (isHarnessEntry(g.entry)) {
+                                return <NoticeRow entry={g.entry} runId={run().runId} preset={expand()} />;
+                              }
+                              return <Entry entry={g.entry} runId={run().runId} preset={expand()} />;
                           }
                         }}
                       </For>
@@ -696,14 +743,26 @@ function eventsHead(e: EventsServedEntry): string {
 
 /**
  * The text an entry type puts in its body and head. Only types that still
- * reach the plain `Entry` renderer belong here — `state`, stray events
- * batches, meta/notices/terminations. Requests, responses and tool calls are
- * always routed to the composite rows (lib/feedgroup.ts), never here.
+ * reach the plain `Entry` renderer belong here — stray events batches,
+ * meta/terminations/watchdogs, and whatever record kind ships next. Requests,
+ * responses and tool calls are always routed to the composite rows
+ * (lib/feedgroup.ts); `state` and `notice` have their own rows below. All of
+ * them reach `detailOf` for the expanded long form, which is why the field
+ * drop lives there.
  */
 function bodyOf(e: FeedEntry): { text: string; head: string } {
   if (e.t === "events_served") return { text: "", head: eventsHead(e as EventsServedEntry) };
   // Everything else renders as the summary the server built, minus the
   // bookkeeping fields.
+  return { text: detailOf(e), head: "" };
+}
+
+/**
+ * The whole summary an entry carries, minus the bookkeeping the head already
+ * shows. The compact rows below expand to exactly this, so a field the one-line
+ * form does not name is still one click away rather than gone.
+ */
+function detailOf(e: FeedEntry): string {
   const { i, t, ts, start, end, clipped, ...rest } = e as Record<string, unknown>;
   void i;
   void t;
@@ -711,14 +770,25 @@ function bodyOf(e: FeedEntry): { text: string; head: string } {
   void start;
   void end;
   void clipped;
-  return { text: JSON.stringify(rest, null, 1), head: "" };
+  return JSON.stringify(rest, null, 1);
 }
 
 const FOLD_LINES = 3;
 
-/** A foldable pre block — the body treatment every card shares. */
-function FoldBlock(props: { text: string }) {
-  const [open, setOpen] = createSignal(false);
+/**
+ * A foldable pre block — the body treatment every card shares.
+ *
+ * `defaultOpen` is the whole-feed preset's say (lib/feedview.ts) and `over` is
+ * this reader's, which wins while it is set. Changing the preset clears the
+ * override, so the choice at the top of the feed always means what it says —
+ * without it, a block clicked once would ignore every later preset change and
+ * the control would look broken on exactly the rows someone had touched.
+ */
+function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
+  const [over, setOver] = createSignal<boolean | null>(null);
+  createEffect(on(() => props.defaultOpen, () => setOver(null), { defer: true }));
+  const open = (): boolean => over() ?? props.defaultOpen === true;
+  const setOpen = (v: boolean): void => void setOver(v);
   // Counted without splitting: bodies run to many KB and the array of line
   // substrings would be built only to read its length.
   const lines = createMemo(() => {
@@ -763,7 +833,7 @@ function When(props: { ts: number }) {
   return <span title={stamp(props.ts)}>{TIME_FMT.format(props.ts)}</span>;
 }
 
-function Entry(props: { entry: FeedEntry; runId: string }) {
+function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
   const parts = createMemo(() => bodyOf(props.entry));
   return (
     <div class="entry">
@@ -781,7 +851,7 @@ function Entry(props: { entry: FeedEntry; runId: string }) {
       </div>
       <Show when={parts().text.length > 0}>
         <div class="body">
-          <FoldBlock text={parts().text} />
+          <FoldBlock text={parts().text} defaultOpen={expandedBy(props.preset, "detail")} />
         </div>
       </Show>
     </div>
@@ -819,7 +889,7 @@ function TurnRow(props: { g: TurnGroup; runId: string }) {
 }
 
 /** The model's reply, with how long the model took to produce it. */
-function ResponseRow(props: { g: ResponseGroup; runId: string }) {
+function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset }) {
   const e = (): ResponseGroup["entry"] => props.g.entry;
   return (
     <div class="entry">
@@ -840,7 +910,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string }) {
       </div>
       <Show when={(e().text ?? "").length > 0}>
         <div class="body">
-          <FoldBlock text={e().text ?? ""} />
+          <FoldBlock text={e().text ?? ""} defaultOpen={expandedBy(props.preset, "response")} />
         </div>
       </Show>
     </div>
@@ -854,7 +924,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string }) {
  * card exists to remove. The duration is `result.ts − call.ts` and only shown
  * when the writer recorded the call before running it (see lib/feedgroup.ts).
  */
-function CallCard(props: { g: CallGroup; runId: string }) {
+function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset }) {
   const g = (): CallGroup => props.g;
   /** The input text: the snippet's code, else the call's args. */
   const input = createMemo((): string => {
@@ -895,7 +965,7 @@ function CallCard(props: { g: CallGroup; runId: string }) {
       </div>
       <Show when={input().length > 0}>
         <div class="body">
-          <FoldBlock text={input()} />
+          <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
         </div>
       </Show>
       <Show
@@ -906,11 +976,144 @@ function CallCard(props: { g: CallGroup; runId: string }) {
           <div class="body pending">no result yet</div>
         }
       >
-        {(r) => (
+        {(r) => {
+          /*
+           * The harness's own lines are lifted out of the result text and drawn
+           * as a callout: they are the harness talking to the model, not the
+           * tool's output, and inside a folded console dump they were invisible
+           * to a reader looking for exactly them (lib/feedview.ts).
+           */
+          const split = createMemo(() => splitNotices(r().text ?? ""));
+          return (
+            <>
+              <Show when={split().body.length > 0}>
+                <div class="body">
+                  <FoldBlock text={split().body} defaultOpen={expandedBy(props.preset, "call")} />
+                </div>
+              </Show>
+              <Show when={split().notices.length > 0}>
+                <div class="body notices">
+                  <NoticeCallout lines={split().notices} />
+                </div>
+              </Show>
+            </>
+          );
+        }}
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * The harness speaking to the model, as a callout rather than a footnote.
+ *
+ * One line per deduped (action, status) group, exactly as the harness wrote
+ * it — `moveTo too_far ×21: a single moveTo covers ~250y — …`. Nothing is
+ * reformatted: the count and the wording are what the model was handed, and a
+ * page that rephrased them would be showing something the run did not contain.
+ * Always open: there are at most a handful of lines, and a notice nobody
+ * expands is a notice nobody reads.
+ */
+function NoticeCallout(props: { lines: string[] }) {
+  return (
+    <div class="notice-callout">
+      <span class="notice-tag">harness</span>
+      <div class="notice-lines">
+        <For each={props.lines}>{(l) => <div class="notice-line">{l}</div>}</For>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A `harness` record: the harness's own voice in the feed.
+ *
+ * One type carries two things (see `lib/feedview.ts`). A record with text is
+ * addressed to the model — a sandbox restart, a truncated turn — and gets the
+ * callout. A record without is bookkeeping the run needed to state, and gets
+ * one quiet line with its fields behind the same toggle every other row uses:
+ * shouting `resolved_model` on every run would train the reader to skip
+ * exactly the rows this treatment exists for.
+ *
+ * Read defensively throughout, so a writer landing with fields this build does
+ * not know about renders with its full record one click away, never as an error.
+ */
+function NoticeRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
+  const n = createMemo(() => noticeView(props.entry));
+  return (
+    <div class="entry harness" classList={{ notice: !n().bookkeeping }}>
+      <div class="head">
+        <span class="t">harness</span>
+        <span classList={{ "notice-kind": !n().bookkeeping, dim: n().bookkeeping }}>{n().kind}</span>
+        <Show when={n().count !== null}>
+          <span class="dim">×{n().count}</span>
+        </Show>
+        <Show when={props.entry.turn !== undefined}>
+          <span class="dim">turn {props.entry.turn}</span>
+        </Show>
+        {/* Bookkeeping says its whole content on the head line. */}
+        <Show when={n().bookkeeping}>
+          <span class="state-line mono">{harnessFields(props.entry)}</span>
+        </Show>
+        <span class="spacer" />
+        <When ts={props.entry.ts} />
+        <Show when={props.entry.clipped === true}>
+          <RawLink runId={props.runId} i={props.entry.i} />
+        </Show>
+      </div>
+      <Show when={!n().bookkeeping}>
+        <div class="body notices">
+          <NoticeCallout lines={n().text.split("\n")} />
+        </div>
+        {/*
+          The rest of the record, and only when there is one: a notice whose
+          whole content is its text would otherwise print that text twice.
+        */}
+        <Show when={harnessFields(props.entry).length > 0}>
           <div class="body">
-            <FoldBlock text={r().text ?? ""} />
+            <FoldBlock text={detailOf(props.entry)} defaultOpen={expandedBy(props.preset, "detail")} />
           </div>
-        )}
+        </Show>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * One state sample as one line, with the full record behind a toggle.
+ *
+ * The ticker writes one every few seconds, so these are the most numerous rows
+ * in a long feed and the least worth reading in full: what the reader wants
+ * scanning past them is the shape of the run — the level climbing, the zone
+ * changing, the money moving. `stateLine` is that line (lib/feedview.ts); the
+ * JSON is unchanged underneath, and under the "all" preset it starts open.
+ */
+function StateRow(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
+  const line = createMemo(() => stateLine(props.entry));
+  const [open, setOpen] = createSignal<boolean | null>(null);
+  createEffect(on(() => props.preset, () => setOpen(null), { defer: true }));
+  const shown = (): boolean => open() ?? expandedBy(props.preset, "detail");
+  return (
+    <div class="entry state">
+      <div class="head">
+        <span class="t">state</span>
+        <Show when={props.entry.turn !== undefined}>
+          <span class="dim">turn {props.entry.turn}</span>
+        </Show>
+        <span class="state-line mono">{line()}</span>
+        <span class="spacer" />
+        <button class="toggle" onClick={() => setOpen(!shown())}>
+          {shown() ? "less" : "detail"}
+        </button>
+        <When ts={props.entry.ts} />
+        <Show when={props.entry.clipped === true}>
+          <RawLink runId={props.runId} i={props.entry.i} />
+        </Show>
+      </div>
+      <Show when={shown()}>
+        <div class="body">
+          <pre class="block">{detailOf(props.entry)}</pre>
+        </div>
       </Show>
     </div>
   );
