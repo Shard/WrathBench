@@ -92,6 +92,12 @@ class WrathClient {
 }
 ```
 
+Not in that list, because it is not a helper: `raw()` queues one allowlisted
+client opcode with a caller-built body. It is the escape hatch the surface
+philosophy promises (`docs/METHODOLOGY.md`, "The model surface") — the way a
+trajectory shows a surface is needed before one is built, not a second path to
+anything above. The allowlist is `module/PROTOCOL.md` ("raw").
+
 Every guid — state fields, helper returns, and every guid argument — is an
 opaque decimal string, which is also exactly what the wire carries:
 compare with `===`, use as Map keys, `JSON.stringify` freely. A `number` guid

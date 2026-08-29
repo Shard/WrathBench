@@ -47,7 +47,8 @@ everything else is derived from it — no list of names decides what counts.
 - **Promotion.** A model on `t1` that reaches rung 1 in one counted episode
   climbs to `t2`, which is what buys an `e360`; a model on `t0` keeps the
   witness and stays. The rule, the budgets and what counts:
-  `docs/METHODOLOGY.md` ("The tier is the evidence budget").
+  `docs/METHODOLOGY.md` ("Episodes, lanes, and evidence", under *The tier is
+  the evidence budget*).
 - **Extras.** A free model past its target may be given extra `e90` runs with
   a different starting race/class. An extra is this episode — scored,
   same prompt and leash — stamped `extra: true`; it is never counted toward a
