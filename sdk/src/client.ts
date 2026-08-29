@@ -758,6 +758,38 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
 };
 
 /**
+ * One (action, status) pair of hint-bearing failures, tallied for the harness.
+ *
+ * The hints above ride inside the result object, so a snippet that reduces a
+ * result to `.status` — the common shape — throws them away before the model
+ * ever reads one: run a11 (2026-08-29) took 41 `too_far` refusals and read the
+ * hint zero times. The client therefore also *records* every hint-bearing
+ * failure on a channel the snippet cannot strip; the sandbox drains it and the
+ * runner renders it into the snippet result. Aggregated per status rather than
+ * kept per occurrence because the recipes interpolate coordinates: 41 `too_far`
+ * hints are 41 distinct strings, and a per-occurrence log would deliver 41
+ * lines saying one thing. `hint` is the last occurrence's — the one nearest
+ * where the character actually is, and so the actionable one.
+ */
+export interface ActionHint {
+  /** The SDK call that failed, e.g. `moveTo`. */
+  action: string;
+  /** The failure status, the module's word. */
+  status: string;
+  /** How many times this (action, status) failed since the last drain. */
+  count: number;
+  /** The most recent hint text for this pair. */
+  hint: string;
+  /** The destination of the most recent such failure, when the call had one. */
+  point?: { x: number; y: number; z: number };
+  /** When that most recent failure was recorded (epoch ms). */
+  ts: number;
+}
+
+/** Distinct (action, status) pairs kept between drains. A guard, never reached in practice. */
+const ACTION_HINT_MAX_KEYS = 32;
+
+/**
  * The move statuses that mean *nothing moved and no movement packet was sent*.
  * After one of these the server's last word about the character can still be a
  * `MOVEMENTFLAG_FORWARD` heartbeat from a move this request superseded, which
@@ -1548,6 +1580,9 @@ export class WrathClient {
   private readonly defaultSignal: (() => AbortSignal | undefined) | undefined;
   private readonly deadlineAt: (() => number | undefined) | undefined;
 
+  /** Hint-bearing failures since the last drain, by `action:status`. See `ActionHint`. */
+  private readonly actionHints = new Map<string, ActionHint>();
+
   constructor(options: ConnectOptions) {
     this.token = options.token;
     this.boundAccount = options.account;
@@ -1569,6 +1604,36 @@ export class WrathClient {
     // Registered before the socket opens, so the cache sees every frame.
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
     this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
+  }
+
+  /**
+   * Record a hint-bearing failure for the harness to deliver. Only the status
+   * recipe is kept, not the call-specific notes `withNotes` folds in (a budget
+   * or timeout remark is already in the result and would vary per call).
+   */
+  private noteActionHint(action: string, status: string, hint: string | undefined, point?: { x: number; y: number; z: number }): void {
+    if (hint === undefined || hint.length === 0) return;
+    const key = `${action}:${status}`;
+    const prev = this.actionHints.get(key);
+    if (prev === undefined && this.actionHints.size >= ACTION_HINT_MAX_KEYS) return;
+    this.actionHints.set(key, {
+      action,
+      status,
+      count: (prev?.count ?? 0) + 1,
+      hint,
+      ...(point !== undefined ? { point: { x: point.x, y: point.y, z: point.z } } : {}),
+      ts: Date.now(),
+    });
+  }
+
+  /**
+   * Take the recorded hint-bearing failures and clear the tally. Called by the
+   * sandbox once per snippet; not part of the model-facing surface.
+   */
+  drainActionHints(): ActionHint[] {
+    const out = [...this.actionHints.values()];
+    this.actionHints.clear();
+    return out;
   }
 
   // ------------------------------------------------ client-parity queries
@@ -2646,7 +2711,10 @@ export class WrathClient {
       options = repaired.options;
     }
     const resolved = resolveMoveTarget(target, this.state, "moveTo");
-    if ("unknown" in resolved) return { ok: false, status: "unknown_target", hint: resolved.unknown };
+    if ("unknown" in resolved) {
+      this.noteActionHint("moveTo", "unknown_target", resolved.unknown);
+      return { ok: false, status: "unknown_target", hint: resolved.unknown };
+    }
     const point = resolved.point;
     // Notes that belong on whatever verdict comes back: a stale-position
     // fallback, and the budget estimate below. They explain the call, so they
@@ -2801,6 +2869,7 @@ export class WrathClient {
           ) as string,
         };
       }
+      this.noteActionHint("moveTo", "transferred", transfer.hint, point);
       return { ok: false, status: "transferred", ...common, hint: withNotes(transfer.hint) };
     }
     if (status === "teleported") {
@@ -2823,16 +2892,12 @@ export class WrathClient {
           ) as string,
         };
       }
-      return {
-        ok: false,
-        status: "teleported",
-        ...common,
-        hint: withNotes(
-          `a same-map teleport took the character mid-move, but no MSG_MOVE_TELEPORT_ACK with its arrival ` +
-            `point was observed. state.self.position may be stale until the next move result; the ` +
-            `destination (${fmtXY(point)}) was not reached.`,
-        ),
-      };
+      const teleportHint =
+        `a same-map teleport took the character mid-move, but no MSG_MOVE_TELEPORT_ACK with its arrival ` +
+        `point was observed. state.self.position may be stale until the next move result; the ` +
+        `destination (${fmtXY(point)}) was not reached.`;
+      this.noteActionHint("moveTo", "teleported", teleportHint, point);
+      return { ok: false, status: "teleported", ...common, hint: withNotes(teleportHint) };
     }
     if (MOVE_LEAVES_NO_STOP.has(status)) {
       // Nothing moved — and that is exactly when the character can be left
@@ -2860,10 +2925,13 @@ export class WrathClient {
       // than the ten dead minutes the leftover flag cost.
       await this.stop().catch(() => {});
     }
-    const hint = withNotes(
+    const recipe =
       (status === "target_off_mesh" ? transportDockHint(this.state, point) : undefined) ??
-        MOVE_HINTS[status]?.(point, data),
-    );
+      MOVE_HINTS[status]?.(point, data);
+    // Recorded before the call-specific notes are folded in: the recipe is what
+    // the model needs and what dedupes; the notes are per-call (see ActionHint).
+    this.noteActionHint("moveTo", status, recipe, point);
+    const hint = withNotes(recipe);
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
     return {
       ok: false,

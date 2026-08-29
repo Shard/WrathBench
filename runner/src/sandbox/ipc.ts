@@ -4,6 +4,22 @@
  * serialization), so everything here must survive JSON.
  */
 
+/**
+ * A hint-bearing failure the SDK recorded, tallied per (action, status). The
+ * hint rides inside the result object too, but a snippet that keeps only
+ * `.status` drops it (run a11: 41 `too_far`, hint read 0 times), so the harness
+ * carries it home itself. Mirrors `ActionHint` from the SDK; redeclared here
+ * because everything on this channel must survive JSON.
+ */
+export interface ActionHintNote {
+  action: string;
+  status: string;
+  count: number;
+  hint: string;
+  point?: { x: number; y: number; z: number };
+  ts: number;
+}
+
 export interface LogEntry {
   level: "log" | "info" | "warn" | "error" | "debug";
   ts: number;
@@ -42,6 +58,12 @@ export interface EvalResultMsg {
   hint?: string;
   /** console output drained since the previous result (includes background logs). */
   logs: LogEntry[];
+  /**
+   * Hint-bearing failures the SDK recorded while this snippet ran, drained here
+   * so the runner can render them whatever the snippet kept. Empty on an
+   * abandoned eval — the host discards its result, so those ride the pong.
+   */
+  hints?: ActionHintNote[];
   durationMs: number;
 }
 
@@ -63,7 +85,7 @@ export type ChildToHost =
    * distance an in-flight `moveTo` had covered and had left — so the host's
    * abandon message can state it. Absent when the abort taught us nothing.
    */
-  | { t: "pong"; id: number; logs?: LogEntry[]; note?: string }
+  | { t: "pong"; id: number; logs?: LogEntry[]; note?: string; hints?: ActionHintNote[] }
   | { t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }
   | { t: "hostcall"; id: number; method: "scratchpad_read" | "scratchpad_write" | "scratchpad_append"; params: { content?: string } }
   | { t: "fatal"; error: string };
