@@ -22,6 +22,7 @@
 #include "AccountMgr.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "GameTime.h"
 #include "Item.h"
 #include "ItemTemplate.h"
@@ -185,6 +186,16 @@ namespace WrathBench
         std::string taxiPath = sWorld->GetDataPath() + "dbc/TaxiNodes.dbc";
         if (!LoadTaxiNodesDbc(taxiPath))
             LOG_ERROR("module", "wrathbench: TaxiNodes.dbc not loaded from '{}'; SMSG_SHOWTAXINODES will carry node ids without names", taxiPath);
+        std::string tabPath = sWorld->GetDataPath() + "dbc/TalentTab.dbc";
+        if (!LoadTalentTabDbc(tabPath))
+            LOG_ERROR("module", "wrathbench: TalentTab.dbc not loaded from '{}'; talent_tree will carry tab ids without names", tabPath);
+        // Reputation index -> faction id, the join a client makes from its own
+        // Faction.dbc for every SMSG_INITIALIZE_FACTIONS position.
+        for (uint32 i = 0; i < sFactionStore.GetNumRows(); ++i)
+            if (FactionEntry const* f = sFactionStore.LookupEntry(i))
+                if (f->reputationListID >= 0)
+                    _repListToFaction[uint32(f->reputationListID)] = f->ID;
+        LOG_INFO("module", "wrathbench: {} reputation factions indexed from Faction.dbc", _repListToFaction.size());
 
         _http = std::make_unique<HttpServer>(_bindAddress, _port, this, _threads);
         try
@@ -464,6 +475,10 @@ namespace WrathBench
         // preview packet by hand)
         { "CMSG_LEARN_TALENT", CMSG_LEARN_TALENT },
         { "CMSG_LEARN_PREVIEW_TALENTS", CMSG_LEARN_PREVIEW_TALENTS },
+        // respec: the "yes" on the client's confirm dialog after the trainer's
+        // unlearn gossip option answered with MSG_TALENT_WIPE_CONFIRM (the
+        // opcode is bidirectional; body u64 trainer guid)
+        { "MSG_TALENT_WIPE_CONFIRM", MSG_TALENT_WIPE_CONFIRM },
         // chat and emotes (whisper/party/yell ride CMSG_MESSAGECHAT)
         { "CMSG_MESSAGECHAT", CMSG_MESSAGECHAT },
         { "CMSG_EMOTE", CMSG_EMOTE },
@@ -606,6 +621,13 @@ namespace WrathBench
         else if (action == "stop")
         {
             PushTask([this, token, ack]() { DoStop(token, ack); });
+        }
+        else if (action == "talent_tree")
+        {
+            // A client-local read (Talent.dbc / TalentTab.dbc for the
+            // character's class), answered as a WB_TALENT_TREE event so the
+            // observation is logged like every other one. No packet is sent.
+            PushTask([this, token, ack]() { DoTalentTree(token, ack); });
         }
         else if (action == "face")
         {
@@ -2183,6 +2205,180 @@ namespace WrathBench
         return _taxiNodesLoaded;
     }
 
+    // WDBC reader for TalentTab.dbc (3.3.5a: 24 fields of 4 bytes, record
+    // size 96 — verified against the shipped file: id, name[16 locales +
+    // flags] from field 1 with enUS first, spell icon, race mask, class mask
+    // (field 20), pet talent mask, tab page (field 22), internal name). Same
+    // header as AreaTrigger.dbc above.
+    bool Manager::LoadTalentTabDbc(std::string const& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+            return false;
+        char magic[4];
+        uint32 recordCount = 0, fieldCount = 0, recordSize = 0, stringSize = 0;
+        in.read(magic, 4);
+        in.read(reinterpret_cast<char*>(&recordCount), 4);
+        in.read(reinterpret_cast<char*>(&fieldCount), 4);
+        in.read(reinterpret_cast<char*>(&recordSize), 4);
+        in.read(reinterpret_cast<char*>(&stringSize), 4);
+        if (!in || std::memcmp(magic, "WDBC", 4) != 0 || fieldCount != 24 || recordSize != 96)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' is not a 3.3.5a TalentTab.dbc (fields {}, record size {})", path, fieldCount, recordSize);
+            return false;
+        }
+        std::vector<char> recs(size_t(recordCount) * recordSize);
+        in.read(recs.data(), recs.size());
+        std::vector<char> strings(stringSize);
+        in.read(strings.data(), stringSize);
+        if (!in)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' truncated ({} records, {} string bytes expected)", path, recordCount, stringSize);
+            return false;
+        }
+        size_t loaded = 0;
+        for (uint32 i = 0; i < recordCount; ++i)
+        {
+            char const* rec = recs.data() + size_t(i) * recordSize;
+            uint32 id, nameOff, classMask, page;
+            std::memcpy(&id, rec, 4);
+            std::memcpy(&nameOff, rec + 1 * 4, 4);
+            std::memcpy(&classMask, rec + 20 * 4, 4);
+            std::memcpy(&page, rec + 22 * 4, 4);
+            TalentTabRec r;
+            r.classMask = classMask;
+            r.page = page;
+            if (nameOff < stringSize)
+                r.name = std::string(strings.data() + nameOff, strnlen(strings.data() + nameOff, stringSize - nameOff));
+            _talentTabs[id] = std::move(r);
+            ++loaded;
+        }
+        _talentTabsLoaded = loaded > 0;
+        LOG_INFO("module", "wrathbench: loaded {} talent tabs from '{}'", loaded, path);
+        return _talentTabsLoaded;
+    }
+
+    std::string Manager::FactionJson(uint32 repListId, int32 standing, Player* player) const
+    {
+        Json::Writer w;
+        w.Add("repListId", repListId);
+        auto it = _repListToFaction.find(repListId);
+        FactionEntry const* fe = it == _repListToFaction.end() ? nullptr : sFactionStore.LookupEntry(it->second);
+        if (fe)
+        {
+            w.Add("factionId", fe->ID);
+            if (fe->name[0])
+                w.Add("name", fe->name[0]);
+        }
+        w.Add("standing", standing);
+        // The client adds its own Faction.dbc base for the character's race
+        // and class (ReputationMgr::GetBaseReputation is the same arithmetic
+        // over the same masks); `reputation` is what the pane shows and what
+        // the Neutral/Friendly/... rank is read off.
+        if (fe && player)
+        {
+            uint32 raceMask = player->getRaceMask();
+            uint32 classMask = player->getClassMask();
+            int32 base = 0;
+            for (int i = 0; i < 4; ++i)
+            {
+                if ((fe->BaseRepRaceMask[i] & raceMask || (fe->BaseRepRaceMask[i] == 0 && fe->BaseRepClassMask[i] != 0))
+                    && (fe->BaseRepClassMask[i] & classMask || fe->BaseRepClassMask[i] == 0))
+                {
+                    base = fe->BaseRepValue[i];
+                    break;
+                }
+            }
+            w.Add("base", base).Add("reputation", base + standing);
+        }
+        return w.Str();
+    }
+
+    // The talent frame's contents for the player's class: every tab whose
+    // TalentTab.dbc class mask includes the class, each talent's grid
+    // position, rank spells (named from Spell.dbc), and prerequisite — the
+    // static picture a client draws from its own DBCs. Which ranks are
+    // learned is SMSG_TALENTS_INFO's business; the SDK joins the two.
+    std::string Manager::TalentTreeJson(Player* player) const
+    {
+        uint8 cls = player->getClass();
+        uint32 clsMask = cls ? 1u << (cls - 1) : 0;
+        struct Tab { uint32 id; uint32 page; };
+        std::vector<Tab> tabs;
+        for (uint32 i = 0; i < sTalentTabStore.GetNumRows(); ++i)
+        {
+            TalentTabEntry const* t = sTalentTabStore.LookupEntry(i);
+            if (!t || !(t->ClassMask & clsMask))
+                continue;
+            tabs.push_back({ t->TalentTabID, t->tabpage });
+        }
+        std::sort(tabs.begin(), tabs.end(), [](Tab const& a, Tab const& b) { return a.page < b.page; });
+        std::string tabsJson = "[";
+        for (size_t ti = 0; ti < tabs.size(); ++ti)
+        {
+            std::vector<TalentEntry const*> talents;
+            for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+            {
+                TalentEntry const* t = sTalentStore.LookupEntry(i);
+                if (t && t->TalentTab == tabs[ti].id)
+                    talents.push_back(t);
+            }
+            std::sort(talents.begin(), talents.end(), [](TalentEntry const* a, TalentEntry const* b) {
+                return a->Row != b->Row ? a->Row < b->Row : a->Col < b->Col;
+            });
+            std::string list = "[";
+            for (size_t k = 0; k < talents.size(); ++k)
+            {
+                TalentEntry const* t = talents[k];
+                Json::Writer tw;
+                tw.Add("talentId", t->TalentID);
+                uint32 maxRank = 0;
+                std::string ranks = "[";
+                for (uint32 r = 0; r < MAX_TALENT_RANK; ++r)
+                {
+                    if (!t->RankID[r]) break;
+                    if (r) ranks += ',';
+                    ranks += std::to_string(t->RankID[r]);
+                    ++maxRank;
+                }
+                ranks += "]";
+                if (SpellInfo const* info = sSpellMgr->GetSpellInfo(t->RankID[0]))
+                    if (info->SpellName[0])
+                        tw.Add("name", info->SpellName[0]);
+                tw.Add("row", t->Row).Add("col", t->Col).Add("maxRank", maxRank).Raw("ranks", ranks);
+                if (t->DependsOn)
+                    tw.Add("dependsOn", t->DependsOn).Add("dependsOnRank", t->DependsOnRank);
+                if (k) list += ',';
+                list += tw.Str();
+            }
+            list += "]";
+            Json::Writer tabW;
+            tabW.Add("tabId", tabs[ti].id);
+            auto nameIt = _talentTabs.find(tabs[ti].id);
+            if (nameIt != _talentTabs.end() && !nameIt->second.name.empty())
+                tabW.Add("name", nameIt->second.name);
+            tabW.Add("page", tabs[ti].page).Raw("talents", list);
+            if (ti) tabsJson += ',';
+            tabsJson += tabW.Str();
+        }
+        tabsJson += "]";
+        Json::Writer w;
+        w.Add("class", (uint32)cls).Add("unspentPoints", player->GetFreeTalentPoints()).Raw("tabs", tabsJson);
+        return w.Str();
+    }
+
+    void Manager::DoTalentTree(std::string token, std::shared_ptr<std::promise<HttpReply>> ack)
+    {
+        auto s = FindByToken(token);
+        Player* player = CheckActionSession(s, ack);
+        if (!player)
+            return;
+        std::string json = TalentTreeJson(player);
+        Audit(*s, "action", Json::Writer().Add("op", "talent_tree").Str());
+        EmitEvent(*s, "WB_TALENT_TREE", 0xFF08, json);
+        ack->set_value({200, Json::Writer().Add("ok", true).Add("action", "talent_tree").Add("token", token).Str()});
+    }
+
     // The wire carries dates as the client's packed bitfield
     // (ByteBuffer::AppendPackedTime: (year-2000)<<24 | month<<20 | (day-1)<<14
     // | weekday<<11 | hour<<6 | minute). Both the raw field and a readable
@@ -3300,6 +3496,39 @@ namespace WrathBench
                 if (index == PLAYER_FIELD_COINAGE)  { f.Add("money", v); return true; }
                 if (index == PLAYER_XP)             { f.Add("xp", v); return true; }
                 if (index == PLAYER_NEXT_LEVEL_XP)  { f.Add("nextLevelXp", v); return true; }
+                // Unspent talent points (PLAYER_CHARACTER_POINTS1, PRIVATE):
+                // the number on the talent frame; SMSG_TALENTS_INFO carries the
+                // same figure.
+                if (index == PLAYER_CHARACTER_POINTS1) { f.Add("talentPoints", v); return true; }
+                // Skills (FOLLOW-UPS 95): 128 lines x 3 packed u32s, PRIVATE
+                // to self. Served raw per field the way the quest log is, plus
+                // the client's SkillLine.dbc name beside each id so the SDK
+                // needs no table. The SDK's fold keeps only numbers in
+                // `fields` and lifts the name strings into its skill rows.
+                if (index >= PLAYER_SKILL_INFO_1_1 && index < PLAYER_SKILL_INFO_1_1 + 384)
+                {
+                    uint32 rel = index - PLAYER_SKILL_INFO_1_1;
+                    std::string key = "skill" + std::to_string(rel / 3);
+                    switch (rel % 3)
+                    {
+                        case 0:
+                        {
+                            uint32 id = v & 0xFFFF;
+                            f.Add(key + "Id", id).Add(key + "Step", v >> 16);
+                            if (id)
+                                if (SkillLineEntry const* sl = sSkillLineStore.LookupEntry(id))
+                                    if (sl->name[0])
+                                        f.Add(key + "Name", sl->name[0]);
+                            return true;
+                        }
+                        case 1:
+                            f.Add(key + "Value", v & 0xFFFF).Add(key + "Max", v >> 16);
+                            return true;
+                        default:
+                            f.Add(key + "TempBonus", (int32)int16(v & 0xFFFF)).Add(key + "PermBonus", (int32)int16(v >> 16));
+                            return true;
+                    }
+                }
                 // Quest log: 25 slots x 5 fields (id, state, counts lo/hi, time).
                 // Served raw; the SDK reassembles its quest-log view from them.
                 if (index >= PLAYER_QUEST_LOG_1_1 && index < PLAYER_QUEST_LOG_25_1 + 5)
@@ -4232,6 +4461,96 @@ namespace WrathBench
                     w.Raw("mask", mask).Raw("known", known);
                     break;
                 }
+                // -------------------------------------------- reputation
+                case SMSG_INITIALIZE_FACTIONS:
+                {
+                    // ReputationMgr::SendInitialReputations: u32 count (128),
+                    // then per reputation index: u8 flags, u32 standing. Sent
+                    // once during login. Only indices the server has a row for
+                    // (non-zero flags or standing) are served; the position is
+                    // the client's key into its own Faction.dbc.
+                    name = "SMSG_INITIALIZE_FACTIONS";
+                    uint32 count; p >> count;
+                    if (count > 256) throw ByteBufferException();
+                    Player* pl = ws->GetPlayer();
+                    std::string factions = "[";
+                    bool first = true;
+                    for (uint32 i = 0; i < count; ++i)
+                    {
+                        uint8 flags; int32 standing; p >> flags >> standing;
+                        if (!flags && !standing) continue;
+                        if (!first) factions += ',';
+                        first = false;
+                        Json::Writer fw;
+                        fw.Add("flags", (uint32)flags).Add("visible", (flags & 0x01) != 0).Add("atWar", (flags & 0x02) != 0);
+                        std::string body = FactionJson(i, standing, pl);
+                        // merge: FactionJson's object minus its braces
+                        std::string merged = fw.Str();
+                        merged.pop_back();
+                        merged += "," + body.substr(1);
+                        factions += merged;
+                    }
+                    factions += "]";
+                    w.Add("count", count).Raw("factions", factions);
+                    break;
+                }
+                case SMSG_SET_FACTION_STANDING:
+                {
+                    // ReputationMgr::SendState: f32 (refer-a-friend bonus,
+                    // unused), u8 showVisual (the "reputation increased"
+                    // chat line), u32 count, then (u32 repListId, u32
+                    // standing) x count — every faction whose standing
+                    // changed since the last send.
+                    name = "SMSG_SET_FACTION_STANDING";
+                    float bonus; uint8 show; uint32 count;
+                    p >> bonus >> show >> count;
+                    if (count > 256) throw ByteBufferException();
+                    Player* pl = ws->GetPlayer();
+                    std::string factions = "[";
+                    for (uint32 i = 0; i < count; ++i)
+                    {
+                        uint32 repListId; int32 standing; p >> repListId >> standing;
+                        if (i) factions += ',';
+                        factions += FactionJson(repListId, standing, pl);
+                    }
+                    factions += "]";
+                    w.Add("showVisual", show != 0).Raw("factions", factions);
+                    break;
+                }
+                case SMSG_SET_FACTION_VISIBLE:
+                {
+                    // ReputationMgr::SendVisible: u32 repListId — the faction
+                    // appears in the client's reputation pane from now on.
+                    name = "SMSG_SET_FACTION_VISIBLE";
+                    uint32 repListId; p >> repListId;
+                    w.Add("repListId", repListId);
+                    auto it = _repListToFaction.find(repListId);
+                    if (it != _repListToFaction.end())
+                    {
+                        w.Add("factionId", it->second);
+                        if (FactionEntry const* fe = sFactionStore.LookupEntry(it->second))
+                            if (fe->name[0])
+                                w.Add("name", fe->name[0]);
+                    }
+                    break;
+                }
+                // ------------------------------------------------ respec
+                case MSG_TALENT_WIPE_CONFIRM:
+                {
+                    // Player::SendTalentWipeConfirm (u64 trainer guid, u32
+                    // cost in copper) after the trainer's unlearn gossip
+                    // option: the client shows "unlearn all talents for X?"
+                    // and answers yes by echoing the opcode with the guid
+                    // (raw). HandleTalentWipeConfirmOpcode answers a refusal
+                    // (no talents to reset) with guid 0 and cost 0; success
+                    // has no packet of its own — SMSG_TALENTS_INFO follows
+                    // with every rank at 0 and the points back.
+                    name = "MSG_TALENT_WIPE_CONFIRM";
+                    uint64 guid = 0; uint32 cost = 0;
+                    p >> guid >> cost;
+                    w.AddGuid("guid", (uint64_t)guid).Add("cost", cost).Add("nothingToReset", guid == 0);
+                    break;
+                }
                 // ----------------------------------------- innkeeper bind
                 case SMSG_BINDER_CONFIRM:
                 {
@@ -4855,6 +5174,92 @@ namespace WrathBench
                      .Add("buyPrice", buyPrice).Add("sellPrice", sellPrice)
                      .Add("itemLevel", itemLevel).Add("requiredLevel", reqLevel)
                      .Add("class", itemClass).Add("subClass", subClass);
+                    // The rest of the tooltip (FOLLOW-UPS 97), in the order
+                    // WorldSession::HandleItemQuerySingleOpcode writes it:
+                    // requirements, stack/bag sizes, the stat list, two damage
+                    // ranges, armor and six resistances, speed, five spell
+                    // slots, bonding, description, then the page/quest/lock/
+                    // material block up to maxDurability. Everything after
+                    // (sockets, gems, duration, holiday) is left unread.
+                    uint32 reqSkill, reqSkillRank, reqSpell, reqHonor, reqCity, reqRepFaction, reqRepRank;
+                    p >> reqSkill >> reqSkillRank >> reqSpell >> reqHonor >> reqCity >> reqRepFaction >> reqRepRank;
+                    int32 maxCount, stackable; uint32 containerSlots, statsCount;
+                    p >> maxCount >> stackable >> containerSlots >> statsCount;
+                    if (statsCount > 10) throw ByteBufferException();
+                    std::string stats = "[";
+                    for (uint32 i = 0; i < statsCount; ++i)
+                    {
+                        uint32 type; int32 value; p >> type >> value;
+                        if (i) stats += ',';
+                        stats += Json::Writer().Add("type", type).Add("value", value).Str();
+                    }
+                    stats += "]";
+                    uint32 ssd, ssv; p >> ssd >> ssv;
+                    std::string damage = "[";
+                    bool firstDmg = true;
+                    for (int i = 0; i < 2; ++i)
+                    {
+                        float dmin, dmax; uint32 dtype; p >> dmin >> dmax >> dtype;
+                        if (dmin == 0 && dmax == 0) continue;
+                        if (!firstDmg) damage += ',';
+                        firstDmg = false;
+                        damage += Json::Writer().Add("min", (double)dmin).Add("max", (double)dmax).Add("type", dtype).Str();
+                    }
+                    damage += "]";
+                    uint32 armor; p >> armor;
+                    static char const* resName[6] = { "holy", "fire", "nature", "frost", "shadow", "arcane" };
+                    Json::Writer res; bool anyRes = false;
+                    for (int i = 0; i < 6; ++i)
+                    {
+                        uint32 r; p >> r;
+                        if (r) { res.Add(resName[i], r); anyRes = true; }
+                    }
+                    uint32 delay, ammoType; float rangedMod;
+                    p >> delay >> ammoType >> rangedMod;
+                    std::string spells = "[";
+                    bool firstSpell = true;
+                    for (int i = 0; i < 5; ++i)
+                    {
+                        uint32 spellId, trigger; int32 charges; uint32 cd, cat, catCd;
+                        p >> spellId >> trigger >> charges >> cd >> cat >> catCd;
+                        if (!spellId) continue;
+                        if (!firstSpell) spells += ',';
+                        firstSpell = false;
+                        Json::Writer sp;
+                        sp.Add("spellId", spellId).Add("trigger", trigger).Add("charges", charges);
+                        if (SpellInfo const* info = sSpellMgr->GetSpellInfo(spellId))
+                            if (info->SpellName[0])
+                                sp.Add("name", info->SpellName[0]);
+                        spells += sp.Str();
+                    }
+                    spells += "]";
+                    uint32 bonding; std::string description;
+                    p >> bonding >> description;
+                    uint32 pageText, languageId, pageMaterial, startQuest, lockId; int32 material;
+                    uint32 sheath, randomProperty, randomSuffix, block, itemSet, maxDurability;
+                    p >> pageText >> languageId >> pageMaterial >> startQuest >> lockId >> material
+                      >> sheath >> randomProperty >> randomSuffix >> block >> itemSet >> maxDurability;
+                    w.Add("requiredSkill", reqSkill).Add("requiredSkillRank", reqSkillRank);
+                    if (reqSkill)
+                        if (SkillLineEntry const* sl = sSkillLineStore.LookupEntry(reqSkill))
+                            if (sl->name[0])
+                                w.Add("requiredSkillName", sl->name[0]);
+                    if (reqSpell) w.Add("requiredSpell", reqSpell);
+                    if (reqRepFaction)
+                    {
+                        w.Add("requiredReputationFaction", reqRepFaction).Add("requiredReputationRank", reqRepRank);
+                        if (FactionEntry const* fe = sFactionStore.LookupEntry(reqRepFaction))
+                            if (fe->name[0])
+                                w.Add("requiredReputationFactionName", fe->name[0]);
+                    }
+                    w.Add("maxCount", maxCount).Add("stackable", stackable).Add("containerSlots", containerSlots)
+                     .Raw("stats", stats).Raw("damage", damage).Add("armor", armor);
+                    if (anyRes) w.Raw("resistances", res.Str());
+                    w.Add("speedMs", delay).Raw("spells", spells).Add("bonding", bonding);
+                    if (!description.empty()) w.Add("description", description);
+                    if (startQuest) w.Add("startQuest", startQuest);
+                    if (block) w.Add("block", block);
+                    w.Add("maxDurability", maxDurability);
                     break;
                 }
                 // ----------------------------------------------------- death

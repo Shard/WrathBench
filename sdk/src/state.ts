@@ -44,6 +44,21 @@ import {
   type CooldownEventData,
   type InitialSpellsData,
   type ItemQueryResponseData,
+  type ListInventoryData,
+  type LootItemData,
+  type LootResponseData,
+  type LootRemovedData,
+  type LootReleaseResponseData,
+  type TrainerListData,
+  type TrainerSpellData,
+  type VendorItem,
+  type InitializeFactionsData,
+  type ItemDamage,
+  type ItemSpell,
+  type ItemStat,
+  type SetFactionStandingData,
+  type SetFactionVisibleData,
+  type TalentTreeData,
   type LearnedSpellData,
   type MonsterMoveData,
   type RemovedSpellData,
@@ -486,7 +501,15 @@ export interface BagContents {
   readonly bags: readonly WornBag[];
 }
 
-/** What an item query answered about one item entry. */
+/**
+ * What an item query answered about one item entry: the tooltip. The fields
+ * past `buyPrice` (item 97) are `undefined` on events from a module older
+ * than 2026-08-29 and on items that simply have none (no stats, no damage).
+ * `inventoryType` is the equip slot class (1 head, 13 one-hand, 17 two-hand,
+ * 21 main hand, 22 off hand, 15 ranged, 18 bag, ...); `class` 2 weapon, 4
+ * armor, 0 consumable, 1 container, 12 quest; `bonding` 1 binds on pickup,
+ * 2 on equip, 3 on use, 4 quest item; `speedMs` is the weapon's swing time.
+ */
 export interface ItemInfo {
   readonly itemId: number;
   readonly name: string;
@@ -496,6 +519,122 @@ export interface ItemInfo {
   readonly requiredLevel: number | undefined;
   readonly sellPrice: number | undefined;
   readonly buyPrice: number | undefined;
+  readonly class: number | undefined;
+  readonly subClass: number | undefined;
+  readonly requiredSkill: { readonly id: number; readonly rank: number; readonly name: string | undefined } | undefined;
+  readonly requiredReputation: { readonly factionId: number; readonly rank: number; readonly name: string | undefined } | undefined;
+  readonly maxCount: number | undefined;
+  readonly stackable: number | undefined;
+  readonly containerSlots: number | undefined;
+  readonly stats: readonly ItemStat[] | undefined;
+  readonly damage: readonly ItemDamage[] | undefined;
+  readonly armor: number | undefined;
+  readonly resistances: Readonly<Record<string, number>> | undefined;
+  readonly speedMs: number | undefined;
+  readonly spells: readonly ItemSpell[] | undefined;
+  readonly bonding: number | undefined;
+  readonly description: string | undefined;
+  readonly startQuest: number | undefined;
+  readonly block: number | undefined;
+  readonly maxDurability: number | undefined;
+}
+
+/**
+ * One line of the character's skill pane (item 95), folded from the
+ * `PLAYER_SKILL_INFO` update fields. `value`/`max` are the pane's "150/225";
+ * `tempBonus`/`permBonus` the green modifier. `name` is the client's
+ * SkillLine.dbc text (`undefined` when the module could not read it).
+ */
+export interface SkillLine {
+  readonly skillId: number;
+  readonly name: string | undefined;
+  readonly value: number;
+  readonly max: number;
+  readonly tempBonus: number;
+  readonly permBonus: number;
+  readonly step: number;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/** The eight reputation ranks, as the client labels them. */
+export type ReputationRank = "Hated" | "Hostile" | "Unfriendly" | "Neutral" | "Friendly" | "Honored" | "Revered" | "Exalted";
+
+/**
+ * The client's rank for a reputation value (`base + standing`): the fixed
+ * 3.3.5 thresholds -42000/-6000/-3000/0/3000/9000/21000/42000.
+ */
+export function reputationRank(reputation: number): ReputationRank {
+  if (reputation >= 42000) return "Exalted";
+  if (reputation >= 21000) return "Revered";
+  if (reputation >= 9000) return "Honored";
+  if (reputation >= 3000) return "Friendly";
+  if (reputation >= 0) return "Neutral";
+  if (reputation >= -3000) return "Unfriendly";
+  if (reputation >= -6000) return "Hostile";
+  return "Hated";
+}
+
+/**
+ * One faction of the reputation pane (item 99): the fold of the login list
+ * (`SMSG_INITIALIZE_FACTIONS`) and every change since
+ * (`SMSG_SET_FACTION_STANDING`). `standing` is the wire's value, `base` the
+ * client's Faction.dbc base for this race/class, `reputation` their sum and
+ * `rank` its bucket. `visible` follows the login flags and
+ * `SMSG_SET_FACTION_VISIBLE`; the pane shows visible factions only.
+ */
+export interface ReputationEntry {
+  readonly repListId: number;
+  readonly factionId: number | undefined;
+  readonly name: string | undefined;
+  readonly standing: number;
+  readonly base: number | undefined;
+  readonly reputation: number;
+  readonly rank: ReputationRank;
+  readonly visible: boolean;
+  readonly atWar: boolean;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/** One talent of the class tree, with the ranks this character has taken merged in from the last `SMSG_TALENTS_INFO`. */
+export interface TalentTreeTalent {
+  readonly talentId: number;
+  readonly name: string | undefined;
+  /** 0-based tier (each tier needs 5 points in the tab below it). */
+  readonly row: number;
+  readonly col: number;
+  readonly maxRank: number;
+  /** The rank spells, first to last. */
+  readonly ranks: readonly number[];
+  /** Points spent here, 0..maxRank (the wire's 0-based rank + 1). */
+  readonly pointsSpent: number;
+  readonly dependsOn: number | undefined;
+  /** 0-based, as on the wire: the prerequisite must hold rank `dependsOnRank + 1`. */
+  readonly dependsOnRank: number | undefined;
+}
+
+export interface TalentTreeTab {
+  readonly tabId: number;
+  readonly name: string | undefined;
+  readonly page: number;
+  readonly talents: readonly TalentTreeTalent[];
+  /** Points spent in this tab. */
+  readonly pointsSpent: number;
+}
+
+/**
+ * The class talent frame (item 96): the last `WB_TALENT_TREE` (the answer to
+ * `queryTalentTree`) with the learned ranks from the last `SMSG_TALENTS_INFO`
+ * merged in at read time. `unspentPoints` follows the talents packet when
+ * one has arrived since.
+ */
+export interface TalentTree {
+  readonly class: number;
+  readonly unspentPoints: number;
+  readonly tabs: readonly TalentTreeTab[];
+  readonly seq: number;
+  readonly ts: number;
 }
 
 /**
@@ -664,6 +803,61 @@ export interface GossipMenu {
   readonly guid: GuidKey;
   readonly menuId: number;
   readonly options: readonly GossipMenuOption[];
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * A vendor's stock, as `SMSG_LIST_INVENTORY` last carried it for one NPC.
+ *
+ * The rows are the packet's own — `slot` is the 1-based number `buyItem` takes,
+ * `price` is already the discounted copper the client shows, and
+ * `leftInStock` -1 means unlimited. Nothing is derived here: whether an item is
+ * affordable, or an upgrade, is the caller's read over `state.money` and the
+ * item template.
+ *
+ * "Last observed", not "open": no packet closes a vendor frame, so this is the
+ * last list this session saw for that guid and `seq`/`ts` are how stale it is.
+ */
+export interface VendorWindow {
+  readonly guid: GuidKey;
+  readonly items: readonly VendorItem[];
+  /** The server's reason for an empty list, when it gave one. */
+  readonly emptyReason: number | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * What a trainer teaches, as `SMSG_TRAINER_LIST` last carried it for one NPC.
+ *
+ * Raw rows, exactly as `trainerList` receives them (`state` 0 available,
+ * 1 unavailable, 2 known); `learnable` and `affordable` are `trainerList`'s
+ * derivations and stay there. "Last observed", like the vendor window.
+ */
+export interface TrainerWindow {
+  readonly guid: GuidKey;
+  /** 0 class, 1 mount, 2 tradeskill, 3 pet — the server's own classification. */
+  readonly trainerType: number;
+  readonly spells: readonly TrainerSpellData[];
+  readonly greeting: string | undefined;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * The open loot window, as `SMSG_LOOT_RESPONSE` opened it and the loot packets
+ * since have changed it: a taken slot leaves `items` (`SMSG_LOOT_REMOVED`),
+ * taken gold zeroes `gold` (`SMSG_LOOT_CLEAR_MONEY`), and
+ * `SMSG_LOOT_RELEASE_RESPONSE` for this guid closes it. One at a time, because
+ * a client has one loot frame.
+ */
+export interface LootWindow {
+  /** The corpse or object being looted. */
+  readonly guid: GuidKey;
+  readonly lootType: number;
+  readonly gold: number;
+  readonly items: readonly LootItemData[];
   readonly seq: number;
   readonly ts: number;
 }
@@ -974,9 +1168,18 @@ export interface StateSnapshot {
   readonly gossip: ReadonlyMap<GuidKey, GossipMenu>;
   /** guid -> the flight master window last observed for that NPC. */
   readonly taxiWindows: ReadonlyMap<GuidKey, TaxiWindow>;
+  /** guid -> the stock list last observed for that vendor. */
+  readonly vendorWindows: ReadonlyMap<GuidKey, VendorWindow>;
+  /** guid -> the teaching list last observed for that trainer. */
+  readonly trainerWindows: ReadonlyMap<GuidKey, TrainerWindow>;
+  /** The open loot window, or undefined when none is open. */
+  readonly lootWindow: LootWindow | undefined;
   readonly spells: readonly KnownSpell[];
   readonly cooldowns: readonly SpellCooldown[];
   readonly talents: TalentState | undefined;
+  readonly talentTree: TalentTree | undefined;
+  readonly skills: readonly SkillLine[];
+  readonly reputation: readonly ReputationEntry[];
   readonly lastSeq: number;
   readonly eventCount: number;
 }
@@ -1067,6 +1270,33 @@ export class StateCache {
    * last word on what this character may fly to from there.
    */
   private readonly taxiWindows = new Map<GuidKey, TaxiWindow>();
+
+  /**
+   * guid -> the last vendor / trainer list seen for that NPC. Never cleared:
+   * no served packet closes either frame (module/PROTOCOL.md), and clearing
+   * them on some *other* window's close would be the cache inventing a server
+   * signal. They are "last observed", with seq/ts saying how long ago — the
+   * same shape `taxiWindows` already has.
+   */
+  private readonly vendorWindows = new Map<GuidKey, VendorWindow>();
+
+  private readonly trainerWindows = new Map<GuidKey, TrainerWindow>();
+
+  /** The open loot window. Cleared by the release the server does send. */
+  private lootWin: LootWindow | undefined;
+
+  /**
+   * Skill slot -> the SkillLine.dbc name the module put beside that slot's
+   * id (`skill<n>Name`, a string among the numeric update fields). Kept
+   * apart because `self.fields` holds numbers only.
+   */
+  private readonly skillNames = new Map<number, string>();
+
+  /** repListId -> the reputation row, in observation order. */
+  private readonly reputationMap = new Map<number, ReputationEntry>();
+
+  /** The last `WB_TALENT_TREE`, before the learned ranks are merged in. */
+  private talentTreeData: (TalentTreeData & { readonly seq: number; readonly ts: number }) | undefined;
 
   /**
    * spellId -> spellbook row. Replaced wholesale by `SMSG_INITIAL_SPELLS`
@@ -1419,6 +1649,34 @@ export class StateCache {
   }
 
   /**
+   * The stock list last observed for vendor `guid` (`SMSG_LIST_INVENTORY`),
+   * or `undefined` if none has been seen. Rows are the server's own; `slot` is
+   * what `buyItem(guid, itemId, slot)` takes. Nothing closes a vendor frame, so
+   * this survives walking away — read `seq`/`ts` for how old it is.
+   */
+  lastVendorList(guid: GuidKey): VendorWindow | undefined {
+    return this.vendorWindows.get(guid);
+  }
+
+  /**
+   * The teaching list last observed for trainer `guid` (`SMSG_TRAINER_LIST`),
+   * or `undefined` if none has been seen. Raw rows; `trainerList(npcGuid)` is
+   * the helper that asks and adds `learnable`/`affordable`.
+   */
+  lastTrainerList(guid: GuidKey): TrainerWindow | undefined {
+    return this.trainerWindows.get(guid);
+  }
+
+  /**
+   * The loot window currently open, or `undefined`. Its `items[].slot` is what
+   * `lootItem(slot)` takes; taken slots and taken gold leave it as the server
+   * says so, and the release closes it.
+   */
+  lastLoot(): LootWindow | undefined {
+    return this.lootWin;
+  }
+
+  /**
    * The spellbook as the server served it: every spell id the character
    * knows in its active spec, by id. Empty until `SMSG_INITIAL_SPELLS` has
    * arrived (it is sent during login, before the world is entered).
@@ -1448,6 +1706,121 @@ export class StateCache {
   /** The last `SMSG_TALENTS_INFO` for the player, or `undefined` before one arrived. */
   talents(): TalentState | undefined {
     return this.talentState;
+  }
+
+  /**
+   * The class talent frame: the last `WB_TALENT_TREE` (`queryTalentTree`)
+   * with each talent's `pointsSpent` read off the last `SMSG_TALENTS_INFO`.
+   * `undefined` until a tree has been queried.
+   */
+  talentTree(): TalentTree | undefined {
+    const tree = this.talentTreeData;
+    if (tree === undefined) return undefined;
+    const spent = new Map<number, number>();
+    for (const t of this.talentState?.talents ?? []) spent.set(t.talentId, t.rank + 1);
+    const tabs = tree.tabs.map((tab) => {
+      const talents = tab.talents.map((t) => ({
+        talentId: t.talentId,
+        name: t.name,
+        row: t.row,
+        col: t.col,
+        maxRank: t.maxRank,
+        ranks: [...t.ranks],
+        pointsSpent: spent.get(t.talentId) ?? 0,
+        dependsOn: t.dependsOn,
+        dependsOnRank: t.dependsOnRank,
+      }));
+      return { tabId: tab.tabId, name: tab.name, page: tab.page, talents, pointsSpent: talents.reduce((n, t) => n + t.pointsSpent, 0) };
+    });
+    const unspent =
+      this.talentState !== undefined && this.talentState.seq > tree.seq ? this.talentState.unspentPoints : tree.unspentPoints;
+    return { class: tree.class, unspentPoints: unspent, tabs, seq: tree.seq, ts: tree.ts };
+  }
+
+  /**
+   * The skill pane: every occupied `PLAYER_SKILL_INFO` slot on self, by
+   * skill id. Empty until the self create block has been seen.
+   */
+  skills(): SkillLine[] {
+    const out: SkillLine[] = [];
+    for (let slot = 0; slot < SKILL_SLOTS; slot++) {
+      const id = this.self.fields.get(`skill${slot}Id`);
+      if (!id || id.value === 0) continue;
+      const value = this.self.fields.get(`skill${slot}Value`);
+      const max = this.self.fields.get(`skill${slot}Max`);
+      const temp = this.self.fields.get(`skill${slot}TempBonus`);
+      const perm = this.self.fields.get(`skill${slot}PermBonus`);
+      const step = this.self.fields.get(`skill${slot}Step`);
+      let latest = id;
+      for (const f of [value, max, temp, perm]) if (f !== undefined && f.seq > latest.seq) latest = f;
+      out.push({
+        skillId: id.value,
+        name: this.skillNames.get(slot),
+        value: value?.value ?? 0,
+        max: max?.value ?? 0,
+        tempBonus: temp?.value ?? 0,
+        permBonus: perm?.value ?? 0,
+        step: step?.value ?? 0,
+        seq: latest.seq,
+        ts: latest.ts,
+      });
+    }
+    return out.sort((a, b) => a.skillId - b.skillId);
+  }
+
+  /** One skill line by id or by name (case-insensitive exact, else unique substring); `undefined` when the character lacks it. */
+  skill(key: number | string): SkillLine | undefined {
+    const all = this.skills();
+    if (typeof key === "number") return all.find((s) => s.skillId === key);
+    const q = key.trim().toLowerCase();
+    const named = all.filter((s) => s.name !== undefined);
+    const exact = named.find((s) => s.name!.toLowerCase() === q);
+    if (exact !== undefined) return exact;
+    const partial = named.filter((s) => s.name!.toLowerCase().includes(q));
+    return partial.length === 1 ? partial[0] : undefined;
+  }
+
+  /**
+   * The reputation pane: every faction the server has told this character
+   * about, visible ones first, then by name. Empty until login's
+   * `SMSG_INITIALIZE_FACTIONS`.
+   */
+  reputation(): ReputationEntry[] {
+    return [...this.reputationMap.values()].sort((a, b) =>
+      a.visible !== b.visible ? (a.visible ? -1 : 1) : (a.name ?? "").localeCompare(b.name ?? "") || a.repListId - b.repListId,
+    );
+  }
+
+  /** One reputation row by faction id or by name (case-insensitive exact, else unique substring). */
+  reputationWith(key: number | string): ReputationEntry | undefined {
+    const all = [...this.reputationMap.values()];
+    if (typeof key === "number") return all.find((r) => r.factionId === key);
+    const q = key.trim().toLowerCase();
+    const named = all.filter((r) => r.name !== undefined);
+    const exact = named.find((r) => r.name!.toLowerCase() === q);
+    if (exact !== undefined) return exact;
+    const partial = named.filter((r) => r.name!.toLowerCase().includes(q));
+    return partial.length === 1 ? partial[0] : undefined;
+  }
+
+  private foldFactionRow(row: FactionRowLike, seq: number, ts: number): void {
+    const prev = this.reputationMap.get(row.repListId);
+    const standing = row.standing;
+    const base = row.base ?? prev?.base;
+    const reputation = row.reputation ?? (base !== undefined ? base + standing : standing);
+    this.reputationMap.set(row.repListId, {
+      repListId: row.repListId,
+      factionId: row.factionId ?? prev?.factionId,
+      name: row.name ?? prev?.name,
+      standing,
+      base,
+      reputation,
+      rank: reputationRank(reputation),
+      visible: row.visible ?? prev?.visible ?? false,
+      atWar: row.atWar ?? prev?.atWar ?? false,
+      seq,
+      ts,
+    });
   }
 
   /** Name for a guid, if a name query ever returned one. Never guessed. */
@@ -1482,9 +1855,15 @@ export class StateCache {
       anomalies: [...this.anomalyBuf],
       gossip: new Map(this.gossipMenus),
       taxiWindows: new Map(this.taxiWindows),
+      vendorWindows: new Map(this.vendorWindows),
+      trainerWindows: new Map(this.trainerWindows),
+      lootWindow: this.lootWin,
       spells: this.spells(),
       cooldowns: this.cooldowns(),
       talents: this.talentState,
+      talentTree: this.talentTree(),
+      skills: this.skills(),
+      reputation: this.reputation(),
       lastSeq: this.lastSeq,
       eventCount: this.eventCount,
     };
@@ -1785,6 +2164,35 @@ export class StateCache {
         this.self.taxiReply = { value: { reply: d.reply, ok: d.ok }, seq: event.seq, ts: event.ts };
         return;
       }
+      case "WB_TALENT_TREE": {
+        const d = event.data as TalentTreeData;
+        this.talentTreeData = { ...d, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_INITIALIZE_FACTIONS": {
+        // The login list replaces whatever a previous session left: the
+        // server re-sends every row it has, and a faction it no longer
+        // lists is one the client would not show either.
+        const d = event.data as InitializeFactionsData;
+        this.reputationMap.clear();
+        for (const row of d.factions) this.foldFactionRow(row, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_SET_FACTION_STANDING": {
+        const d = event.data as SetFactionStandingData;
+        for (const row of d.factions) this.foldFactionRow(row, event.seq, event.ts);
+        return;
+      }
+      case "SMSG_SET_FACTION_VISIBLE": {
+        const d = event.data as SetFactionVisibleData;
+        const prev = this.reputationMap.get(d.repListId);
+        if (prev !== undefined) {
+          this.reputationMap.set(d.repListId, { ...prev, visible: true, seq: event.seq, ts: event.ts });
+        } else {
+          this.foldFactionRow({ repListId: d.repListId, factionId: d.factionId, name: d.name, standing: 0, visible: true }, event.seq, event.ts);
+        }
+        return;
+      }
       case "SMSG_SHOWTAXINODES": {
         // The flight master's window, per NPC. `known` is the module's decode
         // of the mask plus the client's TaxiNodes.dbc names; the mask itself
@@ -1902,6 +2310,30 @@ export class StateCache {
             requiredLevel: d.requiredLevel,
             sellPrice: d.sellPrice,
             buyPrice: d.buyPrice,
+            class: d.class,
+            subClass: d.subClass,
+            requiredSkill:
+              d.requiredSkill !== undefined && d.requiredSkill !== 0
+                ? { id: d.requiredSkill, rank: d.requiredSkillRank ?? 0, name: d.requiredSkillName }
+                : undefined,
+            requiredReputation:
+              d.requiredReputationFaction !== undefined && d.requiredReputationFaction !== 0
+                ? { factionId: d.requiredReputationFaction, rank: d.requiredReputationRank ?? 0, name: d.requiredReputationFactionName }
+                : undefined,
+            maxCount: d.maxCount,
+            stackable: d.stackable,
+            containerSlots: d.containerSlots,
+            stats: d.stats === undefined ? undefined : d.stats.map((s) => ({ type: s.type, value: s.value })),
+            damage: d.damage === undefined ? undefined : d.damage.map((x) => ({ min: x.min, max: x.max, type: x.type })),
+            armor: d.armor,
+            resistances: d.resistances === undefined ? undefined : { ...d.resistances },
+            speedMs: d.speedMs,
+            spells: d.spells === undefined ? undefined : d.spells.map((s) => ({ spellId: s.spellId, trigger: s.trigger, charges: s.charges, name: s.name })),
+            bonding: d.bonding,
+            description: d.description,
+            startQuest: d.startQuest,
+            block: d.block,
+            maxDurability: d.maxDurability,
           },
           seq: event.seq,
           ts: event.ts,
@@ -2050,6 +2482,69 @@ export class StateCache {
         // only honest fold is "nothing is open" — keeping a per-guid menu alive
         // past this would let a select fire against a stale menu.
         this.gossipMenus.clear();
+        return;
+      }
+      case "SMSG_LIST_INVENTORY": {
+        // The vendor's stock, per NPC. The packet's rows are kept verbatim —
+        // the price is already the discounted one the client shows, and what is
+        // affordable or worth buying is the caller's read, not the cache's.
+        const d = event.data as ListInventoryData;
+        this.vendorWindows.set(d.vendorGuid, {
+          guid: d.vendorGuid,
+          items: d.items.map((i) => ({ ...i })),
+          emptyReason: d.emptyReason,
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_TRAINER_LIST": {
+        const d = event.data as TrainerListData;
+        this.trainerWindows.set(d.guid, {
+          guid: d.guid,
+          trainerType: d.trainerType,
+          spells: d.spells.map((sp) => ({ ...sp })),
+          greeting: d.greeting,
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_LOOT_RESPONSE": {
+        const d = event.data as LootResponseData;
+        this.lootWin = {
+          guid: d.guid,
+          lootType: d.lootType,
+          gold: d.gold,
+          items: d.items.map((i) => ({ ...i })),
+          seq: event.seq,
+          ts: event.ts,
+        };
+        return;
+      }
+      case "SMSG_LOOT_REMOVED": {
+        // One slot was taken (by us or, in a group, by someone else): the
+        // client removes that row from the frame, so the cache does too.
+        const d = event.data as LootRemovedData;
+        if (this.lootWin === undefined) return;
+        this.lootWin = {
+          ...this.lootWin,
+          items: this.lootWin.items.filter((i) => i.slot !== d.slot),
+          seq: event.seq,
+          ts: event.ts,
+        };
+        return;
+      }
+      case "SMSG_LOOT_CLEAR_MONEY": {
+        if (this.lootWin === undefined) return;
+        this.lootWin = { ...this.lootWin, gold: 0, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_LOOT_RELEASE_RESPONSE": {
+        // The one close the server does send, and it names the object — so a
+        // release for something else leaves this window alone.
+        const d = event.data as LootReleaseResponseData;
+        if (this.lootWin?.guid === d.guid) this.lootWin = undefined;
         return;
       }
       default:
@@ -2434,6 +2929,13 @@ export class StateCache {
         if (typeof raw === "string" && "targetGuid" in target) {
           target.targetGuid = { value: raw, seq, ts };
         }
+        continue;
+      }
+      // The skill pane's names ride beside the ids as strings (item 95);
+      // they live in their own map because `fields` holds numbers only.
+      if (target === this.self && typeof raw === "string") {
+        const m = /^skill(\d+)Name$/.exec(key);
+        if (m !== null) this.skillNames.set(Number(m[1]), raw);
         continue;
       }
       // Unknown extras a newer module serves come through the loose schema as
@@ -2991,6 +3493,21 @@ const QUEST_LOG_SLOTS = 25;
 const QUEST_STATE_COMPLETE = 1;
 /** Equipment + bags are 0-22, backpack 23-38 (PROTOCOL.md). */
 const INVENTORY_LAST_SLOT = 38;
+/** `PLAYER_SKILL_INFO_1_1` holds 128 skill slots of three packed u32s each. */
+const SKILL_SLOTS = 128;
+
+/** What `foldFactionRow` needs of a wire row (the login flags are optional). */
+interface FactionRowLike {
+  readonly repListId: number;
+  readonly factionId?: number | undefined;
+  readonly name?: string | undefined;
+  readonly standing: number;
+  readonly base?: number | undefined;
+  readonly reputation?: number | undefined;
+  readonly visible?: boolean | undefined;
+  readonly atWar?: boolean | undefined;
+}
+
 /** First/last backpack slot in the `invSlot<n>` numbering, and its size. */
 const BACKPACK_FIRST_SLOT = 23;
 const BACKPACK_SIZE = 16;

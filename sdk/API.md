@@ -64,6 +64,8 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `activateTaxi` | `activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options?): Promise<ActivateTaxiResult>` | Fly from the master's node to a known node by name or id (resolved against state.lastTaxiNodes(guid)); returns accepted or refused with the server's reply code and a hint. The ride is state.self.taxiFlight. |
 | `bindAtInnkeeper` | `bindAtInnkeeper(npcGuid: GuidOrUnit, options?): Promise<BindResult>` | Make an inn the Hearthstone's home the way a client does (gossip, the home option, confirm) and return the new bind point (also state.self.bindPoint). |
 | `learnTalent` | `learnTalent(talentId, rank, options?): Promise<LearnTalentResult>` | Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents(). |
+| `queryTalentTree` | `queryTalentTree(options?): Promise<TalentTree>` | The class talent frame: tabs [{ tabId, name, page, pointsSpent, talents: [{ talentId, name, row, col, maxRank, ranks, pointsSpent, dependsOn, dependsOnRank }] }] plus unspentPoints; static per class, also state.talentTree(). |
+| `resetTalents` | `resetTalents(npcGuid: GuidOrUnit, options?): Promise<ResetTalentsResult>` | Unlearn all talents at a class trainer the way a client does (gossip, the unlearn option, confirm at the quoted cost); returns reset with the new state.talents(), or refused (nothing to unlearn / not enough money). |
 | `waitForChat` | `waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>` | Wait for a chat line matching a string or predicate. |
 | `waitForNearby` | `waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>` | Wait until an object in view satisfies the predicate. |
 | `waitForTransfer` | `waitForTransfer({ timeout?, sinceSeq?, expectMap? }): Promise<TransferResult>` | Wait for a map transfer's server verdict: transferred (SMSG_NEW_WORLD) / aborted / waiting / no_transfer / wrong_map. moveTo already does this when a portal takes the character. |
@@ -112,6 +114,7 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `trainerListAsync` | `trainerListAsync(guid: GuidArg): Promise<ActionResponse>` | Ask a trainer for its list without waiting (prefer trainerList). |
 | `trainerBuySpellAsync` | `trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>` | Buy a spell without waiting (prefer buySpell). |
 | `learnTalentAsync` | `learnTalentAsync(talentId, rank): Promise<ActionResponse>` | Spend a talent point without waiting (prefer learnTalent). |
+| `talentTreeAsync` | `talentTreeAsync(): Promise<ActionResponse>` | Ask for the class talent tree without waiting for the WB_TALENT_TREE answer (prefer queryTalentTree). |
 | `raw` | `raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>` | Escape hatch: send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: "x" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md "raw". The answer arrives on sdk.events only if its opcode is whitelisted there. |
 
 ## State reads (`state.*`)
@@ -136,11 +139,19 @@ zero.
 | `questLog` | `get state.questLog: QuestLogEntry[]` | All quest-log entries. |
 | `lastTaxiNodes` | `state.lastTaxiNodes(guid): TaxiWindow | undefined` | The flight master window last observed for a guid: current node, known (visited) nodes with their names, the taximask verbatim (what activateTaxi resolves against). |
 | `lastGossip` | `state.lastGossip(guid): GossipMenu | undefined` | The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against). |
+| `lastVendorList` | `state.lastVendorList(guid): VendorWindow | undefined` | The stock last observed for a vendor: { items: [{ slot (1-based, what buyItem takes), itemId, price (discounted copper), buyCount, leftInStock (-1 unlimited), extendedCost }], emptyReason, seq, ts }. Last observed, not open: nothing closes a vendor frame. |
+| `lastTrainerList` | `state.lastTrainerList(guid): TrainerWindow | undefined` | The teaching list last observed for a trainer: { trainerType, spells: [{ spellId, state (0 available, 1 unavailable, 2 known), cost, reqLevel, reqSkill, reqSkillValue }], greeting, seq, ts }. Raw rows; trainerList(npcGuid) asks and adds learnable/affordable. |
+| `lastLoot` | `state.lastLoot(): LootWindow | undefined` | The open loot window: { guid, lootType, gold, items: [{ slot (what lootItem takes), itemId, count, slotType }], seq, ts }. Taken slots and taken gold leave it; the release closes it. |
 | `aurasOf` | `state.aurasOf(guid): AuraEntry[]` | Observed auras on a unit, by slot. |
 | `spells` | `state.spells(): KnownSpell[]` | The spellbook the server served: [{ spellId, rank, name }] for every spell the character knows (empty until login's SMSG_INITIAL_SPELLS; kept current by learned/removed/superseded events). |
 | `spell` | `state.spell(spellId): KnownSpell | undefined` | One spellbook row by id; undefined means the character does not know that spell. |
 | `cooldowns` | `state.cooldowns(now?): SpellCooldown[]` | Spells still on cooldown: [{ spellId, readyAt (epoch ms, or undefined when the server gave no duration), cooldownMs }]. |
 | `talents` | `state.talents(): TalentState | undefined` | Last SMSG_TALENTS_INFO: { unspentPoints, activeSpec, specCount, talents: [{ talentId, rank (0-based) }] }. |
+| `talentTree` | `state.talentTree(): TalentTree | undefined` | The class talent frame last answered by queryTalentTree, with pointsSpent per talent merged from the latest SMSG_TALENTS_INFO; undefined until queried. |
+| `skills` | `state.skills(): SkillLine[]` | The skill pane: [{ skillId, name, value, max, tempBonus, permBonus }] for every skill line the character has (weapons, armor, professions, languages), from the self update fields. |
+| `skill` | `state.skill(idOrName): SkillLine | undefined` | One skill line by id or name (exact, else unique substring); undefined when the character lacks it. |
+| `reputation` | `state.reputation(): ReputationEntry[]` | The reputation pane: [{ factionId, name, standing, base, reputation, rank: "Hated"…"Exalted", visible, atWar }] from login's SMSG_INITIALIZE_FACTIONS and every SMSG_SET_FACTION_STANDING since; visible factions first. |
+| `reputationWith` | `state.reputationWith(factionIdOrName): ReputationEntry | undefined` | One reputation row by faction id or name (exact, else unique substring). |
 | `nameOf` | `state.nameOf(guid): string | undefined` | The name for a guid, if a name query ever returned one. |
 | `snapshot` | `state.snapshot(): StateSnapshot` | A frozen plain-object copy of the whole cache. |
 | `target` | `get state.target: NearbyObject | undefined` | The object our own target points at, when it is also in view. |
