@@ -198,6 +198,29 @@ time into the SDK so a hint can say a walk was always longer than the caller
 had left. No wait shortens and no call is refused because of it — capping
 would silently change what is measured without appearing in any tuple field.
 
+**A fact about the world is in the prompt's remit; a strategy hint is not.**
+The system prompt describes the world, the runtime surface, the tools and the
+goal, and the extent of the world is one of those facts: the prompt states
+that this is the complete, unmodified 3.3.5a world, that every zone, city,
+road, flight path, boat and tram a player could use exists and is reachable,
+and that nothing has been walled off for the benchmark. It names no
+destination, direction or timing, so it steers no play — a player knows this
+much before logging in. Observed need: two opus-low freeplay runs (e360,
+2026-08-26, and a11, 2026-08-29) concluded from local pathing failures that
+the starter valley was walled and wrote that into the scratchpad as a hard
+fact, spending the rest of the episode inside it, while fable and sonnet runs
+on the same build left the valley. Operator decision 2026-08-29. What to do
+when a move fails stays out: that is strategy, and it was explicitly
+rejected.
+
+**A harness message addressed to the model is delivered by the harness.**
+Anything the harness has to say to the model — a per-status hint, a notice —
+reaches it through a channel the model's own code cannot drop. Attaching it
+to a return value and trusting the snippet to keep the field is not delivery:
+a11 (2026-08-29) took 41 refusals carrying the hint that would have unstuck
+it and read none of them, because its loops kept only `.status`. Operator
+decision 2026-08-29.
+
 ## Context policy
 
 One fixed context for every model; the authoritative encoding is
