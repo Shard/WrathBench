@@ -212,7 +212,6 @@ const SNAP_NAMES = [
   "results.json",
   "ladder-e90.json",
   "ladder-e360.json",
-  "ladder-probing.json",
   "ladder-freeplay.json",
   "episodes.json",
   "models.json",

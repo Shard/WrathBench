@@ -163,13 +163,16 @@ status.
     on a scored run is unrecoverable (scored lanes never resume).
 
 92. **Show freeplay lineage on the runs page** (2026-08-29, with the durable
-    stream). A continued freeplay run records `continued_from` (run row, meta.json,
-    `continue` record), but `runner/viewer/runs.ts` does not read it yet and the
-    dashboard shows attempt 12 as unrelated to attempt 11. Trigger: the first
+    stream; amended the same day). The field half is done: `continuedFrom` is on
+    `RunRow` and `ResultRun`, read from `continued_from` with meta as the fallback
+    (`runner/viewer/runs.ts`), and the freeplay ladder now collapses a stream to
+    one row with its attempt count and chain (`streamRows`). What is left is the
+    **runs page**: `/runs` still lists a12 next to a11 as unrelated rows, and the
+    run page says nothing about what a run continues. Trigger: the first
     continuation lands (sub-opus-low's a12 on Bromdir, once the ref is flipped back
-    to `unlimited` after the fleet recreate). Next action: a `continuedFrom` field
-    on the run row, and the runs page linking a stream's attempts as one line —
-    the viewer files were another agent's on the day it shipped.
+    to `unlimited` after the fleet recreate). Next action: a lineage line on
+    `RunDetail.tsx` ("continues <run>", linked) and a stream marker in the runs
+    table, both off the `continuedFrom` field that now exists.
 
 ## Docs and release
 

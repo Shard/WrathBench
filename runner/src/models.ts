@@ -943,7 +943,7 @@ export function driverOf(r: { name: string; driver?: string }): Driver {
  * terminates and no listing shows one, but the ladder is made of them, so the
  * projection (which reads the archive) still has to name the state.
  */
-export function stillbornOf(f: RunFact): boolean | null {
+export function stillbornOf(f: Pick<RunFact, "live" | "pause" | "modelResponses">): boolean | null {
   if (f.modelResponses === null) return null;
   // Paused: undecided. A 0-response rate-limited pause is a launch still in
   // progress as far as the policy is concerned (the roster retries it).

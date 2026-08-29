@@ -63,6 +63,7 @@ function run(p: Partial<RunRow> = {}): RunRow {
     terminationReason: null,
     terminationDetail: null,
     pauseReason: null,
+    continuedFrom: null,
     level: 4,
     xp: 10,
     money: null,

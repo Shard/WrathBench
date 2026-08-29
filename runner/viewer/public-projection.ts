@@ -244,6 +244,9 @@ function projectRunRow(r: RunRow): RunRow {
     // above is the public fact.
     terminationDetail: null,
     pauseReason: pausedToken(r.pauseReason),
+    // A run id, which every public listing already carries; the lineage is the
+    // only thing that makes a freeplay stream legible as one character.
+    continuedFrom: r.continuedFrom,
     level: r.level,
     xp: r.xp,
     money: r.money,
@@ -332,6 +335,8 @@ function projectResultRun(r: ResultRun): ResultRun {
     ...(r.taxi !== undefined ? { taxi: r.taxi === null ? null : projectTaxi(r.taxi) } : {}),
     // The token, never the prose; same rule as the run row's.
     pauseReason: pausedToken(r.pauseReason),
+    continuedFrom: r.continuedFrom,
+    stillborn: r.stillborn,
   };
 }
 

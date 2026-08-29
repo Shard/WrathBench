@@ -70,6 +70,8 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
     tokens: null,
     actualCost: null,
     pauseReason: null,
+    continuedFrom: null,
+    stillborn: null,
     ...p,
   };
 }

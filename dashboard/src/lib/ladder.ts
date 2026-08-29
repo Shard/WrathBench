@@ -753,3 +753,151 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
     py,
   };
 }
+
+/* ------------------------------------------------------- freeplay streams */
+
+/**
+ * The freeplay ladder is a different question, and so a different derivation.
+ *
+ * Operator decision, 2026-08-29: it is **an overview of the top characters on
+ * freeplay right now** — the whole active field, not a leaderboard of finished
+ * evidence. So `scored()` is not applied here, and it is not that a filter was
+ * forgotten: every freeplay run is `unscored (episode freeplay)` by definition
+ * (`unscoredReason` in `runner/viewer/results.ts`), which is exactly why
+ * `ladderRows` showed this page an empty table. What is dropped instead is a
+ * launch that produced nothing — `stillborn`, the scheduler's own notion,
+ * decided server-side — and nothing else. Live, paused and ended runs all
+ * belong on this page; their state is a column, not a filter.
+ *
+ * And a stream is **one character across attempts** (docs/OPERATIONS.md,
+ * "Freeplay streams are durable"). A row is a stream, not a run and not a
+ * model: attempt 12 continues attempt 11 on the same character, so listing
+ * both would show the same character twice with the older one looking behind.
+ * The lineage is `continuedFrom`; the latest attempt carries the character's
+ * current level and state, and the chain rides along so a reader can see how
+ * many attempts are behind it.
+ *
+ * The scored ladders are untouched — `ladderRows` is still keyed by model and
+ * still reads scored runs only.
+ */
+
+/** What a stream is doing now. */
+export type StreamStatus = "live" | "paused" | "ended";
+
+export interface StreamRow {
+  /** The chain root's run id: the stream's identity across attempts. */
+  streamId: string;
+  model: string;
+  /** The latest attempt — the run whose readings this row shows. */
+  latest: ResultRun;
+  /** Attempts in the chain, oldest first. `attempts` is its length. */
+  chain: string[];
+  attempts: number;
+  status: StreamStatus;
+  /**
+   * The recorded reason behind `status`: the pause reason while paused, the
+   * termination reason once ended, null while live. A stream whose ref an
+   * operator disabled reads `paused (operator-pause)` or its ending — the run
+   * row is the only source here and "disabled" is a fact about the roster.
+   */
+  statusDetail: string | null;
+  character: string | null;
+  characterLabel: string | null;
+  harness: string | null;
+  level: number | null;
+  xp: number | null;
+  money: number | null;
+  questsCompleted: number | null;
+  startedAt: number | null;
+}
+
+function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null } {
+  if (r.pauseReason !== null) return { status: "paused", detail: r.pauseReason };
+  if (r.live === true) return { status: "live", detail: null };
+  return { status: "ended", detail: r.terminationReason };
+}
+
+/**
+ * Collapse a set of freeplay runs into one row per stream.
+ *
+ * The chain walk has to survive production, so it is written for it:
+ *
+ * - a `continuedFrom` naming a run this set does not hold — the predecessor
+ *   was archived, filtered out, or its link was dropped when the character
+ *   went away (`dropContinuation`) — makes this run a root rather than
+ *   dropping it;
+ * - two runs claiming the same predecessor both keep it as a parent, and the
+ *   later-started one wins the row (a re-launch that lost its race);
+ * - a cycle cannot happen, and if a malformed one ever did, the visited set
+ *   ends the walk instead of the page hanging.
+ *
+ * Order: level, then xp within it, then gold — the same "furthest, then
+ * richest" comparison the scored ladder uses, with a missing reading sorting
+ * last rather than as zero. Ties fall back to the most recent start and then
+ * the stream id, so the order is total and stable.
+ */
+export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
+  const kept = runs.filter((r) => r.stillborn !== true);
+  const byId = new Map(kept.map((r) => [r.runId, r]));
+  /** Walk to the chain's root, collecting the ids on the way. */
+  const chainOf = (r: ResultRun): string[] => {
+    const ids: string[] = [r.runId];
+    const seen = new Set<string>([r.runId]);
+    let cur = r;
+    for (;;) {
+      const prev = cur.continuedFrom;
+      if (prev === null || seen.has(prev)) break;
+      const parent = byId.get(prev);
+      if (parent === undefined) break;
+      ids.unshift(prev);
+      seen.add(prev);
+      cur = parent;
+    }
+    return ids;
+  };
+  // One entry per root, holding the attempt that got furthest along the chain:
+  // the longest chain wins, and a tie is broken by the later start.
+  const best = new Map<string, { chain: string[]; run: ResultRun }>();
+  for (const r of kept) {
+    const chain = chainOf(r);
+    const root = chain[0]!;
+    const held = best.get(root);
+    if (
+      held === undefined ||
+      chain.length > held.chain.length ||
+      (chain.length === held.chain.length && (r.startedAt ?? 0) > (held.run.startedAt ?? 0))
+    ) {
+      best.set(root, { chain, run: r });
+    }
+  }
+  const rows: StreamRow[] = [];
+  for (const [streamId, { chain, run }] of best) {
+    const { status, detail } = statusOf(run);
+    rows.push({
+      streamId,
+      model: run.model ?? "(unnamed)",
+      latest: run,
+      chain,
+      attempts: chain.length,
+      status,
+      statusDetail: detail,
+      character: run.character,
+      characterLabel: run.characterLabel,
+      harness: run.harness,
+      level: run.maxLevel,
+      xp: run.xp,
+      money: run.money,
+      questsCompleted: run.questsCompleted,
+      startedAt: run.startedAt,
+    });
+  }
+  rows.sort(
+    (a, b) =>
+      desc(b.level, a.level) ||
+      desc(b.xp, a.xp) ||
+      desc(b.money, a.money) ||
+      desc(b.startedAt, a.startedAt) ||
+      a.streamId.localeCompare(b.streamId),
+  );
+  return rows;
+}

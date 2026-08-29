@@ -158,6 +158,7 @@ function runRowFixture(): RunRow {
     objective: POISON.objective,
     campaign: "sweep-1",
     cell: "cell-a",
+    continuedFrom: "fixture-run-0",
     extra: false,
     character: POISON.character,
     race: 3,
@@ -288,6 +289,8 @@ function resultsFixture(): ResultsResponse {
         achievements: { earned: 2, points: 20, ids: [6, 12] },
         taxi: { flights: 1 },
         pauseReason: POISON.pauseReason,
+        continuedFrom: "fixture-run-0",
+        stillborn: false,
       }),
     ],
     episode: "all",
@@ -348,6 +351,7 @@ const RUN_ROW_KEYS = [
   "terminationReason",
   "terminationDetail",
   "pauseReason",
+  "continuedFrom",
   "level",
   "xp",
   "money",
@@ -457,6 +461,8 @@ const RESULT_RUN_KEYS = [
   "taxi",
   "taxi.flights",
   "pauseReason",
+  "continuedFrom",
+  "stillborn",
 ];
 
 /* ---------------------------------------------------------------- tests --- */
