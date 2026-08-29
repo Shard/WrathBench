@@ -17,10 +17,11 @@ status.
 
 ## Next up
 
-1. **95–101** — the basic player surface (skills, talents, item stats, pets,
-   reputation, the dropped replies, legibility). Operator's decision 2026-08-29:
-   complete it, validated by smoke tests, before any 0.6 talk. 95/96/97/99 are
-   with the module agent; 101 is in hand.
+1. **98, 100** — what is left of the basic player surface: the pet surface, and
+   the group/mail/bank/trade replies. Operator's decision 2026-08-29: complete it,
+   validated by smoke tests, before any 0.6 talk. 95/96/97/99 shipped 2026-08-29
+   (97f4e31, built to `:next` and undeployed; retiring their entries below is the
+   module agent's), and 101 shipped the same day (97f4e31 + dc8c9aa).
 2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
 3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
@@ -39,8 +40,9 @@ ever called `sdk.raw()` and the highest level reached was 9, so nothing below is
 "a trajectory asked for it" — it is the surface a player needs before a run can
 get far enough to ask. **Operator's decision, 2026-08-29: complete the basic
 player surface, each piece validated by a smoke test, before any 0.6 talk.**
-Numbers 95–100 are observation/action gaps that need the module; 101 is
-legibility work inside the SDK and runner.
+Numbers 95–100 are observation/action gaps that need the module. Item 101, the
+legibility work inside the SDK and runner, shipped the same day (97f4e31 +
+dc8c9aa; worklogs/2026-08-29).
 
 95. **Skills and professions are not observed** (2026-08-29 audit). The
     observation contract already promises "skills … as the client shows it"
@@ -99,31 +101,6 @@ legibility work inside the SDK and runner.
     the allowlist and is a separate decision, not part of this item. Unblocked by
     a reply tap per surface, each earning its own smoke test; group first, since
     rung 6 needs a party record (item 35). Status: queued.
-
-101. **Legibility: the failures and windows the model cannot read** (2026-08-29
-    audit). Two SDK/runner-side pieces, no module work:
-    - **101a — inventory failures are bare numbers.** `SMSG_INVENTORY_CHANGE_FAILURE`
-      renders in the event window as its raw `result` code, and a run was
-      observed reverse-engineering "reason 60" into "in combat" from context.
-      Map the 3.3.5a `InventoryResult` codes to short client-visible text and
-      deliver it through the existing per-failed-call hint path — plain per-call
-      text, no counters and no thresholds (docs/METHODOLOGY.md, "Softening").
-    - **101b — vendor, trainer and loot windows are transient events only.** A
-      vendor list or a trainer list exists for exactly the one event that carried
-      it; a snippet that read it two turns ago has to ask again. Fold the latest
-      window per NPC (and per corpse for loot) into `StateSnapshot` the way
-      `gossip` and `taxiWindows` already are, cleared on the close the server
-      actually sends.
-
-    Status: both halves are written, typechecked and green **in the worktree and
-    uncommitted** — no pathspec separates them from the module agent's in-flight
-    SDK work for 95/96/97/99, so they land unchanged on top of its SDK commit.
-    Nobody should start 101 from scratch; the write-up, including what each half
-    does and why, is in `docs/worklogs/2026-08-29.md`. One open question for the
-    operator: nothing the server sends closes a vendor or trainer frame, so those
-    two folds never expire and read as "last observed" with `seq`/`ts` (the loot
-    window does close, on its release). Making them expire needs a module tap for
-    the close, not a rule invented in the cache.
 
 ## Navigation
 
