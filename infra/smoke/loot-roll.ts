@@ -2,8 +2,9 @@
  * Probe for group loot rolls (FOLLOW-UPS 102): `SMSG_LOOT_START_ROLL` folded
  * into `state.pendingRolls()` on every member, `lootRoll` (by name or roll
  * guid) sending `CMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL` / `SMSG_LOOT_ROLL_WON`
- * echoing the votes and the verdict, need beating greed, and the late vote
- * refused as `no_pending_roll` with a hint.
+ * echoing the votes and the verdict, need beating greed, the won item
+ * landing in the winner's bag (there is no ITEM_PUSH_RESULT for a roll), and
+ * the late vote refused as `no_pending_roll` with a hint.
  *
  * It FAILS against any worldserver built before the tap. Run it only after
  * the image is deployed: it is the gate for the item 102 build.
@@ -26,7 +27,7 @@
  * uncommon threshold by default) -> A opens the chest (lootCorpse casts the
  * lock's Opening spell) -> both see SMSG_LOOT_START_ROLL for the same roll
  * guid, a named uncommon, need/greed offered -> A needs by name, B greeds by
- * roll guid -> SMSG_LOOT_ROLL_WON names A, the item is pushed to A -> B's
+ * roll guid -> SMSG_LOOT_ROLL_WON names A, the item appears in A's bag -> B's
  * late vote is no_pending_roll with a hint -> leave, logout, delete both.
  *
  * Run from inside the network:
@@ -154,14 +155,31 @@ try {
     if (!needed.ok) fail(`A's need refused: ${needed.status} — ${needed.hint}`);
     const greeded = await b.lootRoll(roll.rollGuid, "greed", { timeout: 15_000 });
     if (!greeded.ok) fail(`B's greed refused: ${greeded.status} — ${greeded.hint}`);
-    log(`rolled: A need ${needed.roll}, B greed ${greeded.roll}`);
+    // Both acks are acknowledgements, not rolls: CountRollVote echoes need as
+    // rollNumber 0 / rollType 0 and greed as 128, and the numbers actually
+    // rolled only go out in CountTheRoll's batch. `rolled` is the assertion.
+    // `choice` is the button passed in (the ack cannot be read back for it) and
+    // `roll` is undefined on every ack, so neither is a server-sourced fact:
+    // the verdict's rollType below is what proves need beat greed.
+    log(`rolled: A ${needed.status} ${needed.choice}, B ${greeded.status} ${greeded.choice}`);
     if (a.state.pendingRolls().length !== 0 || b.state.pendingRolls().length !== 0) fail("a voted roll is still pending");
     const verdict = await wonOnA;
     log(`${verdict.opcode}: ${JSON.stringify(verdict.data)}`);
     if (!isEvent(verdict, "SMSG_LOOT_ROLL_WON")) fail("everyone passed?");
     if ((verdict.data as any).winnerGuid !== a.state.self.guid) fail(`winner ${(verdict.data as any).winnerGuid}, expected ${NAME_A} (need over greed)`);
-    await a.events.waitFor((e) => isEvent(e, "SMSG_ITEM_PUSH_RESULT") && !isDecodeError(e.data) && (e.data as any).itemId === roll.itemId, { timeout: 15_000 });
-    log(`PASS verdict: ${NAME_A} won ${JSON.stringify(roll.name)} and it was pushed`);
+    if ((verdict.data as any).itemId !== roll.itemId) fail(`the verdict is for item ${(verdict.data as any).itemId}, not ${roll.itemId}`);
+    if ((verdict.data as any).rollType !== 1) fail(`the verdict's rollType is ${(verdict.data as any).rollType}, expected 1 (need beating greed)`);
+    // Group::CountTheRoll stores the won item with StoreNewItem and never
+    // calls SendNewItem, so no SMSG_ITEM_PUSH_RESULT is ever sent for a roll
+    // (verified against deps/azerothcore: Group.cpp has no SendNewItem call).
+    // The item arrives only as the object update state.bag() folds — poll it.
+    const bagBy = Date.now() + 15_000;
+    while (!a.state.bag().items.some((i) => i.itemId === roll.itemId) && Date.now() < bagBy) await Bun.sleep(200);
+    if (!a.state.bag().items.some((i) => i.itemId === roll.itemId)) {
+      fail(`${NAME_A} won item ${roll.itemId} but it is not in state.bag() 15s later: ${JSON.stringify(a.state.bag().items)}`);
+    }
+    if (b.state.bag().items.some((i) => i.itemId === roll.itemId)) fail(`${NAME_B} lost the roll but holds item ${roll.itemId}`);
+    log(`PASS verdict: ${NAME_A} won ${JSON.stringify(roll.name)} (roll ${(verdict.data as any).roll}) and it is in the bag`);
 
     // 4. Nothing left to vote on: a value with a hint, nothing sent.
     const late = await b.lootRoll(roll.name, "pass");

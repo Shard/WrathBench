@@ -29,6 +29,9 @@ const TS = 1_700_000_000_000;
 const ROLL_GUID = "4611686018427387905";
 const OTHER_ROLL_GUID = "4611686018427387906";
 const OTHER_PLAYER = "9";
+// The live Battered Chest run of 2026-08-30: a Banded Cloak on slot 2.
+const LIVE_ROLL_GUID = "4611686018427412991";
+const BANDED_CLOAK = 9838;
 const frame = (seq: number, opcode: string, data: unknown) => ({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
 const startRoll = (seq: number, rollGuid = ROLL_GUID, itemId = 17922, mask = 0x03) =>
   frame(seq, "SMSG_LOOT_START_ROLL", {
@@ -175,7 +178,9 @@ describe("client: lootRoll", () => {
     expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_LOOT_ROLL", payload: guidHex(ROLL_GUID) + u32Hex(2) + "02" });
     // Another voter's roll is not our echo.
     stub.push(JSON.stringify(frame(502, "SMSG_LOOT_ROLL", { rollGuid: ROLL_GUID, slot: 2, playerGuid: OTHER_PLAYER, itemId: 17922, roll: 77, rollType: 2, autoPass: false })));
-    // Our echo, with the empty source guid the core actually sends (Group::CountRollVote).
+    // Our echo, with the empty source guid the core writes on every one of these.
+    // A 1-100 number on our own guid is CountTheRoll's per-voter roll (the all-greed
+    // branch), not CountRollVote's ack — that one is 0 for need, 128 otherwise.
     stub.push(JSON.stringify(frame(503, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: 17922, roll: 41, rollType: 2, autoPass: false })));
     expect(await rolled).toMatchObject({ ok: true, status: "rolled", rollGuid: ROLL_GUID, choice: "greed", roll: 41, item: { itemId: 17922, name: "Lionfur Armor" }, resolved: { input: "lionfur", name: "Lionfur Armor" } });
     expect(client.state.pendingRolls()).toHaveLength(0);
@@ -205,6 +210,64 @@ describe("client: lootRoll", () => {
     expect(await passed).toMatchObject({ ok: true, status: "rolled", choice: "pass", roll: undefined });
     client.close();
     await stub.stop();
+  });
+
+  // Replay of the live Battered Chest run (2026-08-30, Banded Cloak on slot 2):
+  // Group::CountRollVote acks a need with rollNumber 0 AND rollType 0 (which is
+  // ROLL_PASS on the wire), so the button cannot be read back off the echo; the
+  // number actually rolled only arrives in CountTheRoll's batch, after the ack
+  // the helper settled on. Both that batch and the verdict carry
+  // ObjectGuid::Empty ("0") as the source, so slot + item resolve them.
+  test("the live need sequence: the ack settles as need with no roll number, and the empty-guid verdict closes the frame", async () => {
+    const stub = startStub({ onConnect: () => world() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(startRoll(600, LIVE_ROLL_GUID, BANDED_CLOAK, 0x07)));
+    stub.push(JSON.stringify(frame(601, "SMSG_ITEM_QUERY_SINGLE_RESPONSE", { itemId: BANDED_CLOAK, found: true, name: "Banded Cloak", quality: 2 })));
+    await client.events.waitFor((e) => e.seq === 601, { timeout: 2000 });
+    expect(client.state.pendingRolls()[0]).toMatchObject({ rollGuid: LIVE_ROLL_GUID, itemId: BANDED_CLOAK, name: "Banded Cloak", quality: 2 });
+    const needed = client.lootRoll("Banded Cloak", "need");
+    const at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_LOOT_ROLL", payload: guidHex(LIVE_ROLL_GUID) + u32Hex(2) + "01" });
+    // CountRollVote's acknowledgement: rollNumber 0, rollType 0, empty source guid.
+    stub.push(JSON.stringify(frame(602, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: BANDED_CLOAK, roll: 0, rollType: 0, autoPass: false })));
+    expect(await needed).toMatchObject({ ok: true, status: "rolled", rollGuid: LIVE_ROLL_GUID, choice: "need", roll: undefined, item: { itemId: BANDED_CLOAK, name: "Banded Cloak" } });
+    expect(client.state.pendingRolls()).toHaveLength(0);
+    // The other member's greed ack, then CountTheRoll's real need roll and the verdict.
+    stub.push(JSON.stringify(frame(603, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: OTHER_PLAYER, itemId: BANDED_CLOAK, roll: 128, rollType: 2, autoPass: false })));
+    stub.push(JSON.stringify(frame(604, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: BANDED_CLOAK, roll: 2, rollType: 1, autoPass: false })));
+    stub.push(JSON.stringify(frame(605, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 2, itemId: BANDED_CLOAK, winnerGuid: SELF_GUID, roll: 2, rollType: 1 })));
+    const verdict = await client.events.waitFor((e) => e.seq === 605, { timeout: 2000 });
+    expect(verdict.data).toMatchObject({ winnerGuid: SELF_GUID, itemId: BANDED_CLOAK, roll: 2, rollType: 1 });
+    expect(client.state.pendingRolls()).toHaveLength(0);
+    // A won item is stored by CountTheRoll with no SendNewItem: nothing on the
+    // stream pushes it, so the winner's bag is the only place it shows up.
+    expect(client.events.recent(50).some((e) => e.opcode === "SMSG_ITEM_PUSH_RESULT")).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+
+  test("the same sequence folds the same way on a replayed cache: the ack closes the frame, the empty-guid verdict is a no-op", () => {
+    const live = [
+      ...loginSequence,
+      startRoll(10, LIVE_ROLL_GUID, BANDED_CLOAK, 0x07),
+      frame(11, "SMSG_ITEM_QUERY_SINGLE_RESPONSE", { itemId: BANDED_CLOAK, found: true, name: "Banded Cloak", quality: 2 }),
+    ];
+    const beforeVote = StateCache.replay(toEvents(live), { seed: SEED });
+    expect(beforeVote.pendingRolls(TS + 12)).toHaveLength(1);
+    const afterAck = StateCache.replay(
+      toEvents([...live, frame(12, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: SELF_GUID, itemId: BANDED_CLOAK, roll: 0, rollType: 0, autoPass: false })]),
+      { seed: SEED },
+    );
+    expect(afterAck.pendingRolls(TS + 13)).toHaveLength(0);
+    const afterVerdict = StateCache.replay(
+      toEvents([
+        ...live,
+        frame(12, "SMSG_LOOT_ROLL", { rollGuid: "0", slot: 2, playerGuid: OTHER_PLAYER, itemId: BANDED_CLOAK, roll: 128, rollType: 2, autoPass: false }),
+        frame(13, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 2, itemId: BANDED_CLOAK, winnerGuid: SELF_GUID, roll: 2, rollType: 1 }),
+      ]),
+      { seed: SEED },
+    );
+    expect(afterVerdict.pendingRolls(TS + 14)).toHaveLength(0);
   });
 });
 

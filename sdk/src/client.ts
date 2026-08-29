@@ -113,7 +113,6 @@ import {
   type PendingRoll,
   type RollChoice,
   ROLL_VOTE,
-  rollChoiceName,
   type CorpseLocation,
   type NearbyObject,
   type Point3,
@@ -1743,10 +1742,17 @@ export type LootRollRefusalStatus = "no_pending_roll" | "ambiguous_roll" | "roll
 
 /**
  * The outcome of `lootRoll` (item 102). `rolled` is the server's echo of the
- * counted vote (`SMSG_LOOT_ROLL` for this character): `roll` is the number
- * rolled, undefined for a pass. Who won arrives later as `SMSG_LOOT_ROLL_WON`
- * (or `SMSG_LOOT_ALL_PASSED`) on the stream; a won item lands as
- * `SMSG_ITEM_PUSH_RESULT` like any loot.
+ * counted vote (`SMSG_LOOT_ROLL` for this character). That first echo is only
+ * an acknowledgement of the button — `Group::CountRollVote` sends it with
+ * rollNumber 0 for need and 128 for pass / greed / disenchant, and with
+ * rollType 0 (pass) for a need — so `roll` is undefined on it and `choice` is
+ * the button that was pressed, not a re-read of the wire. The number actually
+ * rolled arrives later, in the per-voter `SMSG_LOOT_ROLL` batch
+ * `Group::CountTheRoll` broadcasts once every vote is in, alongside
+ * `SMSG_LOOT_ROLL_WON` (or `SMSG_LOOT_ALL_PASSED`). A won item is stored by
+ * `CountTheRoll` with no `SMSG_ITEM_PUSH_RESULT` at all: it shows up only as
+ * the object update `state.bag()` folds, so poll the bag rather than waiting
+ * for a push.
  */
 export type LootRollResult =
   | {
@@ -3913,8 +3919,11 @@ export class WrathClient {
       ok: true,
       status: "rolled",
       rollGuid: chosen.rollGuid,
-      choice: rollChoiceName(d.rollType) ?? choice,
-      roll: d.roll > 100 ? undefined : d.roll,
+      // The acknowledgement cannot be read back for the button: a need ack
+      // carries rollType 0, which is ROLL_PASS. Report what was pressed.
+      choice,
+      // 0 (the need ack) and 128 (every other ack, and a pass) are not rolls.
+      roll: d.roll >= 1 && d.roll <= 100 ? d.roll : undefined,
       item: { itemId: chosen.itemId, name: chosen.name },
     };
     return resolved === undefined ? out : { ...out, resolved };
