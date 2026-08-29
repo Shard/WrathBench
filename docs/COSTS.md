@@ -85,7 +85,7 @@ for the first several turns then plateau — confirmed both in this window (`ox-
 of episode length"). The runner trims older conversation aggressively (system prompt: "the
 scratchpad is your memory, not the chat history"), so cost per turn is bounded regardless of how
 long the episode runs. `cached_tokens` on these lanes is sporadic, and as of 2026-08-24 the
-sporadicity is measured, not assumed (FOLLOW-UPS 78, run
+sporadicity is measured, not assumed (closed item 78, `docs/worklogs/2026-08-24.md`; run
 `fleet-deepseek-flash-e90-deepseek-v4-flash-0731-20260824-a4`, 150 calls). The harness's side is
 clean: replaying every consecutive request pair from the trajectory, the serialized message array
 was byte-identical up to the append point in all 139 non-trim pairs — the prefix the context

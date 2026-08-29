@@ -2,18 +2,67 @@
 
 An LLM evaluation harness built on World of Warcraft 3.3.5a via AzerothCore. A model drives a character through a versioned TypeScript SDK; the game server is the source of truth for what happened.
 
-Status: Phase 0, pre-alpha. Private repository. See `docs/PHASE-0.md`.
+Status: pre-alpha, private repository. The Phase 0 gate passed on 2026-08-21
+(`docs/PHASE-0.md`); the harness has run under versioned series since, currently
+`harness-0.5`.
+
+## In ten lines
+
+A run — an **episode** — hands one model a fresh level-1 character and a fixed
+toolkit, and lets it go. The model does not press keys: it writes TypeScript
+against a versioned SDK, runs it in a sandbox, reads back events and its own
+scratchpad, and decides what to do next. Everything it may see is what a real
+3.3.5a client would have received, and every action it takes goes out as the
+opcode a client would have sent (`docs/CONTRACTS.md`), so the server — not the
+harness — decides what happened.
+
+What that measures is how far a model gets on a long-horizon goal it has to
+break down itself, with a toolkit it cannot change. The visible answer is the
+**milestone ladder**: eight rungs from "finish the starting quest chain" up to
+"clear Icecrown Citadel", each derived from recorded evidence rather than
+asserted. A result is only ever a claim within its comparability group — the
+episode id it ran under **and** the harness series (`major.minor`) it ran on.
+Two runs from different groups are never put on one axis; a run an operator
+steered is never scored at all. The reasoning is `docs/METHODOLOGY.md`, the
+rulesets are `docs/EPISODES.md`.
+
+It is not a direct-play benchmark and does not claim to be one. Nothing
+Blizzard-derived is in this repository (`docs/DATA-AND-LEGAL.md`).
+
+## Reading the dashboard
+
+The operator's window on all of this (`bun run viewer`, then the SPA) is one
+page per grain:
+
+- **`/` fleet** — what is running right now, and the scheduler's state.
+- **`/runs`** — every recorded run of every kind, one row each, newest first;
+  every header sortable and every filter in the URL, so a view is a link.
+- **`/episodes`** — the four rulesets and how many runs sit against each.
+- **`/ladder`** — the aggregate: highest rung reached per model, with the run
+  that got there, plus cost against XP earned.
+- **`/models`** — the roster and the scheduler's verdict on each entry.
+- **`/run/:id`** — one run: its trajectory feed, comparability tuple, tokens and
+  cost, and a cumulative-XP chart.
+- **`/map`** — where characters are, live, on minimap tiles.
+
+The harness-series selector in the top bar filters every page that shows runs;
+what it dropped is always stated on the page.
 
 ## Documents
 
-- `CLAUDE.md`: working instructions for agents and contributors
 - `docs/VISION.md`: what this is, what it measures, what it is not
+- `docs/METHODOLOGY.md`: the decisions that shape what a result means, and the principles behind them
+- `docs/EPISODES.md`: the four rulesets a run can be launched under
 - `docs/ARCHITECTURE.md`: components and data flow
 - `docs/CONTRACTS.md`: what the agent may observe and do
-- `docs/PHASE-0.md`: current scope, task list, and the gate
-- `docs/DATA-AND-LEGAL.md`: data handling posture
-- `docs/WORKLOG.md`: index of the per-day worklogs in `docs/worklogs/` — what shipped and what broke, with commits
-- `docs/METHODOLOGY.md`: the methodological decisions behind the benchmark and the principles behind them
+- `docs/OPERATIONS.md`: running the fleet, deploys, the runbooks
+- `docs/COSTS.md`: what a run costs and how that is accounted
+- `docs/PUBLIC-DASHBOARD.md`: the push-based public hosting design
+- `docs/PHASE-0.md`: the liftoff gate, met 2026-08-21
+- `docs/DATA-AND-LEGAL.md`: data handling posture and the red lines
+- `docs/WORKLOG.md`: index of the per-day worklogs in `docs/worklogs/` — what shipped and what broke, with commits; also where a closed follow-up number or a former ADR number resolves
+- `docs/FOLLOW-UPS.md`: open items only, stable numbers
+- `CLAUDE.md`: working instructions for agents and contributors
 
 ## Quick start
 
@@ -60,9 +109,9 @@ directory: `bun install` once at the root (Bun 1.4.0, pinned in
 
 ```sh
 bun test                     # every workspace's suite; all fixture-based
-bun run typecheck            # sdk, runner, wiki, minimap, dashboard, infra
+bun run typecheck            # sdk, runner, infra, dashboard, dashboard/worker, wiki, minimap
 bun run docs:api:check       # the generated SDK reference is in sync
-bun run dashboard:build      # the SPA, no data involved
+bun run dashboard:build      # the SPA, no data involved — build it before the viewer
 bun run viewer               # serves labelled empty states; creates data/runs
 ```
 

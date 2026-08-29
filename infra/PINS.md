@@ -11,7 +11,7 @@ Pins are changed deliberately and documented here with a date and reason. See CL
 
 ## Bun
 
-- Version: 1.4.0, pinned in `.bun-version` and `package.json` (to be created with the workspace scaffold).
+- Version: 1.4.0, pinned in `.bun-version`, `package.json` (`engines.bun`) and the `oven/bun` image tags in `infra/compose.yml`.
 - Patch bumps are deliberate; the pin rationale is in CLAUDE.md's toolchain section.
 
 ## Server data directory (not in repo)
