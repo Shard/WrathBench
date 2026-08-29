@@ -50,7 +50,7 @@ import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntr
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { runCost } from "./pricing";
-import { isValidRunId, listRuns, readRun, readScratchpad, readStates, runDir } from "./runs";
+import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./archive-dir";
 import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
 import {
@@ -1134,6 +1134,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         model: run.model,
         harnessVersion: run.harnessVersion,
         points: trackFrom(readStates(runsDir, runId)),
+        // The intentions beside the track: same run, different cadence.
+        moves: readMoves(runsDir, runId),
       });
     }
 

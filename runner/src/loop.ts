@@ -104,6 +104,13 @@ export interface ContextBuilderOptions {
 export class ContextBuilder {
   private lastStateAt = 0;
   private live = false;
+  /**
+   * The movement intention already recorded, as `dispatch:verdict` — the
+   * sandbox keeps one slot and re-reports it on every 5s sample, so this is
+   * what turns a standing intent into exactly two rows: the dispatch, and the
+   * verdict that ended it.
+   */
+  private lastMoveKey: string | null = null;
   /** High-water mark into the snapshot's quest-completion list, for logging. */
   private questsLogged = 0;
   /** Last zone/area ids a milestone was written for; undefined until the first sample names one. */
@@ -312,10 +319,47 @@ export class ContextBuilder {
     return signals.length > 0;
   }
 
+  /**
+   * Record the sandbox's movement intention when it changed.
+   *
+   * The change is (move id, status): a dispatch writes one row, the verdict
+   * that ends it writes a second, and every sample in between writes nothing.
+   * A move whose ack has not answered yet has no id, and is keyed by its
+   * dispatch time so the id arriving does not re-record it.
+   */
+  private noteMove(snap: SnapshotLike): void {
+    const m = snap.move;
+    if (m === undefined || m === null) return;
+    if (typeof m.x !== "number" || typeof m.y !== "number" || typeof m.z !== "number") return;
+    // Keyed on the dispatch's own timestamp, not the move id: the id is
+    // learned from the ack a moment later, and keying on it would record the
+    // same dispatch twice.
+    const key = `${m.ts}:${m.status ?? ""}`;
+    if (key === this.lastMoveKey) return;
+    this.lastMoveKey = key;
+    this.o.trajectory.recordMove(this.o.config.runId, {
+      // The intent's own instants: when it was dispatched, and when the
+      // verdict landed. The sample that carried it home is up to a tick later.
+      ts: m.endedAt ?? m.ts,
+      moveId: m.moveId,
+      map: m.map,
+      x: m.x,
+      y: m.y,
+      z: m.z,
+      target: m.target,
+      status: m.status,
+    });
+  }
+
   private async doSampleState(): Promise<SnapshotLike | null> {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
-    if (snap === null || this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
+    if (snap === null) return snap;
+    // Ungated by `stateIntervalMs`: a ~250y walk is over well inside one state
+    // row, so an intention only recorded at row cadence would be one nobody
+    // could ever see in flight.
+    this.noteMove(snap);
+    if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();
     const pos = snap.self?.position?.value as
       | { map?: number; x?: number; y?: number; z?: number }

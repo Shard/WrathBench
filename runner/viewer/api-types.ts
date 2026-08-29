@@ -536,6 +536,28 @@ export type FeedEntry =
   | EventsServedEntry
   | OtherEntry;
 
+/**
+ * Where a character was trying to get to: one recorded movement intention.
+ *
+ * The destination the runner watched a `move_to` dispatch for, and the
+ * module's verdict once it arrived. `status` is null while the move is in
+ * flight, `"arrived"` when it worked, and the module's own failure word
+ * (`too_far`, `drop`, `lost`, `target_off_mesh`, …) when it did not.
+ */
+export interface MoveIntentView {
+  /** When this was recorded: the dispatch, or the verdict that ended it. */
+  ts: number;
+  /** The map the move was dispatched on. A destination on another map is not this one's. */
+  map: number | null;
+  x: number;
+  y: number;
+  z: number;
+  /** The unit the move was aimed at, when it was aimed at one. */
+  target: string | null;
+  /** The module's verdict; null while the move was still walking. */
+  status: string | null;
+}
+
 /** One agent, at one moment (the map's position feed). */
 export interface AgentPosition {
   runId: string;
@@ -553,6 +575,12 @@ export interface AgentPosition {
   /** The newest recorded inventory; see `RunRow.items`. */
   items: ItemSample[] | null;
   harnessVersion: string | null;
+  /**
+   * The newest recorded movement intention, when the run has one. Optional
+   * because a published snapshot rendered before this existed carries none,
+   * and the map must read those the same way it reads a run that never moved.
+   */
+  move?: MoveIntentView | null;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -1290,6 +1318,13 @@ export interface TrackResponse extends SnapshotEnvelope {
   model: string | null;
   harnessVersion: string | null;
   points: TrackPoint[];
+  /**
+   * Every movement intention the run recorded, oldest first. Separate from
+   * `points` because it has its own cadence: a move is dispatched when the
+   * model decides to walk, not when the state ticker writes a row. Optional
+   * for the same reason as `AgentPosition.move`.
+   */
+  moves?: MoveIntentView[];
 }
 
 export interface ApiError {

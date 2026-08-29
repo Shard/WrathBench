@@ -606,6 +606,7 @@ describe("projectPositions and projectTrack", () => {
           questsCompleted: 2,
           items: [{ name: POISON.itemName, count: 1, equipped: false }],
           harnessVersion: "harness-0.5-1-gabc",
+          move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: null }),
         }),
       ],
     });
@@ -627,12 +628,16 @@ describe("projectPositions and projectTrack", () => {
           "questsCompleted",
           "items",
           "harnessVersion",
+          "move",
+          ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
         ]),
       ]),
     );
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBeNull();
     expect(out.positions[0]!.items).toBeNull();
+    // The destination travels; the name of what it was aimed at does not.
+    expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: null, status: null });
   });
 
   test("track: exactly the allowlist; the character name is gone", () => {
@@ -644,6 +649,9 @@ describe("projectPositions and projectTrack", () => {
       points: [
         smuggle({ ts: 1000, map: 0, x: -6240, y: 380, level: 1, xp: 0, money: 0, questsCompleted: 0, turn: 1 }),
       ],
+      moves: [
+        smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: "arrived" }),
+      ],
     });
     const out = projectTrack(input);
     expect(keyPaths(out)).toEqual(
@@ -654,6 +662,8 @@ describe("projectPositions and projectTrack", () => {
         "harnessVersion",
         "points",
         ...under("points[]", ["ts", "map", "x", "y", "level", "xp", "money", "questsCompleted", "turn"]),
+        "moves",
+        ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
       ]),
     );
     assertClean(JSON.stringify(out));
