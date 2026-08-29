@@ -51,7 +51,12 @@ describe("priceFor", () => {
     expect(p?.asIfMetered).toBe(false);
     // Rates are the sync's, not this test's, but they must be real dollars.
     expect(p?.input).toBeGreaterThan(0);
-    expect(p?.asOf).toBe(SYNCED_PRICES.asOf);
+    // The date is the window's own `from` where it has one, and the file's
+    // `asOf` for a first, undated window — deriving it here rather than
+    // hard-coding `SYNCED_PRICES.asOf` keeps this green through a rate move,
+    // which is the whole point of windows.
+    const latest = SYNCED_PRICES.models[run.model!]!.at(-1)!;
+    expect(p?.asOf).toBe(latest.from ?? SYNCED_PRICES.asOf);
     expect(priceFor({ ...run, model: "deepseek/deepseek-v4-pro" })).toBeNull();
   });
   test("names a claude model through the claude-code harness", () => {
