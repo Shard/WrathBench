@@ -10,11 +10,11 @@
  * custom properties in `styles.css`; this file only names them.
  *
  * What the feed carries decides what draws. Level and xp are on every
- * `AgentPosition`; health, power and class are in the SDK's state cache but
- * the runner's state sampler does not write them yet (FOLLOW-UPS 102), so a
- * bar whose numbers are absent renders as *unobserved* — an empty track with a
- * dash — rather than as zero. Undefined means unobserved, never zero, the same
- * rule the SDK holds.
+ * `AgentPosition`; health, power, the power type and the class ride with them
+ * since item 104, but a run recorded before that carries none, so a bar whose
+ * numbers are absent renders as *unobserved* — an empty track with a dash —
+ * rather than as zero. Undefined means unobserved, never zero, the same rule
+ * the SDK holds.
  */
 
 /** 3.3.5a power type ids, as `UNIT_FIELD_BYTES_0` carries them. */
@@ -38,6 +38,18 @@ export function classPowerType(klass: number | null | undefined): PowerType {
     case 6: return "runic"; // death knight
     default: return "mana";
   }
+}
+
+/**
+ * Which bar to tint: the sample's own `powerType` when the feed carried one,
+ * the class's primary power otherwise. A druid's bar therefore reads mana on
+ * an old run and rage in bear form on a new one, which is what the client does.
+ */
+export function resolvePowerType(
+  powerType: number | null | undefined,
+  klass: number | null | undefined,
+): PowerType {
+  return powerType === null || powerType === undefined ? classPowerType(klass) : powerTypeOf(powerType);
 }
 
 /** The custom property each power type paints with; see `styles.css`. */

@@ -162,6 +162,13 @@ interface FixtureRun {
   noPositionColumns?: boolean;
   /** Add the `items` column (FOLLOW-UPS 50) and set it on the newest state row. */
   items?: string | null;
+  /**
+   * Add the player-frame columns (FOLLOW-UPS 104) and set them on the newest
+   * state row: [health, maxHealth, power, maxPower, powerType, nextLevelXp].
+   */
+  gauges?: (number | null)[];
+  /** The class in meta.json's config, as a launch writes it. */
+  klass?: number;
 }
 
 function fixture(runs: FixtureRun[]): string {
@@ -175,7 +182,12 @@ function fixture(runs: FixtureRun[]): string {
         runId: r.id,
         harnessVersion: "harness-0.2",
         startedAt: 1,
-        config: { model: r.model ?? "a/model", character: r.character ?? "Char", driver: "openai" },
+        config: {
+          model: r.model ?? "a/model",
+          character: r.character ?? "Char",
+          driver: "openai",
+          ...(r.klass === undefined ? {} : { class: r.klass }),
+        },
       }),
     );
     writeFileSync(join(dir, "trajectory.jsonl"), "");
@@ -198,6 +210,14 @@ function fixture(runs: FixtureRun[]): string {
     const holes = new Array(width).fill("?").join(", ");
     for (const s of r.states ?? [])
       db.query(`INSERT INTO state VALUES (${holes})`).run(...([r.id, ...s] as never[]));
+    if (r.gauges !== undefined) {
+      for (const c of ["health", "max_health", "power", "max_power", "power_type", "next_level_xp"])
+        db.exec(`ALTER TABLE state ADD COLUMN ${c} INTEGER`);
+      db.query(
+        `UPDATE state SET health = ?, max_health = ?, power = ?, max_power = ?, power_type = ?,
+         next_level_xp = ? WHERE ts = (SELECT MAX(ts) FROM state)`,
+      ).run(...(r.gauges as never[]));
+    }
     if (r.items !== undefined) {
       db.exec(`ALTER TABLE state ADD COLUMN items TEXT`);
       db.query(`UPDATE state SET items = ? WHERE ts = (SELECT MAX(ts) FROM state)`).run(r.items);
@@ -234,6 +254,15 @@ describe("readPositions", () => {
       questsCompleted: 7,
       items: null,
       harnessVersion: "harness-0.2",
+      // A fixture written before the player-frame columns existed reads them as
+      // unobserved — null, never zero.
+      health: null,
+      maxHealth: null,
+      power: null,
+      maxPower: null,
+      powerType: null,
+      nextLevelXp: null,
+      class: null,
       // A fixture written before the move table existed records no intention.
       move: null,
     });
@@ -251,6 +280,42 @@ describe("readPositions", () => {
     const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
     expect(byId.get("live-items")?.items).toEqual(JSON.parse(items));
     expect(byId.get("live-bare")?.items).toBeNull();
+  });
+
+  test("the unit frame's numbers ride the sample the pip is drawn from", () => {
+    const runsDir = fixture([
+      {
+        id: "live-hp",
+        klass: 1,
+        states: [
+          [NOW - 9000, 4, 900, 0, -6240, 380, 380, 1, 1],
+          // The newest sample carries no position, so the row below it wins —
+          // and the frame must show that row's numbers, not this one's.
+          [NOW - 1000, 4, 950, null, null, null, null, 1, 1],
+        ],
+        gauges: [140, 220, 30, 100, 0, 2100],
+      },
+    ]);
+    const [p] = readPositions(runsDir, NOW);
+    expect(p!.ts).toBe(NOW - 9000);
+    // The gauges were written on the newest row, which has no position: the
+    // positioned row carried none, and none is what the feed says.
+    expect(p!.health).toBeNull();
+    expect(p!.class).toBe(1);
+
+    const positioned = fixture([
+      { id: "live-hp2", klass: 4, states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]], gauges: [140, 220, 30, 100, 3, 2100] },
+    ]);
+    const [q] = readPositions(positioned, NOW);
+    expect({ ...q, runId: q!.runId }).toMatchObject({
+      health: 140,
+      maxHealth: 220,
+      power: 30,
+      maxPower: 100,
+      powerType: 3,
+      nextLevelXp: 2100,
+      class: 4,
+    });
   });
 
   test("a terminated run is not on the map, however fresh its last position", () => {

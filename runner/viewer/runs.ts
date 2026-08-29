@@ -359,6 +359,13 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       // `SELECT *` on a database that predates the column simply has no key
       // here, which `num` turns into null — no schema guard needed.
       turn: num(r["turn"]),
+      // The player frame's numbers (FOLLOW-UPS 104), same rule.
+      health: num(r["health"]),
+      maxHealth: num(r["max_health"]),
+      power: num(r["power"]),
+      maxPower: num(r["max_power"]),
+      powerType: num(r["power_type"]),
+      nextLevelXp: num(r["next_level_xp"]),
     }));
   } catch {
     return [];

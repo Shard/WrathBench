@@ -313,6 +313,22 @@ export interface StatePoint {
    * Samples are taken on a clock, so this is first-observation, not first-reach.
    */
   turn: number | null;
+  /**
+   * The player frame's numbers, from the newest state sample that carried a
+   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * recorded before the columns existed, and a snapshot published before this
+   * shipped, carry none, and every reader must draw those as unobserved rather
+   * than as zero. A health/maxHealth pair is whole or absent — the SDK
+   * withholds a gauge until both halves are seen.
+   */
+  health?: number | null;
+  maxHealth?: number | null;
+  power?: number | null;
+  maxPower?: number | null;
+  /** The raw `powerType` field the client picks a power bar with. */
+  powerType?: number | null;
+  /** The XP bar's denominator, as the client shows it. */
+  nextLevelXp?: number | null;
 }
 
 /** Provider-reported usage for one turn, normalised across driver shapes. */
@@ -581,6 +597,28 @@ export interface AgentPosition {
    * and the map must read those the same way it reads a run that never moved.
    */
   move?: MoveIntentView | null;
+  /**
+   * The player frame's numbers, from the newest state sample that carried a
+   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * recorded before the columns existed, and a snapshot published before this
+   * shipped, carry none, and every reader must draw those as unobserved rather
+   * than as zero. A health/maxHealth pair is whole or absent — the SDK
+   * withholds a gauge until both halves are seen.
+   */
+  health?: number | null;
+  maxHealth?: number | null;
+  power?: number | null;
+  maxPower?: number | null;
+  /** The raw `powerType` field the client picks a power bar with. */
+  powerType?: number | null;
+  /** The XP bar's denominator, as the client shows it. */
+  nextLevelXp?: number | null;
+  /**
+   * The character's class, off the run row (it is launch config, not a state
+   * sample). Lets a pip from a run recorded before `powerType` still tint its
+   * power bar the way that class's bar is tinted.
+   */
+  class?: number | null;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -1310,6 +1348,22 @@ export interface TrackPoint {
   money: number | null;
   questsCompleted: number | null;
   turn: number | null;
+  /**
+   * The player frame's numbers, from the newest state sample that carried a
+   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * recorded before the columns existed, and a snapshot published before this
+   * shipped, carry none, and every reader must draw those as unobserved rather
+   * than as zero. A health/maxHealth pair is whole or absent — the SDK
+   * withholds a gauge until both halves are seen.
+   */
+  health?: number | null;
+  maxHealth?: number | null;
+  power?: number | null;
+  maxPower?: number | null;
+  /** The raw `powerType` field the client picks a power bar with. */
+  powerType?: number | null;
+  /** The XP bar's denominator, as the client shows it. */
+  nextLevelXp?: number | null;
 }
 
 export interface TrackResponse extends SnapshotEnvelope {
