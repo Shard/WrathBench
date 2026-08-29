@@ -193,6 +193,16 @@ short aliases were rejected: they die on reconnect, so a stale alias silently
 names the wrong unit — the forbidden class. Representation is fair game to
 optimize; referents are not.
 
+**A name in view is a valid referent, with bounded fuzz** (operator, 2026-08-29).
+Wherever a helper or raw action takes a guid, it also takes the name of a unit,
+item, spell, talent, faction or taxi node the model can currently observe, since
+a player points at things by name. Resolution is deterministic and narrow:
+normalise case, whitespace and apostrophes; exact match, else a unique
+substring, else a unique match within a small edit distance. One candidate acts;
+none refuses with what is in view; two or more refuse and list them — the
+harness never picks between plausible referents, so referent selection stays
+the model's. Opcode names and guids themselves are never fuzzed.
+
 **A deadline explains, never caps.** The runner passes the sandbox's abandon
 time into the SDK so a hint can say a walk was always longer than the caller
 had left. No wait shortens and no call is refused because of it — capping
