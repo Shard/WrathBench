@@ -409,8 +409,13 @@ filters it; a launch that produced nothing is dropped and a run's state is a
 column rather than an exclusion. Because a freeplay stream is durable, one row
 is **one character across attempts**, not one run: the latest attempt carries
 the character's current level and state and the lineage rides with it, so the
-same character never appears twice. Nothing here touches the scored ladders,
-which remain keyed by model over scored runs alone.
+same character never appears twice. The reader's own filters still apply as
+they do on the scored tiers, **"exclude free" included** (operator, 2026-08-29,
+reversing the exemption made the same day): same control, same default-on, same
+predicate, over both the table and the graph. The one exemption that stands is
+the harness series — a stream is durable across series, and cutting its older
+attempts would report a long-lived character as attempt 1. Nothing here touches
+the scored ladders, which remain keyed by model over scored runs alone.
 
 **No single number is promised in this phase**; the honest artifact is the
 scorecard.
