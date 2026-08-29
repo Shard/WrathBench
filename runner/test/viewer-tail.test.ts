@@ -9,6 +9,8 @@ import {
   playtimeMs,
   areaFactsFrom,
   achievementFactsFrom,
+  deathFactsFrom,
+  levelUpFactsFrom,
   taxiFactsFrom,
   scanRunTotals,
   segmentsFrom,
@@ -1198,5 +1200,113 @@ describe("achievement and flight milestones (issue #8)", () => {
     // A second scan of an unchanged file adds nothing.
     await tail.scan();
     expect(tail.achievements).toEqual(totals.achievements);
+  });
+});
+
+describe("level and death milestones (FOLLOW-UPS 35)", () => {
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-deaths-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+  const meta = JSON.stringify({ t: "meta", ts: 1000 });
+  const level = (to: number, from?: number, xp?: number, turn = 1) =>
+    JSON.stringify({
+      t: "milestone",
+      ts: 1100,
+      kind: "level",
+      to,
+      ...(from === undefined ? {} : { from }),
+      ...(xp === undefined ? {} : { xp }),
+      turn,
+    });
+  const death = (observedTs: number, turn = 2) =>
+    JSON.stringify({
+      t: "milestone",
+      ts: 9999,
+      kind: "death",
+      observedTs,
+      position: { map: 0, x: 1, y: 2, z: 3, source: "death_spot" },
+      zone: { id: 12 },
+      area: { id: 9 },
+      released: false,
+      turn,
+    });
+
+  test("a run from before the producer has neither reading — null, never zero", async () => {
+    const { leveling, deaths } = await scanRunTotals(
+      fileWith([meta, JSON.stringify({ t: "milestone", ts: 1100, kind: "area", to: { id: 9 } })]),
+    );
+    expect(leveling).toBeNull();
+    expect(deaths).toBeNull();
+  });
+
+  test("a run that levelled and never died reads zero deaths, which is a reading", async () => {
+    const { leveling, deaths } = await scanRunTotals(fileWith([meta, level(1, undefined, 0), level(2, 1, 40)]));
+    // The level mark is the liveness witness: it says the producer was live for
+    // this run, which is what makes "never died" different from "not recorded".
+    expect(deaths).toEqual({ deaths: 0, releases: 0, resurrects: 0, first: null, last: null, sites: [] });
+    expect(leveling!.levelUps).toBe(1);
+    expect(leveling!.startLevel).toBe(1);
+    expect(leveling!.maxLevel).toBe(2);
+    expect(leveling!.marks).toHaveLength(2);
+  });
+
+  test("a resumed run's second baseline mark is not counted as a level-up", () => {
+    const facts = levelUpFactsFrom([
+      { to: 1, from: null, xp: 0, ts: 1, turn: 1 },
+      { to: 2, from: 1, xp: 10, ts: 2, turn: 2 },
+      // The resumed process opens with its own `from`-less mark at the level it
+      // resumed at; counting it would credit a resume with a gain.
+      { to: 2, from: null, xp: 20, ts: 3, turn: 3 },
+      { to: 3, from: 2, xp: 5, ts: 4, turn: 4 },
+    ])!;
+    expect(facts.levelUps).toBe(2);
+    expect(facts.startLevel).toBe(1);
+    expect(facts.maxLevel).toBe(3);
+    expect(facts.first.to).toBe(1);
+    expect(facts.last.to).toBe(3);
+  });
+
+  test("a death carries the death's own timestamp and its site, not the sample's", async () => {
+    const { deaths } = await scanRunTotals(
+      fileWith([
+        meta,
+        level(3, undefined, 0),
+        death(4444),
+        JSON.stringify({ t: "milestone", ts: 9999, kind: "release", turn: 2 }),
+        JSON.stringify({ t: "milestone", ts: 9999, kind: "resurrect", turn: 3 }),
+        death(8888, 5),
+      ]),
+    );
+    expect(deaths!.deaths).toBe(2);
+    expect(deaths!.releases).toBe(1);
+    expect(deaths!.resurrects).toBe(1);
+    // `observedTs` beats the record's own `ts` (9999, when the sample landed).
+    expect(deaths!.first!.ts).toBe(4444);
+    expect(deaths!.last!.ts).toBe(8888);
+    expect(deaths!.first!.position).toEqual({ map: 0, x: 1, y: 2, z: 3, source: "death_spot" });
+    expect(deaths!.first!.released).toBe(false);
+    expect(deaths!.first!.zone).toBe(12);
+    expect(deaths!.sites).toHaveLength(2);
+  });
+
+  test("no mark of either kind is null; a level mark alone opens the death reading", () => {
+    expect(deathFactsFrom([], false)).toBeNull();
+    expect(deathFactsFrom([], true)!.deaths).toBe(0);
+    expect(levelUpFactsFrom([])).toBeNull();
+  });
+
+  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+    const path = fileWith([meta, level(1, undefined, 0), death(4444), level(2, 1, 10)]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    const totals = await scanRunTotals(path);
+    expect(tail.leveling).toEqual(totals.leveling);
+    expect(tail.deaths).toEqual(totals.deaths);
+    // A second scan of an unchanged file adds nothing.
+    await tail.scan();
+    expect(tail.deaths).toEqual(totals.deaths);
   });
 });

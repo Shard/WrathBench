@@ -637,6 +637,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           totals?.areas ?? null,
           totals?.achievements ?? null,
           totals?.taxi ?? null,
+          totals?.leveling ?? null,
+          totals?.deaths ?? null,
         ),
       );
     }
@@ -1084,6 +1086,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,
         taxi: tail.taxi,
+        leveling: tail.leveling,
+        deaths: tail.deaths,
         // Same incremental path again: a live run's rate advances with the tail
         // rather than waiting on the (size, mtime) totals cache to miss.
         tps: tokensPerSecond(entries),

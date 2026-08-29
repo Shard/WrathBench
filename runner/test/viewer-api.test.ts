@@ -803,14 +803,55 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(detail.taxi).toEqual(row.taxi);
   });
 
+  test("level and death milestones cross the wire on both the results row and the run page", async () => {
+    const runs = fixture();
+    appendFileSync(
+      join(runs, RUN_ID, "trajectory.jsonl"),
+      [
+        { ts: 1300, t: "milestone", kind: "level", to: 1, xp: 0, turn: 1 },
+        {
+          ts: 1600,
+          t: "milestone",
+          kind: "death",
+          observedTs: 1550,
+          position: { map: 0, x: 1, y: 2, z: 3, source: "death_spot" },
+          zone: { id: 12 },
+          area: { id: 9 },
+          released: false,
+          turn: 2,
+        },
+        { ts: 1700, t: "milestone", kind: "level", from: 1, to: 2, xp: 40, turn: 3 },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const handle = api(runs);
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; leveling: { levelUps: number } | null; deaths: { deaths: number } | null }[];
+    };
+    const row = results.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.leveling!.levelUps).toBe(1);
+    expect(row.deaths!.deaths).toBe(1);
+    // The run page reads the same facts off the incremental tail, so the two
+    // views of one run cannot disagree.
+    const detail = (await (await handle(new Request(`http://x/api/run/${RUN_ID}`))).json()) as {
+      leveling: unknown;
+      deaths: unknown;
+    };
+    expect(detail.leveling).toEqual(row.leveling);
+    expect(detail.deaths).toEqual(row.deaths);
+  });
+
   test("a run with no milestone records reads not-recorded on both, never zero", async () => {
     const runs = fixture();
     const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
-      runs: { runId: string; achievements: unknown; taxi: unknown }[];
+      runs: { runId: string; achievements: unknown; taxi: unknown; leveling: unknown; deaths: unknown }[];
     };
     const row = body.runs.find((r) => r.runId === RUN_ID)!;
     expect(row.achievements).toBeNull();
     expect(row.taxi).toBeNull();
+    expect(row.leveling).toBeNull();
+    expect(row.deaths).toBeNull();
   });
 
   test("/api/results projects each run with its level marks and scorability", async () => {

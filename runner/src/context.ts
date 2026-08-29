@@ -69,6 +69,8 @@ export const CONTEXT_POLICY = {
 interface ObservedLike {
   value?: unknown;
   seq?: number;
+  /** The cache's wall-clock stamp for the observation; on the wire, undeclared until now. */
+  ts?: number;
 }
 
 /** One nearby object as the sandbox flattens `state.units()` into the rpc JSON. */
@@ -197,8 +199,12 @@ function fmtGauge(o?: ObservedLike): string {
   return fmt(v);
 }
 
-/** PLAYER_FLAGS_GHOST on 3.3.5a — set while the character is a corpse-run ghost. */
-const PLAYER_FLAGS_GHOST = 0x10;
+/**
+ * PLAYER_FLAGS_GHOST on 3.3.5a — set while the character is a corpse-run ghost.
+ * Exported because the death milestone producer reads the same bit off the same
+ * raw field record, and two copies of a wire constant is one too many.
+ */
+export const PLAYER_FLAGS_GHOST = 0x10;
 
 /** Backpack size (16 slots): the bag line's total when the snapshot carries none. */
 const BACKPACK_SIZE = 16;
