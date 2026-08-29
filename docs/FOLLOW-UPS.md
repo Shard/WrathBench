@@ -42,7 +42,7 @@ player surface, each piece validated by a smoke test, before any 0.6 talk.**
 Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
 worklogs/2026-08-29).
 
-102. **Sample health, power and class into `state`, so the map's unit frame lights up**
+104. **Sample health, power and class into `state`, so the map's unit frame lights up**
     (2026-08-29). The map sidebar now draws a WoW-style unit frame
     (`dashboard/src/components/UnitFrame.tsx`): health, power tinted by type, XP
     with the level badge. Only the XP bar has data — the SDK cache carries
