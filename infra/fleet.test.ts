@@ -216,7 +216,7 @@ describe("parseFleet", () => {
     expect(parseFleet(fleetJson([{ ref: "glm", episode: "e90" }])).refusals).toEqual([]);
     expect(formatRefusals([])).toEqual([]);
     expect(formatRefusals([{ pin: "a-e90", why: "because", jobs: ["a-e90"] }])).toEqual([
-      "! 1 pin(s) refused by the account rules — the rest of the file IS in effect:",
+      "! 1 pin(s) refused by the config rules — the rest of the file IS in effect:",
       "   a-e90 REFUSED and left disabled: because",
       "   a live run under a refused pin is left alone; it just will not respawn",
     ]);
@@ -229,6 +229,55 @@ describe("parseFleet", () => {
     expect(() => parseFleet(fleetJson([], { lanes: [] }))).toThrow(/`lanes` is not a 0.4 key — a job goes in `queue`/);
     expect(() => parseFleet(fleetJson([], { accounts: { pinned: { S: "x" }, pool: [] } }))).toThrow(/accounts.pinned is not a 0.4 key/);
     expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code\)/);
+  });
+
+  test("a roster entry carrying a key the harness does not read is refused BY NAME, not ignored", () => {
+    // 2026-08-30. `"enabled": false` was written onto a roster entry to pause a
+    // freeplay stream; the key is a queue job's, not an entry's, so it was
+    // dropped in silence and the deploy's resume brought the character back.
+    // An unknown key now refuses the entry and names the pause recipe.
+    const config = parseFleet(
+      fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", idle: "unlimited", enabled: false } } }),
+    );
+    expect(config.refusals.map((r) => r.pin)).toEqual(["roster glm"]);
+    expect(config.refusals[0]!.why).toMatch(/unknown key `enabled` on a roster entry/);
+    expect(config.refusals[0]!.why).toMatch(/to pause a stream set `idle: "none"`/);
+    // Refused means scheduled by nothing — and the entry is still in the catalog.
+    expect(Object.keys(config.roster)).toEqual(["glm"]);
+    expect(policyExclusion(config, "glm")).toMatch(/unknown key/);
+    expect([...policyRefs(config)]).toEqual([]);
+    // A lane spelling that looks like it would work gets its own alternative.
+    const lane = parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" } } }));
+    expect(lane.refusals[0]!.why).toMatch(/use `subscription`, the NAME of the env var/);
+  });
+
+  test("a refused roster entry names its jobs, so a live freeplay run is spared", () => {
+    // The 2026-08-24 lesson, carried to the entry: a refusal suppresses
+    // SCHEDULING. Without `jobs` the policy job `glm-freeplay` would simply
+    // vanish from the diff and the live stream would be drained for a typo.
+    const config = parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", nonsense: 1 } } }));
+    expect(config.refusals[0]!.jobs).toContain("glm-freeplay");
+    const live = { running: new Set(["glm-freeplay"]), draining: new Set<string>(), finished: new Set<string>() };
+    const drain = diffJobs([], live).drain;
+    expect(drain).toEqual(["glm-freeplay"]);
+    const refused = new Set(config.refusals.flatMap((r) => r.jobs));
+    expect(drain.filter((n) => !refused.has(n))).toEqual([]);
+  });
+
+  test("a queue job carrying an unknown key is refused, and the well-formed jobs are untouched", () => {
+    const config = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "S2", idle: "none" }]),
+    );
+    expect(config.jobs.map((j) => [j.name, j.enabled])).toEqual([["glm-e90", true], ["ox-e90", false]]);
+    expect(config.refusals.map((r) => [r.pin, r.jobs])).toEqual([["ox-e90", ["ox-e90"]]]);
+    expect(config.refusals[0]!.why).toMatch(/unknown key `idle` on a queue job/);
+    // And it does not win the account: a job the harness cannot read must not
+    // refuse a well-formed one behind it.
+    const behind = parseFleet(
+      fleetJson([{ ref: "ox", episode: "e90", account: "S", idle: "none" }, { ref: "glm", episode: "e90", account: "S" }]),
+    );
+    expect(behind.jobs.map((j) => [j.name, j.enabled])).toEqual([["ox-e90", false], ["glm-e90", true]]);
+    expect(behind.refusals.map((r) => r.pin)).toEqual(["ox-e90"]);
   });
 });
 
@@ -784,6 +833,14 @@ describe("the shipped fleet files", () => {
       }
     }
   };
+
+  test("fleet.json: the shipped file carries no key the harness would refuse", async () => {
+    // The strict-key rule's own safety net. It is a REFUSAL, so a key outside
+    // the declared set costs the operator a stream rather than the file — and
+    // that must never be discovered on a recreate.
+    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
+    expect(config.refusals).toEqual([]);
+  });
 
   test("fleet.json: every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
     const NOW = Date.parse("2027-01-15T08:00:00.000Z");
