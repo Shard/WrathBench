@@ -91,6 +91,20 @@ export interface ItemSample {
  * - `taxi` / `taxi_landed`: `taxiFlight` on self flipping on after an accepted
  *   reply, and flipping back. The area id is keyed `areaId`, not `id`, so no
  *   consumer can mistake a flight record for a zone/area mark.
+ * - `level`: `self.level` changing, `from` absent on the first observation of a
+ *   process exactly as on `zone` — so a run's starting level is on the record
+ *   and a consumer counts level-ups as the marks that carry a `from`, never as
+ *   the number of marks. `xp` is the reading at the moment the new level was
+ *   first seen, which is what the client's bar showed.
+ * - `death` / `release` / `resurrect`: the dead window opening (health at 0, the
+ *   ghost flag, or a corpse the cache is holding — whichever the sample sees
+ *   first), the spirit being released to a graveyard, and the ghost flag
+ *   clearing again. `observedTs` on a `death` is the state cache's own
+ *   timestamp for that evidence — the death's moment rather than the sample's,
+ *   since the cache latches the corpse until the resurrect clears it. `zone` /
+ *   `area` are the reading at first observation, which is the death site only
+ *   when `released` is false; once the spirit is at the graveyard they are the
+ *   graveyard's, and `released` is what says so.
  */
 export type MilestoneLine =
   | {
@@ -109,7 +123,34 @@ export type MilestoneLine =
     }
   | { kind: "achievements_at_login"; ids: number[]; points: number; turn?: number | undefined }
   | { kind: "taxi"; from?: { areaId: number } | undefined; turn?: number | undefined }
-  | { kind: "taxi_landed"; to?: { areaId: number } | undefined; turn?: number | undefined };
+  | { kind: "taxi_landed"; to?: { areaId: number } | undefined; turn?: number | undefined }
+  | {
+      kind: "level";
+      from: number | undefined;
+      to: number;
+      xp?: number | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "death";
+      /** The cache's timestamp for the death evidence, when it carried one. */
+      observedTs?: number | undefined;
+      /** Where the corpse is, and which packet said so; absent when unobserved. */
+      position?:
+        | { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" }
+        | undefined;
+      zone?: { id: number } | undefined;
+      area?: { id: number } | undefined;
+      /** The ghost flag was already set when the death was first observed. */
+      released?: boolean | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "release";
+      graveyard?: { map: number; x: number; y: number; z: number } | undefined;
+      turn?: number | undefined;
+    }
+  | { kind: "resurrect"; turn?: number | undefined };
 
 export interface RunMeta {
   runId: string;

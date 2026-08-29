@@ -24,6 +24,8 @@ import { EPISODES } from "../src/episodes";
 import type {
   AchievementFacts,
   AreaFacts,
+  DeathFacts,
+  LevelUpFacts,
   CostFigure,
   EpisodeIdView,
   LevelMark,
@@ -323,6 +325,14 @@ export function resultRunOf(
    */
   achievements: AchievementFacts | null = null,
   taxi: TaxiFacts | null = null,
+  /**
+   * The level timeline and the deaths from the same pass. Their own parameters
+   * for the same reason `areas` is one, and `null` in either is "the run
+   * recorded none of that kind" — which a reader must be able to tell from a
+   * run that levelled once and never died.
+   */
+  leveling: LevelUpFacts | null = null,
+  deaths: DeathFacts | null = null,
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -397,6 +407,8 @@ export function resultRunOf(
     areas,
     achievements,
     taxi,
+    leveling,
+    deaths,
     pauseReason: run.pauseReason,
   };
 }

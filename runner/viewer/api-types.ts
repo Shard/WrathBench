@@ -614,6 +614,12 @@ export interface RunDetailResponse extends SnapshotEnvelope {
   achievements?: AchievementFacts | null;
   taxi?: TaxiFacts | null;
   /**
+   * The level timeline and the deaths this run's milestones account for; null
+   * is "not recorded", never zero. Optional for the reason `achievements` is.
+   */
+  leveling?: LevelUpFacts | null;
+  deaths?: DeathFacts | null;
+  /**
    * Output tokens per second (`TpsFacts`), off the same incremental tail as the
    * tokens above, so a live run's rate advances with its trajectory. Null when
    * no turn has completed; optional for the reason `achievements` is.
@@ -953,6 +959,100 @@ export interface TaxiFacts {
   flights: number;
 }
 
+/**
+ * A run's level timeline, from its `level` milestone records (FOLLOW-UPS 35).
+ *
+ * The producer writes one mark per change of `self.level`, `from` absent on the
+ * first observation of a process — so the first mark of a run is the level it
+ * started at, and a **level-up is a mark that carries a `from` and climbs**.
+ * `levelUps` already applies that rule; a consumer must never count `marks`.
+ *
+ * Distinct from the level readings the state samples carry, which say what the
+ * level was at each sample: a mark says *when it changed*, with the turn in
+ * flight and the XP the bar showed at that moment. It is a lower bound in the
+ * usual sense — sampled on `stateIntervalMs`, so two levels gained inside one
+ * interval leave one mark — and null (no `LevelUpFacts` at all) is "not
+ * recorded": every run before 2026-08-29.
+ */
+export interface LevelUpFacts {
+  /** Marks that carry a `from` and climb. Never `marks.length`. */
+  levelUps: number;
+  /** The first level observed, and the highest any mark named. */
+  startLevel: number;
+  maxLevel: number;
+  /** The ends of `marks`, carried so a listing row need not walk the array. */
+  first: LevelUpMark;
+  last: LevelUpMark;
+  /** The timeline itself, in observation order. Tens of entries at most. */
+  marks: LevelUpMark[];
+}
+
+/**
+ * One `level` milestone projected: the level, the level it came from, and when.
+ * Distinct from `LevelMark`, which is a level reading derived from the state
+ * samples and carries the cost of reaching it.
+ */
+export interface LevelUpMark {
+  to: number;
+  /** Null on the first observation of a process — a baseline, not a gain. */
+  from: number | null;
+  /** XP toward the next level as the bar showed it at that moment. */
+  xp: number | null;
+  ts: number;
+  turn: number | null;
+}
+
+/**
+ * A run's deaths, from the `death` / `release` / `resurrect` milestones.
+ *
+ * `deaths` counts the **dead windows** the producer observed opening, not the
+ * health transitions: the state cache latches the corpse and the reclaim delay
+ * from the death until the resurrect, so a sample landing anywhere inside the
+ * window sees it and stamps the death with the cache's own timestamp. A death
+ * whose whole window fell between two samples leaves nothing, and two deaths
+ * with no observed resurrect between them read as one — a lower bound, the
+ * convention `AreaFacts` and `TaxiFacts` already carry.
+ *
+ * Null is "deaths were not recorded for this run" and is not `{ deaths: 0 }`.
+ * The two are told apart by the level marks: every run under this producer
+ * writes one on its first sample, so a run with a level timeline and no death
+ * genuinely never died. This is the job `achievements_at_login` does for
+ * flights; the achievement records cannot do it here, since runs that predate
+ * the death producer have them.
+ */
+export interface DeathFacts {
+  deaths: number;
+  /** Ghost-flag transitions: released to a graveyard, and resurrected. */
+  releases: number;
+  resurrects: number;
+  /** The ends of `sites`, carried so a listing row need not walk the array. */
+  first: DeathSite | null;
+  last: DeathSite | null;
+  /** Every death observed, in order — the death sites map replay wants (item 22). */
+  sites: DeathSite[];
+}
+
+/** Where and when one death happened. */
+export interface DeathSite {
+  /** The death's own timestamp where the cache carried one, else the record's. */
+  ts: number;
+  turn: number | null;
+  /**
+   * The corpse, and which packet said where it is: `death_spot` is the position
+   * at the moment health reached 0, `corpse_query` the server's own answer.
+   * Null when neither had been observed by the sample that saw the death.
+   */
+  position: { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" } | null;
+  /**
+   * The zone/area reading at first observation. It is the death site only when
+   * `released` is false — once the spirit is at the graveyard these are the
+   * graveyard's ids, and `released` is what says which one a reader is holding.
+   */
+  zone: number | null;
+  area: number | null;
+  released: boolean | null;
+}
+
 /** One run as the results charts read it: identity, comparability, level marks. */
 export interface ResultRun {
   runId: string;
@@ -1108,6 +1208,12 @@ export interface ResultRun {
    * field, the same convention `xpEarned` and `expectedCost` use.
    */
   areas?: AreaFacts | null;
+  /**
+   * The level timeline and the deaths, from the same pass over the milestone
+   * records. Optional for the reason `areas` is: an older viewer has neither.
+   */
+  leveling?: LevelUpFacts | null;
+  deaths?: DeathFacts | null;
   /**
    * Achievements the run's records account for. `null` is a run that
    * wrote none — everything before the achievement taps were deployed — and

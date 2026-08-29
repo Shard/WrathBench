@@ -151,8 +151,17 @@ export const EXPANSION_MAPS = [530, 571];
  * soon as *any* of the model's runs passes, so an old run cannot make a
  * derivation look false — it simply says nothing.
  *
- * Rung 6 stays not instrumented: grouping and instance records do not exist,
- * and the harness runs one character per session anyway.
+ * Deaths and the level timeline joined the milestone records on 2026-08-29
+ * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
+ * often a character died, and the level rungs already read `maxLevel`.
+ *
+ * Rung 6 stays not instrumented, and what it lacks is specifically: a record of
+ * joining or leaving a party (no group milestone exists) and a record of
+ * entering an instance (no instance milestone exists — a map-id change in the
+ * state samples is not one, since it cannot tell a dungeon from a boat ride).
+ * Even with both, the harness runs one character per session, so the rung's
+ * "party of agents" clause needs multi-session work that does not exist
+ * either. The framing of that rung is issue #9.
  */
 export const RUNGS: Rung[] = [
   {

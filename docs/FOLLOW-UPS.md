@@ -125,9 +125,26 @@ status.
     after an accepted reply. `ResultRun.achievements` / `.taxi` and
     `RunDetailResponse` carry them (`achievementFactsFrom`, `taxiFactsFrom`),
     rung 4 now derives fully (capital **and** a flight), and achievement points
-    are displayed only — no ordering reads them. Death, level-up, spell learned,
-    talent spent and the remaining firsts are still unwritten, and rung 6 is
-    still nobody's.
+    are displayed only — no ordering reads them. **Deaths and levels
+    (2026-08-29):** the loop writes `{ kind: "level", from: number | undefined,
+    to, xp?, turn }` on every change of `self.level` (the first observation of a
+    process carries no `from`, exactly as the first zone does, so a level-up is
+    a mark that carries one and climbs), and `{ kind: "death", observedTs?,
+    position?: { map, x, y, z, source }, zone?, area?, released? }` plus
+    `{ kind: "release", graveyard? }` / `{ kind: "resurrect" }` from the ghost
+    flag. The death is read as a *window* — the cache latches the corpse and the
+    reclaim delay until the resurrect, so a sample landing anywhere inside it
+    recovers the death and stamps it with the cache's own time rather than the
+    sample's; a window that opened and closed between two samples still leaves
+    nothing, the usual lower bound. `RunTotals.leveling` / `.deaths`
+    (`levelUpFactsFrom`, `deathFactsFrom`), `ResultRun` and
+    `RunDetailResponse` carry them; the level mark is the liveness witness that
+    lets "never died" read as `0` where "not recorded" reads `null`, the job
+    `achievements_at_login` does for flights. Nothing renders them yet.
+    **What remains:** spell learned, talent spent, the "firsts" (first trade,
+    first instance, first group join) and grouping/instance records. Rung 6 is
+    still nobody's — it needs a party record and an instance record, and the
+    harness runs one character per session; its framing is issue #9.
 
 90. **The freeplay pilot is queued behind class-probe, and one lane cannot do
     both** (2026-08-28, with the roster refresh). `nemotron-super` carries
