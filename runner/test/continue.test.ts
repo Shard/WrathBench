@@ -9,14 +9,19 @@
  * the module for a stub that calls no tool.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { loadContinuation } from "../src/run";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
+
+/** A freeplay launch on RUNNER2 continuing `from`. */
+const cfgFor = (runsDir: string, from: string) =>
+  ({ episode: "freeplay", account: "RUNNER2", runsDir, continuedFrom: from }) as Parameters<typeof loadContinuation>[0];
 
 /** An ended freeplay run on RUNNER2 that played Bromdir to level 8, notes and all. */
 function endedFreeplayRun(over: { episode?: "freeplay" | "e90"; account?: string; character?: string } = {}) {
@@ -112,7 +117,7 @@ describe("loadContinuation", () => {
     const { runsDir, runId, dir } = endedFreeplayRun();
     expect(loadContinuation(cfg(runsDir))).toEqual({ from: runId, character: "Bromdir", race: 3, class: 2, dir });
     // The account matches as the realm matches it.
-    expect(loadContinuation(cfg(runsDir, { account: "runner2" })).character).toBe("Bromdir");
+    expect(loadContinuation(cfg(runsDir, { account: "runner2" }))?.character).toBe("Bromdir");
   });
 
   test("refuses everything that would make the lineage a lie", () => {
@@ -121,8 +126,9 @@ describe("loadContinuation", () => {
     expect(() => loadContinuation(cfg(runsDir, { episode: "e90" }))).toThrow(/freeplay continuation/);
     // Another account: the character is not there.
     expect(() => loadContinuation(cfg(runsDir, { account: "RUNNER5" }))).toThrow(/a character lives on one account/);
-    // No such run.
-    expect(() => loadContinuation(cfg(runsDir, { continuedFrom: "nope" }))).toThrow(/no meta.json/);
+    // No such run anywhere: an absent lineage, not a lie about one — the
+    // launch degrades to a fresh start rather than dying (see below).
+    expect(loadContinuation(cfg(runsDir, { continuedFrom: "nope" }))).toBeNull();
     // A predecessor that is not freeplay, or never named a character.
     expect(() => loadContinuation(cfg(endedFreeplayRun({ episode: "e90" }).runsDir))).toThrow(/not freeplay/);
     expect(() => loadContinuation(cfg(endedFreeplayRun({ character: undefined }).runsDir))).toThrow(/never recorded a character/);
@@ -174,6 +180,48 @@ describe("--continue-from", () => {
       const records = readTrajectory(dir);
       expect(records.some((r) => r.t === "harness" && r["kind"] === "continue-dropped")).toBe(true);
       expect(JSON.stringify(records)).toContain("name your character");
+    } finally {
+      mod.stop();
+    }
+  }, 60_000);
+
+  test("an archived predecessor still continues: the archive parks a listing, not a character", async () => {
+    const { runsDir, runId, dir } = endedFreeplayRun();
+    // The freeplay ladder shows one stream per model, so the dead sessions
+    // behind it get parked. The character is untouched by that move.
+    mkdirSync(join(runsDir, ARCHIVE_DIR), { recursive: true });
+    renameSync(dir, join(runsDir, ARCHIVE_DIR, runId));
+    expect(loadContinuation(cfgFor(runsDir, runId))).toMatchObject({
+      from: runId,
+      character: "Bromdir",
+      dir: join(runsDir, ARCHIVE_DIR, runId),
+    });
+    const mod = fakeModule([{ name: "Bromdir", guid: "310" }]);
+    try {
+      const stderr = await launch(runsDir, mod.url, ["--episode", "freeplay", "--run-id", "a12", "--continue-from", runId]);
+      expect(stderr).toContain(`continuing ${runId}: Bromdir (guid 310) is on RUNNER2`);
+      const next = join(runsDir, "a12");
+      expect(readMeta(next)?.config.continuedFrom).toBe(runId);
+      // The predecessor's notes come along from the archive, too.
+      expect(readFileSync(join(next, "scratchpad.md"), "utf8")).toContain("the pass bends west first");
+    } finally {
+      mod.stop();
+    }
+  }, 60_000);
+
+  test("a predecessor that is nowhere on disk degrades to a fresh start, never a dead launch", async () => {
+    const { runsDir } = endedFreeplayRun();
+    const mod = fakeModule([]);
+    try {
+      const stderr = await launch(runsDir, mod.url, ["--episode", "freeplay", "--run-id", "a12", "--continue-from", "fleet-gone-freeplay-gone-20260101"]);
+      expect(stderr).toContain("no such run under");
+      const dir = join(runsDir, "a12");
+      // The run happened, and no record claims a lineage it does not have.
+      expect(existsSync(dir)).toBe(true);
+      expect(readMeta(dir)?.config.continuedFrom).toBeUndefined();
+      const records = readTrajectory(dir);
+      const dropped = records.find((r) => r.t === "harness" && r["kind"] === "continue-dropped");
+      expect(String(dropped?.["detail"])).toContain("fleet-gone-freeplay-gone-20260101");
     } finally {
       mod.stop();
     }

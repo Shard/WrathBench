@@ -17,7 +17,7 @@ import { createApi } from "../viewer/api";
 import { listRuns } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { scanRunTotals } from "../viewer/tail";
-import { archiveIfNoResponses, archiveRun, inSeries, planPreSeries, recentFleetRunIds } from "../src/archive";
+import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds } from "../src/archive";
 import { readRunFacts } from "../src/models";
 
 const OLD = 1_600_000_000; // seconds; well outside any liveness window
@@ -209,4 +209,91 @@ describe("the series floor", () => {
     stamp("warm-live", "harness-0.3");
     expect(planPreSeries(runs, "0.4", Date.now(), true).find((p) => p.runId === "warm-live")).toMatchObject({ held: true });
   });
+});
+
+/**
+ * `--run-ids`: the operator naming the runs, because "one live stream per
+ * model+effort on the freeplay ladder" is a judgement no series floor can
+ * make (operator ask, 2026-08-29). What matters here is that naming a run is
+ * not a licence to move it — the held guards are the floor's, unchanged — and
+ * that an id which names nothing comes back as a line, not an exception: a
+ * selector that swallowed a typo would report eighteen of nineteen as done.
+ */
+describe("the named selector", () => {
+  const pause = (runs: string, id: string) => {
+    const path = join(runs, id, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const { mtimeMs } = statSync(path);
+    writeFileSync(path, JSON.stringify({ ...meta, pause: { reason: "rate-limited", at: 1 } }));
+    utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+  };
+
+  test("a comma list, an @file and a duplicate all name the same set once", () => {
+    expect(parseRunIds("a,b , c")).toEqual(["a", "b", "c"]);
+    expect(parseRunIds("a,b,a")).toEqual(["a", "b"]);
+    const dir = mkdtempSync(join(tmpdir(), "runids-"));
+    const file = join(dir, "ids.txt");
+    writeFileSync(file, "# the dead qwen sessions\na\n\nb\n");
+    expect(parseRunIds(`@${file}`)).toEqual(["a", "b"]);
+  });
+
+  test("named runs move, and an id that names nothing is reported rather than thrown", () => {
+    const runs = fixture();
+    const { plans, unknown } = planRunIds(runs, ["worked", "no-such-run", ARCHIVE_DIR]);
+    expect(plans.map((p) => p.runId)).toEqual(["worked"]);
+    expect(plans[0]).toMatchObject({ held: false });
+    // A typo and the archive directory itself: both named, neither moved.
+    expect(unknown.map((u) => u.runId)).toEqual(["no-such-run", ARCHIVE_DIR]);
+    // A run already parked says so, rather than reading as a typo.
+    archiveRun(runs, "spoke-only");
+    expect(planRunIds(runs, ["spoke-only"]).unknown[0]!.reason).toContain("already under archive/");
+  });
+
+  test("the held guards are the floor's: warm files and a fleet job log both refuse", () => {
+    const runs = fixture();
+    const now = Date.now();
+    run(runs, "warm-live", [META], { warm: true });
+    writeFileSync(join(runs, "fleet-job-a.jsonl"), JSON.stringify({ ts: now - 60_000, runId: "worked" }) + "\n");
+    const byId = new Map(planRunIds(runs, ["warm-live", "worked"], now).plans.map((p) => [p.runId, p]));
+    expect(byId.get("warm-live")).toMatchObject({ held: true });
+    expect(byId.get("warm-live")!.reason).toContain("may still be live");
+    expect(byId.get("worked")).toMatchObject({ held: true });
+    expect(byId.get("worked")!.reason).toContain("fleet job log");
+    // Naming a held run never moves it: the plan is the only filter archiveRun has.
+    expect(existsSync(join(runs, "warm-live", "trajectory.jsonl"))).toBe(true);
+  });
+
+  test("--release-paused lifts the warm hold for a parked run, and only for a parked one", () => {
+    const runs = fixture();
+    const now = Date.now();
+    run(runs, "parked", [META], { warm: true });
+    pause(runs, "parked");
+    run(runs, "warm-live", [META], { warm: true });
+    expect(planRunIds(runs, ["parked", "warm-live"], now).plans).toEqual([
+      { runId: "parked", held: true, reason: expect.stringContaining("may still be live") },
+      { runId: "warm-live", held: true, reason: expect.stringContaining("may still be live") },
+    ]);
+    const released = new Map(planRunIds(runs, ["parked", "warm-live"], now, true).plans.map((p) => [p.runId, p]));
+    expect(released.get("parked")).toMatchObject({ held: false });
+    expect(released.get("parked")!.reason).toContain("named by the operator");
+    expect(released.get("warm-live")).toMatchObject({ held: true });
+  });
+
+  test("--dry-run plans and moves nothing", async () => {
+    const runs = fixture();
+    const cli = join(import.meta.dir, "..", "src", "archive.ts");
+    const proc = Bun.spawn({
+      cmd: [process.execPath, cli, "--run-ids", "worked,no-such-run", "--dry-run"],
+      env: { ...process.env, WRATHBENCH_RUNS_DIR: runs },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    expect(out).toContain("would move  worked");
+    expect(out).toContain("unknown   no-such-run");
+    expect(out).toContain("1 would move, 0 held back, 1 unknown");
+    expect(existsSync(join(runs, "worked", "trajectory.jsonl"))).toBe(true);
+    expect(existsSync(join(runs, ARCHIVE_DIR, "worked"))).toBe(false);
+  }, 30_000);
 });
