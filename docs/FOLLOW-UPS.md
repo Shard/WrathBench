@@ -19,9 +19,8 @@ status.
 
 1. **98, 100** — what is left of the basic player surface: the pet surface, and
    the group/mail/bank/trade replies. Operator's decision 2026-08-29: complete it,
-   validated by smoke tests, before any 0.6 talk. 95/96/97/99 shipped 2026-08-29
-   (97f4e31, built to `:next` and undeployed; retiring their entries below is the
-   module agent's), and 101 shipped the same day (97f4e31 + dc8c9aa).
+   validated by smoke tests, before any 0.6 talk. 95/96/97/99 and 101 shipped
+   2026-08-29 (97f4e31, dc8c9aa; module built to `:next`, deploy owed).
 2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
 3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
@@ -40,41 +39,11 @@ ever called `sdk.raw()` and the highest level reached was 9, so nothing below is
 "a trajectory asked for it" — it is the surface a player needs before a run can
 get far enough to ask. **Operator's decision, 2026-08-29: complete the basic
 player surface, each piece validated by a smoke test, before any 0.6 talk.**
-Numbers 95–100 are observation/action gaps that need the module. Item 101, the
-legibility work inside the SDK and runner, shipped the same day (97f4e31 +
-dc8c9aa; worklogs/2026-08-29).
+Items 95, 96, 97, 99 and 101 shipped the same day (97f4e31, dc8c9aa;
+worklogs/2026-08-29). 98 and 100 remain.
 
-95. **Skills and professions are not observed** (2026-08-29 audit). The
-    observation contract already promises "skills … as the client shows it"
-    (docs/CONTRACTS.md), and nothing serves them: no `SMSG_INITIAL_SPELLS` skill
-    block, no skill update fields on self, no `state.self.skills`. Why it
-    matters: weapon skill, defense and every profession are invisible, so a model
-    cannot tell why a swing missed, cannot know it is at the trainer's skill cap,
-    and cannot gate riding at 75 or take a profession at all — which makes
-    professions unreachable rather than unused. Unblocked by the module tapping
-    the skill fields (they ride the player update block a client already gets) and
-    an SDK fold plus one smoke test. Status: with the module agent, in flight.
 
-96. **Talents are not discoverable, and there is no respec** (2026-08-29 audit).
-    `learnTalent` exists and takes a `Talent.dbc` talent id with a rank; the model
-    has no way to observe which ids exist, what they do, or which tree they belong
-    to, so the only working path is guessing an id out of world knowledge.
-    `state.talents` reports points spent, never the choices available. Respec is
-    absent entirely: `CMSG_TALENT_WIPE_CONFIRM` is not on the raw allowlist, so a
-    misspent tree is permanent for the run. This bites at level 10, which the
-    ladder now expects runs to pass. Unblocked by a talent catalogue served as
-    client-cache knowledge the way spell and achievement names already are, plus
-    the trainer's wipe opcode allowlisted and a smoke test that spends and undoes
-    a point. Status: with the module agent, in flight.
 
-97. **`ItemInfo` carries no stats** (2026-08-29 audit). The item template fold
-    serves name, quality, item level, required level and buy/sell price and
-    nothing else, so an upgrade decision and every quest reward choice is a guess
-    over a name — the model cannot see armour, a damage range, or a single stat
-    the client shows in the tooltip it renders from the same template. Unblocked
-    by widening the served item-template fields (all client-cache, all in the
-    template a client already has) and a fixture test that a reward choice reads
-    them. Status: in flight.
 
 98. **No pet surface, so hunter and warlock are unplayable** (2026-08-29 audit).
     There is no `CMSG_PET_ACTION` and no `SMSG_PET_SPELLS` tap — `WbManager.cpp`
@@ -85,11 +54,6 @@ dc8c9aa; worklogs/2026-08-29).
     action opcode, and a smoke test that summons and commands one. Status:
     queued behind 95–97.
 
-99. **Reputation is allowed and not served** (2026-08-29 audit). The observation
-    contract lists "reputation as the client shows it"; no packet is tapped and
-    no state field exists. Faction standing gates quests, vendors and rewards, so
-    a model cannot tell why an NPC refuses it. Unblocked by the reputation tap and
-    an SDK fold. Status: in flight.
 
 100. **Allowlisted opcodes whose replies are dropped: group, mail, bank, trade**
     (2026-08-29 audit). The raw allowlist accepts the client opcodes for all
