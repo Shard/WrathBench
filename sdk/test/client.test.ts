@@ -3783,6 +3783,11 @@ describe("client: a name in view is a referent", () => {
     expect(ack.payload).toBe(exact.payload); // the same bytes a guid would have produced
     expect(ack.resolved).toEqual([{ input: "thistle", name: "Thistlebore", guid: CREATURE_GUID }]);
     expect(exact.resolved).toBeUndefined();
+    // packedGuid encodes differently (mask + non-zero bytes), so it gets its
+    // own end-to-end check rather than riding on the guid one.
+    const packed = await client.raw("CMSG_TEXT_EMOTE", [{ packedGuid: "thistle" }]);
+    const packedExact = await client.raw("CMSG_TEXT_EMOTE", [{ packedGuid: CREATURE_GUID }]);
+    expect(packed.payload).toBe(packedExact.payload);
     client.close();
     await stub.stop();
   });
