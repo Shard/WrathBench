@@ -26,6 +26,8 @@
  * rebuilt history reproduces the same boundaries as an in-memory one.
  */
 
+import { inventoryResultText } from "@wrathbench/sdk";
+
 import { compactJson } from "./jsonsafe";
 import type { EventSummary } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
@@ -525,12 +527,27 @@ export interface ContextInputs {
   turn: number;
 }
 
+/**
+ * The client-visible sentence for an inventory refusal, appended to the raw
+ * event line. The packet carries only a number, and a run was observed
+ * reverse-engineering "reason 60" into "in combat" from context (FOLLOW-UPS
+ * 101a); the number still renders verbatim inside the payload, so this only
+ * names what the client would have shown. Nothing else is added — no advice.
+ */
+function eventLineNote(e: EventSummary): string {
+  if (e.opcode !== "SMSG_INVENTORY_CHANGE_FAILURE") return "";
+  const result = (e.data as { result?: unknown } | undefined)?.result;
+  if (typeof result !== "number") return "";
+  const named = inventoryResultText(result);
+  return named === undefined ? "" : ` — ${named}`;
+}
+
 export function formatEventLine(e: EventSummary): string {
   const schema = e.schemaError !== undefined ? " [schema mismatch]" : "";
   // A stream_gap is synthetic and carries the NEXT real event's seq; rendering
   // that number made it look like a duplicate. Mark it as the gap it is.
   const tag = e.opcode === "stream_gap" ? "#gap" : `#${e.seq}`;
-  return `${tag} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}`;
+  return `${tag} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}${eventLineNote(e)}`;
 }
 
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
