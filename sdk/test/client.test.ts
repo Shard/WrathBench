@@ -41,6 +41,8 @@ import {
   transferPending,
   offerReward,
   OTHER_QUEST_ID,
+  playerCreate,
+  playerName,
   PLAYER_GUID,
   QUEST_ID,
   questAccepted,
@@ -2342,7 +2344,7 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
     expect((unknown as Error).message).toContain("Thelsamar");
     const notKnown = await client.activateTaxi(CREATURE_GUID, 9).catch((e: unknown) => e);
     expect((notKnown as Error).message).toContain("not in the window");
-    const ambiguous = await client.activateTaxi(CREATURE_GUID, ", ").catch((e: unknown) => e);
+    const ambiguous = await client.activateTaxi(CREATURE_GUID, "o").catch((e: unknown) => e);
     expect((ambiguous as Error).message).toContain("matches 2 nodes");
     expect(stub.actions.some((a) => a.action === "raw")).toBe(false);
     client.close();
@@ -3616,6 +3618,69 @@ describe("client: the softened inputs and the harness hints they refuse with (20
     stub.push(frame(642, "SMSG_TALENTS_INFO", { pet: false, unspentPoints: 1, specCount: 1, activeSpec: 0, specs: [{ talents: [{ talentId: 124, rank: 1 }] }] }));
     expect(await learn).toMatchObject({ ok: true, status: "learned", talentId: 124, rank: 1 });
     expect(await client.learnTalent("Bladestorm")).toMatchObject({ ok: false, status: "unknown_talent" });
+    client.close();
+    await stub.stop();
+  });
+});
+
+/**
+ * METHODOLOGY, "A name in view is a valid referent, with bounded fuzz": the
+ * three tiers reach the same unit, a non-exact match says so in the result
+ * rather than in a hint, two matches refuse, and nothing guid-shaped is ever
+ * fuzzed.
+ */
+describe("client: a name in view is a referent", () => {
+  const namedWorld = () =>
+    frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, playerCreate, playerName]);
+
+  test("an exact name acts, and says nothing about resolving — there was nothing to resolve", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.interact("  thistlebore ");
+    expect(stub.actions[0]?.guid).toBe(CREATURE_GUID);
+    expect(ack).not.toHaveProperty("resolved");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a unique substring acts and the result carries what it landed on", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.interact("thistle");
+    expect(stub.actions[0]?.guid).toBe(CREATURE_GUID);
+    expect(ack.resolved).toEqual({ input: "thistle", name: "Thistlebore", guid: CREATURE_GUID });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a unique near-miss acts and the result carries what it landed on", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.interact("Thistlebode");
+    expect(stub.actions[0]?.guid).toBe(CREATURE_GUID);
+    expect(ack.resolved).toEqual({ input: "Thistlebode", name: "Thistlebore", guid: CREATURE_GUID });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a name two things answer to refuses with both, and dispatches nothing", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    // "b" is in both "Thistlebore" and "Quilby".
+    await expect(client.interact("b")).rejects.toThrow(/matches 2 things in view.*does not choose between referents/s);
+    expect(stub.actions).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a guid is never fuzzed — one digit off is that guid, not the unit it nearly names", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const nearMiss = `${CREATURE_GUID.slice(0, -1)}9`;
+    expect(nearMiss).not.toBe(CREATURE_GUID);
+    const ack = await client.interact(nearMiss);
+    expect(stub.actions[0]?.guid).toBe(nearMiss);
+    expect(ack).not.toHaveProperty("resolved");
     client.close();
     await stub.stop();
   });

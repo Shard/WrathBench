@@ -95,6 +95,17 @@ import {
   type UpdateFields,
 } from "./protocol";
 import { STREAM_GAP, type StreamEvent } from "./events";
+import { resolveName, type Resolution } from "./resolve";
+
+/**
+ * A state *query* has no refusal channel — it answers a row or `undefined` —
+ * so both "nothing answers to that" and "two things do" read as `undefined`,
+ * and the caller falls back to the list accessor. Only actions refuse and say
+ * why (METHODOLOGY, "A name in view is a valid referent, with bounded fuzz").
+ */
+function only<T>(hit: Resolution<T>): T | undefined {
+  return hit.kind === "one" ? hit.value : undefined;
+}
 
 /** `UNIT_FLAG_TAXI_FLIGHT` — the bit a client reads to know it is being flown. */
 const UNIT_FLAG_TAXI_FLIGHT = 0x0010_0000;
@@ -2108,16 +2119,17 @@ export class StateCache {
     return out.sort((a, b) => a.skillId - b.skillId);
   }
 
-  /** One skill line by id or by name (case-insensitive exact, else unique substring); `undefined` when the character lacks it. */
+  /**
+   * One skill line by id or by name, through the shared `resolveName`;
+   * `undefined` when the character lacks it. A query is a *read* here, not an
+   * action, so there is nowhere to put a refusal: an ambiguous name answers
+   * `undefined` the same as an unknown one, and the caller looks at
+   * `skills()`.
+   */
   skill(key: number | string): SkillLine | undefined {
     const all = this.skills();
     if (typeof key === "number") return all.find((s) => s.skillId === key);
-    const q = key.trim().toLowerCase();
-    const named = all.filter((s) => s.name !== undefined);
-    const exact = named.find((s) => s.name!.toLowerCase() === q);
-    if (exact !== undefined) return exact;
-    const partial = named.filter((s) => s.name!.toLowerCase().includes(q));
-    return partial.length === 1 ? partial[0] : undefined;
+    return only(resolveName(key, all, (s) => s.name));
   }
 
   /**
@@ -2131,16 +2143,11 @@ export class StateCache {
     );
   }
 
-  /** One reputation row by faction id or by name (case-insensitive exact, else unique substring). */
+  /** One reputation row by faction id or by name (shared `resolveName`; ambiguous reads `undefined`, as `skill` does). */
   reputationWith(key: number | string): ReputationEntry | undefined {
     const all = [...this.reputationMap.values()];
     if (typeof key === "number") return all.find((r) => r.factionId === key);
-    const q = key.trim().toLowerCase();
-    const named = all.filter((r) => r.name !== undefined);
-    const exact = named.find((r) => r.name!.toLowerCase() === q);
-    if (exact !== undefined) return exact;
-    const partial = named.filter((r) => r.name!.toLowerCase().includes(q));
-    return partial.length === 1 ? partial[0] : undefined;
+    return only(resolveName(key, all, (r) => r.name));
   }
 
   /**
@@ -2191,18 +2198,14 @@ export class StateCache {
   }
 
   /**
-   * One of the pet's spells by id or by name (case-insensitive exact, else
-   * unique substring); `undefined` when the pet lacks it or there is no pet.
+   * One of the pet's spells by id or by name (shared `resolveName`);
+   * `undefined` when the pet lacks it, there is no pet, or the name is
+   * ambiguous — a read has nowhere to put a refusal.
    */
   petSpell(key: number | string): PetSpellEntry | undefined {
     const all = this.pet()?.spells ?? [];
     if (typeof key === "number") return all.find((s) => s.spellId === key);
-    const q = key.trim().toLowerCase();
-    const named = all.filter((s) => s.name !== undefined);
-    const exact = named.find((s) => s.name!.toLowerCase() === q);
-    if (exact !== undefined) return exact;
-    const partial = named.filter((s) => s.name!.toLowerCase().includes(q));
-    return partial.length === 1 ? partial[0] : undefined;
+    return only(resolveName(key, all, (s) => s.name));
   }
 
   /** The party (item 100), or `undefined` until any group packet has been observed. */
