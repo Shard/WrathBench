@@ -29,14 +29,14 @@ const TS = 1_700_000_000_000;
 const ROLL_GUID = "4611686018427387905";
 const OTHER_ROLL_GUID = "4611686018427387906";
 const OTHER_PLAYER = "9";
-// The live Battered Chest run of 2026-08-30: a Banded Cloak on slot 2.
+// The live Battered Chest run of 2026-08-30 03:5x: a Banded Cloak on slot 2.
 const LIVE_ROLL_GUID = "4611686018427412991";
 const BANDED_CLOAK = 9838;
 const frame = (seq: number, opcode: string, data: unknown) => ({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
-const startRoll = (seq: number, rollGuid = ROLL_GUID, itemId = 17922, mask = 0x03) =>
+const startRoll = (seq: number, rollGuid = ROLL_GUID, itemId = 17922, mask = 0x03, slot = 2) =>
   frame(seq, "SMSG_LOOT_START_ROLL", {
     rollGuid,
-    slot: 2,
+    slot,
     itemId,
     count: 1,
     countdownMs: 60_000,
@@ -124,6 +124,39 @@ describe("state: group loot rolls (item 102)", () => {
     expect(passed.pendingRolls(TS + 13)).toHaveLength(0);
     const late = StateCache.replay(toEvents(base), { seed: SEED });
     expect(late.pendingRolls(TS + 10 + 60_001)).toHaveLength(0);
+  });
+
+  test("two rolls from one open are kept apart, and an empty-source verdict closes only the frame its slot and item name", () => {
+    // The live Battered Chest of 2026-08-30 06:10 opened two rolls at once:
+    // item 3049 on slot 1 and item 2842 on slot 2 (the run logged the ids, not
+    // the names). Both verdicts come back with ObjectGuid::Empty as the source,
+    // so slot + item is all that tells them apart.
+    const FIRST_GREEN = 3049;
+    const SECOND_GREEN = 2842;
+    const both = [
+      ...loginSequence,
+      startRoll(10, LIVE_ROLL_GUID, FIRST_GREEN, 0x03, 1),
+      startRoll(11, OTHER_ROLL_GUID, SECOND_GREEN, 0x03, 2),
+    ];
+    const open = StateCache.replay(toEvents(both), { seed: SEED });
+    expect(open.pendingRolls(TS + 12).map((r) => [r.rollGuid, r.slot, r.itemId])).toEqual([
+      [LIVE_ROLL_GUID, 1, FIRST_GREEN],
+      [OTHER_ROLL_GUID, 2, SECOND_GREEN],
+    ]);
+    const first = StateCache.replay(
+      toEvents([...both, frame(12, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 1, itemId: FIRST_GREEN, winnerGuid: SELF_GUID, roll: 61, rollType: 1 })]),
+      { seed: SEED },
+    );
+    expect(first.pendingRolls(TS + 13).map((r) => r.rollGuid)).toEqual([OTHER_ROLL_GUID]);
+    const secondToo = StateCache.replay(
+      toEvents([
+        ...both,
+        frame(12, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 1, itemId: FIRST_GREEN, winnerGuid: SELF_GUID, roll: 61, rollType: 1 }),
+        frame(13, "SMSG_LOOT_ROLL_WON", { rollGuid: "0", slot: 2, itemId: SECOND_GREEN, winnerGuid: SELF_GUID, roll: 44, rollType: 1 }),
+      ]),
+      { seed: SEED },
+    );
+    expect(secondToo.pendingRolls(TS + 14)).toHaveLength(0);
   });
 });
 
