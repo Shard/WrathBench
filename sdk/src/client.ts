@@ -1993,6 +1993,8 @@ export interface RawActionResponse extends ActionResponse {
   readonly opcode: string;
   /** The body bytes as sent, hex. */
   readonly payload: string;
+  /** One entry per payload field where a non-exact name resolved to a guid. */
+  readonly resolved?: readonly ResolvedRef[];
 }
 
 /**
@@ -3648,6 +3650,14 @@ export class WrathClient {
    *
    * Opcodes that already have a method (`castSpell`, `say`, `lootAll`, …) are
    * not on the allowlist: one audited path per opcode.
+   *
+   * A `guid`/`packedGuid` field also takes the name of something in view, the
+   * same referent a helper takes and through the same resolver — a name is a
+   * referent wherever a guid is one (METHODOLOGY). Nothing else in the payload
+   * is touched: a `cstring` is a mail recipient or an invite target, usually
+   * someone not in view, and a `u64` is not a referent at all. The opcode name
+   * is never fuzzed either. Two matches refuse and name both; the answer
+   * carries `resolved` for each field a name resolved.
    */
   raw(opcode: string, payload: RawPayload = ""): Promise<RawActionResponse> {
     const op = rawOpcodeSchema.safeParse(opcode);
@@ -3657,7 +3667,8 @@ export class WrathClient {
           `see module/PROTOCOL.md "raw" for the allowlist`,
       );
     }
-    const body = rawPayloadSchema.safeParse(payload);
+    const named = this.resolveRawGuids(op.data, payload);
+    const body = rawPayloadSchema.safeParse(named.payload);
     if (!body.success) {
       throw new TypeError(
         `raw(${opcode}, payload): payload must be a hex string, a Uint8Array, or a list of ` +
@@ -3671,7 +3682,41 @@ export class WrathClient {
       "/action",
       { token: this.token, action: "raw", opcode: op.data, payload: hexPayload },
       actionResponseSchema,
-    ).then((ack) => ({ ...ack, opcode: op.data, payload: hexPayload }));
+    ).then((ack) => ({
+      ...ack,
+      opcode: op.data,
+      payload: hexPayload,
+      ...(named.resolved.length > 0 ? { resolved: named.resolved } : {}),
+    }));
+  }
+
+  /**
+   * Turn any name sitting in a raw payload's `guid`/`packedGuid` field into
+   * the guid it names, and report the ones that needed fuzz. Only those two
+   * field kinds: `cstring` carries player names the server resolves itself
+   * (a mail recipient, a group invite) and rewriting one against what is in
+   * view would silently retarget a valid call, and `u64` is a 64-bit value
+   * rather than a referent. A hex or byte payload is already encoded and is
+   * passed through untouched.
+   */
+  private resolveRawGuids(
+    opcode: string,
+    payload: RawPayload,
+  ): { payload: RawPayload; resolved: ResolvedRef[] } {
+    if (!Array.isArray(payload)) return { payload, resolved: [] };
+    const resolved: ResolvedRef[] = [];
+    const fields = payload.map((field) => {
+      if (field === null || typeof field !== "object") return field;
+      for (const key of ["guid", "packedGuid"] as const) {
+        const value = (field as Record<string, unknown>)[key];
+        if (typeof value !== "string" || GUID_TEXT.test(value.trim())) continue;
+        const ref = this.targetRef(value, `raw(${opcode}, [{ ${key} }])`);
+        if (ref.resolved !== undefined) resolved.push(ref.resolved);
+        return { ...(field as object), [key]: ref.guid } as RawField;
+      }
+      return field;
+    });
+    return { payload: fields, resolved };
   }
 
   /**

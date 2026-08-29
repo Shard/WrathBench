@@ -3673,6 +3673,52 @@ describe("client: a name in view is a referent", () => {
     await stub.stop();
   });
 
+  test("a raw payload's guid field takes a name in view, resolved the same way", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.raw("CMSG_TEXT_EMOTE", [{ u32: 1 }, { guid: "thistle" }]);
+    const exact = await client.raw("CMSG_TEXT_EMOTE", [{ u32: 1 }, { guid: "Thistlebore" }]);
+    expect(ack.payload).toBe(exact.payload); // the same bytes a guid would have produced
+    expect(ack.resolved).toEqual([{ input: "thistle", name: "Thistlebore", guid: CREATURE_GUID }]);
+    expect(exact.resolved).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("a raw payload refuses an ambiguous name rather than picking, and sends nothing", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const before = stub.actions.length;
+    expect(() => client.raw("CMSG_TEXT_EMOTE", [{ packedGuid: "b" }])).toThrow(/matches 2 things in view/);
+    expect(stub.actions).toHaveLength(before);
+    client.close();
+    await stub.stop();
+  });
+
+  test("the rest of a raw payload is left alone — a cstring is not a referent, nor is a u64", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    // "Thistle" as a mail recipient or invite target is a player the server
+    // resolves; rewriting it against what is in view would retarget the call.
+    const ack = await client.raw("CMSG_TEXT_EMOTE", [{ cstring: "Thistle" }, { u64: "4294967296" }]);
+    expect(ack.payload).toBe("54686973746c6500" + "0000000001000000");
+    expect(ack.resolved).toBeUndefined();
+    client.close();
+    await stub.stop();
+  });
+
+  test("an opcode name is never fuzzed — a near miss goes to the module as typed", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.raw("CMSG_TEXT_EMOT", [{ u32: 1 }]);
+    // The module owns the allowlist and answers for it; the SDK must not
+    // "correct" the name to the opcode it nearly spells.
+    expect(ack.opcode).toBe("CMSG_TEXT_EMOT");
+    expect(stub.actions.at(-1)).toMatchObject({ opcode: "CMSG_TEXT_EMOT" });
+    client.close();
+    await stub.stop();
+  });
+
   test("a guid is never fuzzed — one digit off is that guid, not the unit it nearly names", async () => {
     const stub = startStub({ onConnect: () => namedWorld() });
     const client = await inWorld(stub);
