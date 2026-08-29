@@ -234,6 +234,8 @@ describe("readPositions", () => {
       questsCompleted: 7,
       items: null,
       harnessVersion: "harness-0.2",
+      // A fixture written before the move table existed records no intention.
+      move: null,
     });
   });
 

@@ -49,6 +49,36 @@ export interface DeathSignal {
   released?: boolean;
 }
 
+/**
+ * Where the character is trying to get to: the destination of the current or
+ * last `move_to` this session dispatched, and what became of it.
+ *
+ * Captured at the sandbox boundary rather than inside the SDK, from the
+ * `POST /action` the client makes and the `WB_MOVE_RESULT` that answers it —
+ * the destination the module was actually asked for, after the SDK resolved a
+ * unit or a name to a point. It rides the `state_summary` snapshot, so the
+ * runner's state ticker sees it on the 5s tick rather than on the (60s) row
+ * cadence: a walk of ~250y is over inside one row interval, and an intention
+ * only sampled at row cadence would be an intention nobody could see.
+ */
+export interface MoveIntentNote {
+  /** The module's move id, once the POST answered. Null while the ack is in flight. */
+  moveId: number | null;
+  /** The map the character stood on when the move was dispatched, when observed. */
+  map: number | null;
+  x: number;
+  y: number;
+  z: number;
+  /** The name of the unit the move was aimed at, when it was aimed at one. */
+  target: string | null;
+  /** The module's verdict (`arrived`, `too_far`, …); null while the move is in flight. */
+  status: string | null;
+  /** When the move was dispatched. */
+  ts: number;
+  /** When the verdict arrived; null while the move is in flight. */
+  endedAt: number | null;
+}
+
 export interface LogEntry {
   level: "log" | "info" | "warn" | "error" | "debug";
   ts: number;

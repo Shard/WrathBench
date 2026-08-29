@@ -29,7 +29,7 @@
 import { inventoryResultText } from "@wrathbench/sdk";
 
 import { compactJson } from "./jsonsafe";
-import type { EventSummary } from "./sandbox/ipc";
+import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
@@ -122,6 +122,12 @@ interface AchievementLike {
 
 /** JSON-safe snapshot as produced by the sandbox rpc (StateCache.snapshot()). */
 export interface SnapshotLike {
+  /**
+   * Where the character is trying to get to, as the sandbox watched the
+   * dispatch (`MoveIntentNote`). Not part of the world the model is shown —
+   * the HUD never prints it; the map draws it.
+   */
+  move?: MoveIntentNote | null;
   self?: {
     guid?: unknown;
     name?: unknown;

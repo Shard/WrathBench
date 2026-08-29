@@ -59,7 +59,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
-import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -118,6 +118,117 @@ class GuardedWebSocket extends RealWebSocket {
   }
 }
 globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
+
+// ------------------------------------------------------- movement intention
+
+/**
+ * Where the character is trying to get to: the destination of the current or
+ * last `move_to`, watched at the SDK's own HTTP call rather than inside the SDK.
+ *
+ * The wire request is the honest place to read it. By the time the client POSTs
+ * `/action`, a unit, a guid or a name has already been resolved to the point
+ * the module is actually asked to walk to — so nothing here re-implements
+ * `resolveMoveTarget`, and a `moveToAsync` the snippet never awaits is watched
+ * on exactly the same path as an awaited `moveTo`. The verdict comes from the
+ * `WB_MOVE_RESULT` the module sends, so a move that is superseded, stopped or
+ * refused terminates instead of being drawn as in flight forever.
+ *
+ * One slot: the module runs one move at a time per session, and a newer
+ * dispatch is what supersedes an older one.
+ */
+let moveIntent: MoveIntentNote | null = null;
+
+/**
+ * Verdicts whose `moveId` no intent has learned yet, kept until the POST that
+ * carries it answers. An immediate refusal (`target_off_mesh`) lands on the
+ * event stream while the ack is still in flight, and dropping it would leave
+ * that move drawn as if it were still walking.
+ */
+const earlyVerdicts = new Map<number, { status: string; ts: number }>();
+const EARLY_VERDICT_MAX = 8;
+
+function settleMoveIntent(moveId: number, status: string, ts: number): void {
+  if (moveIntent !== null && moveIntent.moveId === moveId) {
+    moveIntent.status = status;
+    moveIntent.endedAt = ts;
+    return;
+  }
+  earlyVerdicts.set(moveId, { status, ts });
+  for (const key of earlyVerdicts.keys()) {
+    if (earlyVerdicts.size <= EARLY_VERDICT_MAX) break;
+    earlyVerdicts.delete(key);
+  }
+}
+
+/** The `move_to` body the SDK is about to POST, as a fresh intent. Null for anything else. */
+function noteMoveDispatch(body: unknown): MoveIntentNote | null {
+  if (typeof body !== "object" || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (b["action"] !== "move_to") return null;
+  const { x, y, z } = b;
+  if (typeof x !== "number" || typeof y !== "number" || typeof z !== "number") return null;
+  const pos = client.state.self.position?.value as { map?: unknown } | undefined;
+  const guid = typeof b["guid"] === "string" ? b["guid"] : undefined;
+  // The unit the move was aimed at, when it was aimed at one: the guid rides
+  // along as the module's planning hint, and the cache is what has its name.
+  const target =
+    guid === undefined ? null : (client.state.units().find((u) => u.guid === guid)?.name ?? null);
+  const note: MoveIntentNote = {
+    moveId: null,
+    map: typeof pos?.map === "number" ? pos.map : null,
+    x,
+    y,
+    z,
+    target,
+    status: null,
+    ts: Date.now(),
+    endedAt: null,
+  };
+  moveIntent = note;
+  return note;
+}
+
+/**
+ * `guardedFetch` plus the move watch. Passed to the client explicitly rather
+ * than installed globally, so a snippet's own `fetch` is not read here.
+ */
+const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
+  let note: MoveIntentNote | null = null;
+  try {
+    if (typeof init?.body === "string") note = noteMoveDispatch(JSON.parse(init.body));
+  } catch {
+    // Not JSON, or not ours to read: the request is untouched either way.
+  }
+  const res = guardedFetch(input, init);
+  if (note === null) return res;
+  return res.then(
+    (r) => {
+      // Learn the module's move id from the ack. `clone()` because the SDK
+      // still has to read the same body.
+      void r
+        .clone()
+        .json()
+        .then((j: unknown) => {
+          const id = (j as { moveId?: unknown } | null)?.moveId;
+          if (typeof id !== "number" || moveIntent !== note) return;
+          note.moveId = id;
+          const early = earlyVerdicts.get(id);
+          if (early !== undefined) {
+            earlyVerdicts.delete(id);
+            note.status = early.status;
+            note.endedAt = early.ts;
+          }
+        })
+        .catch(() => {});
+      return r;
+    },
+    (err: unknown) => {
+      // Nothing was dispatched, so there is no intention to draw.
+      if (moveIntent === note) moveIntent = null;
+      throw err;
+    },
+  );
+}) as typeof fetch;
 
 // ------------------------------------------------------------- console tap
 
@@ -214,6 +325,16 @@ const client = new WrathClient({
   subscribeEvents: false,
   signal: currentSignal,
   deadline: currentDeadline,
+  fetchImpl: watchedFetch,
+});
+
+// The module's verdict on a move, whoever issued it: an awaited `moveTo`
+// resolves from the same event, and this sees the ones nothing awaited.
+client.events.on("WB_MOVE_RESULT", (e) => {
+  const d = e.data as { moveId?: unknown; status?: unknown } | null;
+  if (typeof d?.moveId === "number" && typeof d.status === "string") {
+    settleMoveIntent(d.moveId, d.status, typeof e.ts === "number" ? e.ts : Date.now());
+  }
 });
 
 let hostcallId = 0;
@@ -667,6 +788,10 @@ function stateSnapshot(): unknown {
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);
   snap["ui"] = foldUiOpenWindows(client.events.recent());
+  // Where the character is trying to get to (`moveIntent`). Not an observation
+  // of the world — it is this session's own last dispatch — so it rides the
+  // snapshot rather than the state cache, and the HUD never prints it.
+  snap["move"] = moveIntent === null ? null : { ...moveIntent };
   return snap;
 }
 
