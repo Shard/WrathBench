@@ -901,3 +901,289 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
   );
   return rows;
 }
+
+/* ------------------------------------------------- the freeplay stream chart */
+
+/**
+ * A stream's level timeline, stitched across its attempts.
+ *
+ * **The axis is cumulative active playtime, not wall clock and not turns.**
+ * The scored ladders' own graph (`components/LadderChart`) has no time axis at
+ * all — it is a cost/xp scatter — so the family member this borrows from is the
+ * run page's `XpChart`, whose x is elapsed wall clock bounded by the episode
+ * deadline. That bound is exactly what a freeplay stream does not have, and
+ * the three reasons the axis changes with it:
+ *
+ * - a freeplay stream is unbounded and spends days paused between attempts, so
+ *   wall clock would draw the operator's calendar rather than the character's
+ *   progress — twelve attempts over a fortnight would be mostly flat gaps;
+ * - turns are not usable across a resume. `turnsUsable` in
+ *   `runner/viewer/results.ts` exists because a run resumed by an older build
+ *   restarts its turn counter, and a cross-attempt axis would be summing
+ *   counters that each begin again;
+ * - `LevelMark.playtimeMs` is pause-corrected active time from the run's start
+ *   to that sample, already computed server-side (`activeMsUntil`), so the
+ *   honest axis is the one the data already carries.
+ *
+ * Which is also why the marks come from `ResultRun.levels` rather than the
+ * `leveling` facts of FOLLOW-UPS 35: `LevelUpMark` carries `ts` and `turn` and
+ * no playtime at all, so it cannot be placed on this axis. Nothing new is
+ * needed from the viewer — `levels` (with its per-mark `playtimeMs`) and the
+ * run's own `playtimeMs` are already on `ResultRun` and already in the public
+ * snapshot projection.
+ *
+ * The series is a **step**, never an interpolation. `levelMarks` records the
+ * first sighting of each new highest level, so a diagonal from L5 to L6 would
+ * claim the character was at 5.4 partway, which is not a thing: the level is
+ * held flat to the next mark and rises there. A lower bound on *when*, in the
+ * sense the whole milestone surface already means it.
+ *
+ * At a seam between attempts, attempt k's first mark is the level the character
+ * already had, not a gain — the same rule `LevelUpFacts` states for its own
+ * first mark. Any mark at or below the level already drawn is dropped, so a
+ * twelve-attempt stream does not draw eleven phantom rises; a mark *above* it
+ * is a ding that happened in the unobserved gap and draws its step at the seam.
+ */
+export interface StreamPoint {
+  /** Cumulative active playtime across the stream, in ms. */
+  x: number;
+  level: number;
+  /** The attempt the mark was recorded on, and its wall-clock instant. */
+  runId: string;
+  ts: number;
+}
+
+export interface StreamSeries {
+  streamId: string;
+  /** The character, falling back to the model when a run recorded no name. */
+  label: string;
+  model: string;
+  status: StreamStatus;
+  attempts: number;
+  /** The attempt the series ends on — where a click on the line goes. */
+  latestRunId: string;
+  points: StreamPoint[];
+  /** Where the line stops: the stream's total active time. "Now", while live. */
+  endX: number;
+  /** The level it is holding there — the last point's, which is `maxLevel`. */
+  endLevel: number;
+  /**
+   * The chain's root still names a predecessor this set does not hold, so the
+   * series begins mid-history: the axis is time-since-the-oldest-attempt-served,
+   * not time-since-the-character-was-made.
+   */
+  truncated: boolean;
+}
+
+export interface StreamChartModel {
+  series: StreamSeries[];
+  /** A stream that could not be drawn, and the reason, in `ladderPoints`' shape. */
+  omitted: { streamId: string; label: string; why: string }[];
+}
+
+/** The total active time an attempt contributes, or null when it recorded none. */
+function attemptSpan(run: ResultRun): number | null {
+  if (run.playtimeMs !== null) return run.playtimeMs;
+  // The run's own total is the right figure — it advances with a live run. A
+  // run that never got one still contributes what its marks prove it played,
+  // which is a lower bound and is documented as one at the call site.
+  const marked = run.levels.map((l) => l.playtimeMs).filter((p): p is number => p !== null);
+  return marked.length > 0 ? Math.max(...marked) : null;
+}
+
+/**
+ * Build one series per stream from the same rows and runs the table shows.
+ *
+ * `rows` supplies the lineage (`streamRows` already resolved it, including the
+ * malformed cases) and `runs` is the set those ids index into, so the chart and
+ * the table can never disagree about which runs are on screen.
+ *
+ * A prior attempt with no active-time reading at all is the one case that
+ * cannot be stitched: its successors' offsets would be short by an unknown
+ * amount, and folding a null to zero would silently compress the axis — the
+ * distinction `AreaFacts` and `TaxiFacts` are emphatic about. Such a stream is
+ * omitted with its reason rather than drawn wrong. The *last* attempt is
+ * different: with no span the line simply ends at its last mark.
+ */
+export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRun[]): StreamChartModel {
+  const byId = new Map(runs.map((r) => [r.runId, r]));
+  const series: StreamSeries[] = [];
+  const omitted: { streamId: string; label: string; why: string }[] = [];
+  /** When each stream's latest attempt started — the label's disambiguator. */
+  const startedOf = new Map(rows.map((r) => [r.streamId, r.startedAt]));
+
+  for (const row of rows) {
+    const label = row.character ?? row.model;
+    const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
+    if (attempts.length === 0) {
+      omitted.push({ streamId: row.streamId, label, why: "no attempt served" });
+      continue;
+    }
+    const points: StreamPoint[] = [];
+    let offset = 0;
+    let endX = 0;
+    let highest = 0;
+    let broke: string | null = null;
+    for (let i = 0; i < attempts.length; i++) {
+      const run = attempts[i]!;
+      for (const mark of run.levels) {
+        if (mark.playtimeMs === null || mark.level <= highest) continue;
+        highest = mark.level;
+        points.push({ x: offset + mark.playtimeMs, level: mark.level, runId: run.runId, ts: mark.ts });
+      }
+      const span = attemptSpan(run);
+      if (span === null) {
+        if (i < attempts.length - 1) {
+          broke = `attempt ${i + 1} of ${attempts.length} recorded no active time`;
+          break;
+        }
+        // The line stops at the furthest time anything proves: the attempts
+        // already counted, or a mark on this one past them. Never *behind* the
+        // offset — the earlier attempts' active time is evidence we hold.
+        endX = Math.max(offset, points.length > 0 ? points[points.length - 1]!.x : 0);
+        break;
+      }
+      offset += span;
+      endX = offset;
+    }
+    if (broke !== null) {
+      omitted.push({ streamId: row.streamId, label, why: broke });
+      continue;
+    }
+    if (points.length === 0) {
+      // Two different nothings: a stream too young to have been sampled at a
+      // level at all, and one whose marks carry no active time to place them on.
+      const why = attempts.every((r) => r.levels.length === 0)
+        ? "no level recorded yet"
+        : "no level mark carries an active-time reading";
+      omitted.push({ streamId: row.streamId, label, why });
+      continue;
+    }
+    const root = attempts[0]!;
+    series.push({
+      streamId: row.streamId,
+      label,
+      model: row.model,
+      status: row.status,
+      attempts: row.attempts,
+      latestRunId: row.latest.runId,
+      points,
+      endX: Math.max(endX, points[points.length - 1]!.x),
+      endLevel: points[points.length - 1]!.level,
+      /*
+       * A predecessor named and not served. The `typeof` is not paranoia: a
+       * viewer that predates the field omits it entirely, and `undefined !==
+       * null` would mark every stream in the fleet as missing history — the
+       * same "an older viewer must still work" rule `ResultRun.xpEarned` states.
+       */
+      truncated: typeof root.continuedFrom === "string" && !byId.has(root.continuedFrom),
+    });
+  }
+  /*
+   * A character name is not unique: a stream that lost its character is
+   * re-rolled under the same name, and four ended `Qwenlocal` lines all
+   * labelled `Qwenlocal` name nothing. Where the name repeats, and only there,
+   * the stream's start date joins it — ISO, because a pure module has no
+   * business picking a locale.
+   */
+  const seen = new Map<string, number>();
+  for (const s of series) seen.set(s.label, (seen.get(s.label) ?? 0) + 1);
+  for (const s of series) {
+    if ((seen.get(s.label) ?? 0) < 2) continue;
+    const started = startedOf.get(s.streamId) ?? null;
+    if (started !== null) s.label = `${s.label} ${new Date(started).toISOString().slice(0, 10)}`;
+  }
+  // Furthest first, so the eye meets the leaders and the legend order matches
+  // the table's. Ties fall back to the stream id, so the order is total.
+  series.sort((a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.streamId.localeCompare(b.streamId));
+  omitted.sort((a, b) => a.label.localeCompare(b.label) || a.streamId.localeCompare(b.streamId));
+  return { series, omitted };
+}
+
+/**
+ * Ticks for a duration axis, in ms: the first of 1/2/5/10/15/30 minutes, then
+ * 1/2/4/8/12 hours, then whole days, that yields at most `want` of them.
+ *
+ * `niceTicks` cannot do this job. Its 1/2/5 × 10^k step over a millisecond
+ * domain lands on things like 5,000,000 ms — a gridline every 1.39 hours, which
+ * is a number no reader has ever wanted. Time is not decimal, so its axis needs
+ * its own ladder of steps.
+ */
+export function timeTicks(maxMs: number, want = 6): number[] {
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const steps = [MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, HOUR, 2 * HOUR, 4 * HOUR, 8 * HOUR, 12 * HOUR];
+  const top = Math.max(maxMs, 0);
+  let step = steps.find((s) => top / s <= want);
+  if (step === undefined) {
+    // Past half a day, whole days — a multiple, so the labels stay round.
+    const day = 24 * HOUR;
+    step = day * Math.max(1, Math.ceil(top / want / day));
+  }
+  const ticks: number[] = [];
+  for (let v = 0; v <= top + step / 2; v += step) ticks.push(v);
+  return ticks;
+}
+
+export interface PlacedStream {
+  series: StreamSeries;
+  /** The step path, in viewBox units, ending flat at the stream's own `endX`. */
+  d: string;
+  endCx: number;
+  endCy: number;
+  labelY: number;
+}
+
+export interface StreamChartLayout {
+  xTicks: number[];
+  yTicks: number[];
+  xMax: number;
+  yMax: number;
+  placed: PlacedStream[];
+  px: (x: number) => number;
+  py: (y: number) => number;
+}
+
+/**
+ * Place the series in a plot box: the step paths, and the end labels nudged
+ * apart so two streams holding the same level do not print on top of each other.
+ *
+ * The y axis runs from zero rather than from the lowest level drawn. A level
+ * axis with a floating base would make a character that gained two levels look
+ * like the whole chart, and level 1 is a real origin — it is where every
+ * character starts.
+ */
+export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox): StreamChartLayout {
+  const xMax = Math.max(1, ...series.map((s) => s.endX));
+  const yTicks = niceTicks(Math.max(1, ...series.map((s) => s.endLevel)));
+  const yMax = yTicks[yTicks.length - 1]!;
+  const px = scaleLinear([0, xMax], [box.x0, box.x1]);
+  const py = scaleLinear([0, yMax], [box.y0, box.y1]);
+
+  const placed: PlacedStream[] = [];
+  const takenY: number[] = [];
+  for (const s of series) {
+    const steps: string[] = [];
+    for (const [i, p] of s.points.entries()) {
+      const x = px(p.x);
+      const y = py(p.level);
+      if (i === 0) steps.push(`M${x.toFixed(1)},${y.toFixed(1)}`);
+      else steps.push(`H${x.toFixed(1)}`, `V${y.toFixed(1)}`);
+    }
+    const endCx = px(s.endX);
+    const endCy = py(s.endLevel);
+    steps.push(`H${endCx.toFixed(1)}`);
+    // The label sits at the end of the line, pushed down in whole label rows
+    // until it clears every label already placed. Down, not up: the series are
+    // placed furthest-first, so the leader keeps its natural position.
+    let labelY = endCy + LABEL_H * 0.3;
+    // …but never off the bottom of the plot. Once the field is crowded enough
+    // that pushing down would leave the box, the label stays where it is and
+    // overlaps rather than walking out of the viewBox, which is the same call
+    // `ladderChartLayout`'s `inside()` guard makes.
+    while (labelY + LABEL_H <= box.y0 && takenY.some((t) => Math.abs(t - labelY) < LABEL_H)) labelY += LABEL_H;
+    takenY.push(labelY);
+    placed.push({ series: s, d: steps.join(" "), endCx, endCy, labelY });
+  }
+  return { xTicks: timeTicks(xMax), yTicks, xMax, yMax, placed, px, py };
+}
