@@ -42,6 +42,23 @@ player surface, each piece validated by a smoke test, before any 0.6 talk.**
 Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
 worklogs/2026-08-29).
 
+102. **Group loot rolls** (operator, 2026-08-29). Tap `SMSG_LOOT_START_ROLL`,
+    `SMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL_WON`, `SMSG_LOOT_ALL_PASSED`,
+    `SMSG_LOOT_MASTER_LIST`; allowlist `CMSG_LOOT_ROLL`. SDK
+    `state.pendingRolls()` (item named from the item query, roll guid,
+    deadline, allowed buttons) and `lootRoll(itemOrRollGuid, choice)` with
+    softened inputs, refusing on ambiguity, hints `no_pending_roll` /
+    `roll_not_allowed`. Smoke: two grouped characters (`group.ts` pattern)
+    on a corpse that yields an uncommon item.
+
+103. **Item text** (operator, 2026-08-29). Tap the read path a client has —
+    `SMSG_READ_ITEM_OK` / `_FAILED` and `SMSG_PAGE_TEXT_QUERY_RESPONSE`
+    (3.3.5 sends books via `CMSG_PAGE_TEXT_QUERY`, not
+    `SMSG_ITEM_TEXT_QUERY_RESPONSE`, which is the mailed-letter text query) —
+    serve the text; SDK `readItem(itemNameOrSlot)`, `state.itemTexts()`,
+    hints `no_item` / `not_readable`. Smoke: a scenario that puts a readable
+    letter in the bags and reads it back. Names and text only.
+
 104. **Sample health, power and class into `state`, so the map's unit frame lights up**
     (2026-08-29). The map sidebar now draws a WoW-style unit frame
     (`dashboard/src/components/UnitFrame.tsx`): health, power tinted by type, XP
@@ -55,6 +72,18 @@ worklogs/2026-08-29).
     `AgentPosition` and `RunRow` (class is already on the run row), and pass them
     through in `MapPage.tsx`; the component already takes every field. Unblocks a
     dead pip reading dead on the map too. Needs a fleet deploy to take effect.
+
+105. **Chest casts carry the client's target flag, and the lock type rides the
+    game object query** (2026-08-29, from the chest-loot investigation). The SDK
+    opens a chest with `cast_spell` + the object's guid, which the module sends
+    as TARGET_FLAG_UNIT; the core accepts it because it resolves the packed guid
+    by its high bits, but a client sends TARGET_FLAG_GAMEOBJECT (0x800), and the
+    packet shape should match. And the SDK guesses the Opening spell by trying
+    the four open-hand lock types in turn because it has no `Lock.dbc`; the
+    module could decode the chest's lock type (data0 → `Lock.dbc`, which a
+    client reads) into `SMSG_GAMEOBJECT_QUERY_RESPONSE` so the SDK casts the
+    right spell first time. Both are a module build; do them together with the
+    next `:next`. Gate: `infra/smoke/chest-loot.ts`.
 
 ## Navigation
 
