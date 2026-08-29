@@ -60,6 +60,7 @@ export type {
   WaitForChatOptions,
   WaitForNearbyOptions,
   WaitForTransferOptions,
+  WithResolved,
 } from "./client";
 
 export {
@@ -166,6 +167,9 @@ export type {
   UnitView,
   WorldPosition,
 } from "./state";
+
+export { editBudget, editDistance, normaliseName, resolveName } from "./resolve";
+export type { Resolution, ResolvedRef, ResolveTier } from "./resolve";
 
 export {
   guidKey,
