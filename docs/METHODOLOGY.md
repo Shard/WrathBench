@@ -308,6 +308,11 @@ must do what a player does: read "in the inn at Goldshire", walk there, look.
 Harder is the point; coordinates are served only in steered episodes, and if
 the names-only ladder proves unclimbable the pull-back is a labeled coords
 tier, never a silent change.
+The same rule governs client-side tables the module reads: the flight-master
+window carries node *names* (`TaxiNodes.dbc`, the same precedent as area
+names), never the node positions the DBC also holds — a model learns where
+Thelsamar is by flying there, not from a coordinate list. Operator decision
+2026-08-29.
 
 **Three lanes, separated by what a series bump does to them.** Evals (`e90`,
 `e360`) re-arm on every series bump and feed the charts. Probe campaigns — a
