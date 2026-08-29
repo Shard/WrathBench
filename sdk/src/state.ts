@@ -53,6 +53,8 @@ import {
   type AchievementEarnedData,
   type AllAchievementData,
   type ActivateTaxiReplyData,
+  type BindPointUpdateData,
+  type ShowTaxiNodesData,
   type TransportProgressData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
@@ -292,6 +294,47 @@ export interface SelfState extends UnitFieldsState {
    * ride itself shows on `taxiFlight`.
    */
   taxiReply: Observed<{ readonly reply: number; readonly ok: boolean }> | undefined;
+  /**
+   * Where the Hearthstone goes (`SMSG_BINDPOINTUPDATE`): sent once at login
+   * and again after every innkeeper bind, so this is always the server's
+   * current word. `undefined` only before the login packet has been seen.
+   */
+  bindPoint: Observed<BindPoint> | undefined;
+}
+
+/**
+ * The hearthstone's destination as the wire carries it: map, position, and
+ * the area id with the client's `AreaTable.dbc` name for it (`""` when the
+ * table has no row).
+ */
+export interface BindPoint {
+  readonly map: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly area: AreaRef;
+}
+
+/** One node in a flight master's window: the wire id and the client's TaxiNodes.dbc name (absent when unknown). */
+export interface TaxiNodeRef {
+  readonly nodeId: number;
+  readonly name: string | undefined;
+}
+
+/**
+ * The flight master's window last observed for one NPC: the fold of the last
+ * `SMSG_SHOWTAXINODES` for that guid. `current` is the node the master
+ * stands at (what `activateTaxi` sends as the source), `known` the nodes this
+ * character has visited — the only destinations the server will accept.
+ * `mask` is the taximask verbatim. Nothing here is a route or a fare.
+ */
+export interface TaxiWindow {
+  readonly guid: GuidKey;
+  readonly current: TaxiNodeRef;
+  readonly known: readonly TaxiNodeRef[];
+  readonly mask: readonly number[];
+  readonly seq: number;
+  readonly ts: number;
 }
 
 /**
@@ -929,6 +972,8 @@ export interface StateSnapshot {
   readonly anomalies: readonly Anomaly[];
   /** guid -> the gossip menu last observed open for that NPC (none after a close). */
   readonly gossip: ReadonlyMap<GuidKey, GossipMenu>;
+  /** guid -> the flight master window last observed for that NPC. */
+  readonly taxiWindows: ReadonlyMap<GuidKey, TaxiWindow>;
   readonly spells: readonly KnownSpell[];
   readonly cooldowns: readonly SpellCooldown[];
   readonly talents: TalentState | undefined;
@@ -952,6 +997,7 @@ export class StateCache {
     achievements: undefined,
     taxiFlight: undefined,
     taxiReply: undefined,
+    bindPoint: undefined,
     health: undefined,
     power: undefined,
     fields: new Map<string, Observed<number>>(),
@@ -1013,6 +1059,14 @@ export class StateCache {
    * Populated from that one opcode pair only; nothing here queries the server.
    */
   private readonly gossipMenus = new Map<GuidKey, GossipMenu>();
+
+  /**
+   * guid -> the flight master window last sent for that NPC
+   * (`SMSG_SHOWTAXINODES`). Not cleared by `SMSG_GOSSIP_COMPLETE`: the taxi
+   * window is its own frame on a client and the packet that opened it is the
+   * last word on what this character may fly to from there.
+   */
+  private readonly taxiWindows = new Map<GuidKey, TaxiWindow>();
 
   /**
    * spellId -> spellbook row. Replaced wholesale by `SMSG_INITIAL_SPELLS`
@@ -1354,6 +1408,17 @@ export class StateCache {
   }
 
   /**
+   * The flight master window last observed for `guid` (`SMSG_SHOWTAXINODES`),
+   * or `undefined` if none has been seen. What `activateTaxi(guid, dest)`
+   * resolves a destination name or node id against, and where the source
+   * node it sends comes from. Opened by choosing the taxi option on the
+   * flight master's gossip menu (`showTaxiNodes` does that in one call).
+   */
+  lastTaxiNodes(guid: GuidKey): TaxiWindow | undefined {
+    return this.taxiWindows.get(guid);
+  }
+
+  /**
    * The spellbook as the server served it: every spell id the character
    * knows in its active spec, by id. Empty until `SMSG_INITIAL_SPELLS` has
    * arrived (it is sent during login, before the world is entered).
@@ -1416,6 +1481,7 @@ export class StateCache {
       gaps: [...this.gapBuf],
       anomalies: [...this.anomalyBuf],
       gossip: new Map(this.gossipMenus),
+      taxiWindows: new Map(this.taxiWindows),
       spells: this.spells(),
       cooldowns: this.cooldowns(),
       talents: this.talentState,
@@ -1717,6 +1783,31 @@ export class StateCache {
       case "SMSG_ACTIVATETAXIREPLY": {
         const d = event.data as ActivateTaxiReplyData;
         this.self.taxiReply = { value: { reply: d.reply, ok: d.ok }, seq: event.seq, ts: event.ts };
+        return;
+      }
+      case "SMSG_SHOWTAXINODES": {
+        // The flight master's window, per NPC. `known` is the module's decode
+        // of the mask plus the client's TaxiNodes.dbc names; the mask itself
+        // rides along verbatim so nothing about the fold is unverifiable.
+        const d = event.data as ShowTaxiNodesData;
+        const known = d.known.map((n) => ({ nodeId: n.nodeId, name: n.name }));
+        this.taxiWindows.set(d.guid, {
+          guid: d.guid,
+          current: { nodeId: d.currentNode, name: d.currentNodeName ?? known.find((n) => n.nodeId === d.currentNode)?.name },
+          known,
+          mask: [...d.mask],
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_BINDPOINTUPDATE": {
+        const d = event.data as BindPointUpdateData;
+        this.self.bindPoint = {
+          value: { map: d.map, x: d.x, y: d.y, z: d.z, area: { id: d.areaId, name: d.areaName } },
+          seq: event.seq,
+          ts: event.ts,
+        };
         return;
       }
       case "SMSG_NAME_QUERY_RESPONSE": {

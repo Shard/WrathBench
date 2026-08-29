@@ -114,6 +114,16 @@ describe("formatStateSummary", () => {
     expect(none).toContain("position: map 0 (1, 2, 3)");
   });
 
+  test("home is the bind point with its area name, and absent until the server has said one", () => {
+    const self = { name: "Benchy", guid: "1" };
+    const bound = formatStateSummary(
+      { self: { ...self, bindPoint: { value: { map: 0, x: -4840.7, y: -857.1, z: 502, area: { id: 1537, name: "Ironforge" } }, seq: 9 } } },
+      { sessionLive: true },
+    );
+    expect(bound).toContain("home: Ironforge — map 0 (-4840.7, -857.1, 502) [Hearthstone destination]");
+    expect(formatStateSummary({ self }, { sessionLive: true })).not.toContain("home:");
+  });
+
   test("achievements are a count and a points total, never the list", () => {
     const text = formatStateSummary(
       {

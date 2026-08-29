@@ -153,6 +153,8 @@ export interface SnapshotLike {
     taxiFlight?: ObservedLike;
     /** `value` is `{ reply, ok }` — the last `SMSG_ACTIVATETAXIREPLY`. */
     taxiReply?: ObservedLike;
+    /** `value` is `{ map, x, y, z, area: { id, name } }` — where the Hearthstone goes (`SMSG_BINDPOINTUPDATE`). */
+    bindPoint?: ObservedLike;
   };
   /** Current XP toward the next level (top level in the SDK snapshot, not under `self`). */
   xp?: ObservedLike;
@@ -389,6 +391,18 @@ export function formatStateSummary(
       ? "position: unobserved"
       : `position: ${fmtPlace(s)}map ${fmt(pos.map)} (${fmt(pos.x)}, ${fmt(pos.y)}, ${fmt(pos.z)}) [seq ${fmt(s.position?.seq, "?")}]`,
   );
+
+  // home: the hearthstone's destination, as the server last said it. The
+  // area name is what a client shows for the bind ("Your home is now
+  // Ironforge"); the position is the same packet's, so a snippet can plan
+  // a hearth as a real connector rather than a guess.
+  const home = s.bindPoint?.value as { map?: number; x?: number; y?: number; z?: number; area?: { id?: number; name?: string } } | undefined;
+  if (home !== undefined) {
+    const areaName = home.area?.name ? String(home.area.name) : undefined;
+    lines.push(
+      `home: ${areaName === undefined ? "" : `${areaName} — `}map ${fmt(home.map)} (${fmt(home.x)}, ${fmt(home.y)}, ${fmt(home.z)}) [Hearthstone destination]`,
+    );
+  }
 
   // health / power (self only — the player frame is numbers)
   lines.push(`health: ${fmtGauge(s.health)}  power: ${fmtGauge(s.power)}`);
