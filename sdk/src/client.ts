@@ -234,6 +234,87 @@ function guidOf(target: GuidOrUnit, arg: string): string {
   return guidArg(target, arg);
 }
 
+/** A guid as the module writes them: decimal digits and nothing else. */
+const GUID_TEXT = /^\d+$/;
+
+/** How many rows a "what was found instead" list quotes before it truncates. */
+const SHOWN_MATCHES = 8;
+
+function listNames(rows: readonly { guid: string; name?: string | undefined }[]): string {
+  const shown = rows.slice(0, SHOWN_MATCHES).map((r) => `${r.guid}:${JSON.stringify(r.name ?? "?")}`);
+  return shown.join(", ") + (rows.length > shown.length ? `, +${rows.length - shown.length} more` : "");
+}
+
+/**
+ * Resolve a helper target given as a name rather than a guid — what a client
+ * picks by looking at it. Case-insensitive and whitespace-tolerant: an exact
+ * name wins, else a unique substring. Two matches is two readings, so it
+ * refuses and lists them rather than picking (METHODOLOGY, "Softening"): the
+ * SDK never chooses a referent for the model.
+ */
+function resolveNamedTarget(state: StateCache, name: string, arg: string): string {
+  const q = name.trim().toLowerCase();
+  const rows = state.units();
+  if (q.length === 0) {
+    throw new TypeError(
+      `${arg} is an empty string — pass a guid, a unit from state.units(...) / state.closest(...), or the ` +
+        `name of something in view`,
+    );
+  }
+  const named = rows.filter((u) => u.name !== undefined);
+  const exact = named.filter((u) => u.name!.toLowerCase() === q);
+  const matched = exact.length > 0 ? exact : named.filter((u) => u.name!.toLowerCase().includes(q));
+  if (matched.length === 1) return matched[0]!.guid;
+  if (matched.length === 0) {
+    throw new TypeError(
+      `${arg} got ${JSON.stringify(name)}, which is neither a decimal guid nor the name of anything in view. ` +
+        `In view: [${listNames(named)}] — pass a unit from state.units({ name: ... }) or its .guid`,
+    );
+  }
+  throw new TypeError(
+    `${arg} got ${JSON.stringify(name)}, which matches ${matched.length} things in view ([${listNames(matched)}]); ` +
+      `pass the one you mean from state.units({ name: ... }) — the SDK does not choose between referents`,
+  );
+}
+
+/**
+ * Resolve which item an item-taking call means: the `bag`/`slot` pair
+ * `state.bag()` / `state.bank()` list, or the item's name in place of `bag`
+ * (exact case-insensitive, else a unique substring). A name that matches
+ * nothing or more than one thing is refused with what was found; a `bag`
+ * number with no `slot` is refused the same way. The numeric pair is passed
+ * through untouched, including one nothing has been observed at — the caller
+ * that cares reports that itself.
+ */
+function resolveItemSlot(
+  items: readonly { bag: number; slot: number; itemId?: number | undefined; name?: string | undefined }[],
+  bagOrName: number | string,
+  slot: number | undefined,
+  method: string,
+  where: string,
+): { bag: number; slot: number } | { refusal: string } {
+  if (typeof bagOrName === "number") {
+    if (typeof slot !== "number" || !Number.isInteger(slot)) {
+      return { refusal: `${method}: a numeric bag needs its slot too — pass ${method.replace(/\(.*$/, "")}(bag, slot) as ${where} lists them, or the item's name` };
+    }
+    return { bag: bagOrName, slot };
+  }
+  const q = bagOrName.trim().toLowerCase();
+  const named = items.filter((i) => i.name !== undefined);
+  const exact = named.filter((i) => i.name!.toLowerCase() === q);
+  const matched = exact.length > 0 ? exact : named.filter((i) => i.name!.toLowerCase().includes(q));
+  if (matched.length === 1) return { bag: matched[0]!.bag, slot: matched[0]!.slot };
+  const show = (rows: readonly { bag: number; slot: number; name?: string | undefined }[]) =>
+    rows.slice(0, SHOWN_MATCHES).map((i) => `${JSON.stringify(i.name ?? "?")} at bag ${i.bag} slot ${i.slot}`).join(", ") +
+    (rows.length > SHOWN_MATCHES ? `, +${rows.length - SHOWN_MATCHES} more` : "");
+  if (matched.length === 0) {
+    return { refusal: `${method}: nothing in ${where} is named ${JSON.stringify(bagOrName)} — it holds [${show(named)}]` };
+  }
+  return {
+    refusal: `${method}: ${JSON.stringify(bagOrName)} matches ${matched.length} items in ${where} ([${show(matched)}]) — pass the bag and slot of the one you mean`,
+  };
+}
+
 /** A one-line description of a rejected target object, for the error message. */
 function showTarget(target: object): string {
   try {
@@ -326,6 +407,16 @@ function ownPoint(target: unknown): MovePoint | undefined {
  * a guid nothing can be found for is a typed answer, not a throw.
  */
 function resolveMoveTarget(target: unknown, state: StateCache, method: string): ResolvedMoveTarget {
+  // A name is the third form a client could mean, and moveTo answers a target
+  // it cannot resolve with a value rather than a throw — so a name that names
+  // nothing, or two things, comes back as `unknown_target` with what was found.
+  if (typeof target === "string" && !GUID_TEXT.test(target.trim())) {
+    try {
+      target = resolveNamedTarget(state, target, `${method}(target)`);
+    } catch (e) {
+      return { unknown: e instanceof Error ? e.message : String(e) };
+    }
+  }
   const guid = moveTargetGuid(target);
   if (guid === undefined) {
     // Not a guid-shaped argument: the point path, byte-identical to before —
@@ -1551,6 +1642,20 @@ export interface ResetTalentsOptions {
   option?: string | number;
 }
 
+/** Why a pet call sent nothing. Each is a state of the world the SDK can see before dispatching, never a server verdict. */
+export type PetRefusalStatus = "no_pet" | "unknown_spell" | "ambiguous_spell" | "passive_spell" | "unknown_reaction";
+
+/**
+ * The outcome of a pet order. `sent` is an ack — the pet action bar has no
+ * "done" packet, so the verdict is `SMSG_PET_ACTION_FEEDBACK` /
+ * `SMSG_PET_CAST_FAILED` on the stream and `state.pet()` afterwards. The
+ * refusals are the SDK declining to act on what it can already see (no pet,
+ * a spell the pet does not have), each with a hint the harness delivers.
+ */
+export type PetActionResult =
+  | { readonly ok: true; readonly status: "sent"; readonly ack: ActionResponse }
+  | { readonly ok: false; readonly status: PetRefusalStatus; readonly hint: string };
+
 /** The outcome of `inviteToGroup`: the server's `SMSG_PARTY_COMMAND_RESULT` on the invite. */
 export type InviteResult = { ok: true; status: "invited"; name: string } | { ok: false; status: "refused"; name: string; result: number; hint: string };
 
@@ -1564,19 +1669,22 @@ export interface MailOptions {
   timeout?: number;
 }
 
-/** What `sendMail` attaches: carried items by the `bag`/`slot` `state.bag()` lists them under. */
+/** What `sendMail` attaches: carried items by the `bag`/`slot` `state.bag()` lists them under, or by name. */
 export interface SendMailOptions extends MailOptions {
   /** Copper to enclose. */
   money?: number;
   /** Cash-on-delivery the recipient pays to take the items. */
   cod?: number;
-  items?: readonly { bag: number; slot: number }[];
+  /** Up to 12 carried items, each `{ bag, slot }` or the item's name (exact, else a unique substring). */
+  items?: readonly ({ bag: number; slot: number } | string)[];
 }
 
 /** The outcome of a mail action, as the server's `SMSG_SEND_MAIL_RESULT` said it. */
 export type MailResult =
   | { ok: true; status: "sent" | "money_taken" | "item_taken" | "deleted" | "returned"; mailId: number }
-  | { ok: false; status: "refused"; mailId: number; result: number; inventoryResult: number | undefined; hint: string };
+  | { ok: false; status: "refused"; mailId: number; result: number; inventoryResult: number | undefined; hint: string }
+  /** The SDK sent nothing: no mailbox frame is open, or the item named is not carried. */
+  | { ok: false; status: "no_mailbox" | "no_item"; hint: string };
 
 export interface BankOptions {
   /** How long to wait for the item to move (or the server to refuse). Default 10000. */
@@ -1586,7 +1694,9 @@ export interface BankOptions {
 /** The outcome of `bankDeposit` / `bankWithdraw`: the item's new place, or the server's `SMSG_INVENTORY_CHANGE_FAILURE`. */
 export type BankMoveResult =
   | { ok: true; status: "moved"; guid: string; bag: number; slot: number }
-  | { ok: false; status: "refused"; guid: string; result: number; hint: string };
+  | { ok: false; status: "refused"; guid: string; result: number; hint: string }
+  /** The SDK sent nothing: no bank frame is open, or nothing answers to the bag/slot or name given. */
+  | { ok: false; status: "no_bank" | "no_item"; hint: string };
 
 /**
  * The outcome of `resetTalents`, as a value. `reset` is the server's
@@ -1605,6 +1715,12 @@ export type ResetTalentsResult =
       readonly ok: false;
       readonly status: "refused";
       readonly cost: number;
+      readonly hint: string;
+    }
+  /** The SDK sent no confirm: the menu that opened has no unlearn option to choose. */
+  | {
+      readonly ok: false;
+      readonly status: "no_option";
       readonly hint: string;
     };
 
@@ -1662,6 +1778,12 @@ export type EquipItemResult =
       readonly itemId: number | undefined;
       readonly name: string | undefined;
       readonly hint: string;
+    }
+  /** Nothing was sent: the name given matches nothing carried, or matches more than one thing. */
+  | {
+      readonly ok: false;
+      readonly status: "no_item";
+      readonly hint: string;
     };
 
 /**
@@ -1677,6 +1799,12 @@ export type LearnTalentResult =
       readonly talentId: number;
       readonly rank: number;
       readonly talents: TalentState;
+      readonly hint: string;
+    }
+  /** Nothing was sent: the name given is not one talent of this class's tree, or the tree has not been read yet. */
+  | {
+      readonly ok: false;
+      readonly status: "unknown_talent" | "ambiguous_talent" | "no_tree";
       readonly hint: string;
     };
 
@@ -1892,6 +2020,21 @@ export class WrathClient {
     // Registered before the socket opens, so the cache sees every frame.
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
     this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
+  }
+
+  /**
+   * What a *helper* acts on, as a guid: a unit object, the opaque decimal guid
+   * string, or the name of something in view (`resolveNamedTarget`) — the
+   * three forms a client could reasonably mean. Raw actions keep `guidArg` and
+   * take the guid string only: referent selection is what this bench measures,
+   * and the SDK still never picks between two matches, it refuses and lists
+   * them.
+   */
+  private targetGuid(target: GuidOrUnit, arg: string): string {
+    if (typeof target === "string" && !GUID_TEXT.test(target.trim())) {
+      return resolveNamedTarget(this.state, target, arg);
+    }
+    return guidKey(guidOf(target, arg));
   }
 
   /**
@@ -2227,7 +2370,7 @@ export class WrathClient {
    * a unit from `state.units(...)` / `state.closest(...)`.
    */
   interact(target: GuidOrUnit): Promise<ActionResponse> {
-    return this.action({ action: "interact", guid: guidOf(target, "interact(guid)") });
+    return this.action({ action: "interact", guid: this.targetGuid(target, "interact(guid)") });
   }
 
   /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
@@ -2389,7 +2532,14 @@ export class WrathClient {
    * `InventoryResult` code and a hint, not as success. The refusal is a value,
    * not a throw: it is the game answering.
    */
-  async equipItem(bag: number, slot: number, options: EquipOptions = {}): Promise<EquipItemResult> {
+  async equipItem(bagOrName: number | string, slot?: number, options: EquipOptions = {}): Promise<EquipItemResult> {
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "equipItem(bagOrName, slot?)", "state.bag()");
+    if ("refusal" in where) {
+      this.noteActionHint("equipItem", "no_item", where.refusal);
+      return { ok: false, status: "no_item", hint: where.refusal };
+    }
+    const { bag, slot: at } = where;
+    slot = at;
     const before = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
     const guid = before?.guid;
     const item = { bag, slot, itemId: before?.itemId, name: before?.name };
@@ -2485,8 +2635,17 @@ export class WrathClient {
     return { ok: false, status: "unconfirmed", ...item, hint: unconfirmed };
   }
 
-  /** `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell. */
-  async useItem(bag: number, slot: number, targetGuid?: GuidArg): Promise<ActionResponse> {
+  /**
+   * `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell.
+   * The item is the `bag`/`slot` pair `state.bag()` lists, or its name in
+   * place of `bag` (exact, else a unique substring) — a name that names
+   * nothing carried, or two things, throws with what is carried.
+   */
+  async useItem(bagOrName: number | string, slot?: number, targetGuid?: GuidArg): Promise<ActionResponse> {
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "useItem(bagOrName, slot?)", "state.bag()");
+    if ("refusal" in where) throw new TypeError(where.refusal);
+    const { bag } = where;
+    slot = where.slot;
     try {
       return await this.action({
         action: "use_item",
@@ -2528,9 +2687,15 @@ export class WrathClient {
     });
   }
 
-  /** `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. */
-  destroyItem(bag: number, slot: number, count?: number): Promise<ActionResponse> {
-    return this.action({ action: "destroy_item", bag, slot, count });
+  /**
+   * `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. Takes the
+   * `bag`/`slot` pair `state.bag()` lists, or the item's name in place of
+   * `bag` (exact, else a unique substring).
+   */
+  destroyItem(bagOrName: number | string, slot?: number, count?: number): Promise<ActionResponse> {
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "destroyItem(bagOrName, slot?)", "state.bag()");
+    if ("refusal" in where) throw new TypeError(where.refusal);
+    return this.action({ action: "destroy_item", bag: where.bag, slot: where.slot, count });
   }
 
   /** `CMSG_REPOP_REQUEST` — release the spirit while dead. */
@@ -2852,7 +3017,7 @@ export class WrathClient {
    * handler answers the echo with a guid-0 confirm and nothing else.
    */
   async resetTalents(npcGuid: GuidOrUnit, options: ResetTalentsOptions = {}): Promise<ResetTalentsResult> {
-    const id = guidKey(guidOf(npcGuid, "resetTalents(npcGuid)"));
+    const id = this.targetGuid(npcGuid, "resetTalents(npcGuid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.gossipHello(id);
@@ -2871,11 +3036,12 @@ export class WrathClient {
     } else {
       const unlearn = menu.options.filter((o) => /unlearn/i.test(o.text));
       if (unlearn.length !== 1) {
-        throw new Error(
-          `resetTalents(${id}): the menu that opened has ${unlearn.length === 0 ? "no" : unlearn.length} option(s) mentioning ` +
-            `"unlearn" — is this NPC a class trainer for your class (state.units({ role: "trainer" }))? Pass { option } to pick one of: ` +
-            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", "),
-        );
+        const hint =
+          `the menu that opened has ${unlearn.length === 0 ? "no" : unlearn.length} option(s) mentioning "unlearn" — ` +
+          `a respec needs a class trainer for your own class (state.units({ role: "trainer" })). Pass { option } to ` +
+          `pick one of: ` + menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", ");
+        this.noteActionHint("resetTalents", "no_option", hint);
+        return { ok: false, status: "no_option", hint };
       }
       choice = { menuId: menu.menuId, optionId: unlearn[0]!.optionId };
     }
@@ -2913,67 +3079,110 @@ export class WrathClient {
   // ------------------------------------------------------------------ pets (item 98)
 
   /**
-   * The pet the control bar is for, or a thrown explanation. Every pet
-   * helper starts here: the guid is what `CMSG_PET_ACTION` addresses.
+   * The pet the control bar is for, or the refusal to send anything. "There is
+   * no pet" is a state of the world, not a caller mistake, so it is a value
+   * with a hint the harness delivers — the same shape as `moveTo`'s
+   * `unknown_target`.
    */
-  private petGuidOrThrow(what: string): string {
+  private petGuidOrRefuse(what: string): { guid: string } | { refusal: PetActionResult } {
     const pet = this.state.pet();
-    if (pet === undefined) {
-      throw new Error(
-        `${what}: there is no pet — state.pet() is undefined. Summon one first (a warlock's Summon Imp, a hunter's Call Pet) ` +
-          `and wait for the control bar (SMSG_PET_SPELLS) to arrive.`,
-      );
-    }
-    return pet.guid;
+    if (pet !== undefined) return { guid: pet.guid };
+    return { refusal: this.petRefusal(what, "no_pet",
+      `there is no pet (state.pet() is undefined) — summon one first (a warlock's Summon Imp, a hunter's Call Pet) ` +
+      `and wait for its control bar, SMSG_PET_SPELLS`) };
+  }
+
+  /** Record a pet refusal on the harness channel and return it as the call's value. */
+  private petRefusal(action: string, status: PetRefusalStatus, hint: string): PetActionResult {
+    this.noteActionHint(action, status, hint);
+    return { ok: false, status, hint };
   }
 
   /** `CMSG_PET_ACTION` with one action-bar button: `data` is `action | type << 24` as the wire packs it. */
-  private petAction(petGuid: string, action: number, type: number, targetGuid: string = "0"): Promise<RawActionResponse> {
-    return this.raw("CMSG_PET_ACTION", [{ guid: petGuid }, { u32: ((action & 0x00ffffff) | (type << 24)) >>> 0 }, { guid: targetGuid }]);
+  private async petAction(petGuid: string, action: number, type: number, targetGuid: string = "0"): Promise<PetActionResult> {
+    const ack = await this.raw("CMSG_PET_ACTION", [{ guid: petGuid }, { u32: ((action & 0x00ffffff) | (type << 24)) >>> 0 }, { guid: targetGuid }]);
+    return { ok: true, status: "sent", ack };
   }
 
   /**
    * Order the pet to attack a unit (the "Attack" button: `CMSG_PET_ACTION`
-   * with `COMMAND_ATTACK`). Ack-only; the pet's swings show as
-   * `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
+   * with `COMMAND_ATTACK`). `sent` is an ack, not a verdict: the pet's swings
+   * show as `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
    * `SMSG_PET_ACTION_FEEDBACK` (`petFeedbackText`).
    */
-  petAttack(target: GuidOrUnit): Promise<RawActionResponse> {
-    const pet = this.petGuidOrThrow("petAttack(target)");
-    return this.petAction(pet, 2, 0x07, guidKey(guidOf(target, "petAttack(target)")));
+  async petAttack(target: GuidOrUnit): Promise<PetActionResult> {
+    const pet = this.petGuidOrRefuse("petAttack");
+    if ("refusal" in pet) return pet.refusal;
+    return this.petAction(pet.guid, 2, 0x07, this.targetGuid(target, "petAttack(target)"));
   }
 
   /** Order the pet to follow you (the "Follow" button). Ack-only; `state.pet().command` follows the next `SMSG_PET_SPELLS`. */
-  petFollow(): Promise<RawActionResponse> {
-    return this.petAction(this.petGuidOrThrow("petFollow()"), 1, 0x07);
+  async petFollow(): Promise<PetActionResult> {
+    const pet = this.petGuidOrRefuse("petFollow");
+    if ("refusal" in pet) return pet.refusal;
+    return this.petAction(pet.guid, 1, 0x07);
   }
 
   /** Order the pet to stay where it is (the "Stay" button). Ack-only. */
-  petStay(): Promise<RawActionResponse> {
-    return this.petAction(this.petGuidOrThrow("petStay()"), 0, 0x07);
+  async petStay(): Promise<PetActionResult> {
+    const pet = this.petGuidOrRefuse("petStay");
+    if ("refusal" in pet) return pet.refusal;
+    return this.petAction(pet.guid, 0, 0x07);
   }
 
-  /** Set the pet's react state: `"passive"`, `"defensive"` or `"aggressive"` (the react buttons). Ack-only. */
-  petReact(reaction: "passive" | "defensive" | "aggressive"): Promise<RawActionResponse> {
-    const state = { passive: 0, defensive: 1, aggressive: 2 }[reaction];
-    return this.petAction(this.petGuidOrThrow("petReact(reaction)"), state, 0x06);
+  /**
+   * Set the pet's react state: `"passive"`, `"defensive"` or `"aggressive"`
+   * (the react buttons), case-insensitive and whitespace-tolerant. Ack-only.
+   */
+  async petReact(reaction: string): Promise<PetActionResult> {
+    const key = String(reaction).trim().toLowerCase();
+    const state = ({ passive: 0, defensive: 1, aggressive: 2 } as Record<string, number>)[key];
+    if (state === undefined) {
+      return this.petRefusal("petReact", "unknown_reaction",
+        `${JSON.stringify(reaction)} is not a react state — pass "passive", "defensive" or "aggressive" ` +
+        `(the pet's current one is state.pet().reaction)`);
+    }
+    const pet = this.petGuidOrRefuse("petReact");
+    if ("refusal" in pet) return pet.refusal;
+    return this.petAction(pet.guid, state, 0x06);
   }
 
   /**
    * Have the pet cast one of its own spells, by name (`state.pet().spells`,
-   * exact or unique substring) or id, at a unit or at nothing. The pet frame's
-   * button: `CMSG_PET_ACTION` with the spell. Ack-only; a refusal arrives as
-   * `SMSG_PET_CAST_FAILED`. Throws when the pet does not know the spell.
+   * case-insensitive exact, else a unique substring) or by id, at a unit or at
+   * nothing. The pet frame's button: `CMSG_PET_ACTION` with the spell.
+   * Ack-only; a refusal arrives as `SMSG_PET_CAST_FAILED`.
    */
-  petCast(spell: string | number, target?: GuidOrUnit): Promise<RawActionResponse> {
-    const pet = this.petGuidOrThrow("petCast(spell, target?)");
-    const known: PetSpellEntry | undefined = this.state.petSpell(spell);
-    if (known === undefined) {
-      const names = (this.state.pet()?.spells ?? []).map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ");
-      throw new Error(`petCast(${JSON.stringify(spell)}): the pet does not know that spell — its book is [${names}]`);
+  async petCast(spell: string | number, target?: GuidOrUnit): Promise<PetActionResult> {
+    const pet = this.petGuidOrRefuse("petCast");
+    if ("refusal" in pet) return pet.refusal;
+    const book = this.state.pet()?.spells ?? [];
+    const list = book.map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ");
+    let known: PetSpellEntry | undefined;
+    if (typeof spell === "number") {
+      known = book.find((s) => s.spellId === spell);
+    } else {
+      const q = spell.trim().toLowerCase();
+      const named = book.filter((s) => s.name !== undefined);
+      const exact = named.filter((s) => s.name!.toLowerCase() === q);
+      const matched = exact.length > 0 ? exact : named.filter((s) => s.name!.toLowerCase().includes(q));
+      if (matched.length > 1) {
+        return this.petRefusal("petCast", "ambiguous_spell",
+          `${JSON.stringify(spell)} matches ${matched.length} of the pet's spells ` +
+          `(${matched.map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ")}) — pass the exact name or the spell id`);
+      }
+      known = matched[0];
     }
-    if (known.passive) throw new Error(`petCast(${JSON.stringify(spell)}): ${known.name ?? known.spellId} is passive and cannot be cast`);
-    return this.petAction(pet, known.spellId, 0x81, target === undefined ? "0" : guidKey(guidOf(target, "petCast(spell, target)")));
+    if (known === undefined) {
+      return this.petRefusal("petCast", "unknown_spell",
+        `the pet does not know ${JSON.stringify(spell)} — its book is [${list}] (state.pet().spells)`);
+    }
+    if (known.passive) {
+      return this.petRefusal("petCast", "passive_spell",
+        `${known.name ?? known.spellId} is a passive the pet always has, so there is nothing to cast — the ` +
+        `castable rows in state.pet().spells are the ones with passive: false`);
+    }
+    return this.petAction(pet.guid, known.spellId, 0x81, target === undefined ? "0" : this.targetGuid(target, "petCast(spell, target)"));
   }
 
   /**
@@ -2984,11 +3193,14 @@ export class WrathClient {
    * bar removal is `SMSG_PET_SPELLS` with `removed: true`, after which
    * `state.pet()` is undefined.
    */
-  petDismiss(): Promise<ActionResponse> {
-    const pet = this.petGuidOrThrow("petDismiss()");
-    const dismiss = this.state.spell(2641);
-    if (dismiss !== undefined) return this.castSpell(2641);
-    return this.petAction(pet, 3, 0x07);
+  async petDismiss(): Promise<PetActionResult> {
+    const pet = this.petGuidOrRefuse("petDismiss");
+    if ("refusal" in pet) return pet.refusal;
+    if (this.state.spell(2641) !== undefined) {
+      const ack = await this.castSpell(2641);
+      return { ok: true, status: "sent", ack };
+    }
+    return this.petAction(pet.guid, 3, 0x07);
   }
 
   // ---------------------------------------------------------------- group (item 100)
@@ -3001,21 +3213,23 @@ export class WrathClient {
    * `SMSG_GROUP_DECLINE` (`state.group().lastDecline`).
    */
   async inviteToGroup(name: string, options: GroupOptions = {}): Promise<InviteResult> {
+    const who = String(name).trim();
+    if (who.length === 0) throw new TypeError("inviteToGroup(name): name is empty — pass the other character's name as the client would type it");
     const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.raw("CMSG_GROUP_INVITE", [{ cstring: name }, { u32: 0 }]);
+    await this.raw("CMSG_GROUP_INVITE", [{ cstring: who }, { u32: 0 }]);
     const event = await this.waitEvent(
       (e) =>
         isEvent(e, "SMSG_PARTY_COMMAND_RESULT") &&
         !isDecodeError(e.data) &&
         (e.data as PartyCommandResultData).operation === 0 &&
         (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout: options.timeout ?? 10_000, description: `the SMSG_PARTY_COMMAND_RESULT answering inviteToGroup(${JSON.stringify(name)})` },
+      { timeout: options.timeout ?? 10_000, description: `the SMSG_PARTY_COMMAND_RESULT answering inviteToGroup(${JSON.stringify(who)})` },
     );
     const d = event.data as PartyCommandResultData;
-    if (d.result === 0) return { ok: true, status: "invited", name };
+    if (d.result === 0) return { ok: true, status: "invited", name: who };
     const hint = `the server refused the invite: ${partyResultText(d.result)}`;
     this.noteActionHint("inviteToGroup", "refused", hint);
-    return { ok: false, status: "refused", name, result: d.result, hint };
+    return { ok: false, status: "refused", name: who, result: d.result, hint };
   }
 
   /**
@@ -3060,18 +3274,36 @@ export class WrathClient {
 
   // ----------------------------------------------------------------- mail (item 100)
 
-  /** The mailbox the frame is open on, or a thrown explanation. */
+  /**
+   * The sentence every mail call says when no frame is open. One text, whether
+   * it reaches the model as this call's `no_mailbox` value or (for `mailList`,
+   * which has no union to answer with) as the thrown message.
+   */
+  private static readonly NO_MAILBOX =
+    'no mailbox frame is open — call openMailbox(mailbox) on a mailbox game object in view ' +
+    '(state.units({ type: "gameObject" }) has goType "mailbox") and stay within reach of it';
+
+  /** The mailbox the frame is open on, or `undefined` when none is. */
+  private mailboxGuid(): string | undefined {
+    return this.state.mailbox()?.guid;
+  }
+
+  /** The `no_mailbox` refusal as a value, recorded on the harness channel first. */
+  private noMailbox(action: string): MailResult {
+    this.noteActionHint(action, "no_mailbox", WrathClient.NO_MAILBOX);
+    return { ok: false, status: "no_mailbox", hint: WrathClient.NO_MAILBOX };
+  }
+
+  /** The mailbox the frame is open on, or a thrown explanation (for the calls that return state, not a verdict). */
   private mailboxGuidOrThrow(what: string): string {
-    const guid = this.state.mailbox()?.guid;
-    if (guid === undefined) {
-      throw new Error(`${what}: no mailbox frame is open — openMailbox(mailbox) on a mailbox game object in view (state.units({ type: "gameObject" }) with goType "mailbox") first`);
-    }
+    const guid = this.mailboxGuid();
+    if (guid === undefined) throw new Error(`${what}: ${WrathClient.NO_MAILBOX}`);
     return guid;
   }
 
   /** Open a mailbox (`CMSG_GAMEOBJ_USE` on it, as a client does) and wait for the frame (`SMSG_SHOW_MAILBOX`). */
   async openMailbox(mailbox: GuidOrUnit, options: MailOptions = {}): Promise<MailboxState> {
-    const id = guidKey(guidOf(mailbox, "openMailbox(mailbox)"));
+    const id = this.targetGuid(mailbox, "openMailbox(mailbox)");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.interact(id);
     await this.waitEvent(
@@ -3081,7 +3313,7 @@ export class WrathClient {
     return this.state.mailbox()!;
   }
 
-  private async waitMailResult(action: number, sinceSeq: number | undefined, timeout: number, what: string): Promise<MailResult> {
+  private async waitMailResult(call: string, action: number, sinceSeq: number | undefined, timeout: number, what: string): Promise<MailResult> {
     const event = await this.waitEvent(
       (e) => isEvent(e, "SMSG_SEND_MAIL_RESULT") && !isDecodeError(e.data) && (e.data as SendMailResultData).action === action && (sinceSeq === undefined || e.seq > sinceSeq),
       { timeout, description: `the SMSG_SEND_MAIL_RESULT answering ${what}` },
@@ -3094,7 +3326,7 @@ export class WrathClient {
     const hint =
       `the server refused ${what}: ${mailResultText(d.result)}` +
       (d.inventoryResult !== undefined ? ` (${inventoryResultText(d.inventoryResult) ?? `inventory result ${d.inventoryResult}`})` : "");
-    this.noteActionHint("mail", "refused", hint);
+    this.noteActionHint(call, "refused", hint);
     return { ok: false, status: "refused", mailId: d.mailId, result: d.result, inventoryResult: d.inventoryResult, hint };
   }
 
@@ -3106,20 +3338,32 @@ export class WrathClient {
    * take an hour to deliver, money and text are immediate.
    */
   async sendMail(to: string, subject: string, body: string, options: SendMailOptions = {}): Promise<MailResult> {
-    const mailbox = this.mailboxGuidOrThrow("sendMail(to, subject, body)");
+    const mailbox = this.mailboxGuid();
+    if (mailbox === undefined) return this.noMailbox("sendMail");
     const items = options.items ?? [];
     if (items.length > 12) throw new Error(`sendMail: at most 12 items per mail (got ${items.length})`);
     const carried = this.state.bag().items;
-    const fields: RawField[] = [{ guid: mailbox }, { cstring: to }, { cstring: subject }, { cstring: body }, { u32: 41 }, { u32: 0 }, { u8: items.length }];
-    items.forEach((slot, i) => {
-      const row = carried.find((it) => it.bag === slot.bag && it.slot === slot.slot);
-      if (row === undefined) throw new Error(`sendMail: nothing is carried at bag ${slot.bag} slot ${slot.slot} (state.bag().items lists what is)`);
+    const fields: RawField[] = [{ guid: mailbox }, { cstring: to.trim() }, { cstring: subject }, { cstring: body }, { u32: 41 }, { u32: 0 }, { u8: items.length }];
+    for (const [i, ref] of items.entries()) {
+      // Each attachment is a bag/slot pair or a carried item's name, resolved
+      // the same way every other item-taking call resolves one.
+      const where = typeof ref === "object" ? { bag: ref.bag, slot: ref.slot } : resolveItemSlot(carried, ref, undefined, "sendMail({ items })", "state.bag()");
+      if ("refusal" in where) {
+        this.noteActionHint("sendMail", "no_item", where.refusal);
+        return { ok: false, status: "no_item", hint: where.refusal };
+      }
+      const row = carried.find((it) => it.bag === where.bag && it.slot === where.slot);
+      if (row === undefined) {
+        const hint = `nothing is carried at bag ${where.bag} slot ${where.slot} — state.bag().items lists what is, and an attachment can also be given by name`;
+        this.noteActionHint("sendMail", "no_item", hint);
+        return { ok: false, status: "no_item", hint };
+      }
       fields.push({ u8: i }, { guid: row.guid });
-    });
+    }
     fields.push({ u32: options.money ?? 0 }, { u32: options.cod ?? 0 }, { u64: "0" }, { u8: 0 });
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_SEND_MAIL", fields);
-    return this.waitMailResult(0, sinceSeq, options.timeout ?? 10_000, `sendMail(${JSON.stringify(to)})`);
+    return this.waitMailResult("sendMail", 0, sinceSeq, options.timeout ?? 10_000, `sendMail(${JSON.stringify(to.trim())})`);
   }
 
   /** List the inbox at the open mailbox (`CMSG_GET_MAIL_LIST`) and return it (`SMSG_MAIL_LIST_RESULT`, also `state.mailbox()`). */
@@ -3137,33 +3381,36 @@ export class WrathClient {
 
   /** Take the money out of a mail (`CMSG_MAIL_TAKE_MONEY`) and return the verdict. */
   async takeMailMoney(mailId: number, options: MailOptions = {}): Promise<MailResult> {
-    const mailbox = this.mailboxGuidOrThrow("takeMailMoney(mailId)");
+    const mailbox = this.mailboxGuid();
+    if (mailbox === undefined) return this.noMailbox("takeMailMoney");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_MAIL_TAKE_MONEY", [{ guid: mailbox }, { u32: mailId }]);
-    return this.waitMailResult(1, sinceSeq, options.timeout ?? 10_000, `takeMailMoney(${mailId})`);
+    return this.waitMailResult("takeMailMoney", 1, sinceSeq, options.timeout ?? 10_000, `takeMailMoney(${mailId})`);
   }
 
   /** Take one attached item out of a mail (`CMSG_MAIL_TAKE_ITEM`; `itemGuidLow` from `state.mailbox().mails[].items[]`) and return the verdict. */
   async takeMailItem(mailId: number, itemGuidLow: number, options: MailOptions = {}): Promise<MailResult> {
-    const mailbox = this.mailboxGuidOrThrow("takeMailItem(mailId, itemGuidLow)");
+    const mailbox = this.mailboxGuid();
+    if (mailbox === undefined) return this.noMailbox("takeMailItem");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_MAIL_TAKE_ITEM", [{ guid: mailbox }, { u32: mailId }, { u32: itemGuidLow }]);
-    return this.waitMailResult(2, sinceSeq, options.timeout ?? 10_000, `takeMailItem(${mailId}, ${itemGuidLow})`);
+    return this.waitMailResult("takeMailItem", 2, sinceSeq, options.timeout ?? 10_000, `takeMailItem(${mailId}, ${itemGuidLow})`);
   }
 
   /** Delete a mail (`CMSG_MAIL_DELETE`) and return the verdict. */
   async deleteMail(mailId: number, options: MailOptions = {}): Promise<MailResult> {
-    const mailbox = this.mailboxGuidOrThrow("deleteMail(mailId)");
+    const mailbox = this.mailboxGuid();
+    if (mailbox === undefined) return this.noMailbox("deleteMail");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_MAIL_DELETE", [{ guid: mailbox }, { u32: mailId }]);
-    return this.waitMailResult(4, sinceSeq, options.timeout ?? 10_000, `deleteMail(${mailId})`);
+    return this.waitMailResult("deleteMail", 4, sinceSeq, options.timeout ?? 10_000, `deleteMail(${mailId})`);
   }
 
   // ----------------------------------------------------------------- bank (item 100)
 
   /** Open the bank at a banker (`CMSG_BANKER_ACTIVATE`) and return it once the frame opens (`SMSG_SHOW_BANK`; also `state.bank()`). */
   async openBank(npcGuid: GuidOrUnit, options: BankOptions = {}): Promise<BankContents> {
-    const id = guidKey(guidOf(npcGuid, "openBank(npcGuid)"));
+    const id = this.targetGuid(npcGuid, "openBank(npcGuid)");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_BANKER_ACTIVATE", [{ guid: id }]);
     await this.waitEvent(
@@ -3174,10 +3421,29 @@ export class WrathClient {
   }
 
   /**
+   * The `no_bank` refusal, when the bank frame was never opened. The server
+   * answers `CMSG_AUTOBANK_ITEM` with silence in that case, so without this
+   * check the call would spend its whole timeout learning nothing.
+   */
+  private bankClosed(call: string): BankMoveResult | undefined {
+    if (this.state.bank().guid !== undefined) return undefined;
+    const hint = 'no bank open — walk to a banker (state.units({ role: "banker" })) and call openBank(guid) first';
+    this.noteActionHint(call, "no_bank", hint);
+    return { ok: false, status: "no_bank", hint };
+  }
+
+  /** The `no_item` refusal, recorded on the harness channel first. */
+  private noBankItem(call: string, hint: string): BankMoveResult {
+    this.noteActionHint(call, "no_item", hint);
+    return { ok: false, status: "no_item", hint };
+  }
+
+  /**
    * One bank move: send the opcode, then wait for the item's guid to show up
    * where `landed` says, or for the server's `SMSG_INVENTORY_CHANGE_FAILURE`.
    */
   private async bankMove(
+    call: string,
     opcode: "CMSG_AUTOBANK_ITEM" | "CMSG_AUTOSTORE_BANK_ITEM",
     guid: string,
     bag: number,
@@ -3205,7 +3471,7 @@ export class WrathClient {
     if (failure !== undefined) {
       const f: InventoryChangeFailureData = failure;
       const hint = `the server refused ${what}: ${inventoryResultText(f.result) ?? `inventory result ${f.result}`}`;
-      this.noteActionHint("bank", "refused", hint);
+      this.noteActionHint(call, "refused", hint);
       return { ok: false, status: "refused", guid, result: f.result, hint };
     }
     const at = place ?? landed()!;
@@ -3218,15 +3484,23 @@ export class WrathClient {
    * or the server's refusal (bank full, not at a banker, ...). Needs the
    * bank frame open (`openBank`).
    */
-  async bankDeposit(bag: number, slot: number, options: BankOptions = {}): Promise<BankMoveResult> {
-    const row = this.state.bag().items.find((it) => it.bag === bag && it.slot === slot);
-    if (row === undefined) throw new Error(`bankDeposit(${bag}, ${slot}): nothing is carried there (state.bag().items lists what is)`);
+  async bankDeposit(bagOrName: number | string, slot?: number, options: BankOptions = {}): Promise<BankMoveResult> {
+    const closed = this.bankClosed("bankDeposit");
+    if (closed !== undefined) return closed;
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "bankDeposit(bagOrName, slot?)", "state.bag()");
+    if ("refusal" in where) return this.noBankItem("bankDeposit", where.refusal);
+    const { bag, slot: at } = where;
+    const row = this.state.bag().items.find((it) => it.bag === bag && it.slot === at);
+    if (row === undefined) {
+      return this.noBankItem("bankDeposit", `nothing is carried at bag ${bag} slot ${at} — state.bag().items lists what is, and the item's name works in place of the bag`);
+    }
     const guid = row.guid;
     return this.bankMove(
+      "bankDeposit",
       "CMSG_AUTOBANK_ITEM",
       guid,
       bag,
-      slot,
+      at,
       () => {
         const hit = this.state.bank().items.find((it) => it.guid === guid);
         return hit === undefined ? undefined : { bag: hit.bag, slot: hit.slot };
@@ -3242,15 +3516,23 @@ export class WrathClient {
    * bag's slot 67-73 with its inner slot) and return where it landed in
    * `state.bag()`, or the server's refusal. Needs the bank frame open.
    */
-  async bankWithdraw(bag: number, slot: number, options: BankOptions = {}): Promise<BankMoveResult> {
-    const row = this.state.bank().items.find((it) => it.bag === bag && it.slot === slot);
-    if (row === undefined) throw new Error(`bankWithdraw(${bag}, ${slot}): nothing is banked there (state.bank().items lists what is)`);
+  async bankWithdraw(bagOrName: number | string, slot?: number, options: BankOptions = {}): Promise<BankMoveResult> {
+    const closed = this.bankClosed("bankWithdraw");
+    if (closed !== undefined) return closed;
+    const where = resolveItemSlot(this.state.bank().items, bagOrName, slot, "bankWithdraw(bagOrName, slot?)", "state.bank()");
+    if ("refusal" in where) return this.noBankItem("bankWithdraw", where.refusal);
+    const { bag, slot: at } = where;
+    const row = this.state.bank().items.find((it) => it.bag === bag && it.slot === at);
+    if (row === undefined) {
+      return this.noBankItem("bankWithdraw", `nothing is banked at bag ${bag} slot ${at} — state.bank().items lists what is, and the item's name works in place of the bag`);
+    }
     const guid = row.guid;
     return this.bankMove(
+      "bankWithdraw",
       "CMSG_AUTOSTORE_BANK_ITEM",
       guid,
       bag,
-      slot,
+      at,
       () => {
         const hit = this.state.bag().items.find((it) => it.guid === guid);
         return hit === undefined ? undefined : { bag: hit.bag, slot: hit.slot };
@@ -3874,7 +4156,7 @@ export class WrathClient {
    * because a fight and a corpse are two decisions.
    */
   async killTarget(target: GuidOrUnit, options: KillTargetOptions = {}): Promise<KillResult> {
-    const raw = guidOf(target, "killTarget(guid)");
+    const raw = this.targetGuid(target, "killTarget(guid)");
     // Canonicalised ("007" -> "7"), because it is used as the nearby-cache map
     // key and the cache's own keys are canonical (guidSchema round-trips every
     // wire guid). A raw string that does not parse names nothing and would
@@ -4058,7 +4340,7 @@ export class WrathClient {
    * neither, so it still throws `EventTimeoutError`.
    */
   async lootCorpse(target: GuidOrUnit, options: LootOptions = {}): Promise<LootResult> {
-    const id = guidOf(target, "lootCorpse(guid)");
+    const id = this.targetGuid(target, "lootCorpse(guid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     // Collected live from before the action goes out, so a push can never slip
@@ -4130,7 +4412,7 @@ export class WrathClient {
     questId: number,
     options: QuestOptions = {},
   ): Promise<QuestAcceptResult> {
-    const npc = guidOf(npcGuid, "acceptQuestFrom(npcGuid, questId)");
+    const npc = this.targetGuid(npcGuid, "acceptQuestFrom(npcGuid, questId)");
     const timeout = options.timeout ?? 10_000;
     const inLog = this.state.quest(questId);
     if (inLog) {
@@ -4167,7 +4449,7 @@ export class WrathClient {
     npcGuid: GuidOrUnit,
     options: QuestOptions = {},
   ): Promise<{ ok: true; quests: readonly OfferedQuest[] }> {
-    const npc = guidOf(npcGuid, "questsAvailableFrom(npcGuid)");
+    const npc = this.targetGuid(npcGuid, "questsAvailableFrom(npcGuid)");
     const quests = await this.questOffer(npc, options.timeout ?? 10_000);
     return { ok: true, quests };
   }
@@ -4187,7 +4469,7 @@ export class WrathClient {
    * those from a slow answer: they all surface as `EventTimeoutError`.
    */
   async trainerList(npcGuid: GuidOrUnit, options: TrainerOptions = {}): Promise<TrainerListResult> {
-    const id = guidKey(guidOf(npcGuid, "trainerList(npcGuid)"));
+    const id = this.targetGuid(npcGuid, "trainerList(npcGuid)");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.trainerListAsync(id);
     const event = await this.waitEvent(
@@ -4225,7 +4507,14 @@ export class WrathClient {
    * nothing about *why* (no points, wrong tree tier, prerequisite missing),
    * so the hint lists what a client checks before enabling the button.
    */
-  async learnTalent(talentId: number, rank: number, options: TrainerOptions = {}): Promise<LearnTalentResult> {
+  async learnTalent(talent: number | string, rank?: number, options: TrainerOptions = {}): Promise<LearnTalentResult> {
+    const resolved = this.resolveTalent(talent);
+    if ("refusal" in resolved) return resolved.refusal;
+    const talentId = resolved.talentId;
+    // The wire rank is 0-based, so the next point is exactly how many are
+    // already in this talent — the rank the client's own tooltip would buy.
+    const spent = this.state.talents()?.talents.find((t) => t.talentId === talentId)?.rank;
+    rank = rank ?? (spent === undefined ? 0 : spent + 1);
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.learnTalentAsync(talentId, rank);
     await this.waitEvent(
@@ -4247,17 +4536,41 @@ export class WrathClient {
     if (row !== undefined && row.rank >= rank) {
       return { ok: true, status: "learned", talentId, rank, talents };
     }
-    return {
-      ok: false,
-      status: "not_learned",
-      talentId,
-      rank,
-      talents,
-      hint:
+    const hint =
         `the server did not record talent ${talentId} at rank ${rank} — it needs an unspent point ` +
         `(state.talents().unspentPoints is ${talents.unspentPoints}), the previous rank first, enough ` +
-        `points in that tree's earlier tiers, and any prerequisite talent; the server names no reason`,
+        `points in that tree's earlier tiers, and any prerequisite talent; the server names no reason`;
+    this.noteActionHint("learnTalent", "not_learned", hint);
+    return { ok: false, status: "not_learned", talentId, rank, talents, hint };
+  }
+
+  /**
+   * Which talent `learnTalent` means: an id, or a talent's name anywhere in
+   * this class's tree (case-insensitive exact, else a unique substring),
+   * which needs the tree read once — `queryTalentTree()`. Two matches are two
+   * readings, so they are refused with both named rather than picked.
+   */
+  private resolveTalent(talent: number | string): { talentId: number } | { refusal: LearnTalentResult } {
+    if (typeof talent === "number") return { talentId: talent };
+    const refuse = (status: "unknown_talent" | "ambiguous_talent" | "no_tree", hint: string) => {
+      this.noteActionHint("learnTalent", status, hint);
+      return { refusal: { ok: false as const, status, hint } };
     };
+    const tree = this.state.talentTree();
+    if (tree === undefined) {
+      return refuse("no_tree", `a talent name can only be resolved against the class tree — call queryTalentTree() once first, or pass the talent id`);
+    }
+    const all = tree.tabs.flatMap((tab) => tab.talents.map((t) => ({ ...t, tab: tab.name })));
+    const q = talent.trim().toLowerCase();
+    const named = all.filter((t) => t.name !== undefined);
+    const exact = named.filter((t) => t.name!.toLowerCase() === q);
+    const matched = exact.length > 0 ? exact : named.filter((t) => t.name!.toLowerCase().includes(q));
+    const show = (rows: typeof matched) => rows.map((t) => `${t.talentId}:${JSON.stringify(t.name ?? "?")}${t.tab === undefined ? "" : ` (${t.tab})`}`).join(", ");
+    if (matched.length === 1) return { talentId: matched[0]!.talentId };
+    if (matched.length === 0) {
+      return refuse("unknown_talent", `no talent in your tree is named ${JSON.stringify(talent)} — state.talentTree().tabs[].talents lists them`);
+    }
+    return refuse("ambiguous_talent", `${JSON.stringify(talent)} matches ${matched.length} talents (${show(matched)}) — pass the exact name or the talent id`);
   }
 
   /**
@@ -4273,7 +4586,7 @@ export class WrathClient {
    * ask (`activateTaxi`).
    */
   async showTaxiNodes(npcGuid: GuidOrUnit, options: TaxiOptions = {}): Promise<TaxiWindow> {
-    const id = guidKey(guidOf(npcGuid, "showTaxiNodes(npcGuid)"));
+    const id = this.targetGuid(npcGuid, "showTaxiNodes(npcGuid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     const after = (e: StreamEvent) => sinceSeq === undefined || e.seq > sinceSeq;
@@ -4327,7 +4640,7 @@ export class WrathClient {
    * and shows on `state.money`.
    */
   async activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options: TaxiOptions = {}): Promise<ActivateTaxiResult> {
-    const id = guidKey(guidOf(npcGuid, "activateTaxi(npcGuid, dest)"));
+    const id = this.targetGuid(npcGuid, "activateTaxi(npcGuid, dest)");
     const window = this.state.lastTaxiNodes(id);
     if (window === undefined) {
       throw new Error(
@@ -4368,7 +4681,7 @@ export class WrathClient {
    * as the confirm never arriving (`EventTimeoutError`).
    */
   async bindAtInnkeeper(npcGuid: GuidOrUnit, options: BindOptions = {}): Promise<BindResult> {
-    const id = guidKey(guidOf(npcGuid, "bindAtInnkeeper(npcGuid)"));
+    const id = this.targetGuid(npcGuid, "bindAtInnkeeper(npcGuid)");
     const timeout = options.timeout ?? 10_000;
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.gossipHello(id);
@@ -4427,7 +4740,7 @@ export class WrathClient {
     spellId: number,
     options: TrainerOptions = {},
   ): Promise<BuySpellResult> {
-    const id = guidKey(guidOf(npcGuid, "buySpell(npcGuid, spellId)"));
+    const id = this.targetGuid(npcGuid, "buySpell(npcGuid, spellId)");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.trainerBuySpellAsync(id, spellId);
     const isFor = (e: StreamEvent, opcode: "SMSG_TRAINER_BUY_SUCCEEDED" | "SMSG_TRAINER_BUY_FAILED") =>
@@ -4450,16 +4763,12 @@ export class WrathClient {
     }
     const reason = (event.data as TrainerBuyFailedData).reason;
     const named = TRAINER_BUY_FAIL_HINTS[reason];
-    return {
-      ok: false,
-      status: "buy_failed",
-      spellId,
-      reason,
-      hint:
-        `the trainer refused (reason ${reason}${named ? `: ${named}` : ""}) — the usual causes are ` +
-        `too little money and a spell that is not learnable yet; sdk.trainerList(npcGuid) reports ` +
-        `each spell's cost, learnable and affordable`,
-    };
+    const hint =
+      `the trainer refused (reason ${reason}${named ? `: ${named}` : ""}) — the usual causes are ` +
+      `too little money and a spell that is not learnable yet; sdk.trainerList(npcGuid) reports ` +
+      `each spell's cost, learnable and affordable`;
+    this.noteActionHint("buySpell", "buy_failed", hint);
+    return { ok: false, status: "buy_failed", spellId, reason, hint };
   }
 
   /**
@@ -4479,7 +4788,7 @@ export class WrathClient {
     rewardIndex = 0,
     options: QuestOptions = {},
   ): Promise<QuestTurnInResult> {
-    const npcId = guidOf(npcGuid, "turnInQuest(npcGuid, questId)");
+    const npcId = this.targetGuid(npcGuid, "turnInQuest(npcGuid, questId)");
     const timeout = options.timeout ?? 10_000;
     const isFor = (e: StreamEvent, opcode: "SMSG_QUESTGIVER_OFFER_REWARD" | "SMSG_QUESTGIVER_REQUEST_ITEMS") =>
       isEvent(e, opcode) &&
