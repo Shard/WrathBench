@@ -399,3 +399,60 @@ button.update {
   background: transparent; color: var(--warn);
 }
 button.update:hover { background: var(--panel); }
+
+/* --- the unit frame (components/UnitFrame.tsx) --- */
+/*
+ * The client's own bar colours — health 0/1/0, mana 0/0/1, rage 1/0/0, energy
+ * 1/1/0, focus 1/.5/.25, runic power 0/.82/1 — desaturated a step so they sit
+ * on the panel rather than glow off it, and darkened on white so 11px text
+ * stays legible over them. Experience is the client's purple. Tokens live here
+ * next to the palette so both schemes are defined in one place.
+ */
+:root {
+  --hp: #2fb34a;
+  --power-mana: #3a5fd9;
+  --power-rage: #c8352f;
+  --power-energy: #d9c227;
+  --power-focus: #d9772f;
+  --power-runic: #29b4e0;
+  --xp: #7b3fd6;
+  --bar-track: #0e1013;
+  --bar-border: #000000;
+  --bar-text: #f4f6f8;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --hp: #2a9a42;
+    --power-mana: #2d4fc4;
+    --power-rage: #b52d28;
+    --power-energy: #c4ad10;
+    --power-focus: #c46520;
+    --power-runic: #1f9dc7;
+    --xp: #6b32c2;
+    --bar-track: #d9dce2;
+    --bar-border: #6a7280;
+    --bar-text: #ffffff;
+  }
+}
+.unit-frame { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 4px; }
+.bar { position: relative; height: 16px; border-radius: 2px; overflow: hidden;
+       background: var(--bar-track); border: 1px solid var(--bar-border); }
+.bar-fill { position: absolute; inset: 0 auto 0 0; transition: width .3s ease;
+            /* A faint bevel: lighter at the top, darker toward the bottom. */
+            background-image: linear-gradient(to bottom, rgba(255,255,255,.28), rgba(255,255,255,0) 45%, rgba(0,0,0,.22)); }
+.bar.hp .bar-fill { background-color: var(--hp); }
+.bar.xp .bar-fill { background-color: var(--xp); }
+/* The power tint is an inline background-color from the component, chosen by type. */
+.bar.pw .bar-fill { background-color: var(--power-mana); }
+.bar-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--bar-text);
+            text-shadow: 0 1px 1px rgba(0,0,0,.7); pointer-events: none; }
+.bar.unobserved .bar-text { color: var(--dim); text-shadow: none; }
+.bar.dead { border-color: var(--err); }
+.bar.dead .bar-text { color: var(--err); text-shadow: none; }
+.xp-row { display: flex; align-items: center; gap: 5px; }
+.xp-row .bar { flex: 1; min-width: 0; }
+.level-badge { flex: none; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 50%;
+               display: inline-flex; align-items: center; justify-content: center;
+               font-size: 11px; font-weight: 700; color: var(--bar-text); background: var(--xp);
+               border: 1px solid var(--bar-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
