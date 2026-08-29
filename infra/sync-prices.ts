@@ -22,6 +22,24 @@
  * changed nothing produces no diff. OpenRouter has no cache-*write* tier for
  * most models — a write is billed as ordinary input — so `cacheWrite` falls
  * back to `input` rather than to zero.
+ *
+ * **A changed rate appends a window; it never overwrites one.** Each id maps to
+ * a list of `{ input, output, cacheRead, cacheWrite, from? }` in date order.
+ * The sync compares the catalogue against the *latest* window and, when the
+ * four rates differ, appends a new one stamped `from: <today>` — so the runs
+ * that billed at the old rate keep reading it (`windowAt` in
+ * `runner/viewer/pricing.ts` picks the window in force at a run's start). A
+ * second sync on the same day replaces that day's window rather than stacking
+ * a duplicate. The first window has no `from`: it means "everything before the
+ * next window begins", which is what makes every run already on disk price
+ * exactly as it did before windows existed.
+ *
+ * One hole this does not close: an id the catalogue *drops* is still removed
+ * outright, windows and all, so a delisted model's runs go unpriced rather than
+ * keeping the rates they really billed at (`DELISTED_MODELS` in `pricing.ts`
+ * names why a row is missing). That is the 2026-08-29 delisting decision
+ * standing as it was; whether a delisted id should keep its history is a
+ * question about what a blank means, and the operator's.
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -52,9 +70,8 @@ const PIN: readonly string[] = [
   "openai/gpt-5.6-luna",
   "google/gemini-3.7-flash",
   // Launch discount: $0.075/$0.25 per Mtok runs to roughly 2026-09-09, after
-  // which the catalogue quotes list ($0.15/$0.50). The table has no as-of-rate
-  // mechanism, so a re-sync past that date re-prices earlier runs at list —
-  // re-sync deliberately, and see FOLLOW-UPS item 88.
+  // which the catalogue quotes list ($0.15/$0.50). A sync past that date
+  // appends a window dated that day; August's runs keep the discount.
   "z-ai/glm-5.3-flash",
 ];
 
@@ -66,10 +83,54 @@ export interface SyncedPrice {
   cacheWrite: number;
 }
 
+/** One rate window: the rates, plus the day they took over (absent on the first). */
+export type SyncedWindow = SyncedPrice & { from?: string };
+
 export interface SyncedPrices {
-  /** The day the catalogue was read. Every row in the file shares it. */
+  /** The day the catalogue was last read. A *window*'s date is its own `from`. */
   asOf: string;
-  models: Record<string, SyncedPrice>;
+  /** Windows per id, oldest first. The first carries no `from`. */
+  models: Record<string, SyncedWindow[]>;
+}
+
+/** Whether two windows quote the same four rates. Both sides are already rounded. */
+export function sameRates(a: SyncedPrice, b: SyncedPrice): boolean {
+  return a.input === b.input && a.output === b.output && a.cacheRead === b.cacheRead && a.cacheWrite === b.cacheWrite;
+}
+
+/**
+ * The file the sync should write: the existing windows, plus a new one wherever
+ * the catalogue now quotes something else.
+ *
+ * Pure, so the interesting behaviour is testable without a catalogue. Rules, in
+ * order: an id the catalogue no longer prices is dropped (see the header); an
+ * unchanged rate leaves the id's windows byte-identical; a changed rate appends
+ * `{ ...fresh, from: today }`; and a change on a day that already has a window
+ * replaces it, so a second sync in one day corrects rather than stacks.
+ */
+export function mergeWindows(
+  existing: Record<string, SyncedWindow[]> | undefined,
+  fresh: Record<string, SyncedPrice>,
+  today: string,
+): Record<string, SyncedWindow[]> {
+  const out: Record<string, SyncedWindow[]> = {};
+  for (const id of Object.keys(fresh).sort()) {
+    const price = fresh[id]!;
+    const prior = existing?.[id] ?? [];
+    const latest = prior[prior.length - 1];
+    if (latest === undefined) {
+      // First sighting: no `from`, so it also prices every run older than it.
+      out[id] = [{ ...price }];
+      continue;
+    }
+    if (sameRates(latest, price)) {
+      out[id] = prior.map((w) => ({ ...w }));
+      continue;
+    }
+    const kept = (latest.from === today ? prior.slice(0, -1) : prior).map((w) => ({ ...w }));
+    out[id] = [...kept, { ...price, from: today }];
+  }
+  return out;
 }
 
 /** Six significant figures: enough for a $0.0000005/token rate, stable across syncs. */
@@ -158,9 +219,26 @@ export async function main(): Promise<void> {
     models[id] = price;
   }
 
-  const out: SyncedPrices = { asOf: new Date().toISOString().slice(0, 10), models };
+  const today = new Date().toISOString().slice(0, 10);
+  let prior: Record<string, SyncedWindow[]> | undefined;
+  try {
+    prior = ((await Bun.file(OUT).json()) as SyncedPrices).models;
+  } catch {
+    prior = undefined; // no file yet: every id starts on a first, undated window
+  }
+  const windows = mergeWindows(prior, models, today);
+  const appended = Object.entries(windows)
+    .filter(([, ws]) => ws[ws.length - 1]?.from === today)
+    .map(([id]) => id);
+
+  const out: SyncedPrices = { asOf: today, models: windows };
   await Bun.write(OUT, `${JSON.stringify(out, null, 2)}\n`);
-  console.log(`${OUT}: ${Object.keys(models).length} priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
+  console.log(`${OUT}: ${Object.keys(windows).length} priced of ${wanted.size} wanted, from ${rows.length} catalogue rows`);
+  if (appended.length > 0) {
+    // A rate moved. Earlier runs keep the window they billed at; only runs from
+    // today forward read the new one.
+    console.log(`rate changed, new window from ${today} (earlier runs keep the old rate): ${appended.join(", ")}`);
+  }
   if (missing.length > 0) {
     // Most of these are OpenCode Zen / local ids, which OpenRouter never
     // carries — they are free or local and priced by rule, not by table.

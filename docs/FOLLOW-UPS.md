@@ -77,31 +77,23 @@ status.
 
 ## Fleet and gate
 
-91. **The synced price table has no as-of-run rates, and `glm-5.3-flash`'s
-    discount ends ~2026-09-09** (2026-08-29, out of item 88). `prices.openrouter.json`
-    holds one rate per model and one `asOf` for the whole file, so a re-sync
-    re-prices every run already on disk at today's catalogue. That is fine while
-    rates hold still and wrong the moment one moves: `z-ai/glm-5.3-flash` is on a
-    50% launch discount ($0.075/$0.25) running to roughly 2026-09-09, after which
-    a sync silently bills August's runs at list ($0.15/$0.50). The mechanism
-    already exists for the Claude rows — `standardAfter` in `CLAUDE_PRICES`, which
-    `priceFor` switches on the run's own start date — and wants generalising to
-    the synced table, with the sync writing rate windows rather than replacing a
-    row. Trigger: the discount lapsing, or the next catalogue move on any id the
-    corpus has runs for. Until then the two 2026-08-28 movers (`deepseek-v4-flash`
-    +81%, `-0731` -25%) are the standing example that a cost comparison spanning
-    a sync is not comparing like with like.
-
 ## Episodes and results
 
-8. **Context policy is not applied on the claude-code harness** (recorded, not
-   penalised: the harness is a tag on every row, docs/METHODOLOGY.md, "What
-   WrathBench measures"). No trim; one CLI conversation grows linearly (~200k tokens by the end
-   of a 90-minute episode, roster-sonnet-20260822, COSTS.md), so the lane's spend is
-   mostly cache-read replays of a growing prefix and a `quota-exhausted` pause loses the
-   context on resume. Either the driver applies a policy or the prompt stops promising
-   one; cross-driver cost comparisons are invalid until then. Read first (merged 8c):
-   `fleet-nav-probe-sonnet-20260822-c2`, a 6h e360 completed naturally at $43.90.
+8. **Cross-driver cost is not comparable, because the two harnesses do not
+   spend context the same way** (recorded, not penalised: the harness is a tag on every
+   row, docs/METHODOLOGY.md, "What WrathBench measures"). The fixed loop trims and its
+   requests plateau; the claude-code harness applies no policy at all, so one CLI
+   conversation grows linearly (~200k tokens by the end of a 90-minute episode,
+   roster-sonnet-20260822, COSTS.md), the lane's spend is mostly cache-read replays of a
+   growing prefix, and a `quota-exhausted` pause loses the context on resume. Read
+   first: `fleet-nav-probe-sonnet-20260822-c2`, a 6h e360 completed naturally at $43.90.
+   The prompt half is closed — since 2026-08-29 each harness's prompt states its own
+   context regime and the two hash differently in the comparability tuple, so a
+   cross-driver comparison is visibly over two prompts rather than looking like one.
+   What remains is the operator's: whether the claude-code harness should have a
+   context policy at all, or stay the deliberate "the CLI owns its history" arm, and if
+   the latter, what a $/level or $/turn chart may say across the two harnesses. Both are
+   methodology, not implementation — nothing here is an agent's to decide.
 
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
     The signal vector lists deaths, zones, spells learned and talents spent
