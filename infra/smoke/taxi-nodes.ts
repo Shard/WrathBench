@@ -11,7 +11,7 @@
  * Fixture (FOLLOW-UPS 45 pattern): a persistent character (default
  * `Smokeflight` on MODULE_ACCOUNT, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario taxi-ironforge` — level 10, 1g, in
- * front of Gryth Thurden in Ironforge with TaxiNodes 6 (Ironforge) and 7
+ * front of Gryth Thurden in Ironforge with TaxiNodes 6 (Ironforge) and 8
  * (Thelsamar) visited, because the server only sells routes between visited
  * nodes (ERR_TAXINOTVISITED otherwise).
  *
@@ -43,7 +43,7 @@ const SCENARIO = "taxi-ironforge";
 
 const GRYTH_THURDEN = 1573; // creature entry, Ironforge flight master
 const TAXI_IRONFORGE = 6;
-const TAXI_THELSAMAR = 7;
+const TAXI_THELSAMAR = 8;
 const ZONE_IRONFORGE = 1537;
 const ZONE_LOCH_MODAN = 38;
 

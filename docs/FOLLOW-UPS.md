@@ -52,28 +52,34 @@ status.
       `infra/smoke/area-and-roles.ts` (login names, one `WB_AREA` each way across the
       abbey door, Deputy Willem reports `questGiver`) — runs on the first deploy of the
       N2 build; if the server's ids disagree with the ones read from the map files, the
-      smoke is corrected to the server's answer. **Innkeeper bind built 2026-08-29
-      (to `:next`, deploy owed):** `SMSG_BINDER_CONFIRM` / `SMSG_BINDPOINTUPDATE` /
+      smoke is corrected to the server's answer. **Innkeeper bind shipped 2026-08-29,
+      deployed as `harness-0.5-225-ga2c0bd2`, gate passed the same day
+      (`innkeeper-bind.ts`: login bind Coldridge Valley 132 → bind at Firebrew
+      lands 0.0y from the character as Ironforge 1537):** `SMSG_BINDER_CONFIRM` / `SMSG_BINDPOINTUPDATE` /
       `SMSG_PLAYERBOUND` tapped, `CMSG_BINDER_ACTIVATE` on the raw allowlist,
       `state.self.bindPoint` (map, xyz, area id + AreaTable name), `bindAtInnkeeper`
       typed, HUD `home: Ironforge — map 0 (x, y, z)`. Payloads in
       worklogs/2026-08-29. Gate: `infra/smoke/innkeeper-bind.ts` (scenario
-      `inn-ironforge`: login bind is the planted Coldridge Valley, bind at Firebrew
-      lands within 10y and renames) — runs on the first deploy of that build.
-    - **N3 — flight paths, built 2026-08-29 (to `:next`, deploy owed):**
+      `inn-ironforge`). N2 is complete.
+    - **N3 — flight paths, shipped 2026-08-29, deployed as
+      `harness-0.5-225-ga2c0bd2`, probe gate passed the same day:**
       `SMSG_SHOWTAXINODES` tapped exactly as the wire has it (show flag, guid,
       current node, 14-word mask) plus the mask decoded to `known[]` named from the
       client's `TaxiNodes.dbc`; `state.lastTaxiNodes(guid)`, `showTaxiNodes(guid)`
       (hello → the icon-2 taxi option → window), `activateTaxi(guid, nameOrId)`
       typed over raw `CMSG_ACTIVATETAXI` with a hint per `ActivateTaxiReply` code.
       Never the TaxiPath catalogue, never node positions, never a nearest-master
-      lookup. Gate: `infra/smoke/taxi-nodes.ts` (Gryth's window has current 6 and
-      node 7 known; `activateTaxi(gryth, "Thelsamar")` accepted; `taxiFlight`
-      true then false; landing zone Loch Modan) — runs on the first deploy;
-      then a model discovers and uses a flight master unaided. Open question for
-      the operator: whether the `TaxiNodes.dbc` node positions (which the client
-      draws on its taxi map) are a contract-clean observation; withheld until
-      decided.
+      lookup. `infra/smoke/taxi-nodes.ts` passed (window current 6 Ironforge,
+      known 6/8/100 — 100 Honor Hold is the core's Alliance starting mask, not the
+      fixture's; `activateTaxi(gryth, "Thelsamar")` accepted, fare 105c;
+      `taxiFlight` true → false at 97s; landing zone Loch Modan). **Remaining:**
+      the "unaided" half of the gate — a model discovers and uses a flight master
+      on its own (N4 evidence). Residual seen on the gate: `state.self.position`
+      still read the takeoff point after landing (the fold does not follow the
+      flight spline; the zone did move) — a model reads its landing spot from
+      `self.zone` until its first own step. Open question for the operator:
+      whether the `TaxiNodes.dbc` node positions (which the client draws on its
+      taxi map) are a contract-clean observation; withheld until decided.
     - **N4 — rung-4 attempts**: Opus/Fable runs with milestone records on, destination
       choice scored from the records (destination chosen → connector chosen → action
       dispatched → transfer confirmed / not_visited / waiting / wrong_map / stuck →
