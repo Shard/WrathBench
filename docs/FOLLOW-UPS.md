@@ -162,18 +162,6 @@ status.
     cleared lane's scored run and the sweep overlap, at the cost that a mid-run 429
     on a scored run is unrecoverable (scored lanes never resume).
 
-92. **Show freeplay lineage on the runs page** (2026-08-29, with the durable
-    stream; amended the same day). The field half is done: `continuedFrom` is on
-    `RunRow` and `ResultRun`, read from `continued_from` with meta as the fallback
-    (`runner/viewer/runs.ts`), and the freeplay ladder now collapses a stream to
-    one row with its attempt count and chain (`streamRows`). What is left is the
-    **runs page**: `/runs` still lists a12 next to a11 as unrelated rows, and the
-    run page says nothing about what a run continues. Trigger: the first
-    continuation lands (sub-opus-low's a12 on Bromdir, once the ref is flipped back
-    to `unlimited` after the fleet recreate). Next action: a lineage line on
-    `RunDetail.tsx` ("continues <run>", linked) and a stream marker in the runs
-    table, both off the `continuedFrom` field that now exists.
-
 93. **`fleet-update.sh graceful` cannot complete while a freeplay stream is live**
     (2026-08-29). Graceful sets the pause switch and then waits for every live run
     to "finish on its own clock" — an `idle: unlimited` freeplay session has no
