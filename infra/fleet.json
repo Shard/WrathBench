@@ -97,7 +97,7 @@
   },
   "roster": {
     "sub-opus": {"model": "opus", "driver": "claude-code", "race": 3, "class": 2, "tier": "t0"},
-    "sub-opus-low": {"model": "opus", "driver": "claude-code", "effort": "low", "race": 3, "class": 2, "tier": "t1", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2", "idle": "unlimited"},
+    "sub-opus-low": { "enabled": false,"model": "opus", "driver": "claude-code", "effort": "low", "race": 3, "class": 2, "tier": "t1", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2", "idle": "unlimited"},
     "sub-opus-none": {"model": "opus", "driver": "claude-code", "effort": "none", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sub-fable-none": {"model": "claude-fable-5", "driver": "claude-code", "effort": "none", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2", "idle": "unlimited"},
     "sub-fable-low": {"model": "claude-fable-5", "driver": "claude-code", "effort": "low", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
