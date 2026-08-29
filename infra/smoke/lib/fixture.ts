@@ -127,3 +127,35 @@ export async function applyScenario(ctx: FixtureContext, scenario: string): Prom
   }
   ctx.log(`  scenario ${scenario} applied to ${ctx.character}`);
 }
+
+/**
+ * Delete throwaway characters through the module (`POST /character-delete`,
+ * the same CMSG_CHAR_DELETE path a client takes), swallowing every failure
+ * into the caller's log. Smokes call this from a `finally` that wraps the
+ * fixture boot as well as the arc: a scenario that failed to apply used to
+ * leave its character behind, and ten of those on one account hit the realm
+ * cap (create result 53) for every smoke after. Names that do not exist are
+ * simply reported and skipped.
+ */
+export async function deleteFixtureCharacters(ctx: Pick<FixtureContext, "base" | "account" | "token" | "log">, names: readonly string[]): Promise<void> {
+  for (const [i, character] of names.entries()) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (attempt > 0) await Bun.sleep(3000);
+      const res = await fetch(`${ctx.base}/character-delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: `${ctx.token}-del${i}-${attempt}`, account: ctx.account, character }),
+      }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }));
+      const json = (await res.json().catch(() => undefined)) as { ok?: boolean; error?: string; result?: number } | undefined;
+      if (res.ok && json?.ok) {
+        ctx.log(`  deleted ${character} on ${ctx.account}`);
+        break;
+      }
+      const transient = json?.error === "account_in_use" || json?.error === "timeout" || res.status === 504;
+      if (!transient || attempt === 7) {
+        ctx.log(`  delete ${character} on ${ctx.account} failed: ${res.status} ${JSON.stringify(json)}`);
+        break;
+      }
+    }
+  }
+}

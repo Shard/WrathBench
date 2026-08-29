@@ -3340,9 +3340,16 @@ export class WrathClient {
 
   /**
    * Order the pet to attack a unit (the "Attack" button: `CMSG_PET_ACTION`
-   * with `COMMAND_ATTACK`). `sent` is an ack, not a verdict: the pet's swings
-   * show as `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
-   * `SMSG_PET_ACTION_FEEDBACK` (`petFeedbackText`).
+   * with `COMMAND_ATTACK`). `sent` is an ack, not a verdict: the order landing
+   * shows as `SMSG_ATTACKSTART` from the pet's guid at the target (a ranged
+   * pet such as an imp with Firebolt autocast off then stands there — no
+   * swing follows; `petCast` or autocast is what makes it fight), its swings
+   * as `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
+   * `SMSG_PET_ACTION_FEEDBACK` (`petFeedbackText`). One refusal is silent: a
+   * passive pet (`state.pet().reaction === "passive"`, which is how a fresh
+   * summon arrives) ignores the order with no packet at all — the core's
+   * PetAI::CanAIAttack answers false for REACT_PASSIVE before the command
+   * flag is set. `petReact("defensive")` first.
    */
   async petAttack(target: GuidOrUnit): Promise<WithResolved<PetActionResult>> {
     const pet = this.petGuidOrRefuse("petAttack");
@@ -3350,18 +3357,26 @@ export class WrathClient {
     return this.byName(target, "petAttack(target)", (guid) => this.petAction(pet.guid, 2, 0x07, guid));
   }
 
-  /** Order the pet to follow you (the "Follow" button). Ack-only; `state.pet().command` follows the next `SMSG_PET_SPELLS`. */
+  /** Order the pet to follow you (the "Follow" button). Ack-only: no packet answers it, so the ack folds `state.pet().command`. */
   async petFollow(): Promise<PetActionResult> {
     const pet = this.petGuidOrRefuse("petFollow");
     if ("refusal" in pet) return pet.refusal;
-    return this.petAction(pet.guid, 1, 0x07);
+    return this.petCommand(pet.guid, 1);
   }
 
-  /** Order the pet to stay where it is (the "Stay" button). Ack-only. */
+  /** Order the pet to stay where it is (the "Stay" button). Ack-only, folded like `petFollow`. */
   async petStay(): Promise<PetActionResult> {
     const pet = this.petGuidOrRefuse("petStay");
     if ("refusal" in pet) return pet.refusal;
-    return this.petAction(pet.guid, 0, 0x07);
+    return this.petCommand(pet.guid, 0);
+  }
+
+  /** A follow/stay command button, with the ack folded into the bar's command state. */
+  private async petCommand(petGuid: string, command: number): Promise<PetActionResult> {
+    const sent = await this.petAction(petGuid, command, 0x07);
+    const last = this.events.recent(1)[0];
+    this.state.petCommanded({ commandState: command }, last?.seq ?? 0, last?.ts ?? Date.now());
+    return sent;
   }
 
   /**
@@ -3378,7 +3393,11 @@ export class WrathClient {
     }
     const pet = this.petGuidOrRefuse("petReact");
     if ("refusal" in pet) return pet.refusal;
-    return this.petAction(pet.guid, state, 0x06);
+    const sent = await this.petAction(pet.guid, state, 0x06);
+    // No packet answers a react change; the ack folds it (state.petCommanded).
+    const last = this.events.recent(1)[0];
+    this.state.petCommanded({ reactState: state }, last?.seq ?? 0, last?.ts ?? Date.now());
+    return sent;
   }
 
   /**
@@ -3537,12 +3556,21 @@ export class WrathClient {
   /** Open a mailbox (`CMSG_GAMEOBJ_USE` on it, as a client does) and wait for the frame (`SMSG_SHOW_MAILBOX`). */
   async openMailbox(mailbox: GuidOrUnit, options: MailOptions = {}): Promise<WithResolved<MailboxState>> {
     return this.byName(mailbox, "openMailbox(mailbox)", async (id) => {
+      // The core never answers CMSG_GAMEOBJ_USE on a mailbox with
+      // SMSG_SHOW_MAILBOX (GameObject::Use has no mailbox case; the client
+      // opens the frame locally). What proves the box is open and in reach
+      // is the first list: CMSG_GET_MAIL_LIST is refused silently unless
+      // Player::GetGameObjectIfCanInteractWith(guid, MAILBOX) holds, and
+      // answered with SMSG_MAIL_LIST_RESULT when it does. The use is still
+      // sent, as a client does, so the server sees the same sequence.
       const sinceSeq = this.events.recent(1)[0]?.seq;
       await this.interact(id);
-      await this.waitEvent(
-        (e) => isEvent(e, "SMSG_SHOW_MAILBOX") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
-        { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_MAILBOX for ${id} (is it a mailbox, and are you within reach?)` },
+      await this.raw("CMSG_GET_MAIL_LIST", [{ guid: id }]);
+      const listed = await this.waitEvent(
+        (e) => isEvent(e, "SMSG_MAIL_LIST_RESULT") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout: options.timeout ?? 10_000, description: `the SMSG_MAIL_LIST_RESULT answering openMailbox(${id}) (is it a mailbox, and are you within reach?)` },
       );
+      this.state.mailboxOpened(id, listed.seq, listed.ts);
       return this.state.mailbox()!;
     });
   }
@@ -3605,12 +3633,29 @@ export class WrathClient {
     const mailbox = this.mailboxGuidOrThrow("mailList()");
     const sinceSeq = this.events.recent(1)[0]?.seq;
     await this.raw("CMSG_GET_MAIL_LIST", [{ guid: mailbox }]);
-    await this.waitEvent(
+    const listed = await this.waitEvent(
       (e) => isEvent(e, "SMSG_MAIL_LIST_RESULT") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
       { timeout: options.timeout ?? 10_000, description: "the SMSG_MAIL_LIST_RESULT answering mailList()" },
     );
-    void (undefined as MailListResultData | undefined);
+    await this.nameMailSenders(listed.seq, options.timeout ?? 10_000);
     return this.state.mailbox()!;
+  }
+
+  /**
+   * A player-sent mail carries only the sender's guid, and the module names
+   * guids it sees in update blocks, not in mail — the sender is usually
+   * logged out. A client asks `CMSG_NAME_QUERY` for each unknown sender as
+   * it fills the inbox; so does this, and waits (briefly) for the answers so
+   * `mails[].senderName` is joined on return.
+   */
+  private async nameMailSenders(sinceSeq: number, timeout: number): Promise<void> {
+    const unknown = [...new Set((this.state.mailbox()?.mails ?? []).filter((m) => m.senderGuid !== undefined && m.senderName === undefined).map((m) => m.senderGuid!))];
+    if (unknown.length === 0) return;
+    for (const guid of unknown) await this.raw("CMSG_NAME_QUERY", [{ guid }]);
+    await this.waitEvent(
+      (e) => e.seq > sinceSeq && (this.state.mailbox()?.mails ?? []).every((m) => m.senderGuid === undefined || m.senderName !== undefined),
+      { timeout: Math.min(timeout, 5_000), description: `the SMSG_NAME_QUERY_RESPONSE for the mail sender(s) ${unknown.join(", ")}` },
+    ).catch(() => undefined);
   }
 
   /** Take the money out of a mail (`CMSG_MAIL_TAKE_MONEY`) and return the verdict. */
@@ -3636,7 +3681,10 @@ export class WrathClient {
     const mailbox = this.mailboxGuid();
     if (mailbox === undefined) return this.noMailbox("deleteMail");
     const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.raw("CMSG_MAIL_DELETE", [{ guid: mailbox }, { u32: mailId }]);
+    // u64 mailbox, u32 mailId, u32 mail template id: HandleMailDelete reads
+    // all three, and a body without the third is a ByteBufferException the
+    // core skips silently (seen live on the first mail smoke).
+    await this.raw("CMSG_MAIL_DELETE", [{ guid: mailbox }, { u32: mailId }, { u32: 0 }]);
     return this.waitMailResult("deleteMail", 4, sinceSeq, options.timeout ?? 10_000, `deleteMail(${mailId})`);
   }
 
@@ -3854,7 +3902,9 @@ export class WrathClient {
         isEvent(e, "SMSG_LOOT_ROLL") &&
         !isDecodeError(e.data) &&
         (sinceSeq === undefined || e.seq > sinceSeq) &&
-        (e.data as LootRollData).rollGuid === chosen.rollGuid &&
+        // The echo's source guid is ObjectGuid::Empty ("0") from the core (Group::CountRollVote); slot + item name the roll.
+        ((e.data as LootRollData).rollGuid === chosen.rollGuid ||
+          ((e.data as LootRollData).rollGuid === "0" && (e.data as LootRollData).slot === chosen.slot && (e.data as LootRollData).itemId === chosen.itemId)) &&
         (e.data as LootRollData).playerGuid === this.state.self.guid,
       { timeout, description: `the server counting the ${choice} vote (SMSG_LOOT_ROLL)` },
     );
