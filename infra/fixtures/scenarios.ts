@@ -186,14 +186,26 @@ const BAILEY_FRONT = { x: BAILEY.x + 3 * Math.cos(BAILEY.o), y: BAILEY.y + 3 * M
 const MCBRIDE = { x: -8902.59, y: -162.606, z: 82.0223, o: 2.04204 };
 const MCBRIDE_FRONT = { x: MCBRIDE.x + 3 * Math.cos(MCBRIDE.o), y: MCBRIDE.y + 3 * Math.sin(MCBRIDE.o), z: 82.05 };
 
-// Leprithus, entry 572, the Westfall rare at the Dagger Hills crypt: the
-// static spawn (acore_world.creature guid 134020, MovementType 0) at
-// (-10084.6, 1557.27, 40.848), respawn 72000s. His loot has a group whose
-// every entry is uncommon, so a kill always drops one green — the one
-// guaranteed over-threshold drop reachable without an instance or a GM
-// command. The pair stands twelve yards east of him, facing him.
-const LEPRITHUS = { x: -10084.6, y: 1557.27, z: 40.848 };
-const LEPRITHUS_FRONT = { x: -10072.6, y: 1557.27, z: 41.0 };
+// Katherine the Pure, entry 5492, paladin trainer in Stormwind's Cathedral of
+// Light; spawn from acore_world.creature (guid 37586): (-8565, 880.211,
+// 106.519), o 3.783. Her gossip menu (4470) carries "I wish to unlearn my
+// talents." (OPTION_UNLEARNTALENTS) where Brother Sammuel's (4663) has only
+// "Please teach me." — the Northshire trainer cannot respec anyone, so the
+// talent smoke stands here. Three yards along her facing, turned back.
+const KATHERINE = { x: -8565, y: 880.211, z: 106.519, o: 3.783 };
+const KATHERINE_FRONT = { x: KATHERINE.x + 3 * Math.cos(KATHERINE.o), y: KATHERINE.y + 3 * Math.sin(KATHERINE.o), z: 106.52 };
+
+// A Battered Chest (template 2849, lock 57, groupLootRules set) on the
+// Lake Everstill shore below Lakeshire, Redridge: `acore_world.gameobject`
+// guid 20651 at (-9405.47, -2786.26, 37.7474), respawn 7200s, in no pool
+// (the Elwynn Battered Chests, template 2843, are pooled one-of-five and
+// hold only whites). Loot 2280's group 1 is 332 equal-chanced entries, every
+// one uncommon, so every open yields exactly one green — the only guaranteed
+// over-threshold drop reachable without a rare, an instance or a GM command.
+// The nearest hostiles are level-17-19 murlocs 25y+ off, which do not aggro
+// a level-30 pair. The pair stands three yards south-west of it, facing it.
+const LAKESHIRE_CHEST = { x: -9405.47, y: -2786.26, z: 37.7474 };
+const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 
 export const SCENARIOS = {
   "mcbride-report": {
@@ -212,16 +224,16 @@ export const SCENARIOS = {
     // (quest_template_addon); every link rewarded is the whole gate.
     quests: { rewarded: [783, 7, 15, 21] },
   },
-  "leprithus-westfall": {
-    description: "level 30, no money, facing Leprithus's static spawn in Westfall (for the loot-roll smoke: two of these, grouped, kill him for his guaranteed green)",
+  "battered-chest-lakeshire": {
+    description: "level 30, no money, facing the Battered Chest on the Lake Everstill shore below Lakeshire (for the loot-roll smoke: two of these, grouped, open it for its guaranteed green)",
     level: 30,
     money: 0,
     position: {
       map: 0,
-      // 40 = Westfall (AreaTable).
-      zone: 40,
-      ...LEPRITHUS_FRONT,
-      o: facing(LEPRITHUS_FRONT, LEPRITHUS),
+      // 44 = Redridge Mountains (AreaTable).
+      zone: 44,
+      ...LAKESHIRE_CHEST_FRONT,
+      o: facing(LAKESHIRE_CHEST_FRONT, LAKESHIRE_CHEST),
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
@@ -303,15 +315,16 @@ export const SCENARIOS = {
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
-  "talents-northshire": {
-    description: "level 10, 5g, standing in front of Brother Sammuel in Northshire Abbey (one talent point to spend and a respec to buy)",
+  "talents-stormwind": {
+    description: "level 10, 5g, standing in front of Katherine the Pure in Stormwind's cathedral (one talent point to spend and a respec to buy — her menu has the unlearn option, Sammuel's does not)",
     level: 10,
     money: 50000,
     position: {
       map: 0,
-      zone: 12,
-      ...SAMMUEL_FRONT,
-      o: facing(SAMMUEL_FRONT, SAMMUEL),
+      // 1519 = Stormwind City (AreaTable).
+      zone: 1519,
+      ...KATHERINE_FRONT,
+      o: facing(KATHERINE_FRONT, KATHERINE),
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
@@ -381,6 +394,21 @@ export const SCENARIOS = {
       rewarded: [783],
       inProgress: [7],
     },
+  },
+  "vineyard-warlock": {
+    description:
+      "level 1, no money, at the Northshire vineyard edge knowing Summon Imp (688) (for the pet smoke: a fresh warlock is not given the imp here — 688 is a level-1 trainer spell on Drusilla La Salle — so the fixture grants it)",
+    level: 1,
+    xp: 0,
+    money: 0,
+    spells: [688],
+    position: {
+      map: 0,
+      zone: 12,
+      ...VINEYARD_EDGE,
+      o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
 } as const satisfies Record<string, Scenario>;
 

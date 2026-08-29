@@ -18,7 +18,7 @@
  */
 
 import { connect, type WrathClient } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
@@ -65,27 +65,31 @@ function ctxFor(character: string, token: string): FixtureContext {
 
 async function atMailbox(client: WrathClient, character: string) {
   await client.createSession({ account: ACCOUNT, character, race: 1, class: 1 });
-  log(`in world as ${character}, money ${client.state.money?.value}`);
   await client.waitForNearby((o) => o.objectType?.value === "gameObject" && o.fields.get("goType")?.value === 19, { timeout: 15_000 });
+  // The self create block (money) lands with the first update after login; poll for it.
+  const moneyBy = Date.now() + 10_000;
+  while (client.state.money === undefined && Date.now() < moneyBy) await Bun.sleep(100);
+  log(`in world as ${character}, money ${client.state.money?.value}`);
   const mailbox = client.state.units({ type: "gameObject" }).find((u) => u.goType === "mailbox") ?? fail("no mailbox in view");
+  if (mailbox.distance === undefined || mailbox.distance > 8) fail(`the mailbox is ${mailbox.distance}y away — did apply.ts place the character?`);
   const box = await client.openMailbox(mailbox, { timeout: 10_000 });
-  log(`mailbox ${mailbox.name ?? mailbox.guid} open (frame guid ${box.guid})`);
+  log(`mailbox ${mailbox.name ?? mailbox.guid} open (frame guid ${box.guid}, ${box.mails.length} mail(s) listed)`);
 }
 
 const tokenS = `smoke-mail-s-${RUN}`;
 const tokenR = `smoke-mail-r-${RUN}`;
-for (const [name, token] of [
-  [SENDER, tokenS],
-  [RECEIVER, tokenR],
-] as const) {
-  const ctx = ctxFor(name, token);
-  await ensureFixtureCharacter(ctx);
-  await applyScenario(ctx, SCENARIO);
-}
-
 let sender: WrathClient | undefined;
 let receiver: WrathClient | undefined;
 try {
+  for (const [name, token] of [
+    [SENDER, tokenS],
+    [RECEIVER, tokenR],
+  ] as const) {
+    const ctx = ctxFor(name, token);
+    await ensureFixtureCharacter(ctx);
+    await applyScenario(ctx, SCENARIO);
+  }
+
   // 1. The sender mails money to the receiver.
   sender = await connect({ baseUrl: BASE, token: tokenS });
   await atMailbox(sender, SENDER);
@@ -129,11 +133,7 @@ try {
     if (c === undefined) continue;
     await c.logout().catch(() => {});
   }
-  const cleanup = await connect({ baseUrl: BASE, token: `smoke-mail-x-${RUN}` });
-  for (const name of [SENDER, RECEIVER]) {
-    await cleanup.deleteCharacter(name, { account: ACCOUNT }).catch((e) => log(`delete ${name} failed: ${String(e)}`));
-  }
-  cleanup.close();
   sender?.close();
   receiver?.close();
+  await deleteFixtureCharacters({ base: BASE, account: ACCOUNT, token: `smoke-mail-x-${RUN}`, log }, [SENDER, RECEIVER]);
 }

@@ -24,7 +24,10 @@
  *      naming lootCorpse (the opcode would be dropped);
  *   3. lootCorpse(bucket): SMSG_SPELL_START(6478) -> SMSG_LOOT_RESPONSE ->
  *      { status: "looted", items: [{ 16314, 1 }] }, the item in the bag;
- *   4. destroy the quest item so the next run's chest has it to show;
+ *   4. destroy the quest item so the next run's chest has it to show (and,
+ *      at login, destroy one a failed run left behind: the chest only shows
+ *      16314 to a character who still needs it, so a leftover makes the
+ *      window come back empty — which is what happened on 2026-08-30);
  *   5. logout.
  *
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/chest-loot.ts
@@ -93,6 +96,15 @@ try {
   if (bucket.goType !== "chest") fail(`the bucket's goType is ${bucket.goType}, expected chest`);
   if (bucket.distance === undefined || bucket.distance > 5) fail(`the bucket is ${bucket.distance}y away — did apply.ts place the character?`);
   if (!client.state.questLog.some((q) => q.questId === 3361)) fail("A Refugee's Quandary (3361) is not in the log — the fixture did not plant it");
+  await Bun.sleep(1000); // the bag fold (inventory fields + item queries) lands with the first updates
+  const leftover = client.state.bag().items.find((i) => i.itemId === BOLTS);
+  if (leftover !== undefined) {
+    log(`a previous run left ${BOLTS} x${leftover.count} in the bag; destroying it so the chest has it to show`);
+    await client.destroyItem(leftover.bag, leftover.slot);
+    const goneBy = Date.now() + 5_000;
+    while (client.state.bag().items.some((i) => i.itemId === BOLTS) && Date.now() < goneBy) await Bun.sleep(100);
+    if (client.state.bag().items.some((i) => i.itemId === BOLTS)) fail(`item ${BOLTS} is still in the bag after destroyItem`);
+  }
   log(`PASS bucket: ${bucket.guid} goType=${bucket.goType} at ${bucket.distance.toFixed(1)}y, quest 3361 in the log`);
 
   // 2. interact() refuses a chest and says what to do instead.
@@ -107,12 +119,17 @@ try {
   if (!loot.items.some((i) => i.itemId === BOLTS)) fail(`looted ${JSON.stringify(loot.items)}, expected item ${BOLTS}`);
   if (!seen.includes("SMSG_SPELL_START")) fail(`no SMSG_SPELL_START was observed: the window came from something other than the Opening cast`);
   if (!seen.includes("SMSG_LOOT_RESPONSE") || !seen.includes("SMSG_LOOT_RELEASE_RESPONSE")) fail(`window/release not both observed: ${seen.join(",")}`);
-  const inBag = client.state.bag().items.find((i) => i.itemId === BOLTS) ?? fail(`item ${BOLTS} is not in state.bag()`);
+  // The push and the bag's inventory-field update are separate packets; poll for the fold.
+  const bagBy = Date.now() + 5_000;
+  while (!client.state.bag().items.some((i) => i.itemId === BOLTS) && Date.now() < bagBy) await Bun.sleep(100);
+  const inBag = client.state.bag().items.find((i) => i.itemId === BOLTS) ?? fail(`item ${BOLTS} is not in state.bag() 5s after the loot`);
   log(`PASS loot: ${JSON.stringify(loot.items)} via Opening ${OPEN_KNEELING}; bag holds ${BOLTS} x${inBag.count}`);
 
   // 4. Put the world back: the quest item is what the chest shows next run.
   await client.destroyItem(inBag.bag, inBag.slot);
-  await Bun.sleep(500);
+  const goneBy = Date.now() + 5_000;
+  while (client.state.bag().items.some((i) => i.itemId === BOLTS) && Date.now() < goneBy) await Bun.sleep(100);
+  if (client.state.bag().items.some((i) => i.itemId === BOLTS)) fail(`item ${BOLTS} is still in the bag after destroyItem — the next run's chest would be empty`);
   log(`destroyed the quest item; bag now ${JSON.stringify(client.state.bag().items.map((i) => i.itemId))}`);
 
   console.log(`PASS: chest-loot (${((Date.now() - started) / 1000).toFixed(1)}s)`);

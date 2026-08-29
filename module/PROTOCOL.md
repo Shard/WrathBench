@@ -407,10 +407,15 @@ whose handler does nothing a non-GM client could not do:
   item guid), u32 money, u32 cod, u64 0, u8 0`; the SDK's `sendMail` builds
   it), `CMSG_GET_MAIL_LIST` (`u64 mailbox`), `CMSG_MAIL_TAKE_ITEM` (`u64
   mailbox, u32 mailId, u32 item low guid`), `CMSG_MAIL_TAKE_MONEY` (`u64
-  mailbox, u32 mailId`), `CMSG_MAIL_MARK_AS_READ`, `CMSG_MAIL_DELETE` (both
-  `u64 mailbox, u32 mailId`), `CMSG_MAIL_RETURN_TO_SENDER` (`u64 mailbox, u32
-  mailId, u64 0`). Every mail handler checks the mailbox guid is a mailbox
-  game object within reach (`SMSG_SHOW_MAILBOX` after `CMSG_GAMEOBJ_USE` on it)
+  mailbox, u32 mailId`), `CMSG_MAIL_MARK_AS_READ` (`u64 mailbox, u32
+  mailId`), `CMSG_MAIL_DELETE` (`u64 mailbox, u32 mailId, u32 0` — the
+  template id; without it HandleMailDelete throws and the core skips the
+  packet), `CMSG_MAIL_RETURN_TO_SENDER` (`u64 mailbox, u32 mailId, u64 0`).
+  Every mail handler checks the mailbox guid is a mailbox game object within
+  reach. The core sends no `SMSG_SHOW_MAILBOX` for `CMSG_GAMEOBJ_USE` on a
+  mailbox (GameObject::Use has no mailbox case; a client opens the frame
+  locally) — the first `SMSG_MAIL_LIST_RESULT` answering `CMSG_GET_MAIL_LIST`
+  is what proves the box is in reach, and the SDK's `openMailbox` waits for it
 - party: `CMSG_GROUP_INVITE` (`cstring name, u32 0`), `CMSG_GROUP_ACCEPT`
   (`u32 0`), `CMSG_GROUP_DECLINE` (empty), `CMSG_GROUP_UNINVITE` (`cstring
   name`), `CMSG_GROUP_UNINVITE_GUID` (`u64 guid, cstring reason`),
@@ -1017,8 +1022,8 @@ item entry, queried like a cache miss so the SDK can name it.
 | opcode | id | `data` fields |
 |---|---|---|
 | `SMSG_LOOT_START_ROLL` | 0x2A1 | `{ "rollGuid", "slot", "itemId", "count", "countdownMs", "voteMask": <u8>, "canNeed": <bool>, "canGreed": <bool>, "canDisenchant": <bool> }` — the frame opens; pass is always allowed. The per-player form drops the need bit when this character cannot need. Map id, random suffix and property are consumed and not served |
-| `SMSG_LOOT_ROLL` | 0x2A2 | `{ "rollGuid", "slot", "playerGuid", "itemId", "roll": <u8>, "rollType": <u8>, "autoPass": <bool> }` — one counted vote, to every voter; `roll` 1-100, 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant |
-| `SMSG_LOOT_ROLL_WON` | 0x29F | `{ "rollGuid", "slot", "itemId", "winnerGuid", "roll": <u8>, "rollType": <u8> }` — the verdict; the item lands on the winner as `SMSG_ITEM_PUSH_RESULT` |
+| `SMSG_LOOT_ROLL` | 0x2A2 | `{ "rollGuid", "slot", "playerGuid", "itemId", "roll": <u8>, "rollType": <u8>, "autoPass": <bool> }` — one counted vote, to every voter; `roll` 1-100, 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant. `rollGuid` is `"0"` here: the core writes `ObjectGuid::Empty` as the source (Group::CountRollVote / CountTheRoll), so `slot` + `itemId` name the roll |
+| `SMSG_LOOT_ROLL_WON` | 0x29F | `{ "rollGuid", "slot", "itemId", "winnerGuid", "roll": <u8>, "rollType": <u8> }` — the verdict; the item lands on the winner as `SMSG_ITEM_PUSH_RESULT`. `rollGuid` is `"0"` here too (same source field); `SMSG_LOOT_ALL_PASSED` and `SMSG_LOOT_START_ROLL` carry the real guid |
 | `SMSG_LOOT_ALL_PASSED` | 0x29E | `{ "rollGuid", "slot", "itemId" }` — everyone passed; the item stays on the corpse |
 | `SMSG_LOOT_MASTER_LIST` | 0x2A4 | `{ "looters": [{ "guid" }] }` — under master loot, who the master looter may assign an over-threshold item to |
 
