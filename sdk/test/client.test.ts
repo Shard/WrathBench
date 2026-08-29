@@ -344,6 +344,58 @@ describe("client: movement", () => {
     }
   });
 
+  test("hint-bearing failures are tallied per status on the client's own channel and drained once", async () => {
+    // The hint rides inside the result object, so a snippet that keeps only
+    // `.status` never shows it to the model (run a11: 41 `too_far`, hint read 0
+    // times). The client records it as well; the sandbox drains this.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    expect(client.drainActionHints()).toEqual([]);
+
+    for (let i = 0; i < 3; i++) {
+      const pending = client.moveTo({ x: 10 + i, y: 20, z: 30 }, { timeout: 2000 });
+      stub.push(JSON.stringify(moveResult("too_far", i + 1, 30 + i)));
+      await pending;
+    }
+    const p = client.moveTo({ x: 99, y: 98, z: 97 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("target_off_mesh", 4, 40)));
+    await p;
+    // An arrival is not a hint-bearing failure and must not be recorded.
+    const ok = client.moveTo({ x: 1, y: 2, z: 3 }, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("arrived", 5, 41)));
+    await ok;
+
+    const drained = client.drainActionHints();
+    expect(drained.length).toBe(2);
+    const tooFar = drained.find((h) => h.status === "too_far");
+    expect(tooFar?.action).toBe("moveTo");
+    expect(tooFar?.count).toBe(3);
+    // The last occurrence's hint and point: nearest to where the character is.
+    expect(tooFar?.point).toEqual({ x: 12, y: 20, z: 30 });
+    expect(tooFar?.hint).toContain("a single moveTo covers ~250y");
+    expect(drained.find((h) => h.status === "target_off_mesh")?.count).toBe(1);
+    // Drained exactly once.
+    expect(client.drainActionHints()).toEqual([]);
+
+    client.close();
+    await stub.stop();
+  });
+
+  test("a moveTo to an unknown target is recorded too, and its hint is the one the caller got", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    const r = await client.moveTo("999999999");
+    expect(r.ok).toBe(false);
+    const drained = client.drainActionHints();
+    expect(drained.length).toBe(1);
+    expect(drained[0]?.status).toBe("unknown_target");
+    expect(drained[0]?.hint).toBe(r.ok ? undefined : r.hint);
+    client.close();
+    await stub.stop();
+  });
+
   test("a refused stop after a failed move never masks the move verdict", async () => {
     const stub = startStub({
       onConnect: () => frames(loginSequence),

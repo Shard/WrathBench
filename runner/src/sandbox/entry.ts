@@ -59,7 +59,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows } from "../context";
-import type { ChildToHost, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ChildToHost, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -167,6 +167,16 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
 
 function drainLogs(): LogEntry[] {
   return logBuf.splice(0, logBuf.length);
+}
+
+/**
+ * The hint-bearing failures the SDK tallied while the last snippet ran. Drained
+ * exactly once per snippet result (or per pong, for an abandoned one), so the
+ * runner can render them whether or not the snippet kept the result objects.
+ * Hints from a background routine ride the next snippet result.
+ */
+function drainHints(): ActionHintNote[] {
+  return client.drainActionHints();
 }
 
 // -------------------------------------------------------- ambient snippet API
@@ -444,6 +454,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
       id,
       ok: true,
       logs: drainLogs(),
+      hints: drainHints(),
       durationMs: Date.now() - started,
     };
     if (value !== undefined) msg.value = Bun.inspect(value, { depth: 4 }).slice(0, VALUE_MAX_CHARS);
@@ -474,7 +485,10 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
       id,
       ok: false,
       error: renderError(err),
+      // As with the logs: an abandoned eval's result is discarded host-side, so
+      // its hints must stay in the SDK's tally for the pong that follows.
       logs: controller.signal.aborted ? [] : drainLogs(),
+      hints: controller.signal.aborted ? [] : drainHints(),
       durationMs: Date.now() - started,
     });
   } finally {
@@ -555,7 +569,13 @@ function handle(msg: HostToChild | HostcallResult): void {
         const pong = (): void => {
           const note = abandonNote;
           abandonNote = undefined;
-          send({ t: "pong", id: msg.id, logs: drainLogs(), ...(note !== undefined ? { note } : {}) });
+          send({
+            t: "pong",
+            id: msg.id,
+            logs: drainLogs(),
+            hints: drainHints(),
+            ...(note !== undefined ? { note } : {}),
+          });
         };
         if (unwinding === undefined) pong();
         else void Promise.race([unwinding, Bun.sleep(ABANDON_UNWIND_GRACE_MS)]).then(pong);

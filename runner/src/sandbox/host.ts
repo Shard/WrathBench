@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import type { Scratchpad } from "../scratchpad";
-import type { ChildToHost, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ChildToHost, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
   ok: boolean;
@@ -25,6 +25,12 @@ export interface SnippetResult {
   error?: string | undefined;
   /** A note about the completion value; see `EvalResultMsg.hint`. */
   hint?: string | undefined;
+  /**
+   * Hint-bearing action failures the SDK recorded while the snippet ran. The
+   * harness renders these itself (tools.ts) because the hint inside the result
+   * object only reaches the model if the snippet's own code kept it.
+   */
+  actionHints?: ActionHintNote[] | undefined;
   logs: LogEntry[];
   durationMs: number;
   timedOut?: boolean;
@@ -313,6 +319,7 @@ export class SandboxHost {
         value: res.value,
         error: res.error,
         hint: res.hint,
+        actionHints: res.hints ?? [],
         logs: res.logs,
         durationMs: res.durationMs,
       };
@@ -366,6 +373,9 @@ export class SandboxHost {
             `— the trailing value keeps the snippet from awaiting the promise REPL-style; it returns instantly, then a later snippet checks \`await Promise.race([trip, "running"])\`); ` +
             `code that was not awaiting the SDK may still be running, so check state/events before assuming it failed.`,
           logs: ping.logs,
+          // The abandoned snippet's hints: its result is discarded, so this
+          // pong is the only channel that still reaches the model.
+          actionHints: ping.hints,
           durationMs: this.opts.snippetTimeoutMs,
         };
       }
@@ -383,16 +393,21 @@ export class SandboxHost {
     }
   }
 
-  private async pingAlive(): Promise<{ alive: boolean; logs: LogEntry[]; note?: string }> {
+  private async pingAlive(): Promise<{ alive: boolean; logs: LogEntry[]; note?: string; hints: ActionHintNote[] }> {
     const id = this.nextId++;
     try {
-      const pong = await this.request<{ t: "pong"; id: number; logs?: LogEntry[]; note?: string }>(
+      const pong = await this.request<{ t: "pong"; id: number; logs?: LogEntry[]; note?: string; hints?: ActionHintNote[] }>(
         { t: "ping", id },
         this.opts.pingGraceMs,
       );
-      return { alive: true, logs: pong.logs ?? [], ...(pong.note !== undefined ? { note: pong.note } : {}) };
+      return {
+        alive: true,
+        logs: pong.logs ?? [],
+        hints: pong.hints ?? [],
+        ...(pong.note !== undefined ? { note: pong.note } : {}),
+      };
     } catch {
-      return { alive: false, logs: [] };
+      return { alive: false, logs: [], hints: [] };
     }
   }
 

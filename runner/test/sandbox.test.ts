@@ -49,6 +49,39 @@ describe("sandbox evaluation", () => {
     expect((await host.evalSnippet("1 + 1")).hint).toBeUndefined();
   });
 
+  test("hint-bearing failures reach the host whatever the snippet returned", async () => {
+    // The SDK records them (sdk/test/client.test.ts covers that from real move
+    // results); here the point is the channel: the tally leaves the child on
+    // the eval result, drained exactly once, regardless of the snippet's value.
+    const host = makeHost();
+    const record =
+      '(sdk as any).noteActionHint("moveTo", "too_far", "walk to an intermediate point first", ' +
+      '{ x: 1, y: 2, z: 3 });';
+    const res = await host.evalSnippet(`${record} ${record} return "status only";`);
+    expect(res.ok).toBe(true);
+    expect(res.value).toBe('"status only"');
+    expect(res.actionHints).toEqual([
+      expect.objectContaining({
+        action: "moveTo",
+        status: "too_far",
+        count: 2,
+        hint: "walk to an intermediate point first",
+        point: { x: 1, y: 2, z: 3 },
+      }),
+    ]);
+    // Drained: the next snippet does not repeat them.
+    expect((await host.evalSnippet("1 + 1")).actionHints).toEqual([]);
+  });
+
+  test("hints from a snippet that then threw still come home", async () => {
+    const host = makeHost();
+    const res = await host.evalSnippet(
+      '(sdk as any).noteActionHint("moveTo", "no_mesh", "nothing to retry here", { x: 0, y: 0, z: 0 }); throw new Error("boom");',
+    );
+    expect(res.ok).toBe(false);
+    expect(res.actionHints?.[0]?.status).toBe("no_mesh");
+  });
+
   test("top-level bindings persist across snippets", async () => {
     const host = makeHost();
     expect((await host.evalSnippet("const base: number = 10; let acc = base * 2;")).ok).toBe(true);
