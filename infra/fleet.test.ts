@@ -967,7 +967,10 @@ describe("the shipped fleet files", () => {
     const classes = config.campaigns.find((c) => c.name === "class-probe")!;
     expect(classes.cells).toHaveLength(8);
     expect(classes.account).toBeUndefined();
-    expect(classes.models).toEqual(["muse-spark", "nemotron-super"]);
+    // Item 90 (operator pick 2026-08-29): `nemotron-super` left the sweep so
+    // its lane spends idle time on freeplay; the campaign idles on muse-spark
+    // until another free lane meets its targets.
+    expect(classes.models).toEqual(["muse-spark"]);
     // Item 87: a probe that pauses on a provider rate limit is resumed rather
     // than swept again as a failed attempt, and a cell whose launches keep
     // failing is abandoned instead of swept forever.
