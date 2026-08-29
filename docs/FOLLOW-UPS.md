@@ -77,23 +77,6 @@ status.
 
 ## Fleet and gate
 
-
-57. **Item fixtures need a guid-safe design** (2026-08-23, split out of item 45). A
-    fixture cannot write inventory or mail, so no smoke can be staged with a specific
-    bag or mailbox: `item_instance` guids come from an in-memory generator seeded once
-    at worldserver boot from `SELECT MAX(guid)`, so anything inserted from outside
-    while the server is up collides with guids the running server is about to hand
-    out — and `ObjectMgr.cpp` then *deletes* every row at or above its watermark in
-    `character_inventory`, `mail_items`, `auctionhouse` and `guild_bank_item` on the
-    next start. Externally written items are racy now and reaped later, which is why
-    `infra/fixtures/scenarios.ts` refuses them outright. Two designs are plausible and
-    neither is picked: route the grant through the live server (a vendor purchase or
-    quest reward driven by the module, which is slow but always guid-correct), or
-    write with the world stopped and reseed the watermark. Blocks nothing today —
-    every claim a fixture is wanted for so far is position, level or spells. Do it
-    when a smoke needs gear, mail or a specific consumable to prove its claim.
-
-
 91. **The synced price table has no as-of-run rates, and `glm-5.3-flash`'s
     discount ends ~2026-09-09** (2026-08-29, out of item 88). `prices.openrouter.json`
     holds one rate per model and one `asOf` for the whole file, so a re-sync
@@ -111,23 +94,6 @@ status.
 
 ## Episodes and results
 
-84. **Tool-call timing provenance should be stamped by the writers, not inferred by
-    the dashboard** (run-feed composite rows, 2026-08-25). The feed's call cards show
-    `result.ts − call.ts` only when the writer recorded the call before dispatching it,
-    and the dashboard infers which writer it was from incidental field shapes
-    (`feedgroup.ts`: `turn` present and `call` absent ⇒ `runner/src/loop.ts`, genuine;
-    the claude driver's `call` index or the MCP server's turn-less pairs ⇒ post-hoc,
-    duration withheld). Correct today and pinned by dashboard tests, but it turns three
-    writers' habits into an unstated protocol: loop.ts gaining a `call` index would
-    silently erase genuine durations; mcp.ts gaining `turn` would silently fabricate
-    ~0ms ones. The deeper fix: post-hoc writers stamp the real dispatch time (or an
-    explicit provenance flag) on the record, with `tail.ts`'s summariser as the
-    fallback stamping point; the field-shape inference then retires to a legacy
-    fallback for pre-stamp trajectories. `ResponseGroup.latencyMs` (adjacency-derived)
-    rides on the same ordering assumptions and should be covered by the same stamp.
-    Unblocked; touches the trajectory format and two runner writers, so it is its own
-    change, not a dashboard PR rider.
-
 8. **Context policy is not applied on the claude-code harness** (recorded, not
    penalised: the harness is a tag on every row, docs/METHODOLOGY.md, "What
    WrathBench measures"). No trim; one CLI conversation grows linearly (~200k tokens by the end
@@ -136,21 +102,6 @@ status.
    context on resume. Either the driver applies a policy or the prompt stops promising
    one; cross-driver cost comparisons are invalid until then. Read first (merged 8c):
    `fleet-nav-probe-sonnet-20260822-c2`, a 6h e360 completed naturally at $43.90.
-   - **8a — extractive digest, behind an evidence gate.** Requests plateau at ~8–20k on
-     the fixed-loop driver (worklogs/2026-08-21), so build it only on real context
-     exhaustion or a trajectory re-querying facts lost to a trim. Design then: a trimmed
-     message becomes a deterministic one-line record (tool, truncated args, error flag)
-     in a capped ring buffer in the regenerated context message. Within a harness
-     version, never model summarization (conflates constructs, breaks replay) and never
-     per-model context scaling (declared sizes drift for one id).
-   - **8b — context engine as a labelled harness value; parked, operator direction.**
-     (a) Stretch the window past 24–48 in a future harness version: caching makes a much
-     longer prefix nearly free at ~8–12k steady state against 131k–200k contexts.
-     (b) Offer threshold-triggered self-compaction as a third value of the
-     comparability tuple's `harness` field, since grow-then-self-compact is what end-user
-     agents run under: comparable within a harness if the operator partitions, never
-     silently across. Supersedes 8a's flat "no model summarization ever" for a future
-     labelled engine, not for unlabelled changes to this one.
 
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
     The signal vector lists deaths, zones, spells learned and talents spent
@@ -188,28 +139,6 @@ status.
     talent spent and the remaining firsts are still unwritten, and rung 6 is
     still nobody's.
 
-
-
-80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
-    audit). `openSocket()` (`sdk/src/events.ts`) puts no timeout of its own around the
-    WebSocket construction, so one stalled TCP/WS handshake during a reconnect silently
-    consumes the caller's whole wait budget with no fallback — the reconnect ladder
-    only reschedules on close/error, never on "still opening". Observed once as the
-    events.test.ts reconnect test timing out at 5s in a loaded container (2026-08-24,
-    under the wrong Bun; not reproduced since — 25+ runs incl. under CPU stress), so
-    this stays parked per the earned-by-need rule. Unblocks on a second observation,
-    in CI or a live run's reconnect logs.
-
-81. **run.sqlite is opened everywhere with busy_timeout 0** (2026-08-24, bare-clone
-    audit). No connection to a run.sqlite anywhere in the codebase sets
-    `PRAGMA busy_timeout` (or WAL), so any overlap — the runner writing while the
-    viewer, fleet supervisor or models.ts reads — throws SQLITE_BUSY immediately
-    instead of retrying. Never yet observed failing (the 2026-08-24 endRuns test
-    failure that first pointed here turned out to be a root-container path quirk),
-    which is why this is an item and not a change: one line in `Trajectory`'s
-    constructor plus the read-only opens, when an actual SQLITE_BUSY shows up in a
-    log. Unblocks on first observation.
-
 90. **The freeplay pilot is queued behind class-probe, and one lane cannot do
     both** (2026-08-28, with the roster refresh). `nemotron-super` carries
     `idle: "unlimited"` and is also the only working model left in
@@ -225,19 +154,6 @@ status.
     free lane meets its targets. Related: raising the openrouter cap to 2 would let a
     cleared lane's scored run and the sweep overlap, at the cost that a mid-run 429
     on a scored run is unrecoverable (scored lanes never resume).
-
-
-## Module
-
-82. **module/ has no host-side checks at all** (2026-08-24, bare-clone audit). ~5,900
-    lines of C++ with no unit tests, no lint, no static analysis runnable outside the
-    live stack — the smoke scripts are the verification and they need the full
-    compose stack, so every non-live environment (CI, web sessions, the 2026-08-24
-    audit) sees module/ as a blind spot. Deliberate so far (the module stays thin;
-    game semantics live in TypeScript), but the boundary deserves a decision rather
-    than a default: even a `clang-format --dry-run` or a syntax-only compile in the
-    image build would catch mechanical breakage before a deploy window. Next action:
-    decide what, if anything, runs without the stack; record it either way.
 
 ## Docs and release
 
@@ -260,30 +176,6 @@ status.
     `dashboard/worker/`, and remove `dashboard/worker` from the root typecheck
     loop. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
-
-86. **The snapshot generation is all-or-nothing, and that is what publishing
-    costs** (2026-08-25; rewritten the same day after measurement — the
-    original filing blamed `playtimeMs`, and that turned out to be the smaller
-    half). `gen` is one hash over *every* aggregate, so a single live run
-    taking a turn changes `runs.json`, `results.json`, `ladder-*.json` and
-    `models.json`, and all ten aggregates are rewritten under a fresh prefix
-    plus a new `manifest.json`. Measured against a real fleet: a steady pass is
-    24 PUTs + ~4 DELETEs — ten aggregates, manifest, `live.json`, and a
-    detail/track pair per live run. Diffing two consecutive generations with
-    the envelope stripped shows the differences are **real data** (token
-    counts, `turns`, `levels`, achievements, cost `basis` flipping to
-    `list-price`), not clock artifacts, so normalizing `playtimeMs` the way
-    `now` is normalized would not have removed them. Mitigated for now by
-    cadence: 60s measured ~1.21M R2 class-A ops/month against a 1M free tier,
-    and the operator moved it to 300s (~242k) on 2026-08-25. What is still
-    worth doing, in order of value: (1) give each aggregate its own content
-    hash instead of one `gen` over all of them, so a pass rewrites only what
-    changed — three of seven aggregates compared were byte-identical, so this
-    is real; it needs the manifest to name a version per artifact rather than a
-    single generation, and the wave ordering must still flip the manifest last.
-    (2) Normalize `playtimeMs` in `addressable()`, which stops a live run's
-    detail churning on passes where nothing else moved. Neither is urgent while
-    the cadence holds the total at a quarter of the free tier.
 
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
     accepted-risk statement in docs/CONTRACTS.md). Shipped so far: the module refuses
