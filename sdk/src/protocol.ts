@@ -253,6 +253,8 @@ export type ActionRequest =
   // spellbook/talent extension
   | { token: string; action: "learn_talent"; talentId: number; rank: number }
   | { token: string; action: "learn_preview_talents"; talents: readonly (readonly [number, number])[] }
+  /** A client-local read: the class talent tree, answered as `WB_TALENT_TREE` (no packet sent). */
+  | { token: string; action: "talent_tree" }
   /** The escape hatch: an allowlisted client opcode by name and its body as hex. */
   | { token: string; action: "raw"; opcode: string; payload: string };
 
@@ -292,7 +294,8 @@ export const rawPayloadSchema = z.union([
 export type RawPayload = z.input<typeof rawPayloadSchema>;
 
 /** The opcode names the module's allowlist uses; the module is the authority on membership. */
-export const rawOpcodeSchema = z.string().regex(/^CMSG_[A-Z0-9_]+$/, "a CMSG_* opcode name");
+/** `CMSG_*`, or a bidirectional `MSG_*` a client also sends (`MSG_TALENT_WIPE_CONFIRM`). */
+export const rawOpcodeSchema = z.string().regex(/^C?MSG_[A-Z0-9_]+$/, "a CMSG_* (or MSG_*) opcode name");
 
 function hex(bytes: Uint8Array): string {
   let out = "";
@@ -1372,6 +1375,95 @@ export const playerBoundDataSchema = z.looseObject({
 });
 export type PlayerBoundData = z.infer<typeof playerBoundDataSchema>;
 
+/**
+ * One faction row as the module serves it (item 99): the wire's reputation
+ * index (`repListId`) and standing, joined to the client's `Faction.dbc`
+ * (`factionId`, `name`) and the race/class base the client adds (`base`);
+ * `reputation` is `base + standing`, the number the reputation pane shows.
+ * `flags`/`visible`/`atWar` only ride the login packet.
+ */
+export const factionRowSchema = z.looseObject({
+  repListId: z.number(),
+  factionId: z.number().optional(),
+  name: z.string().optional(),
+  standing: z.number(),
+  base: z.number().optional(),
+  reputation: z.number().optional(),
+  flags: z.number().optional(),
+  visible: z.boolean().optional(),
+  atWar: z.boolean().optional(),
+});
+export type FactionRow = z.infer<typeof factionRowSchema>;
+
+/** `SMSG_INITIALIZE_FACTIONS`: the login reputation list (rows with a flag or a standing only). */
+export const initializeFactionsDataSchema = z.looseObject({
+  count: z.number(),
+  factions: z.array(factionRowSchema),
+});
+export type InitializeFactionsData = z.infer<typeof initializeFactionsDataSchema>;
+
+/** `SMSG_SET_FACTION_STANDING`: every faction whose standing changed; `showVisual` is the "reputation with X increased" line. */
+export const setFactionStandingDataSchema = z.looseObject({
+  showVisual: z.boolean(),
+  factions: z.array(factionRowSchema),
+});
+export type SetFactionStandingData = z.infer<typeof setFactionStandingDataSchema>;
+
+/** `SMSG_SET_FACTION_VISIBLE`: a faction appears in the reputation pane from now on. */
+export const setFactionVisibleDataSchema = z.looseObject({
+  repListId: z.number(),
+  factionId: z.number().optional(),
+  name: z.string().optional(),
+});
+export type SetFactionVisibleData = z.infer<typeof setFactionVisibleDataSchema>;
+
+/**
+ * `MSG_TALENT_WIPE_CONFIRM` from the server: the trainer (`guid`) asks
+ * "unlearn all talents for `cost` copper?" after its unlearn gossip option.
+ * A client answers yes by echoing the opcode with the guid (`resetTalents`
+ * does; raw otherwise). `nothingToReset` is the refusal form (guid 0, cost
+ * 0) the handler sends when there are no talents to reset or the money is
+ * short.
+ */
+export const talentWipeConfirmDataSchema = z.looseObject({
+  guid: guidSchema,
+  cost: z.number(),
+  nothingToReset: z.boolean(),
+});
+export type TalentWipeConfirmData = z.infer<typeof talentWipeConfirmDataSchema>;
+
+/** One talent of the class tree as the talent frame draws it; `ranks` are the rank spells, `name` the first rank's Spell.dbc name. */
+export const talentTreeTalentSchema = z.looseObject({
+  talentId: z.number(),
+  name: z.string().optional(),
+  row: z.number(),
+  col: z.number(),
+  maxRank: z.number(),
+  ranks: z.array(z.number()),
+  dependsOn: z.number().optional(),
+  dependsOnRank: z.number().optional(),
+});
+export type TalentTreeTalentData = z.infer<typeof talentTreeTalentSchema>;
+
+/**
+ * `WB_TALENT_TREE` (the answer to the `talent_tree` action): the character's
+ * class talent tabs as the client reads them from its own Talent.dbc and
+ * TalentTab.dbc — static; which ranks are learned is `SMSG_TALENTS_INFO`'s.
+ */
+export const talentTreeDataSchema = z.looseObject({
+  class: z.number(),
+  unspentPoints: z.number(),
+  tabs: z.array(
+    z.looseObject({
+      tabId: z.number(),
+      name: z.string().optional(),
+      page: z.number(),
+      talents: z.array(talentTreeTalentSchema),
+    }),
+  ),
+});
+export type TalentTreeData = z.infer<typeof talentTreeDataSchema>;
+
 /** `result` is an InventoryResult code; the SDK does not name them. */
 export const inventoryChangeFailureDataSchema = z.looseObject({
   result: z.number(),
@@ -1381,6 +1473,35 @@ export const inventoryChangeFailureDataSchema = z.looseObject({
 });
 export type InventoryChangeFailureData = z.infer<typeof inventoryChangeFailureDataSchema>;
 
+/** One `(statType, value)` pair of an item's stat list (`ItemModType` ids: 3 agility, 4 strength, 5 intellect, 6 spirit, 7 stamina, ...). */
+export const itemStatSchema = z.looseObject({
+  type: z.number(),
+  value: z.number(),
+});
+export type ItemStat = z.infer<typeof itemStatSchema>;
+
+/** One damage range of a weapon; `type` is the school (0 physical). Zero ranges are not served. */
+export const itemDamageSchema = z.looseObject({
+  min: z.number(),
+  max: z.number(),
+  type: z.number(),
+});
+export type ItemDamage = z.infer<typeof itemDamageSchema>;
+
+/** One of an item's spell slots; `trigger` 0 on use, 1 on equip, 2 chance on hit, 5 learn. Empty slots are not served. */
+export const itemSpellSchema = z.looseObject({
+  spellId: z.number(),
+  trigger: z.number(),
+  charges: z.number(),
+  name: z.string().optional(),
+});
+export type ItemSpell = z.infer<typeof itemSpellSchema>;
+
+/**
+ * `SMSG_ITEM_QUERY_SINGLE_RESPONSE`: the item template as the tooltip shows
+ * it. Everything past `subClass` was added 2026-08-29 (item 97) and is
+ * absent from older modules' events.
+ */
 export const itemQueryResponseDataSchema = z.looseObject({
   itemId: z.number(),
   found: z.boolean(),
@@ -1393,6 +1514,27 @@ export const itemQueryResponseDataSchema = z.looseObject({
   requiredLevel: z.number().optional(),
   class: z.number().optional(),
   subClass: z.number().optional(),
+  requiredSkill: z.number().optional(),
+  requiredSkillRank: z.number().optional(),
+  requiredSkillName: z.string().optional(),
+  requiredSpell: z.number().optional(),
+  requiredReputationFaction: z.number().optional(),
+  requiredReputationRank: z.number().optional(),
+  requiredReputationFactionName: z.string().optional(),
+  maxCount: z.number().optional(),
+  stackable: z.number().optional(),
+  containerSlots: z.number().optional(),
+  stats: z.array(itemStatSchema).optional(),
+  damage: z.array(itemDamageSchema).optional(),
+  armor: z.number().optional(),
+  resistances: z.record(z.string(), z.number()).optional(),
+  speedMs: z.number().optional(),
+  spells: z.array(itemSpellSchema).optional(),
+  bonding: z.number().optional(),
+  description: z.string().optional(),
+  startQuest: z.number().optional(),
+  block: z.number().optional(),
+  maxDurability: z.number().optional(),
 });
 export type ItemQueryResponseData = z.infer<typeof itemQueryResponseDataSchema>;
 
@@ -1533,6 +1675,12 @@ export const eventDataSchemas = {
   SMSG_COOLDOWN_EVENT: cooldownEventDataSchema,
   SMSG_CLEAR_COOLDOWN: cooldownEventDataSchema,
   SMSG_TALENTS_INFO: talentsInfoDataSchema,
+  MSG_TALENT_WIPE_CONFIRM: talentWipeConfirmDataSchema,
+  WB_TALENT_TREE: talentTreeDataSchema,
+  // reputation
+  SMSG_INITIALIZE_FACTIONS: initializeFactionsDataSchema,
+  SMSG_SET_FACTION_STANDING: setFactionStandingDataSchema,
+  SMSG_SET_FACTION_VISIBLE: setFactionVisibleDataSchema,
   // achievements and flight paths
   SMSG_ACHIEVEMENT_EARNED: achievementEarnedDataSchema,
   SMSG_ALL_ACHIEVEMENT_DATA: allAchievementDataSchema,

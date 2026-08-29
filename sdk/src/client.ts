@@ -72,6 +72,8 @@ import {
   type RawPayload,
   type SessionResponse,
   type TalentsInfoData,
+  type TalentTreeData,
+  type TalentWipeConfirmData,
   type TrainerBuyFailedData,
   type TrainerListData,
   type TrainerSpellData,
@@ -95,6 +97,7 @@ import {
   type Point3,
   type QuestLogEntry,
   type TalentState,
+  type TalentTree,
   type TaxiNodeRef,
   type TaxiWindow,
   type UnitPosition,
@@ -1364,36 +1367,119 @@ const TAXI_REPLY_HINTS: Record<number, string> = {
 };
 
 /**
- * `SMSG_INVENTORY_CHANGE_FAILURE.result` — `InventoryResult` in the pinned
- * core — for the codes an equip refusal actually produces, rendered the way
- * `TRAINER_BUY_FAIL_HINTS` renders trainer refusals: the number is the
- * server's word and is always reported; this is the client-visible sentence
- * for it. An unknown code renders without one.
+ * `SMSG_INVENTORY_CHANGE_FAILURE.result` — the 3.3.5a `InventoryResult` enum
+ * (`EQUIP_ERR_*` in the pinned core's `Item.h`), as the short sentence a client
+ * would put on screen for it.
+ *
+ * Every inventory refusal the game makes arrives as one of these numbers and
+ * nothing else, and a run was observed reverse-engineering "reason 60" into
+ * "in combat" from context (FOLLOW-UPS item 101a). The number stays the
+ * server's word and is always reported alongside; this table only names it.
+ * Naming is not softening game semantics — the client shows this text too —
+ * and it says nothing about what to do next.
+ *
+ * Codes whose only client string is empty (`EQUIP_ERR_OK`, `EQUIP_ERR_NONE`,
+ * the gap at 83) are absent on purpose, and an unknown code renders without
+ * text rather than with a guess.
  */
-const EQUIP_FAIL_HINTS: Record<number, string> = {
+const INVENTORY_RESULT_TEXT: Record<number, string> = {
   1: "your level is too low for that item",
   2: "you do not have the skill it requires",
   3: "that item does not go in that slot",
+  4: "that bag is full",
+  5: "a bag with things in it cannot go inside another bag",
+  6: "bags with things in them cannot be traded",
+  7: "only ammo can go there",
   8: "your class has no proficiency for that weapon or armour type — a weapon master can teach some of them",
   9: "no equipment slot is free for it",
   10: "this character can never use that item",
   11: "this character can never use that item",
+  12: "no equipment slot is free for it",
   13: "a two-handed weapon is equipped — that blocks an off-hand or shield until you equip a one-hander instead",
   14: "you cannot dual wield",
+  15: "that item does not go into a bag",
+  16: "that item does not go into a bag",
+  17: "you cannot carry any more of that",
+  18: "no equipment slot is free for it",
+  19: "that item does not stack",
   20: "that item cannot be equipped",
+  21: "those two items cannot be swapped",
   22: "that inventory slot is empty",
   23: "no item was found at that address",
+  24: "a soulbound item cannot be dropped that way",
+  25: "you are out of range",
+  26: "you tried to split off more than the stack holds",
+  27: "the stack could not be split",
+  28: "a reagent is missing",
+  29: "you do not have enough money",
+  30: "that is not a bag",
+  31: "that can only be done with empty bags",
+  32: "you do not own that item",
+  33: "you can equip only one quiver",
+  34: "that bag slot has not been bought yet",
+  35: "you are too far from the bank",
   36: "the item is locked",
   37: "you are stunned",
   38: "you are dead",
   39: "you cannot do that right now",
+  40: "the server reported an internal bag error",
+  41: "you can equip only one bolt container",
+  42: "you can equip only one ammo pouch",
+  43: "a stack cannot be wrapped",
+  44: "an equipped item cannot be wrapped",
+  45: "a wrapped item cannot be wrapped again",
+  46: "a soulbound item cannot be wrapped",
+  47: "a unique item cannot be wrapped",
+  48: "bags cannot be wrapped",
+  49: "that has already been looted",
   50: "your bags are full",
+  51: "your bank is full",
+  52: "the vendor is sold out of that",
+  53: "that bag is full",
+  54: "no item was found at that address",
+  55: "that item does not stack",
+  56: "that bag is full",
+  57: "the vendor is sold out of that",
+  58: "that object is busy",
   60: "not while in combat",
   61: "not while disarmed",
+  62: "that bag is full",
   63: "your rank is too low",
   64: "your reputation is too low",
+  65: "you are carrying too many special bags of that kind",
+  66: "you cannot loot that right now",
+  67: "you can have only one of that unique-equipped item",
+  68: "the vendor wants items you do not have",
+  69: "you do not have enough honor points",
+  70: "you do not have enough arena points",
+  71: "you already have as many of that gem socketed as are allowed",
+  72: "a soulbound item cannot be mailed",
+  73: "a stack cannot be split while prospecting",
+  75: "you already have as many of that gem socketed on equipped items as are allowed",
+  76: "you already have that unique-equipped gem socketed",
+  77: "you cannot carry that much gold",
+  78: "not during an arena match",
+  79: "that item cannot be traded",
+  80: "your personal arena rating is too low",
+  81: "equipping that will bind it to you — confirmation is needed",
+  82: "that item belongs to another character",
+  84: "you already have as many items of that category as are allowed",
+  85: "you already have as many gems of that category socketed as are allowed",
+  86: "the item's scaling level would be exceeded",
+  87: "your level is too low to buy that",
   88: "it needs a talent you have not taken",
+  89: "you already have as many items of that category equipped as are allowed",
 };
+
+/**
+ * The client-visible sentence for an `InventoryResult` code, or `undefined`
+ * for one the SDK does not name. Exported because the runner names the code on
+ * the raw `SMSG_INVENTORY_CHANGE_FAILURE` event line too, and the two must read
+ * from one table.
+ */
+export function inventoryResultText(result: number): string | undefined {
+  return INVENTORY_RESULT_TEXT[result];
+}
 
 /** Inventory slots below this are equipment and bag slots; 23-38 are backpack. */
 const BACKPACK_FIRST_SLOT = 23;
@@ -1436,6 +1522,42 @@ export type BuySpellResult =
 export interface TrainerOptions {
   timeout?: number;
 }
+
+export interface TalentTreeOptions {
+  /** How long to wait for the module's WB_TALENT_TREE answer. Default 10000. */
+  timeout?: number;
+}
+
+export interface ResetTalentsOptions {
+  /** How long to wait for each server answer (menu, confirm, talents). Default 10000. */
+  timeout?: number;
+  /**
+   * Which gossip option is the respec. Default: the option whose text
+   * mentions "unlearn" (the stock "I wish to unlearn my talents."). A visible
+   * text (exact or unique substring) or an `optionId` from `state.lastGossip(guid)`.
+   */
+  option?: string | number;
+}
+
+/**
+ * The outcome of `resetTalents`, as a value. `reset` is the server's
+ * `SMSG_TALENTS_INFO` after the confirm with every rank gone and the points
+ * back (`cost` is what the trainer charged, from its confirm). `refused` is
+ * the handler's guid-0 confirm: nothing to reset, or not enough money.
+ */
+export type ResetTalentsResult =
+  | {
+      readonly ok: true;
+      readonly status: "reset";
+      readonly cost: number;
+      readonly talents: TalentState;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "refused";
+      readonly cost: number;
+      readonly hint: string;
+    };
 
 export interface EquipOptions {
   /**
@@ -2284,32 +2406,34 @@ export class WrathClient {
     const landed = equippedSlot();
     if (landed !== undefined) return { ok: true, status: "equipped", ...item, equippedSlot: landed };
     if (failure !== undefined) {
-      const named = EQUIP_FAIL_HINTS[failure.result];
+      const named = inventoryResultText(failure.result);
       const level = failure.requiredLevel;
+      const hint =
+        `the server refused to equip ${item.name ?? `item ${item.itemId ?? "?"}`} ` +
+        `(InventoryResult ${failure.result}${named ? `: ${named}` : ""}` +
+        `${level === undefined ? "" : `, needs level ${level}`}) — the item is still at bag ${bag} slot ${slot}`;
+      // The hint rides inside the result, and a snippet that ignores the return
+      // value sees nothing — so it is recorded for the harness too, exactly as
+      // moveTo and activateTaxi record theirs.
+      this.noteActionHint("equipItem", "not_equipped", hint);
       return {
         ok: false,
         status: "not_equipped",
         ...item,
         reason: failure.result,
         requiredLevel: level,
-        hint:
-          `the server refused to equip ${item.name ?? `item ${item.itemId ?? "?"}`} ` +
-          `(InventoryResult ${failure.result}${named ? `: ${named}` : ""}` +
-          `${level === undefined ? "" : `, needs level ${level}`}) — the item is still at bag ${bag} slot ${slot}`,
+        hint,
       };
     }
     if (leftBackpack()) return { ok: true, status: "equipped", ...item, equippedSlot: undefined };
-    return {
-      ok: false,
-      status: "unconfirmed",
-      ...item,
-      hint:
-        guid === undefined
-          ? `nothing was observed at bag ${bag} slot ${slot} before the equip, so neither outcome could be ` +
-            `confirmed — re-read state.bag() and check whether the item moved`
-          : `no equipment-slot update and no refusal arrived for bag ${bag} slot ${slot} — re-read ` +
-            `state.bag() to see whether the item moved before trying again`,
-    };
+    const unconfirmed =
+      guid === undefined
+        ? `nothing was observed at bag ${bag} slot ${slot} before the equip, so neither outcome could be ` +
+          `confirmed — re-read state.bag() and check whether the item moved`
+        : `no equipment-slot update and no refusal arrived for bag ${bag} slot ${slot} — re-read ` +
+          `state.bag() to see whether the item moved before trying again`;
+    this.noteActionHint("equipItem", "unconfirmed", unconfirmed);
+    return { ok: false, status: "unconfirmed", ...item, hint: unconfirmed };
   }
 
   /** `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell. */
@@ -2637,6 +2761,107 @@ export class WrathClient {
   }
 
   /**
+   * Ask the module for the class talent tree (the `talent_tree` action); the
+   * answer is the `WB_TALENT_TREE` event. Prefer `queryTalentTree`, which
+   * waits for it and returns `state.talentTree()`.
+   */
+  talentTreeAsync(): Promise<ActionResponse> {
+    return this.action({ action: "talent_tree" });
+  }
+
+  /**
+   * The character's class talent frame as a client draws it from its own
+   * Talent.dbc / TalentTab.dbc: per tab, each talent's id, name, grid
+   * position, max rank, rank spells and prerequisite, with `pointsSpent`
+   * merged from the last `SMSG_TALENTS_INFO` and the unspent points. The
+   * tree is static for a class, so one call per session is enough;
+   * `state.talentTree()` stays current as points are spent.
+   */
+  async queryTalentTree(options: TalentTreeOptions = {}): Promise<TalentTree> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.talentTreeAsync();
+    await this.waitEvent(
+      (e) => isEvent(e, "WB_TALENT_TREE") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: "the WB_TALENT_TREE answering talent_tree" },
+    );
+    const tree = this.state.talentTree();
+    if (tree === undefined) throw new Error("queryTalentTree: WB_TALENT_TREE arrived but the state cache holds no tree");
+    return tree;
+  }
+
+  /**
+   * Unlearn every talent at a class trainer, the way a client does it: open
+   * the trainer's gossip menu, choose the unlearn option ("I wish to unlearn
+   * my talents." by default), answer the server's `MSG_TALENT_WIPE_CONFIRM`
+   * (which names the cost) by echoing it, and read the verdict off the
+   * `SMSG_TALENTS_INFO` that follows. The cost is charged by the server and
+   * shows on `state.money`; it rises with every reset (the client's
+   * "next reset will cost" is not on the wire).
+   *
+   * Throws (nothing further dispatched) when the menu has no such option.
+   * The refusal — nothing to reset, or not enough money — is a value: the
+   * handler answers the echo with a guid-0 confirm and nothing else.
+   */
+  async resetTalents(npcGuid: GuidOrUnit, options: ResetTalentsOptions = {}): Promise<ResetTalentsResult> {
+    const id = guidKey(guidOf(npcGuid, "resetTalents(npcGuid)"));
+    const timeout = options.timeout ?? 10_000;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.gossipHello(id);
+    const menuEvent = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
+        !isDecodeError(e.data) &&
+        guidKey((e.data as GossipMessageData).guid) === id &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout, description: `the trainer's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
+    );
+    const menu = menuEvent.data as GossipMessageData;
+    let choice: { menuId: number; optionId: number };
+    if (options.option !== undefined) {
+      choice = this.resolveGossipOption(id, options.option);
+    } else {
+      const unlearn = menu.options.filter((o) => /unlearn/i.test(o.text));
+      if (unlearn.length !== 1) {
+        throw new Error(
+          `resetTalents(${id}): the menu that opened has ${unlearn.length === 0 ? "no" : unlearn.length} option(s) mentioning ` +
+            `"unlearn" — is this NPC a class trainer for your class (state.units({ role: "trainer" }))? Pass { option } to pick one of: ` +
+            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", "),
+        );
+      }
+      choice = { menuId: menu.menuId, optionId: unlearn[0]!.optionId };
+    }
+    await this.gossipSelect(id, choice.menuId, choice.optionId);
+    const isConfirm = (e: StreamEvent) => isEvent(e, "MSG_TALENT_WIPE_CONFIRM") && !isDecodeError(e.data);
+    const confirm = await this.waitEvent((e) => isConfirm(e) && e.seq > menuEvent.seq, {
+      timeout,
+      description: `the trainer's confirm (MSG_TALENT_WIPE_CONFIRM) from ${id}`,
+    });
+    const ask = confirm.data as TalentWipeConfirmData;
+    if (ask.nothingToReset) {
+      const hint = "the trainer offered no reset: there are no talents to unlearn (state.talents().talents is empty)";
+      this.noteActionHint("resetTalents", "refused", hint);
+      return { ok: false, status: "refused", cost: 0, hint };
+    }
+    await this.raw("MSG_TALENT_WIPE_CONFIRM", [{ guid: id }]);
+    const verdict = await this.waitEvent(
+      (e) =>
+        e.seq > confirm.seq &&
+        ((isEvent(e, "SMSG_TALENTS_INFO") && !isDecodeError(e.data) && !(e.data as TalentsInfoData).pet) || isConfirm(e)),
+      { timeout, description: `the SMSG_TALENTS_INFO (or a refusal) after confirming the reset with ${id}` },
+    );
+    if (isConfirm(verdict)) {
+      const hint =
+        `the server refused the reset (cost ${ask.cost} copper): nothing to unlearn, or not enough money ` +
+        `(state.money is ${this.state.money?.value ?? "unobserved"})`;
+      this.noteActionHint("resetTalents", "refused", hint);
+      return { ok: false, status: "refused", cost: ask.cost, hint };
+    }
+    const talents = this.state.talents();
+    if (talents === undefined) throw new Error("resetTalents: SMSG_TALENTS_INFO arrived but the state cache holds no talent state");
+    return { ok: true, status: "reset", cost: ask.cost, talents };
+  }
+
+  /**
    * `CMSG_LEARN_TALENT` — spend one talent point. `rank` is 0-based as on the
    * wire (0 = the first point in that talent). Prefer `learnTalent`, which
    * waits for the `SMSG_TALENTS_INFO` answer.
@@ -2661,7 +2886,7 @@ export class WrathClient {
     const op = rawOpcodeSchema.safeParse(opcode);
     if (!op.success) {
       throw new TypeError(
-        `raw(opcode, payload): opcode must be a CMSG_* name (got ${JSON.stringify(opcode)}) — ` +
+        `raw(opcode, payload): opcode must be a CMSG_* (or bidirectional MSG_*) name (got ${JSON.stringify(opcode)}) — ` +
           `see module/PROTOCOL.md "raw" for the allowlist`,
       );
     }
@@ -3943,13 +4168,12 @@ export class WrathClient {
       );
       if (complete.opcode === "SMSG_INVENTORY_CHANGE_FAILURE") {
         const fail = complete.data as InventoryChangeFailureData;
-        return {
-          ok: false,
-          status: "inventory_full",
-          questId,
-          result: fail.result,
-          hint: "the reward could not be stored — free a bag slot (sell or destroyItem), then turn in again",
-        };
+        const named = inventoryResultText(fail.result);
+        const hint =
+          `the reward could not be stored (InventoryResult ${fail.result}${named ? `: ${named}` : ""}) — ` +
+          `free a bag slot (sell or destroyItem), then turn in again`;
+        this.noteActionHint("turnInQuest", "inventory_full", hint);
+        return { ok: false, status: "inventory_full", questId, result: fail.result, hint };
       }
       const d = complete.data as QuestGiverQuestCompleteData;
       return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };

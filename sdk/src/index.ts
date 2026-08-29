@@ -8,6 +8,7 @@
 
 export {
   connect,
+  inventoryResultText,
   KNOWN_ERROR_CODES,
   TRAINER_SPELL_STATE,
   WrathClient,
@@ -42,6 +43,9 @@ export type {
   QuestTurnInResult,
   StoredLootItem,
   TaxiOptions,
+  ResetTalentsOptions,
+  ResetTalentsResult,
+  TalentTreeOptions,
   TrainerListResult,
   TrainerOptions,
   TrainerSpell,
@@ -69,7 +73,7 @@ export type {
   WaitForOptions,
 } from "./events";
 
-export { GAME_OBJECT_TYPE_NAMES, NPC_ROLES, gameObjectTypeName, npcRolesOf, pointOf, questGiverStatusName, StateCache } from "./state";
+export { GAME_OBJECT_TYPE_NAMES, NPC_ROLES, gameObjectTypeName, npcRolesOf, pointOf, questGiverStatusName, reputationRank, StateCache } from "./state";
 export type {
   Anomaly,
   AreaRef,
@@ -91,14 +95,23 @@ export type {
   BindPoint,
   GossipMenu,
   GossipMenuOption,
+  LootWindow,
   InventoryItem,
   ItemInfo,
   KnownSpell,
   SpellCooldown,
   TalentEntry,
   TalentState,
+  TalentTree,
+  TalentTreeTab,
+  TalentTreeTalent,
+  SkillLine,
+  ReputationEntry,
+  ReputationRank,
   TaxiNodeRef,
   TaxiWindow,
+  TrainerWindow,
+  VendorWindow,
   Motion,
   NearbyObject,
   NotificationEntry,

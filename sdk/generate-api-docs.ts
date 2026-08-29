@@ -77,6 +77,8 @@ const CLIENT_HELPERS: readonly Row[] = [
   { name: "activateTaxi", sig: "activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options?): Promise<ActivateTaxiResult>", purpose: "Fly from the master's node to a known node by name or id (resolved against state.lastTaxiNodes(guid)); returns accepted or refused with the server's reply code and a hint. The ride is state.self.taxiFlight." },
   { name: "bindAtInnkeeper", sig: "bindAtInnkeeper(npcGuid: GuidOrUnit, options?): Promise<BindResult>", purpose: "Make an inn the Hearthstone's home the way a client does (gossip, the home option, confirm) and return the new bind point (also state.self.bindPoint)." },
   { name: "learnTalent", sig: "learnTalent(talentId, rank, options?): Promise<LearnTalentResult>", purpose: "Spend a talent point (rank is 0-based) and read the verdict off the SMSG_TALENTS_INFO answer; returns learned or not_learned with the new state.talents()." },
+  { name: "queryTalentTree", sig: "queryTalentTree(options?): Promise<TalentTree>", purpose: "The class talent frame: tabs [{ tabId, name, page, pointsSpent, talents: [{ talentId, name, row, col, maxRank, ranks, pointsSpent, dependsOn, dependsOnRank }] }] plus unspentPoints; static per class, also state.talentTree()." },
+  { name: "resetTalents", sig: "resetTalents(npcGuid: GuidOrUnit, options?): Promise<ResetTalentsResult>", purpose: "Unlearn all talents at a class trainer the way a client does (gossip, the unlearn option, confirm at the quoted cost); returns reset with the new state.talents(), or refused (nothing to unlearn / not enough money)." },
   { name: "waitForChat", sig: "waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>", purpose: "Wait for a chat line matching a string or predicate." },
   { name: "waitForNearby", sig: "waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>", purpose: "Wait until an object in view satisfies the predicate." },
   { name: "waitForTransfer", sig: "waitForTransfer({ timeout?, sinceSeq?, expectMap? }): Promise<TransferResult>", purpose: "Wait for a map transfer's server verdict: transferred (SMSG_NEW_WORLD) / aborted / waiting / no_transfer / wrong_map. moveTo already does this when a portal takes the character." },
@@ -130,6 +132,7 @@ const CLIENT_RAW: readonly Row[] = [
   { name: "trainerListAsync", sig: "trainerListAsync(guid: GuidArg): Promise<ActionResponse>", purpose: "Ask a trainer for its list without waiting (prefer trainerList)." },
   { name: "trainerBuySpellAsync", sig: "trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>", purpose: "Buy a spell without waiting (prefer buySpell)." },
   { name: "learnTalentAsync", sig: "learnTalentAsync(talentId, rank): Promise<ActionResponse>", purpose: "Spend a talent point without waiting (prefer learnTalent)." },
+  { name: "talentTreeAsync", sig: "talentTreeAsync(): Promise<ActionResponse>", purpose: "Ask for the class talent tree without waiting for the WB_TALENT_TREE answer (prefer queryTalentTree)." },
   { name: "raw", sig: "raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>", purpose: "Escape hatch: send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: \"x\" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md \"raw\". The answer arrives on sdk.events only if its opcode is whitelisted there." },
 ];
 
@@ -182,11 +185,19 @@ const STATE_ROWS: readonly Row[] = [
   { name: "questLog", sig: "get state.questLog: QuestLogEntry[]", purpose: "All quest-log entries." },
   { name: "lastTaxiNodes", sig: "state.lastTaxiNodes(guid): TaxiWindow | undefined", purpose: "The flight master window last observed for a guid: current node, known (visited) nodes with their names, the taximask verbatim (what activateTaxi resolves against)." },
   { name: "lastGossip", sig: "state.lastGossip(guid): GossipMenu | undefined", purpose: "The gossip menu last observed open for a guid (what gossipSelect-by-text resolves against)." },
+  { name: "lastVendorList", sig: "state.lastVendorList(guid): VendorWindow | undefined", purpose: "The stock last observed for a vendor: { items: [{ slot (1-based, what buyItem takes), itemId, price (discounted copper), buyCount, leftInStock (-1 unlimited), extendedCost }], emptyReason, seq, ts }. Last observed, not open: nothing closes a vendor frame." },
+  { name: "lastTrainerList", sig: "state.lastTrainerList(guid): TrainerWindow | undefined", purpose: "The teaching list last observed for a trainer: { trainerType, spells: [{ spellId, state (0 available, 1 unavailable, 2 known), cost, reqLevel, reqSkill, reqSkillValue }], greeting, seq, ts }. Raw rows; trainerList(npcGuid) asks and adds learnable/affordable." },
+  { name: "lastLoot", sig: "state.lastLoot(): LootWindow | undefined", purpose: "The open loot window: { guid, lootType, gold, items: [{ slot (what lootItem takes), itemId, count, slotType }], seq, ts }. Taken slots and taken gold leave it; the release closes it." },
   { name: "aurasOf", sig: "state.aurasOf(guid): AuraEntry[]", purpose: "Observed auras on a unit, by slot." },
   { name: "spells", sig: "state.spells(): KnownSpell[]", purpose: "The spellbook the server served: [{ spellId, rank, name }] for every spell the character knows (empty until login's SMSG_INITIAL_SPELLS; kept current by learned/removed/superseded events)." },
   { name: "spell", sig: "state.spell(spellId): KnownSpell | undefined", purpose: "One spellbook row by id; undefined means the character does not know that spell." },
   { name: "cooldowns", sig: "state.cooldowns(now?): SpellCooldown[]", purpose: "Spells still on cooldown: [{ spellId, readyAt (epoch ms, or undefined when the server gave no duration), cooldownMs }]." },
   { name: "talents", sig: "state.talents(): TalentState | undefined", purpose: "Last SMSG_TALENTS_INFO: { unspentPoints, activeSpec, specCount, talents: [{ talentId, rank (0-based) }] }." },
+  { name: "talentTree", sig: "state.talentTree(): TalentTree | undefined", purpose: "The class talent frame last answered by queryTalentTree, with pointsSpent per talent merged from the latest SMSG_TALENTS_INFO; undefined until queried." },
+  { name: "skills", sig: "state.skills(): SkillLine[]", purpose: "The skill pane: [{ skillId, name, value, max, tempBonus, permBonus }] for every skill line the character has (weapons, armor, professions, languages), from the self update fields." },
+  { name: "skill", sig: "state.skill(idOrName): SkillLine | undefined", purpose: "One skill line by id or name (exact, else unique substring); undefined when the character lacks it." },
+  { name: "reputation", sig: "state.reputation(): ReputationEntry[]", purpose: "The reputation pane: [{ factionId, name, standing, base, reputation, rank: \"Hated\"…\"Exalted\", visible, atWar }] from login's SMSG_INITIALIZE_FACTIONS and every SMSG_SET_FACTION_STANDING since; visible factions first." },
+  { name: "reputationWith", sig: "state.reputationWith(factionIdOrName): ReputationEntry | undefined", purpose: "One reputation row by faction id or name (exact, else unique substring)." },
   { name: "nameOf", sig: "state.nameOf(guid): string | undefined", purpose: "The name for a guid, if a name query ever returned one." },
   { name: "snapshot", sig: "state.snapshot(): StateSnapshot", purpose: "A frozen plain-object copy of the whole cache." },
   { name: "target", sig: "get state.target: NearbyObject | undefined", purpose: "The object our own target points at, when it is also in view." },
@@ -225,6 +236,7 @@ const STATE_INTERNAL = new Set([
   "mergeFields",
   "rebuildAchievements",
   "upsertNearby",
+  "foldFactionRow",
 ]);
 
 // ---------------------------------------------------------------- event rows
