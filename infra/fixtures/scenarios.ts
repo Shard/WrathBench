@@ -215,6 +215,18 @@ export const SCENARIOS = {
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
+  "talents-northshire": {
+    description: "level 10, 5g, standing in front of Brother Sammuel in Northshire Abbey (one talent point to spend and a respec to buy)",
+    level: 10,
+    money: 50000,
+    position: {
+      map: 0,
+      zone: 12,
+      ...SAMMUEL_FRONT,
+      o: facing(SAMMUEL_FRONT, SAMMUEL),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
   "northshire-fresh": {
     description: "reset: level 1, no money, human start position, empty quest log",
     level: 1,
