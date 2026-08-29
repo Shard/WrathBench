@@ -3483,14 +3483,18 @@ describe("client: the softened inputs and the harness hints they refuse with (20
     const stub = startStub({ onConnect: () => carried() });
     const client = await inWorld(stub);
     await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
-    const equip = client.equipItem("gritstone", undefined, { timeout: 500 });
+    // The name form leaves argument 2 free, so the options object may sit there.
+    const equip = client.equipItem("gritstone", { timeout: 500 });
     const at = await untilAction(stub, "equip_item");
     expect(stub.actions[at]).toMatchObject({ action: "equip_item", bag: 255, slot: BACKPACK_SLOT });
     await equip;
     client.drainActionHints();
 
-    await client.destroyItem("Gritstone Charm");
-    expect(stub.actions.at(-1)).toMatchObject({ action: "destroy_item", bag: 255, slot: BACKPACK_SLOT });
+    // …and a trailing count keeps its meaning rather than being read as a slot.
+    await client.destroyItem("Gritstone Charm", 5);
+    expect(stub.actions.at(-1)).toMatchObject({ action: "destroy_item", bag: 255, slot: BACKPACK_SLOT, count: 5 });
+    await client.useItem("Gritstone Charm", CREATURE_GUID);
+    expect(stub.actions.at(-1)).toMatchObject({ action: "use_item", bag: 255, slot: BACKPACK_SLOT, targetGuid: CREATURE_GUID });
 
     const missing = await client.equipItem("Thunderfury");
     expect(missing).toMatchObject({ ok: false, status: "no_item" });
@@ -3552,7 +3556,7 @@ describe("client: the softened inputs and the harness hints they refuse with (20
     let at = await untilAction(stub, "raw");
     stub.push(frame(620, "SMSG_SHOW_BANK", { guid: CREATURE_GUID }));
     await open;
-    const deposit = client.bankDeposit("gritstone", undefined, { timeout: 2000 });
+    const deposit = client.bankDeposit("gritstone", { timeout: 2000 });
     at = await untilAction(stub, "raw", at + 1);
     expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOBANK_ITEM", payload: "ff" + BACKPACK_SLOT.toString(16) });
     stub.push(frame(621, "SMSG_INVENTORY_CHANGE_FAILURE", { result: 4 }));
@@ -3605,7 +3609,7 @@ describe("client: the softened inputs and the harness hints they refuse with (20
     stub.push(frame(641, "SMSG_TALENTS_INFO", { pet: false, unspentPoints: 2, specCount: 1, activeSpec: 0, specs: [{ talents: [{ talentId: 124, rank: 0 }] }] }));
     await client.events.waitForOpcode("SMSG_TALENTS_INFO", { timeout: 2000 });
 
-    const learn = client.learnTalent("heroic strike", undefined, { timeout: 2000 });
+    const learn = client.learnTalent("heroic strike", { timeout: 2000 });
     const at = await untilAction(stub, "learn_talent");
     // One point is already in, so the next one is wire rank 1.
     expect(stub.actions[at]).toMatchObject({ action: "learn_talent", talentId: 124, rank: 1 });

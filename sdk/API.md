@@ -117,8 +117,8 @@ own client — not for snippets, where `sdk` already exists.) Then, on the clien
 | `buyItem` | `buyItem(guid: GuidArg, itemId, slot, count?): Promise<ActionResponse>` | Buy an item from a vendor (slot is the 1-based vendor slot). |
 | `sellItem` | `sellItem(guid: GuidArg, itemGuid: GuidArg, count?): Promise<ActionResponse>` | Sell an item to a vendor; omit count to sell the whole stack. |
 | `repairAll` | `repairAll(guid: GuidArg): Promise<ActionResponse>` | Repair everything at a repair vendor. |
-| `useItem` | `useItem(bagOrName: number | string, slot?, targetGuid?: GuidArg): Promise<ActionResponse>` | Use a bag item's on-use effect; the item is its bag/slot or its name. |
-| `destroyItem` | `destroyItem(bagOrName: number | string, slot?, count?): Promise<ActionResponse>` | Destroy a bag item by bag/slot or by name; omit count to destroy the whole stack. |
+| `useItem` | `useItem(bagOrName: number | string, slot?, targetGuid?: GuidArg): Promise<ActionResponse>` | Use a bag item's on-use effect; the item is its bag/slot or its name (with a name, the next argument is the target guid). |
+| `destroyItem` | `destroyItem(bagOrName: number | string, slot?, count?): Promise<ActionResponse>` | Destroy a bag item by bag/slot or by name (with a name, the next argument is the count); omit count to destroy the whole stack. |
 | `repop` | `repop(): Promise<ActionResponse>` | Release the spirit while dead. |
 | `reclaimCorpse` | `reclaimCorpse(guid?: GuidArg, options?: ReclaimCorpseOptions): Promise<ReclaimCorpseResult>` | Wait out the server's corpse reclaim delay, reclaim, and report the verdict: reclaimed / not_reclaimed / unconfirmed. |
 | `reclaimCorpseAsync` | `reclaimCorpseAsync(guid?: GuidArg): Promise<ActionResponse>` | CMSG_RECLAIM_CORPSE, dispatch only. Prefer reclaimCorpse. |
