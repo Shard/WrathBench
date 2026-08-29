@@ -160,7 +160,44 @@ const HUMAN_START = { map: 0, zone: 12, x: -8949.95, y: -132.493, z: 83.5312, o:
 const COLDRIDGE_ROAD = { x: -6115.1, y: 372.3, z: 395.6 };
 const COLDRIDGE_PASS_MOUTH = { x: -6049.4, y: 383.6 };
 
+// The Goldshire mailbox, `acore_world.gameobject` guid 142075 (template
+// type 19), at (-9455.99, 45.82, 56.44). The character stands two yards
+// south of it facing it: inside the mailbox's interaction range, and the
+// inn's innkeeper and vendors are a few yards further along.
+const GOLDSHIRE_MAILBOX = { x: -9455.99, y: 45.82, z: 56.44 };
+const GOLDSHIRE_MAILBOX_FRONT = { x: -9457.8, y: 44.6, z: 56.5 };
+
+// Bailey Stonemantle, entry 2461, banker in Ironforge's Vault; spawn from
+// acore_world.creature (guid 1754): (-4886.55, -997.594, 504.024), o 2.23402.
+// Three yards along his facing, turned back to face him.
+const BAILEY = { x: -4886.55, y: -997.594, z: 504.024, o: 2.23402 };
+const BAILEY_FRONT = { x: BAILEY.x + 3 * Math.cos(BAILEY.o), y: BAILEY.y + 3 * Math.sin(BAILEY.o), z: 504.03 };
+
 export const SCENARIOS = {
+  "mailbox-goldshire": {
+    description: "level 1, 50s, in front of the Goldshire mailbox (for the mail smoke: postage plus enclosed money)",
+    level: 1,
+    money: 5000,
+    position: {
+      map: 0,
+      zone: 12,
+      ...GOLDSHIRE_MAILBOX_FRONT,
+      o: facing(GOLDSHIRE_MAILBOX_FRONT, GOLDSHIRE_MAILBOX),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
+  "bank-ironforge": {
+    description: "level 1, no money, in front of Bailey Stonemantle (Ironforge banker)",
+    level: 1,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 1537,
+      ...BAILEY_FRONT,
+      o: facing(BAILEY_FRONT, BAILEY),
+    },
+    homebind: { map: 0, zone: 1537, x: -4918.88, y: -940.406, z: 501.564 },
+  },
   "tram-ironforge": {
     description: "level 10, 1g, standing at the Deeprun Tram portal in Ironforge facing the areatrigger",
     level: 10,
