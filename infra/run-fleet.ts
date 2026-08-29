@@ -2347,6 +2347,26 @@ export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefi
 }
 
 /**
+ * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
+ * restart — same run id, account and character — rather than spending its
+ * attempt. Two kinds do: the freeplay stream (`pausesOnDrain`, resumed in
+ * place while the pause is fresh) and a probe campaign that asked to be
+ * resumed (`campaigns.<name>.resume`). Everything else — every scored e90 or
+ * e360 — is ended `manual` on the next boot and must be waited out on its own
+ * clock.
+ *
+ * Published per job row so `infra/fleet-update.sh` can decide what its
+ * graceful window is actually waiting for without re-deriving the campaign's
+ * opt-in from a config the supervisor may not even be running (the pause
+ * switch exists to work while `fleet.json` is rejected). Pure.
+ */
+export function resumesInPlace(job: Pick<FleetJob, "source" | "episode" | "probe"> | undefined, campaigns: readonly Campaign[] | undefined): boolean {
+  if (job === undefined) return false;
+  if (pausesOnDrain(job)) return true;
+  return job.probe !== undefined && campaignResumeOf(campaigns, job.probe.campaign);
+}
+
+/**
  * Cross-account name hygiene, the fallback under account affinity.
  *
  * Episode hygiene clears the LAUNCHING account and nothing else, so a name
@@ -3452,6 +3472,13 @@ export interface StateJob {
   draining: boolean;
   /** The supervisor's own view of the process; see resolveStatePath. */
   alive: boolean;
+  /**
+   * `resumesInPlace`: this job's run comes back where it left off after a
+   * supervisor restart, so a drain that is waiting on it is waiting for
+   * nothing. Absent on a supervisor older than this field — readers must fall
+   * back to the `source`/`episode` pair rather than reading absence as false.
+   */
+  resumesInPlace?: boolean;
 }
 
 /**
@@ -3513,6 +3540,8 @@ interface PoolView {
   skipped: { name: string; reason: string }[];
   policyIdle?: string;
   session: { finished: number; ok: number; retried: number };
+  /** The campaigns in force, for the per-job `resumesInPlace` flag. */
+  campaigns: readonly Campaign[];
   /** Paused runs the last plan did not resume, with why. */
   paused: PausedListing[];
   /** Paused runs ended instead of resumed, this session. */
@@ -3565,6 +3594,7 @@ function writeState(
       exitCode: p.exitCode,
       draining: draining.has(name),
       alive: !p.exited,
+      ...(resumesInPlace(j, pool?.campaigns) ? { resumesInPlace: true } : {}),
     };
   }
   const state: FleetState = {
@@ -4897,6 +4927,7 @@ async function main(): Promise<void> {
     assigned,
     jobs: liveJobs,
     queue: poolJobs(cfg),
+    campaigns: cfg.campaigns,
     finished: sets.finished,
     waiting: lastPlan.waiting.map((j) => j.name),
     skipped: lastPlan.skipped.map((sk) => ({ name: sk.job.name, reason: sk.reason })),

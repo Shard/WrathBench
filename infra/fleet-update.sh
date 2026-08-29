@@ -6,10 +6,11 @@
 # applies at the next episode spawn with no restart at all; see
 # docs/OPERATIONS.md, "Updating the live fleet".
 #
-#   ./infra/fleet-update.sh graceful   # pause, wait for every live run to finish
-#                                      # on its own clock, recreate, resume
+#   ./infra/fleet-update.sh graceful   # pause, wait for every run that has a
+#                                      # clock to finish on it, recreate, resume
 #   ./infra/fleet-update.sh force      # recreate NOW; every live run pauses and,
 #                                      # if scored, spends its attempt (--yes)
+#                                      # a set switch is cleared after the recreate
 #   ./infra/fleet-update.sh drain      # pause and wait for quiet, then STOP —
 #                                      # the pause stays set (deploy windows)
 #   ./infra/fleet-update.sh resume     # clear the pause switch
@@ -28,9 +29,16 @@
 # inert until somebody reads the banner, and a stop switch must not be able to
 # do that.
 #
-# WHAT GRACEFUL COSTS. Nothing, in the normal case: every live run reaches its
-# own episode limit or watchdog and records its verdict. Two caveats, both
-# printed by the script:
+# WHAT GRACEFUL WAITS FOR. Every run a recreate would COST: the scored e90 and
+# e360 runs, which reach their own episode limit or watchdog and record their
+# verdict. NOT the runs that come back where they left off — the freeplay
+# stream and a probe campaign with `resume: true` — which the wait counts as
+# drained once the switch has put them in `draining`. An `idle: unlimited`
+# session has no clock to finish on, so waiting for one is waiting forever
+# (2026-08-29: the window ran to its ceiling and had to become a `force`).
+#
+# WHAT GRACEFUL COSTS. Nothing, in the normal case. Three caveats, all printed
+# by the script:
 #  - the drain race the supervisor documents: an episode spawned in the instant
 #    between the idle check and the SIGTERM is terminated gracefully. Worst
 #    case one just-started episode, never one mid-flight.
@@ -39,6 +47,13 @@
 #    episode budget it is ended stale — and a provider pause that goes stale is
 #    a COUNTED failed attempt against the model (runner/src/lapse.ts). The
 #    script lists such runs before it starts waiting.
+#  - a parked freeplay/resume:true run is SIGTERMed by the recreate wherever it
+#    happens to be, exactly as `force` would. It resumes on the same run id,
+#    account and character; nothing is scored, so nothing is spent.
+#
+# ON ABORT. Ctrl-C during the wait kills nothing, and the switch STAYS SET —
+# the script says so and names `fleet-update.sh resume`, which is the only way
+# the fleet starts scheduling again.
 #
 # WHAT FORCE COSTS. `up -d --force-recreate` stops the container inside its
 # 180s stop_grace_period, so every live run takes the pause path: a scored
@@ -81,7 +96,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --timeout) TIMEOUT_S="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,65p' "$0"; exit 0 ;;
     *) die "unknown argument $1 (graceful | force | drain | resume | status)" ;;
   esac
 done
@@ -103,6 +118,48 @@ alive_jobs() {
       process.stdout.write(String(Object.values(s.jobs ?? {}).filter((j) => j && j.alive === true).length) + "\n"); }
     catch { process.stdout.write("none\n"); }
   ' "${STATE_JSON}" 2>/dev/null | strip_ansi || echo none
+}
+
+# What the graceful window is actually waiting for. Every live job row, split
+# in two:
+#
+#   wait:<name> ...   a run that must finish on its own clock. A recreate ends
+#                     it `manual`: the attempt is spent. Every scored e90/e360
+#                     is here.
+#   park:<name> ...   a run that comes back WHERE IT LEFT OFF — the freeplay
+#                     stream, and a probe campaign with `resume: true`. The
+#                     recreate costs it nothing (2026-08-29: the sonnet stream
+#                     came back on the same run id and character), so waiting
+#                     on one is waiting for nothing. FOLLOW-UPS 93.
+#
+# A row is parked only when the supervisor has already put it in `draining`:
+# that is the proof the switch reached it. It is also what makes the observed
+# hang finish — a freeplay job under a supervisor that drains to an episode
+# boundary sits `draining, alive` forever, because an `idle: unlimited`
+# session has no boundary — and it keeps the documented sparing of a REFUSED
+# PIN honest: a spared job never drains, so it still holds the window.
+#
+# `resumesInPlace` is the supervisor's own answer (it is the only side that
+# knows the campaign's opt-in, and the switch has to work while fleet.json is
+# rejected); a supervisor older than that field does not write it, so the
+# freeplay pair is the fallback and the first graceful after this ships still
+# works.
+#
+# Output ends with `ok`: anything less — a truncated mid-write state file, a
+# bun that died — is NOT quiet. Nothing here says whether the supervisor is
+# ticking; the caller checks the heartbeat.
+drain_view() {
+  "${BUN_PLAIN_ENV[@]}" bun -e '
+    const s = await Bun.file(process.argv[1]).json();
+    for (const [name, j] of Object.entries(s.jobs ?? {})) {
+      if (!j || j.alive !== true) continue;
+      const where = `${name} (${j.ref ?? "?"}, ${j.episode ?? "episode unknown"}, ${j.account ?? "?"})`;
+      const resumes = j.resumesInPlace === true || (j.resumesInPlace === undefined && j.source === "policy" && j.episode === "freeplay");
+      if (resumes && j.draining === true) process.stdout.write(`park:${where} — draining; resumes in place\n`);
+      else process.stdout.write(`wait:${where}${j.draining === true ? " — draining" : ""}\n`);
+    }
+    process.stdout.write("ok\n");
+  ' "${STATE_JSON}" 2>/dev/null | strip_ansi || true
 }
 
 # The supervisor's last heartbeat, in epoch SECONDS, or 0. Absolute rather than
@@ -170,6 +227,39 @@ clear_switch() {
   say "pause switch cleared — the fleet schedules again within a tick (60s)"
 }
 
+# What the switch says, for an operator who did not set it. Empty when it is not set.
+switch_why() {
+  [[ -f "${PAUSE_JSON}" ]] || return 0
+  "${BUN_PLAIN_ENV[@]}" bun -e '
+    try { const s = await Bun.file(process.argv[1]).json();
+      process.stdout.write(String(s.why ?? "no reason recorded") + "\n"); } catch { process.stdout.write("unreadable\n"); }
+  ' "${PAUSE_JSON}" 2>/dev/null | strip_ansi || true
+}
+
+# Wait for the NEW supervisor's first heartbeat and only then clear the switch.
+# Strictly after the recreate: the OLD supervisor's last heartbeat is fresh too,
+# and mistaking it for the new one is how the switch gets cleared under a fleet
+# that never came back. Non-zero means it did not come back and the switch was
+# LEFT SET on purpose.
+await_boot_then_clear() {
+  local recreated_at="$1" at boot_deadline
+  boot_deadline=$(( $(date +%s) + BOOT_WAIT_S ))
+  while :; do
+    at="$(heartbeat_at_s)"
+    [[ "${at}" =~ ^[0-9]+$ ]] || at=0
+    if (( at >= recreated_at )); then break; fi
+    if (( $(date +%s) >= boot_deadline )); then
+      say "no fresh heartbeat after ${BOOT_WAIT_S}s — LEAVING the switch set so the fleet cannot"
+      say "start scheduling behind a supervisor nobody has looked at. Check \`${COMPOSE[*]} logs fleet\`,"
+      say "then \`./infra/fleet-update.sh resume\`."
+      return 1
+    fi
+    sleep 2
+  done
+  clear_switch
+  return 0
+}
+
 # ------------------------------------------------------------------- status
 print_status() {
   say "compose file   ${COMPOSE_FILE}"
@@ -197,16 +287,33 @@ if [[ "${MODE}" == "force" ]]; then
   say "  e90/e360 run then ends \`manual\` — the attempt is spent (money and quota"
   say "  with it) and reattempted with a full clock, no strike against the model."
   say "  Freeplay and campaigns with resume:true come back where they left off."
+  # A switch left set by an aborted `graceful` is the normal way to arrive here
+  # (2026-08-29, FOLLOW-UPS 93): force STARTS the container, so leaving the
+  # switch set would hand back a fleet that runs and schedules nothing — a
+  # state with no use. `drain` is the mode whose job is leaving it set, and it
+  # stops the container instead.
+  why="$(switch_why)"
+  if [[ -n "${why}" ]]; then
+    say "  the pause switch is SET (${why}); this clears it after the recreate."
+  fi
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     say "dry-run: would run ${COMPOSE[*]} up -d --no-deps --force-recreate fleet"
+    if [[ -n "${why}" ]]; then
+      say "dry-run: would wait up to ${BOOT_WAIT_S}s for a fresh heartbeat, then delete ${PAUSE_JSON}"
+    fi
     exit 0
   fi
   if [[ "${ASSUME_YES}" -ne 1 ]]; then
     read -r -p "fleet-update: type yes to recreate now: " ans
     [[ "${ans}" == "yes" ]] || die "not confirmed — nothing done"
   fi
+  recreated_at=$(date +%s)
   "${COMPOSE[@]}" up -d --no-deps --force-recreate fleet
   say "recreated. \`./infra/run-fleet.sh --status\` shows the new supervisor's first tick."
+  if [[ -n "${why}" ]]; then
+    say "waiting up to ${BOOT_WAIT_S}s for the new supervisor's first heartbeat before clearing the switch"
+    await_boot_then_clear "${recreated_at}" || exit 1
+  fi
   exit 0
 fi
 
@@ -220,7 +327,23 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "--dry-run: the plan, and every resolved value; nothing is written, stopped or recreated"
   print_status
   say "would: write ${PAUSE_JSON} (${WHY})"
-  say "would: poll ${STATE_JSON} every ${POLL_S}s for up to ${TIMEOUT_S}s until no job is alive"
+  say "would: poll ${STATE_JSON} every ${POLL_S}s for up to ${TIMEOUT_S}s until no run is being waited on"
+  say "would: wait on scored runs only — a draining freeplay stream, or a resume:true campaign"
+  say "       run, counts as drained: it comes back where it left off. On the state as it"
+  say "       stands right now — nothing is DRAINING until the switch is set, so a stream"
+  say "       that will park is listed here as one this window would wait on:"
+  dv="$(drain_view)"
+  if [[ "${dv}" == *$'\nok' || "${dv}" == "ok" ]]; then
+    while IFS= read -r l; do
+      case "${l}" in
+        wait:*) say "       would wait on:  ${l#wait:}" ;;
+        park:*) say "       counted drained: ${l#park:}" ;;
+      esac
+    done <<< "${dv}"
+    [[ "${dv}" == "ok" ]] && say "       (no live job)"
+  else
+    say "       ${STATE_JSON} did not parse — that would NOT be read as quiet"
+  fi
   if [[ "${MODE}" == "graceful" ]]; then
     say "would: ${COMPOSE[*]} up -d --no-deps --force-recreate fleet"
     say "would: wait up to ${BOOT_WAIT_S}s for a fresh heartbeat, then delete ${PAUSE_JSON}"
@@ -231,6 +354,18 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
 fi
 
 set_switch "${WHY}"
+# From here the switch is on disk, so every way out of this script has to say so
+# — an aborted window that looks like nothing happened is a fleet that quietly
+# schedules nothing until somebody notices (2026-08-29, FOLLOW-UPS 93).
+on_abort() {
+  trap - INT TERM
+  echo
+  say "ABORTED — nothing was killed and the PAUSE SWITCH IS STILL SET (${PAUSE_JSON})."
+  say "The fleet launches nothing and resumes nothing while it is. Put it back to work with:"
+  say "  ./infra/fleet-update.sh resume"
+  exit 130
+}
+trap on_abort INT TERM
 say "waiting for every live run to finish on its own clock (up to ${TIMEOUT_S}s, polling every ${POLL_S}s)"
 say "an e360 run can hold this for six hours; Ctrl-C is safe — the switch stays set and nothing is killed"
 pr="$(paused_runs)"
@@ -242,39 +377,57 @@ if [[ -n "${pr}" ]]; then
   while IFS= read -r l; do [[ -n "${l}" ]] && say "      ${l}"; done <<< "${pr}"
 fi
 
-# Quiet is a claim about LIVE RUNS, and only a state file this poll actually
-# parsed, written by a supervisor that is actually ticking, can make it. Two
-# ways to get that wrong, both ending in a recreate over live episodes:
+# Quiet is a claim about the runs a recreate would COST, and only a state file
+# this poll actually parsed, written by a supervisor that is actually ticking,
+# can make it. Three ways to get it wrong:
 # `writeState` is a plain writeFileSync, so a poll can land mid-write and read a
-# truncated file (`alive_jobs` says "none"); and a supervisor that died leaves a
-# file whose `alive: true` rows are frozen, not current. Neither is quiet. The
-# deploy script reads "none" as nothing-to-drain because it only asks AFTER
-# `compose stop fleet` returned — here the fleet is still up and the meaning
-# inverts.
+# truncated file (no `ok` line); a supervisor that died leaves a file whose
+# `alive: true` rows are frozen, not current; and — the one this loop used to
+# get wrong — a live row is not automatically a reason to wait. A draining
+# freeplay stream or resume:true campaign run comes back where it left off, so
+# it is counted as drained (`drain_view`); every scored e90/e360 is waited out.
+# The deploy script reads an unparsable state as nothing-to-drain because it
+# only asks AFTER `compose stop fleet` returned — here the fleet is still up and
+# the meaning inverts.
 deadline=$(( $(date +%s) + TIMEOUT_S ))
 while :; do
-  n="$(alive_jobs)"
+  dv="$(drain_view)"
   hb="$(heartbeat_at_s)"; [[ "${hb}" =~ ^[0-9]+$ ]] || hb=0
   age=$(( $(date +%s) - hb ))
-  if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
+  wait_lines=(); park_lines=()
+  while IFS= read -r l; do
+    case "${l}" in
+      wait:*) wait_lines+=("${l#wait:}") ;;
+      park:*) park_lines+=("${l#park:}") ;;
+    esac
+  done <<< "${dv}"
+  if [[ "${dv}" != *"ok" ]]; then
     waiting="${STATE_JSON} did not parse this poll — NOT reading that as quiet"
   elif (( hb == 0 || age > 180 )); then
     waiting="the supervisor's heartbeat is ${age}s old — it is not ticking, so its job rows mean nothing"
-  elif [[ "${n}" == "0" ]]; then
+  elif (( ${#wait_lines[@]} == 0 )); then
     break
   else
-    waiting="${n} job(s) still live (heartbeat ${age}s ago)"
+    waiting="${#wait_lines[@]} run(s) still on their own clock (heartbeat ${age}s ago)"
   fi
   if (( $(date +%s) >= deadline )); then
     say "TIMED OUT after ${TIMEOUT_S}s: ${waiting}. Nothing was killed and the switch is still"
     say "set: wait longer (\`fleet-update.sh status\`), or accept the cost and run"
     say "\`fleet-update.sh force\`. Clear the switch with \`fleet-update.sh resume\` to abandon the update."
+    for l in "${wait_lines[@]}"; do say "  waiting on:      ${l}"; done
     exit 1
   fi
   say "  ${waiting} — waiting"
+  if (( ${#wait_lines[@]} > 0 )); then for l in "${wait_lines[@]}"; do say "      waiting on:      ${l}"; done; fi
+  if (( ${#park_lines[@]} > 0 )); then for l in "${park_lines[@]}"; do say "      counted drained: ${l}"; done; fi
   sleep "${POLL_S}"
 done
-say "quiet: no job holds a live episode."
+if (( ${#park_lines[@]} > 0 )); then
+  say "quiet: no run is on its own clock. ${#park_lines[@]} paused run(s) counted as drained — they resume in place:"
+  for l in "${park_lines[@]}"; do say "  counted drained: ${l}"; done
+else
+  say "quiet: no job holds a live episode."
+fi
 
 if [[ "${MODE}" == "drain" ]]; then
   "${COMPOSE[@]}" stop fleet
@@ -286,21 +439,6 @@ fi
 recreated_at=$(date +%s)
 "${COMPOSE[@]}" up -d --no-deps --force-recreate fleet
 say "recreated on the new supervisor code; waiting up to ${BOOT_WAIT_S}s for its first heartbeat"
-boot_deadline=$(( $(date +%s) + BOOT_WAIT_S ))
-while :; do
-  at="$(heartbeat_at_s)"
-  [[ "${at}" =~ ^[0-9]+$ ]] || at=0
-  # Strictly after the recreate: the OLD supervisor's last heartbeat is fresh
-  # too, and mistaking it for the new one is how the switch gets cleared under
-  # a fleet that never came back.
-  if (( at >= recreated_at )); then break; fi
-  if (( $(date +%s) >= boot_deadline )); then
-    say "no fresh heartbeat after ${BOOT_WAIT_S}s — LEAVING the switch set so the fleet cannot"
-    say "start scheduling behind a supervisor nobody has looked at. Check \`${COMPOSE[*]} logs fleet\`,"
-    say "then \`./infra/fleet-update.sh resume\`."
-    exit 1
-  fi
-  sleep 2
-done
-clear_switch
+await_boot_then_clear "${recreated_at}" || exit 1
+trap - INT TERM
 say "done: new supervisor up, no run was interrupted."

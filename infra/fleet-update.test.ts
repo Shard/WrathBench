@@ -41,6 +41,12 @@ exit 0
 interface Case {
   /** Jobs the supervisor's state lists with a live roster process. */
   aliveJobs?: number;
+  /**
+   * Live job rows written out in full, for the drain view: what the wait loop
+   * waits on and what it counts as drained. Added to whatever `aliveJobs`
+   * generated.
+   */
+  jobs?: { name: string; episode: string; source: string; draining?: boolean; resumesInPlace?: boolean }[];
   /** Seconds since the supervisor's last heartbeat. */
   heartbeatAgeS?: number;
   /** Paused runs the supervisor is not resuming. */
@@ -55,6 +61,8 @@ interface Case {
   /** Write a truncated state file: a poll that landed mid-writeState. */
   corruptState?: boolean;
   env?: Record<string, string>;
+  /** Send SIGINT after this many seconds, to exercise the abort path. */
+  interruptAfterS?: number;
 }
 
 interface Result {
@@ -74,8 +82,20 @@ function run(c: Case): Result {
   chmodSync(shim, 0o755);
 
   const stateJson = join(dir, "fleet-state.json");
-  const jobs: Record<string, { account: string; alive: boolean }> = {};
+  const jobs: Record<string, { account: string; alive: boolean; ref?: string; episode?: string; source?: string; draining?: boolean; resumesInPlace?: boolean }> =
+    {};
   for (let i = 0; i < (c.aliveJobs ?? 0); i++) jobs[`job-${i}`] = { account: `RUNNER${i}`, alive: true };
+  for (const j of c.jobs ?? []) {
+    jobs[j.name] = {
+      account: "RUNNER9",
+      alive: true,
+      ref: j.name,
+      episode: j.episode,
+      source: j.source,
+      draining: j.draining === true,
+      ...(j.resumesInPlace !== undefined ? { resumesInPlace: j.resumesInPlace } : {}),
+    };
+  }
   writeFileSync(
     stateJson,
     JSON.stringify(
@@ -97,7 +117,11 @@ function run(c: Case): Result {
   const dockerLog = join(dir, "docker.log");
   writeFileSync(dockerLog, "");
 
-  const proc = Bun.spawnSync(["bash", SCRIPT, ...c.args], {
+  // `interruptAfterS` is Ctrl-C: `timeout -s INT` signals the script mid-wait,
+  // which is the only way to exercise the abort trap.
+  const argv =
+    c.interruptAfterS !== undefined ? ["timeout", "-s", "INT", String(c.interruptAfterS), "bash", SCRIPT, ...c.args] : ["bash", SCRIPT, ...c.args];
+  const proc = Bun.spawnSync(argv, {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -125,6 +149,11 @@ function run(c: Case): Result {
   };
 }
 
+/** The script, Ctrl-C'd two seconds into its wait. */
+function runAborted(c: Case): Result {
+  return run({ ...c, interruptAfterS: 2, env: { WRATHBENCH_FLEET_TIMEOUT_S: "60", ...(c.env ?? {}) } });
+}
+
 describe("fleet-update.sh", () => {
   test("graceful: sets the switch, waits for quiet, recreates with --no-deps, clears the switch", () => {
     const r = run({ aliveJobs: 0, args: ["graceful"] });
@@ -143,11 +172,85 @@ describe("fleet-update.sh", () => {
   test("graceful: a job still live holds the window open and times out WITHOUT killing anything", () => {
     const r = run({ aliveJobs: 2, args: ["graceful"] });
     expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("2 job(s) still live");
+    expect(r.out).toContain("2 run(s) still on their own clock");
     expect(r.out).toContain("TIMED OUT");
     // Nothing was recreated or stopped: the runs are untouched.
     expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
     // And the switch stays set, so the fleet is not quietly scheduling again.
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("graceful: a DRAINING freeplay stream is counted as drained — it resumes in place, so the window completes", () => {
+    // FOLLOW-UPS 93: an `idle: unlimited` session has no clock to finish on, so
+    // a wait loop that treats it as live runs to its ceiling. The recreate
+    // costs it nothing: it comes back on the same run id and character.
+    const r = run({ jobs: [{ name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: true }], args: ["graceful"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("counted drained: sonnet-low-freeplay");
+    expect(r.out).toContain("resumes in place");
+    const up = r.dockerCalls.find((l) => l.includes("up -d"));
+    expect(up).toContain("--force-recreate");
+    expect(r.pauseFile).toBeNull();
+  });
+
+  test("graceful: a freeplay stream the switch has NOT reached yet is still waited on", () => {
+    // `draining` is the proof the supervisor picked the switch up. It is also
+    // what keeps a refused pin — deliberately spared from draining — holding
+    // the window open, as OPERATIONS.md promises.
+    const r = run({ jobs: [{ name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: false }], args: ["graceful"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("TIMED OUT");
+    expect(r.out).toContain("waiting on:      sonnet-low-freeplay");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("graceful: a scored e90 run still holds the window even while draining", () => {
+    // The guarantee the parking must not eat: a scored attempt is spent if the
+    // recreate lands on it, so it waits out its own clock.
+    const r = run({ jobs: [{ name: "glm-e90", episode: "e90", source: "policy", draining: true }], args: ["graceful"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("1 run(s) still on their own clock");
+    expect(r.out).toContain("waiting on:      glm-e90");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("graceful: a resume:true campaign run is parked only because the supervisor said so", () => {
+    // The campaign's `resume` opt-in is the supervisor's to know — the switch
+    // has to work while fleet.json is rejected, so the script never reads it.
+    // A probing row without the flag waits; with it, it parks.
+    const waits = run({ jobs: [{ name: "muse-class-probe-gnome-mage", episode: "probing", source: "policy", draining: true }], args: ["graceful"] });
+    expect(waits.exitCode).toBe(1);
+    expect(waits.out).toContain("waiting on:      muse-class-probe-gnome-mage");
+    const parks = run({
+      jobs: [{ name: "muse-class-probe-gnome-mage", episode: "probing", source: "policy", draining: true, resumesInPlace: true }],
+      args: ["graceful"],
+    });
+    expect(parks.exitCode).toBe(0);
+    expect(parks.out).toContain("counted drained: muse-class-probe-gnome-mage");
+    expect(parks.pauseFile).toBeNull();
+  });
+
+  test("graceful: one parked stream and one scored run still waits", () => {
+    const r = run({
+      jobs: [
+        { name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: true },
+        { name: "glm-e90", episode: "e90", source: "policy", draining: true },
+      ],
+      args: ["graceful"],
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("waiting on:      glm-e90");
+    expect(r.out).toContain("counted drained: sonnet-low-freeplay");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+  });
+
+  test("graceful: aborted with SIGINT, the switch stays SET and the message says how to clear it", () => {
+    const r = runAborted({ jobs: [{ name: "glm-e90", episode: "e90", source: "policy", draining: true }], args: ["graceful"] });
+    expect(r.out).toContain("PAUSE SWITCH IS STILL SET");
+    expect(r.out).toContain("fleet-update.sh resume");
+    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -207,8 +310,26 @@ describe("fleet-update.sh", () => {
     const up = r.dockerCalls.find((l) => l.includes("up -d"));
     expect(up).toContain("--no-deps");
     expect(up).toContain("--force-recreate");
-    // Force does not wait for anything and does not touch the switch.
+    // Nothing set the switch, so there is nothing to clear and nothing to wait for.
     expect(r.pauseFile).toBeNull();
+    expect(r.out).not.toContain("first heartbeat");
+  });
+
+  test("force: a switch left set by an aborted graceful is cleared after the recreate", () => {
+    // 2026-08-29: `force --yes` had to be followed by `resume` by hand. force
+    // STARTS the container, so a switch it leaves set is a fleet that runs and
+    // schedules nothing.
+    const r = run({ aliveJobs: 1, paused_switch: true, args: ["force", "--yes"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("the pause switch is SET (set by hand)");
+    expect(r.pauseFile).toBeNull();
+  });
+
+  test("force: a supervisor that does not come back leaves that switch SET", () => {
+    const r = run({ aliveJobs: 1, paused_switch: true, boots: false, args: ["force", "--yes"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("no fresh heartbeat");
+    expect(r.pauseFile?.paused).toBe(true);
   });
 
   test("force without --yes on a pipe refuses rather than recreating", () => {
@@ -222,6 +343,7 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("would: write");
     expect(r.out).toContain("--force-recreate fleet");
+    expect(r.out).toContain("counts as drained");
     expect(r.pauseFile).toBeNull();
     expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop"))).toEqual([]);
   });
