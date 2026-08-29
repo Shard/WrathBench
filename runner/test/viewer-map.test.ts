@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readLatestPosition, readPositions } from "../viewer/positions";
+import { trackFrom } from "../viewer/results";
+import { readStates } from "../viewer/runs";
 import { parseTilePath, resolveTilePath } from "../viewer/tiles";
 import {
   GRID,
@@ -316,6 +318,26 @@ describe("readPositions", () => {
       nextLevelXp: 2100,
       class: 4,
     });
+  });
+
+  test("the recorded track carries the frame's numbers through readStates", () => {
+    // The replay path: state row → readStates → trackFrom. Distinct values, so
+    // a max_health/max_power transposition in either mapping fails here.
+    const runsDir = fixture([
+      { id: "track-hp", states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]], gauges: [140, 220, 30, 100, 3, 2100] },
+    ]);
+    const [p] = trackFrom(readStates(runsDir, "track-hp"));
+    expect(p).toMatchObject({
+      health: 140,
+      maxHealth: 220,
+      power: 30,
+      maxPower: 100,
+      powerType: 3,
+      nextLevelXp: 2100,
+    });
+    // A run recorded before the columns reads them as unobserved, not zero.
+    const old = fixture([{ id: "track-old", states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]] }]);
+    expect(trackFrom(readStates(old, "track-old"))[0]).toMatchObject({ health: null, maxPower: null });
   });
 
   test("a terminated run is not on the map, however fresh its last position", () => {
