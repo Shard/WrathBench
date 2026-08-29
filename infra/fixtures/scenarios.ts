@@ -148,6 +148,15 @@ const VINEYARD_NEAREST_VERMIN = { x: -8783.05, y: -161.565 };
 // is the zone id the core stores for Northshire Valley's parent).
 const HUMAN_START = { map: 0, zone: 12, x: -8949.95, y: -132.493, z: 83.5312, o: 0 };
 
+// The Coldridge Valley road below the pass, and the tunnel's south mouth it
+// faces: both are `creature` spawn rows on map 0 (a Coldridge Mountaineer and
+// Wren Darkspring), the same landmarks `infra/smoke/travel.ts` leg 1 walks. A
+// level-12 character here can walk the pass without the Rockjaw Raiders and
+// troggs turning the walk into an `interrupted` (they killed every level-1
+// attempt at that gate).
+const COLDRIDGE_ROAD = { x: -6115.1, y: 372.3, z: 395.6 };
+const COLDRIDGE_PASS_MOUTH = { x: -6049.4, y: 383.6 };
+
 export const SCENARIOS = {
   "tram-ironforge": {
     description: "level 10, 1g, standing at the Deeprun Tram portal in Ironforge facing the areatrigger",
@@ -211,6 +220,20 @@ export const SCENARIOS = {
     position: { ...HUMAN_START },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
     clearQuests: true,
+  },
+  "coldridge-valley": {
+    description:
+      "level 12, no money, on the Coldridge Valley road below the pass — the start of the legacy travel.ts tunnel walk",
+    level: 12,
+    money: 0,
+    position: {
+      map: 0,
+      // 132 = Coldridge Valley (AreaTable), the dwarf starting subzone.
+      zone: 132,
+      ...COLDRIDGE_ROAD,
+      o: facing(COLDRIDGE_ROAD, COLDRIDGE_PASS_MOUTH),
+    },
+    homebind: DWARF_START_BIND,
   },
   "vineyard-kill-credit": {
     description:
