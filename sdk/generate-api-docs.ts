@@ -90,6 +90,8 @@ const CLIENT_HELPERS: readonly Row[] = [
   { name: "deleteMail", sig: "deleteMail(mailId, options?): Promise<MailResult>", purpose: "Delete one mail (deleted, or refused)." },
   { name: "openBank", sig: "openBank(npcGuid: GuidOrUnit, options?): Promise<BankContents>", purpose: "Open the bank at a banker (state.units({ role: \"banker\" }), within reach) and return it; deposits and withdrawals need this open." },
   { name: "bankDeposit", sig: "bankDeposit(bagOrName: number | string, slot?, options?): Promise<BankMoveResult>", purpose: "Put a carried item (bag/slot as state.bag() lists it, or its name) in the bank; returns where it landed in state.bank(), refused with the inventory reason, or no_bank / no_item when nothing was sent." },
+  { name: "lootRoll", sig: "lootRoll(itemNameOrIdOrRollGuid, choice: \"need\" | \"greed\" | \"pass\" | \"disenchant\", options?): Promise<LootRollResult>", purpose: "Vote on an open roll frame from state.pendingRolls() (by the item's name — exact, else a unique substring — its id, or the roll guid); rolled carries the number rolled, while no_pending_roll / ambiguous_roll / roll_not_allowed mean nothing was sent. The winner arrives as SMSG_LOOT_ROLL_WON." },
+  { name: "readItem", sig: "readItem(bagOrName: number | string, slot?, options?): Promise<ReadItemResult>", purpose: "Read a carried book or letter (bag/slot as state.bag() lists it, or its name) and return its pages and text; no_item / not_readable mean nothing to read. The pages stay in state.itemTexts()." },
   { name: "bankWithdraw", sig: "bankWithdraw(bagOrName: number | string, slot?, options?): Promise<BankMoveResult>", purpose: "Take an item out of the bank (bag/slot as state.bank() lists it, or its name) into the bags; returns where it landed in state.bag(), refused, or no_bank / no_item." },
   { name: "waitForChat", sig: "waitForChat(match: string | (entry) => boolean, options?): Promise<ChatEntry>", purpose: "Wait for a chat line matching a string or predicate." },
   { name: "waitForNearby", sig: "waitForNearby(predicate: (obj) => boolean, options?): Promise<NearbyObject>", purpose: "Wait until an object in view satisfies the predicate." },
@@ -100,56 +102,56 @@ const CLIENT_HELPERS: readonly Row[] = [
 /**
  * Raw actions: one opcode each, acknowledged by HTTP; the game's outcome (a
  * cast failure, a gossip menu, a loot window) arrives on the event stream.
- * A few take a `GuidOrUnit` (`interact`) or resolve a gossip option by text —
- * that is argument convenience, not verdict-waiting; the RAW label is only
- * about where the outcome lands.
+ * Taking a `GuidOrUnit` or resolving a gossip option by text is argument
+ * convenience, not verdict-waiting; the RAW label is only about where the
+ * outcome lands.
  */
 const CLIENT_RAW: readonly Row[] = [
   { name: "say", sig: "say(text): Promise<ActionResponse>", purpose: "Say something in local chat." },
   { name: "moveToAsync", sig: "moveToAsync(target): Promise<MoveToResponse>", purpose: "Queue a move without waiting — the call for a walk longer than your own time budget; same targets as moveTo." },
   { name: "stop", sig: "stop(): Promise<ActionResponse>", purpose: "Queue a movement stop; the in-flight moveTo resolves with status 'stopped'." },
   { name: "face", sig: "face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>", purpose: "Turn in place toward an orientation (radians) or a point." },
-  { name: "setTarget", sig: "setTarget(guid: GuidArg): Promise<ActionResponse>", purpose: "Set the current target (guid string only)." },
+  { name: "setTarget", sig: "setTarget(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Set the current target." },
   { name: "clearTarget", sig: "clearTarget(): Promise<ActionResponse>", purpose: "Clear the current target." },
-  { name: "attackStart", sig: "attackStart(guid: GuidArg): Promise<ActionResponse>", purpose: "Start melee auto-attack (guid string only)." },
+  { name: "attackStart", sig: "attackStart(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Start melee auto-attack." },
   { name: "attackStop", sig: "attackStop(): Promise<ActionResponse>", purpose: "Stop melee auto-attack." },
-  { name: "castSpell", sig: "castSpell(spellId, targetGuid?: GuidArg): Promise<ActionResponse>", purpose: "Cast a spell; no target means self/auto-target." },
+  { name: "castSpell", sig: "castSpell(spellId, targetGuid?: GuidOrUnit): Promise<ActionResponse>", purpose: "Cast a spell; no target means self/auto-target." },
   { name: "cancelCast", sig: "cancelCast(spellId): Promise<ActionResponse>", purpose: "Cancel a cast in progress." },
-  { name: "interact", sig: "interact(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Use a gameobject — chest, door, quest object (accepts a unit or its guid)." },
-  { name: "gossipHello", sig: "gossipHello(guid: GuidArg): Promise<ActionResponse>", purpose: "Open an NPC's gossip menu (guid string only)." },
-  { name: "gossipSelect", sig: "gossipSelect(guid: GuidArg, option: string | number) | gossipSelect(guid, menuId, optionId): Promise<ActionResponse>", purpose: "Choose a gossip option by visible text (from the last observed menu) or by numeric ids." },
-  { name: "questList", sig: "questList(guid: GuidArg): Promise<ActionResponse>", purpose: "Ask an NPC for its quest list." },
-  { name: "questDetails", sig: "questDetails(guid: GuidArg, questId): Promise<ActionResponse>", purpose: "Request a quest's text." },
-  { name: "questAccept", sig: "questAccept(guid: GuidArg, questId): Promise<ActionResponse>", purpose: "Accept a quest (prefer acceptQuestFrom, which confirms)." },
-  { name: "questComplete", sig: "questComplete(guid: GuidArg, questId): Promise<ActionResponse>", purpose: "Ask to complete a quest (prefer turnInQuest, which waits)." },
-  { name: "questChooseReward", sig: "questChooseReward(guid: GuidArg, questId, rewardIndex?): Promise<ActionResponse>", purpose: "Choose a quest reward by index." },
+  { name: "interact", sig: "interact(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Use a gameobject — chest, door, quest object." },
+  { name: "gossipHello", sig: "gossipHello(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Open an NPC's gossip menu." },
+  { name: "gossipSelect", sig: "gossipSelect(guid: GuidOrUnit, option: string | number) | gossipSelect(guid, menuId, optionId): Promise<ActionResponse>", purpose: "Choose a gossip option by visible text (from the last observed menu) or by numeric ids." },
+  { name: "questList", sig: "questList(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Ask an NPC for its quest list." },
+  { name: "questDetails", sig: "questDetails(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Request a quest's text." },
+  { name: "questAccept", sig: "questAccept(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Accept a quest (prefer acceptQuestFrom, which confirms)." },
+  { name: "questComplete", sig: "questComplete(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Ask to complete a quest (prefer turnInQuest, which waits)." },
+  { name: "questChooseReward", sig: "questChooseReward(guid: GuidOrUnit, questId, rewardIndex?): Promise<ActionResponse>", purpose: "Choose a quest reward by index." },
   { name: "questAbandon", sig: "questAbandon(questId): Promise<ActionResponse>", purpose: "Abandon a quest from the log." },
   { name: "questQuery", sig: "questQuery(questId): Promise<ActionResponse>", purpose: "Fetch a quest template (title, objective text, required entries/counts) into state.quests; the SDK already does this for every quest entering the log." },
-  { name: "questGiverStatusQuery", sig: "questGiverStatusQuery(guid?: GuidArg): Promise<ActionResponse>", purpose: "Refresh the questgiver marker (state.units(...).questGiver) for one guid, or for everything in view when called with no guid; the SDK already does this on sight and on quest-log changes." },
-  { name: "loot", sig: "loot(guid: GuidArg): Promise<ActionResponse>", purpose: "Open the loot window on a corpse." },
-  { name: "lootAll", sig: "lootAll(guid: GuidArg): Promise<ActionResponse>", purpose: "Open and auto-loot; fire-and-forget (prefer lootCorpse, which waits)." },
+  { name: "questGiverStatusQuery", sig: "questGiverStatusQuery(guid?: GuidOrUnit): Promise<ActionResponse>", purpose: "Refresh the questgiver marker (state.units(...).questGiver) for one guid, or for everything in view when called with no guid; the SDK already does this on sight and on quest-log changes." },
+  { name: "loot", sig: "loot(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Open the loot window on a corpse." },
+  { name: "lootAll", sig: "lootAll(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Open and auto-loot; fire-and-forget (prefer lootCorpse, which waits)." },
   { name: "lootItem", sig: "lootItem(slot): Promise<ActionResponse>", purpose: "Store one loot slot into the bags." },
   { name: "lootMoney", sig: "lootMoney(): Promise<ActionResponse>", purpose: "Take the money from the open loot window." },
-  { name: "lootRelease", sig: "lootRelease(guid: GuidArg): Promise<ActionResponse>", purpose: "Close the loot window." },
-  { name: "vendorList", sig: "vendorList(guid: GuidArg): Promise<ActionResponse>", purpose: "Ask a vendor for its inventory list." },
-  { name: "buyItem", sig: "buyItem(guid: GuidArg, itemId, slot, count?): Promise<ActionResponse>", purpose: "Buy an item from a vendor (slot is the 1-based vendor slot)." },
-  { name: "sellItem", sig: "sellItem(guid: GuidArg, itemGuid: GuidArg, count?): Promise<ActionResponse>", purpose: "Sell an item to a vendor; omit count to sell the whole stack." },
-  { name: "repairAll", sig: "repairAll(guid: GuidArg): Promise<ActionResponse>", purpose: "Repair everything at a repair vendor." },
-  { name: "useItem", sig: "useItem(bagOrName: number | string, slot?, targetGuid?: GuidArg): Promise<ActionResponse>", purpose: "Use a bag item's on-use effect; the item is its bag/slot or its name (with a name, the next argument is the target guid)." },
+  { name: "lootRelease", sig: "lootRelease(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Close the loot window." },
+  { name: "vendorList", sig: "vendorList(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Ask a vendor for its inventory list." },
+  { name: "buyItem", sig: "buyItem(guid: GuidOrUnit, itemId, slot, count?): Promise<ActionResponse>", purpose: "Buy an item from a vendor (slot is the 1-based vendor slot)." },
+  { name: "sellItem", sig: "sellItem(vendor: GuidOrUnit, itemGuid: GuidArg, count?): Promise<ActionResponse>", purpose: "Sell an item to a vendor; omit count to sell the whole stack. The vendor takes a name in view, itemGuid stays the item's own guid string — there is no name-to-item-guid namespace." },
+  { name: "repairAll", sig: "repairAll(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Repair everything at a repair vendor." },
+  { name: "useItem", sig: "useItem(bagOrName: number | string, slot?, targetGuid?: GuidOrUnit): Promise<ActionResponse>", purpose: "Use a bag item's on-use effect; the item is its bag/slot or its name (with a name, the next argument is the target guid)." },
   { name: "destroyItem", sig: "destroyItem(bagOrName: number | string, slot?, count?): Promise<ActionResponse>", purpose: "Destroy a bag item by bag/slot or by name (with a name, the next argument is the count); omit count to destroy the whole stack." },
   { name: "repop", sig: "repop(): Promise<ActionResponse>", purpose: "Release the spirit while dead." },
-  { name: "reclaimCorpse", sig: "reclaimCorpse(guid?: GuidArg, options?: ReclaimCorpseOptions): Promise<ReclaimCorpseResult>", purpose: "Wait out the server's corpse reclaim delay, reclaim, and report the verdict: reclaimed / not_reclaimed / unconfirmed." },
-  { name: "reclaimCorpseAsync", sig: "reclaimCorpseAsync(guid?: GuidArg): Promise<ActionResponse>", purpose: "CMSG_RECLAIM_CORPSE, dispatch only. Prefer reclaimCorpse." },
-  { name: "spiritHealerActivate", sig: "spiritHealerActivate(guid: GuidArg): Promise<ActionResponse>", purpose: "Resurrect at a graveyard spirit healer (durability cost, resurrection sickness)." },
-  { name: "trainerListAsync", sig: "trainerListAsync(guid: GuidArg): Promise<ActionResponse>", purpose: "Ask a trainer for its list without waiting (prefer trainerList)." },
-  { name: "trainerBuySpellAsync", sig: "trainerBuySpellAsync(guid: GuidArg, spellId): Promise<ActionResponse>", purpose: "Buy a spell without waiting (prefer buySpell)." },
+  { name: "reclaimCorpse", sig: "reclaimCorpse(guid?: GuidOrUnit, options?: ReclaimCorpseOptions): Promise<ReclaimCorpseResult>", purpose: "Wait out the server's corpse reclaim delay, reclaim, and report the verdict: reclaimed / not_reclaimed / unconfirmed." },
+  { name: "reclaimCorpseAsync", sig: "reclaimCorpseAsync(guid?: GuidOrUnit): Promise<ActionResponse>", purpose: "CMSG_RECLAIM_CORPSE, dispatch only. Prefer reclaimCorpse." },
+  { name: "spiritHealerActivate", sig: "spiritHealerActivate(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Resurrect at a graveyard spirit healer (durability cost, resurrection sickness)." },
+  { name: "trainerListAsync", sig: "trainerListAsync(guid: GuidOrUnit): Promise<ActionResponse>", purpose: "Ask a trainer for its list without waiting (prefer trainerList)." },
+  { name: "trainerBuySpellAsync", sig: "trainerBuySpellAsync(guid: GuidOrUnit, spellId): Promise<ActionResponse>", purpose: "Buy a spell without waiting (prefer buySpell)." },
   { name: "learnTalentAsync", sig: "learnTalentAsync(talentId, rank): Promise<ActionResponse>", purpose: "Spend a talent point without waiting (prefer learnTalent)." },
   { name: "talentTreeAsync", sig: "talentTreeAsync(): Promise<ActionResponse>", purpose: "Ask for the class talent tree without waiting for the WB_TALENT_TREE answer (prefer queryTalentTree)." },
   { name: "petAttack", sig: "petAttack(target: GuidOrUnit): Promise<PetActionResult>", purpose: "Order the pet (state.pet()) to attack a unit; sent is an ack and the server's refusal arrives as SMSG_PET_ACTION_FEEDBACK, while no_pet means nothing was sent." },
   { name: "petFollow", sig: "petFollow(): Promise<PetActionResult>", purpose: "Order the pet to follow you." },
   { name: "petStay", sig: "petStay(): Promise<PetActionResult>", purpose: "Order the pet to stay where it is." },
   { name: "petReact", sig: "petReact(reaction: \"passive\" | \"defensive\" | \"aggressive\"): Promise<PetActionResult>", purpose: "Set the pet's react state (case-insensitive); anything else is unknown_reaction." },
-  { name: "petCast", sig: "petCast(spellNameOrId, target?: GuidOrUnit): Promise<PetActionResult>", purpose: "Have the pet cast one of its own spells (state.pet().spells, by name — exact, else a unique substring — or by id) at a unit or at nothing; the server's refusal arrives as SMSG_PET_CAST_FAILED, while unknown_spell / ambiguous_spell / passive_spell mean nothing was sent." },
+  { name: "petCast", sig: "petCast(spellNameOrId, target?: GuidOrUnit): Promise<PetActionResult>", purpose: "Have the pet cast one of its own spells (state.pet().spells, by name or by id) at a unit or at nothing; the server's refusal arrives as SMSG_PET_CAST_FAILED, while unknown_spell / ambiguous_spell / passive_spell mean nothing was sent." },
   { name: "petDismiss", sig: "petDismiss(): Promise<PetActionResult>", purpose: "Send the pet away: a hunter casts Dismiss Pet (the pet can be called back), any other pet is abandoned (a demon or temporary summon just goes). state.pet() is undefined once the bar is removed." },
   { name: "declineGroupInvite", sig: "declineGroupInvite(): Promise<RawActionResponse>", purpose: "Decline the pending invitation." },
   { name: "raw", sig: "raw(opcode: string, payload?: hex | Uint8Array | RawField[]): Promise<RawActionResponse>", purpose: "Escape hatch: send one allowlisted CMSG_* opcode with a body you build — a field list like [{ u32: 5 }, { guid: unit.guid }, { cstring: \"x\" }] is packed little-endian for you. Allowlist and field types: module/PROTOCOL.md \"raw\". The answer arrives on sdk.events only if its opcode is whitelisted there." },
@@ -168,7 +170,13 @@ const CLIENT_INTERNAL = new Set([
   "resolveGossipOption",
   "petGuidOrRefuse",
   "petRefusal",
+  "lootRollRefusal",
   "targetGuid",
+  "isChest",
+  "openChest",
+  "targetRef",
+  "byName",
+  "resolveRawGuids",
   "resolveTalent",
   "bankClosed",
   "noBankItem",
@@ -226,14 +234,16 @@ const STATE_ROWS: readonly Row[] = [
   { name: "talents", sig: "state.talents(): TalentState | undefined", purpose: "Last SMSG_TALENTS_INFO: { unspentPoints, activeSpec, specCount, talents: [{ talentId, rank (0-based) }] }." },
   { name: "talentTree", sig: "state.talentTree(): TalentTree | undefined", purpose: "The class talent frame last answered by queryTalentTree, with pointsSpent per talent merged from the latest SMSG_TALENTS_INFO; undefined until queried." },
   { name: "skills", sig: "state.skills(): SkillLine[]", purpose: "The skill pane: [{ skillId, name, value, max, tempBonus, permBonus }] for every skill line the character has (weapons, armor, professions, languages), from the self update fields." },
-  { name: "skill", sig: "state.skill(idOrName): SkillLine | undefined", purpose: "One skill line by id or name (exact, else unique substring); undefined when the character lacks it." },
+  { name: "skill", sig: "state.skill(idOrName): SkillLine | undefined", purpose: "One skill line by id or name; undefined when the character lacks it, and also when the name is ambiguous — a read has no way to refuse." },
   { name: "reputation", sig: "state.reputation(): ReputationEntry[]", purpose: "The reputation pane: [{ factionId, name, standing, base, reputation, rank: \"Hated\"…\"Exalted\", visible, atWar }] from login's SMSG_INITIALIZE_FACTIONS and every SMSG_SET_FACTION_STANDING since; visible factions first." },
-  { name: "reputationWith", sig: "state.reputationWith(factionIdOrName): ReputationEntry | undefined", purpose: "One reputation row by faction id or name (exact, else unique substring)." },
+  { name: "reputationWith", sig: "state.reputationWith(factionIdOrName): ReputationEntry | undefined", purpose: "One reputation row by faction id or name; undefined when there is none or the name is ambiguous." },
   { name: "pet", sig: "state.pet(): PetState | undefined", purpose: "The pet frame: { guid, name, creatureName, level, health, maxHealth, power, maxPower, dead, inView, reaction: \"passive\"|\"defensive\"|\"aggressive\", command: \"stay\"|\"follow\"|\"attack\", actionBar, spells: [{ spellId, name, rank, autocast, passive }], cooldowns }; undefined when there is no pet (none summoned, or its bar was removed)." },
-  { name: "petSpell", sig: "state.petSpell(idOrName): PetSpellEntry | undefined", purpose: "One of the pet's spells by id or name (exact, else unique substring)." },
+  { name: "petSpell", sig: "state.petSpell(idOrName): PetSpellEntry | undefined", purpose: "One of the pet's spells by id or name; undefined when there is none or the name is ambiguous." },
   { name: "group", sig: "state.group(): GroupState | undefined", purpose: "The party: { inGroup, raid, leaderGuid, leaderName, leader (you), members: [{ guid, name, online, leader, assistant }], pendingInvite: { inviterName }, lastResult: { operation, name, result, text }, lastDecline }; undefined until any group packet." },
   { name: "mailbox", sig: "state.mailbox(): MailboxState | undefined", purpose: "The mailbox: { guid (the open mailbox), mails: [{ mailId, senderName, subject, body, money, cod, read, daysLeft, items }], total, newMail, lastResult: { action, result, text } }; undefined until any mail packet." },
   { name: "bank", sig: "state.bank(): BankContents", purpose: "The bank: { guid (the banker the frame was opened at), items: [{ bag (255 for the main bank, else the bank bag's slot 67-73), slot, guid, itemId, name, count }], bags, freeSlots, totalSlots }; the slots are known from login, moving items needs openBank." },
+  { name: "pendingRolls", sig: "state.pendingRolls(): PendingRoll[]", purpose: "The open group-loot roll frames: [{ rollGuid, itemId, name, quality, count, allowed: [\"need\"|\"greed\"|\"disenchant\"|\"pass\"], deadline }]; empty when nothing is up for a roll." },
+  { name: "itemTexts", sig: "state.itemTexts(): ItemText[]", purpose: "The text of every carried item read so far: [{ guid, itemId, name, pages, complete }]." },
   { name: "trade", sig: "state.trade(): TradeState | undefined", purpose: "The trade window: { status, statusText, open, traderGuid, mine: { money, items }, theirs: { money, items } }; undefined until any trade packet." },
   { name: "nameOf", sig: "state.nameOf(guid): string | undefined", purpose: "The name for a guid, if a name query ever returned one." },
   { name: "snapshot", sig: "state.snapshot(): StateSnapshot", purpose: "A frozen plain-object copy of the whole cache." },
@@ -384,8 +394,21 @@ game answer you asked for.
 **Two tiers.** A **helper** waits for the game's verdict and returns it. A **raw
 action** is one opcode acknowledged over HTTP; its outcome arrives later on the
 event stream (\`sdk.events\`). The tier is about where the outcome lands, not
-about the argument type — \`interact\` is a raw action that still accepts a unit
-object. Endpoints (session, health) return their HTTP answer directly.
+about the argument type: every call that takes a guid takes a unit object or a
+name in view just the same. Endpoints (session, health) return their HTTP
+answer directly.
+
+**Names are referents.** Anywhere a guid is taken — helpers, raw actions, and a
+\`{ guid }\` / \`{ packedGuid }\` field inside a \`raw()\` payload — you may instead
+pass the name of something you can currently see, exactly as a player points at
+things by name. Resolution ignores case, spacing and apostrophes, then takes an
+exact name, else a unique substring, else a unique near-miss (one typo, two in a
+name of eight characters or more). One match acts; nothing matching, or two
+things matching, refuses and lists what is in view — the SDK never picks between
+referents. When the match was not exact the answer carries
+\`resolved: { input, name, guid }\` so you can see what you acted on. Items work
+the same way in place of a bag number (\`equipItem("Bronze Axe")\`), against what
+you carry. Guids and opcode names are never fuzzed.
 
 ## Session & connection
 
