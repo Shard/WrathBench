@@ -75,8 +75,6 @@ status.
       and evidence"); pull back to a labelled coords
       tier only if the names-only ladder proves unclimbable.
 
-## Fleet and gate
-
 ## Episodes and results
 
 8. **Cross-driver cost is not comparable, because the two harnesses do not
