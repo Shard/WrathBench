@@ -18,17 +18,25 @@
  *   the same tie-break `streamRows` picks its row with, so the two cannot
  *   disagree;
  * - a cycle cannot happen, and if a malformed one ever did, the visited set
- *   ends the walk instead of the page hanging.
+ *   ends the walk instead of the page hanging;
+ * - a stillborn launch is not an attempt at the character and is cut before the
+ *   walk, so no page counts one or points at one.
  *
  * Typed structurally rather than on `ResultRun`: the run page holds a `RunRow`,
- * the runs table a `ResultRun`, and the lineage is the three fields both have.
+ * the runs table a `ResultRun`, and the lineage is the fields both have.
  */
 
-/** The three fields a lineage is derived from. Both wire shapes carry them. */
+/**
+ * The fields a lineage is derived from. Both wire shapes carry the first three;
+ * `stillborn` is the listing's own annotation and absent on the run page's row,
+ * which is why it is optional.
+ */
 export interface LineageRun {
   runId: string;
   continuedFrom: string | null;
   startedAt: number | null;
+  /** A launch that produced nothing (`stillbornOf`). Not an attempt. */
+  stillborn?: boolean | null;
 }
 
 export interface Lineage {
@@ -78,7 +86,15 @@ export function chainsOf(runs: readonly LineageRun[]): Map<string, string[]> {
  * stream as a whole, not the part before this run — so an attempt in the middle
  * of a chain reads "attempt 2 of 3" rather than "attempt 2 of 2".
  */
-export function lineageIndex(runs: readonly LineageRun[]): Map<string, Lineage> {
+export function lineageIndex(all: readonly LineageRun[]): Map<string, Lineage> {
+  /*
+   * A stillborn launch is not an attempt at the character, so it is neither
+   * counted nor pointed at — the same cut `streamRows` makes before it walks,
+   * made here so the runs table, the run page and the ladder cannot disagree
+   * about how long a stream is. Such a run still *lists* on the inventory: it
+   * simply gets no entry here and so no lineage line.
+   */
+  const runs = all.filter((r) => r.stillborn !== true);
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const chains = chainsOf(runs);
 
