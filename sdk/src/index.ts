@@ -15,7 +15,6 @@ export {
   WrathTransportError,
 } from "./client";
 export type {
-  ActionHint,
   BuySpellResult,
   ConnectOptions,
   DeleteCharacterOptions,
