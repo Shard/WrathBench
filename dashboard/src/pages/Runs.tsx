@@ -28,6 +28,7 @@ import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
+import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
 import {
   COLUMN_TITLES,
   RUN_COLUMNS,
@@ -66,6 +67,15 @@ export default function Runs() {
   const series = (): string | null => pageSeries(feeds.seriesChoice(), feeds.seriesAvailable(), served());
   const inSeries = (): ResultRun[] => filterBySeries(served(), series());
   const rows = createMemo(() => sortRuns(filterRuns(inSeries(), filter()), sort()));
+  /*
+   * Freeplay lineage (`lib/lineage.ts`), so a12 does not read as an unrelated
+   * row beside a11. Indexed over everything the server served rather than over
+   * the rows on screen: a stream that crossed a minor bump has its predecessor
+   * outside the shell's series filter, and that is exactly where the reader
+   * most needs to be told what the run continues. The link still resolves —
+   * the run page takes any id.
+   */
+  const lineage = createMemo(() => lineageIndex(served()));
 
   const setSort = (column: RunColumn): void => setParams(sortQuery(nextSort(sort(), column)), { replace: true });
   const clear = (): void =>
@@ -135,7 +145,9 @@ export default function Runs() {
               </tr>
             </thead>
             <tbody>
-              <For each={rows()}>{(r) => <RunRowView row={r} query={query()} />}</For>
+              <For each={rows()}>
+                {(r) => <RunRowView row={r} query={query()} lineage={lineage().get(r.runId)} />}
+              </For>
               <Show when={rows().length === 0}>
                 <tr>
                   <td colSpan={RUN_COLUMNS.length} class="dim">
@@ -162,8 +174,11 @@ export default function Runs() {
  * One run. Every cell is rendered off `RUN_COLUMNS`, so a column cannot exist
  * in the header and not here: that drift is what the constant exists to stop.
  */
-function RunRowView(props: { row: ResultRun; query: string }) {
+function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | undefined }) {
   const r = (): ResultRun => props.row;
+  /** Undefined unless this run is part of a stream: one attempt is not lineage. */
+  const lin = (): Lineage | undefined => (hasLineage(props.lineage) ? props.lineage : undefined);
+  const runHref = (id: string): string => `/run/${encodeURIComponent(id)}${props.query}`;
   const href = (): string => `/run/${encodeURIComponent(r().runId)}${props.query}`;
   const narrow = (patch: Record<string, string>): string => {
     const q = new URLSearchParams(props.query);
@@ -183,6 +198,29 @@ function RunRowView(props: { row: ResultRun; query: string }) {
         return (
           <td>
             <A href={href()}>{r().runId}</A>
+            {/* A durable freeplay stream is one character across attempts, and
+                this line is the whole of the link between them: the table sorts
+                thirteen ways, so a11 is often nowhere near a12 and the text has
+                to carry what adjacency cannot. */}
+            <Show when={lin()}>
+              {(l) => (
+                <div class="dim" title="a durable freeplay stream: one character, continued across attempts">
+                  attempt {l().attempt} of {l().attempts}
+                  <Show when={l().previous}>
+                    {(p) => (
+                      <>
+                        {" · continues "}
+                        <A href={runHref(p())}>{p()}</A>
+                      </>
+                    )}
+                  </Show>
+                  <Show when={l().previous !== l().streamId && l().attempt > 2}>
+                    {" · from "}
+                    <A href={runHref(l().streamId)}>{l().streamId}</A>
+                  </Show>
+                </div>
+              )}
+            </Show>
           </td>
         );
       case "model":
@@ -282,5 +320,7 @@ function RunRowView(props: { row: ResultRun; query: string }) {
         );
     }
   };
-  return <tr>{RUN_COLUMNS.map(cell)}</tr>;
+  /* The rail is the cheap half of the same fact: where the sort does put a
+     stream's attempts together, they read as one block. */
+  return <tr class={lin() === undefined ? "" : "stream"}>{RUN_COLUMNS.map(cell)}</tr>;
 }
