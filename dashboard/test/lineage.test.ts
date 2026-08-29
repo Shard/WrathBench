@@ -97,3 +97,25 @@ describe("lineageIndex", () => {
     for (const id of ["a1", "a2", "a3"]) expect(idx.get(id)).toEqual(rev.get(id)!);
   });
 });
+
+describe("stillborn launches", () => {
+  test("a launch that produced nothing is not an attempt, and nothing points at it", () => {
+    const idx = lineageIndex([
+      r("a11", null, 10),
+      { ...r("a12", "a11", 20), stillborn: true },
+      r("a13", "a11", 30),
+    ]);
+    expect(idx.has("a12")).toBe(false);
+    // The stream is two attempts, and a13 continues a11 rather than the launch.
+    expect(idx.get("a13")).toMatchObject({ attempt: 2, attempts: 2, previous: "a11" });
+    expect(idx.get("a11")?.next).toBe("a13");
+  });
+
+  test("a chain through a stillborn launch keeps the runs either side apart", () => {
+    // a13 names the dead launch as its predecessor: the link cannot resolve, so
+    // a13 is a root rather than being credited with a11's progress.
+    const idx = lineageIndex([r("a11", null, 10), { ...r("a12", "a11", 20), stillborn: true }, r("a13", "a12", 30)]);
+    expect(idx.get("a13")).toMatchObject({ streamId: "a13", attempt: 1, previous: null });
+    expect(idx.get("a11")?.next).toBe(null);
+  });
+});
