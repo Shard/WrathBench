@@ -39,32 +39,8 @@ ever called `sdk.raw()` and the highest level reached was 9, so nothing below is
 "a trajectory asked for it" — it is the surface a player needs before a run can
 get far enough to ask. **Operator's decision, 2026-08-29: complete the basic
 player surface, each piece validated by a smoke test, before any 0.6 talk.**
-Items 95, 96, 97, 99 and 101 shipped the same day (97f4e31, dc8c9aa;
-worklogs/2026-08-29). 98 and 100 remain.
-
-
-
-
-98. **No pet surface, so hunter and warlock are unplayable** (2026-08-29 audit).
-    There is no `CMSG_PET_ACTION` and no `SMSG_PET_SPELLS` tap — `WbManager.cpp`
-    says so in as many words ("no pet surface yet", ~line 4105). A hunter past
-    level 10 or a warlock past level 1 has a pet it can neither command nor
-    observe, which silently removes two classes from the class dimension rather
-    than scoring them badly. Unblocked by the pet spellbook tap plus the pet
-    action opcode, and a smoke test that summons and commands one. Status:
-    queued behind 95–97.
-
-
-100. **Allowlisted opcodes whose replies are dropped: group, mail, bank, trade**
-    (2026-08-29 audit). The raw allowlist accepts the client opcodes for all
-    four, and no reply is whitelisted, so the model sends and sees nothing — the
-    exact "I sent it and saw nothing" evidence the raw tier is supposed to
-    produce (docs/METHODOLOGY.md, "The model surface"). Bank is worse than
-    silent: its slots fall outside the inventory range the module serves, so even
-    a successful deposit is invisible. The auction house is blocked outright at
-    the allowlist and is a separate decision, not part of this item. Unblocked by
-    a reply tap per surface, each earning its own smoke test; group first, since
-    rung 6 needs a party record (item 35). Status: queued.
+Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
+worklogs/2026-08-29).
 
 ## Navigation
 
