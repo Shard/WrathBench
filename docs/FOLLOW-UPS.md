@@ -146,21 +146,6 @@ status.
     still nobody's — it needs a party record and an instance record, and the
     harness runs one character per session; its framing is issue #9.
 
-90. **The freeplay pilot is queued behind class-probe, and one lane cannot do
-    both** (2026-08-28, with the roster refresh). `nemotron-super` carries
-    `idle: "unlimited"` and is also the only working model left in
-    `campaigns.class-probe`. The policy consumes candidates in three ordered loops
-    — scored evals (`runner/src/models.ts:1535`), campaign probes (`:1580`), then
-    idle/freeplay (`:1613`) — so its eight cells (up to 90m each) all run before the
-    freeplay session starts, roughly twelve hours out. It is also the only free lane
-    whose tier targets are met, so it is the only one eligible for idle work at all;
-    the others still owe scored runs. `policy.maxConcurrent.openrouter: 1` means it
-    cannot do both at once either. Next action: operator picks which the lane spends
-    tonight on — leave it (class-probe sweeps, freeplay follows), or drop it from
-    `class-probe.models` so freeplay starts now and the campaign idles until another
-    free lane meets its targets. Related: raising the openrouter cap to 2 would let a
-    cleared lane's scored run and the sweep overlap, at the cost that a mid-run 429
-    on a scored run is unrecoverable (scored lanes never resume).
 
 ## Docs and release
 
