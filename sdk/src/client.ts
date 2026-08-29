@@ -40,6 +40,8 @@ import {
   sessionResponseSchema,
   type ActionRequest,
   type ActionResponse,
+  type ActivateTaxiReplyData,
+  type BindPointUpdateData,
   type CharacterDeleteResponse,
   type CorpseReclaimDelayData,
   type CorpseQueryData,
@@ -86,12 +88,15 @@ import {
   pointOf,
   questGiverStatusName,
   StateCache,
+  type BindPoint,
   type ChatEntry,
   type CorpseLocation,
   type NearbyObject,
   type Point3,
   type QuestLogEntry,
   type TalentState,
+  type TaxiNodeRef,
+  type TaxiWindow,
   type UnitPosition,
   type UnitView,
   type WorldPosition,
@@ -144,6 +149,41 @@ function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint
         `unit): the opaque decimal string from state.nearbyUnits(), state.closest(...), or event data`,
     );
   }
+}
+
+/**
+ * Resolve `activateTaxi`'s destination — a node name (case-insensitive exact,
+ * else a unique substring) or a node id — against a flight master window.
+ * Throws with the known nodes listed on no match or more than one; the
+ * current node is a legal target here (the server answers 11, same node).
+ */
+function resolveTaxiNode(window: TaxiWindow, dest: string | number): TaxiNodeRef {
+  const list = () =>
+    window.known.map((n) => `${n.nodeId}${n.name === undefined ? "" : `:${JSON.stringify(n.name)}`}`).join(", ");
+  if (typeof dest === "number") {
+    const hit = window.known.find((n) => n.nodeId === dest);
+    if (hit !== undefined) return hit;
+    throw new Error(
+      `activateTaxi(${window.guid}, ${dest}): node ${dest} is not in the window this flight master last showed ` +
+        `(only nodes this character has visited are offered). Known: ${list()}`,
+    );
+  }
+  const q = dest.trim().toLowerCase();
+  const named = window.known.filter((n) => n.name !== undefined);
+  const exact = named.filter((n) => n.name!.toLowerCase() === q);
+  const matched = exact.length > 0 ? exact : named.filter((n) => n.name!.toLowerCase().includes(q));
+  if (matched.length === 1) return matched[0]!;
+  if (matched.length === 0) {
+    throw new Error(
+      `activateTaxi(${window.guid}, ${JSON.stringify(dest)}): no known node in this flight master's window is named ` +
+        `that${named.length === 0 ? " (the module served ids only — pass a node id)" : ""}. Known: ${list()}`,
+    );
+  }
+  throw new Error(
+    `activateTaxi(${window.guid}, ${JSON.stringify(dest)}): matches ${matched.length} nodes (${matched
+      .map((n) => JSON.stringify(n.name))
+      .join(", ")}); use the exact name or the node id. Known: ${list()}`,
+  );
 }
 
 function guidArg(guid: GuidArg, arg: string): string {
@@ -1302,6 +1342,28 @@ const TRAINER_BUY_FAIL_HINTS: Record<number, string> = {
 };
 
 /**
+ * `SMSG_ACTIVATETAXIREPLY.reply` — `ActivateTaxiReply` in the pinned core —
+ * rendered the way `TRAINER_BUY_FAIL_HINTS` renders trainer refusals: the
+ * number is the server's word and is always reported; this is the
+ * client-visible sentence and the recovery that follows from it. The
+ * accepted case (0) needs no hint. An unknown code renders without one.
+ */
+const TAXI_REPLY_HINTS: Record<number, string> = {
+  1: "the server refused the flight without a reason (ERR_TAXIUNSPECIFIEDSERVERERROR); ask again",
+  2: "no flight path connects these two nodes for this character (ERR_TAXINOSUCHPATH); pick another destination from state.lastTaxiNodes(guid).known",
+  3: "not enough money for the fare (ERR_TAXINOTENOUGHMONEY); state.money is what you have",
+  4: "too far from the flight master, or it is not a flight master (ERR_TAXITOOFARAWAY); moveTo the NPC first, then reopen the window with showTaxiNodes(guid)",
+  5: "no flight master is in interaction range (ERR_TAXINOVENDORNEARBY); moveTo the NPC and retry",
+  6: "this character has not visited that node (ERR_TAXINOTVISITED) — a flight master only sells routes between nodes you have discovered on foot; the destination must be in state.lastTaxiNodes(guid).known",
+  7: "you are busy (ERR_TAXIPLAYERBUSY): in combat, casting, or trading; wait and retry",
+  8: "you are already mounted (ERR_TAXIPLAYERALREADYMOUNTED); dismount first",
+  9: "you are shapeshifted (ERR_TAXIPLAYERSHAPESHIFTED); cancel the form first",
+  10: "you are moving (ERR_TAXIPLAYERMOVING); stop(), stand still a moment, retry",
+  11: "the destination is the node you are standing at (ERR_TAXISAMENODE); pick another",
+  12: "you are not standing (ERR_TAXINOTSTANDING); stand up and retry",
+};
+
+/**
  * `SMSG_INVENTORY_CHANGE_FAILURE.result` — `InventoryResult` in the pinned
  * core — for the codes an equip refusal actually produces, rendered the way
  * `TRAINER_BUY_FAIL_HINTS` renders trainer refusals: the number is the
@@ -1446,6 +1508,61 @@ export type LearnTalentResult =
       readonly talents: TalentState;
       readonly hint: string;
     };
+
+export interface TaxiOptions {
+  /** How long to wait for the server's window or verdict. Default 10000. */
+  timeout?: number;
+}
+
+/**
+ * The outcome of `activateTaxi`, as a value: the server's
+ * `SMSG_ACTIVATETAXIREPLY`. `accepted` means the flight is starting — the
+ * ride itself is `state.self.taxiFlight` turning true, and the landing is it
+ * turning false again; no packet says "landed", so nothing here does either.
+ * `refused` carries the server's reply code and the client-visible sentence
+ * for it.
+ */
+export type ActivateTaxiResult =
+  | {
+      readonly ok: true;
+      readonly status: "accepted";
+      readonly reply: 0;
+      readonly from: TaxiNodeRef;
+      readonly to: TaxiNodeRef;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "refused";
+      /** Raw `ActivateTaxiReply` code (1..12). */
+      readonly reply: number;
+      readonly from: TaxiNodeRef;
+      readonly to: TaxiNodeRef;
+      readonly hint: string;
+    };
+
+export interface BindOptions {
+  /** How long to wait for each of the three server answers (menu, confirm, bind point). Default 10000. */
+  timeout?: number;
+  /**
+   * Which gossip option is the bind. Default: the option whose text contains
+   * "home" (the stock "Make this inn your home."). A visible text (exact or
+   * unique substring) or an `optionId` from `state.lastGossip(guid)`.
+   */
+  option?: string | number;
+}
+
+/**
+ * The outcome of `bindAtInnkeeper`, as a value. `bound` is the server's
+ * `SMSG_BINDPOINTUPDATE` after the confirm — the new hearthstone destination,
+ * also on `state.self.bindPoint`. Every other way the sequence can end is
+ * an absence of a server answer and throws (`EventTimeoutError`), or an SDK
+ * refusal to act (no such option on the menu) and throws too.
+ */
+export type BindResult = {
+  readonly ok: true;
+  readonly status: "bound";
+  readonly bindPoint: BindPoint;
+};
 
 export interface ReclaimCorpseOptions {
   /**
@@ -3516,6 +3633,160 @@ export class WrathClient {
         `the server did not record talent ${talentId} at rank ${rank} — it needs an unspent point ` +
         `(state.talents().unspentPoints is ${talents.unspentPoints}), the previous rank first, enough ` +
         `points in that tree's earlier tiers, and any prerequisite talent; the server names no reason`,
+    };
+  }
+
+  /**
+   * Open a flight master's window and return it: `gossipHello` on the NPC,
+   * then — when the master's menu has other entries too — choose its taxi
+   * option (gossip icon 2, the client's own marker), and wait for
+   * `SMSG_SHOWTAXINODES`. A flight master with nothing else to say sends the
+   * window straight from the hello, so the select step is skipped when the
+   * window arrives first. The result is what `state.lastTaxiNodes(guid)`
+   * holds: the node this master stands at and the nodes this character has
+   * visited (the only destinations the server will accept). Nothing here
+   * is a route or a fare; the way to learn whether two nodes connect is to
+   * ask (`activateTaxi`).
+   */
+  async showTaxiNodes(npcGuid: GuidOrUnit, options: TaxiOptions = {}): Promise<TaxiWindow> {
+    const id = guidKey(guidOf(npcGuid, "showTaxiNodes(npcGuid)"));
+    const timeout = options.timeout ?? 10_000;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    const after = (e: StreamEvent) => sinceSeq === undefined || e.seq > sinceSeq;
+    const isWindow = (e: StreamEvent) =>
+      isEvent(e, "SMSG_SHOWTAXINODES") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id;
+    const isMenu = (e: StreamEvent) =>
+      isEvent(e, "SMSG_GOSSIP_MESSAGE") && !isDecodeError(e.data) && guidKey((e.data as GossipMessageData).guid) === id;
+    await this.gossipHello(id);
+    const first = await this.waitEvent((e) => after(e) && (isWindow(e) || isMenu(e)), {
+      timeout,
+      description: `the flight master's window (SMSG_SHOWTAXINODES) or menu (SMSG_GOSSIP_MESSAGE) for ${id}`,
+    });
+    if (isMenu(first)) {
+      const menu = first.data as GossipMessageData;
+      const taxi = menu.options.filter((o) => o.icon === 2);
+      if (taxi.length !== 1) {
+        throw new Error(
+          `showTaxiNodes(${id}): the menu that opened has ${taxi.length === 0 ? "no" : taxi.length} taxi option(s) ` +
+            `(gossip icon 2) — is this NPC a flight master (state.units({ role: "flightMaster" }))? Options: ` +
+            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)} (icon ${o.icon})`).join(", "),
+        );
+      }
+      await this.gossipSelect(id, menu.menuId, taxi[0]!.optionId);
+      await this.waitEvent((e) => e.seq > first.seq && isWindow(e), {
+        timeout,
+        description: `the flight master's window (SMSG_SHOWTAXINODES) for ${id} after choosing its taxi option`,
+      });
+    }
+    const window = this.state.lastTaxiNodes(id);
+    if (window === undefined) {
+      throw new Error(`showTaxiNodes(${id}): SMSG_SHOWTAXINODES arrived but the state cache holds no window for it`);
+    }
+    return window;
+  }
+
+  /**
+   * `CMSG_ACTIVATETAXI` — fly from the node this flight master stands at to
+   * `dest`, and read the server's verdict off `SMSG_ACTIVATETAXIREPLY`.
+   *
+   * `dest` is a node name (case-insensitive exact, or a unique substring) or
+   * a node id, resolved against the window last observed for this master
+   * (`state.lastTaxiNodes(guid)`; `showTaxiNodes` opens one). The source
+   * node is that window's `current`, exactly what a client sends. Throws
+   * (nothing dispatched) when no window has been seen for the guid or the
+   * destination matches no known node or more than one — every rejection
+   * lists the known nodes so the next call is obvious. The refusal codes
+   * come back as values with a hint each (`TAXI_REPLY_HINTS`).
+   *
+   * `accepted` is the flight starting; `state.self.taxiFlight` is true for
+   * the ride and flips false on landing. The fare is charged by the server
+   * and shows on `state.money`.
+   */
+  async activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options: TaxiOptions = {}): Promise<ActivateTaxiResult> {
+    const id = guidKey(guidOf(npcGuid, "activateTaxi(npcGuid, dest)"));
+    const window = this.state.lastTaxiNodes(id);
+    if (window === undefined) {
+      throw new Error(
+        `activateTaxi(${id}, ${JSON.stringify(dest)}): no flight master window has been observed for ${id} — ` +
+          `open one first with showTaxiNodes(guid) (gossipHello on a visible flight master), then fly.`,
+      );
+    }
+    const to = resolveTaxiNode(window, dest);
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_ACTIVATETAXI", [{ guid: id }, { u32: window.current.nodeId }, { u32: to.nodeId }]);
+    const event = await this.waitEvent(
+      (e) => isEvent(e, "SMSG_ACTIVATETAXIREPLY") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout: options.timeout ?? 10_000,
+        description: `the SMSG_ACTIVATETAXIREPLY answering activateTaxi(${id}, ${JSON.stringify(dest)})`,
+      },
+    );
+    const reply = (event.data as ActivateTaxiReplyData).reply;
+    if (reply === 0) {
+      return { ok: true, status: "accepted", reply: 0, from: window.current, to };
+    }
+    const named = TAXI_REPLY_HINTS[reply];
+    const hint = named === undefined ? `the server refused the flight with reply ${reply}, a code the SDK does not name` : named;
+    this.noteActionHint("activateTaxi", "refused", hint);
+    return { ok: false, status: "refused", reply, from: window.current, to, hint };
+  }
+
+  /**
+   * Make an inn the hearthstone's home, the way a client does it: open the
+   * innkeeper's gossip menu, choose the bind option ("Make this inn your
+   * home." by default), answer the server's `SMSG_BINDER_CONFIRM` with
+   * `CMSG_BINDER_ACTIVATE`, and return the `SMSG_BINDPOINTUPDATE` that
+   * follows — the new destination, also on `state.self.bindPoint`.
+   *
+   * Throws (nothing further dispatched) when the menu has no such option;
+   * the message lists the options. The server declines silently when the
+   * NPC is not an innkeeper in range or the character is dead, which shows
+   * as the confirm never arriving (`EventTimeoutError`).
+   */
+  async bindAtInnkeeper(npcGuid: GuidOrUnit, options: BindOptions = {}): Promise<BindResult> {
+    const id = guidKey(guidOf(npcGuid, "bindAtInnkeeper(npcGuid)"));
+    const timeout = options.timeout ?? 10_000;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.gossipHello(id);
+    const menuEvent = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
+        !isDecodeError(e.data) &&
+        guidKey((e.data as GossipMessageData).guid) === id &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout, description: `the innkeeper's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
+    );
+    const menu = menuEvent.data as GossipMessageData;
+    let choice: { menuId: number; optionId: number };
+    if (options.option !== undefined) {
+      choice = this.resolveGossipOption(id, options.option);
+    } else {
+      const home = menu.options.filter((o) => /home/i.test(o.text));
+      if (home.length !== 1) {
+        throw new Error(
+          `bindAtInnkeeper(${id}): the menu that opened has ${home.length === 0 ? "no" : home.length} option(s) mentioning ` +
+            `"home" — is this NPC an innkeeper (state.units({ role: "innkeeper" }))? Pass { option } to pick one of: ` +
+            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", "),
+        );
+      }
+      choice = { menuId: menu.menuId, optionId: home[0]!.optionId };
+    }
+    await this.gossipSelect(id, choice.menuId, choice.optionId);
+    const confirm = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_BINDER_CONFIRM") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id && e.seq > menuEvent.seq,
+      { timeout, description: `the innkeeper's confirm (SMSG_BINDER_CONFIRM) from ${id}` },
+    );
+    await this.raw("CMSG_BINDER_ACTIVATE", [{ guid: id }]);
+    const bound = await this.waitEvent(
+      (e) => isEvent(e, "SMSG_BINDPOINTUPDATE") && !isDecodeError(e.data) && e.seq > confirm.seq,
+      { timeout, description: `the new bind point (SMSG_BINDPOINTUPDATE) after confirming with ${id}` },
+    );
+    const d = bound.data as BindPointUpdateData;
+    return {
+      ok: true,
+      status: "bound",
+      bindPoint: { map: d.map, x: d.x, y: d.y, z: d.z, area: { id: d.areaId, name: d.areaName } },
     };
   }
 

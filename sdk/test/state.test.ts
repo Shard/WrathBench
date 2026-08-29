@@ -1929,6 +1929,53 @@ describe("achievements and flight paths", () => {
     expect(cache.self.taxiFlight).toEqual({ value: false, seq: 4, ts: 2004 });
   });
 
+  test("SMSG_SHOWTAXINODES folds into lastTaxiNodes(guid): current node, known nodes, the mask verbatim", () => {
+    const window = (seq: number) => ({
+      seq,
+      opcode: "SMSG_SHOWTAXINODES",
+      opcodeId: 0x1a9,
+      ts: 2000 + seq,
+      data: {
+        showWindow: true,
+        guid: "17365880163140632581",
+        currentNode: 6,
+        currentNodeName: "Ironforge, Dun Morogh",
+        mask: [0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        known: [{ nodeId: 6, name: "Ironforge, Dun Morogh" }, { nodeId: 7 }],
+      },
+    });
+    const cache = StateCache.replay(toEvents([window(1)]), { seed: SEED });
+    const w = cache.lastTaxiNodes("17365880163140632581");
+    expect(w?.current).toEqual({ nodeId: 6, name: "Ironforge, Dun Morogh" });
+    expect(w?.known).toEqual([
+      { nodeId: 6, name: "Ironforge, Dun Morogh" },
+      { nodeId: 7, name: undefined },
+    ]);
+    expect(w?.mask).toEqual([0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(w?.seq).toBe(1);
+    expect(cache.lastTaxiNodes("8")).toBeUndefined();
+    expect(cache.snapshot().taxiWindows.get("17365880163140632581")?.current.nodeId).toBe(6);
+  });
+
+  test("SMSG_BINDPOINTUPDATE is self.bindPoint, the last one winning", () => {
+    const bind = (seq: number, areaId: number, areaName: string, x: number) => ({
+      seq,
+      opcode: "SMSG_BINDPOINTUPDATE",
+      opcodeId: 0x155,
+      ts: 2000 + seq,
+      data: { x, y: -132.5, z: 83.5, map: 0, areaId, areaName },
+    });
+    const cache = StateCache.replay(toEvents([bind(1, 9, "Northshire Valley", -8949.9), bind(2, 1537, "Ironforge", -4840.6)]), {
+      seed: SEED,
+    });
+    expect(cache.self.bindPoint).toEqual({
+      value: { map: 0, x: -4840.6, y: -132.5, z: 83.5, area: { id: 1537, name: "Ironforge" } },
+      seq: 2,
+      ts: 2002,
+    });
+    expect(StateCache.replay([], { seed: SEED }).self.bindPoint).toBeUndefined();
+  });
+
   test("a refused flight is an ok:false reply and no flag", () => {
     const cache = StateCache.replay(toEvents([taxiReply(1, 3)]), { seed: SEED });
     expect(cache.self.taxiReply?.value).toEqual({ reply: 3, ok: false });

@@ -182,6 +182,9 @@ namespace WrathBench
         std::string achPath = sWorld->GetDataPath() + "dbc/Achievement.dbc";
         if (!LoadAchievementDbc(achPath))
             LOG_ERROR("module", "wrathbench: Achievement.dbc not loaded from '{}'; achievement events will carry ids without names or points", achPath);
+        std::string taxiPath = sWorld->GetDataPath() + "dbc/TaxiNodes.dbc";
+        if (!LoadTaxiNodesDbc(taxiPath))
+            LOG_ERROR("module", "wrathbench: TaxiNodes.dbc not loaded from '{}'; SMSG_SHOWTAXINODES will carry node ids without names", taxiPath);
 
         _http = std::make_unique<HttpServer>(_bindAddress, _port, this, _threads);
         try
@@ -486,6 +489,9 @@ namespace WrathBench
         { "CMSG_TAXIQUERYAVAILABLENODES", CMSG_TAXIQUERYAVAILABLENODES },
         { "CMSG_ACTIVATETAXI", CMSG_ACTIVATETAXI },
         { "CMSG_ACTIVATETAXIEXPRESS", CMSG_ACTIVATETAXIEXPRESS },
+        // innkeeper bind: the "yes" on the client's confirm dialog after
+        // SMSG_BINDER_CONFIRM (the gossip option itself is gossip_select)
+        { "CMSG_BINDER_ACTIVATE", CMSG_BINDER_ACTIVATE },
         // bank
         { "CMSG_BANKER_ACTIVATE", CMSG_BANKER_ACTIVATE },
         { "CMSG_AUTOBANK_ITEM", CMSG_AUTOBANK_ITEM },
@@ -2122,6 +2128,59 @@ namespace WrathBench
         _achievementsLoaded = loaded > 0;
         LOG_INFO("module", "wrathbench: loaded {} achievements from '{}'", loaded, path);
         return _achievementsLoaded;
+    }
+
+    // WDBC reader for TaxiNodes.dbc (3.3.5a: 24 fields of 4 bytes, record
+    // size 96 — verified against the shipped file: id, mapId, x, y, z,
+    // name[16 locales + flags] from field 5 with enUS first, mount creature
+    // ids). Only id, mapId and the enUS name are kept: the position is not
+    // served (the client draws the node on its taxi map from it, but the
+    // model-facing surface is names only until an operator decides
+    // otherwise). Same header as AreaTrigger.dbc above.
+    bool Manager::LoadTaxiNodesDbc(std::string const& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
+            return false;
+        char magic[4];
+        uint32 recordCount = 0, fieldCount = 0, recordSize = 0, stringSize = 0;
+        in.read(magic, 4);
+        in.read(reinterpret_cast<char*>(&recordCount), 4);
+        in.read(reinterpret_cast<char*>(&fieldCount), 4);
+        in.read(reinterpret_cast<char*>(&recordSize), 4);
+        in.read(reinterpret_cast<char*>(&stringSize), 4);
+        if (!in || std::memcmp(magic, "WDBC", 4) != 0 || fieldCount != 24 || recordSize != 96)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' is not a 3.3.5a TaxiNodes.dbc (fields {}, record size {})", path, fieldCount, recordSize);
+            return false;
+        }
+        std::vector<char> recs(size_t(recordCount) * recordSize);
+        in.read(recs.data(), recs.size());
+        std::vector<char> strings(stringSize);
+        in.read(strings.data(), stringSize);
+        if (!in)
+        {
+            LOG_ERROR("module", "wrathbench: '{}' truncated ({} records, {} string bytes expected)", path, recordCount, stringSize);
+            return false;
+        }
+        size_t loaded = 0;
+        for (uint32 i = 0; i < recordCount; ++i)
+        {
+            char const* rec = recs.data() + size_t(i) * recordSize;
+            uint32 id, map, nameOff;
+            std::memcpy(&id, rec, 4);
+            std::memcpy(&map, rec + 4, 4);
+            std::memcpy(&nameOff, rec + 5 * 4, 4);
+            TaxiNodeRec r;
+            r.mapId = map;
+            if (nameOff < stringSize)
+                r.name = std::string(strings.data() + nameOff, strnlen(strings.data() + nameOff, stringSize - nameOff));
+            _taxiNodes[id] = std::move(r);
+            ++loaded;
+        }
+        _taxiNodesLoaded = loaded > 0;
+        LOG_INFO("module", "wrathbench: loaded {} taxi nodes from '{}'", loaded, path);
+        return _taxiNodesLoaded;
     }
 
     // The wire carries dates as the client's packed bitfield
@@ -4129,6 +4188,87 @@ namespace WrathBench
                     name = "SMSG_ACTIVATETAXIREPLY";
                     uint32 reply = 0; p >> reply;
                     w.Add("reply", reply).Add("ok", reply == 0);
+                    break;
+                }
+                case SMSG_SHOWTAXINODES:
+                {
+                    // WorldSession::SendTaxiMenu: u32 1 (show window), u64
+                    // flight master guid, u32 current node, then the taximask
+                    // (TaxiMaskSize = 14 u32; node n is bit (n-1)%32 of word
+                    // (n-1)/32). Sent when the taxi gossip option is chosen —
+                    // the client never asks for it any other way. `known` is
+                    // the mask decoded, with the name a client reads from its
+                    // own TaxiNodes.dbc; nothing about routes or fares is here
+                    // (the client learns those only by asking to fly).
+                    name = "SMSG_SHOWTAXINODES";
+                    uint32 show = 0; uint64 guid = 0; uint32 cur = 0;
+                    p >> show >> guid >> cur;
+                    std::string mask = "[", known = "[";
+                    bool firstKnown = true;
+                    for (uint32 word = 0; word < 14 && p.rpos() + 4 <= p.size(); ++word)
+                    {
+                        uint32 bits; p >> bits;
+                        if (word) mask += ',';
+                        mask += std::to_string(bits);
+                        for (uint32 bit = 0; bit < 32; ++bit)
+                        {
+                            if (!(bits & (1u << bit))) continue;
+                            uint32 node = word * 32 + bit + 1;
+                            if (!firstKnown) known += ',';
+                            firstKnown = false;
+                            Json::Writer n;
+                            n.Add("nodeId", node);
+                            auto it = _taxiNodes.find(node);
+                            if (it != _taxiNodes.end())
+                                n.Add("name", it->second.name);
+                            known += n.Str();
+                        }
+                    }
+                    mask += "]"; known += "]";
+                    w.Add("showWindow", show == 1).AddGuid("guid", (uint64_t)guid).Add("currentNode", cur);
+                    auto curIt = _taxiNodes.find(cur);
+                    if (curIt != _taxiNodes.end())
+                        w.Add("currentNodeName", curIt->second.name);
+                    w.Raw("mask", mask).Raw("known", known);
+                    break;
+                }
+                // ----------------------------------------- innkeeper bind
+                case SMSG_BINDER_CONFIRM:
+                {
+                    // Player::SetBindPoint: u64 innkeeper guid. The answer to
+                    // the "Make this inn your home" gossip option; a client
+                    // shows a yes/no dialog and sends CMSG_BINDER_ACTIVATE
+                    // (raw) on yes.
+                    name = "SMSG_BINDER_CONFIRM";
+                    uint64 guid = 0; p >> guid;
+                    w.AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_BINDPOINTUPDATE:
+                {
+                    // Spell::EffectBind / Player login: f32 x, y, z, u32 map,
+                    // u32 areaId — the hearthstone's destination. Once during
+                    // login and again after every bind. `areaName` is the
+                    // client's AreaTable.dbc text for the id ("" when unknown).
+                    name = "SMSG_BINDPOINTUPDATE";
+                    float x, y, z; uint32 map, areaId;
+                    p >> x >> y >> z >> map >> areaId;
+                    auto it = _areaTable.find(areaId);
+                    w.Add("x", (double)x).Add("y", (double)y).Add("z", (double)z)
+                     .Add("map", map).Add("areaId", areaId)
+                     .Add("areaName", it == _areaTable.end() ? std::string() : it->second.name);
+                    break;
+                }
+                case SMSG_PLAYERBOUND:
+                {
+                    // Spell::EffectBind: u64 binder guid, u32 areaId — the
+                    // "Your home is now X" line a client prints after a bind.
+                    name = "SMSG_PLAYERBOUND";
+                    uint64 guid = 0; uint32 areaId = 0;
+                    p >> guid >> areaId;
+                    auto it = _areaTable.find(areaId);
+                    w.AddGuid("guid", (uint64_t)guid).Add("areaId", areaId)
+                     .Add("areaName", it == _areaTable.end() ? std::string() : it->second.name);
                     break;
                 }
                 // -------------------------------------------------- progress
