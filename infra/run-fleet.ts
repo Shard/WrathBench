@@ -335,6 +335,13 @@ export interface FleetJob {
    */
   keepCharacters?: string[];
   /**
+   * Set by `planContinuations` when the stream's head sits on an account
+   * another ref's stream occupies: the head this spawn deliberately does not
+   * continue, and why (`--continue-dropped`). A record on the new run, no
+   * lineage. Never from the file.
+   */
+  continueDropped?: { runId: string; reason: string };
+  /**
    * Set when this job is a probe campaign's work: which campaign
    * commissioned it and which cell it is. The campaign's own dimensions are
    * looked up from the config at spawn time; only the identity travels here.
@@ -1178,7 +1185,7 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
     }
     // Same shape of refusal: a freeplay stream's lineage is read off the
     // runs, never written into the file.
-    for (const k of ["continueFrom", "keepCharacters"] as const) {
+    for (const k of ["continueFrom", "keepCharacters", "continueDropped"] as const) {
       if ((j as Record<string, unknown>)[k] !== undefined) {
         fail(`queue ${ref}: a job must not carry ${k} — the supervisor derives a freeplay stream's continuation from its runs`);
       }
@@ -1746,6 +1753,7 @@ export function jobSpawn(
       // are kept on every fresh launch.
       ...(uncappedLane && job.continueFrom !== undefined ? { continueFrom: job.continueFrom } : {}),
       ...(job.keepCharacters !== undefined && job.keepCharacters.length > 0 ? { keepCharacters: [...job.keepCharacters] } : {}),
+      ...(uncappedLane && job.continueDropped !== undefined ? { continueDropped: { ...job.continueDropped } } : {}),
       // The subscription lane, for the one driver that has one. Omitted on the
       // default lane, so a spawn is byte-identical to a pre-lane one.
       ...(job.subscription !== undefined && entry.driver === "claude-code" ? { tokenEnv: job.subscription } : {}),
@@ -2290,30 +2298,126 @@ export function streamAffinity(streams: ReadonlyMap<string, Stream>, fallback: A
   return (ref) => streams.get(ref)?.account ?? fallback(ref);
 }
 
+/** Who holds an account this tick, for the stream rule: the ref, and whether its session has no boundary. */
+export interface Occupant {
+  ref: string;
+  /** A policy freeplay session of an `idle: "unlimited"` ref: no wall clock, ends only by watchdog or hand. */
+  unlimited: boolean;
+}
+
+/**
+ * Where a ref's stream head stands against the accounts in use this tick.
+ * Pure. `occupants` is keyed by upper-cased account.
+ *
+ * - `free`: nobody on the head's account — the next pick continues there.
+ * - `own`: the ref itself is there (live, or a resume reserving it) — the
+ *   stream is in flight, nothing to plan.
+ * - `boundary`: another ref's BOUNDED run holds it (a scored episode, a
+ *   probe, a hand-written job) — it ends at its episode boundary, so the
+ *   pick is held; a fresh start would trade a whole character for minutes.
+ * - `occupied`: another ref's UNLIMITED stream holds it — there is no
+ *   boundary to wait for, and the wait is the item-94 deadlock: the pick
+ *   starts fresh on a free account, lineage dropped and recorded.
+ */
+export type StreamStanding =
+  | { kind: "free" }
+  | { kind: "own"; occupant: string }
+  | { kind: "boundary"; occupant: string }
+  | { kind: "occupied"; occupant: string };
+
+export function streamStanding(ref: string, stream: Stream, occupants: ReadonlyMap<string, Occupant>): StreamStanding {
+  const o = occupants.get(stream.account.toUpperCase());
+  if (o === undefined) return { kind: "free" };
+  if (o.ref === ref) return { kind: "own", occupant: o.ref };
+  return o.unlimited ? { kind: "occupied", occupant: o.ref } : { kind: "boundary", occupant: o.ref };
+}
+
+/** The one-line reason a stream is not continuing this tick, for the log and --status. */
+export function describeStanding(stream: Stream, standing: StreamStanding): string {
+  switch (standing.kind) {
+    case "free":
+      return `${stream.account} is free — continues ${stream.runId} (${stream.character}) there`;
+    case "own":
+      return `${stream.account} is its own — in flight`;
+    case "boundary":
+      return `${stream.account} is held by ${standing.occupant} until its episode boundary — holding for ${stream.character} (${stream.runId})`;
+    case "occupied":
+      return `${stream.account} is occupied by ${standing.occupant}'s stream — next pick starts FRESH on a free account, lineage ${stream.runId} (${stream.character}) dropped`;
+  }
+}
+
+/** The --status stream rows: one per `idle: "unlimited"` ref. Pure. */
+export function formatStreams(
+  roster: Record<string, FleetRosterEntry>,
+  streams: ReadonlyMap<string, Stream>,
+  occupants: ReadonlyMap<string, Occupant>,
+  running: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const [ref, e] of Object.entries(roster)) {
+    if (e.idle !== "unlimited") continue;
+    const st = streams.get(ref);
+    if (st === undefined) {
+      out.push(`stream ${ref}: no head — ${running.has(ref) ? "first session in flight" : "next pick starts fresh"}`);
+      continue;
+    }
+    const standing = streamStanding(ref, st, occupants);
+    const verdict =
+      running.has(ref)
+        ? "in flight"
+        : standing.kind === "free"
+          ? "continuable"
+          : standing.kind === "own"
+            ? "own account, resuming"
+            : standing.kind === "boundary"
+              ? `held: ${standing.occupant} on it until its episode boundary`
+              : `occupied by ${standing.occupant}'s stream: fresh-next on a free account, lineage dropped`;
+    out.push(`stream ${ref}: head ${st.runId} on ${st.account} as ${st.character} — ${verdict}`);
+  }
+  return out;
+}
+
 /** A policy pick held back this tick because its stream's account is busy. */
 export interface StreamWait {
   name: string;
   stream: Stream;
   /** The account the pick would have taken instead. */
   offered: string;
+  /** Why it holds rather than continuing or starting fresh. */
+  why: string;
+}
+
+/** A policy pick that started fresh because its stream's account is another ref's. */
+export interface StreamDrop {
+  name: string;
+  stream: Stream;
+  /** The other ref's stream on the head's account. */
+  occupant: string;
+  /** The free account the fresh start went to. */
+  account: string;
 }
 
 /**
  * The policy's freeplay picks, made to continue their streams. Pure. A pick
  * on an `idle: "unlimited"` ref whose stream is on the account it got carries
- * `continueFrom`; one whose stream is on another account is held — the
- * character lives there, and a session elsewhere would be a fresh one, which
- * is the loss this exists to prevent. Every pick (and every queue
- * assignment the caller passes) gets the other streams' characters on its
- * account to keep.
+ * `continueFrom`. One whose stream is on another account is decided by
+ * `streamStanding`: held while the account will come free at a boundary (or
+ * is the ref's own), started FRESH on the account it was offered when
+ * another ref's unlimited stream sits there — with `continueDropped` naming
+ * the head and the reason (`account_occupied_by <ref>`), so the new run's
+ * trajectory says the lineage was dropped on purpose. Every pick (and every
+ * queue assignment the caller passes) gets the other streams' characters on
+ * its account to keep.
  */
 export function planContinuations(
   picks: readonly PolicyPick[],
   streams: ReadonlyMap<string, Stream>,
   roster: Record<string, FleetRosterEntry>,
-): { picks: PolicyPick[]; waiting: StreamWait[] } {
+  occupants: ReadonlyMap<string, Occupant> = new Map(),
+): { picks: PolicyPick[]; waiting: StreamWait[]; dropped: StreamDrop[] } {
   const out: PolicyPick[] = [];
   const waiting: StreamWait[] = [];
+  const dropped: StreamDrop[] = [];
   for (const p of picks) {
     const keep = keepFor(p.account, streams, p.job.ref);
     const withKeep = (job: FleetJob): FleetJob => (keep.length > 0 ? { ...job, keepCharacters: keep } : job);
@@ -2324,12 +2428,22 @@ export function planContinuations(
       continue;
     }
     if (stream.account.toUpperCase() !== p.account.toUpperCase()) {
-      waiting.push({ name: p.job.name, stream, offered: p.account });
+      const standing = streamStanding(p.job.ref, stream, occupants);
+      if (standing.kind === "occupied") {
+        dropped.push({ name: p.job.name, stream, occupant: standing.occupant, account: p.account });
+        out.push({
+          ...p,
+          why: `${p.why}; fresh — ${stream.account} is ${standing.occupant}'s`,
+          job: withKeep({ ...p.job, continueDropped: { runId: stream.runId, reason: `account_occupied_by ${standing.occupant}` } }),
+        });
+        continue;
+      }
+      waiting.push({ name: p.job.name, stream, offered: p.account, why: describeStanding(stream, standing) });
       continue;
     }
     out.push({ ...p, job: withKeep({ ...p.job, continueFrom: stream.runId }) });
   }
-  return { picks: out, waiting };
+  return { picks: out, waiting, dropped };
 }
 
 /**
@@ -4113,6 +4227,20 @@ function printStatus(configPath: string): void {
       if (line !== undefined) console.log(`  ${line}`);
     }
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
+    // (c') freeplay streams: each unlimited ref's head and what the next pick
+    // does with it. Occupancy is the live jobs' (plus the resumes that would
+    // reserve theirs), the same facts the tick reads; heads read the archive.
+    const occupants = new Map<string, Occupant>();
+    for (const j of live.values()) {
+      if (!isAlive(j)) continue;
+      const unlimited = j.source === "policy" && j.episode === "freeplay" && config.roster[j.ref]?.idle === "unlimited";
+      occupants.set(j.account.toUpperCase(), { ref: j.ref, unlimited });
+    }
+    for (const r of resumePlan.resume) {
+      occupants.set(r.account.toUpperCase(), { ref: r.job.ref, unlimited: pausesOnDrain(r.job) && config.roster[r.job.ref]?.idle === "unlimited" });
+    }
+    const streams = streamsFrom(readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), config.roster);
+    for (const line of formatStreams(config.roster, streams, occupants, running)) console.log(`  ${line}`);
     /*
      * How much of the schedule is left, bounded by whether anything else
      * promotes (`outstandingWork` carries the formula). Computed from the
@@ -4794,6 +4922,18 @@ async function main(): Promise<void> {
       }
     }
     const runningAndReserved = new Map([...assigned, ...reserved]);
+    // Who holds each account this tick, for the stream rule (`streamStanding`):
+    // the live pool jobs, the pinned ones, and the resumes reserving theirs.
+    const occupants = new Map<string, Occupant>();
+    {
+      const claim = (account: string, job: FleetJob | undefined): void => {
+        if (job === undefined) return;
+        occupants.set(account.toUpperCase(), { ref: job.ref, unlimited: pausesOnDrain(job) && cfg.roster[job.ref]?.idle === "unlimited" });
+      };
+      for (const [name, account] of assigned) claim(account, liveJobs.get(name));
+      for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) claim(job.account!, job);
+      for (const r of resumes.resume) claim(r.account, r.job);
+    }
     // Where each model's last character is standing. Read once a
     // tick from the same run facts everything else here reads.
     const affinityMap = affinityFrom(runs, cfg.roster);
@@ -4849,14 +4989,37 @@ async function main(): Promise<void> {
         }),
         streams,
         cfg.roster,
+        occupants,
       );
       const picks = continued.picks;
       for (const w of continued.waiting) {
-        const key = `${w.name}:stream:${w.stream.runId}`;
+        const key = `${w.name}:stream:${w.stream.runId}:${w.why}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
-          say(`policy ${w.name}: waiting for ${w.stream.account} — its freeplay character ${w.stream.character} (${w.stream.runId}) is there; not starting fresh on ${w.offered}`);
-          record({ job: w.name, event: "stream-waiting", detail: `${w.stream.character} on ${w.stream.account} (${w.stream.runId}); offered ${w.offered}` });
+          say(`policy ${w.name}: waiting — ${w.why}; not starting fresh on ${w.offered}`);
+          record({ job: w.name, event: "stream-waiting", detail: `${w.why}; offered ${w.offered}` });
+        }
+      }
+      for (const d of continued.dropped) {
+        const key = `${d.name}:stream-dropped:${d.stream.runId}`;
+        if (!announcedPicks.has(key)) {
+          announcedPicks.add(key);
+          say(`policy ${d.name}: ${d.stream.account} is occupied by ${d.occupant}'s stream — starting fresh on ${d.account}, lineage ${d.stream.runId} (${d.stream.character}) dropped`);
+          record({ job: d.name, event: "stream-dropped", detail: `${d.stream.runId} (${d.stream.character} on ${d.stream.account}) account_occupied_by ${d.occupant}; fresh on ${d.account}` });
+        }
+      }
+      // A stream whose head is on another ref's account and that got NO pick
+      // this tick (no free account, the cap, the gate) says so once, so the
+      // wait reads as a wait for a free account and not as the item-94 hold.
+      for (const [ref, st] of streams) {
+        if (!allowed.has(ref) || runningRefs.has(ref)) continue;
+        if (picks.some((p) => p.job.ref === ref) || continued.waiting.some((w) => w.name === `${ref}-freeplay`)) continue;
+        const standing = streamStanding(ref, st, occupants);
+        if (standing.kind !== "occupied") continue;
+        const key = `${ref}:stream-blocked:${st.runId}:${standing.occupant}`;
+        if (!announcedPicks.has(key)) {
+          announcedPicks.add(key);
+          say(`policy ${ref}: ${describeStanding(st, standing)} — none free this tick`);
         }
       }
       for (const { job, account, why } of picks) {
