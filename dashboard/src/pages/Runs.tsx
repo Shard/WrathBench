@@ -74,6 +74,9 @@ export default function Runs() {
    * outside the shell's series filter, and that is exactly where the reader
    * most needs to be told what the run continues. The link still resolves —
    * the run page takes any id.
+   *
+   * Stillborn launches drop out inside `lineageIndex`; their rows still list,
+   * because an inventory shows every launch.
    */
   const lineage = createMemo(() => lineageIndex(served()));
 

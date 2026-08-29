@@ -260,6 +260,8 @@ export default function RunDetail() {
                * This run, then everything else the listing served: a run the
                * listing does not hold (archived, or served by an older viewer)
                * still gets its own place in the walk rather than no line at all.
+               * Stillborn launches drop out inside `lineageIndex`, so
+               * "continued by" can never name a launch that produced nothing.
                */
               const others = res.runs.filter((r) => r.runId !== d.run.runId);
               setLineage(lineageIndex([{ ...d.run }, ...others]).get(d.run.runId));
@@ -401,8 +403,11 @@ export default function RunDetail() {
               <Show when={hasLineage(lineage()) ? lineage() : undefined}>
                 {(l) => (
                   <p class="dim" title="a durable freeplay stream: one character, continued across attempts">
-                    freeplay stream <A href={`/run/${encodeURIComponent(l().streamId)}`}>{l().streamId}</A> · attempt{" "}
-                    {l().attempt} of {l().attempts}
+                    freeplay stream{" "}
+                    <Show when={l().streamId !== run().runId} fallback={l().streamId}>
+                      <A href={`/run/${encodeURIComponent(l().streamId)}`}>{l().streamId}</A>
+                    </Show>{" "}
+                    · attempt {l().attempt} of {l().attempts}
                     <Show when={l().previous}>
                       {(p) => (
                         <>
