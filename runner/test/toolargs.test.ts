@@ -172,22 +172,26 @@ describe("harness-delivered action hints", () => {
     expect(renderActionHints([])).toBeUndefined();
   });
 
-  test("one line per status, with the count — 41 refusals do not cost 41 lines", () => {
-    const text = renderActionHints([note({ count: 41 }), note({ status: "drop", count: 1, hint: "steps off a ledge" })]);
+  test("one line per status, most recent first — 41 refusals do not cost 41 lines", () => {
+    const text = renderActionHints([
+      note({ count: 41, ts: 10 }),
+      note({ status: "drop", count: 1, hint: "steps off a ledge", ts: 20 }),
+    ]);
     expect(text).toBeDefined();
     const lines = (text as string).split("\n");
     expect(lines[0]).toBe("--- harness ---");
-    expect(lines[1]).toBe(
+    // A single occurrence carries no count; a repeat carries the collapse marker
+    // and nothing else — no threshold, no escalation, no added advice.
+    expect(lines[1]).toBe("moveTo drop: steps off a ledge");
+    expect(lines[2]).toBe(
       "moveTo too_far ×41: (-6048, 367) is 312y away in a straight line; a single moveTo covers ~250y. Walk to an intermediate point first.",
     );
-    // A single occurrence carries no count.
-    expect(lines[2]).toBe("moveTo drop: steps off a ledge");
     expect(lines.length).toBe(3);
   });
 
   test("the block is capped per snippet and each hint is truncated", () => {
     const many = ["a", "b", "c", "d", "e", "f"].map((st, i) =>
-      note({ status: st, count: 10 - i, hint: "x".repeat(600) }),
+      note({ status: st, count: 10 - i, hint: "x".repeat(600), ts: 100 - i }),
     );
     const lines = (renderActionHints(many) as string).split("\n");
     expect(lines.length).toBe(1 + ACTION_HINT_RENDER.MAX_GROUPS + 1);

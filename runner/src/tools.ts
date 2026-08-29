@@ -509,7 +509,10 @@ export const ACTION_HINT_RENDER = {
  */
 export function renderActionHints(hints: readonly ActionHintNote[]): string | undefined {
   if (hints.length === 0) return undefined;
-  const ordered = [...hints].sort((a, b) => b.count - a.count || a.status.localeCompare(b.status));
+  // Most recent first. Nothing here reacts to how often a status failed — the
+  // count is only the collapse marker for repeats of one hint, and no rendering
+  // or ordering decision reads it.
+  const ordered = [...hints].sort((a, b) => b.ts - a.ts || a.status.localeCompare(b.status));
   const shown = ordered.slice(0, ACTION_HINT_RENDER.MAX_GROUPS);
   const lines = ["--- harness ---"];
   for (const h of shown) {
