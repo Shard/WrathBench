@@ -17,8 +17,8 @@ status.
 
 ## Next up
 
-1. **38** — run the N1 gate: three tram rides on PROBE with typed success per leg;
-   navigation N1 is proven on that run.
+1. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
+   (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
 2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
    grouping and instance records exist, and death/level-up/spell/talent are still
    unwritten.
@@ -93,15 +93,6 @@ status.
     every claim a fixture is wanted for so far is position, level or spells. Do it
     when a smoke needs gear, mail or a specific consumable to prove its claim.
 
-79. **Second track for the achievement/taxi taps** (2026-08-25, issue #8).
-    The module half is deployed (`harness-0.5-34-g9be594e`) and gated:
-    `infra/smoke/achievements-taxi.ts` PASS on PROBE 2026-08-25 (login list
-    named from Achievement.dbc, reply 0, `taxiFlight` flips on a values-only
-    update for self's guid). What remains: SDK schemas for the three opcodes,
-    runner milestone records (achievements only for `self: true`; flight start
-    = reply 0 then `taxiFlight` true on self's guid, landing = the flip back),
-    and the dashboard's rung 4 and achievement-points derivations. Unblocked;
-    the SDK derivation is in hand with another agent.
 
 91. **The synced price table has no as-of-run rates, and `glm-5.3-flash`'s
     discount ends ~2026-09-09** (2026-08-29, out of item 88). `prices.openrouter.json`
@@ -206,13 +197,6 @@ status.
     talent spent and the remaining firsts are still unwritten, and rung 6 is
     still nobody's.
 
-
-67. **Superseded: freeplay characters do not persist between sessions** (2026-08-24;
-    superseded 2026-08-27). The idle `unlimited` lane is now one continuous
-    freeplay session with no episode wall-clock cap and no tool-call ceiling,
-    governed by the idle watchdog. This removes the artificial six-hour rollover
-    that recreated a level-1 character and discarded continuity, and the 500-call
-    ceiling that was doing the same thing sooner; scored episodes remain fresh.
 
 
 80. **EventStream reconnect has no per-attempt connect bound** (2026-08-24, bare-clone
