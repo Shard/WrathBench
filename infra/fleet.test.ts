@@ -63,6 +63,12 @@ import {
   takeAccount,
   planNameSweeps,
   sweepNames,
+  streamsFrom,
+  streamKey,
+  keepFor,
+  streamAffinity,
+  planContinuations,
+  pausesOnDrain,
   policyJob,
   rosterModels,
   eligibleFrom,
@@ -2741,5 +2747,135 @@ describe("account affinity and cross-account name hygiene", () => {
     const boom = (() => Promise.reject(new Error("econnrefused"))) as unknown as typeof fetch;
     await sweepNames([{ ref: "glm", account: "RUNNER5", character: "Grimjaw" }], (s) => said.push(s), boom);
     expect(said[1]).toContain("could not reach the module");
+  });
+});
+
+describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    opuslo: { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+    sonlo: { model: "sonnet", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
+    glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
+  };
+  const fact = (runId: string, over: Partial<RunFact>): RunFact => ({
+    runId,
+    model: "opus",
+    effort: "low",
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "0.5.3",
+    harnessSeries: "0.5",
+    extra: true,
+    startedAt: NOW - 3_600_000,
+    endedAt: NOW - 60_000,
+    terminationReason: "manual",
+    modelResponses: 40,
+    bestLevel: 8,
+    live: false,
+    pause: null,
+    account: "RUNNER2",
+    character: "Bromdir",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: "CLAUDE_CODE_OAUTH_TOKEN_2",
+    ...over,
+  });
+  const policyFreeplay = (ref: string, attempt: number): FleetJob => ({
+    refs: [ref],
+    ref,
+    episode: "freeplay",
+    repeat: 1,
+    name: ref,
+    enabled: true,
+    source: "policy",
+    attempt,
+  });
+
+  test("a stream is the ref's latest ENDED freeplay run with an account and a character", () => {
+    // The 2026-08-29 shape: sub-opus-low's a11 (Bromdir, RUNNER2) was killed
+    // by hand and terminated `manual`; the a10 before it ended `idle` on Bromdal.
+    const runs = [
+      fact("fleet-sub-opus-low-freeplay-opus-low-20260827-a10", { startedAt: NOW - 90_000_000, character: "Bromdal", terminationReason: "idle" }),
+      fact("fleet-sub-opus-low-freeplay-opus-low-20260827-a11", {}),
+      // A live one (no termination) is in flight, not a predecessor.
+      fact("fleet-sonnet-low-freeplay-sonnet-low-20260827-a2", { model: "sonnet", account: "RUNNER3", character: "Ironvowen", terminationReason: null, live: true }),
+      // A paused one is planResumes' business, on its own run id.
+      fact("fleet-sonnet-low-freeplay-sonnet-low-20260827", { model: "sonnet", account: "RUNNER3", character: "Bronwyra", terminationReason: null, pause: { reason: "operator-pause", at: NOW, count: 1, episodeElapsedMs: null } }),
+      // A scored run of the same model is not the stream, whatever it played.
+      fact("fleet-sub-opus-low-e90-opus-low-20260829", { episode: "e90", extra: false, startedAt: NOW - 1000, account: "RUNNER5", character: "Brintor", terminationReason: "episode-limit" }),
+    ];
+    const streams = streamsFrom(runs, roster);
+    expect(streams.get("opuslo")).toEqual({ runId: "fleet-sub-opus-low-freeplay-opus-low-20260827-a11", account: "RUNNER2", character: "Bromdir" });
+    expect(streams.has("sonlo")).toBe(false);
+    // A ref that is not in the unlimited lane owes no stream, even with runs.
+    expect(streamsFrom([fact("x", { model: "z-ai/glm-5.2:free", effort: null })], roster).has("glm")).toBe(false);
+  });
+
+  test("the policy's freeplay pick continues its stream on the stream's account, and is held elsewhere", () => {
+    const streams = new Map([["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }]]);
+    // Landed on RUNNER2 (affinity did its job): continue a11.
+    const back = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], streams, roster);
+    expect(back.waiting).toEqual([]);
+    expect(back.picks[0]!.job.continueFrom).toBe("a11");
+    // RUNNER2 busy, RUNNER5 offered: held, never a fresh character elsewhere.
+    const away = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], streams, roster);
+    expect(away.picks).toEqual([]);
+    expect(away.waiting).toEqual([{ name: "opuslo", stream: streams.get("opuslo")!, offered: "RUNNER5" }]);
+    // A ref with no stream yet starts fresh, as before.
+    const fresh = planContinuations([{ job: policyFreeplay("sonlo", 1), account: "RUNNER3", why: "extra" }], streams, roster);
+    expect(fresh.picks[0]!.job.continueFrom).toBeUndefined();
+    // The freeplay pick's account preference is its stream's, not the model's last run's.
+    expect(streamAffinity(streams, () => "RUNNER5")("opuslo")).toBe("RUNNER2");
+    expect(streamAffinity(streams, () => "RUNNER5")("sonlo")).toBe("RUNNER5");
+  });
+
+  test("another stream's character on the account is kept, and the name sweep never deletes one", () => {
+    const streams = new Map([
+      ["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }],
+      ["sonlo", { runId: "s2", account: "RUNNER2", character: "Ironvowen" }],
+    ]);
+    // A scored launch on RUNNER2 keeps both; opuslo's own continuation keeps only the other.
+    expect(keepFor("RUNNER2", streams)).toEqual(["Bromdir", "Ironvowen"]);
+    expect(keepFor("runner2", streams, "opuslo")).toEqual(["Ironvowen"]);
+    expect(keepFor("RUNNER5", streams)).toEqual([]);
+    const picked = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], streams, roster);
+    expect(picked.picks[0]!.job.keepCharacters).toEqual(["Ironvowen"]);
+    // The e90 of the same model launching on RUNNER5 while RUNNER2 is free
+    // used to plan a delete of Bromdir there; a stream character is protected.
+    const affinity = new Map([["opuslo", { account: "RUNNER2", character: "Bromdir" }]]);
+    const protect = new Set([...streams.values()].map((s) => streamKey(s.account, s.character)));
+    expect(planNameSweeps({ assign: [{ ref: "opuslo", account: "RUNNER5" }], affinity, isFree: () => true, protect })).toEqual([]);
+    expect(planNameSweeps({ assign: [{ ref: "opuslo", account: "RUNNER5" }], affinity, isFree: () => true })).toEqual([
+      { ref: "opuslo", account: "RUNNER2", character: "Bromdir" },
+    ]);
+  });
+
+  test("the lineage rides the spawn only on the unlimited lane, and never from the file", () => {
+    const job: FleetJob = { ...policyFreeplay("opuslo", 12), continueFrom: "a11", keepCharacters: ["Ironvowen"] };
+    const spawn = jobSpawn(job, roster, "RUNNER2", "20260829");
+    expect(spawn.entries[0]).toMatchObject({ continueFrom: "a11", keepCharacters: ["Ironvowen"], maxToolCalls: null });
+    const argv = episodeArgv(resolve(fillEntries(spawn, "20260829"), "20260829")[0]!, false);
+    expect(argv[argv.indexOf("--continue-from") + 1]).toBe("a11");
+    expect(argv[argv.indexOf("--keep-characters") + 1]).toBe("Ironvowen");
+    // A hand-written freeplay job on the same ref is the operator's experiment: no lineage.
+    const manual: FleetJob = { ...job, source: "queue", attempt: undefined };
+    expect(jobSpawn(manual, roster, "RUNNER2", "20260829").entries[0]!.continueFrom).toBeUndefined();
+    // The file may not say it.
+    const file = (extra: Record<string, unknown>) => ({
+      accounts: { pool: ["RUNNER2"] },
+      roster: { opuslo: { tier: "t1", model: "opus", effort: "low", driver: "claude-code" } },
+      policy: {},
+      queue: [{ ref: "opuslo", episode: "freeplay", ...extra }],
+    });
+    expect(() => parseFleet(file({ continueFrom: "a11" }))).toThrow(/must not carry continueFrom/);
+    expect(() => parseFleet(file({ keepCharacters: ["x"] }))).toThrow(/must not carry keepCharacters/);
+  });
+
+  test("a disabled unlimited session pauses at once; everything else drains to its boundary", () => {
+    expect(pausesOnDrain(policyFreeplay("opuslo", 12))).toBe(true);
+    expect(pausesOnDrain({ source: "policy", episode: "e90" })).toBe(false);
+    expect(pausesOnDrain({ source: "queue", episode: "freeplay" })).toBe(false);
+    expect(pausesOnDrain(undefined)).toBe(false);
   });
 });

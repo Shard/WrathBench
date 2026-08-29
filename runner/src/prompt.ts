@@ -236,6 +236,39 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
  * nothing to preserve or reuse: it gets the fresh-launch note instead of one
  * that interpolates a name it does not have.
  */
+/**
+ * The continued run's session note: a freeplay stream coming back under a new
+ * run id — the operator disabled it, or the stream's previous run ended — on
+ * the character and scratchpad its predecessor left. The same character facts
+ * the resume note carries, for the same reason, and the same instruction:
+ * `createSession` on the recorded name reuses the character, so the model
+ * must not roll another one.
+ */
+export function continuedSessionNote(o: {
+  character: string;
+  race: number;
+  class: number;
+  /** The run id being continued. */
+  from: string;
+  /** The last observed level/xp sentence, or "" when nothing was observed. */
+  seen: string;
+  raceName?: string | null;
+  className?: string | null;
+}): string {
+  const race = o.raceName ?? null;
+  const klass = o.className ?? null;
+  return (
+    `this session continues your earlier freeplay session ${o.from} on the same character. ` +
+    `Conversation history was not preserved; your scratchpad was. ` +
+    `Your character is unchanged and was NOT deleted: name "${o.character}", ` +
+    `race ${o.race}${race !== null ? ` (${race})` : ""}, class ${o.class}` +
+    `${klass !== null ? ` (${klass})` : ""}.${o.seen} Do not create a different one. ` +
+    `Run \`await connect()\`, then ` +
+    `\`await sdk.createSession({ character: "${o.character}", race: ${o.race}, class: ${o.class} })\` ` +
+    `— it reuses the existing character of that name.`
+  );
+}
+
 export function resumeSessionNote(o: {
   character: string | undefined;
   race: number;
