@@ -18,6 +18,14 @@
  * cannot be checked. Prices are data, each row dated and sourced, so a stale
  * one is visible rather than buried in an expression.
  *
+ * Rates are asked for *as of the run*, never as of today. Both tables answer
+ * that question: `standardAfter` on the hand-written Claude rows, and rate
+ * windows in the synced OpenRouter file, where each id maps to a list of
+ * `{ input, output, cacheRead, cacheWrite, from? }` in date order and the
+ * first window carries no `from` (see `SYNCED_PRICES` below for the format and
+ * `infra/sync-prices.ts` for who appends to it). Re-pricing yesterday's runs
+ * at today's catalogue is the failure both avoid.
+ *
  * Figures come from the 2026-08-23 COSTS.md cross-check (§3 of `git show d752ef7:docs/COSTS.md`; the snapshot sections left the live doc on 2026-08-24), which checked the Sonnet row
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
  */
@@ -146,7 +154,23 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  * `prices.openrouter.json` is written by `infra/sync-prices.ts` (`bun run
  * sync-prices`), which reads the provider's own catalogue and keeps the rows
  * the roster and the corpus actually need. A rate nobody typed is a rate nobody
- * can mistype, and the file's `asOf` dates every row in one place.
+ * can mistype.
+ *
+ * **Rate windows.** Each id maps to a *list* of windows in date order rather
+ * than to one row, because a rate that moves must not re-price the runs that
+ * billed at the old one — `z-ai/glm-5.3-flash`'s launch discount lapsing around
+ * 2026-09-09 is the case this exists for. A window carries the same four rates
+ * as before plus an optional `from` (`YYYY-MM-DD`, the day it took over); the
+ * first window omits `from`, meaning "everything before the next window
+ * begins", so every run already on disk when windows arrived keeps the reading
+ * it had. `syncedPrice` picks the last window whose `from` is at or before the
+ * run's start, and the latest window when a caller asks for no particular date.
+ * This is the synced-table twin of `standardAfter` on the Claude rows: same
+ * question, same answer, from data instead of source.
+ *
+ * The file-level `asOf` is the day the catalogue was last read, not the day a
+ * rate began — a window's own `from` is that, and a window without one is dated
+ * by the sync that first wrote the file.
  *
  * These models are genuinely metered against the operator's OpenRouter
  * balance, so `asIfMetered` is false: the figure is a list-price estimate of a
@@ -157,26 +181,55 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  * first, whatever the catalogue quotes. So a 0/0 row in this file is only ever
  * reached for a `:free`/`-free` id — a *suffixless* id quoted at 0/0 would be
  * a paid model reading as free, which is the one shape the table must not
- * hold. `viewer-pricing.test.ts` asserts that invariant over the whole file.
+ * hold. `viewer-pricing.test.ts` asserts that invariant over every window in
+ * the whole file.
  */
 export type SyncedRow = Pick<PriceRow, "input" | "output" | "cacheRead" | "cacheWrite">;
 
-export const SYNCED_PRICES: { asOf: string; models: Record<string, SyncedRow> } = synced;
+/** One rate window: the rates, and the day they took over (absent on the first). */
+export type SyncedWindow = SyncedRow & { from?: string };
 
-/** The synced row for an OpenRouter id, or null when the sync does not carry it. */
-export function syncedPrice(model: string): PriceRow | null {
-  const row = SYNCED_PRICES.models[model];
-  if (row === undefined) return null;
+export const SYNCED_PRICES: { asOf: string; models: Record<string, SyncedWindow[]> } = synced;
+
+/**
+ * The window in force at `at`, or the latest when the caller names no date.
+ *
+ * Null means "the table's current price" — a run with no start date on it, and
+ * every caller that just wants today's rate. A date older than every `from`
+ * falls back to the earliest window, which is the best the table can say about
+ * a run that predates what it knows.
+ */
+export function windowAt(windows: readonly SyncedWindow[], at: number | null): SyncedWindow | null {
+  if (windows.length === 0) return null;
+  if (at === null) return windows[windows.length - 1]!;
+  let chosen: SyncedWindow | null = null;
+  for (const w of windows) {
+    if (w.from !== undefined && Date.parse(w.from) > at) break;
+    chosen = w;
+  }
+  return chosen ?? windows[0]!;
+}
+
+/** The synced row for an OpenRouter id at a date, or null when the sync does not carry it. */
+export function syncedPrice(model: string, at: number | null = null): PriceRow | null {
+  const windows = SYNCED_PRICES.models[model];
+  if (windows === undefined) return null;
+  const row = windowAt(windows, at);
+  if (row === null) return null;
+  const asOf = row.from ?? SYNCED_PRICES.asOf;
   return {
     id: model,
     input: row.input,
     output: row.output,
     cacheRead: row.cacheRead,
     cacheWrite: row.cacheWrite,
-    asOf: SYNCED_PRICES.asOf,
+    asOf,
     source: "list",
     asIfMetered: false,
-    note: `OpenRouter list price, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts); metered against the operator's OpenRouter balance`,
+    note:
+      row.from === undefined
+        ? `OpenRouter list price, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts); metered against the operator's OpenRouter balance`
+        : `OpenRouter list price in force from ${row.from} (catalogue read ${SYNCED_PRICES.asOf}, infra/sync-prices.ts); metered against the operator's OpenRouter balance`,
   };
 }
 
@@ -215,7 +268,7 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
-  const open = syncedPrice(model);
+  const open = syncedPrice(model, at);
   if (open !== null) return open;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;

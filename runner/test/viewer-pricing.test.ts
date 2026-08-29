@@ -15,8 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, DELISTED_MODELS, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
+import { CLAUDE_PRICES, DELISTED_MODELS, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { FREE_SUFFIXLESS_ALLOWLIST, isFreeSlug } from "../src/model-cost";
+import { mergeWindows, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -100,6 +101,37 @@ describe("priceFor", () => {
     ).toBeNull();
   });
 
+  test("the synced table is windowed: every id's first window carries no date, so it prices runs older than the sync", () => {
+    for (const [id, windows] of Object.entries(SYNCED_PRICES.models)) {
+      expect(windows.length).toBeGreaterThan(0);
+      expect(windows[0]!.from).toBeUndefined();
+      // Windows are in date order, and only the first is undated.
+      let prev = "";
+      for (const w of windows.slice(1)) {
+        expect(w.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(w.from! > prev).toBe(true);
+        prev = w.from!;
+      }
+      expect(id.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a synced rate that moved does not re-price the runs that billed at the old one", () => {
+    // The `glm-5.3-flash` case in miniature: a launch discount, then list.
+    const windows = [
+      { input: 0.075, output: 0.25, cacheRead: 0.015, cacheWrite: 0.075 },
+      { from: "2026-09-09", input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0.15 },
+    ];
+    // A run from before the move, on its own day, and after it.
+    expect(windowAt(windows, Date.parse("2026-08-20"))!.input).toBe(0.075);
+    expect(windowAt(windows, Date.parse("2026-09-08"))!.input).toBe(0.075);
+    expect(windowAt(windows, Date.parse("2026-09-09"))!.input).toBe(0.15);
+    expect(windowAt(windows, Date.parse("2026-10-01"))!.input).toBe(0.15);
+    // No date asked for means the table's current price, not its oldest.
+    expect(windowAt(windows, null)!.input).toBe(0.15);
+    expect(windowAt([], null)).toBeNull();
+  });
+
   test("the sonnet intro rate lapses: a run started after 2026-08-31 gets standard pricing", () => {
     const intro = priceFor(sonnetRun, Date.parse("2026-08-22"))!;
     const std = priceFor(sonnetRun, Date.parse("2026-09-15"))!;
@@ -114,9 +146,13 @@ describe("priceFor", () => {
     // (`priceFor` answers the suffix first). Anything else at 0/0 is a paid
     // model whose price went missing — `stealth/ox-alpha` sat here from
     // 2026-08-20 to 2026-08-29 and made 22 runs read as costing nothing.
-    for (const [id, row] of Object.entries(SYNCED_PRICES.models)) {
-      if (row.input > 0 || row.output > 0) continue;
-      expect(isFreeSlug(id)).toBe(true);
+    for (const [id, windows] of Object.entries(SYNCED_PRICES.models)) {
+      // Every window, not just the one in force: a historical zero prices the
+      // runs of its own window and is the same failure a day later.
+      for (const w of windows) {
+        if (w.input > 0 || w.output > 0) continue;
+        expect(isFreeSlug(id)).toBe(true);
+      }
     }
   });
 
@@ -147,6 +183,91 @@ describe("priceFor", () => {
       expect(p.source).toBe("list");
       expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
+  });
+});
+
+describe("a sync that re-reads the catalogue", () => {
+  /*
+   * The failure this guards: `z-ai/glm-5.3-flash` is on a launch discount to
+   * roughly 2026-09-09, and before rate windows a re-sync past that date
+   * rewrote the one row it had, silently re-pricing August's runs at list.
+   * `mergeWindows` is the sync's own merge step, so this is the real path with
+   * the fetch taken out.
+   */
+  const today = SYNCED_PRICES.asOf;
+  /** Today's file, as the sync would read it back. */
+  const current = SYNCED_PRICES.models;
+  /** What the catalogue quotes on the day of the sync: the latest window of each id. */
+  const catalogue = Object.fromEntries(
+    Object.entries(current).map(([id, ws]) => {
+      const { from: _from, ...rates } = ws[ws.length - 1]!;
+      return [id, rates];
+    }),
+  );
+  /** A fixture run on one id, dated inside the corpus's August window. */
+  function august(model: string): PriceableRun & { startedAt: number } {
+    return {
+      model,
+      apiBase: "https://openrouter.ai/api/v1",
+      platform: "openrouter",
+      driver: "openai",
+      harness: "wrathbench",
+      startedAt: Date.parse("2026-08-24T12:00:00Z"),
+    };
+  }
+  const fixture = tokens({ promptTokens: 3_000_000, completionTokens: 250_000, cacheReadTokens: 1_800_000, cacheWriteTokens: 400_000 });
+
+  test("a sync that changed nothing writes the same windows back", () => {
+    expect(mergeWindows(current, catalogue, "2026-12-01")).toEqual(current);
+    expect(sameRates({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 })).toBe(true);
+    expect(sameRates({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, { input: 1, output: 2, cacheRead: 3, cacheWrite: 5 })).toBe(false);
+  });
+
+  test("every priced id in the corpus reads the same dollars before and after a sync that doubles every rate", () => {
+    // The worst case: not one mover but all of them, on a day after every run
+    // in `data/runs`. Nothing already on disk may move by a cent.
+    const doubled = Object.fromEntries(
+      Object.entries(catalogue).map(([id, r]) => [
+        id,
+        { input: r.input * 2, output: r.output * 2, cacheRead: r.cacheRead * 2, cacheWrite: r.cacheWrite * 2 },
+      ]),
+    );
+    const after = mergeWindows(current, doubled, "2026-09-09");
+    for (const id of Object.keys(current)) {
+      const run = august(id);
+      const before = breakdownTotal(costOf(fixture, priceFor(run, run.startedAt)!));
+      const windows = after[id]!;
+      const priced = windowAt(windows, run.startedAt)!;
+      const now = breakdownTotal(costOf(fixture, { ...priced, id, asOf: today, source: "list", asIfMetered: false, note: "" }));
+      expect(now).toBe(before);
+      // A rate that really moved gained a window rather than replacing one; a
+      // zero-rate free row doubles to zero and is left alone.
+      const free = catalogue[id]!.input === 0 && catalogue[id]!.output === 0;
+      expect(windows.length).toBe(free ? 1 : 2);
+      if (!free) expect(windowAt(windows, Date.parse("2026-09-10"))!.input).toBe(catalogue[id]!.input * 2);
+    }
+  });
+
+  test("a second sync on the same day corrects that day's window instead of stacking a duplicate", () => {
+    const id = "z-ai/glm-5.3-flash";
+    const list = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0.15 };
+    const first = mergeWindows(current, { ...catalogue, [id]: list }, "2026-09-09");
+    expect(first[id]).toHaveLength(2);
+    const corrected = { input: 0.16, output: 0.52, cacheRead: 0.032, cacheWrite: 0.16 };
+    const second = mergeWindows(first, { ...catalogue, [id]: corrected }, "2026-09-09");
+    expect(second[id]).toEqual([current[id]![0]!, { ...corrected, from: "2026-09-09" }]);
+    // And the August run still prices at the discount through both.
+    expect(windowAt(second[id]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
+  });
+
+  test("an id the catalogue no longer prices is dropped, and a new id starts on an undated window", () => {
+    const { "z-ai/glm-5.3": _gone, ...rest } = catalogue;
+    const fresh = { ...rest, "vendor/new-model": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 } };
+    const after = mergeWindows(current, fresh, "2026-09-09");
+    expect(after["z-ai/glm-5.3"]).toBeUndefined();
+    expect(after["vendor/new-model"]).toEqual([{ input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
+    // No prior file at all is the same case for every id.
+    expect(mergeWindows(undefined, { "a/b": { input: 1, output: 2, cacheRead: 0, cacheWrite: 1 } }, "2026-09-09")["a/b"]![0]!.from).toBeUndefined();
   });
 });
 
