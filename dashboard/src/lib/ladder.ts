@@ -13,6 +13,7 @@
 
 import type { ResultRun } from "@viewer/api-types";
 import { niceTicks, scaleLinear } from "./chart";
+import { chainsOf } from "./lineage";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
@@ -820,16 +821,11 @@ function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null }
 /**
  * Collapse a set of freeplay runs into one row per stream.
  *
- * The chain walk has to survive production, so it is written for it:
- *
- * - a `continuedFrom` naming a run this set does not hold — the predecessor
- *   was archived, filtered out, or its link was dropped when the character
- *   went away (`dropContinuation`) — makes this run a root rather than
- *   dropping it;
- * - two runs claiming the same predecessor both keep it as a parent, and the
- *   later-started one wins the row (a re-launch that lost its race);
- * - a cycle cannot happen, and if a malformed one ever did, the visited set
- *   ends the walk instead of the page hanging.
+ * The chain walk itself is `lib/lineage.ts` — shared with the runs table and
+ * the run page, so the field and the inventory cannot disagree about which
+ * attempts belong to one stream, and written there for the cases production
+ * produces (a predecessor the set does not hold, a fork, a malformed cycle).
+ * The tie-break a fork gets there is the one this row applies: the later start.
  *
  * Order: level, then xp within it, then gold — the same "furthest, then
  * richest" comparison the scored ladder uses, with a missing reading sorting
@@ -837,29 +833,15 @@ function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null }
  * the stream id, so the order is total and stable.
  */
 export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
+  // The stillborn filter is this page's, not the walk's: the runs table is an
+  // inventory and shows them, the field is a leaderboard and does not.
   const kept = runs.filter((r) => r.stillborn !== true);
-  const byId = new Map(kept.map((r) => [r.runId, r]));
-  /** Walk to the chain's root, collecting the ids on the way. */
-  const chainOf = (r: ResultRun): string[] => {
-    const ids: string[] = [r.runId];
-    const seen = new Set<string>([r.runId]);
-    let cur = r;
-    for (;;) {
-      const prev = cur.continuedFrom;
-      if (prev === null || seen.has(prev)) break;
-      const parent = byId.get(prev);
-      if (parent === undefined) break;
-      ids.unshift(prev);
-      seen.add(prev);
-      cur = parent;
-    }
-    return ids;
-  };
+  const chains = chainsOf(kept);
   // One entry per root, holding the attempt that got furthest along the chain:
   // the longest chain wins, and a tie is broken by the later start.
   const best = new Map<string, { chain: string[]; run: ResultRun }>();
   for (const r of kept) {
-    const chain = chainOf(r);
+    const chain = chains.get(r.runId)!;
     const root = chain[0]!;
     const held = best.get(root);
     if (

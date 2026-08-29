@@ -164,6 +164,11 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--fg); }
 th.sorted { color: var(--fg); }
 .sortmark { margin-left: 4px; font-size: 9px; }
+/* A run that continues another: a rail on the run cell, so where the sort does
+   put a stream's attempts side by side they read as one block. The lineage
+   itself is the text in the cell — under any other sort the attempts are not
+   adjacent and the rail has nothing to join. */
+tr.stream td:nth-child(2) { box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
 
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
           margin-right: 6px; vertical-align: middle; }

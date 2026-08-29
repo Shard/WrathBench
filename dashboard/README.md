@@ -83,6 +83,16 @@ it is the harness talking to the model rather than the tool's output; a
 `harness` record with no text is bookkeeping and stays one quiet line. The pure
 half is `lib/feedview.ts` and its tests.
 
+A durable freeplay stream is one character across attempts, so `/runs` and
+`/run/:id` say where a run sits in its chain ("attempt 2 of 3 · continues a11",
+both directions linked on the run page) rather than listing a12 as an unrelated
+row beside a11. The walk is `lib/lineage.ts`, shared with the ladder's
+`streamRows`, and it is indexed over every run the server served — a stream
+that crossed a minor bump has its predecessor outside the series filter, which
+is where the line is worth the most. The table itself never reorders: it sorts
+thirteen ways, so the text is the link and the rail on the run cell is only
+what adjacency happens to give.
+
 One page per grain: the fleet page is what is
 running *now* and links to a run, never listing them; `/runs` is the runs;
 `/episodes` is the tiers; `/ladder` is aggregates over runs. A tier's member

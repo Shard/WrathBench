@@ -42,6 +42,7 @@ import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
+import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
 import {
@@ -167,6 +168,14 @@ export default function RunDetail() {
     writeExpandPref(v);
   };
   const [disconnected, setDisconnected] = createSignal(false);
+  /*
+   * Where this run sits in its freeplay stream, or undefined for a run that has
+   * none. The detail endpoint reads one run directory and so cannot see a
+   * sibling; the listing can, and this page already talks to it nowhere else,
+   * so the lineage is one fetch off `/api/results` rather than a field the
+   * public projection would have to learn to carry.
+   */
+  const [lineage, setLineage] = createSignal<Lineage | undefined>(undefined);
 
   /*
    * The log column is the scroll container, not the window: with the two-column
@@ -234,6 +243,29 @@ export default function RunDetail() {
       .then(async (d) => {
         setDetail(d);
         setTokens(d.tokens);
+        /*
+         * The stream this run belongs to. Fetched once and never polled: a
+         * continuation is only ever launched after its predecessor has ended,
+         * so a run being watched cannot gain a successor while it is on screen.
+         * Only freeplay has lineage, and the tier is read off the stamped
+         * comparability tuple — the run row carries no episode of its own.
+         * `continuedFrom` is checked as well, because a run whose metadata
+         * predates the stamp has no tuple and would otherwise lose its line.
+         */
+        if (d.run.continuedFrom !== null || d.run.comparability?.episode === "freeplay") {
+          void api
+            .results("all", true, "all")
+            .then((res) => {
+              /*
+               * This run, then everything else the listing served: a run the
+               * listing does not hold (archived, or served by an older viewer)
+               * still gets its own place in the walk rather than no line at all.
+               */
+              const others = res.runs.filter((r) => r.runId !== d.run.runId);
+              setLineage(lineageIndex([{ ...d.run }, ...others]).get(d.run.runId));
+            })
+            .catch(() => undefined);
+        }
         /*
          * The feed is the one part of this page the public site does not
          * publish: an entry carries model output and verbatim game text, which
@@ -362,6 +394,34 @@ export default function RunDetail() {
                   ← runs
                 </A>
               </h2>
+
+              {/* The freeplay stream this run is one attempt of. Both directions
+                  link, because a reader landing on a12 wants a11 and a reader
+                  landing on a11 wants to know it was not the end of the line. */}
+              <Show when={hasLineage(lineage()) ? lineage() : undefined}>
+                {(l) => (
+                  <p class="dim" title="a durable freeplay stream: one character, continued across attempts">
+                    freeplay stream <A href={`/run/${encodeURIComponent(l().streamId)}`}>{l().streamId}</A> · attempt{" "}
+                    {l().attempt} of {l().attempts}
+                    <Show when={l().previous}>
+                      {(p) => (
+                        <>
+                          {" · continues "}
+                          <A href={`/run/${encodeURIComponent(p())}`}>{p()}</A>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={l().next}>
+                      {(n) => (
+                        <>
+                          {" · continued by "}
+                          <A href={`/run/${encodeURIComponent(n())}`}>{n()}</A>
+                        </>
+                      )}
+                    </Show>
+                  </p>
+                )}
+              </Show>
 
               {/* Cumulative XP with level bands — full page width, above both columns. */}
               <XpChart
