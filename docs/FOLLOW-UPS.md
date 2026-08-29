@@ -42,6 +42,20 @@ player surface, each piece validated by a smoke test, before any 0.6 talk.**
 Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
 worklogs/2026-08-29).
 
+102. **Sample health, power and class into `state`, so the map's unit frame lights up**
+    (2026-08-29). The map sidebar now draws a WoW-style unit frame
+    (`dashboard/src/components/UnitFrame.tsx`): health, power tinted by type, XP
+    with the level badge. Only the XP bar has data — the SDK cache carries
+    `self.health`/`maxHealth`, `power1..7`, `powerType` and `nextLevelXp`
+    (`sdk/src/protocol.ts`), but the runner's state sampler writes only
+    level/xp/position/zone/area/items, so the positions feed cannot serve them and
+    the health and power bars render as unobserved. Next: add `health`,
+    `max_health`, `power`, `max_power`, `power_type`, `next_level_xp` to
+    `STATE_ADDED_COLUMNS` in `runner/src/trajectory.ts`, surface them on
+    `AgentPosition` and `RunRow` (class is already on the run row), and pass them
+    through in `MapPage.tsx`; the component already takes every field. Unblocks a
+    dead pip reading dead on the map too. Needs a fleet deploy to take effect.
+
 ## Navigation
 
 38. **Navigation plan — rungs 2–4** (2026-08-22; supersedes item 18). Rung 4 — a
