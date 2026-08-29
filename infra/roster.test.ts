@@ -65,6 +65,13 @@ describe("episodeArgv", () => {
     // Absent: nothing new in the argv of a spec written before either existed.
     const [plain] = resolve([{ model: "opus", driver: "claude-code" }], "20260829");
     expect(episodeArgv(plain!, false)).not.toContain("--keep-characters");
+    // A dropped head travels the same way: the record's inputs, fresh launch only.
+    const [d] = resolve([{ model: "opus", driver: "claude-code", episode: "freeplay", continueDropped: { runId: "f1", reason: "account_occupied_by opuslo" } }], "20260829");
+    const droppedArgv = episodeArgv(d!, false);
+    expect(droppedArgv[droppedArgv.indexOf("--continue-dropped") + 1]).toBe("f1");
+    expect(droppedArgv[droppedArgv.indexOf("--continue-dropped-reason") + 1]).toBe("account_occupied_by opuslo");
+    expect(droppedArgv).not.toContain("--continue-from");
+    expect(episodeArgv(d!, true)).not.toContain("--continue-dropped");
   });
 
   test("openai entries are unchanged: driver, endpoint, no account flag", () => {

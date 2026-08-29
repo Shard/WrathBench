@@ -165,22 +165,6 @@ status.
     harness runs one character per session; its framing is issue #9.
 
 
-94. **Two freeplay streams can elect one account and deadlock** (2026-08-29,
-    observed on the first day of durable streams). `streamsFrom` keys a stream by
-    its head run's account + character, and a launch on another account is held
-    "until its account is free". When a second ref's stream head lands on the same
-    pool account (fable-none spawned on RUNNER2 between two fleet.json edits, then
-    opus-low reclaimed RUNNER2 for Bromdir), the second stream waits indefinitely:
-    opus's launch hygiene keeps every stream character on the account, so
-    Thorgrima never disappears, and `POST /character-delete` refuses while the
-    account has a live session. Cleared by hand by blanking the dead run's
-    `character` in meta.json / run.sqlite so it stopped being a head. Next action:
-    a stream head on an account another stream currently occupies should start
-    fresh on a free account (lineage dropped, `continue-dropped` recorded) instead
-    of holding, and the supervisor should say so in `--status`; and the operator
-    doc should note the ordering rule — roster changes that compete for one
-    account go in one write, owner first.
-
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit

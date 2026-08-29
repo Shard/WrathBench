@@ -475,9 +475,35 @@ What the supervisor does with it, per tick:
   copied notes and starts fresh — a lineage the character does not back is
   the wrong record.
 - **The account is the stream's.** A freeplay pick prefers its stream's
-  account over the model's last run; if that account is busy the pick is
-  **held** (`policy <ref>: waiting for RUNNER2 — its freeplay character
-  Bromdir is there`), never started fresh elsewhere.
+  account over the model's last run. If that account is busy, who holds it
+  decides (`streamStanding`; operator decision 2026-08-29, item 94):
+  - the ref itself (its own live run, or its resume reserving the account):
+    nothing to plan, the stream is in flight;
+  - another ref's **bounded** run — a scored episode, a probe, a hand-written
+    job — ends at its episode boundary, so the pick is **held**
+    (`policy <ref>: waiting — RUNNER2 is held by glm-e90 until its episode
+    boundary — holding for Bromdir (…-a11)`), never started fresh elsewhere;
+  - another ref's **unlimited stream** has no boundary to wait for, and
+    waiting is the deadlock the first day of durable streams produced (two
+    heads on one account: the occupant's `--keep-characters` protects the
+    waiter's character, `POST /character-delete` refuses `account_in_use`,
+    and the waiter holds forever). The pick starts **fresh on the free
+    account it was offered**, lineage dropped: no `--continue-from`, a
+    `continue-dropped` harness record on the new run naming the head and
+    `account_occupied_by <ref>`, a `stream-dropped` event in the supervisor
+    log, and `--status` says `fresh-next`. With no free account the ref
+    simply gets no pick, and the supervisor says once why the next one will
+    be fresh.
+  The orphaned character stays where it is. `keepFor` derives from
+  `streamsFrom`, and a head is the ref's latest **ended** freeplay run with
+  a character: while the fresh session is live the old head is still the
+  stream, so the occupant's keep-list (fixed at its own launch anyway) and
+  the next launch on that account still protect the orphan. Once the fresh
+  session ends having named a character, it is the head, the orphan is no
+  stream's, and the next fresh launch on the old account wipes it in
+  ordinary hygiene (the cross-account name sweep stops skipping it too). If
+  the fresh session dies before naming one, the old head stands and the
+  next pick is decided the same way again.
 - **One stream per model+effort.** A `unlimited` ref has exactly one character
   at a time, and the freeplay ladder shows the live field, not every dead
   character a model ever rolled (operator ask, 2026-08-29). The older ended
@@ -497,7 +523,13 @@ What the supervisor does with it, per tick:
   skips stream characters.
 
 The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
-attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`. A hand-written
+attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`, and `--status` prints
+one `stream <ref>:` row per `idle: "unlimited"` ref — its head (run id,
+account, character) and the verdict: `in flight`, `continuable`, `held: <ref>
+on it until its episode boundary`, or `occupied by <ref>'s stream: fresh-next`.
+Roster changes that compete for one account go in **one write, owner first**:
+the hot reload is 60 s, and two edits in sequence let a second stream elect the
+account between them (how item 94 arose). A hand-written
 `freeplay` job on the same ref is the operator's own experiment and never
 continues anything. To start a stream over deliberately, delete its character
 (`POST /character-delete` on the module, the sweep's own path) before

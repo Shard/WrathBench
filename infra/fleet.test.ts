@@ -68,6 +68,9 @@ import {
   keepFor,
   streamAffinity,
   planContinuations,
+  streamStanding,
+  describeStanding,
+  formatStreams,
   pausesOnDrain,
   resumesInPlace,
   policyJob,
@@ -812,11 +815,12 @@ describe("the shipped fleet files", () => {
     expect(policyAny["extras"]).toBeUndefined();
     expect(config.policy.paid).toEqual({ maxConcurrent: 1 });
     // Three Claude sessions at most, one on the operator's own subscription and
-    // two on the partner's: a run spends both its lane's key and the total.
+    // up to three on the partner's (67169fd): a run spends both its lane's key
+    // and the total, so the total still caps the fleet at three.
     expect(config.maxConcurrent).toEqual({
       "claude-code": 3,
       "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1,
-      "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 2,
+      "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3,
       openrouter: 1,
       opencode: 1,
     });
@@ -2826,13 +2830,54 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     // RUNNER2 busy, RUNNER5 offered: held, never a fresh character elsewhere.
     const away = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], streams, roster);
     expect(away.picks).toEqual([]);
-    expect(away.waiting).toEqual([{ name: "opuslo", stream: streams.get("opuslo")!, offered: "RUNNER5" }]);
+    expect(away.waiting).toEqual([{ name: "opuslo", stream: streams.get("opuslo")!, offered: "RUNNER5", why: expect.stringContaining("RUNNER2 is free") }]);
     // A ref with no stream yet starts fresh, as before.
     const fresh = planContinuations([{ job: policyFreeplay("sonlo", 1), account: "RUNNER3", why: "extra" }], streams, roster);
     expect(fresh.picks[0]!.job.continueFrom).toBeUndefined();
     // The freeplay pick's account preference is its stream's, not the model's last run's.
     expect(streamAffinity(streams, () => "RUNNER5")("opuslo")).toBe("RUNNER2");
     expect(streamAffinity(streams, () => "RUNNER5")("sonlo")).toBe("RUNNER5");
+  });
+
+  test("a stream head on another ref's occupied account starts fresh elsewhere; a bounded or own occupant holds (item 94)", () => {
+    // The 2026-08-29 shape: fable-none's two-minute head (Thorgrima) landed on
+    // RUNNER2, then opus-low reclaimed RUNNER2 for Bromdir and stays there
+    // indefinitely — an unlimited session has no boundary to wait for.
+    const streams = new Map([
+      ["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }],
+      ["sonlo", { runId: "f1", account: "RUNNER2", character: "Thorgrima" }],
+    ]);
+    const pick = [{ job: policyFreeplay("sonlo", 2), account: "RUNNER5", why: "extra" }];
+    // Same-ref occupant (opus's own resume reserving RUNNER2): holds.
+    const own = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], streams, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
+    expect(own.picks).toEqual([]);
+    expect(own.dropped).toEqual([]);
+    expect(own.waiting[0]!.why).toContain("its own");
+    // Different ref's unlimited stream on the head's account: fresh on the offered account, with the record and no lineage.
+    const occupied = planContinuations(pick, streams, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
+    expect(occupied.waiting).toEqual([]);
+    expect(occupied.dropped).toEqual([{ name: "sonlo", stream: streams.get("sonlo")!, occupant: "opuslo", account: "RUNNER5" }]);
+    expect(occupied.picks[0]!.account).toBe("RUNNER5");
+    expect(occupied.picks[0]!.job.continueFrom).toBeUndefined();
+    expect(occupied.picks[0]!.job.continueDropped).toEqual({ runId: "f1", reason: "account_occupied_by opuslo" });
+    // A bounded occupant (a scored run) ends at its boundary: hold, as before.
+    const bounded = planContinuations(pick, streams, roster, new Map([["RUNNER2", { ref: "glm", unlimited: false }]]));
+    expect(bounded.picks).toEqual([]);
+    expect(bounded.waiting[0]!.why).toContain("held by glm until its episode boundary");
+    // No free account: no pick reaches here, and the standing names the reason --status prints.
+    expect(streamStanding("sonlo", streams.get("sonlo")!, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]))).toEqual({ kind: "occupied", occupant: "opuslo" });
+    expect(describeStanding(streams.get("sonlo")!, { kind: "occupied", occupant: "opuslo" })).toContain("starts FRESH");
+    // Head account free: continues there (the pick lands on it through affinity).
+    const free = planContinuations([{ job: policyFreeplay("sonlo", 2), account: "RUNNER2", why: "extra" }], streams, roster, new Map());
+    expect(free.picks[0]!.job.continueFrom).toBe("f1");
+    expect(free.picks[0]!.job.continueDropped).toBeUndefined();
+    expect(streamStanding("sonlo", streams.get("sonlo")!, new Map())).toEqual({ kind: "free" });
+    // The --status rows, one per unlimited ref.
+    const rows = formatStreams(roster, streams, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]), new Set(["opuslo"]));
+    expect(rows).toEqual([
+      expect.stringContaining("stream opuslo: head a11 on RUNNER2 as Bromdir — in flight"),
+      expect.stringContaining("stream sonlo: head f1 on RUNNER2 as Thorgrima — occupied by opuslo's stream: fresh-next"),
+    ]);
   });
 
   test("another stream's character on the account is kept, and the name sweep never deletes one", () => {
