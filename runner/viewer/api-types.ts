@@ -265,6 +265,14 @@ export interface RunRow {
   terminationReason: string | null;
   terminationDetail: string | null;
   pauseReason: string | null;
+  /**
+   * The freeplay run this one continues (`continued_from` in run.sqlite, and
+   * `config.continuedFrom` in meta.json). A durable freeplay stream is one
+   * character across attempts, and this is the only link between them; null is
+   * "a fresh launch", which is also what a run written before the column
+   * existed and a run whose continuation was dropped both read as.
+   */
+  continuedFrom: string | null;
   level: number | null;
   xp: number | null;
   /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
@@ -1230,6 +1238,19 @@ export interface ResultRun {
   taxi?: TaxiFacts | null;
   /** Why a run is suspended, when it ended for no other reason. */
   pauseReason: string | null;
+  /**
+   * The run this one continues; see `RunRow.continuedFrom`. What the freeplay
+   * ladder collapses a stream's attempts by.
+   */
+  continuedFrom: string | null;
+  /**
+   * A launch that produced nothing — `stillbornOf` in `runner/src/models.ts`,
+   * the same notion the scheduler's defer ladder counts. `null` is undecided:
+   * the run is live or paused, or its response count could not be read. Kept
+   * apart from `unscored`, which for a steered run answers "the episode" and
+   * so never gets far enough to say anything about the run itself.
+   */
+  stillborn: boolean | null;
 }
 
 export interface ResultsResponse extends SnapshotEnvelope {

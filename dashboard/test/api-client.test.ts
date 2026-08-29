@@ -121,7 +121,7 @@ describe("shapes", () => {
         {
           runId: "r1", model: "m", driver: "openai", harness: "wrathbench", shakeout: null, objective: null,
           campaign: null, cell: null, extra: false,
-          comparability: null,
+          comparability: null, continuedFrom: null,
           character: "Chr", race: 3, raceName: "Dwarf", class: 3, className: "Hunter",
           characterLabel: "Dwarf Hunter", platform: "openrouter", resolvedModel: "claude-sonnet-5", cliVersion: "2.1.239",
           apiBase: null, harnessVersion: "harness-0.2",

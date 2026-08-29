@@ -24,7 +24,7 @@ function runRow(over: Partial<RunRow> = {}): RunRow {
     objective: null, campaign: null, cell: null, extra: false, character: "c", race: 1, raceName: "Human", class: 2,
     className: "Paladin", characterLabel: "Human Paladin", platform: "p", resolvedModel: null, cliVersion: null, apiBase: null, harnessVersion: "v",
     comparability: null, startedAt: 1, endedAt: null, terminationReason: null,
-    terminationDetail: null, pauseReason: null, level: null, xp: null, money: null,
+    terminationDetail: null, pauseReason: null, continuedFrom: null, level: null, xp: null, money: null,
     questsCompleted: null, items: null, mtime: null, bytes: null, live: false,
     ...over,
   };
@@ -41,6 +41,7 @@ function resultRun(over: Partial<ResultRun> = {}): ResultRun {
     startedAt: null, terminationReason: null, levels: [], maxLevel: null,
     questsCompleted: null, maps: [], xp: null, money: null,
     character: null, playtimeMs: null, tokens: null, actualCost: null, pauseReason: null,
+    continuedFrom: null, stillborn: null,
     ...over,
   };
 }

@@ -190,7 +190,9 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     const runs = projectRuns(await get<RunsResponse>("/api/runs"));
     const results = projectResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1"));
     const ladders: [string, ResultsResponse][] = [];
-    for (const ep of EPISODE_IDS) {
+    // `probing` has no ladder (operator, 2026-08-29; the reason is at
+    // `LADDER_EPISODES` in api.ts), so no `ladder-probing.json` is published.
+    for (const ep of EPISODE_IDS.filter((id) => id !== "probing")) {
       ladders.push([ep, projectResults(await get<ResultsResponse>(`/api/ladder?episode=${ep}`))]);
     }
     const episodes = projectEpisodes(await get<EpisodesResponse>("/api/episodes"));
