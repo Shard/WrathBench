@@ -529,6 +529,10 @@ namespace WrathBench
         { "CMSG_GROUP_DISBAND", CMSG_GROUP_DISBAND },
         { "CMSG_GROUP_SET_LEADER", CMSG_GROUP_SET_LEADER },
         { "CMSG_LOOT_METHOD", CMSG_LOOT_METHOD },
+        // group loot roll (FOLLOW-UPS 102): the need/greed/pass/disenchant
+        // button on the roll frame SMSG_LOOT_START_ROLL opened (body u64 roll
+        // guid, u32 slot, u8 vote); the SDK's lootRoll builds it
+        { "CMSG_LOOT_ROLL", CMSG_LOOT_ROLL },
         // trade
         { "CMSG_INITIATE_TRADE", CMSG_INITIATE_TRADE },
         { "CMSG_BEGIN_TRADE", CMSG_BEGIN_TRADE },
@@ -561,6 +565,8 @@ namespace WrathBench
         { "CMSG_ITEM_QUERY_SINGLE", CMSG_ITEM_QUERY_SINGLE },
         { "CMSG_NPC_TEXT_QUERY", CMSG_NPC_TEXT_QUERY },
         { "CMSG_PAGE_TEXT_QUERY", CMSG_PAGE_TEXT_QUERY },
+        // player-written item text — a mailed letter (FOLLOW-UPS 103; body u64 item guid)
+        { "CMSG_ITEM_TEXT_QUERY", CMSG_ITEM_TEXT_QUERY },
         { "CMSG_PLAYED_TIME", CMSG_PLAYED_TIME },
         { "CMSG_QUERY_TIME", CMSG_QUERY_TIME },
         { "CMSG_SET_WATCHED_FACTION", CMSG_SET_WATCHED_FACTION },
@@ -5467,6 +5473,132 @@ namespace WrathBench
                     w.AddGuid("guid", (uint64_t)guid);
                     break;
                 }
+                // ------------------------------------------- group loot rolls
+                // (FOLLOW-UPS 102). Group::SendLootStartRoll and friends: a
+                // roll is keyed by a fresh item guid the core mints for it
+                // (`rollGuid`), not by the loot slot alone.
+                case SMSG_LOOT_START_ROLL:
+                {
+                    // u64 roll guid, u32 map, u32 loot slot, u32 item entry,
+                    // u32 random suffix, u32 random property, u32 count, u32
+                    // countdown ms, u8 vote mask (1 need, 2 greed, 4
+                    // disenchant; pass is always allowed). The per-player form
+                    // (SendLootStartRollToPlayer) drops the need bit when this
+                    // character cannot need.
+                    name = "SMSG_LOOT_START_ROLL";
+                    uint64 rollGuid; uint32 mapId, slot, itemId, suffix, prop, count, countdown; uint8 mask;
+                    p >> rollGuid >> mapId >> slot >> itemId >> suffix >> prop >> count >> countdown >> mask;
+                    w.AddGuid("rollGuid", (uint64_t)rollGuid).Add("slot", slot).Add("itemId", itemId)
+                     .Add("count", count).Add("countdownMs", countdown).Add("voteMask", (uint32)mask)
+                     .Add("canNeed", (mask & 0x01) != 0).Add("canGreed", (mask & 0x02) != 0)
+                     .Add("canDisenchant", (mask & 0x04) != 0);
+                    itemEntries.push_back(itemId);
+                    break;
+                }
+                case SMSG_LOOT_ROLL:
+                {
+                    // u64 roll guid, u32 slot, u64 player, u32 item entry, u32
+                    // suffix, u32 property, u8 roll (1-100; 128 = passed), u8
+                    // vote (0 pass, 1 need, 2 greed, 3 disenchant), u8 auto
+                    // pass. One per counted vote, to every voter.
+                    name = "SMSG_LOOT_ROLL";
+                    uint64 rollGuid; uint32 slot; uint64 player; uint32 itemId, suffix, prop; uint8 roll, vote, autoPass;
+                    p >> rollGuid >> slot >> player >> itemId >> suffix >> prop >> roll >> vote >> autoPass;
+                    w.AddGuid("rollGuid", (uint64_t)rollGuid).Add("slot", slot).AddGuid("playerGuid", (uint64_t)player)
+                     .Add("itemId", itemId).Add("roll", (uint32)roll).Add("rollType", (uint32)vote).Add("autoPass", autoPass != 0);
+                    itemEntries.push_back(itemId);
+                    break;
+                }
+                case SMSG_LOOT_ROLL_WON:
+                {
+                    // u64 roll guid, u32 slot, u32 item entry, u32 suffix, u32
+                    // property, u64 winner, u8 winning roll, u8 vote.
+                    name = "SMSG_LOOT_ROLL_WON";
+                    uint64 rollGuid; uint32 slot, itemId, suffix, prop; uint64 winner; uint8 roll, vote;
+                    p >> rollGuid >> slot >> itemId >> suffix >> prop >> winner >> roll >> vote;
+                    w.AddGuid("rollGuid", (uint64_t)rollGuid).Add("slot", slot).Add("itemId", itemId)
+                     .AddGuid("winnerGuid", (uint64_t)winner).Add("roll", (uint32)roll).Add("rollType", (uint32)vote);
+                    itemEntries.push_back(itemId);
+                    break;
+                }
+                case SMSG_LOOT_ALL_PASSED:
+                {
+                    // u64 roll guid, u32 slot, u32 item entry, u32 property, u32 suffix.
+                    name = "SMSG_LOOT_ALL_PASSED";
+                    uint64 rollGuid; uint32 slot, itemId, prop, suffix;
+                    p >> rollGuid >> slot >> itemId >> prop >> suffix;
+                    w.AddGuid("rollGuid", (uint64_t)rollGuid).Add("slot", slot).Add("itemId", itemId);
+                    itemEntries.push_back(itemId);
+                    break;
+                }
+                case SMSG_LOOT_MASTER_LIST:
+                {
+                    // Group::MasterLoot: u8 count, count x u64 — who the master
+                    // looter may hand an over-threshold item to.
+                    name = "SMSG_LOOT_MASTER_LIST";
+                    uint8 count; p >> count;
+                    if (count > 40) throw ByteBufferException();
+                    std::string looters = "[";
+                    for (uint8 i = 0; i < count; ++i)
+                    {
+                        uint64 g; p >> g;
+                        if (i) looters += ',';
+                        looters += Json::Writer().AddGuid("guid", (uint64_t)g).Str();
+                    }
+                    looters += "]";
+                    w.Raw("looters", looters);
+                    break;
+                }
+                // ------------------------------------------------ item text
+                // (FOLLOW-UPS 103). Two reading paths a client has: a book or
+                // letter with a PageText id (CMSG_READ_ITEM -> SMSG_READ_ITEM_OK
+                // -> the client's CMSG_PAGE_TEXT_QUERY on the template's page
+                // id -> one SMSG_PAGE_TEXT_QUERY_RESPONSE per page, the core
+                // walks the NextPage chain itself), and player-written text on
+                // a mailed letter (CMSG_ITEM_TEXT_QUERY). The SDK sends the
+                // page query the client would, keyed by the pageText it was
+                // served on the item query.
+                case SMSG_READ_ITEM_OK:
+                {
+                    name = "SMSG_READ_ITEM_OK";
+                    uint64 guid; p >> guid;
+                    w.AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_READ_ITEM_FAILED:
+                {
+                    // Same body; the equip error (SMSG_INVENTORY_CHANGE_FAILURE) precedes it.
+                    name = "SMSG_READ_ITEM_FAILED";
+                    uint64 guid; p >> guid;
+                    w.AddGuid("guid", (uint64_t)guid);
+                    break;
+                }
+                case SMSG_PAGE_TEXT_QUERY_RESPONSE:
+                {
+                    // WorldSession::HandlePageTextQueryOpcode: u32 page id,
+                    // cstring text, u32 next page (0 = last). A missing page
+                    // is served as the core's own "Item page missing." text.
+                    name = "SMSG_PAGE_TEXT_QUERY_RESPONSE";
+                    uint32 pageId; std::string text; uint32 next;
+                    p >> pageId >> text >> next;
+                    w.Add("pageId", pageId).Add("text", text).Add("nextPageId", next);
+                    break;
+                }
+                case SMSG_ITEM_TEXT_QUERY_RESPONSE:
+                {
+                    // WorldSession::HandleItemTextQuery: u8 1 = no such item;
+                    // else u8 0, u64 item guid, cstring text.
+                    name = "SMSG_ITEM_TEXT_QUERY_RESPONSE";
+                    uint8 noText; p >> noText;
+                    w.Add("found", noText == 0);
+                    if (noText == 0)
+                    {
+                        uint64 guid; std::string text;
+                        p >> guid >> text;
+                        w.AddGuid("guid", (uint64_t)guid).Add("text", text);
+                    }
+                    break;
+                }
                 // ---------------------------------------------------- vendor
                 case SMSG_LIST_INVENTORY:
                 {
@@ -5729,6 +5861,10 @@ namespace WrathBench
                     w.Add("speedMs", delay).Raw("spells", spells).Add("bonding", bonding);
                     if (!description.empty()) w.Add("description", description);
                     if (startQuest) w.Add("startQuest", startQuest);
+                    // PageText.dbc-shaped id of the item's first page: a book
+                    // or letter the client can read (FOLLOW-UPS 103). 0 is
+                    // "nothing to read" and is not served.
+                    if (pageText) w.Add("pageText", pageText);
                     if (block) w.Add("block", block);
                     w.Add("maxDurability", maxDurability);
                     break;

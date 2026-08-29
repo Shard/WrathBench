@@ -49,6 +49,12 @@ import {
   type LootResponseData,
   type LootRemovedData,
   type LootReleaseResponseData,
+  type LootStartRollData,
+  type LootRollData,
+  type LootRollWonData,
+  type LootAllPassedData,
+  type PageTextQueryResponseData,
+  type ItemTextQueryResponseData,
   type TrainerListData,
   type TrainerSpellData,
   type VendorItem,
@@ -563,6 +569,8 @@ export interface ItemInfo {
   readonly bonding: number | undefined;
   readonly description: string | undefined;
   readonly startQuest: number | undefined;
+  /** PageText id of the first page when the item can be read (a book, a letter); undefined otherwise. Item 103. */
+  readonly pageText: number | undefined;
   readonly block: number | undefined;
   readonly maxDurability: number | undefined;
 }
@@ -898,6 +906,52 @@ const PET_FEEDBACK_TEXT: Readonly<Record<number, string>> = {
 };
 
 /** The client's text for a `SMSG_PARTY_COMMAND_RESULT` code; the code itself when the SDK does not name it. */
+/** A vote on a group loot roll, as the roll frame's buttons name them. */
+export type RollChoice = "need" | "greed" | "pass" | "disenchant";
+
+/** The wire `RollVote` for each button (`CMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL.rollType`). */
+export const ROLL_VOTE: Readonly<Record<RollChoice, number>> = { pass: 0, need: 1, greed: 2, disenchant: 3 };
+
+/** The button name for a wire `rollType`, or the number when it is none of them. */
+export function rollChoiceName(rollType: number): RollChoice | undefined {
+  return (["pass", "need", "greed", "disenchant"] as const)[rollType];
+}
+
+/**
+ * One open roll frame (item 102): an over-threshold item on a group-looted
+ * corpse the server asked this character to vote on (`SMSG_LOOT_START_ROLL`).
+ * `rollGuid` is what the vote names; `deadline` is when the frame closes
+ * (arrival plus the countdown, on the local clock); `allowed` lists the
+ * buttons the server offered — pass is always among them.
+ */
+export interface PendingRoll {
+  readonly rollGuid: GuidKey;
+  readonly slot: number;
+  readonly itemId: number;
+  /** From the item query, when answered. */
+  readonly name: string | undefined;
+  readonly quality: number | undefined;
+  readonly count: number;
+  readonly allowed: readonly RollChoice[];
+  readonly deadline: number;
+  readonly seq: number;
+  readonly ts: number;
+}
+
+/**
+ * The text of a carried item the character has read (item 103): a book's or
+ * letter's pages (`SMSG_PAGE_TEXT_QUERY_RESPONSE`, in chain order) or the
+ * player-written text on a mailed letter (`SMSG_ITEM_TEXT_QUERY_RESPONSE`).
+ */
+export interface ItemText {
+  readonly guid: GuidKey;
+  readonly itemId: number | undefined;
+  readonly name: string | undefined;
+  readonly pages: readonly string[];
+  /** Whether every page of the chain has arrived. */
+  readonly complete: boolean;
+}
+
 export function partyResultText(result: number): string {
   return PARTY_RESULT_TEXT[result] ?? `party result ${result}`;
 }
@@ -1642,6 +1696,15 @@ export class StateCache {
 
   private groupState: GroupState | undefined;
 
+  /** rollGuid -> the open roll frame (item 102). Closed by the won / all-passed verdict, by our own counted vote, or by its deadline. */
+  private readonly rolls = new Map<GuidKey, PendingRoll>();
+
+  /** pageId -> one page of a book (item 103). A client-cache mirror: pages never change, so never pruned. */
+  private readonly pageTexts = new Map<number, { readonly text: string; readonly nextPageId: number }>();
+
+  /** item guid -> the player-written text on it, from `SMSG_ITEM_TEXT_QUERY_RESPONSE`. */
+  private readonly playerTexts = new Map<GuidKey, string>();
+
   private mailState: MailboxState | undefined;
 
   /** The banker the bank frame was last opened at. */
@@ -1694,6 +1757,8 @@ export class StateCache {
   private readonly notificationTail: number;
 
   lastSeq = -1;
+  /** The `ts` of the last event folded: the stream's own clock, which timed things (a roll's deadline) are read against. */
+  lastTs = 0;
   eventCount = 0;
 
   /**
@@ -2208,6 +2273,57 @@ export class StateCache {
     return only(resolveName(key, all, (s) => s.name));
   }
 
+  /**
+   * The roll frames open right now (item 102), oldest first, named from the
+   * item query where it has answered. A frame whose deadline has passed is
+   * gone: the server decided it without us. `now` defaults to the stream's
+   * own clock (`lastTs`), the clock the deadline was set on.
+   */
+  pendingRolls(now: number = this.lastTs): PendingRoll[] {
+    const out: PendingRoll[] = [];
+    for (const [guid, roll] of this.rolls) {
+      if (roll.deadline <= now) {
+        this.rolls.delete(guid);
+        continue;
+      }
+      const info = this.items.get(roll.itemId)?.value;
+      out.push(roll.name === undefined && info !== undefined ? { ...roll, name: info.name, quality: info.quality } : roll);
+    }
+    return out;
+  }
+
+  /**
+   * The text of every carried item this character has read (item 103): a
+   * book's pages walked from the template's `pageText` through the cached
+   * chain, or the player-written text on a mailed letter. Items that were
+   * never read are absent; `complete` is false while a chain's later pages
+   * are still arriving.
+   */
+  itemTexts(): ItemText[] {
+    const out: ItemText[] = [];
+    for (const item of this.bag().items) {
+      const written = this.playerTexts.get(item.guid);
+      if (written !== undefined) {
+        out.push({ guid: item.guid, itemId: item.itemId, name: item.name, pages: [written], complete: true });
+        continue;
+      }
+      const first = item.itemId === undefined ? undefined : this.items.get(item.itemId)?.value.pageText;
+      if (first === undefined || first === 0) continue;
+      const pages: string[] = [];
+      let next = first;
+      // Cap the walk: a page chain is short and a cycle in the data must not hang a read.
+      for (let guard = 0; next !== 0 && guard < 64; guard++) {
+        const page = this.pageTexts.get(next);
+        if (page === undefined) break;
+        pages.push(page.text);
+        next = page.nextPageId;
+      }
+      if (pages.length === 0) continue;
+      out.push({ guid: item.guid, itemId: item.itemId, name: item.name, pages, complete: next === 0 });
+    }
+    return out;
+  }
+
   /** The party (item 100), or `undefined` until any group packet has been observed. */
   group(): GroupState | undefined {
     return this.groupState;
@@ -2416,7 +2532,10 @@ export class StateCache {
     // churn), and holding the old max made `lastSeq` drift from the live
     // stream position for the rest of the run (seen in gate2-ox-2, +3).
     // `eventCount` stays a lifetime counter across sessions by design.
-    if (event.opcode !== STREAM_GAP) this.lastSeq = event.seq;
+    if (event.opcode !== STREAM_GAP) {
+      this.lastSeq = event.seq;
+      this.lastTs = event.ts;
+    }
 
     if (event.opcode === STREAM_GAP) {
       const d = event.data as GapRecord;
@@ -2719,6 +2838,49 @@ export class StateCache {
         if (d.found && d.name !== undefined) this.petNames.set(d.petNumber, d.name);
         return;
       }
+      case "SMSG_LOOT_START_ROLL": {
+        const d = event.data as LootStartRollData;
+        const allowed: RollChoice[] = ["pass"];
+        if (d.canNeed) allowed.unshift("need");
+        if (d.canGreed) allowed.splice(allowed.length - 1, 0, "greed");
+        if (d.canDisenchant) allowed.splice(allowed.length - 1, 0, "disenchant");
+        const info = this.items.get(d.itemId)?.value;
+        this.rolls.set(d.rollGuid, {
+          rollGuid: d.rollGuid,
+          slot: d.slot,
+          itemId: d.itemId,
+          name: info?.name,
+          quality: info?.quality,
+          count: d.count,
+          allowed,
+          deadline: event.ts + d.countdownMs,
+          seq: event.seq,
+          ts: event.ts,
+        });
+        return;
+      }
+      case "SMSG_LOOT_ROLL": {
+        // Our own counted vote closes the frame on a client; other voters' do not.
+        const d = event.data as LootRollData;
+        if (this.self.guid !== undefined && d.playerGuid === this.self.guid) this.rolls.delete(d.rollGuid);
+        return;
+      }
+      case "SMSG_LOOT_ROLL_WON":
+      case "SMSG_LOOT_ALL_PASSED": {
+        const d = event.data as LootRollWonData | LootAllPassedData;
+        this.rolls.delete(d.rollGuid);
+        return;
+      }
+      case "SMSG_PAGE_TEXT_QUERY_RESPONSE": {
+        const d = event.data as PageTextQueryResponseData;
+        this.pageTexts.set(d.pageId, { text: d.text, nextPageId: d.nextPageId });
+        return;
+      }
+      case "SMSG_ITEM_TEXT_QUERY_RESPONSE": {
+        const d = event.data as ItemTextQueryResponseData;
+        if (d.found && d.guid !== undefined && d.text !== undefined) this.playerTexts.set(d.guid, d.text);
+        return;
+      }
       case "SMSG_GROUP_INVITE": {
         const d = event.data as GroupInviteData;
         if (d.canAccept) this.groupPatch({ pendingInvite: { inviterName: d.inviterName, seq: event.seq, ts: event.ts } }, event.seq, event.ts);
@@ -3006,6 +3168,7 @@ export class StateCache {
             bonding: d.bonding,
             description: d.description,
             startQuest: d.startQuest,
+            pageText: d.pageText,
             block: d.block,
             maxDurability: d.maxDurability,
           },
