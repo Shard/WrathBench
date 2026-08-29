@@ -53,7 +53,8 @@ otherwise on whichever pool account is free.
   its account when the process exits; deleting a job from the queue drains it
   the same way.
 - `"enabled": true`, or a brand-new job — spawned on the next tick (a pool job
-  when an account is free).
+  when an account is free). `enabled` belongs to a JOB; on a roster entry it is
+  refused (pause a stream with `idle: "none"` — "Strict keys", below).
 - A malformed edit is complained about and ignored; the last good config keeps
   running. Check it first if you like:
   `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts infra/fleet.json --dry-run`
@@ -84,8 +85,9 @@ preflight   the gate (below): enabled, account, smokes [{script, account}], time
 accounts    { pool: [...], paid: [...], local: [...] } — the account classes, each in
             preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
             refused if authored.
-roster      name -> entry, the exact run-roster per-entry schema (model, driver, effort, apiBase,
-            apiKeyEnv, race, class, objective, watchdogs, maxToolCalls, wikiCoords).
+roster      name -> entry. The keys an entry may carry, and nothing else: model, tier, idle,
+            driver, effort, apiBase, apiKeyEnv, billing, subscription, race, class, watchdogs,
+            maxToolCalls. Anything else REFUSES the entry by name ("Strict keys", below).
             NO character name: the model names its own at createSession, and the name it chose is
             what the run row, meta.json and the runs page carry. `character` is REFUSED by name
             here (as it is in a campaign or a cell) — a name in the config is one the harness has
@@ -135,7 +137,8 @@ campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, 
             `maxAttemptsPerCell` ABANDONS a (model, cell) after that many launches, counted or
             not. Absent means no cap. Progress is on the /campaigns page.
 queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
-            enabled, account? }. With `account` the job is PINNED to it and never the policy's;
+            enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
+            any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
             `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>]-<stamp>`), one job
             per (ref, episode). A pool job whose ref is not eligible for its EPISODE is skipped
@@ -143,6 +146,26 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
             reserves the POOL only — the paid and local classes still pick, and the reservation
             is named in --status.
 ```
+
+#### Strict keys, and how to pause a stream
+
+A roster entry and a queue job each carry a **declared set of keys** (listed
+above) and nothing else. A key outside the set REFUSES that entry or job by
+name: the refusal line in `--status` says which key it was and what to write
+instead, the rest of the file stays in effect, and a live run under the refused
+entry or job is left alone — it just does not respawn. Whole-file rejection is
+still what a shape error gets. (Campaigns were already strict, via their
+schema; account lists are plain names and have no keys to get wrong.)
+
+The key that cost us a day: **`enabled` is a queue job's word, not a roster
+entry's.** `"enabled": false` on an entry was silently ignored, so a freeplay
+stream believed to be paused kept running through a deploy window
+(2026-08-30). To pause a stream, set the entry's `idle: "none"`: the freeplay
+job stops being generated, the paused run reads "not in config — resume by
+hand", and it stays down until `idle: "unlimited"` comes back (the character is
+durable — "Freeplay streams are durable", below). To take a model out of
+scheduling entirely, set its tier and idle to what you actually want; there is
+no on/off switch on a catalog entry.
 
 A roster entry referenced by a pinned job is never policy-scheduled: the account
 is spoken for. Nothing else takes an entry out of the policy — a campaign
@@ -793,10 +816,10 @@ as a config error (every per-entry account is checked), and none is ever
 In order: the REJECTED banner when the file is not in effect; the PAUSED banner
 when `data/runs/fleet-pause.json` is set (with what the supervisor has actually
 picked up — see "Updating the live fleet"); the `!` refusal
-block when the file IS in effect but the account rules disabled a pin in it
+block when the file IS in effect but a config rule disabled something in it
 (item 66 — an enabled job or campaign on a listed account, or a second one on
-an account already taken, is refused by name rather than taking the whole file
-down with it); the supervisor
+an account already taken; and since 2026-08-30 an entry or job carrying an
+unknown key — refused by name rather than taking the whole file down with it); the supervisor
 line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the
 gate (last result, per smoke); the **accounts** table — every account, pinned
 first then the pool in preference order, with the job on it (`name: model
