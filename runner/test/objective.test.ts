@@ -21,7 +21,7 @@ import {
   watchdogOverrideSchema,
 } from "../src/config";
 import { runLoop } from "../src/loop";
-import { buildSystemPrompt, SYSTEM_PROMPT } from "../src/prompt";
+import { SYSTEM_PROMPT, buildSystemPrompt, contextSentence, objectiveSection } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
@@ -79,7 +79,7 @@ describe("prompt rendering", () => {
     expect(p.indexOf("--- end operator objective ---")).toBeLessThan(p.indexOf("## The snippet runtime"));
   });
 
-  test("the text depends on the objective alone — not the model, driver or effort", async () => {
+  test("the objective text depends on the objective alone — not the model, driver or effort", async () => {
     // The claude driver's `--system-prompt` value...
     const args = claudeArgs({
       mcpConfigPath: "/tmp/mcp.json",
@@ -119,6 +119,13 @@ describe("prompt rendering", () => {
     const viaLoop = messages.find((m) => m.role === "system")?.content;
     expect(viaLoop).toBe(viaClaude!);
     expect(viaLoop).toBe(buildSystemPrompt(OBJECTIVE));
+    // The one thing that *is* per driver is the sentence about older
+    // conversation, and it carries the objective block unchanged with it: the
+    // claude-code render differs from this one by that sentence and nothing
+    // else (item 8; `prompt.ts`, `contextSentence`).
+    const viaClaudeHarness = buildSystemPrompt(OBJECTIVE, undefined, "claude-code");
+    expect(viaClaudeHarness).toContain(objectiveSection(OBJECTIVE));
+    expect(viaClaudeHarness.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(viaLoop!);
     trajectory.close();
   });
 });

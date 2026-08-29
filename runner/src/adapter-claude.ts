@@ -104,7 +104,7 @@ import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
-import { buildSystemPrompt, SYSTEM_PROMPT } from "./prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { TOOLS, type ToolContext } from "./tools";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -366,6 +366,7 @@ export interface ClaudeArgsOptions {
   model?: string | undefined;
   /** `--effort` level, when the run declares one. `none` is env, not a flag. */
   effort?: string | undefined;
+  /** Defaults to the claude-code render of the fixed prompt, never the fixed loop's. */
   systemPrompt?: string;
 }
 
@@ -424,7 +425,7 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     "--output-format",
     "stream-json",
     "--system-prompt",
-    o.systemPrompt ?? SYSTEM_PROMPT,
+    o.systemPrompt ?? CLAUDE_CODE_SYSTEM_PROMPT,
     "--mcp-config",
     o.mcpConfigPath,
     "--strict-mcp-config",
@@ -796,7 +797,10 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // A cwd outside the repo: `claude` walks parents for CLAUDE.md, and the run
   // directory lives under a checkout that has one.
   const cwd = mkdtempSync(join(tmpdir(), "wrathbench-claude-"));
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode);
+  // The claude-code render: same prompt, except the sentence about older
+  // conversation, which on this harness must describe the CLI's regime and not
+  // the fixed loop's trim (`contextSentence`).
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"));
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
