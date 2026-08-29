@@ -54,6 +54,14 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       questsCompleted: p.questsCompleted,
       // Track points carry no inventory; the replay popout shows none.
       items: null,
+      // The player frame as that sample recorded it (FOLLOW-UPS 104); a track
+      // from before the columns existed carries nulls and draws unobserved.
+      health: p.health ?? null,
+      maxHealth: p.maxHealth ?? null,
+      power: p.power ?? null,
+      maxPower: p.maxPower ?? null,
+      powerType: p.powerType ?? null,
+      nextLevelXp: p.nextLevelXp ?? null,
       harnessVersion: track.harnessVersion,
       // The intention standing at the cursor. Its own cadence, so it is looked
       // up by time rather than taken from the track point beside it.

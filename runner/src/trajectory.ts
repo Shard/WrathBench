@@ -52,6 +52,21 @@ export interface StateLine {
   /** Area (subzone) id from the state cache (`self.area`). */
   area?: number | undefined;
   /**
+   * The player frame's own numbers (FOLLOW-UPS 104), off the same snapshot
+   * every other field here comes from — no extra RPC. `health`/`maxHealth` and
+   * `power`/`maxPower` arrive as the state cache's derived gauges, which it
+   * withholds until both halves have actually been observed, so a pair is
+   * either wholly present or wholly absent and a ratio read off one row is
+   * never mismatched. `powerType` is the raw field the client picks the bar
+   * with; `nextLevelXp` is the denominator of the XP bar.
+   */
+  health?: number | undefined;
+  maxHealth?: number | undefined;
+  power?: number | undefined;
+  maxPower?: number | undefined;
+  powerType?: number | undefined;
+  nextLevelXp?: number | undefined;
+  /**
    * What the character carries and wears (FOLLOW-UPS 50): names and counts
    * from the state cache's item queries, `equipped` for inventory slots 0-18,
    * carried rows from `state.bag()` across every bag. Omitted when the
@@ -357,6 +372,15 @@ const STATE_ADDED_COLUMNS: Record<string, string> = {
   area: "INTEGER",
   // JSON `ItemSample[]` (FOLLOW-UPS 50); NULL when the sample carried none.
   items: "TEXT",
+  // Added 2026-08-30 (FOLLOW-UPS 104): the player frame's numbers. Additive and
+  // nullable — nothing scored reads them, and a sample written before they
+  // existed has NULL, which every reader renders as unobserved.
+  health: "INTEGER",
+  max_health: "INTEGER",
+  power: "INTEGER",
+  max_power: "INTEGER",
+  power_type: "INTEGER",
+  next_level_xp: "INTEGER",
 };
 
 export class Trajectory {
@@ -541,8 +565,9 @@ export class Trajectory {
     this.append({ t: "state", ...s });
     this.db
       .query(
-        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state (run_id, ts, level, xp, map, x, y, z, event_count, last_seq, money, quests_completed, turn, zone, area, items,
+                            health, max_health, power, max_power, power_type, next_level_xp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -561,6 +586,12 @@ export class Trajectory {
         s.zone ?? null,
         s.area ?? null,
         s.items === undefined ? null : JSON.stringify(s.items),
+        s.health ?? null,
+        s.maxHealth ?? null,
+        s.power ?? null,
+        s.maxPower ?? null,
+        s.powerType ?? null,
+        s.nextLevelXp ?? null,
       );
   }
 

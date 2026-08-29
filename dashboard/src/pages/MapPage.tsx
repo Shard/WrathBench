@@ -37,6 +37,7 @@ import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
+import { resolvePowerType } from "../lib/unitframe";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
   clearReplayState,
@@ -867,7 +868,16 @@ export default function MapPage() {
                 {p().model ?? "—"}
               </div>
               <div class="v">
-                <UnitFrame level={p().level} xp={p().xp} />
+                <UnitFrame
+                  level={p().level}
+                  xp={p().xp}
+                  nextLevelXp={p().nextLevelXp}
+                  health={p().health}
+                  maxHealth={p().maxHealth}
+                  power={p().power}
+                  maxPower={p().maxPower}
+                  powerType={resolvePowerType(p().powerType, p().class)}
+                />
               </div>
               <div class="k">money</div>
               <div class="v mono">{fmtMoney(p().money)}</div>

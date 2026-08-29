@@ -404,7 +404,10 @@ const RUN_LIST_ROW_KEYS = [
   "modelResponses",
   // no `snapshot`: only the renderer stamps it, after projection
 ];
-const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn"];
+const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
+  // The player frame's numbers (FOLLOW-UPS 104): public on every surface that
+  // carries a state sample, as they are on the positions feed.
+  "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp"];
 const RESULT_RUN_KEYS = [
   "runId",
   "model",
@@ -606,6 +609,13 @@ describe("projectPositions and projectTrack", () => {
           questsCompleted: 2,
           items: [{ name: POISON.itemName, count: 1, equipped: false }],
           harnessVersion: "harness-0.5-1-gabc",
+          health: 140,
+          maxHealth: 220,
+          power: 30,
+          maxPower: 100,
+          powerType: 3,
+          nextLevelXp: 2100,
+          class: 4,
           move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: null }),
         }),
       ],
@@ -628,6 +638,8 @@ describe("projectPositions and projectTrack", () => {
           "questsCompleted",
           "items",
           "harnessVersion",
+          "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+          "class",
           "move",
         ]),
         ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
@@ -636,6 +648,16 @@ describe("projectPositions and projectTrack", () => {
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBeNull();
     expect(out.positions[0]!.items).toBeNull();
+    // The player frame's numbers are public: what any onlooker's client shows.
+    expect(out.positions[0]).toMatchObject({
+      health: 140,
+      maxHealth: 220,
+      power: 30,
+      maxPower: 100,
+      powerType: 3,
+      nextLevelXp: 2100,
+      class: 4,
+    });
     // The destination travels; the name of what it was aimed at does not.
     expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: null, status: null });
   });
@@ -647,7 +669,10 @@ describe("projectPositions and projectTrack", () => {
       model: "test/model",
       harnessVersion: "harness-0.5-1-gabc",
       points: [
-        smuggle({ ts: 1000, map: 0, x: -6240, y: 380, level: 1, xp: 0, money: 0, questsCompleted: 0, turn: 1 }),
+        smuggle({
+          ts: 1000, map: 0, x: -6240, y: 380, level: 1, xp: 0, money: 0, questsCompleted: 0, turn: 1,
+          health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 3, nextLevelXp: 2100,
+        }),
       ],
       moves: [
         smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: "arrived" }),
@@ -661,13 +686,17 @@ describe("projectPositions and projectTrack", () => {
         "model",
         "harnessVersion",
         "points",
-        ...under("points[]", ["ts", "map", "x", "y", "level", "xp", "money", "questsCompleted", "turn"]),
+        ...under("points[]", [
+          "ts", "map", "x", "y", "level", "xp", "money", "questsCompleted", "turn",
+          "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+        ]),
         "moves",
         ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
       ]),
     );
     assertClean(JSON.stringify(out));
     expect(out.character).toBeNull();
+    expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
   });
 });
 
