@@ -116,7 +116,6 @@
     "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tier": "t1", "idle": "none"},
     "north-mini-code": {"model": "cohere/north-mini-code:free", "tier": "t1", "idle": "none"},
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "unlimited"},
-    "nemotron-nano": {"model": "nvidia/nemotron-nano-9b-v2:free", "tier": "t1", "idle": "none"},
     "deepseek-flash": {"model": "deepseek/deepseek-v4-flash-0731", "billing": "paid", "race": 1, "class": 2, "tier": "t1"},
     "gpt-luna": {"model": "openai/gpt-5.6-luna", "billing": "paid", "race": 1, "class": 2, "tier": "t1"},
     "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "race": 1, "class": 2, "tier": "t1"},
@@ -129,6 +128,12 @@
     "laguna-or": {"model": "poolside/laguna-s-2.1:free", "tier": "t1", "idle": "none"},
     "muse-spark": {"model": "muse-spark-1.2-contributor-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
     "hy3": {"model": "hy3-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t1", "idle": "none"},
+    "minimax-m3-free": {"model": "minimax/minimax-m3:free", "tier": "t0", "idle": "none"},
+    "inkling-small": {"model": "thinkingmachines/inkling-small:free", "tier": "t0", "idle": "none"},
+    "dots-3": {"model": "dots-studio/dots-3-note-preview:free", "tier": "t0", "idle": "none"},
+    "nemotron-lightning": {"model": "nemotron-3.5-lightning-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t0", "idle": "none"},
+    "ling-flash": {"model": "ling-3.0-flash-fin-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t0", "idle": "none"},
+    "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t0", "idle": "none"},
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "race": 1, "class": 2, "tier": "t1", "idle": "unlimited"}
   },
   "policy": {
