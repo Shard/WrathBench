@@ -16,8 +16,10 @@ import type {
   AchievementFacts,
   AreaFacts,
   DeathFacts,
+  DeathSite,
   EntrySummary,
   LevelUpFacts,
+  LevelUpMark,
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
@@ -42,8 +44,10 @@ export type {
   AchievementFacts,
   AreaFacts,
   DeathFacts,
+  DeathSite,
   EntrySummary,
   LevelUpFacts,
+  LevelUpMark,
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
@@ -1256,31 +1260,6 @@ export function taxiFactsFrom(
 
 /* ---------------------------------------------- level and death milestones */
 
-/**
- * One `level` milestone, projected to what a derivation needs. `from` is null
- * on the first observation of a process, which is the run's starting level (or,
- * on a resumed run, the level it resumed at) and **not** a level-up.
- */
-export interface LevelUpMark {
-  to: number;
-  from: number | null;
-  xp: number | null;
-  ts: number;
-  turn: number | null;
-}
-
-/** Where a death happened, as the death milestone recorded it. */
-export interface DeathSite {
-  /** The death's own timestamp when the cache carried one, else the record's. */
-  ts: number;
-  turn: number | null;
-  position: { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" } | null;
-  /** The zone/area reading at first observation; the death site only when `released` is false. */
-  zone: number | null;
-  area: number | null;
-  released: boolean | null;
-}
-
 /** A death-family milestone: the death itself, the release, or the resurrect. */
 export type DeathMark =
   | ({ kind: "death" } & DeathSite)
@@ -1383,7 +1362,18 @@ export function levelUpFactsFrom(marks: readonly LevelUpMark[]): LevelUpFacts | 
  */
 export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: boolean): DeathFacts | null {
   if (marks.length === 0 && !sawLevelUpMark) return null;
-  const sites = marks.filter((m): m is { kind: "death" } & DeathSite => m.kind === "death");
+  // Mapped, not filtered through: a `DeathMark` carries a `kind` discriminant
+  // that `DeathSite` does not declare, and the wire must be exactly the type.
+  const sites: DeathSite[] = marks
+    .filter((m): m is { kind: "death" } & DeathSite => m.kind === "death")
+    .map((m) => ({
+      ts: m.ts,
+      turn: m.turn,
+      position: m.position,
+      zone: m.zone,
+      area: m.area,
+      released: m.released,
+    }));
   return {
     deaths: sites.length,
     releases: marks.filter((m) => m.kind === "release").length,
