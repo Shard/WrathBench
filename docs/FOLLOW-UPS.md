@@ -17,13 +17,103 @@ status.
 
 ## Next up
 
-1. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
+1. **95–101** — the basic player surface (skills, talents, item stats, pets,
+   reputation, the dropped replies, legibility). Operator's decision 2026-08-29:
+   complete it, validated by smoke tests, before any 0.6 talk. 95/96/97/99 are
+   with the module agent; 101 is in hand.
+2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
-2. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
+3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
    grouping and instance records exist, and death/level-up/spell/talent are still
    unwritten.
-3. **19** — before anything is public or MCP-exposed: shared secret on the port,
+4. **19** — before anything is public or MCP-exposed: shared secret on the port,
    token-to-character binding, filesystem sandboxing.
+
+## Player surface
+
+The 2026-08-29 fan-out audit (three subagents — the SDK surface, the module's
+taps, and every trajectory to date) found a character who can walk, fight, quest,
+train, fly and bind, and who cannot see or spend most of what a level-10 player
+handles. Observed need is thin on purpose here: across 11 Claude runs no snippet
+ever called `sdk.raw()` and the highest level reached was 9, so nothing below is
+"a trajectory asked for it" — it is the surface a player needs before a run can
+get far enough to ask. **Operator's decision, 2026-08-29: complete the basic
+player surface, each piece validated by a smoke test, before any 0.6 talk.**
+Numbers 95–100 are observation/action gaps that need the module; 101 is
+legibility work inside the SDK and runner.
+
+95. **Skills and professions are not observed** (2026-08-29 audit). The
+    observation contract already promises "skills … as the client shows it"
+    (docs/CONTRACTS.md), and nothing serves them: no `SMSG_INITIAL_SPELLS` skill
+    block, no skill update fields on self, no `state.self.skills`. Why it
+    matters: weapon skill, defense and every profession are invisible, so a model
+    cannot tell why a swing missed, cannot know it is at the trainer's skill cap,
+    and cannot gate riding at 75 or take a profession at all — which makes
+    professions unreachable rather than unused. Unblocked by the module tapping
+    the skill fields (they ride the player update block a client already gets) and
+    an SDK fold plus one smoke test. Status: with the module agent, in flight.
+
+96. **Talents are not discoverable, and there is no respec** (2026-08-29 audit).
+    `learnTalent` exists and takes a `Talent.dbc` talent id with a rank; the model
+    has no way to observe which ids exist, what they do, or which tree they belong
+    to, so the only working path is guessing an id out of world knowledge.
+    `state.talents` reports points spent, never the choices available. Respec is
+    absent entirely: `CMSG_TALENT_WIPE_CONFIRM` is not on the raw allowlist, so a
+    misspent tree is permanent for the run. This bites at level 10, which the
+    ladder now expects runs to pass. Unblocked by a talent catalogue served as
+    client-cache knowledge the way spell and achievement names already are, plus
+    the trainer's wipe opcode allowlisted and a smoke test that spends and undoes
+    a point. Status: with the module agent, in flight.
+
+97. **`ItemInfo` carries no stats** (2026-08-29 audit). The item template fold
+    serves name, quality, item level, required level and buy/sell price and
+    nothing else, so an upgrade decision and every quest reward choice is a guess
+    over a name — the model cannot see armour, a damage range, or a single stat
+    the client shows in the tooltip it renders from the same template. Unblocked
+    by widening the served item-template fields (all client-cache, all in the
+    template a client already has) and a fixture test that a reward choice reads
+    them. Status: in flight.
+
+98. **No pet surface, so hunter and warlock are unplayable** (2026-08-29 audit).
+    There is no `CMSG_PET_ACTION` and no `SMSG_PET_SPELLS` tap — `WbManager.cpp`
+    says so in as many words ("no pet surface yet", ~line 4105). A hunter past
+    level 10 or a warlock past level 1 has a pet it can neither command nor
+    observe, which silently removes two classes from the class dimension rather
+    than scoring them badly. Unblocked by the pet spellbook tap plus the pet
+    action opcode, and a smoke test that summons and commands one. Status:
+    queued behind 95–97.
+
+99. **Reputation is allowed and not served** (2026-08-29 audit). The observation
+    contract lists "reputation as the client shows it"; no packet is tapped and
+    no state field exists. Faction standing gates quests, vendors and rewards, so
+    a model cannot tell why an NPC refuses it. Unblocked by the reputation tap and
+    an SDK fold. Status: in flight.
+
+100. **Allowlisted opcodes whose replies are dropped: group, mail, bank, trade**
+    (2026-08-29 audit). The raw allowlist accepts the client opcodes for all
+    four, and no reply is whitelisted, so the model sends and sees nothing — the
+    exact "I sent it and saw nothing" evidence the raw tier is supposed to
+    produce (docs/METHODOLOGY.md, "The model surface"). Bank is worse than
+    silent: its slots fall outside the inventory range the module serves, so even
+    a successful deposit is invisible. The auction house is blocked outright at
+    the allowlist and is a separate decision, not part of this item. Unblocked by
+    a reply tap per surface, each earning its own smoke test; group first, since
+    rung 6 needs a party record (item 35). Status: queued.
+
+101. **Legibility: the failures and windows the model cannot read** (2026-08-29
+    audit). Two SDK/runner-side pieces, no module work:
+    - **101a — inventory failures are bare numbers.** `SMSG_INVENTORY_CHANGE_FAILURE`
+      renders in the event window as its raw `result` code, and a run was
+      observed reverse-engineering "reason 60" into "in combat" from context.
+      Map the 3.3.5a `InventoryResult` codes to short client-visible text and
+      deliver it through the existing per-failed-call hint path — plain per-call
+      text, no counters and no thresholds (docs/METHODOLOGY.md, "Softening").
+    - **101b — vendor, trainer and loot windows are transient events only.** A
+      vendor list or a trainer list exists for exactly the one event that carried
+      it; a snippet that read it two turns ago has to ask again. Fold the latest
+      window per NPC (and per corpse for loot) into `StateSnapshot` the way
+      `gossip` and `taxiWindows` already are, cleared on the close the server
+      actually sends.
 
 ## Navigation
 
