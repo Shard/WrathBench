@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { connect, meshZHint, WrathRequestError, WrathTransportError } from "../src/client";
+import { connect, inventoryResultText, meshZHint, WrathRequestError, WrathTransportError } from "../src/client";
 import { EventAbortedError, EventTimeoutError } from "../src/events";
 import {
   addKill,
@@ -2052,6 +2052,40 @@ describe("client: equipItem", () => {
     await stub.stop();
   });
 
+  test("a refusal is recorded for the harness, not only returned", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
+    await untilAction(stub, "equip_item");
+    // 60 is EQUIP_ERR_NOT_IN_COMBAT — the code a run reverse-engineered from
+    // context because nothing ever named it (FOLLOW-UPS 101a).
+    stub.push(JSON.stringify(inventoryChangeFailure(78, 60)));
+    const result = await pending;
+    if (result.ok || result.status !== "not_equipped") throw new Error("unreachable");
+    expect(result.hint).toContain("not while in combat");
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]!.action).toBe("equipItem");
+    expect(drained[0]!.status).toBe("not_equipped");
+    expect(drained[0]!.hint).toContain("not while in combat");
+    // Drained means drained: a second read is empty.
+    expect(client.drainActionHints()).toEqual([]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an unconfirmed equip is recorded for the harness too", async () => {
+    const stub = startStub({ onConnect: () => bagWorld() });
+    const client = await inWorld(stub);
+    const result = await client.equipItem(255, BACKPACK_SLOT, { timeout: 60 });
+    expect(result.ok).toBe(false);
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]!.status).toBe("unconfirmed");
+    client.close();
+    await stub.stop();
+  });
+
   test("silence is unconfirmed, not success", async () => {
     const stub = startStub({ onConnect: () => bagWorld() });
     const client = await inWorld(stub);
@@ -2062,6 +2096,32 @@ describe("client: equipItem", () => {
     expect(result.hint).toContain("state.bag()");
     client.close();
     await stub.stop();
+  });
+});
+
+describe("inventoryResultText", () => {
+  test("names the codes runs actually hit, and stays silent on the rest", () => {
+    // Spot checks against the pinned core's Item.h EQUIP_ERR_* list.
+    expect(inventoryResultText(60)).toBe("not while in combat");
+    expect(inventoryResultText(50)).toBe("your bags are full");
+    expect(inventoryResultText(1)).toContain("level is too low");
+    expect(inventoryResultText(8)).toContain("proficiency");
+    expect(inventoryResultText(88)).toContain("talent");
+    // OK, NONE and the enum's gap carry no client string, so neither do we,
+    // and an out-of-range code is never guessed at.
+    expect(inventoryResultText(0)).toBeUndefined();
+    expect(inventoryResultText(59)).toBeUndefined();
+    expect(inventoryResultText(83)).toBeUndefined();
+    expect(inventoryResultText(999)).toBeUndefined();
+  });
+
+  test("every named code is a short sentence, never advice", () => {
+    for (let code = 1; code <= 89; code++) {
+      const text = inventoryResultText(code);
+      if (text === undefined) continue;
+      expect(text.length).toBeLessThanOrEqual(120);
+      expect(text).not.toContain("InventoryResult");
+    }
   });
 });
 
@@ -2682,7 +2742,7 @@ describe("client: talents and the raw escape hatch (FOLLOW-UPS 39)", () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const before = stub.actions.length;
-    expect(() => client.raw("say", "")).toThrow(/CMSG_\* name/);
+    expect(() => client.raw("say", "")).toThrow(/CMSG_\* \(or bidirectional MSG_\*\) name/);
     expect(() => client.raw("CMSG_EMOTE", "abc")).toThrow(/hex string/);
     expect(() => client.raw("CMSG_EMOTE", [{ u8: 300 }])).toThrow(/payload/);
     expect(() => client.raw("CMSG_EMOTE", [{ u9: 3 } as never])).toThrow(/field/);
@@ -3099,6 +3159,116 @@ describe("client: moveTo target resolution", () => {
     expect(plainHint).toContain("often outlasts a timeout that short");
 
     quiet.close();
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: queryTalentTree and resetTalents (item 96)", () => {
+  const TS = 1_700_000_000_000;
+  const tree = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "WB_TALENT_TREE",
+      opcodeId: 0xff08,
+      ts: TS + seq,
+      data: {
+        class: 1,
+        unspentPoints: 1,
+        tabs: [{ tabId: 161, name: "Arms", page: 0, talents: [{ talentId: 124, name: "Improved Heroic Strike", row: 0, col: 0, maxRank: 3, ranks: [12282, 12663, 12664] }] }],
+      },
+    });
+  const menu = (seq: number, withUnlearn = true): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_GOSSIP_MESSAGE",
+      opcodeId: 0x17d,
+      ts: TS + seq,
+      data: {
+        guid: CREATURE_GUID,
+        menuId: 4675,
+        textId: 100,
+        options: withUnlearn
+          ? [{ optionId: 0, icon: 3, text: "I seek training." }, { optionId: 1, icon: 3, text: "I wish to unlearn my talents." }]
+          : [{ optionId: 0, icon: 3, text: "I seek training." }],
+        quests: [],
+      },
+    });
+  const confirm = (seq: number, cost: number, nothing = false): string =>
+    JSON.stringify({
+      seq,
+      opcode: "MSG_TALENT_WIPE_CONFIRM",
+      opcodeId: 0x2aa,
+      ts: TS + seq,
+      data: { guid: nothing ? "0" : CREATURE_GUID, cost, nothingToReset: nothing },
+    });
+  const talents = (seq: number, rows: { talentId: number; rank: number }[], unspent: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_TALENTS_INFO",
+      opcodeId: 0x4c0,
+      ts: TS + seq,
+      data: { pet: false, unspentPoints: unspent, specCount: 1, activeSpec: 0, specs: [{ talents: rows }] },
+    });
+
+  test("queryTalentTree sends talent_tree and returns the folded tree with learned ranks", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(talents(500, [{ talentId: 124, rank: 0 }], 1));
+    await client.events.waitForOpcode("SMSG_TALENTS_INFO", { timeout: 2000 });
+    const pending = client.queryTalentTree({ timeout: 2000 });
+    const at = await untilAction(stub, "talent_tree");
+    expect(stub.actions[at]).toMatchObject({ action: "talent_tree" });
+    stub.push(tree(501));
+    const t = await pending;
+    expect(t.tabs[0]!.name).toBe("Arms");
+    expect(t.tabs[0]!.talents[0]).toMatchObject({ talentId: 124, pointsSpent: 1, maxRank: 3 });
+    expect(client.state.talentTree()?.seq).toBe(501);
+    client.close();
+    await stub.stop();
+  });
+
+  test("resetTalents: hello, the unlearn option, the confirm echoed raw, the talents packet", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.resetTalents(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(510));
+    const sel = await untilAction(stub, "gossip_select");
+    expect(stub.actions[sel]).toMatchObject({ action: "gossip_select", guid: CREATURE_GUID, menuId: 4675, optionId: 1 });
+    stub.push(confirm(511, 10000));
+    const rawAt = await untilAction(stub, "raw");
+    const guidHex = BigInt(CREATURE_GUID).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+    expect(stub.actions[rawAt]).toMatchObject({ action: "raw", opcode: "MSG_TALENT_WIPE_CONFIRM", payload: guidHex });
+    stub.push(talents(512, [], 3));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.cost).toBe(10000);
+    expect(result.talents.unspentPoints).toBe(3);
+    expect(result.talents.talents).toEqual([]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("resetTalents: the guid-0 confirm is a refusal value; a menu without the option throws", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.resetTalents(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(520));
+    await untilAction(stub, "gossip_select");
+    stub.push(confirm(521, 0, true));
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, status: "refused", cost: 0 });
+    expect(stub.actions.some((a) => a.action === "raw")).toBe(false);
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "resetTalents", status: "refused" });
+
+    const noOption = client.resetTalents(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello", 1);
+    stub.push(menu(530, false));
+    const err = await noOption.catch((e: unknown) => e);
+    expect((err as Error).message).toContain("no option");
     client.close();
     await stub.stop();
   });

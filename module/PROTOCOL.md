@@ -199,7 +199,8 @@ quest/combat extension set (2026-08, additive): `set_target`, `clear_target`,
 `reclaim_corpse`, `spirit_healer_activate` (2026-08, additive), the trainer
 extension (2026-08, additive): `trainer_list`, `trainer_buy_spell`, and the
 spellbook/talent extension (2026-08, additive): `learn_talent`,
-`learn_preview_talents`, `raw`. Acks that the
+`learn_preview_talents`, `raw`, and the talent-frame read (2026-08-29,
+FOLLOW-UPS 96): `talent_tree`. Acks that the
 opcode was synthesized and queued; the game
 result (the chat echo, an arrival, or an error) arrives on the WebSocket.
 
@@ -334,6 +335,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `trainer_buy_spell` | `guid`, `spellId` | `CMSG_TRAINER_BUY_SPELL` | costs the character's own money server-side; answered by `SMSG_TRAINER_BUY_SUCCEEDED` or `SMSG_TRAINER_BUY_FAILED` |
 | `learn_talent` | `talentId`, `rank` | `CMSG_LEARN_TALENT` | `talentId` from Talent.dbc, `rank` 0-based; the handler always answers `SMSG_TALENTS_INFO`, and a granted spell arrives as `SMSG_LEARNED_SPELL`; `400 missing_talent` |
 | `learn_preview_talents` | `talents` = `[[talentId, rank], ...]` | `CMSG_LEARN_PREVIEW_TALENTS` | the preview-mode "learn" button (at most 150 pairs); `400 missing_talents`, `400 invalid_talents` |
+| `talent_tree` | — | none (client-local read) | the class talent frame from the client's own Talent.dbc / TalentTab.dbc, answered as `WB_TALENT_TREE` on the stream so the observation is logged; no packet is sent (2026-08-29, FOLLOW-UPS 96) |
 | `raw` | `opcode`, `payload` | the named opcode | the escape hatch, below |
 | `repop` | — | `CMSG_REPOP_REQUEST` | release spirit while dead |
 | `reclaim_corpse` | `guid?` | `CMSG_RECLAIM_CORPSE` | resurrect at corpse; handler resolves the player's own corpse, guid optional. Refusals are silent (further than 39y, delay not elapsed, other map, no corpse); the SDK reads them off the corpse-query answer below |
@@ -379,7 +381,11 @@ and a hint), `invalid_payload` (not whole hex bytes), `payload_too_large`
 Allowlist — every entry is an opcode a stock client sends during ordinary play
 whose handler does nothing a non-GM client could not do:
 
-- talents: `CMSG_LEARN_TALENT`, `CMSG_LEARN_PREVIEW_TALENTS`
+- talents: `CMSG_LEARN_TALENT`, `CMSG_LEARN_PREVIEW_TALENTS`,
+  `MSG_TALENT_WIPE_CONFIRM` (body `u64 trainer guid` — the yes on the
+  "unlearn all talents for N gold?" dialog after the server's own
+  `MSG_TALENT_WIPE_CONFIRM`; the SDK's `resetTalents` sends it. The one
+  `MSG_*` on the list: the opcode is bidirectional and a client sends it)
 - chat/emotes: `CMSG_MESSAGECHAT` (whisper, party, yell and the rest ride this
   one), `CMSG_EMOTE`, `CMSG_TEXT_EMOTE`
 - inventory: `CMSG_SPLIT_ITEM`, `CMSG_SWAP_ITEM`, `CMSG_SWAP_INV_ITEM`,
@@ -670,6 +676,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | `WB_TRANSPORT_PROGRESS` | 0xFF06 | `{ "guid": <guid-string>, "entry": <u32>, "pos": { "x","y","z","o" }, "progressMs": <u32>, "periodMs": <u32?>, "docked": <bool?> }` — at most 1/s per session, one per transport on the character's map whose create block the session has received: the car's current position on its `TransportAnimation.dbc` path (what a client animates locally from `pathProgress`), the clock and period, and `docked` when the keyframe segment the clock is on has no displacement (the car is dwelling at a platform; absent for transports without an animation path) |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
 | `WB_AREA` | 0xFF07 | `{ "mapId": <u32>, "zoneId": <u32>, "zoneName": <str>, "areaId": <u32>, "areaName": <str> }` — the zone and subzone the character is in, named as the client names them; once when the character enters the world and once per change of either id, whatever moved it (walking, a teleport, a map transfer). See "Zone and area" below. |
+| `WB_TALENT_TREE` | 0xFF08 | the class talent frame, the answer to the `talent_tree` action; shape under "Spellbook, cooldowns, talents" below |
 | `WB_SESSION_STATE` | 0xFF03 | `{ "character": <str>, "guid": <guid-string>, "inWorld": true, "map": <n>, "x": <f>, "y": <f>, "z": <f>, "o": <f>, "level": <n>, "zoneId", "zoneName", "areaId", "areaName" }` — emitted once per WS subscribe to an already-in-world session (reattach semantics in the `/events` section above). Strictly client-visible facts: what `SMSG_LOGIN_VERIFY_WORLD` plus the session's own identity would carry, plus the same zone/area fields as `WB_AREA` so a reattached client starts where the stream cannot re-emit. |
 
 `moveId` is a plain JSON number: it is a per-session counter that cannot exceed
@@ -874,7 +881,7 @@ Loot, vendor, inventory:
 | `SMSG_TRAINER_BUY_SUCCEEDED` | 0x1B3 | `{ "guid", "spellId" }` |
 | `SMSG_TRAINER_BUY_FAILED` | 0x1B4 | `{ "guid", "spellId", "reason": <i32> }` — 0 unavailable, 1 not enough money, 2 not enough skill (also level/prerequisites) |
 | `SMSG_INVENTORY_CHANGE_FAILURE` | 0x112 | `{ "result": <u8>, "itemGuid"?, "itemGuid2"?, "requiredLevel"? }` (InventoryResult code) |
-| `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"? }` |
+| `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"?, "requiredSkill", "requiredSkillRank", "requiredSkillName"?, "requiredSpell"?, "requiredReputationFaction"?, "requiredReputationRank"?, "requiredReputationFactionName"?, "maxCount", "stackable", "containerSlots", "stats": [{ "type", "value" }], "damage": [{ "min": <f>, "max": <f>, "type" }], "armor", "resistances"?: { "holy"?, "fire"?, ... }, "speedMs", "spells": [{ "spellId", "trigger", "charges", "name"? }], "bonding", "description"?, "startQuest"?, "block"?, "maxDurability" }` — everything from `requiredSkill` on is the tooltip (2026-08-29, FOLLOW-UPS 97), read in `HandleItemQuerySingleOpcode`'s order up to `MaxDurability`; sockets, gem properties, duration and holiday are left unread. Zero damage ranges and empty spell slots are dropped; `resistances` only when one is non-zero. Names on `requiredSkill`, `requiredReputationFaction` and each spell are client-cache (SkillLine.dbc, Faction.dbc, Spell.dbc) knowledge like the rest |
 
 Item name resolution mirrors creature/name queries: on first sight of an item
 entry (item create block, loot window, vendor list, item push, quest reward
@@ -896,7 +903,28 @@ knowledge, like item-template fields:
 | `SMSG_SPELL_COOLDOWN` | 0x134 | `{ "guid", "flags": <u8>, "cooldowns": [{ "spellId", "cooldownMs" }] }` — cooldowns that just started for `guid` (self or pet); `flags & 1` = the GCD was triggered too; a 0 ms entry is a GCD-only marker |
 | `SMSG_COOLDOWN_EVENT` | 0x135 | `{ "spellId", "guid" }` — "start the timer you already know for this spell": the duration is Spell.dbc knowledge the module does not serve |
 | `SMSG_CLEAR_COOLDOWN` | 0x1DE | `{ "spellId", "guid" }` |
-| `SMSG_TALENTS_INFO` | 0x4C0 | `{ "pet": false, "unspentPoints", "specCount", "activeSpec", "specs": [{ "talents": [{ "talentId", "rank" }] }] }` — `rank` is 0-based; glyph slots are consumed and not served. The pet form is `{ "pet": true }` only (no pet surface). Sent on login, level-up, after every `CMSG_LEARN_TALENT`, and on spec change |
+| `SMSG_TALENTS_INFO` | 0x4C0 | `{ "pet": false, "unspentPoints", "specCount", "activeSpec", "specs": [{ "talents": [{ "talentId", "rank" }] }] }` — `rank` is 0-based; glyph slots are consumed and not served. The pet form is `{ "pet": true }` only (no pet surface). Sent on login, level-up, after every `CMSG_LEARN_TALENT`, on spec change, and after a successful talent reset |
+| `MSG_TALENT_WIPE_CONFIRM` | 0x2AA | `{ "guid", "cost": <u32 copper>, "nothingToReset": <bool> }` — the trainer's "unlearn all talents?" dialog (`Player::SendTalentWipeConfirm`) after its unlearn gossip option; a client answers yes by echoing the opcode with the guid (raw). `nothingToReset` is the guid-0/cost-0 form `HandleTalentWipeConfirmOpcode` sends back when there are no talents to reset or the money is short; a successful reset has no packet of its own — `SMSG_TALENTS_INFO` follows with every rank gone (2026-08-29, FOLLOW-UPS 96) |
+| `WB_TALENT_TREE` | 0xFF08 | `{ "class": <u8>, "unspentPoints": <u32>, "tabs": [{ "tabId", "name"?, "page", "talents": [{ "talentId", "name"?, "row", "col", "maxRank", "ranks": [<spellId> × maxRank], "dependsOn"?, "dependsOnRank"? }] }] }` — the answer to the `talent_tree` action: every TalentTab.dbc tab whose class mask holds the character's class, in page order, and every Talent.dbc row in it sorted by row then column. `name` on a tab is the client's TalentTab.dbc text (the module reads the file: `dbc/TalentTab.dbc`, 24 fields, record size 96, refused otherwise), on a talent the first rank spell's Spell.dbc name; `dependsOnRank` is 0-based. What the talent frame draws, nothing more — no icons, no tooltips, and no server-side state (the ranks learned are `SMSG_TALENTS_INFO`'s, joined by the SDK) |
+
+Reputation (2026-08-29, FOLLOW-UPS 99). The wire keys factions by their
+`Faction.dbc` reputation index (`repListId`), not the faction id; the module
+makes the same join a client does and adds the client's base standing for
+the character's race and class (`ReputationMgr::GetBaseReputation` is the
+same arithmetic over the same masks), so `reputation` = `base` + `standing`
+is the number the pane shows and the one the rank thresholds apply to
+(Hated < -6000, Hostile, Unfriendly < 0, Neutral, Friendly ≥ 3000, Honored
+≥ 9000, Revered ≥ 21000, Exalted ≥ 42000). `base` and `reputation` are
+absent only when the player object was not reachable at decode time:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_INITIALIZE_FACTIONS` | 0x122 | `{ "count": <u32>, "factions": [{ "repListId", "flags": <u8>, "visible", "atWar", "factionId"?, "name"?, "standing": <i32>, "base"?, "reputation"? }] }` — the login list (`ReputationMgr::SendInitialReputations`): 128 positions, only those with a non-zero flag or standing served. `flags`: 1 visible, 2 at war, 4 hidden, 8 invisible-forced, 16 peace-forced, 32 inactive |
+| `SMSG_SET_FACTION_STANDING` | 0x124 | `{ "showVisual": <bool>, "factions": [{ "repListId", "factionId"?, "name"?, "standing", "base"?, "reputation"? }] }` — every faction whose standing changed since the last send (`ReputationMgr::SendState`); `showVisual` is the "reputation with X increased" chat line |
+| `SMSG_SET_FACTION_VISIBLE` | 0x123 | `{ "repListId", "factionId"?, "name"? }` — the faction joins the pane |
+
+`SMSG_SET_FACTION_ATWAR` and the at-war/inactive toggles a client sends are
+not tapped or allowlisted: nothing in a trajectory has asked for them.
 
 Achievements and flight paths (2026-08-25, issue #8 first half):
 
@@ -1007,7 +1035,15 @@ teleport: `teleported`, with the arrival on `MSG_MOVE_TELEPORT_ACK`).
 Served in `SMSG_UPDATE_OBJECT` `fields` alongside the existing set:
 
 - players (self only; the server marks these PRIVATE): `money` (copper),
-  `xp`, `nextLevelXp`; quest log as raw fields `quest<slot><Off>` with slot
+  `xp`, `nextLevelXp`, `talentPoints` (`PLAYER_CHARACTER_POINTS1`, the
+  unspent count); the skill pane (2026-08-29, FOLLOW-UPS 95) as raw fields
+  `skill<slot><Off>` with slot 0-127 (`PLAYER_SKILL_INFO_1_1`, three packed
+  u32s per line) and Off one of `Id`/`Step` (low/high u16 of the first),
+  `Value`/`Max` (the second), `TempBonus`/`PermBonus` (the third, as signed
+  i16), plus `skill<slot>Name`, a string beside each non-zero id with the
+  client's SkillLine.dbc text — the one non-numeric entry `fields` carries;
+  the SDK lifts it into its skill rows. There is no dedicated skill opcode in
+  3.3.5: every change is a values update on these fields. Quest log as raw fields `quest<slot><Off>` with slot
   0-24 and Off one of `Id`, `State`, `CountsLo`, `CountsHi`, `Time` (the
   3.3.5 layout: two u32s of packed u16 objective counters); inventory as
   `invSlot<n>Lo`/`invSlot<n>Hi` u32 guid halves, n 0-22 = equipment + bag
