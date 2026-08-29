@@ -142,3 +142,29 @@ describe("clearAccountCharacters with model-chosen names", () => {
     expect(out.leftover).toEqual(["Grimjaw"]);
   });
 });
+
+describe("clearAccountCharacters with keep", () => {
+  test("a kept character is left standing and reported; the rest is cleared and it is not a leftover", async () => {
+    const { f, calls } = fakeFetch({
+      list: [enumOf({ name: "Bromdir", guid: "310" }, { name: "Novice", guid: "311" }), enumOf({ name: "Bromdir", guid: "310" })],
+      del: [deleted("Novice")],
+    });
+    const out = await clearAccountCharacters({ ...base, fetch: f, keep: ["bromdir"] });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.cleared).toBe(1);
+    expect(out.leftover).toEqual([]);
+    expect(out.kept).toEqual([{ name: "Bromdir", guid: "310" }]);
+    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"])).toEqual(["Novice"]);
+    // The kept guid is still in `seen`: a scored run that names it is caught by the tripwire.
+    expect(out.seen.get("bromdir")).toBe("310");
+  });
+
+  test("a kept name that is not on the account is simply absent from kept", async () => {
+    const { f } = fakeFetch({ list: [enumOf()], del: [] });
+    const out = await clearAccountCharacters({ ...base, fetch: f, keep: ["Bromdir"] });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.kept).toEqual([]);
+  });
+});

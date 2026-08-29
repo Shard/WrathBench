@@ -134,6 +134,18 @@ export interface RosterSpec {
    * the lane's behaviour.
    */
   resumeOnPause?: boolean;
+  /**
+   * A freeplay continuation: the run id whose character and scratchpad this
+   * launch carries on (`--continue-from`). The fleet sets it on the
+   * `idle: "unlimited"` lane's next session when the stream's previous run
+   * ended; a fresh launch only, never restated on `--resume`.
+   */
+  continueFrom?: string;
+  /**
+   * Characters on this account that belong to another ref's freeplay stream
+   * and must survive this launch's hygiene (`--keep-characters`).
+   */
+  keepCharacters?: string[];
 }
 
 export interface Resolved {
@@ -161,6 +173,8 @@ export interface Resolved {
   cell: string | undefined;
   /** Resolved once here, so no caller has to remember the fallback. */
   resumeOnPause: boolean;
+  continueFrom: string | undefined;
+  keepCharacters: string[];
 }
 
 type Outcome =
@@ -455,6 +469,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       campaign: s.campaign,
       cell: s.cell,
       resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
+      continueFrom: s.continueFrom,
+      keepCharacters: s.keepCharacters ?? [],
     });
   }
   return out;
@@ -525,6 +541,11 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
+  // A freeplay stream's lineage and the other streams' characters on this
+  // account: launch inputs, so a fresh launch only (a resume keeps the stored
+  // identity and the account's hygiene does not run).
+  if (spec.continueFrom !== undefined) argv.push("--continue-from", spec.continueFrom);
+  if (spec.keepCharacters.length > 0) argv.push("--keep-characters", spec.keepCharacters.join(","));
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.

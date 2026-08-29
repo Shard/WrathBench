@@ -34,6 +34,15 @@ export interface HygieneOptions {
   log?: (line: string) => void;
   /** Listing/delete rounds before giving up. Each round waits 5s * round. */
   maxAttempts?: number;
+  /**
+   * Characters to KEEP. A freeplay continuation (`--continue-from`) plays the
+   * character its predecessor left on this account, and any fresh launch on
+   * an account that holds another ref's freeplay character must leave that
+   * one standing (`--keep-characters`): hygiene clears everything else and
+   * reports which of them were actually there. Matched case-insensitively,
+   * as the realm matches names.
+   */
+  keep?: readonly string[];
 }
 
 export type HygieneOutcome =
@@ -48,6 +57,11 @@ export type HygieneOutcome =
       leftover: string[];
       /** name (lower-cased) -> guid of every character a listing showed. */
       seen: Map<string, string>;
+      /**
+       * The `keep` characters the final listing actually shows (name and
+       * guid). A kept name that is not on the account any more is absent.
+       */
+      kept: { name: string; guid: string }[];
     }
   | { ok: false; reason: string; seen: Map<string, string> };
 
@@ -62,6 +76,8 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
   const log = o.log ?? (() => {});
   const maxAttempts = o.maxAttempts ?? 6;
   const seen = new Map<string, string>();
+  const keep = new Set((o.keep ?? []).map((n) => n.toLowerCase()));
+  const isKept = (name: string): boolean => keep.has(name.toLowerCase());
 
   const list = async (i: number): Promise<Listing> => {
     try {
@@ -122,12 +138,13 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
       // play on either — the model's createSession will fail the same way.
       // Skip, as before; the first-observation tripwire still stands.
       log(`hygiene: skipped (${last.error})`);
-      return { ok: true, cleared: 0, leftover: [], seen };
+      return { ok: true, cleared: 0, leftover: [], seen, kept: [] };
     }
     if (!last.ok) continue;
-    initial ??= last.chars.length;
-    if (last.chars.length === 0) break;
-    for (const c of last.chars) {
+    const disposable = last.chars.filter((c) => !isKept(c.name));
+    initial ??= disposable.length;
+    if (disposable.length === 0) break;
+    for (const c of disposable) {
       const err = await del(c.name, attempt);
       if (err !== null) log(`hygiene: could not delete leftover character ${c.name} (${err})`);
     }
@@ -143,6 +160,13 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
   }
   // `initial` is the first OK listing's count; whatever the final OK listing
   // still carries was not cleared.
-  const cleared = Math.max(0, (initial ?? 0) - last.chars.length);
-  return { ok: true, cleared, leftover: last.chars.map((c) => c.name), seen };
+  const disposable = last.chars.filter((c) => !isKept(c.name));
+  const cleared = Math.max(0, (initial ?? 0) - disposable.length);
+  return {
+    ok: true,
+    cleared,
+    leftover: disposable.map((c) => c.name),
+    seen,
+    kept: last.chars.filter((c) => isKept(c.name)).map((c) => ({ name: c.name, guid: c.guid })),
+  };
 }

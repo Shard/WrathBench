@@ -164,7 +164,11 @@ standing sandbox that never finishes. Duration separates neither pair.
   combination does — a hand-written freeplay job on the same ref does not. It is governed by the 20-minute
   idle watchdog; when the model remains active, its character and progress
   continue beyond six hours. When that session ends, the next tick starts
-  another. Such a run is stamped `extra: true` — an attempt, shown as an extra
+  another **on the same character**: a stream is durable across the
+  operator's disable/re-enable and across its own endings (2026-08-29), so the
+  next attempt is launched `--continue-from` the last one — same account,
+  same character, the scratchpad carried forward — and records the lineage as
+  `continued_from` (docs/OPERATIONS.md, "Freeplay streams are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.
@@ -196,7 +200,7 @@ evidence"):
 |---|---|---|
 | `e90`, `e360` | failed attempt, retried fresh | ended, retried fresh |
 | `probing` | failed attempt unless `campaigns.<name>.resume` | ended |
-| `freeplay` | resumed | ended; the next tick starts a fresh session |
+| `freeplay` | resumed | ended; the next tick continues the stream on the same character |
 
 A failed attempt is an **attempt spent**: it numbers a run id, it shows on the
 runs page with its reason, and it is never a recorded episode — the ladder, the

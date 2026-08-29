@@ -30,7 +30,9 @@
  * scratchpad, not the chat history, is the durable memory.
  */
 
+import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { archiveIfNoResponses } from "./archive";
 import { clearAccountCharacters } from "./hygiene";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
@@ -54,7 +56,7 @@ import {
   type WatchdogOverride,
 } from "./config";
 import { runLoop, type StopRequest } from "./loop";
-import { freshCharacterNote, resumeSessionNote } from "./prompt";
+import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
@@ -184,6 +186,9 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // A probe campaign's identity, both or neither.
     campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
     cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
+    // A freeplay continuation: the run id whose character and scratchpad this
+    // launch carries on. Validated against the predecessor in `main`.
+    continuedFrom: typeof args["continue-from"] === "string" ? args["continue-from"] : undefined,
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
     maxTurns: num(args["max-turns"]),
     maxToolCallsPerEpisode: toolCallCap(args["max-tool-calls"]),
@@ -202,10 +207,83 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
   return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
 }
 
+/** What a continuation takes from its predecessor: the character's identity. */
+export interface Continuation {
+  from: string;
+  character: string;
+  race: number;
+  class: number;
+  /** The predecessor's run directory. */
+  dir: string;
+}
+
+/**
+ * `--continue-from <run-id>`: a freeplay stream coming back under a new run id
+ * on its predecessor's character. Everything that would make the lineage a
+ * lie is refused here, before a directory exists: the launch must be
+ * `freeplay` (a scored episode is a fresh character by definition), the
+ * predecessor must exist, be a freeplay run on the SAME account (a character
+ * lives on one account; a continuation elsewhere would find nothing), and
+ * must have recorded a character at all. Race and class are the
+ * predecessor's — they are the character's, not the launch's.
+ */
+export function loadContinuation(
+  config: Pick<RunConfig, "episode" | "account" | "runsDir" | "continuedFrom">,
+): Continuation {
+  const from = config.continuedFrom;
+  if (from === undefined) throw new Error("no --continue-from");
+  if (config.episode !== "freeplay") {
+    throw new Error(`--continue-from is a freeplay continuation; --episode ${config.episode ?? "(none)"} starts a fresh character`);
+  }
+  const dir = join(config.runsDir, from);
+  const meta = readMeta(dir);
+  if (meta === null) throw new Error(`--continue-from ${from}: no meta.json under ${config.runsDir}`);
+  const episode = meta.comparability?.episode ?? meta.config.episode;
+  if (episode !== "freeplay") throw new Error(`--continue-from ${from}: that run is ${String(episode ?? "no episode")}, not freeplay`);
+  const account = meta.config.account;
+  if (account.toUpperCase() !== config.account.toUpperCase()) {
+    throw new Error(`--continue-from ${from}: that run was on ${account}, this launch is on ${config.account} — a character lives on one account`);
+  }
+  if (meta.config.character === undefined) throw new Error(`--continue-from ${from}: that run never recorded a character`);
+  return { from, character: meta.config.character, race: meta.config.race, class: meta.config.class, dir };
+}
+
+/** The predecessor's last recorded level/xp, read-only; null when there is none. */
+function lastStateIn(dir: string, runId: string): { level?: number; xp?: number } | null {
+  const path = join(dir, "run.sqlite");
+  if (!existsSync(path)) return null;
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const r = db.query(`SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1`).get(runId) as
+      | { level?: unknown; xp?: unknown }
+      | null;
+    if (r === null) return null;
+    return {
+      ...(typeof r.level === "number" ? { level: r.level } : {}),
+      ...(typeof r.xp === "number" ? { xp: r.xp } : {}),
+    };
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 async function main(): Promise<void> {
   const rawArgs = Bun.argv.slice(2);
   const args = parseArgs(rawArgs);
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
+  /**
+   * `--keep-characters a,b`: names on this account that belong to another
+   * ref's freeplay stream and must survive this launch's hygiene. A launch
+   * input, not identity — nothing about this run is different for it except
+   * that those names are taken.
+   */
+  const keepCharacters =
+    typeof args["keep-characters"] === "string"
+      ? args["keep-characters"].split(",").map((n) => n.trim()).filter((n) => n.length > 0)
+      : [];
   if (typeof args["driver"] === "string" && !(DRIVERS as readonly string[]).includes(args["driver"])) {
     console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
     process.exit(2);
@@ -277,6 +355,19 @@ async function main(): Promise<void> {
   } else {
     config = configFromArgs(rawArgs);
   }
+  /** The freeplay run this launch continues, once its predecessor checks out. */
+  let continuation: Continuation | undefined;
+  if (!resumed && config.continuedFrom !== undefined) {
+    try {
+      continuation = loadContinuation(config);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
+    // The character's identity is the predecessor's; the launch's race/class
+    // flags are the fleet restating the entry, and they must not disagree.
+    config = { ...config, character: continuation.character, race: continuation.race, class: continuation.class };
+  }
   // Deliberately NOT registered with `trajectory.redact`: meta.json is scrubbed
   // with the same secret list, and a redacted token could never be read back by
   // `--resume`. Trajectories are gitignored and stay on the operator's disk.
@@ -295,6 +386,13 @@ async function main(): Promise<void> {
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
+  // The predecessor's notes come along: the scratchpad is the durable memory,
+  // and a continuation that started with an empty one would be a stranger to
+  // its own character. Only into an empty run directory — a re-launch of a
+  // continuation that already wrote notes keeps its own.
+  if (continuation !== undefined && !existsSync(scratchpad.path) && existsSync(join(continuation.dir, "scratchpad.md"))) {
+    copyFileSync(join(continuation.dir, "scratchpad.md"), scratchpad.path);
+  }
 
   // driver
   let adapter: ChatAdapter | undefined;
@@ -556,6 +654,10 @@ async function main(): Promise<void> {
       token: config.token,
       account: config.account,
       log: (line) => console.error(`[wrathbench] ${line}`),
+      // A continuation keeps its predecessor's character, and every launch
+      // keeps another stream's character it shares the account with;
+      // everything else on the account is the usual leftover.
+      keep: [...(continuation !== undefined ? [continuation.character] : []), ...keepCharacters],
     });
     if (!hygiene.ok) {
       console.error(`[wrathbench] ${hygiene.reason}`);
@@ -574,13 +676,39 @@ async function main(): Promise<void> {
       console.error(`[wrathbench] hygiene: cleared ${hygiene.cleared} leftover character(s)`);
       trajectory.append({ t: "harness", kind: "hygiene", cleared: hygiene.cleared });
     }
-    takenNames = hygiene.leftover;
+    // A kept character is as taken as a slot-eater: `createSession` on its
+    // name would reuse it, and the tripwire below would end the run.
+    const keptOthers = hygiene.kept.filter((k) => continuation === undefined || k.name.toLowerCase() !== continuation.character.toLowerCase());
+    takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name)];
+    if (keptOthers.length > 0) {
+      console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another freeplay stream's character on this account)`);
+    }
     if (hygiene.leftover.length > 0) {
       console.error(
         `[wrathbench] hygiene: ${hygiene.leftover.length} leftover character(s) not cleared (${hygiene.leftover.join(", ")}) — proceeding, the model is told not to pick them`,
       );
     }
-    watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
+    const own = continuation === undefined ? undefined : hygiene.kept.find((k) => k.name.toLowerCase() === continuation!.character.toLowerCase());
+    if (continuation !== undefined && own !== undefined) {
+      // The character is there: the stream goes on, and the freshness belt
+      // stays off, as on a resume — this character is meant to have history.
+      console.error(`[wrathbench] continuing ${continuation.from}: ${own.name} (guid ${own.guid}) is on ${config.account}`);
+      trajectory.append({ t: "continue", from: continuation.from, character: own.name, guid: own.guid });
+    } else {
+      if (continuation !== undefined) {
+        // The predecessor's character is gone (deleted by hand, or by another
+        // account's hygiene): nothing to continue. The run goes on as a fresh
+        // one and says so everywhere the lineage was written, and the copied
+        // notes go with it — they describe a character that no longer exists.
+        const detail = `${continuation.character} is not on ${config.account} any more — starting a fresh character instead of continuing ${continuation.from}`;
+        console.error(`[wrathbench] ${detail}`);
+        trajectory.dropContinuation(config.runId, detail);
+        config = { ...config, character: undefined, continuedFrom: undefined };
+        if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
+        continuation = undefined;
+      }
+      watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
+    }
   }
 
   /* The resumed run's session note (prompt.ts owns the wording). */
@@ -609,6 +737,26 @@ async function main(): Promise<void> {
     });
   };
 
+  /* The continued run's session note: the predecessor's character, as it was last seen there. */
+  const continueNote = (c: Continuation): string => {
+    const last = lastStateIn(c.dir, c.from);
+    const seen =
+      last === null || (last.level === undefined && last.xp === undefined)
+        ? ""
+        : ` It was last observed at level ${last.level ?? "?"}` +
+          (last.xp !== undefined ? ` with ${last.xp} xp` : "") +
+          `, and that progress is still there.`;
+    return continuedSessionNote({
+      character: c.character,
+      race: c.race,
+      class: c.class,
+      from: c.from,
+      seen,
+      raceName: raceName(c.race),
+      className: className(c.class),
+    });
+  };
+
   const initialNotices = resumed
       ? [
           {
@@ -617,7 +765,15 @@ async function main(): Promise<void> {
             text: resumeNote(),
           } as const,
         ]
-      : [
+      : continuation !== undefined
+        ? [
+            {
+              ts: Date.now(),
+              kind: "session_note",
+              text: continueNote(continuation),
+            } as const,
+          ]
+        : [
           {
             ts: Date.now(),
             kind: "session_note",

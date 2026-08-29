@@ -54,6 +54,19 @@ describe("resolve", () => {
 });
 
 describe("episodeArgv", () => {
+  test("a continuation and the kept names are launch inputs: on a fresh launch, never on a resume", () => {
+    const [s] = resolve([{ model: "opus", driver: "claude-code", episode: "freeplay", continueFrom: "a11", keepCharacters: ["Ironvowen", "Vespers"] }], "20260829");
+    const fresh = episodeArgv(s!, false);
+    expect(fresh[fresh.indexOf("--continue-from") + 1]).toBe("a11");
+    expect(fresh[fresh.indexOf("--keep-characters") + 1]).toBe("Ironvowen,Vespers");
+    const resumed = episodeArgv(s!, true);
+    expect(resumed).not.toContain("--continue-from");
+    expect(resumed).not.toContain("--keep-characters");
+    // Absent: nothing new in the argv of a spec written before either existed.
+    const [plain] = resolve([{ model: "opus", driver: "claude-code" }], "20260829");
+    expect(episodeArgv(plain!, false)).not.toContain("--keep-characters");
+  });
+
   test("openai entries are unchanged: driver, endpoint, no account flag", () => {
     const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
     const argv = episodeArgv(s!, false);

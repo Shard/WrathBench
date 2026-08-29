@@ -162,6 +162,15 @@ status.
     cleared lane's scored run and the sweep overlap, at the cost that a mid-run 429
     on a scored run is unrecoverable (scored lanes never resume).
 
+92. **Show freeplay lineage on the runs page** (2026-08-29, with the durable
+    stream). A continued freeplay run records `continued_from` (run row, meta.json,
+    `continue` record), but `runner/viewer/runs.ts` does not read it yet and the
+    dashboard shows attempt 12 as unrelated to attempt 11. Trigger: the first
+    continuation lands (sub-opus-low's a12 on Bromdir, once the ref is flipped back
+    to `unlimited` after the fleet recreate). Next action: a `continuedFrom` field
+    on the run row, and the runs page linking a stream's attempts as one line —
+    the viewer files were another agent's on the day it shipped.
+
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit

@@ -104,7 +104,9 @@ roster      name -> entry, the exact run-roster per-entry schema (model, driver,
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Never bought by
-              omission. A race/class sweep is a campaign now, not an idle mode.
+              omission. A race/class sweep is a campaign now, not an idle mode. Flipping
+              `unlimited` → `none` pauses the live session at once; flipping it back brings the
+              same character back ("Freeplay streams are durable", below).
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -377,7 +379,8 @@ whose last activity (its pause mark, else its trajectory) is older than **its
 own** episode budget — 12h for a run with no wall clock — is ended. That is the
 half-day outage case: the host slept, and every run left live or paused had its
 budget elapse in wall clock while nobody was playing it. A stale freeplay
-session is ended too, and the next tick starts a fresh one. A run the fleet did
+session is ended too, and the next tick continues it on the same character
+under a new run id (below). A run the fleet did
 not launch (no `fleet-` prefix) is never ended by the supervisor: it is listed
 for the operator.
 
@@ -403,6 +406,67 @@ run … — resumed by the supervisor, never rescheduled` for a lane that resume
 and `… — ended as a failed attempt on the next tick, then reattempted fresh`
 for one that does not. Either way no second attempt starts for that model, and
 a paused run counts toward nothing until it finally ends.
+
+### Freeplay streams are durable
+
+A freeplay stream — the one continuous session an `idle: "unlimited"` ref
+gets — is the operator's to disable and re-enable at will, and the character
+survives it (operator ask, 2026-08-29). Before this, only a *pause* came back:
+every ended session (idle watchdog, a hand kill, the stale sweep) was followed
+by a fresh attempt whose hygiene wiped the account and whose model named a new
+level-1 character — `sub-opus-low` went through ten names in eleven attempts.
+
+The stream's identity is nothing new on disk: the ref's latest **ended**
+freeplay run that recorded an account and a character (`streamsFrom`; matched
+on model + effort like account affinity, so a renamed ref keeps its stream).
+What the supervisor does with it, per tick:
+
+- **Disable** (`idle: "unlimited"` → `"none"`, or the fleet pause switch): the
+  policy job is drained, and for this lane a drain is an immediate SIGTERM —
+  there is no episode boundary to wait for on a session with no wall clock.
+  The runner logs the character out and writes `operator-pause`; `--status`
+  lists the run as `paused, not in config` while the ref stays `none`.
+- **Re-enable within 12h**: the paused run is resumed in place by the ordinary
+  resume path — same run id, account, character, scratchpad.
+- **Re-enable later**, or after any ended session: the stale sweep (or the
+  watchdog, or the operator's kill) has ended the run, so the next policy pick
+  is a **continuation**: a new run id (`-a<n+1>`) launched with
+  `--continue-from <predecessor>`. The runner refuses it unless the launch is
+  `freeplay`, the predecessor is a freeplay run on the same account and named
+  a character; then hygiene keeps that character and clears the rest, the
+  predecessor's `scratchpad.md` is copied in, race and class are the
+  character's, and the model gets a "this continues run X on Bromdir, last
+  seen at level 8" note instead of the naming note. The lineage is on the run
+  record: `config.continuedFrom` in meta.json, `continued_from` on the `run`
+  row, a `continue` trajectory record. If the character turns out to be gone,
+  the run drops the lineage everywhere (`continue-dropped`), deletes the
+  copied notes and starts fresh — a lineage the character does not back is
+  the wrong record.
+- **The account is the stream's.** A freeplay pick prefers its stream's
+  account over the model's last run; if that account is busy the pick is
+  **held** (`policy <ref>: waiting for RUNNER2 — its freeplay character
+  Bromdir is there`), never started fresh elsewhere.
+- **Nothing else deletes it.** Every fresh launch on an account that holds
+  another ref's stream character gets `--keep-characters`, so a scored run's
+  hygiene leaves it standing (the model is told the name is taken, and the
+  freshness tripwire still arms on its guid); the cross-account name sweep
+  skips stream characters.
+
+The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
+attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`. A hand-written
+`freeplay` job on the same ref is the operator's own experiment and never
+continues anything. To start a stream over deliberately, delete its character
+(`POST /character-delete` on the module, the sweep's own path) before
+re-enabling: the continuation finds nothing and starts fresh.
+
+Scored episodes are untouched: `--continue-from` is refused on `e90`/`e360`,
+their hygiene still clears everything but another stream's character, and a
+lapsed scored run is still a failed attempt.
+
+**Deploy:** the runner half lands on the next episode spawn; the supervisor
+half (`planContinuations`, the pause-on-drain, `--keep-characters`) needs the
+`fleet` container recreated — `./infra/fleet-update.sh graceful` once the live
+runs are at a boundary, as "Updating the live fleet" describes.
 
 ### Deploy window (worldserver changes)
 

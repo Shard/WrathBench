@@ -6,6 +6,7 @@ import {
   contextSentence,
   freshCharacterNote,
   resumeSessionNote,
+  continuedSessionNote,
 } from "../src/prompt";
 
 /**
@@ -236,5 +237,25 @@ describe("the resume session note", () => {
     expect(note).not.toContain("Do not create a different one");
     expect(note).toContain("name your character");
     expect(note).toContain('createSession({ character: "<your name>", race: 1, class: 2 })');
+  });
+});
+
+describe("continuedSessionNote", () => {
+  test("names the run it continues and the character, and says not to roll another", () => {
+    const note = continuedSessionNote({
+      character: "Bromdir",
+      race: 3,
+      class: 2,
+      from: "fleet-sub-opus-low-freeplay-opus-low-20260827-a11",
+      seen: " It was last observed at level 8 with 6410 xp, and that progress is still there.",
+      raceName: "Dwarf",
+      className: "Paladin",
+    });
+    expect(note).toContain("continues your earlier freeplay session fleet-sub-opus-low-freeplay-opus-low-20260827-a11");
+    expect(note).toContain('name "Bromdir", race 3 (Dwarf), class 2 (Paladin)');
+    expect(note).toContain("level 8 with 6410 xp");
+    expect(note).toContain("Do not create a different one");
+    expect(note).toContain('createSession({ character: "Bromdir", race: 3, class: 2 })');
+    expect(note).toContain("your scratchpad was");
   });
 });
