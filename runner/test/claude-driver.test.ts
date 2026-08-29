@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
-import { SYSTEM_PROMPT } from "../src/prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { Scratchpad } from "../src/scratchpad";
 import { renderTimeline } from "../src/timeline";
 import { TOOLS } from "../src/tools";
@@ -136,8 +136,13 @@ describe("claude-code driver", () => {
     expect(outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
 
     const record = readRecord(recordPath);
-    // the SAME fixed prompt as the OpenAI loop, byte for byte
-    expect(record["systemPrompt"]).toBe(SYSTEM_PROMPT);
+    // The same fixed prompt as the OpenAI loop except for one sentence: this
+    // harness applies no context policy, so it must not tell the model its
+    // conversation is being trimmed (item 8).
+    expect(record["systemPrompt"]).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
+    expect(record["systemPrompt"]).not.toBe(SYSTEM_PROMPT);
+    expect(record["systemPrompt"]).toContain(contextSentence("claude-code"));
+    expect(record["systemPrompt"]).not.toContain("trimmed aggressively");
     // built-ins disabled; only our six tools granted
     expect(record["toolsFlag"]).toBe("");
     expect(record["allowedTools"]).toEqual(mcpToolNames());

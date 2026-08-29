@@ -3,8 +3,14 @@
  * for every model, changed only deliberately and never per model. It explains
  * the world, the snippet runtime surface, the tools, and the goal — nothing
  * else. No strategy hints beyond what the tools themselves imply.
+ *
+ * One sentence varies, and only by *harness*, never by model: what happens to
+ * older conversation is a different fact on the fixed loop than on the
+ * claude-code CLI, and a prompt that states the wrong one is simply false
+ * (`contextSentence`).
  */
 
+import type { Harness } from "./config";
 import type { EpisodeId } from "./episodes";
 
 /**
@@ -15,8 +21,12 @@ export const GOAL_SECTION = `You are an agent controlling one character in World
 
 You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.`;
 
-/** Everything from the runtime surface down. Never varies. */
-const BODY = `## The snippet runtime
+/**
+ * Everything from the runtime surface down to the last line of "## Each turn",
+ * minus the one sentence that describes what happens to older conversation —
+ * that sentence is the harness's, not a constant (`contextSentence`).
+ */
+const BODY_HEAD = `## The snippet runtime
 
 Snippets run in one long-lived process. Top-level const/let/var/function/class declarations persist across snippets (destructured declarations may not persist; prefer simple names or assign to globalThis). Background routines persist too: a setInterval, or an async function you call without awaiting, keeps running between snippets and after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. import is not available — everything you need is ambient:
 
@@ -54,14 +64,60 @@ A raw action's { ok: true } means the opcode was dispatched, not that it worked:
 
 ## Each turn
 
-Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad. Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history. Act through tools every turn; text without a tool call does nothing in the world.`;
+Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.`;
+
+/** The last sentence of the prompt, after the harness's context sentence. */
+const BODY_TAIL = `Act through tools every turn; text without a tool call does nothing in the world.`;
 
 /**
- * The fixed system prompt, exactly as it has always read: goal, then body.
- * Defined as the join of the two halves so that "no objective" is byte-identical
- * to the old single string by construction, not by test.
+ * What the prompt tells the model about the fate of older conversation.
+ *
+ * The only per-harness text in the prompt, and it exists because the two
+ * harnesses genuinely differ: the fixed loop rebuilds the conversation every
+ * turn under the context policy (docs/METHODOLOGY.md, "Context policy"), while
+ * the claude-code harness hands the CLI one continuous session and the CLI owns
+ * the history. Stating the trim on both drivers made the prompt false on one of
+ * them, which is a worse fault than the two prompts differing: a model cannot
+ * plan around a rule that is not being applied to it.
+ *
+ * The claude-code sentence is deliberately a statement of the regime and
+ * nothing more — no advice about how to use it. The scratchpad clause survives
+ * there only because it is still true and has a reason it is worth saying: a
+ * pause and resume replays no conversation but does restore the scratchpad
+ * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
+ *
+ * Exhaustive over `Harness` on purpose, exactly as `episodeSection` is over
+ * `EpisodeId`: a third harness must not silently inherit a sentence that
+ * describes machinery it does not run.
  */
-export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${BODY}`;
+export function contextSentence(harness: Harness): string {
+  switch (harness) {
+    case "wrathbench":
+      return "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.";
+    case "claude-code":
+      return "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your scratchpad outlasts that history — a run that is paused and resumed comes back with the scratchpad and no conversation at all — so facts you want to keep belong there.";
+  }
+}
+
+/** The body for one harness: the fixed text with that harness's context sentence in it. */
+function bodyFor(harness: Harness): string {
+  return `${BODY_HEAD} ${contextSentence(harness)} ${BODY_TAIL}`;
+}
+
+/**
+ * The fixed system prompt on the fixed loop, exactly as it has always read:
+ * goal, then body. Defined as the join of the halves so that "no objective" is
+ * byte-identical to the old single string by construction, not by test.
+ */
+export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("wrathbench")}`;
+
+/**
+ * The same prompt as the claude-code harness renders it. Differs from
+ * `SYSTEM_PROMPT` in `contextSentence` and nothing else, so the two hash
+ * differently in the comparability tuple — which is the intended, visible
+ * record that the two harnesses do not share a prompt.
+ */
+export const CLAUDE_CODE_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("claude-code")}`;
 
 /**
  * The delimited block an operator objective is rendered into. One shape, one
@@ -105,16 +161,23 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
 }
 
 /**
- * The system prompt for a run. With no objective and no episode this returns
- * `SYSTEM_PROMPT` unchanged; the episode sentence, then the delimited
- * objective block, sit between the standing goal and the runtime description.
+ * The system prompt for a run. With no objective, no episode and the default
+ * harness this returns `SYSTEM_PROMPT` unchanged; the episode sentence, then
+ * the delimited objective block, sit between the standing goal and the runtime
+ * description. `harness` picks the context sentence and nothing else, so the
+ * two harnesses' prompts differ by exactly the one sentence that describes
+ * what each of them actually does with older conversation.
  */
-export function buildSystemPrompt(objective?: string | undefined, episode?: EpisodeId | undefined): string {
+export function buildSystemPrompt(
+  objective?: string | undefined,
+  episode?: EpisodeId | undefined,
+  harness: Harness = "wrathbench",
+): string {
   const parts = [GOAL_SECTION];
   const tier = episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
-  parts.push(BODY);
+  parts.push(bodyFor(harness));
   return parts.join("\n\n");
 }
 
