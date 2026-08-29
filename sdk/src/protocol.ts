@@ -1759,10 +1759,92 @@ export const itemQueryResponseDataSchema = z.looseObject({
   bonding: z.number().optional(),
   description: z.string().optional(),
   startQuest: z.number().optional(),
+  /** The item's first page (PageText id) when it can be read; absent otherwise. Item 103. */
+  pageText: z.number().optional(),
   block: z.number().optional(),
   maxDurability: z.number().optional(),
 });
 export type ItemQueryResponseData = z.infer<typeof itemQueryResponseDataSchema>;
+
+// ------------------------------------------------------ group loot rolls (item 102)
+
+/**
+ * `SMSG_LOOT_START_ROLL`: a roll frame opened for one over-threshold item on
+ * a group-looted corpse. `rollGuid` is the fresh guid the core minted for the
+ * roll (what `CMSG_LOOT_ROLL` names); `countdownMs` is how long the frame
+ * stays open. Pass is always allowed; need/greed/disenchant are per the mask.
+ */
+export const lootStartRollDataSchema = z.looseObject({
+  rollGuid: guidSchema,
+  slot: z.number(),
+  itemId: z.number(),
+  count: z.number(),
+  countdownMs: z.number(),
+  voteMask: z.number(),
+  canNeed: z.boolean(),
+  canGreed: z.boolean(),
+  canDisenchant: z.boolean(),
+});
+export type LootStartRollData = z.infer<typeof lootStartRollDataSchema>;
+
+/** `SMSG_LOOT_ROLL`: one counted vote. `roll` 1-100, or 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant. */
+export const lootRollDataSchema = z.looseObject({
+  rollGuid: guidSchema,
+  slot: z.number(),
+  playerGuid: guidSchema,
+  itemId: z.number(),
+  roll: z.number(),
+  rollType: z.number(),
+  autoPass: z.boolean(),
+});
+export type LootRollData = z.infer<typeof lootRollDataSchema>;
+
+/** `SMSG_LOOT_ROLL_WON`: the roll is decided; the item goes to `winnerGuid`. */
+export const lootRollWonDataSchema = z.looseObject({
+  rollGuid: guidSchema,
+  slot: z.number(),
+  itemId: z.number(),
+  winnerGuid: guidSchema,
+  roll: z.number(),
+  rollType: z.number(),
+});
+export type LootRollWonData = z.infer<typeof lootRollWonDataSchema>;
+
+/** `SMSG_LOOT_ALL_PASSED`: everyone passed; the item stays on the corpse for whoever loots it. */
+export const lootAllPassedDataSchema = z.looseObject({
+  rollGuid: guidSchema,
+  slot: z.number(),
+  itemId: z.number(),
+});
+export type LootAllPassedData = z.infer<typeof lootAllPassedDataSchema>;
+
+/** `SMSG_LOOT_MASTER_LIST`: who the master looter may assign an item to. */
+export const lootMasterListDataSchema = z.looseObject({
+  looters: z.array(z.looseObject({ guid: guidSchema })),
+});
+export type LootMasterListData = z.infer<typeof lootMasterListDataSchema>;
+
+// ------------------------------------------------------------ item text (item 103)
+
+/** `SMSG_READ_ITEM_OK` / `SMSG_READ_ITEM_FAILED`: the item a `CMSG_READ_ITEM` named. */
+export const readItemDataSchema = z.looseObject({ guid: guidSchema });
+export type ReadItemData = z.infer<typeof readItemDataSchema>;
+
+/** `SMSG_PAGE_TEXT_QUERY_RESPONSE`: one page of a book or letter; `nextPageId` 0 is the last page. */
+export const pageTextQueryResponseDataSchema = z.looseObject({
+  pageId: z.number(),
+  text: z.string(),
+  nextPageId: z.number(),
+});
+export type PageTextQueryResponseData = z.infer<typeof pageTextQueryResponseDataSchema>;
+
+/** `SMSG_ITEM_TEXT_QUERY_RESPONSE`: the player-written text on a carried item (a mailed letter), or `found: false`. */
+export const itemTextQueryResponseDataSchema = z.looseObject({
+  found: z.boolean(),
+  guid: guidSchema.optional(),
+  text: z.string().optional(),
+});
+export type ItemTextQueryResponseData = z.infer<typeof itemTextQueryResponseDataSchema>;
 
 /** `map: -1` clears the release marker. */
 export const deathReleaseLocDataSchema = z.looseObject({
@@ -1882,6 +1964,17 @@ export const eventDataSchemas = {
   SMSG_LOOT_MONEY_NOTIFY: lootMoneyNotifyDataSchema,
   SMSG_LOOT_CLEAR_MONEY: emptyDataSchema,
   SMSG_LOOT_RELEASE_RESPONSE: lootReleaseResponseDataSchema,
+  // group loot rolls (item 102)
+  SMSG_LOOT_START_ROLL: lootStartRollDataSchema,
+  SMSG_LOOT_ROLL: lootRollDataSchema,
+  SMSG_LOOT_ROLL_WON: lootRollWonDataSchema,
+  SMSG_LOOT_ALL_PASSED: lootAllPassedDataSchema,
+  SMSG_LOOT_MASTER_LIST: lootMasterListDataSchema,
+  // item text (item 103)
+  SMSG_READ_ITEM_OK: readItemDataSchema,
+  SMSG_READ_ITEM_FAILED: readItemDataSchema,
+  SMSG_PAGE_TEXT_QUERY_RESPONSE: pageTextQueryResponseDataSchema,
+  SMSG_ITEM_TEXT_QUERY_RESPONSE: itemTextQueryResponseDataSchema,
   SMSG_LIST_INVENTORY: listInventoryDataSchema,
   SMSG_BUY_ITEM: buyItemDataSchema,
   SMSG_BUY_FAILED: buyFailedDataSchema,
