@@ -11,7 +11,7 @@ import type { Database } from "bun:sqlite";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
-import type { EventSummary } from "./sandbox/ipc";
+import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 
@@ -481,6 +481,49 @@ export function isKnownTool(name: string): name is keyof typeof argSchemas {
   return name in argSchemas;
 }
 
+/**
+ * How much of one snippet result the harness may spend on hints, and how much
+ * of one hint. Both are caps, not budgets to fill: the common turn shows one
+ * group of one line.
+ */
+export const ACTION_HINT_RENDER = {
+  MAX_GROUPS: 4,
+  MAX_HINT_CHARS: 320,
+} as const;
+
+/**
+ * Render the SDK's hint-bearing failures for the model, or undefined when there
+ * were none.
+ *
+ * This is the delivery the principle asks for: the hint is already in the
+ * result object, but a snippet that reduces a result to `.status` throws it
+ * away before the model reads it (run a11: 41 `too_far`, hint read 0 times), so
+ * the harness puts it in the snippet result itself — the one place both drivers
+ * share, and one the model's own code cannot strip. Rendered here rather than
+ * in the turn's context block because a claude-code turn is a whole CLI
+ * session: a context notice would arrive a turn late, which is the follow-up
+ * inspection the principle forbids.
+ *
+ * Nothing is added to the hint strings. Grouping is the SDK's (action, status)
+ * tally, so a status that failed 21 times costs one line and a count.
+ */
+export function renderActionHints(hints: readonly ActionHintNote[]): string | undefined {
+  if (hints.length === 0) return undefined;
+  const ordered = [...hints].sort((a, b) => b.count - a.count || a.status.localeCompare(b.status));
+  const shown = ordered.slice(0, ACTION_HINT_RENDER.MAX_GROUPS);
+  const lines = ["--- harness ---"];
+  for (const h of shown) {
+    const hint =
+      h.hint.length > ACTION_HINT_RENDER.MAX_HINT_CHARS
+        ? `${h.hint.slice(0, ACTION_HINT_RENDER.MAX_HINT_CHARS - 1).trimEnd()}…`
+        : h.hint;
+    lines.push(`${h.action} ${h.status}${h.count > 1 ? ` ×${h.count}` : ""}: ${hint}`);
+  }
+  const rest = ordered.length - shown.length;
+  if (rest > 0) lines.push(`(+${rest} other failure ${rest === 1 ? "status" : "statuses"} this snippet)`);
+  return lines.join("\n");
+}
+
 /** Dispatch one tool call. Never throws: errors come back as `isError` text. */
 export async function callTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
   const state = episodeState(ctx);
@@ -520,6 +563,10 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
           lines.push("--- console ---");
           for (const l of res.logs) lines.push(`[${l.level}] ${l.text}`);
         }
+        // Last, and on a successful snippet too: a11's snippets returned `ok`
+        // while swallowing 41 hints, so this is the main case, not the edge.
+        const hints = renderActionHints(res.actionHints ?? []);
+        if (hints !== undefined) lines.push(hints);
         return { text: lines.join("\n"), isError: !res.ok };
       }
       case "recent_events": {

@@ -9,13 +9,16 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ACTION_HINT_RENDER,
   callTool,
   coerceToolArgs,
   nearestTool,
   normalizeToolArgs,
   parseToolArgsText,
+  renderActionHints,
   type ToolContext,
 } from "../src/tools";
+import type { ActionHintNote } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
 
@@ -152,6 +155,66 @@ describe("snippet result rendering", () => {
     expect(res.isError ?? false).toBe(false);
     expect(res.text).toContain("=> [AsyncFunction (anonymous)]");
     expect(res.text).toContain("the snippet returned a function it never called");
+  });
+});
+
+describe("harness-delivered action hints", () => {
+  const note = (over: Partial<ActionHintNote> = {}): ActionHintNote => ({
+    action: "moveTo",
+    status: "too_far",
+    count: 1,
+    hint: "(-6048, 367) is 312y away in a straight line; a single moveTo covers ~250y. Walk to an intermediate point first.",
+    ts: 1,
+    ...over,
+  });
+
+  test("nothing recorded renders nothing", () => {
+    expect(renderActionHints([])).toBeUndefined();
+  });
+
+  test("one line per status, with the count — 41 refusals do not cost 41 lines", () => {
+    const text = renderActionHints([note({ count: 41 }), note({ status: "drop", count: 1, hint: "steps off a ledge" })]);
+    expect(text).toBeDefined();
+    const lines = (text as string).split("\n");
+    expect(lines[0]).toBe("--- harness ---");
+    expect(lines[1]).toBe(
+      "moveTo too_far ×41: (-6048, 367) is 312y away in a straight line; a single moveTo covers ~250y. Walk to an intermediate point first.",
+    );
+    // A single occurrence carries no count.
+    expect(lines[2]).toBe("moveTo drop: steps off a ledge");
+    expect(lines.length).toBe(3);
+  });
+
+  test("the block is capped per snippet and each hint is truncated", () => {
+    const many = ["a", "b", "c", "d", "e", "f"].map((st, i) =>
+      note({ status: st, count: 10 - i, hint: "x".repeat(600) }),
+    );
+    const lines = (renderActionHints(many) as string).split("\n");
+    expect(lines.length).toBe(1 + ACTION_HINT_RENDER.MAX_GROUPS + 1);
+    expect(lines.at(-1)).toBe("(+2 other failure statuses this snippet)");
+    for (const l of lines.slice(1, 1 + ACTION_HINT_RENDER.MAX_GROUPS)) {
+      expect(l.length).toBeLessThan(ACTION_HINT_RENDER.MAX_HINT_CHARS + 40);
+      expect(l.endsWith("…")).toBe(true);
+    }
+  });
+
+  test("a snippet that returned ok and kept only .status still gets the hint", async () => {
+    const ctx = makeCtx({
+      sandbox: {
+        evalSnippet: async () => ({
+          ok: true,
+          value: '[ "too_far", "too_far" ]',
+          actionHints: [note({ count: 2 })],
+          logs: [],
+          durationMs: 5,
+        }),
+      } as unknown as SandboxHost,
+    });
+    const res = await callTool(ctx, "run_snippet", { code: "results.map(r => r.status)" });
+    expect(res.isError ?? false).toBe(false);
+    expect(res.text).toContain("--- harness ---");
+    expect(res.text).toContain("moveTo too_far ×2:");
+    expect(res.text).toContain("Walk to an intermediate point first.");
   });
 });
 

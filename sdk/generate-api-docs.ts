@@ -133,6 +133,8 @@ const CLIENT_RAW: readonly Row[] = [
 /** WrathClient prototype members that are internal plumbing, deliberately undocumented. */
 const CLIENT_INTERNAL = new Set([
   "action",
+  "noteActionHint",
+  "drainActionHints",
   "request",
   "postMoveTo",
   "waitOwnTeleportAck",
