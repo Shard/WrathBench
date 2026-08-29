@@ -7,7 +7,10 @@
  * It FAILS against any worldserver built before the tap (`reputation()`
  * empty). Run it only after the image is deployed.
  *
- * Arc: fresh Human Paladin -> login -> reputation() has Stormwind (72)
+ * Arc: fresh Human Paladin -> login -> the login list lands on the event
+ * stream (it is sent during login, before `createSession` resolves, and the
+ * stream folds it asynchronously — so wait for the fold, as skills.ts does
+ * for its create block) -> reputation() has Stormwind (72)
  * visible and at least Friendly for a human (base 2500 + a fresh human's
  * standing), Orgrimmar (76) Hated and at war, every row named -> logout and
  * delete. A standing change is not forced here: the login list and the
@@ -42,6 +45,11 @@ const client = await connect({ baseUrl: BASE, token: TOKEN });
 try {
   await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
   log(`in world as ${CHARACTER}`);
+  const deadline = Date.now() + 10_000;
+  while (client.state.reputation().length === 0) {
+    if (Date.now() > deadline) break;
+    await Bun.sleep(100);
+  }
   const rep = client.state.reputation();
   log(`reputation: ${rep.length} rows, visible ${rep.filter((r) => r.visible).length}: ${JSON.stringify(rep.filter((r) => r.visible).map((r) => [r.name, r.reputation, r.rank]))}`);
   if (rep.length === 0) fail("reputation() is empty — SMSG_INITIALIZE_FACTIONS did not arrive or was not folded");
