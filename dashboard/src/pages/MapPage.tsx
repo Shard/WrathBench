@@ -34,6 +34,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
+import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
@@ -735,9 +736,8 @@ export default function MapPage() {
                 <ModelIcon model={p().model} />
                 {p().model ?? "—"}
               </div>
-              <div class="k">level / xp</div>
-              <div class="v mono">
-                {num(p().level)} · {num(p().xp)}
+              <div class="v">
+                <UnitFrame level={p().level} xp={p().xp} />
               </div>
               <div class="k">money</div>
               <div class="v mono">{fmtMoney(p().money)}</div>
