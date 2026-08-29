@@ -73,7 +73,7 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
   test("moveTo is documented as taking a unit or guid, with a typed miss", () => {
     // 4 of 7 runs in the same fan-out threw a raw TypeError reading .x off a
     // unit lookup that found nothing.
-    expect(SYSTEM_PROMPT).toContain("moveTo and moveToAsync take a unit or a guid as well as a point");
+    expect(SYSTEM_PROMPT).toContain("moveTo and moveToAsync take a unit, a guid or a name as well as a point");
     expect(SYSTEM_PROMPT).toContain('status: "unknown_target"');
   });
 
