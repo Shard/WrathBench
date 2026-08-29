@@ -15,8 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
-import { FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
+import { CLAUDE_PRICES, DELISTED_MODELS, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost } from "../viewer/pricing";
+import { FREE_SUFFIXLESS_ALLOWLIST, isFreeSlug } from "../src/model-cost";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -107,6 +107,39 @@ describe("priceFor", () => {
     expect(std.input).toBe(3.0);
     expect(std.output).toBe(15.0);
     expect(std.note).toContain("lapsed");
+  });
+
+  test("a suffixless id is never quoted at 0/0: a paid model reading as free is the failure the table must not hold", () => {
+    // A `:free`/`-free` row may be zero and is never consulted anyway
+    // (`priceFor` answers the suffix first). Anything else at 0/0 is a paid
+    // model whose price went missing — `stealth/ox-alpha` sat here from
+    // 2026-08-20 to 2026-08-29 and made 22 runs read as costing nothing.
+    for (const [id, row] of Object.entries(SYNCED_PRICES.models)) {
+      if (row.input > 0 || row.output > 0) continue;
+      expect(isFreeSlug(id)).toBe(true);
+    }
+  });
+
+  test("a delisted model has no price and is not told to run the sync that dropped it", () => {
+    const run: PriceableRun = { model: "stealth/ox-alpha", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    expect(SYNCED_PRICES.models["stealth/ox-alpha"]).toBeUndefined();
+    expect(priceFor(run)).toBeNull();
+    const c = runCost({ run, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 10_000 }), reportedUsd: 0 });
+    // The blank is explicit and says *delisted*, not "run the sync".
+    expect(c.expected.basis).toBe("none");
+    expect(c.expected.usd).toBeNull();
+    expect(c.expected.note).toContain("delisted");
+    expect(c.expected.note).not.toContain("sync-prices");
+    // The provider's own zero is still a sourced figure, and it is the one to read.
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(0);
+  });
+
+  test("every delisted id is absent from the synced table — the note and the row cannot both be right", () => {
+    for (const [id, why] of Object.entries(DELISTED_MODELS)) {
+      expect(SYNCED_PRICES.models[id]).toBeUndefined();
+      expect(why).toContain("delisted");
+    }
   });
 
   test("every row carries its own date and source, so a stale price is visible", () => {

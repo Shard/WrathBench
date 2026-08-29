@@ -42,9 +42,12 @@ const PIN: readonly string[] = [
   "deepseek/deepseek-v4-flash-0731",
   "deepseek/deepseek-v4-flash",
   // Delisted 2026-08-28: the catalogue no longer carries the stealth id at
-  // all, so the pin no longer prices it and its 0/0/0/0 row in the output is
-  // held by hand. A re-sync drops that row (every 2026-08-20..26 run then
-  // reads as unpriced) until FOLLOW-UPS item 88 is decided.
+  // all, so this pin will never resolve — it is kept as the standing ask, so a
+  // relisting is picked up rather than needing to be noticed. The 0/0/0/0 row
+  // it used to hold by hand was deliberately dropped on 2026-08-29: a paid
+  // model reading as free is worse than a blank, and the corpus's 22 runs now
+  // read unpriced with the delisting named (`DELISTED_MODELS` in
+  // `runner/viewer/pricing.ts`) rather than $0.00 wearing a synced-price label.
   "stealth/ox-alpha",
   "openai/gpt-5.6-luna",
   "google/gemini-3.7-flash",
