@@ -2532,7 +2532,13 @@ export class WrathClient {
    * `InventoryResult` code and a hint, not as success. The refusal is a value,
    * not a throw: it is the game answering.
    */
-  async equipItem(bagOrName: number | string, slot?: number, options: EquipOptions = {}): Promise<EquipItemResult> {
+  async equipItem(bagOrName: number | string, slot?: number | EquipOptions, options: EquipOptions = {}): Promise<EquipItemResult> {
+    // A name in place of the bag leaves the second argument free, so
+    // `equipItem("Bronze Axe", { timeout })` has exactly one reading: shift it.
+    if (slot !== null && typeof slot === "object") {
+      options = slot;
+      slot = undefined;
+    }
     const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "equipItem(bagOrName, slot?)", "state.bag()");
     if ("refusal" in where) {
       this.noteActionHint("equipItem", "no_item", where.refusal);
@@ -2641,8 +2647,14 @@ export class WrathClient {
    * place of `bag` (exact, else a unique substring) — a name that names
    * nothing carried, or two things, throws with what is carried.
    */
-  async useItem(bagOrName: number | string, slot?: number, targetGuid?: GuidArg): Promise<ActionResponse> {
-    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "useItem(bagOrName, slot?)", "state.bag()");
+  async useItem(bagOrName: number | string, slot?: number | GuidArg, targetGuid?: GuidArg): Promise<ActionResponse> {
+    // `useItem("Healing Potion", guid)`: with a name, the second argument
+    // cannot be a slot, so the guid it holds is the target.
+    if (typeof bagOrName === "string" && slot !== undefined) {
+      targetGuid = slot as GuidArg;
+      slot = undefined;
+    }
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot as number | undefined, "useItem(bagOrName, slot?)", "state.bag()");
     if ("refusal" in where) throw new TypeError(where.refusal);
     const { bag } = where;
     slot = where.slot;
@@ -2693,6 +2705,12 @@ export class WrathClient {
    * `bag` (exact, else a unique substring).
    */
   destroyItem(bagOrName: number | string, slot?: number, count?: number): Promise<ActionResponse> {
+    // `destroyItem("Copper Ore", 5)`: with a name, the second argument cannot
+    // be a slot, so the number it holds is the count.
+    if (typeof bagOrName === "string" && slot !== undefined) {
+      count = slot;
+      slot = undefined;
+    }
     const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "destroyItem(bagOrName, slot?)", "state.bag()");
     if ("refusal" in where) throw new TypeError(where.refusal);
     return this.action({ action: "destroy_item", bag: where.bag, slot: where.slot, count });
@@ -3484,7 +3502,11 @@ export class WrathClient {
    * or the server's refusal (bank full, not at a banker, ...). Needs the
    * bank frame open (`openBank`).
    */
-  async bankDeposit(bagOrName: number | string, slot?: number, options: BankOptions = {}): Promise<BankMoveResult> {
+  async bankDeposit(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<BankMoveResult> {
+    if (slot !== null && typeof slot === "object") {
+      options = slot;
+      slot = undefined;
+    }
     const closed = this.bankClosed("bankDeposit");
     if (closed !== undefined) return closed;
     const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "bankDeposit(bagOrName, slot?)", "state.bag()");
@@ -3516,7 +3538,11 @@ export class WrathClient {
    * bag's slot 67-73 with its inner slot) and return where it landed in
    * `state.bag()`, or the server's refusal. Needs the bank frame open.
    */
-  async bankWithdraw(bagOrName: number | string, slot?: number, options: BankOptions = {}): Promise<BankMoveResult> {
+  async bankWithdraw(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<BankMoveResult> {
+    if (slot !== null && typeof slot === "object") {
+      options = slot;
+      slot = undefined;
+    }
     const closed = this.bankClosed("bankWithdraw");
     if (closed !== undefined) return closed;
     const where = resolveItemSlot(this.state.bank().items, bagOrName, slot, "bankWithdraw(bagOrName, slot?)", "state.bank()");
@@ -4507,7 +4533,13 @@ export class WrathClient {
    * nothing about *why* (no points, wrong tree tier, prerequisite missing),
    * so the hint lists what a client checks before enabling the button.
    */
-  async learnTalent(talent: number | string, rank?: number, options: TrainerOptions = {}): Promise<LearnTalentResult> {
+  async learnTalent(talent: number | string, rank?: number | TrainerOptions, options: TrainerOptions = {}): Promise<LearnTalentResult> {
+    // `learnTalent("Improved Heroic Strike", { timeout })`: an object is never
+    // a rank, so it is the options — one reading, repaired rather than sent.
+    if (rank !== null && typeof rank === "object") {
+      options = rank;
+      rank = undefined;
+    }
     const resolved = this.resolveTalent(talent);
     if ("refusal" in resolved) return resolved.refusal;
     const talentId = resolved.talentId;
