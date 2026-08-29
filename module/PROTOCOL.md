@@ -305,9 +305,9 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `clear_target` | — | `CMSG_SET_SELECTION` | guid 0 |
 | `attack_start` | `guid` | `CMSG_ATTACKSWING` | melee auto-attack; server swings while in range |
 | `attack_stop` | — | `CMSG_ATTACKSTOP` | |
-| `cast_spell` | `spellId`, `targetGuid?` | `CMSG_CAST_SPELL` | no `targetGuid` = self/auto target (mask 0); with it, TARGET_FLAG_UNIT + packed guid |
+| `cast_spell` | `spellId`, `targetGuid?` | `CMSG_CAST_SPELL` | no `targetGuid` = self/auto target (mask 0); with it, TARGET_FLAG_UNIT + packed guid. A game object guid works too (the core resolves the packed guid by its type), which is how chests open; a client would set TARGET_FLAG_GAMEOBJECT for it — FOLLOW-UPS 105 |
 | `cancel_cast` | `spellId` | `CMSG_CANCEL_CAST` | |
-| `interact` | `guid` | `CMSG_GAMEOBJ_USE` | game objects (chests, doors, quest objects) |
+| `interact` | `guid` | `CMSG_GAMEOBJ_USE` | doors, buttons, quest objects, mailboxes. Not chests: the core's `GameObject::Use` has no chest case and returns silently; a client opens a chest with `cast_spell` of the lock's Opening spell at the object's guid (the SDK's `lootCorpse` does this) |
 | `gossip_hello` | `guid` | `CMSG_GOSSIP_HELLO` | opens the NPC gossip menu (`SMSG_GOSSIP_MESSAGE`) |
 | `gossip_select` | `guid`, `menuId`, `optionId` | `CMSG_GOSSIP_SELECT_OPTION` | ids from `SMSG_GOSSIP_MESSAGE` (`menuId`, `options[].optionId`) |
 | `quest_list` | `guid` | `CMSG_QUESTGIVER_HELLO` | `SMSG_QUESTGIVER_QUEST_LIST` or a gossip menu follows |
@@ -415,7 +415,10 @@ whose handler does nothing a non-GM client could not do:
   (`u32 0`), `CMSG_GROUP_DECLINE` (empty), `CMSG_GROUP_UNINVITE` (`cstring
   name`), `CMSG_GROUP_UNINVITE_GUID` (`u64 guid, cstring reason`),
   `CMSG_GROUP_DISBAND` (empty — "leave group"), `CMSG_GROUP_SET_LEADER` (`u64
-  guid`), `CMSG_LOOT_METHOD`
+  guid`), `CMSG_LOOT_METHOD`, `CMSG_LOOT_ROLL` (`u64 roll guid, u32 loot
+  slot, u8 vote` — 0 pass, 1 need, 2 greed, 3 disenchant — on a frame
+  `SMSG_LOOT_START_ROLL` opened; the SDK's `lootRoll` builds it; 2026-08-29,
+  FOLLOW-UPS 102)
 - trade: `CMSG_INITIATE_TRADE` (`u64 guid`), `CMSG_BEGIN_TRADE`, `CMSG_ACCEPT_TRADE`,
   `CMSG_UNACCEPT_TRADE`, `CMSG_CANCEL_TRADE`, `CMSG_BUSY_TRADE`,
   `CMSG_IGNORE_TRADE`, `CMSG_SET_TRADE_ITEM` (`u8 trade slot, u8 bag, u8
@@ -438,7 +441,10 @@ whose handler does nothing a non-GM client could not do:
   (empty — re-sends `SMSG_PET_SPELLS`)
 - client-cache queries: `CMSG_NAME_QUERY`, `CMSG_CREATURE_QUERY`,
   `CMSG_GAMEOBJECT_QUERY`, `CMSG_ITEM_QUERY_SINGLE`, `CMSG_NPC_TEXT_QUERY`,
-  `CMSG_PAGE_TEXT_QUERY`, `CMSG_PLAYED_TIME`, `CMSG_QUERY_TIME`,
+  `CMSG_PAGE_TEXT_QUERY` (`u32 page id, u64 item guid` — the SDK's `readItem`
+  sends it after `SMSG_READ_ITEM_OK`, on the template's `pageText`),
+  `CMSG_ITEM_TEXT_QUERY` (`u64 item guid` — the player-written text on a
+  mailed letter; FOLLOW-UPS 103), `CMSG_PLAYED_TIME`, `CMSG_QUERY_TIME`,
   `CMSG_SET_WATCHED_FACTION`, `CMSG_SET_ACTION_BUTTON`
 - corpse: `MSG_CORPSE_QUERY` (empty body) — re-ask where the corpse is; the
   module already asks once per death on the client's behalf (see "Death"), and
@@ -913,7 +919,7 @@ Loot, vendor, inventory:
 | `SMSG_TRAINER_BUY_SUCCEEDED` | 0x1B3 | `{ "guid", "spellId" }` |
 | `SMSG_TRAINER_BUY_FAILED` | 0x1B4 | `{ "guid", "spellId", "reason": <i32> }` — 0 unavailable, 1 not enough money, 2 not enough skill (also level/prerequisites) |
 | `SMSG_INVENTORY_CHANGE_FAILURE` | 0x112 | `{ "result": <u8>, "itemGuid"?, "itemGuid2"?, "requiredLevel"? }` (InventoryResult code) |
-| `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"?, "requiredSkill", "requiredSkillRank", "requiredSkillName"?, "requiredSpell"?, "requiredReputationFaction"?, "requiredReputationRank"?, "requiredReputationFactionName"?, "maxCount", "stackable", "containerSlots", "stats": [{ "type", "value" }], "damage": [{ "min": <f>, "max": <f>, "type" }], "armor", "resistances"?: { "holy"?, "fire"?, ... }, "speedMs", "spells": [{ "spellId", "trigger", "charges", "name"? }], "bonding", "description"?, "startQuest"?, "block"?, "maxDurability" }` — everything from `requiredSkill` on is the tooltip (2026-08-29, FOLLOW-UPS 97), read in `HandleItemQuerySingleOpcode`'s order up to `MaxDurability`; sockets, gem properties, duration and holiday are left unread. Zero damage ranges and empty spell slots are dropped; `resistances` only when one is non-zero. Names on `requiredSkill`, `requiredReputationFaction` and each spell are client-cache (SkillLine.dbc, Faction.dbc, Spell.dbc) knowledge like the rest |
+| `SMSG_ITEM_QUERY_SINGLE_RESPONSE` | 0x058 | `{ "itemId", "found", "name"?, "quality"?, "inventoryType"?, "buyPrice"?, "sellPrice"?, "itemLevel"?, "requiredLevel"?, "class"?, "subClass"?, "requiredSkill", "requiredSkillRank", "requiredSkillName"?, "requiredSpell"?, "requiredReputationFaction"?, "requiredReputationRank"?, "requiredReputationFactionName"?, "maxCount", "stackable", "containerSlots", "stats": [{ "type", "value" }], "damage": [{ "min": <f>, "max": <f>, "type" }], "armor", "resistances"?: { "holy"?, "fire"?, ... }, "speedMs", "spells": [{ "spellId", "trigger", "charges", "name"? }], "bonding", "description"?, "startQuest"?, "pageText"?, "block"?, "maxDurability" }` — everything from `requiredSkill` on is the tooltip (2026-08-29, FOLLOW-UPS 97), read in `HandleItemQuerySingleOpcode`'s order up to `MaxDurability`; sockets, gem properties, duration and holiday are left unread. Zero damage ranges and empty spell slots are dropped; `resistances` only when one is non-zero. Names on `requiredSkill`, `requiredReputationFaction` and each spell are client-cache (SkillLine.dbc, Faction.dbc, Spell.dbc) knowledge like the rest |
 
 Item name resolution mirrors creature/name queries: on first sight of an item
 entry (item create block, loot window, vendor list, item push, quest reward
@@ -1001,8 +1007,41 @@ served as numbers; the SDK names them.
 | `SMSG_TRADE_STATUS` | 0x120 | `{ "status": <u32>, "traderGuid"? (status 1), "inventoryResult"?, "targetError"?, "limitedItemId"? (status 12), "slot"? (22, 23) }` — `TradeStatus`: 0 busy, 1 begin trade (the other player proposed), 2 window open, 3 canceled, 4 accepted, 6 no target, 7 back to trade, 8 complete, 9 rejected, 10 too far, 11 wrong faction, 12 close window, 14 ignoring you, 15/16 stunned, 17/18 dead, 19/20 logging out, 21 trial account |
 | `SMSG_TRADE_STATUS_EXTENDED` | 0x121 | `{ "theirs": <bool>, "money", "spellId", "items": [{ "slot", "itemId", "count", "wrapped": <bool> }] }` — one side of the trade window (`theirs` false is own); slot 6 is the "will not be traded" enchant slot; empty slots and the per-item enchant / gem / creator / durability block are consumed and not served |
 
+Group loot rolls (2026-08-29, FOLLOW-UPS 102): the roll frame a group-looted
+corpse opens for each item at or above the group's loot threshold
+(`Group::GroupLoot`; uncommon by default, and the threshold cannot be set
+lower). A roll is keyed by the fresh item guid the core mints for it
+(`rollGuid`), which is what `CMSG_LOOT_ROLL` names. Every packet carries the
+item entry, queried like a cache miss so the SDK can name it.
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_LOOT_START_ROLL` | 0x2A1 | `{ "rollGuid", "slot", "itemId", "count", "countdownMs", "voteMask": <u8>, "canNeed": <bool>, "canGreed": <bool>, "canDisenchant": <bool> }` — the frame opens; pass is always allowed. The per-player form drops the need bit when this character cannot need. Map id, random suffix and property are consumed and not served |
+| `SMSG_LOOT_ROLL` | 0x2A2 | `{ "rollGuid", "slot", "playerGuid", "itemId", "roll": <u8>, "rollType": <u8>, "autoPass": <bool> }` — one counted vote, to every voter; `roll` 1-100, 128 for a pass; `rollType` 0 pass, 1 need, 2 greed, 3 disenchant |
+| `SMSG_LOOT_ROLL_WON` | 0x29F | `{ "rollGuid", "slot", "itemId", "winnerGuid", "roll": <u8>, "rollType": <u8> }` — the verdict; the item lands on the winner as `SMSG_ITEM_PUSH_RESULT` |
+| `SMSG_LOOT_ALL_PASSED` | 0x29E | `{ "rollGuid", "slot", "itemId" }` — everyone passed; the item stays on the corpse |
+| `SMSG_LOOT_MASTER_LIST` | 0x2A4 | `{ "looters": [{ "guid" }] }` — under master loot, who the master looter may assign an over-threshold item to |
+
+Item text (2026-08-29, FOLLOW-UPS 103): a client reads a book or letter with
+`CMSG_READ_ITEM`, and on the server's `SMSG_READ_ITEM_OK` asks
+`CMSG_PAGE_TEXT_QUERY` for the template's `pageText` (served on the item
+query above), which the core answers page by page down the `NextPage` chain
+in one go. The player-written text on a mailed letter is a different query
+(`CMSG_ITEM_TEXT_QUERY`). `SMSG_ITEM_TEXT_QUERY_RESPONSE` is the only reply
+to the latter; the core never sends it for books. Text only — no
+coordinates ride any of these.
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_READ_ITEM_OK` | 0x0AE | `{ "guid" }` — the item may be read; the pages follow the client's page query |
+| `SMSG_READ_ITEM_FAILED` | 0x0AF | `{ "guid" }` — the item has pages but this character may not read it (`SMSG_INVENTORY_CHANGE_FAILURE` precedes it with the reason). An item with no pages answers `SMSG_INVENTORY_CHANGE_FAILURE` alone (`EQUIP_ERR_ITEM_NOT_FOUND`) |
+| `SMSG_PAGE_TEXT_QUERY_RESPONSE` | 0x05B | `{ "pageId", "text", "nextPageId" }` — one page; `nextPageId` 0 is the last. A missing page is served as the core's own "Item page missing." text |
+| `SMSG_ITEM_TEXT_QUERY_RESPONSE` | 0x244 | `{ "found": <bool>, "guid"?, "text"? }` — `found` false is "no such carried item"; a carried item with nothing written on it answers `found` true with an empty `text` |
+
 The auction house stays outside both lists: `CMSG_AUCTION_*` is not
-allowlisted and no auction reply is tapped (operator decision pending).
+allowlisted and no auction reply is tapped (operator decision 2026-08-29:
+deferred, with the dungeon finder, guilds, battlegrounds, glyphs, dual spec
+and equipment sets, until single-player play is validated; docs/CONTRACTS.md).
 
 Achievements and flight paths (2026-08-25, issue #8 first half):
 

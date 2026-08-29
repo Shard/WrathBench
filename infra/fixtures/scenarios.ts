@@ -158,6 +158,12 @@ const HUMAN_START = { map: 0, zone: 12, x: -8949.95, y: -132.493, z: 83.5312, o:
 // troggs turning the walk into an `interrupted` (they killed every level-1
 // attempt at that gate).
 const COLDRIDGE_ROAD = { x: -6115.1, y: 372.3, z: 395.6 };
+// Felix's Bucket of Bolts, `acore_world.gameobject` guid 1394 (template
+// 178085, a chest with lock 43 = "Open Kneeling"), at the troll camp south of
+// the Coldridge Valley lake. Its one loot row is the quest item for
+// A Refugee's Quandary (3361), so the chest only opens for a character on it.
+const FELIX_BUCKET = { x: -6480.01, y: 505.256, z: 385.988 };
+const FELIX_BUCKET_FRONT = { x: -6477.8, y: 504.4, z: 385.988 };
 const COLDRIDGE_PASS_MOUTH = { x: -6049.4, y: 383.6 };
 
 // The Goldshire mailbox, `acore_world.gameobject` guid 142075 (template
@@ -173,7 +179,52 @@ const GOLDSHIRE_MAILBOX_FRONT = { x: -9457.8, y: 44.6, z: 56.5 };
 const BAILEY = { x: -4886.55, y: -997.594, z: 504.024, o: 2.23402 };
 const BAILEY_FRONT = { x: BAILEY.x + 3 * Math.cos(BAILEY.o), y: BAILEY.y + 3 * Math.sin(BAILEY.o), z: 504.03 };
 
+// Marshal McBride, entry 197, the Northshire Abbey questgiver; spawn from
+// acore_world.creature (guid 79970): (-8902.59, -162.606, 82.0223), o 2.04204.
+// Three yards along his facing, turned back to face him: interact range for
+// "Report to Goldshire" (54), whose start item is a readable letter.
+const MCBRIDE = { x: -8902.59, y: -162.606, z: 82.0223, o: 2.04204 };
+const MCBRIDE_FRONT = { x: MCBRIDE.x + 3 * Math.cos(MCBRIDE.o), y: MCBRIDE.y + 3 * Math.sin(MCBRIDE.o), z: 82.05 };
+
+// Leprithus, entry 572, the Westfall rare at the Dagger Hills crypt: the
+// static spawn (acore_world.creature guid 134020, MovementType 0) at
+// (-10084.6, 1557.27, 40.848), respawn 72000s. His loot has a group whose
+// every entry is uncommon, so a kill always drops one green — the one
+// guaranteed over-threshold drop reachable without an instance or a GM
+// command. The pair stands twelve yards east of him, facing him.
+const LEPRITHUS = { x: -10084.6, y: 1557.27, z: 40.848 };
+const LEPRITHUS_FRONT = { x: -10072.6, y: 1557.27, z: 41.0 };
+
 export const SCENARIOS = {
+  "mcbride-report": {
+    description: "level 5, no money, in front of Marshal McBride with the Northshire chain up to Skirmish at Echo Ridge (21) rewarded (for the read-item smoke: Report to Goldshire hands out a readable letter)",
+    level: 5,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 12,
+      ...MCBRIDE_FRONT,
+      o: facing(MCBRIDE_FRONT, MCBRIDE),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    clearQuests: true,
+    // 54's PrevQuestID is 21, whose chain runs 783 -> 7 -> 15 -> 21
+    // (quest_template_addon); every link rewarded is the whole gate.
+    quests: { rewarded: [783, 7, 15, 21] },
+  },
+  "leprithus-westfall": {
+    description: "level 30, no money, facing Leprithus's static spawn in Westfall (for the loot-roll smoke: two of these, grouped, kill him for his guaranteed green)",
+    level: 30,
+    money: 0,
+    position: {
+      map: 0,
+      // 40 = Westfall (AreaTable).
+      zone: 40,
+      ...LEPRITHUS_FRONT,
+      o: facing(LEPRITHUS_FRONT, LEPRITHUS),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
   "mailbox-goldshire": {
     description: "level 1, 50s, in front of the Goldshire mailbox (for the mail smoke: postage plus enclosed money)",
     level: 1,
@@ -286,6 +337,23 @@ export const SCENARIOS = {
       o: facing(COLDRIDGE_ROAD, COLDRIDGE_PASS_MOUTH),
     },
     homebind: DWARF_START_BIND,
+  },
+  "felix-bucket": {
+    description:
+      "level 5, no money, in front of Felix's Bucket of Bolts (Coldridge Valley) with A Refugee's Quandary (3361) in the log (for the chest-loot smoke)",
+    level: 5,
+    money: 0,
+    position: {
+      map: 0,
+      zone: 132,
+      ...FELIX_BUCKET_FRONT,
+      o: facing(FELIX_BUCKET_FRONT, FELIX_BUCKET),
+    },
+    homebind: DWARF_START_BIND,
+    // Rebuilt every run: the smoke loots the quest item, and a log that already
+    // holds it would make the chest show empty the next time.
+    clearQuests: true,
+    quests: { inProgress: [3361] },
   },
   "vineyard-kill-credit": {
     description:
