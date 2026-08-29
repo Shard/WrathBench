@@ -2143,6 +2143,217 @@ describe("guids are opaque decimal strings: guid arguments at the client surface
   });
 });
 
+describe("client: flight master window and activateTaxi (item 38 N3)", () => {
+  const TS = 1_700_000_000_000;
+  const menu = (seq: number, withTaxi = true): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_GOSSIP_MESSAGE",
+      opcodeId: 0x17d,
+      ts: TS + seq,
+      data: {
+        guid: CREATURE_GUID,
+        menuId: 4360,
+        textId: 100,
+        options: withTaxi
+          ? [{ optionId: 0, icon: 2, text: "I need a ride." }, { optionId: 1, icon: 0, text: "Tell me about the city." }]
+          : [{ optionId: 1, icon: 0, text: "Tell me about the city." }],
+        quests: [],
+      },
+    });
+  const window = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_SHOWTAXINODES",
+      opcodeId: 0x1a9,
+      ts: TS + seq,
+      data: {
+        showWindow: true,
+        guid: CREATURE_GUID,
+        currentNode: 6,
+        currentNodeName: "Ironforge, Dun Morogh",
+        mask: [0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        known: [{ nodeId: 6, name: "Ironforge, Dun Morogh" }, { nodeId: 7, name: "Thelsamar, Loch Modan" }],
+      },
+    });
+  const reply = (seq: number, code: number): string =>
+    JSON.stringify({ seq, opcode: "SMSG_ACTIVATETAXIREPLY", opcodeId: 0x1ae, ts: TS + seq, data: { reply: code, ok: code === 0 } });
+
+  test("showTaxiNodes: hello, the taxi option by icon, then the window", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.showTaxiNodes(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(300));
+    const at = await untilAction(stub, "gossip_select");
+    expect(stub.actions[at]).toMatchObject({ action: "gossip_select", guid: CREATURE_GUID, menuId: 4360, optionId: 0 });
+    stub.push(window(301));
+    const w = await pending;
+    expect(w.current).toEqual({ nodeId: 6, name: "Ironforge, Dun Morogh" });
+    expect(w.known.map((n) => n.nodeId)).toEqual([6, 7]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("showTaxiNodes: a master with nothing else to say sends the window straight from the hello", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.showTaxiNodes(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(window(310));
+    const w = await pending;
+    expect(w.current.nodeId).toBe(6);
+    expect(stub.actions.some((a) => a.action === "gossip_select")).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+
+  test("showTaxiNodes: a menu without a taxi option throws and lists the options", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.showTaxiNodes(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(320, false));
+    const err = await pending.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("no taxi option");
+    expect((err as Error).message).toContain("Tell me about the city.");
+    client.close();
+    await stub.stop();
+  });
+
+  test("activateTaxi: sends the window's current node and the resolved destination, and reads the reply", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(window(330));
+    await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
+    const pending = client.activateTaxi(CREATURE_GUID, "thelsamar", { timeout: 2000 });
+    const at = await untilAction(stub, "raw");
+    const guidHex = BigInt(CREATURE_GUID).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+    expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_ACTIVATETAXI", payload: `${guidHex}0600000007000000` });
+    stub.push(reply(331, 0));
+    expect(await pending).toEqual({
+      ok: true,
+      status: "accepted",
+      reply: 0,
+      from: { nodeId: 6, name: "Ironforge, Dun Morogh" },
+      to: { nodeId: 7, name: "Thelsamar, Loch Modan" },
+    });
+    client.close();
+    await stub.stop();
+  });
+
+  test("activateTaxi: a refusal is a value with the server's code and a hint, and is recorded for the harness", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(window(340));
+    await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
+    const pending = client.activateTaxi(CREATURE_GUID, 7, { timeout: 2000 });
+    await untilAction(stub, "raw");
+    stub.push(reply(341, 3));
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("refused");
+    expect(result.reply).toBe(3);
+    expect(result.hint).toContain("not enough money");
+    const hints = client.drainActionHints();
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toMatchObject({ action: "activateTaxi", status: "refused", count: 1 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("activateTaxi: no window observed, an unknown name, or an ambiguous one throws before anything is sent", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const none = await client.activateTaxi(CREATURE_GUID, 7).catch((e: unknown) => e);
+    expect((none as Error).message).toContain("showTaxiNodes");
+    stub.push(window(350));
+    await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
+    const unknown = await client.activateTaxi(CREATURE_GUID, "Stormwind").catch((e: unknown) => e);
+    expect((unknown as Error).message).toContain("Thelsamar");
+    const notKnown = await client.activateTaxi(CREATURE_GUID, 8).catch((e: unknown) => e);
+    expect((notKnown as Error).message).toContain("not in the window");
+    const ambiguous = await client.activateTaxi(CREATURE_GUID, ", ").catch((e: unknown) => e);
+    expect((ambiguous as Error).message).toContain("matches 2 nodes");
+    expect(stub.actions.some((a) => a.action === "raw")).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: bindAtInnkeeper (item 38 N2)", () => {
+  const TS = 1_700_000_000_000;
+  const menu = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_GOSSIP_MESSAGE",
+      opcodeId: 0x17d,
+      ts: TS + seq,
+      data: {
+        guid: CREATURE_GUID,
+        menuId: 345,
+        textId: 100,
+        options: [
+          { optionId: 0, icon: 0, text: "Trick or Treat!" },
+          { optionId: 2, icon: 5, text: "Make this inn your home." },
+          { optionId: 3, icon: 1, text: "Let me browse your goods." },
+        ],
+        quests: [],
+      },
+    });
+  const confirm = (seq: number): string =>
+    JSON.stringify({ seq, opcode: "SMSG_BINDER_CONFIRM", opcodeId: 0x2eb, ts: TS + seq, data: { guid: CREATURE_GUID } });
+  const bound = (seq: number): string =>
+    JSON.stringify({
+      seq,
+      opcode: "SMSG_BINDPOINTUPDATE",
+      opcodeId: 0x155,
+      ts: TS + seq,
+      data: { x: -4840.7, y: -857.1, z: 502, map: 0, areaId: 1537, areaName: "Ironforge" },
+    });
+
+  test("hello, the home option, the confirm answered with CMSG_BINDER_ACTIVATE, the new bind point", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.bindAtInnkeeper(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(400));
+    const sel = await untilAction(stub, "gossip_select");
+    expect(stub.actions[sel]).toMatchObject({ action: "gossip_select", guid: CREATURE_GUID, menuId: 345, optionId: 2 });
+    stub.push(confirm(401));
+    const rawAt = await untilAction(stub, "raw");
+    const guidHex = BigInt(CREATURE_GUID).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+    expect(stub.actions[rawAt]).toMatchObject({ action: "raw", opcode: "CMSG_BINDER_ACTIVATE", payload: guidHex });
+    stub.push(bound(402));
+    const result = await pending;
+    expect(result).toEqual({
+      ok: true,
+      status: "bound",
+      bindPoint: { map: 0, x: -4840.7, y: -857.1, z: 502, area: { id: 1537, name: "Ironforge" } },
+    });
+    expect(client.state.self.bindPoint?.value.area.name).toBe("Ironforge");
+    client.close();
+    await stub.stop();
+  });
+
+  test("an explicit option is resolved against the open menu; a menu without a home option throws", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const pending = client.bindAtInnkeeper(CREATURE_GUID, { timeout: 2000, option: "browse" });
+    await untilAction(stub, "gossip_hello");
+    stub.push(menu(410));
+    const sel = await untilAction(stub, "gossip_select");
+    expect(stub.actions[sel]).toMatchObject({ optionId: 3 });
+    // No confirm ever comes for a vendor option: the absence is a timeout, not an outcome.
+    const err = await pending.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    client.close();
+    await stub.stop();
+  });
+});
+
 describe("client: gossipSelect by observed option text (item 3c)", () => {
   const gossipMenu = (seq: number): string =>
     JSON.stringify({

@@ -389,7 +389,11 @@ whose handler does nothing a non-GM client could not do:
   `CMSG_CANCEL_CHANNELLING`, `CMSG_SET_SHEATHED`, `CMSG_STANDSTATECHANGE`,
   `CMSG_RESURRECT_RESPONSE`
 - flight paths: `CMSG_TAXINODE_STATUS_QUERY`, `CMSG_TAXIQUERYAVAILABLENODES`,
-  `CMSG_ACTIVATETAXI`, `CMSG_ACTIVATETAXIEXPRESS`
+  `CMSG_ACTIVATETAXI` (body `u64 guid, u32 fromNode, u32 toNode`; the SDK's
+  `activateTaxi` builds it), `CMSG_ACTIVATETAXIEXPRESS`
+- innkeeper bind: `CMSG_BINDER_ACTIVATE` (body `u64 guid` — the yes on the
+  confirm dialog after `SMSG_BINDER_CONFIRM`; the SDK's `bindAtInnkeeper`
+  sends it)
 - bank: `CMSG_BANKER_ACTIVATE`, `CMSG_AUTOBANK_ITEM`, `CMSG_AUTOSTORE_BANK_ITEM`,
   `CMSG_BUY_BANK_SLOT`
 - mail: `CMSG_SEND_MAIL`, `CMSG_GET_MAIL_LIST`, `CMSG_MAIL_TAKE_ITEM`,
@@ -901,6 +905,7 @@ Achievements and flight paths (2026-08-25, issue #8 first half):
 | `SMSG_ACHIEVEMENT_EARNED` | 0x468 | `{ "guid", "self": <bool>, "achievement": { "achievementId", "date": <u32>, "time": "YYYY-MM-DD HH:MM", "name"?, "points"?, "categoryId"? } }` — the core broadcasts this in say range, so `guid` may be another player's; `self` is the equality with the session's own guid, nothing more |
 | `SMSG_ALL_ACHIEVEMENT_DATA` | 0x47D | `{ "count", "achievements": [ <same achievement object> ] }` — sent to self once during login: every achievement already earned. Only the completed block (to its 0xFFFFFFFF terminator) is decoded; the criteria-progress block that follows is consumed and not served |
 | `SMSG_ACTIVATETAXIREPLY` | 0x1AE | `{ "reply": <u32>, "ok": <bool> }` — the answer to `CMSG_ACTIVATETAXI[EXPRESS]` (raw). `ActivateTaxiReply`: 0 ok, 1 server error, 2 no such path, 3 not enough money, 4 too far away, 5 no vendor nearby, 6 not visited, 7 busy, 8 mounted, 9 shapeshifted, 10 moving, 11 same node, 12 not standing |
+| `SMSG_SHOWTAXINODES` | 0x1A9 | `{ "showWindow": <bool>, "guid", "currentNode": <u32>, "currentNodeName"?: <str>, "mask": [<u32> × 14], "known": [{ "nodeId": <u32>, "name"?: <str> }] }` — the flight master's window (`WorldSession::SendTaxiMenu`), sent when the taxi option of the master's gossip menu is chosen: the leading u32 (1 = show), the master's guid, the node it stands at, and the character's taximask verbatim (`TaxiMaskSize` 14 words; node *n* is bit `(n-1)%32` of word `(n-1)/32`). `known` is that mask decoded — the nodes this character has visited, the only destinations the server will sell — each named as the client names it from its own `TaxiNodes.dbc`. No route, fare or position is served |
 
 `date` is the wire's packed bitfield (`AppendPackedTime`: `(year-2000)<<24 |
 month<<20 | (day-1)<<14 | weekday<<11 | hour<<6 | minute`); `time` is its
@@ -915,9 +920,35 @@ The flight itself has no event: `taxiFlight` on self in `SMSG_UPDATE_OBJECT`
 `fields` (below) is `UNIT_FLAG_TAXI_FLIGHT` read off `unitFlags`, so a
 `reply` of 0 followed by `taxiFlight: true` is the flight starting and the
 flip back to `false` is the landing, exactly as a client sees them. Nothing is
-inferred from the server's taxi state. `SMSG_CRITERIA_UPDATE` (0x46A),
-`SMSG_SHOWTAXINODES` and `SMSG_TAXINODE_STATUS` are not tapped: the agent finds
-flight masters the way it finds anything, and learns a node by visiting it.
+inferred from the server's taxi state. `SMSG_CRITERIA_UPDATE` (0x46A) and
+`SMSG_TAXINODE_STATUS` are not tapped: the agent finds flight masters the way
+it finds anything, and learns a node by visiting it.
+
+The window (2026-08-29, FOLLOW-UPS 38 N3): `SMSG_SHOWTAXINODES` is the one
+packet that tells a client what a flight master offers, and the client only
+ever gets it by choosing the taxi option on the master's gossip menu
+(`gossip_hello` then `gossip_select`; a master with no other menu entries
+sends it straight from the hello). Node names come from `TaxiNodes.dbc` on
+the data volume (`dbc/TaxiNodes.dbc`, 24 fields, record size 96; the loader
+refuses any other layout) and are ids only when it is absent — the same
+client-cache class as area and achievement names. The node positions the
+same table carries are deliberately not served, and `TaxiPath.dbc` is never
+read: which nodes connect, and for how much, the character learns by asking
+(`CMSG_ACTIVATETAXI` with the window's current node and a known node, body
+`u64 guid, u32 from, u32 to`, through raw).
+
+Innkeeper bind (2026-08-29, FOLLOW-UPS 38 N2) — the sequence a client runs
+when "Make this inn your home." is chosen:
+
+| opcode | id | `data` fields |
+|---|---|---|
+| `SMSG_BINDER_CONFIRM` | 0x2EB | `{ "guid" }` — the innkeeper asks; a client shows a yes/no dialog and answers yes with `CMSG_BINDER_ACTIVATE` (raw, body `u64 guid`) |
+| `SMSG_BINDPOINTUPDATE` | 0x155 | `{ "x", "y", "z", "map": <u32>, "areaId": <u32>, "areaName": <str> }` — where the hearthstone goes: once during login (`Player::SendInitialPacketsBeforeAddToMap`) and again after every bind (`Spell::EffectBind`). `areaName` is the client's `AreaTable.dbc` text for the id, `""` when it has no row |
+| `SMSG_PLAYERBOUND` | 0x158 | `{ "guid", "areaId", "areaName" }` — the "your home is now …" line; `guid` is the binder |
+
+The server declines a bind silently (not an innkeeper, out of range, dead,
+inside an instance): no packet follows the confirm, and the SDK reports that
+as the absence of an answer, never as a status.
 
 Death:
 

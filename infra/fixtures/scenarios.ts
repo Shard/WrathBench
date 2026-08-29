@@ -110,6 +110,15 @@ const GRYTH = { x: -4821.13, y: -1152.4, z: 502.3 };
 const GRYTH_FRONT = { x: -4825.5, y: -1158.5, z: 502.3 };
 // TaxiNodes.dbc: 6 = Ironforge, 7 = Thelsamar (Loch Modan), the shortest
 // hop out of the city (TaxiPath.dbc 6 -> 7 costs 330 copper at base price).
+// Innkeeper Firebrew (entry 5111), The Stonefire Tavern in Ironforge's
+// Commons; spawn from the world DB (guid 1745), o 4.869 — the front is 3y
+// along his facing. The scenario plants the dwarf start as the homebind so a
+// bind here is a visible change.
+const FIREBREW = { x: -4840.67, y: -857.09, z: 502.0 };
+const FIREBREW_FRONT = { x: -4840.2, y: -860.1, z: 502.0 };
+// `zone` is character_homebind.zoneId, which the core sends back as the bind's
+// areaId at login — a real bind there stores the subzone, 132 Coldridge Valley.
+const DWARF_START_BIND = { map: 0, zone: 132, x: -6240.32, y: 331.033, z: 382.758 };
 export const TAXI_IRONFORGE = 6;
 export const TAXI_THELSAMAR = 7;
 const TRAM_TRIGGER = { x: -4840.26, y: -1330.46, z: 508.17 };
@@ -169,6 +178,18 @@ export const SCENARIOS = {
     homebind: { map: 0, zone: 1537, x: -4918.88, y: -940.406, z: 501.564 },
     taxiNodes: [TAXI_IRONFORGE, TAXI_THELSAMAR],
     achievements: [ACHIEVEMENT_LEVEL_10],
+  },
+  "inn-ironforge": {
+    description: "level 10, 1g, in front of Innkeeper Firebrew (Ironforge) with the hearthstone bound to Coldridge Valley",
+    level: 10,
+    money: 10000,
+    position: {
+      map: 0,
+      zone: 1537,
+      ...FIREBREW_FRONT,
+      o: facing(FIREBREW_FRONT, FIREBREW),
+    },
+    homebind: DWARF_START_BIND,
   },
   "trainer-northshire": {
     description: "level 4, 50s, standing in front of Brother Sammuel in Northshire Abbey",

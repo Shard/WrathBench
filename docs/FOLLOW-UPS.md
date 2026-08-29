@@ -52,16 +52,28 @@ status.
       `infra/smoke/area-and-roles.ts` (login names, one `WB_AREA` each way across the
       abbey door, Deputy Willem reports `questGiver`) — runs on the first deploy of the
       N2 build; if the server's ids disagree with the ones read from the map files, the
-      smoke is corrected to the server's answer. **Remaining:** innkeeper bind
-      (`CMSG_BINDER_ACTIVATE`, `SMSG_BINDPOINTUPDATE`) so the hearthstone is a real
-      connector. Log the exact model-facing payload for each so the later
-      text-vs-other-channel experiment is honest.
-    - **N3 — flight paths**, the first real destination-choice surface: gossip a
-      visible flight master → tap `SMSG_SHOWTAXINODES` (current node and known-node
-      mask, exactly what the client receives) → `activate_taxi` → on-taxi movement
-      state in the cache so the loop does not fight the flight → arrival as a
-      postcondition. Never the TaxiPath catalogue. Gate: the probe flies one hop; a
-      model discovers and uses a flight master unaided.
+      smoke is corrected to the server's answer. **Innkeeper bind built 2026-08-29
+      (to `:next`, deploy owed):** `SMSG_BINDER_CONFIRM` / `SMSG_BINDPOINTUPDATE` /
+      `SMSG_PLAYERBOUND` tapped, `CMSG_BINDER_ACTIVATE` on the raw allowlist,
+      `state.self.bindPoint` (map, xyz, area id + AreaTable name), `bindAtInnkeeper`
+      typed, HUD `home: Ironforge — map 0 (x, y, z)`. Payloads in
+      worklogs/2026-08-29. Gate: `infra/smoke/innkeeper-bind.ts` (scenario
+      `inn-ironforge`: login bind is the planted Coldridge Valley, bind at Firebrew
+      lands within 10y and renames) — runs on the first deploy of that build.
+    - **N3 — flight paths, built 2026-08-29 (to `:next`, deploy owed):**
+      `SMSG_SHOWTAXINODES` tapped exactly as the wire has it (show flag, guid,
+      current node, 14-word mask) plus the mask decoded to `known[]` named from the
+      client's `TaxiNodes.dbc`; `state.lastTaxiNodes(guid)`, `showTaxiNodes(guid)`
+      (hello → the icon-2 taxi option → window), `activateTaxi(guid, nameOrId)`
+      typed over raw `CMSG_ACTIVATETAXI` with a hint per `ActivateTaxiReply` code.
+      Never the TaxiPath catalogue, never node positions, never a nearest-master
+      lookup. Gate: `infra/smoke/taxi-nodes.ts` (Gryth's window has current 6 and
+      node 7 known; `activateTaxi(gryth, "Thelsamar")` accepted; `taxiFlight`
+      true then false; landing zone Loch Modan) — runs on the first deploy;
+      then a model discovers and uses a flight master unaided. Open question for
+      the operator: whether the `TaxiNodes.dbc` node positions (which the client
+      draws on its taxi map) are a contract-clean observation; withheld until
+      decided.
     - **N4 — rung-4 attempts**: Opus/Fable runs with milestone records on, destination
       choice scored from the records (destination chosen → connector chosen → action
       dispatched → transfer confirmed / not_visited / waiting / wrong_map / stuck →

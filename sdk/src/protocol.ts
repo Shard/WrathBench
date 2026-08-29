@@ -1296,8 +1296,8 @@ export const allAchievementDataSchema = z.looseObject({
 export type AllAchievementData = z.infer<typeof allAchievementDataSchema>;
 
 /**
- * `SMSG_ACTIVATETAXIREPLY`: the server's answer to `CMSG_ACTIVATETAXI` (raw —
- * there is no flight helper). `reply` is `ActivateTaxiReply`
+ * `SMSG_ACTIVATETAXIREPLY`: the server's answer to `CMSG_ACTIVATETAXI`
+ * (`activateTaxi`, or raw). `reply` is `ActivateTaxiReply`
  * (0 ok, 1 server error, 2 no such path, 3 not enough money, 4 too far away,
  * 5 no vendor nearby, 6 not visited, 7 busy, 8 mounted, 9 shapeshifted,
  * 10 moving, 11 same node, 12 not standing); `ok` is `reply === 0`. The flight
@@ -1308,6 +1308,69 @@ export const activateTaxiReplyDataSchema = z.looseObject({
   ok: z.boolean(),
 });
 export type ActivateTaxiReplyData = z.infer<typeof activateTaxiReplyDataSchema>;
+
+/**
+ * One node of a flight master's window: the id the wire carries (a bit of
+ * the taximask) and the name a client reads for it from its own
+ * `TaxiNodes.dbc` — client-cache knowledge, the same class as area names.
+ * `name` is absent when the module's copy of the table lacks the id.
+ */
+export const taxiNodeSchema = z.looseObject({
+  nodeId: z.number(),
+  name: z.string().optional(),
+});
+export type TaxiNode = z.infer<typeof taxiNodeSchema>;
+
+/**
+ * `SMSG_SHOWTAXINODES`: the flight master's window, exactly as a client gets
+ * it when the taxi gossip option is chosen — `showWindow` (the leading u32),
+ * the flight master's `guid`, the node the master stands at (`currentNode`),
+ * and the character's taximask (`mask`, 14 u32 words as on the wire) decoded
+ * into `known`, the nodes this character has visited. Nothing about routes
+ * or fares: the client learns those by asking to fly (`activateTaxi`).
+ */
+export const showTaxiNodesDataSchema = z.looseObject({
+  showWindow: z.boolean(),
+  guid: guidSchema,
+  currentNode: z.number(),
+  currentNodeName: z.string().optional(),
+  mask: z.array(z.number()),
+  known: z.array(taxiNodeSchema),
+});
+export type ShowTaxiNodesData = z.infer<typeof showTaxiNodesDataSchema>;
+
+/**
+ * `SMSG_BINDER_CONFIRM`: the innkeeper (`guid`) asks "make this your home?"
+ * after the bind gossip option. A client answers yes with
+ * `CMSG_BINDER_ACTIVATE` (`bindAtInnkeeper` does; raw otherwise).
+ */
+export const binderConfirmDataSchema = z.looseObject({
+  guid: guidSchema,
+});
+export type BinderConfirmData = z.infer<typeof binderConfirmDataSchema>;
+
+/**
+ * `SMSG_BINDPOINTUPDATE`: where the hearthstone goes — once at login and
+ * again after every bind. `areaName` is the client's `AreaTable.dbc` text for
+ * `areaId` (`""` when the table has no row).
+ */
+export const bindPointUpdateDataSchema = z.looseObject({
+  x: z.number(),
+  y: z.number(),
+  z: z.number(),
+  map: z.number(),
+  areaId: z.number(),
+  areaName: z.string(),
+});
+export type BindPointUpdateData = z.infer<typeof bindPointUpdateDataSchema>;
+
+/** `SMSG_PLAYERBOUND`: the "your home is now …" line after a bind; `guid` is the binder. */
+export const playerBoundDataSchema = z.looseObject({
+  guid: guidSchema,
+  areaId: z.number(),
+  areaName: z.string(),
+});
+export type PlayerBoundData = z.infer<typeof playerBoundDataSchema>;
 
 /** `result` is an InventoryResult code; the SDK does not name them. */
 export const inventoryChangeFailureDataSchema = z.looseObject({
@@ -1474,6 +1537,11 @@ export const eventDataSchemas = {
   SMSG_ACHIEVEMENT_EARNED: achievementEarnedDataSchema,
   SMSG_ALL_ACHIEVEMENT_DATA: allAchievementDataSchema,
   SMSG_ACTIVATETAXIREPLY: activateTaxiReplyDataSchema,
+  SMSG_SHOWTAXINODES: showTaxiNodesDataSchema,
+  // innkeeper bind
+  SMSG_BINDER_CONFIRM: binderConfirmDataSchema,
+  SMSG_BINDPOINTUPDATE: bindPointUpdateDataSchema,
+  SMSG_PLAYERBOUND: playerBoundDataSchema,
   // death
   SMSG_DEATH_RELEASE_LOC: deathReleaseLocDataSchema,
   SMSG_CORPSE_RECLAIM_DELAY: corpseReclaimDelayDataSchema,
