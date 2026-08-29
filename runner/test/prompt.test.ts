@@ -76,6 +76,16 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("Tools and ambient objects are different things");
     expect(SYSTEM_PROMPT).toContain("is a ReferenceError");
   });
+
+  test("the world is stated to be the whole, unwalled 3.3.5a world", () => {
+    // Two opus-low freeplay runs (e360 2026-08-26, a11 2026-08-29) wrote
+    // "cannot leave Coldridge Valley" into the scratchpad as a hard fact after
+    // local pathing failures, and ground out the rest of the episode inside
+    // the starter valley. Operator decision 2026-08-29: the extent of the
+    // world is a world fact and belongs in the prompt.
+    expect(SYSTEM_PROMPT).toContain("This is the complete, unmodified 3.3.5a world");
+    expect(SYSTEM_PROMPT).toContain("nothing has been walled off for the benchmark");
+  });
 });
 
 describe("episode sentence", () => {
