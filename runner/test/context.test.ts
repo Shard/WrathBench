@@ -3,6 +3,7 @@ import {
   CONTEXT_POLICY,
   assembleContext,
   foldUiOpenWindows,
+  formatEventLine,
   formatStateSummary,
   messageWindow,
   messageWindowCut,
@@ -333,6 +334,38 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(later).toContain("corpse on map 1 at (5,5), you are on map 0: reclaim within 39y after the reclaim delay");
+  });
+});
+
+describe("formatEventLine", () => {
+  const line = (data: unknown): string =>
+    formatEventLine({ seq: 12, ts: 1_000, opcode: "SMSG_INVENTORY_CHANGE_FAILURE", data } as EventSummary);
+
+  test("an inventory refusal is named, with the server's number still there", () => {
+    const out = line({ result: 60 });
+    expect(out).toContain("\"result\":60");
+    expect(out).toContain("not while in combat");
+  });
+
+  test("a code the SDK does not name renders bare rather than guessed at", () => {
+    const out = line({ result: 999 });
+    expect(out).toContain("\"result\":999");
+    expect(out.endsWith("}")).toBe(true);
+  });
+
+  test("a missing or malformed result adds nothing", () => {
+    expect(line({}).endsWith("}")).toBe(true);
+    expect(line({ result: "60" }).endsWith("}")).toBe(true);
+  });
+
+  test("other opcodes are untouched", () => {
+    const out = formatEventLine({
+      seq: 3,
+      ts: 1,
+      opcode: "SMSG_MESSAGECHAT",
+      data: { result: 60 },
+    } as EventSummary);
+    expect(out).not.toContain("not while in combat");
   });
 });
 
