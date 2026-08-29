@@ -367,6 +367,18 @@ export function projectRuns(r: RunsResponse): RunsResponse {
   return { runs: r.runs.map(projectRunListRow) };
 }
 
+/**
+ * One movement intention, field by field: the coordinates and the module's
+ * status word travel, the target's *name* (verbatim game text) does not.
+ *
+ * Named and explicit rather than a spread with `target` overwritten — every
+ * projection in this file is an allowlist, and a spread would carry whatever
+ * a future field, or a smuggled key, happened to be sitting on the object.
+ */
+function projectMove(m: MoveIntentView): MoveIntentView {
+  return { ts: m.ts, map: m.map, x: m.x, y: m.y, z: m.z, target: null, status: m.status };
+}
+
 export function projectPositions(p: PositionsResponse): PositionsResponse {
   return {
     positions: p.positions.map(
@@ -389,7 +401,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // The destination and the verdict are the run's own coordinates and
         // the module's status word, both publishable. The target's *name* is
         // verbatim game text, so it is withheld like every other name.
-        move: a.move == null ? null : { ...a.move, target: null },
+        move: a.move == null ? null : projectMove(a.move),
       }),
     ),
   };
@@ -732,6 +744,6 @@ export function projectTrack(t: TrackResponse): TrackResponse {
     ),
     // As on the live feed: coordinates and the module's status word travel,
     // the target's name (verbatim game text) does not.
-    moves: (t.moves ?? []).map((m: MoveIntentView): MoveIntentView => ({ ...m, target: null })),
+    moves: (t.moves ?? []).map(projectMove),
   };
 }
