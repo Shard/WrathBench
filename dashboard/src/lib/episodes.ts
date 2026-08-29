@@ -5,19 +5,26 @@
  * (dashboard/README.md), and so any future page reading `?episode=` cannot
  * disagree with the ladder about what a shared link means.
  *
- * Only the four tier ids are offered. There is no `all` and no "+ overridden":
+ * Three ids are offered. There is no `all` and no "+ overridden":
  * a rung reached in six hours is not the same claim as one reached in ninety
  * minutes, and a run whose leash was overridden is not a member of the tier
  * it is stamped with — so neither can share a chart, and a choice the chart
- * cannot honour is not a choice. The runs page is where every run is listed
- * regardless.
+ * cannot honour is not a choice.
+ *
+ * `probing` is not offered either (operator, 2026-08-29): a campaign varies
+ * its cells on purpose, so ranking its runs against each other ranks the sweep
+ * rather than the models, and there is no group for a row to be a member of.
+ * The viewer refuses `/api/ladder?episode=probing` for the same reason and
+ * publishes no `ladder-probing.json`. Probe runs stay visible on the runs and
+ * campaigns pages; they simply have no ladder. The runs page is where every
+ * run is listed regardless.
  */
 
 import type { EpisodeIdView } from "../api/client";
 
 export type EpisodeChoice = EpisodeIdView;
 
-export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "probing", "freeplay"];
+export const EPISODE_CHOICES: readonly EpisodeChoice[] = ["e90", "e360", "freeplay"];
 
 /**
  * The `?episode=` search param, defaulted and validated.

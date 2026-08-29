@@ -17,6 +17,7 @@ import { comparabilityOf } from "../src/comparability";
 import { configFromArgs } from "../src/run";
 import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
+import { readRun } from "../viewer/runs";
 
 const SENTINEL = "sentinel-bearer-2f9c1a";
 const RUN_ID = "fixture-run-1";
@@ -964,6 +965,55 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(e360.runs.map((r) => r.runId)).toEqual([RUN_ID]);
     const e90 = (await (await api(runs)(new Request("http://x/api/ladder"))).json()) as { runs: unknown[] };
     expect(e90.runs).toHaveLength(0);
+  });
+
+  test("a freeplay continuation's lineage reaches the row and the results projection", async () => {
+    const runs = fixture();
+    // The fixture's run.sqlite predates the column, so this is also the
+    // "written before the durable stream existed" path: meta answers.
+    const dir = join(runs, RUN_ID);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
+      config: Record<string, unknown>;
+    };
+    meta.config["continuedFrom"] = "fixture-run-0";
+    writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+    expect(readRun(runs, RUN_ID).continuedFrom).toBe("fixture-run-0");
+    const body = (await (await api(runs)(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; continuedFrom: string | null; stillborn: boolean | null }[];
+    };
+    const row = body.runs.find((r) => r.runId === RUN_ID)!;
+    expect(row.continuedFrom).toBe("fixture-run-0");
+    // The fixture run has not terminated, so "produced nothing" is undecided —
+    // which is the scheduler's own answer for a launch still in progress.
+    expect(row.stillborn).toBeNull();
+  });
+
+  test("the freeplay ladder holds an overridden run: an id that pins nothing has no membership to lose", async () => {
+    const runs = fixture();
+    stamped(runs, { ...TUPLE, episode: "freeplay", episodeOverride: true });
+    const field = (await (await api(runs)(new Request("http://x/api/ladder?episode=freeplay"))).json()) as {
+      runs: { runId: string }[]; includeOverrides: boolean; overridesExcluded: number;
+    };
+    expect(field.runs.map((r) => r.runId)).toEqual([RUN_ID]);
+    expect(field.overridesExcluded).toBe(0);
+    // The scored ladders are unchanged: there, an override is a real exclusion.
+    stamped(runs, { ...TUPLE, episode: "e90", episodeOverride: true });
+    const e90 = (await (await api(runs)(new Request("http://x/api/ladder?episode=e90"))).json()) as {
+      runs: unknown[]; overridesExcluded: number;
+    };
+    expect(e90.runs).toHaveLength(0);
+    expect(e90.overridesExcluded).toBe(1);
+  });
+
+  test("probing has no ladder (operator, 2026-08-29), but its runs still list", async () => {
+    const runs = fixture();
+    stamped(runs, { ...TUPLE, episode: "probing", episodeOverride: false });
+    expect((await api(runs)(new Request("http://x/api/ladder?episode=probing"))).status).toBe(400);
+    // The id is untouched everywhere else: the runs are listed, not hidden.
+    const listed = (await (await api(runs)(new Request("http://x/api/results?episode=probing"))).json()) as {
+      runs: { runId: string }[];
+    };
+    expect(listed.runs.map((r) => r.runId)).toEqual([RUN_ID]);
   });
 
   test("harness is a tag on every results row, not a partition; ?harness= is an optional filter defaulting to all", async () => {

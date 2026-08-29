@@ -17,7 +17,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
-import { EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
+import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import type {
@@ -675,16 +675,42 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return (HARNESSES as readonly string[]).includes(raw) ? (raw as HarnessView) : null;
   }
 
-  async function resultsResponse(url: URL): Promise<Response> {
+  /**
+   * The episodes a ladder is offered for.
+   *
+   * `probing` is not one (operator, 2026-08-29). A probe campaign is a
+   * commissioned sweep whose cells vary on purpose, so a table that ranks its
+   * runs against each other ranks the sweep, not the models — and unlike the
+   * scored ids there is no group for a row to belong to. Probe runs stay
+   * visible everywhere runs are listed; they just have no ladder. It is only
+   * the ladder that loses the id: `/api/results?episode=probing` still answers,
+   * and `EPISODE_IDS` is untouched.
+   */
+  const LADDER_EPISODES: readonly string[] = EPISODE_IDS.filter((id) => id !== "probing");
+
+  async function resultsResponse(url: URL, ladder = false): Promise<Response> {
     const episode = episodeFilter(url);
     if (episode === null) {
       return json({ error: `unknown episode; one of: ${[...EPISODE_IDS, "all"].join(", ")}` }, 400);
+    }
+    if (ladder && episode !== "all" && !LADDER_EPISODES.includes(episode)) {
+      return json({ error: `no ladder for that episode; one of: ${LADDER_EPISODES.join(", ")}` }, 400);
     }
     const harness = harnessFilter(url);
     if (harness === null) {
       return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
     }
-    const includeOverrides = url.searchParams.get("includeOverrides") === "1";
+    /*
+     * An override is a membership question, and only a scored id has a
+     * membership to lose: `freeplay` pins nothing but its own name and its
+     * unscored reason, so a freeplay run given its own leash has not fallen
+     * out of any group — the same reason `docs/EPISODES.md` gives for never
+     * reporting a probe run as overridden. The freeplay ladder is the whole
+     * active field (operator, 2026-08-29), so it holds them.
+     */
+    const unscoredLadder =
+      ladder && episode !== "all" && episode !== null && !EPISODES[episode].scored;
+    const includeOverrides = url.searchParams.get("includeOverrides") === "1" || unscoredLadder;
     const everything = await resultRuns();
     const all = harness === "all" ? everything : everything.filter((r) => r.harness === harness);
     /*
@@ -930,9 +956,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
      * derivation stays client-side (`dashboard/src/lib/ladder.ts`, where its rung
      * rules and their tests already live); the route exists so the episode
      * filter has one spelling per page rather than the ladder page having to
-     * know it is really asking the results endpoint.
+     * know it is really asking the results endpoint. It differs in one thing:
+     * `probing` has no ladder (see `LADDER_EPISODES`) and answers 400 here,
+     * while `/api/results?episode=probing` still lists those runs.
      */
-    if (path === "/api/results" || path === "/api/ladder") return await resultsResponse(url);
+    if (path === "/api/results") return await resultsResponse(url);
+    if (path === "/api/ladder") return await resultsResponse(url, true);
     if (path === "/api/fleet") {
       /*
        * The supervisor's published state, plus one thing only the roster and

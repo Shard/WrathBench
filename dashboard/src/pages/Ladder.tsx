@@ -4,8 +4,16 @@
  * Rungs are read from one episode tier at a time — e90 by default —
  * because a rung reached in six hours is not the same claim as the same rung
  * reached in ninety minutes. There is no "all" and no overridden view: neither
- * is a comparability group, so neither can be a ladder. The runs page lists
- * every run regardless.
+ * is a comparability group, so neither can be a ladder, and there is no
+ * `probing` either (operator, 2026-08-29 — a sweep varies its cells on
+ * purpose, so ranking its runs ranks the sweep). The runs page lists every run
+ * regardless.
+ *
+ * `freeplay` is the one id that shows something else entirely: not rungs but
+ * **the top characters on freeplay right now** (operator, 2026-08-29) — the
+ * whole active field, one row per durable stream, paused and in-progress
+ * included. `streamRows` in `lib/ladder.ts` is that derivation; the scored
+ * ladders below are untouched by it.
  *
  * Above the table, one scatter for the tier: average cost per run against
  * average XP earned, one point per roster entry (`components/LadderChart`).
@@ -43,12 +51,14 @@ import {
   ladderRows,
   raceOptions,
   resolveChoice,
+  streamRows,
   type FilterChoice,
   type LadderCell,
   type LadderRow,
+  type StreamRow,
 } from "../lib/ladder";
 import { resolvedSummary } from "../lib/models";
-import { fmtMoney } from "../lib/format";
+import { fmtMoney, fmtWhen } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
 
@@ -82,7 +92,21 @@ export default function Ladder() {
   // The shell's harness series, applied before anything else reads
   // the rows: a rung reached on 0.4 is not evidence about 0.5.
   const served = (): ResultRun[] => body()?.runs ?? [];
-  const seriesFilter = useSeriesFilter(served);
+  /*
+   * Freeplay is a different page under the same address: an overview of the
+   * top characters on freeplay right now, one row per durable stream
+   * (operator, 2026-08-29). It reads no rungs, so it shows neither the scatter
+   * nor the rung table; "exclude free" does not apply to it — the field is the
+   * field, whoever is paying for it — and neither does the shell's series
+   * filter. That last one is not a convenience: a stream is durable *across*
+   * series, so cutting its older attempts would make the newest survivor the
+   * chain root and report a thirteen-attempt character as attempt 1, which is
+   * the one number this page exists to show. `useSeriesFilter` has the
+   * `active` hatch for exactly this — the map's replay mode uses it for the
+   * same reason.
+   */
+  const freeplay = (): boolean => episode() === "freeplay";
+  const seriesFilter = useSeriesFilter(served, () => !freeplay());
   const series = seriesFilter.series;
   const all = seriesFilter.kept;
   /*
@@ -117,13 +141,15 @@ export default function Ladder() {
       race: resolveChoice(races(), race()),
       klass: resolveChoice(classes(), klass()),
       harness: resolveChoice(harnesses(), harness()),
-      excludeFree: excludeFree(),
+      excludeFree: !freeplay() && excludeFree(),
     }),
   );
+  const streams = createMemo(() => streamRows(runs()));
   // A viewer that predates `billing` reports it on no run at all, and a toggle
   // that excludes nothing is worse than one that is obviously off (the rule
   // `SeriesFilterNote` states for the series filter).
-  const billingUnknown = (): boolean => excludeFree() && all().length > 0 && !billingKnown(all());
+  const billingUnknown = (): boolean =>
+    !freeplay() && excludeFree() && all().length > 0 && !billingKnown(all());
   const rows = createMemo(() => ladderRows(runs()));
 
   return (
@@ -164,6 +190,7 @@ export default function Ladder() {
           onPick={pick(setHarness, HARNESS_KEY)}
           title="The harness tag. A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
         />
+        <Show when={!freeplay()}>
         <label class="filter check" title="Keep only the runs that cost money. A claude-code run counts as paid: a subscription is a bill (runner/src/billing.ts).">
           <input
             type="checkbox"
@@ -175,6 +202,7 @@ export default function Ladder() {
           />
           <span>exclude free</span>
         </label>
+        </Show>
       </div>
       <Show when={billingUnknown()}>
         <p class="dim">
@@ -185,6 +213,10 @@ export default function Ladder() {
       </Show>
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+        <Show when={freeplay()}>
+          <StreamTable rows={streams()} />
+        </Show>
+        <Show when={!freeplay()}>
         <LadderChart runs={runs()} episode={episode()} />
 
         <div class="scroller">
@@ -301,7 +333,95 @@ export default function Ladder() {
             </tbody>
           </table>
         </div>
+        </Show>
       </Show>
+    </div>
+  );
+}
+
+/**
+ * The freeplay field: one row per durable stream, latest attempt first by what
+ * the character has reached.
+ *
+ * Everything not deleted and not stillborn is here, in progress included — a
+ * live stream is the point of the page, not an exclusion. The lineage column
+ * is why a stream that has been through twelve attempts appears once
+ * (FOLLOW-UPS 92): the row is the character, and `attempts` is how many run
+ * ids are behind it.
+ */
+function StreamTable(props: { rows: readonly StreamRow[] }) {
+  return (
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>model</th>
+            <th>character</th>
+            <th>status</th>
+            <th class="right" title="attempts in this stream; the row is the character, not the run">
+              attempts
+            </th>
+            <th class="right" title="the latest attempt's reading — level, then xp within it">
+              level · xp
+            </th>
+            <th class="right">gold</th>
+            <th class="right">quests</th>
+            <th title="the attempt this row is reading, and when it started">latest run</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={props.rows}>
+            {(row) => (
+              <tr>
+                <td>
+                  <ModelIcon model={row.model} />
+                  {row.model}
+                </td>
+                <td>
+                  {row.character ?? "—"}
+                  <Show when={row.characterLabel !== null}>
+                    <div class="dim">{row.characterLabel}</div>
+                  </Show>
+                </td>
+                <td>
+                  <span class={row.status === "live" ? "ok" : row.status === "paused" ? "warn" : "dim"}>
+                    {row.status}
+                  </span>
+                  <Show when={row.statusDetail !== null}>
+                    <span class="dim"> ({row.statusDetail})</span>
+                  </Show>
+                </td>
+                <td class="right mono dim" title={row.chain.join(" → ")}>
+                  {row.attempts}
+                </td>
+                <td class="right mono">
+                  <Show when={row.level !== null} fallback={<span class="dim">—</span>}>
+                    <span>
+                      L{row.level}
+                      <Show when={row.xp !== null}>
+                        <span class="dim"> · {row.xp!.toLocaleString()} xp</span>
+                      </Show>
+                    </span>
+                  </Show>
+                </td>
+                <td class="right mono dim">{row.money === null ? "—" : fmtMoney(row.money)}</td>
+                <td class="right mono dim">{row.questsCompleted ?? "—"}</td>
+                <td class="mono">
+                  <A href={`/run/${encodeURIComponent(row.latest.runId)}`}>{row.latest.runId}</A>
+                  <div class="dim">{fmtWhen(row.startedAt)}</div>
+                </td>
+              </tr>
+            )}
+          </For>
+          <Show when={props.rows.length === 0}>
+            <tr>
+              <td colSpan={8} class="dim">
+                No freeplay streams recorded yet.
+              </td>
+            </tr>
+          </Show>
+        </tbody>
+      </table>
     </div>
   );
 }

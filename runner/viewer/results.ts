@@ -20,6 +20,7 @@ import { runBilling } from "../src/billing";
 import { harnessSeries } from "../src/comparability";
 import { STUB_STAMP, isDriver, isUnscoredDriver } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
+import { stillbornOf } from "../src/models";
 import { EPISODES } from "../src/episodes";
 import type {
   AchievementFacts,
@@ -410,5 +411,17 @@ export function resultRunOf(
     leveling,
     deaths,
     pauseReason: run.pauseReason,
+    continuedFrom: run.continuedFrom,
+    /*
+     * The scheduler's own notion, not a second one: a launch that produced no
+     * response, undecided while it is live or paused. The freeplay ladder
+     * needs it because `unscored` answers "the episode" for every steered run
+     * and never reaches the run's own facts.
+     */
+    stillborn: stillbornOf({
+      live: run.live,
+      pause: run.pauseReason === null ? null : { reason: run.pauseReason, at: 0, count: 0, episodeElapsedMs: null },
+      modelResponses: calls?.modelResponses ?? null,
+    }),
   };
 }

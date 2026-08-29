@@ -28,6 +28,7 @@ import {
   resolveChoice,
   runCostReading,
   scored,
+  streamRows,
   xpEarnedOf,
 } from "../src/lib/ladder";
 import { resolvedSummary } from "../src/lib/models";
@@ -82,6 +83,8 @@ function run(p: Partial<ResultRun> = {}): ResultRun {
     tokens: null,
     actualCost: null,
     pauseReason: null,
+    continuedFrom: null,
+    stillborn: null,
     ...p,
   };
 }
@@ -354,6 +357,97 @@ describe("the shared episode param", () => {
     // `all` was a choice once; a link that still carries it lands on the default.
     expect(episodeParam("all")).toBe("e90");
     expect(EPISODE_CHOICES).not.toContain("all");
+  });
+
+  test("probing has no ladder (operator, 2026-08-29); a link that names it falls back", () => {
+    expect(EPISODE_CHOICES).not.toContain("probing");
+    expect(EPISODE_CHOICES).toEqual(["e90", "e360", "freeplay"]);
+    expect(episodeParam("probing")).toBe("e90");
+  });
+});
+
+/**
+ * The freeplay field. Everything here turns on two facts the scored ladder
+ * does not have: every freeplay run is unscored, and a stream is one character
+ * across attempts.
+ */
+describe("freeplay streams", () => {
+  const fp = (over: Partial<ResultRun> = {}): ResultRun =>
+    run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
+
+  test("an unscored run is a row here — which is exactly what the rung ladder drops", () => {
+    const runs = [fp({ runId: "a1", model: "m", maxLevel: 7, xp: 100 })];
+    // The bug this page had: `ladderRows` filters to `scored`, and no freeplay
+    // run is ever scored, so the table was structurally empty.
+    expect(scored(runs)).toEqual([]);
+    expect(ladderRows(runs)).toEqual([]);
+    expect(streamRows(runs).map((r) => r.streamId)).toEqual(["a1"]);
+  });
+
+  test("a chain of three collapses to one row: the latest attempt, the whole lineage", () => {
+    const rows = streamRows([
+      fp({ runId: "a1", maxLevel: 3, xp: 10 }),
+      fp({ runId: "a3", continuedFrom: "a2", maxLevel: 9, xp: 40, startedAt: 300 }),
+      fp({ runId: "a2", continuedFrom: "a1", maxLevel: 6, xp: 20, startedAt: 200 }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.streamId).toBe("a1");
+    expect(rows[0]!.attempts).toBe(3);
+    expect(rows[0]!.chain).toEqual(["a1", "a2", "a3"]);
+    // The latest attempt carries the character's current state.
+    expect(rows[0]!.latest.runId).toBe("a3");
+    expect(rows[0]!.level).toBe(9);
+  });
+
+  test("a lineage pointing outside the set is a root, not a dropped row", () => {
+    // `dropContinuation` clears the link when the character is gone, and an
+    // archived predecessor is never listed: both must leave the survivor here.
+    const rows = streamRows([fp({ runId: "b7", continuedFrom: "b6-archived", maxLevel: 4 })]);
+    expect(rows.map((r) => ({ id: r.streamId, n: r.attempts }))).toEqual([{ id: "b7", n: 1 }]);
+  });
+
+  test("two runs claiming one predecessor: the longer chain wins the row, then the later start", () => {
+    const rows = streamRows([
+      fp({ runId: "c1", maxLevel: 2 }),
+      fp({ runId: "c2", continuedFrom: "c1", startedAt: 200, maxLevel: 5 }),
+      fp({ runId: "c2b", continuedFrom: "c1", startedAt: 400, maxLevel: 6 }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.latest.runId).toBe("c2b");
+    expect(rows[0]!.attempts).toBe(2);
+  });
+
+  test("a malformed cycle ends the walk instead of hanging the page", () => {
+    const rows = streamRows([
+      fp({ runId: "d1", continuedFrom: "d2" }),
+      fp({ runId: "d2", continuedFrom: "d1" }),
+    ]);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.attempts).toBeLessThanOrEqual(2);
+  });
+
+  test("a stillborn launch is dropped; live, paused and ended streams all stay, with their status", () => {
+    const rows = streamRows([
+      fp({ runId: "live", live: true, maxLevel: 12 }),
+      fp({ runId: "paused", pauseReason: "operator-pause", maxLevel: 11 }),
+      fp({ runId: "ended", terminationReason: "manual", maxLevel: 10 }),
+      fp({ runId: "nothing", stillborn: true, maxLevel: 20 }),
+    ]);
+    expect(rows.map((r) => [r.streamId, r.status, r.statusDetail])).toEqual([
+      ["live", "live", null],
+      ["paused", "paused", "operator-pause"],
+      ["ended", "ended", "manual"],
+    ]);
+  });
+
+  test("ordered by level then xp, and a missing reading sorts last rather than as zero", () => {
+    const rows = streamRows([
+      fp({ runId: "none", maxLevel: null, xp: null }),
+      fp({ runId: "lo", maxLevel: 5, xp: 900 }),
+      fp({ runId: "hi", maxLevel: 5, xp: 4000 }),
+      fp({ runId: "zero", maxLevel: 5, xp: 0 }),
+    ]);
+    expect(rows.map((r) => r.streamId)).toEqual(["hi", "lo", "zero", "none"]);
   });
 });
 

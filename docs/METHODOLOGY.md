@@ -389,6 +389,24 @@ be revised without re-running anything. The dashboard ladder's row ordering
 last, never as zero) is one such derivation, versioned with the dashboard in
 `dashboard/src/lib/eval.ts` — three separate numbers, no aggregate score.
 
+**A ladder belongs to a comparability group, so `probing` has none** (operator
+decision, 2026-08-29). A probe campaign varies its cells on purpose; a table
+ranking its runs against each other ranks the sweep, not the models. Probe runs
+stay visible wherever runs are listed — they simply have no ladder, the viewer
+refuses to serve one, and none is published.
+
+**The freeplay ladder is an overview, not a leaderboard** (operator decision,
+2026-08-29): the top characters on freeplay at the current time. It shows the
+whole active field — every freeplay run not deleted and not tainted, including
+paused and disabled streams and runs in progress, not only finished ones — so
+the scored surfaces' "is this evidence" predicate is deliberately not what
+filters it; a launch that produced nothing is dropped and a run's state is a
+column rather than an exclusion. Because a freeplay stream is durable, one row
+is **one character across attempts**, not one run: the latest attempt carries
+the character's current level and state and the lineage rides with it, so the
+same character never appears twice. Nothing here touches the scored ladders,
+which remain keyed by model over scored runs alone.
+
 **No single number is promised in this phase**; the honest artifact is the
 scorecard.
 

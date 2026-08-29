@@ -94,6 +94,8 @@ function run(over: Partial<ResultRun> = {}): ResultRun {
     startedAt: 1, terminationReason: null, levels: [], maxLevel: null, xp: null, money: null,
     questsCompleted: null, maps: [], character: null, playtimeMs: null, tokens: null,
     actualCost: null, pauseReason: null,
+    continuedFrom: null,
+    stillborn: null,
     ...over,
   };
 }
