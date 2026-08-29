@@ -1,101 +1,133 @@
 {
   "asOf": "2026-08-28",
   "models": {
-    "cohere/north-mini-code:free": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "deepseek/deepseek-v4-flash": {
-      "input": 0.088606,
-      "output": 0.177212,
-      "cacheRead": 0.0177212,
-      "cacheWrite": 0.088606
-    },
-    "deepseek/deepseek-v4-flash-0731": {
-      "input": 0.06,
-      "output": 0.12,
-      "cacheRead": 0.012,
-      "cacheWrite": 0.06
-    },
-    "deepseek/deepseek-v4-pro-0813": {
-      "input": 1.32,
-      "output": 3.96,
-      "cacheRead": 0.044,
-      "cacheWrite": 1.32
-    },
-    "dots-studio/dots-3-note-preview:free": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "google/gemini-3.7-flash": {
-      "input": 0.375,
-      "output": 1.875,
-      "cacheRead": 0.0375,
-      "cacheWrite": 0.0208333
-    },
-    "minimax/minimax-m3": {
-      "input": 0.3,
-      "output": 1.2,
-      "cacheRead": 0.06,
-      "cacheWrite": 0.3
-    },
-    "nvidia/nemotron-3-super-120b-a12b:free": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "nvidia/nemotron-3-ultra-550b-a55b:free": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "openai/gpt-5.6-luna": {
-      "input": 0.2,
-      "output": 1.2,
-      "cacheRead": 0.02,
-      "cacheWrite": 0.25
-    },
-    "openai/gpt-oss-120b": {
-      "input": 0.037,
-      "output": 0.17,
-      "cacheRead": 0.037,
-      "cacheWrite": 0.037
-    },
-    "poolside/laguna-s-2.1:free": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "qwen/qwen3.8-27b": {
-      "input": 0.4,
-      "output": 2.55,
-      "cacheRead": 0.05,
-      "cacheWrite": 0.4
-    },
-    "z-ai/glm-4.7-flash": {
-      "input": 0.06,
-      "output": 0.4,
-      "cacheRead": 0.01,
-      "cacheWrite": 0.06
-    },
-    "z-ai/glm-5.3": {
-      "input": 1.4,
-      "output": 4.4,
-      "cacheRead": 0.26,
-      "cacheWrite": 1.4
-    },
-    "z-ai/glm-5.3-flash": {
-      "input": 0.075,
-      "output": 0.25,
-      "cacheRead": 0.015,
-      "cacheWrite": 0.075
-    }
+    "cohere/north-mini-code:free": [
+      {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      }
+    ],
+    "deepseek/deepseek-v4-flash": [
+      {
+        "input": 0.088606,
+        "output": 0.177212,
+        "cacheRead": 0.0177212,
+        "cacheWrite": 0.088606
+      }
+    ],
+    "deepseek/deepseek-v4-flash-0731": [
+      {
+        "input": 0.06,
+        "output": 0.12,
+        "cacheRead": 0.012,
+        "cacheWrite": 0.06
+      }
+    ],
+    "deepseek/deepseek-v4-pro-0813": [
+      {
+        "input": 1.32,
+        "output": 3.96,
+        "cacheRead": 0.044,
+        "cacheWrite": 1.32
+      }
+    ],
+    "dots-studio/dots-3-note-preview:free": [
+      {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      }
+    ],
+    "google/gemini-3.7-flash": [
+      {
+        "input": 0.375,
+        "output": 1.875,
+        "cacheRead": 0.0375,
+        "cacheWrite": 0.0208333
+      }
+    ],
+    "minimax/minimax-m3": [
+      {
+        "input": 0.3,
+        "output": 1.2,
+        "cacheRead": 0.06,
+        "cacheWrite": 0.3
+      }
+    ],
+    "nvidia/nemotron-3-super-120b-a12b:free": [
+      {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      }
+    ],
+    "nvidia/nemotron-3-ultra-550b-a55b:free": [
+      {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      }
+    ],
+    "openai/gpt-5.6-luna": [
+      {
+        "input": 0.2,
+        "output": 1.2,
+        "cacheRead": 0.02,
+        "cacheWrite": 0.25
+      }
+    ],
+    "openai/gpt-oss-120b": [
+      {
+        "input": 0.037,
+        "output": 0.17,
+        "cacheRead": 0.037,
+        "cacheWrite": 0.037
+      }
+    ],
+    "poolside/laguna-s-2.1:free": [
+      {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      }
+    ],
+    "qwen/qwen3.8-27b": [
+      {
+        "input": 0.4,
+        "output": 2.55,
+        "cacheRead": 0.05,
+        "cacheWrite": 0.4
+      }
+    ],
+    "z-ai/glm-4.7-flash": [
+      {
+        "input": 0.06,
+        "output": 0.4,
+        "cacheRead": 0.01,
+        "cacheWrite": 0.06
+      }
+    ],
+    "z-ai/glm-5.3": [
+      {
+        "input": 1.4,
+        "output": 4.4,
+        "cacheRead": 0.26,
+        "cacheWrite": 1.4
+      }
+    ],
+    "z-ai/glm-5.3-flash": [
+      {
+        "input": 0.075,
+        "output": 0.25,
+        "cacheRead": 0.015,
+        "cacheWrite": 0.075
+      }
+    ]
   }
 }
