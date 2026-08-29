@@ -147,6 +147,45 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("the player frame's numbers round-trip, and the columns migrate into an old database", () => {
+    const dir = tempRunDir();
+    // A state table from before item 104: every column the 0.4 series had, and
+    // none of the frame's. Opening it must add them rather than fail the insert.
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,
+      map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
+      quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER, items TEXT)`);
+    db.close();
+    const traj = new Trajectory(dir);
+    traj.recordState("run-hp", {
+      level: 4,
+      health: 140,
+      maxHealth: 220,
+      power: 30,
+      maxPower: 100,
+      powerType: 0,
+      nextLevelXp: 2100,
+    });
+    // A sample that observed none of it writes NULL, never 0: unobserved is not
+    // a dead character.
+    traj.recordState("run-hp", { level: 4 });
+    const rows = traj.stateRows("run-hp");
+    expect(rows[0]).toMatchObject({
+      health: 140,
+      max_health: 220,
+      power: 30,
+      max_power: 100,
+      power_type: 0,
+      next_level_xp: 2100,
+    });
+    expect(rows[1]!["health"]).toBeNull();
+    expect(rows[1]!["power_type"]).toBeNull();
+    const line = readTrajectory(dir).find((r) => r.t === "state");
+    expect(line?.["health"]).toBe(140);
+    expect(line?.["nextLevelXp"]).toBe(2100);
+    traj.close();
+  });
+
   test("the turn index is recorded, and absent rather than zero before the first turn", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);

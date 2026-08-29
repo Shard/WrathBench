@@ -13,6 +13,7 @@ import {
   percentOf,
   powerToken,
   powerTypeOf,
+  resolvePowerType,
   xpToNext,
 } from "../src/lib/unitframe";
 
@@ -70,6 +71,19 @@ describe("dead state", () => {
     expect(healthReading(1, 120)).toEqual({ pct: 0, text: "0 / 120", title: "dead", observed: true, dead: true });
     expect(healthReading(90, 120).dead).toBe(false);
     expect(healthReading(undefined, undefined)).toMatchObject({ observed: false, dead: false, text: "—" });
+  });
+});
+
+describe("resolvePowerType", () => {
+  test("the sample's own power type wins; the class is the fallback", () => {
+    // A druid (class 11) in bear form reports rage, whatever its class says.
+    expect(resolvePowerType(1, 11)).toBe("rage");
+    expect(resolvePowerType(0, 1)).toBe("mana");
+    // A run recorded before the column: the class's primary power stands in.
+    expect(resolvePowerType(null, 1)).toBe("rage");
+    expect(resolvePowerType(undefined, 4)).toBe("energy");
+    expect(resolvePowerType(null, 6)).toBe("runic");
+    expect(resolvePowerType(null, null)).toBe("mana");
   });
 });
 

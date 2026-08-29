@@ -367,6 +367,16 @@ export class ContextBuilder {
     const level = snap.self?.level?.value as number | undefined;
     const xp = snap.xp?.value as number | undefined;
     const money = snap.money?.value as number | undefined;
+    // The player frame's numbers (FOLLOW-UPS 104), read off the snapshot this
+    // sample already took: the SDK's derived gauges, the raw `powerType` the
+    // client picks a bar with, and the XP denominator. No dead flag is written:
+    // `playerFlags` is routinely a stale 0 for a whole window (see the death
+    // block below), and health is the reliable reading — 0 is a corpse, 1 a
+    // ghost — so a reader infers it from the gauge instead.
+    const hp = gaugeOf(snap.self?.health?.value);
+    const pw = gaugeOf(snap.self?.power?.value);
+    const powerType = snap.self?.fields?.["powerType"]?.value;
+    const nextLevelXp = snap.nextLevelXp?.value;
     // The list only grows, so anything past the high-water mark is new. One
     // compact record each; the state line carries the count, not the list.
     const completions = snap.questCompletions ?? [];
@@ -581,6 +591,12 @@ export class ContextBuilder {
       zone: zone?.id,
       area: area?.id,
       items: itemSample(snap),
+      health: hp?.current,
+      maxHealth: hp?.max,
+      power: pw?.current,
+      maxPower: pw?.max,
+      ...(typeof powerType === "number" ? { powerType } : {}),
+      ...(typeof nextLevelXp === "number" ? { nextLevelXp } : {}),
     });
     if (this.live) watchdogs.noteProgress(level, xp);
     return snap;
@@ -925,4 +941,19 @@ export function itemSample(snap: SnapshotLike): ItemSample[] | undefined {
     out.push({ name: label(i.name, i.itemId, `slot ${String(i.slot)}`), count, equipped: false });
   }
   return out;
+}
+
+/**
+ * A `{ current, max }` gauge off an `Observed.value`, or undefined.
+ *
+ * The SDK's `deriveGauges` publishes a gauge only once both halves have been
+ * observed, so this either yields a whole pair or nothing — a ratio is never
+ * read from a half-seen field.
+ */
+export function gaugeOf(v: unknown): { current: number; max: number } | undefined {
+  if (typeof v !== "object" || v === null) return undefined;
+  const g = v as { current?: unknown; max?: unknown };
+  return typeof g.current === "number" && typeof g.max === "number"
+    ? { current: g.current, max: g.max }
+    : undefined;
 }

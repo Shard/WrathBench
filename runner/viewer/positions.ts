@@ -49,6 +49,24 @@ function num(v: unknown): number | null {
 }
 
 /**
+ * The player frame's columns (FOLLOW-UPS 104), read from the same row as the
+ * position so the frame shows the character as that sample saw it rather than
+ * a per-column high-water mix. Older runs lack the columns entirely, which is
+ * what `stateColumns` is asked about first.
+ */
+const GAUGE_COLUMNS = ["health", "max_health", "power", "max_power", "power_type", "next_level_xp"] as const;
+
+/** The gauges of one state row, keyed as the API serves them. */
+export interface PositionGauges {
+  health: number | null;
+  maxHealth: number | null;
+  power: number | null;
+  maxPower: number | null;
+  powerType: number | null;
+  nextLevelXp: number | null;
+}
+
+/**
  * The newest state sample that actually carried a position.
  *
  * Not simply the newest row: a sample may record level and xp with no
@@ -58,7 +76,7 @@ function num(v: unknown): number | null {
 export function readLatestPosition(
   runsDir: string,
   runId: string,
-): { map: number; x: number; y: number; ts: number } | null {
+): ({ map: number; x: number; y: number; ts: number } & PositionGauges) | null {
   const path = join(runsDir, runId, "run.sqlite");
   if (!existsSync(path)) return null;
   let db: Database;
@@ -70,9 +88,12 @@ export function readLatestPosition(
   try {
     const cols = stateColumns(db);
     for (const c of ["ts", "map", "x", "y"]) if (!cols.has(c)) return null;
+    // Column names are our own literals, never input; a run that predates them
+    // simply selects fewer, and every gauge below reads null.
+    const extra = GAUGE_COLUMNS.filter((c) => cols.has(c));
     const r = db
       .query(
-        `SELECT ts, map, x, y FROM state
+        `SELECT ts, map, x, y${extra.length === 0 ? "" : `, ${extra.join(", ")}`} FROM state
          WHERE run_id = ? AND map IS NOT NULL AND x IS NOT NULL AND y IS NOT NULL
          ORDER BY ts DESC LIMIT 1`,
       )
@@ -83,7 +104,18 @@ export function readLatestPosition(
     const x = num(r["x"]);
     const y = num(r["y"]);
     if (ts === null || map === null || x === null || y === null) return null;
-    return { map, x, y, ts };
+    return {
+      map,
+      x,
+      y,
+      ts,
+      health: num(r["health"]),
+      maxHealth: num(r["max_health"]),
+      power: num(r["power"]),
+      maxPower: num(r["max_power"]),
+      powerType: num(r["power_type"]),
+      nextLevelXp: num(r["next_level_xp"]),
+    };
   } catch {
     return null;
   } finally {
@@ -135,6 +167,16 @@ export function readPositions(
       questsCompleted: run.questsCompleted,
       items: run.items,
       harnessVersion: run.harnessVersion,
+      // The player frame, from the same sample the pip is drawn from.
+      health: pos.health,
+      maxHealth: pos.maxHealth,
+      power: pos.power,
+      maxPower: pos.maxPower,
+      powerType: pos.powerType,
+      nextLevelXp: pos.nextLevelXp,
+      // Launch config, not a sample: the fallback tint for a run recorded
+      // before `power_type` existed.
+      class: run.class,
       // Where it is trying to get to. Not aged here: the map decides what a
       // stale intention looks like, the same way it decides for a pip.
       move: readLatestMove(runsDir, run.runId),

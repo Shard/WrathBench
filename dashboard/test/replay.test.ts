@@ -20,7 +20,11 @@ import {
 } from "../src/lib/replay";
 
 function point(ts: number, map: number, x: number, y: number): TrackPoint {
-  return { ts, map, x, y, level: 5, xp: 100, money: null, questsCompleted: null, turn: ts };
+  return {
+    ts, map, x, y, level: 5, xp: 100, money: null, questsCompleted: null, turn: ts,
+    // The player frame's numbers (FOLLOW-UPS 104), as a recorded track carries them.
+    health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 0, nextLevelXp: 2100,
+  };
 }
 
 const TRACK: TrackResponse = {
@@ -53,6 +57,13 @@ describe("positionsAt", () => {
       y: 2,
       ts: 200,
       harnessVersion: "harness-0.2",
+      // The frame replays with the sample, so a replayed pip lights up too.
+      health: 140,
+      maxHealth: 220,
+      power: 30,
+      maxPower: 100,
+      powerType: 0,
+      nextLevelXp: 2100,
     });
   });
 

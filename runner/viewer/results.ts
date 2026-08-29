@@ -136,6 +136,14 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
       money: null,
       questsCompleted: null,
       turn: s.turn,
+      // Unlike money and quests above, the frame's numbers are carried: replay
+      // draws the same unit frame the live map does, and they are on the row.
+      health: s.health ?? null,
+      maxHealth: s.maxHealth ?? null,
+      power: s.power ?? null,
+      maxPower: s.maxPower ?? null,
+      powerType: s.powerType ?? null,
+      nextLevelXp: s.nextLevelXp ?? null,
     });
   }
   return out;

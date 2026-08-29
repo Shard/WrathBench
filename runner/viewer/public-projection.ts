@@ -187,6 +187,13 @@ function projectStatePoint(s: StatePoint): StatePoint {
     eventCount: s.eventCount,
     lastSeq: s.lastSeq,
     turn: s.turn,
+    // The player frame's numbers, as on the positions feed and the track.
+    health: s.health ?? null,
+    maxHealth: s.maxHealth ?? null,
+    power: s.power ?? null,
+    maxPower: s.maxPower ?? null,
+    powerType: s.powerType ?? null,
+    nextLevelXp: s.nextLevelXp ?? null,
   };
 }
 
@@ -398,6 +405,16 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // Verbatim game text; see the module comment.
         items: null,
         harnessVersion: a.harnessVersion,
+        // The player frame's numbers: what any onlooker's client would show
+        // above a character it can see, and nothing about the host or the run.
+        health: a.health ?? null,
+        maxHealth: a.maxHealth ?? null,
+        power: a.power ?? null,
+        maxPower: a.maxPower ?? null,
+        powerType: a.powerType ?? null,
+        nextLevelXp: a.nextLevelXp ?? null,
+        // Already public on the run row it comes from (`projectRunRow.class`).
+        class: a.class ?? null,
         // The destination and the verdict are the run's own coordinates and
         // the module's status word, both publishable. The target's *name* is
         // verbatim game text, so it is withheld like every other name.
@@ -740,6 +757,13 @@ export function projectTrack(t: TrackResponse): TrackResponse {
         money: p.money,
         questsCompleted: p.questsCompleted,
         turn: p.turn,
+        // As on the live feed.
+        health: p.health ?? null,
+        maxHealth: p.maxHealth ?? null,
+        power: p.power ?? null,
+        maxPower: p.maxPower ?? null,
+        powerType: p.powerType ?? null,
+        nextLevelXp: p.nextLevelXp ?? null,
       }),
     ),
     // As on the live feed: coordinates and the module's status word travel,
