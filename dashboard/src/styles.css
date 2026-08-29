@@ -218,6 +218,35 @@ pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font: inhe
 pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .toggle { background: none; border: none; color: var(--accent); padding: 0; font-size: 12px; }
 
+/* The whole-feed expand preset, in the feed's own heading. */
+.section .filter.expand-preset { margin-left: 12px; font-size: 12px; font-weight: normal; vertical-align: middle; }
+
+/*
+ * A harness notice: the harness talking to the model, which is a different
+ * voice from the tool output around it. Warm rule down the left and a tag, the
+ * banner treatment the page already uses for "read this", scaled to a row.
+ */
+.notice-callout { display: flex; gap: 8px; align-items: baseline;
+                  border-left: 3px solid var(--warn); background: var(--grid);
+                  border-radius: 3px; padding: 6px 8px; }
+.notice-tag { flex: none; color: var(--warn); font-size: 11px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: .05em; }
+.notice-lines { min-width: 0; }
+.notice-line { white-space: pre-wrap; word-break: break-word; }
+.notice-line + .notice-line { margin-top: 3px; }
+.entry .body.notices { padding: 6px 10px 8px; }
+.entry.notice { border-left: 3px solid var(--warn); }
+.entry.notice > .head .notice-kind { color: var(--warn); font-weight: 700; }
+/* Bookkeeping (`resolved_model`, `hygiene`): the whole record is the head line. */
+.entry.harness > .head { border-bottom: none; }
+.entry.harness > .head + .body { padding-top: 0; }
+
+/* A state sample reads as one line; the head IS the row. */
+.entry.state > .head, .entry.harness > .head { flex-wrap: wrap; }
+.entry.state > .head { border-bottom: none; }
+.entry.state > .head .state-line { color: var(--fg); }
+.entry.state .body { padding-top: 0; }
+
 /* --- the map --- */
 .map-wrap { display: flex; height: 100%; }
 .map-stage { position: relative; flex: 1; min-width: 0; }

@@ -69,6 +69,20 @@ published artifact carries.
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/map` | every live agent on the world map |
 
+`/run/:id` has one remembered preference of its own beside the autoscroll
+toggle: the expand preset over the feed (`minimal`, `responses`, `snippets`,
+`all`), which sets where every foldable block starts. It is a default, not a
+lock — each block keeps its own toggle, and changing the preset returns them
+all to the new default. Two record kinds get their own rows rather than the
+generic JSON dump. A state sample reads as one line (level, xp, zone/area ids,
+money, quests, position) that expands to the whole record. The harness's own
+voice is drawn as a callout wherever it appears — a `harness` record that
+carries text (a sandbox restart, a truncated turn), and the block appended to a
+snippet result under a `--- harness ---` rule by `runner/src/tools.ts` — because
+it is the harness talking to the model rather than the tool's output; a
+`harness` record with no text is bookkeeping and stays one quiet line. The pure
+half is `lib/feedview.ts` and its tests.
+
 One page per grain: the fleet page is what is
 running *now* and links to a run, never listing them; `/runs` is the runs;
 `/episodes` is the tiers; `/ladder` is aggregates over runs. A tier's member
