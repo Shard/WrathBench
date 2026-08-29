@@ -210,7 +210,7 @@ A run launched without `--episode` is not a member of any episode. It reads
 promotion, no chart), and it therefore carries no comparability claim to
 protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
 stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m
-(FOLLOW-UPS 48(g), decided 2026-08-23). They are the shape of an untagged
+(item 48(g), decided 2026-08-23; closed — `docs/worklogs/2026-08-23.md`). They are the shape of an untagged
 one-off, not a quiet third ruleset: moving them would change every flagless run
 without any tuple field saying so, and every run that is scored passes the flag.
 

@@ -145,7 +145,7 @@ throws `EventTimeoutError`.
 it returns whatever the NPC offers right now, `{ ok: true, quests: [...] }`,
 and an empty list is an answer rather than an error. It exists because models
 kept rebuilding it by hand over `questList` plus event scraping and getting
-confused by their own nulls (FOLLOW-UPS 9a).
+confused by their own nulls (closed item 9a, `docs/worklogs/2026-08-22.md`).
 
 `acceptQuestFrom` reads the quest log *first*, because a turn-in chain may
 already have added the quest (the core auto-advances, so an explicit accept can
