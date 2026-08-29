@@ -629,8 +629,8 @@ describe("projectPositions and projectTrack", () => {
           "items",
           "harnessVersion",
           "move",
-          ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
         ]),
+        ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
       ]),
     );
     assertClean(JSON.stringify(out));
