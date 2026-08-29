@@ -117,6 +117,7 @@ import {
   type WorldPosition,
 } from "./state";
 import type { z } from "zod";
+import { isFuzzy, resolveName, type ResolvedRef, type ResolveTier } from "./resolve";
 
 /**
  * What every guid-taking method accepts: the opaque decimal string the SDK
@@ -167,8 +168,8 @@ function assertGuid(guid: unknown, arg: string): asserts guid is string | bigint
 }
 
 /**
- * Resolve `activateTaxi`'s destination — a node name (case-insensitive exact,
- * else a unique substring) or a node id — against a flight master window.
+ * Resolve `activateTaxi`'s destination — a node name, through the shared
+ * `resolveName`, or a node id — against a flight master window.
  * Throws with the known nodes listed on no match or more than one; the
  * current node is a legal target here (the server answers 11, same node).
  */
@@ -183,19 +184,17 @@ function resolveTaxiNode(window: TaxiWindow, dest: string | number): TaxiNodeRef
         `(only nodes this character has visited are offered). Known: ${list()}`,
     );
   }
-  const q = dest.trim().toLowerCase();
   const named = window.known.filter((n) => n.name !== undefined);
-  const exact = named.filter((n) => n.name!.toLowerCase() === q);
-  const matched = exact.length > 0 ? exact : named.filter((n) => n.name!.toLowerCase().includes(q));
-  if (matched.length === 1) return matched[0]!;
-  if (matched.length === 0) {
+  const hit = resolveName(dest, named, (n) => n.name);
+  if (hit.kind === "one") return hit.value;
+  if (hit.kind === "none") {
     throw new Error(
       `activateTaxi(${window.guid}, ${JSON.stringify(dest)}): no known node in this flight master's window is named ` +
         `that${named.length === 0 ? " (the module served ids only — pass a node id)" : ""}. Known: ${list()}`,
     );
   }
   throw new Error(
-    `activateTaxi(${window.guid}, ${JSON.stringify(dest)}): matches ${matched.length} nodes (${matched
+    `activateTaxi(${window.guid}, ${JSON.stringify(dest)}): matches ${hit.candidates.length} nodes (${hit.candidates
       .map((n) => JSON.stringify(n.name))
       .join(", ")}); use the exact name or the node id. Known: ${list()}`,
   );
@@ -237,6 +236,31 @@ function guidOf(target: GuidOrUnit, arg: string): string {
 /** A guid as the module writes them: decimal digits and nothing else. */
 const GUID_TEXT = /^\d+$/;
 
+/** What a name resolved to: the thing's guid, the name it actually landed on, and which tier answered. */
+interface NameHit {
+  guid: string;
+  name: string;
+  tier: ResolveTier;
+}
+
+/**
+ * A helper's target once resolved: the guid it will act on, plus — only when a
+ * name matched non-exactly — the `resolved` the result carries back, so the
+ * model can see what it acted on rather than being told in a hint.
+ */
+interface TargetRef {
+  guid: string;
+  resolved?: ResolvedRef;
+}
+
+/** Any helper result, plus the `resolved` a non-exact name match adds to it. */
+export type WithResolved<T> = T & { resolved?: ResolvedRef };
+
+/** Fold a ref's `resolved` into a result object, leaving an exact match untouched. */
+function withResolved<T extends object>(ref: { resolved?: ResolvedRef }, out: T): WithResolved<T> {
+  return ref.resolved === undefined ? out : { ...out, resolved: ref.resolved };
+}
+
 /** How many rows a "what was found instead" list quotes before it truncates. */
 const SHOWN_MATCHES = 8;
 
@@ -247,40 +271,39 @@ function listNames(rows: readonly { guid: string; name?: string | undefined }[])
 
 /**
  * Resolve a helper target given as a name rather than a guid — what a client
- * picks by looking at it. Case-insensitive and whitespace-tolerant: an exact
- * name wins, else a unique substring. Two matches is two readings, so it
+ * picks by looking at it. The tiers and the fuzz budget are the shared
+ * `resolveName` (sdk/src/resolve.ts). Two matches is two readings, so it
  * refuses and lists them rather than picking (METHODOLOGY, "Softening"): the
  * SDK never chooses a referent for the model.
  */
-function resolveNamedTarget(state: StateCache, name: string, arg: string): string {
-  const q = name.trim().toLowerCase();
+function resolveNamedTarget(state: StateCache, name: string, arg: string): NameHit {
   const rows = state.units();
-  if (q.length === 0) {
+  if (name.trim().length === 0) {
     throw new TypeError(
       `${arg} is an empty string — pass a guid, a unit from state.units(...) / state.closest(...), or the ` +
         `name of something in view`,
     );
   }
   const named = rows.filter((u) => u.name !== undefined);
-  const exact = named.filter((u) => u.name!.toLowerCase() === q);
-  const matched = exact.length > 0 ? exact : named.filter((u) => u.name!.toLowerCase().includes(q));
-  if (matched.length === 1) return matched[0]!.guid;
-  if (matched.length === 0) {
+  const hit = resolveName(name, named, (u) => u.name);
+  if (hit.kind === "one") return { guid: hit.value.guid, name: hit.name, tier: hit.tier };
+  if (hit.kind === "none") {
     throw new TypeError(
       `${arg} got ${JSON.stringify(name)}, which is neither a decimal guid nor the name of anything in view. ` +
         `In view: [${listNames(named)}] — pass a unit from state.units({ name: ... }) or its .guid`,
     );
   }
   throw new TypeError(
-    `${arg} got ${JSON.stringify(name)}, which matches ${matched.length} things in view ([${listNames(matched)}]); ` +
-      `pass the one you mean from state.units({ name: ... }) — the SDK does not choose between referents`,
+    `${arg} got ${JSON.stringify(name)}, which matches ${hit.candidates.length} things in view ` +
+      `([${listNames(hit.candidates)}]); pass the one you mean from state.units({ name: ... }) — the SDK does ` +
+      `not choose between referents`,
   );
 }
 
 /**
  * Resolve which item an item-taking call means: the `bag`/`slot` pair
  * `state.bag()` / `state.bank()` list, or the item's name in place of `bag`
- * (exact case-insensitive, else a unique substring). A name that matches
+ * (through the shared `resolveName`). A name that matches
  * nothing or more than one thing is refused with what was found; a `bag`
  * number with no `slot` is refused the same way. The numeric pair is passed
  * through untouched, including one nothing has been observed at — the caller
@@ -292,26 +315,30 @@ function resolveItemSlot(
   slot: number | undefined,
   method: string,
   where: string,
-): { bag: number; slot: number } | { refusal: string } {
+): { bag: number; slot: number; resolved?: ResolvedRef } | { refusal: string } {
   if (typeof bagOrName === "number") {
     if (typeof slot !== "number" || !Number.isInteger(slot)) {
       return { refusal: `${method}: a numeric bag needs its slot too — pass ${method.replace(/\(.*$/, "")}(bag, slot) as ${where} lists them, or the item's name` };
     }
     return { bag: bagOrName, slot };
   }
-  const q = bagOrName.trim().toLowerCase();
   const named = items.filter((i) => i.name !== undefined);
-  const exact = named.filter((i) => i.name!.toLowerCase() === q);
-  const matched = exact.length > 0 ? exact : named.filter((i) => i.name!.toLowerCase().includes(q));
-  if (matched.length === 1) return { bag: matched[0]!.bag, slot: matched[0]!.slot };
+  const hit = resolveName(bagOrName, named, (i) => i.name);
   const show = (rows: readonly { bag: number; slot: number; name?: string | undefined }[]) =>
     rows.slice(0, SHOWN_MATCHES).map((i) => `${JSON.stringify(i.name ?? "?")} at bag ${i.bag} slot ${i.slot}`).join(", ") +
     (rows.length > SHOWN_MATCHES ? `, +${rows.length - SHOWN_MATCHES} more` : "");
-  if (matched.length === 0) {
+  if (hit.kind === "one") {
+    return {
+      bag: hit.value.bag,
+      slot: hit.value.slot,
+      ...(isFuzzy(hit.tier) ? { resolved: { input: bagOrName, name: hit.name } } : {}),
+    };
+  }
+  if (hit.kind === "none") {
     return { refusal: `${method}: nothing in ${where} is named ${JSON.stringify(bagOrName)} — it holds [${show(named)}]` };
   }
   return {
-    refusal: `${method}: ${JSON.stringify(bagOrName)} matches ${matched.length} items in ${where} ([${show(matched)}]) — pass the bag and slot of the one you mean`,
+    refusal: `${method}: ${JSON.stringify(bagOrName)} matches ${hit.candidates.length} items in ${where} ([${show(hit.candidates)}]) — pass the bag and slot of the one you mean`,
   };
 }
 
@@ -412,7 +439,7 @@ function resolveMoveTarget(target: unknown, state: StateCache, method: string): 
   // nothing, or two things, comes back as `unknown_target` with what was found.
   if (typeof target === "string" && !GUID_TEXT.test(target.trim())) {
     try {
-      target = resolveNamedTarget(state, target, `${method}(target)`);
+      target = resolveNamedTarget(state, target, `${method}(target)`).guid;
     } catch (e) {
       return { unknown: e instanceof Error ? e.message : String(e) };
     }
@@ -2031,10 +2058,39 @@ export class WrathClient {
    * them.
    */
   private targetGuid(target: GuidOrUnit, arg: string): string {
+    return this.targetRef(target, arg).guid;
+  }
+
+  /**
+   * The same resolution, keeping what it took to get there: a name that only
+   * matched by substring or by the edit tier comes back with `resolved`, which
+   * the helper folds into its result (`withResolved`). A guid, a unit object
+   * and a normalised-exact name all resolve with nothing to report — case and
+   * whitespace tolerance is always on and tells the caller nothing new.
+   */
+  private targetRef(target: GuidOrUnit, arg: string): TargetRef {
     if (typeof target === "string" && !GUID_TEXT.test(target.trim())) {
-      return resolveNamedTarget(this.state, target, arg);
+      const hit = resolveNamedTarget(this.state, target, arg);
+      return isFuzzy(hit.tier)
+        ? { guid: hit.guid, resolved: { input: target, name: hit.name, guid: hit.guid } }
+        : { guid: hit.guid };
     }
-    return guidKey(guidOf(target, arg));
+    return { guid: guidKey(guidOf(target, arg)) };
+  }
+
+  /**
+   * Run a guid-taking helper against a target given as a guid, a unit or a
+   * name, and hand back its own result with `resolved` attached when the name
+   * matched non-exactly. One place, so no helper drifts into reporting the
+   * fuzz differently (or not at all).
+   */
+  private async byName<T extends object>(
+    target: GuidOrUnit,
+    arg: string,
+    run: (guid: string) => Promise<T>,
+  ): Promise<WithResolved<T>> {
+    const ref = this.targetRef(target, arg);
+    return withResolved(ref, await run(ref.guid));
   }
 
   /**
@@ -2369,8 +2425,8 @@ export class WrathClient {
    * `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. Takes the guid string or
    * a unit from `state.units(...)` / `state.closest(...)`.
    */
-  interact(target: GuidOrUnit): Promise<ActionResponse> {
-    return this.action({ action: "interact", guid: this.targetGuid(target, "interact(guid)") });
+  interact(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "interact(guid)", (guid) => this.action({ action: "interact", guid }));
   }
 
   /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
@@ -2532,7 +2588,7 @@ export class WrathClient {
    * `InventoryResult` code and a hint, not as success. The refusal is a value,
    * not a throw: it is the game answering.
    */
-  async equipItem(bagOrName: number | string, slot?: number | EquipOptions, options: EquipOptions = {}): Promise<EquipItemResult> {
+  async equipItem(bagOrName: number | string, slot?: number | EquipOptions, options: EquipOptions = {}): Promise<WithResolved<EquipItemResult>> {
     // A name in place of the bag leaves the second argument free, so
     // `equipItem("Bronze Axe", { timeout })` has exactly one reading: shift it.
     if (slot !== null && typeof slot === "object") {
@@ -2548,7 +2604,9 @@ export class WrathClient {
     slot = at;
     const before = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
     const guid = before?.guid;
-    const item = { bag, slot, itemId: before?.itemId, name: before?.name };
+    // Every answer this call can give spreads `item`, so a name that only
+    // matched by substring or by a typo says so in all of them.
+    const item = { bag, slot, itemId: before?.itemId, name: before?.name, ...(where.resolved === undefined ? {} : { resolved: where.resolved }) };
     const sinceSeq = this.events.recent(1)[0]?.seq;
 
     // Where the cache says our item is now: an equipment slot means the server
@@ -2644,10 +2702,10 @@ export class WrathClient {
   /**
    * `CMSG_USE_ITEM`; the module fills the item guid and its on-use spell.
    * The item is the `bag`/`slot` pair `state.bag()` lists, or its name in
-   * place of `bag` (exact, else a unique substring) — a name that names
-   * nothing carried, or two things, throws with what is carried.
+   * place of `bag` (the shared `resolveName`) — a name that names nothing
+   * carried, or two things, throws with what is carried.
    */
-  async useItem(bagOrName: number | string, slot?: number | GuidArg, targetGuid?: GuidArg): Promise<ActionResponse> {
+  async useItem(bagOrName: number | string, slot?: number | GuidArg, targetGuid?: GuidArg): Promise<WithResolved<ActionResponse>> {
     // `useItem("Healing Potion", guid)`: with a name, the second argument
     // cannot be a slot, so the guid it holds is the target.
     if (typeof bagOrName === "string" && slot !== undefined) {
@@ -2659,12 +2717,12 @@ export class WrathClient {
     const { bag } = where;
     slot = where.slot;
     try {
-      return await this.action({
+      return withResolved(where, await this.action({
         action: "use_item",
         bag,
         slot,
         targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid, "useItem(..., targetGuid)"),
-      });
+      }));
     } catch (err) {
       // A bare item_not_usable cannot be told apart from "the slot shifted
       // under me" (roster-sonnet-20260822); say what the local cache thinks is
@@ -2702,9 +2760,9 @@ export class WrathClient {
   /**
    * `CMSG_DESTROYITEM`; omit `count` to destroy the whole stack. Takes the
    * `bag`/`slot` pair `state.bag()` lists, or the item's name in place of
-   * `bag` (exact, else a unique substring).
+   * `bag` (the shared `resolveName`).
    */
-  destroyItem(bagOrName: number | string, slot?: number, count?: number): Promise<ActionResponse> {
+  destroyItem(bagOrName: number | string, slot?: number, count?: number): Promise<WithResolved<ActionResponse>> {
     // `destroyItem("Copper Ore", 5)`: with a name, the second argument cannot
     // be a slot, so the number it holds is the count.
     if (typeof bagOrName === "string" && slot !== undefined) {
@@ -2713,7 +2771,7 @@ export class WrathClient {
     }
     const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "destroyItem(bagOrName, slot?)", "state.bag()");
     if ("refusal" in where) throw new TypeError(where.refusal);
-    return this.action({ action: "destroy_item", bag: where.bag, slot: where.slot, count });
+    return this.action({ action: "destroy_item", bag: where.bag, slot: where.slot, count }).then((ack) => withResolved(where, ack));
   }
 
   /** `CMSG_REPOP_REQUEST` — release the spirit while dead. */
@@ -3034,64 +3092,65 @@ export class WrathClient {
    * The refusal — nothing to reset, or not enough money — is a value: the
    * handler answers the echo with a guid-0 confirm and nothing else.
    */
-  async resetTalents(npcGuid: GuidOrUnit, options: ResetTalentsOptions = {}): Promise<ResetTalentsResult> {
-    const id = this.targetGuid(npcGuid, "resetTalents(npcGuid)");
-    const timeout = options.timeout ?? 10_000;
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.gossipHello(id);
-    const menuEvent = await this.waitEvent(
-      (e) =>
-        isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
-        !isDecodeError(e.data) &&
-        guidKey((e.data as GossipMessageData).guid) === id &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout, description: `the trainer's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
-    );
-    const menu = menuEvent.data as GossipMessageData;
-    let choice: { menuId: number; optionId: number };
-    if (options.option !== undefined) {
-      choice = this.resolveGossipOption(id, options.option);
-    } else {
-      const unlearn = menu.options.filter((o) => /unlearn/i.test(o.text));
-      if (unlearn.length !== 1) {
-        const hint =
-          `the menu that opened has ${unlearn.length === 0 ? "no" : unlearn.length} option(s) mentioning "unlearn" — ` +
-          `a respec needs a class trainer for your own class (state.units({ role: "trainer" })). Pass { option } to ` +
-          `pick one of: ` + menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", ");
-        this.noteActionHint("resetTalents", "no_option", hint);
-        return { ok: false, status: "no_option", hint };
+  async resetTalents(npcGuid: GuidOrUnit, options: ResetTalentsOptions = {}): Promise<WithResolved<ResetTalentsResult>> {
+    return this.byName(npcGuid, "resetTalents(npcGuid)", async (id) => {
+      const timeout = options.timeout ?? 10_000;
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.gossipHello(id);
+      const menuEvent = await this.waitEvent(
+        (e) =>
+          isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
+          !isDecodeError(e.data) &&
+          guidKey((e.data as GossipMessageData).guid) === id &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout, description: `the trainer's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
+      );
+      const menu = menuEvent.data as GossipMessageData;
+      let choice: { menuId: number; optionId: number };
+      if (options.option !== undefined) {
+        choice = this.resolveGossipOption(id, options.option);
+      } else {
+        const unlearn = menu.options.filter((o) => /unlearn/i.test(o.text));
+        if (unlearn.length !== 1) {
+          const hint =
+            `the menu that opened has ${unlearn.length === 0 ? "no" : unlearn.length} option(s) mentioning "unlearn" — ` +
+            `a respec needs a class trainer for your own class (state.units({ role: "trainer" })). Pass { option } to ` +
+            `pick one of: ` + menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", ");
+          this.noteActionHint("resetTalents", "no_option", hint);
+          return { ok: false, status: "no_option", hint };
+        }
+        choice = { menuId: menu.menuId, optionId: unlearn[0]!.optionId };
       }
-      choice = { menuId: menu.menuId, optionId: unlearn[0]!.optionId };
-    }
-    await this.gossipSelect(id, choice.menuId, choice.optionId);
-    const isConfirm = (e: StreamEvent) => isEvent(e, "MSG_TALENT_WIPE_CONFIRM") && !isDecodeError(e.data);
-    const confirm = await this.waitEvent((e) => isConfirm(e) && e.seq > menuEvent.seq, {
-      timeout,
-      description: `the trainer's confirm (MSG_TALENT_WIPE_CONFIRM) from ${id}`,
+      await this.gossipSelect(id, choice.menuId, choice.optionId);
+      const isConfirm = (e: StreamEvent) => isEvent(e, "MSG_TALENT_WIPE_CONFIRM") && !isDecodeError(e.data);
+      const confirm = await this.waitEvent((e) => isConfirm(e) && e.seq > menuEvent.seq, {
+        timeout,
+        description: `the trainer's confirm (MSG_TALENT_WIPE_CONFIRM) from ${id}`,
+      });
+      const ask = confirm.data as TalentWipeConfirmData;
+      if (ask.nothingToReset) {
+        const hint = "the trainer offered no reset: there are no talents to unlearn (state.talents().talents is empty)";
+        this.noteActionHint("resetTalents", "refused", hint);
+        return { ok: false, status: "refused", cost: 0, hint };
+      }
+      await this.raw("MSG_TALENT_WIPE_CONFIRM", [{ guid: id }]);
+      const verdict = await this.waitEvent(
+        (e) =>
+          e.seq > confirm.seq &&
+          ((isEvent(e, "SMSG_TALENTS_INFO") && !isDecodeError(e.data) && !(e.data as TalentsInfoData).pet) || isConfirm(e)),
+        { timeout, description: `the SMSG_TALENTS_INFO (or a refusal) after confirming the reset with ${id}` },
+      );
+      if (isConfirm(verdict)) {
+        const hint =
+          `the server refused the reset (cost ${ask.cost} copper): nothing to unlearn, or not enough money ` +
+          `(state.money is ${this.state.money?.value ?? "unobserved"})`;
+        this.noteActionHint("resetTalents", "refused", hint);
+        return { ok: false, status: "refused", cost: ask.cost, hint };
+      }
+      const talents = this.state.talents();
+      if (talents === undefined) throw new Error("resetTalents: SMSG_TALENTS_INFO arrived but the state cache holds no talent state");
+      return { ok: true, status: "reset", cost: ask.cost, talents };
     });
-    const ask = confirm.data as TalentWipeConfirmData;
-    if (ask.nothingToReset) {
-      const hint = "the trainer offered no reset: there are no talents to unlearn (state.talents().talents is empty)";
-      this.noteActionHint("resetTalents", "refused", hint);
-      return { ok: false, status: "refused", cost: 0, hint };
-    }
-    await this.raw("MSG_TALENT_WIPE_CONFIRM", [{ guid: id }]);
-    const verdict = await this.waitEvent(
-      (e) =>
-        e.seq > confirm.seq &&
-        ((isEvent(e, "SMSG_TALENTS_INFO") && !isDecodeError(e.data) && !(e.data as TalentsInfoData).pet) || isConfirm(e)),
-      { timeout, description: `the SMSG_TALENTS_INFO (or a refusal) after confirming the reset with ${id}` },
-    );
-    if (isConfirm(verdict)) {
-      const hint =
-        `the server refused the reset (cost ${ask.cost} copper): nothing to unlearn, or not enough money ` +
-        `(state.money is ${this.state.money?.value ?? "unobserved"})`;
-      this.noteActionHint("resetTalents", "refused", hint);
-      return { ok: false, status: "refused", cost: ask.cost, hint };
-    }
-    const talents = this.state.talents();
-    if (talents === undefined) throw new Error("resetTalents: SMSG_TALENTS_INFO arrived but the state cache holds no talent state");
-    return { ok: true, status: "reset", cost: ask.cost, talents };
   }
 
   // ------------------------------------------------------------------ pets (item 98)
@@ -3128,10 +3187,10 @@ export class WrathClient {
    * show as `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
    * `SMSG_PET_ACTION_FEEDBACK` (`petFeedbackText`).
    */
-  async petAttack(target: GuidOrUnit): Promise<PetActionResult> {
+  async petAttack(target: GuidOrUnit): Promise<WithResolved<PetActionResult>> {
     const pet = this.petGuidOrRefuse("petAttack");
     if ("refusal" in pet) return pet.refusal;
-    return this.petAction(pet.guid, 2, 0x07, this.targetGuid(target, "petAttack(target)"));
+    return this.byName(target, "petAttack(target)", (guid) => this.petAction(pet.guid, 2, 0x07, guid));
   }
 
   /** Order the pet to follow you (the "Follow" button). Ack-only; `state.pet().command` follows the next `SMSG_PET_SPELLS`. */
@@ -3171,7 +3230,7 @@ export class WrathClient {
    * nothing. The pet frame's button: `CMSG_PET_ACTION` with the spell.
    * Ack-only; a refusal arrives as `SMSG_PET_CAST_FAILED`.
    */
-  async petCast(spell: string | number, target?: GuidOrUnit): Promise<PetActionResult> {
+  async petCast(spell: string | number, target?: GuidOrUnit): Promise<WithResolved<PetActionResult>> {
     const pet = this.petGuidOrRefuse("petCast");
     if ("refusal" in pet) return pet.refusal;
     const book = this.state.pet()?.spells ?? [];
@@ -3180,16 +3239,14 @@ export class WrathClient {
     if (typeof spell === "number") {
       known = book.find((s) => s.spellId === spell);
     } else {
-      const q = spell.trim().toLowerCase();
       const named = book.filter((s) => s.name !== undefined);
-      const exact = named.filter((s) => s.name!.toLowerCase() === q);
-      const matched = exact.length > 0 ? exact : named.filter((s) => s.name!.toLowerCase().includes(q));
-      if (matched.length > 1) {
+      const hit = resolveName(spell, named, (s) => s.name);
+      if (hit.kind === "many") {
         return this.petRefusal("petCast", "ambiguous_spell",
-          `${JSON.stringify(spell)} matches ${matched.length} of the pet's spells ` +
-          `(${matched.map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ")}) — pass the exact name or the spell id`);
+          `${JSON.stringify(spell)} matches ${hit.candidates.length} of the pet's spells ` +
+          `(${hit.candidates.map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ")}) — pass the exact name or the spell id`);
       }
-      known = matched[0];
+      known = hit.kind === "one" ? hit.value : undefined;
     }
     if (known === undefined) {
       return this.petRefusal("petCast", "unknown_spell",
@@ -3200,7 +3257,8 @@ export class WrathClient {
         `${known.name ?? known.spellId} is a passive the pet always has, so there is nothing to cast — the ` +
         `castable rows in state.pet().spells are the ones with passive: false`);
     }
-    return this.petAction(pet.guid, known.spellId, 0x81, target === undefined ? "0" : this.targetGuid(target, "petCast(spell, target)"));
+    if (target === undefined) return this.petAction(pet.guid, known.spellId, 0x81, "0");
+    return this.byName(target, "petCast(spell, target)", (guid) => this.petAction(pet.guid, known.spellId, 0x81, guid));
   }
 
   /**
@@ -3320,15 +3378,16 @@ export class WrathClient {
   }
 
   /** Open a mailbox (`CMSG_GAMEOBJ_USE` on it, as a client does) and wait for the frame (`SMSG_SHOW_MAILBOX`). */
-  async openMailbox(mailbox: GuidOrUnit, options: MailOptions = {}): Promise<MailboxState> {
-    const id = this.targetGuid(mailbox, "openMailbox(mailbox)");
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.interact(id);
-    await this.waitEvent(
-      (e) => isEvent(e, "SMSG_SHOW_MAILBOX") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_MAILBOX for ${id} (is it a mailbox, and are you within reach?)` },
-    );
-    return this.state.mailbox()!;
+  async openMailbox(mailbox: GuidOrUnit, options: MailOptions = {}): Promise<WithResolved<MailboxState>> {
+    return this.byName(mailbox, "openMailbox(mailbox)", async (id) => {
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.interact(id);
+      await this.waitEvent(
+        (e) => isEvent(e, "SMSG_SHOW_MAILBOX") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_MAILBOX for ${id} (is it a mailbox, and are you within reach?)` },
+      );
+      return this.state.mailbox()!;
+    });
   }
 
   private async waitMailResult(call: string, action: number, sinceSeq: number | undefined, timeout: number, what: string): Promise<MailResult> {
@@ -3427,15 +3486,16 @@ export class WrathClient {
   // ----------------------------------------------------------------- bank (item 100)
 
   /** Open the bank at a banker (`CMSG_BANKER_ACTIVATE`) and return it once the frame opens (`SMSG_SHOW_BANK`; also `state.bank()`). */
-  async openBank(npcGuid: GuidOrUnit, options: BankOptions = {}): Promise<BankContents> {
-    const id = this.targetGuid(npcGuid, "openBank(npcGuid)");
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.raw("CMSG_BANKER_ACTIVATE", [{ guid: id }]);
-    await this.waitEvent(
-      (e) => isEvent(e, "SMSG_SHOW_BANK") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_BANK for ${id} (is it a banker — state.units({ role: "banker" }) — within reach?)` },
-    );
-    return this.state.bank();
+  async openBank(npcGuid: GuidOrUnit, options: BankOptions = {}): Promise<WithResolved<BankContents>> {
+    return this.byName(npcGuid, "openBank(npcGuid)", async (id) => {
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.raw("CMSG_BANKER_ACTIVATE", [{ guid: id }]);
+      await this.waitEvent(
+        (e) => isEvent(e, "SMSG_SHOW_BANK") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_BANK for ${id} (is it a banker — state.units({ role: "banker" }) — within reach?)` },
+      );
+      return this.state.bank();
+    });
   }
 
   /**
@@ -3502,7 +3562,7 @@ export class WrathClient {
    * or the server's refusal (bank full, not at a banker, ...). Needs the
    * bank frame open (`openBank`).
    */
-  async bankDeposit(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<BankMoveResult> {
+  async bankDeposit(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<WithResolved<BankMoveResult>> {
     if (slot !== null && typeof slot === "object") {
       options = slot;
       slot = undefined;
@@ -3517,7 +3577,7 @@ export class WrathClient {
       return this.noBankItem("bankDeposit", `nothing is carried at bag ${bag} slot ${at} — state.bag().items lists what is, and the item's name works in place of the bag`);
     }
     const guid = row.guid;
-    return this.bankMove(
+    return withResolved(where, await this.bankMove(
       "bankDeposit",
       "CMSG_AUTOBANK_ITEM",
       guid,
@@ -3529,7 +3589,7 @@ export class WrathClient {
       },
       options.timeout ?? 10_000,
       `bankDeposit(${bag}, ${slot})`,
-    );
+    ));
   }
 
   /**
@@ -3538,7 +3598,7 @@ export class WrathClient {
    * bag's slot 67-73 with its inner slot) and return where it landed in
    * `state.bag()`, or the server's refusal. Needs the bank frame open.
    */
-  async bankWithdraw(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<BankMoveResult> {
+  async bankWithdraw(bagOrName: number | string, slot?: number | BankOptions, options: BankOptions = {}): Promise<WithResolved<BankMoveResult>> {
     if (slot !== null && typeof slot === "object") {
       options = slot;
       slot = undefined;
@@ -3553,7 +3613,7 @@ export class WrathClient {
       return this.noBankItem("bankWithdraw", `nothing is banked at bag ${bag} slot ${at} — state.bank().items lists what is, and the item's name works in place of the bag`);
     }
     const guid = row.guid;
-    return this.bankMove(
+    return withResolved(where, await this.bankMove(
       "bankWithdraw",
       "CMSG_AUTOSTORE_BANK_ITEM",
       guid,
@@ -3565,7 +3625,7 @@ export class WrathClient {
       },
       options.timeout ?? 10_000,
       `bankWithdraw(${bag}, ${slot})`,
-    );
+    ));
   }
 
   /**
@@ -4181,175 +4241,176 @@ export class WrathClient {
    * request. The caller is expected to loot afterwards: `killTarget` does not,
    * because a fight and a corpse are two decisions.
    */
-  async killTarget(target: GuidOrUnit, options: KillTargetOptions = {}): Promise<KillResult> {
-    const raw = this.targetGuid(target, "killTarget(guid)");
-    // Canonicalised ("007" -> "7"), because it is used as the nearby-cache map
-    // key and the cache's own keys are canonical (guidSchema round-trips every
-    // wire guid). A raw string that does not parse names nothing and would
-    // otherwise earn an instant, false "lost" — reject it before any opcode.
-    let id: string;
-    try {
-      id = guidKey(raw);
-    } catch {
-      throw new TypeError(
-        `killTarget(guid) got ${JSON.stringify(raw)}, which is not a decimal guid string — ` +
-          `pass unit.guid exactly as state.nearbyUnits() or state.closest(...) gave it`,
-      );
-    }
-    const key = id;
-    // Whether the cache has ever held the target while this fight ran: it is
-    // what separates "left view alive" from "was never in view at all".
-    let sawTarget = this.state.nearby.has(key);
-    const refaceMs = options.refaceIntervalMs ?? 1500;
-    const reapproachMs = options.reapproachIntervalMs ?? 6000;
-    const meleeRange = options.meleeRange ?? 5;
-    const pollMs = options.pollIntervalMs ?? 300;
-    const deadline = Date.now() + (options.timeout ?? 25_000);
-    const abortPct = options.abortBelowHealthPct;
-
-    let swings = 0;
-    const offSwing = this.events.on("SMSG_ATTACKERSTATEUPDATE", (e) => {
-      if (isDecodeError(e.data)) return;
-      if ((e.data as { attackerGuid: string }).attackerGuid === this.state.self.guid) swings++;
-    });
-    // The server cancelling our swing is observable, so react to it rather than
-    // assuming the opening `attack_start` holds for the whole fight. The
-    // handler only raises a flag; the loop decides, because by the time it runs
-    // the cache may already know the victim is dead.
-    let rearmWanted = false;
-    const offStop = this.events.on("SMSG_ATTACKSTOP", (e) => {
-      if (isDecodeError(e.data)) return;
-      const d = e.data as { attackerGuid: string; victimGuid: string; attackerDead: boolean };
-      if (d.attackerGuid !== this.state.self.guid || d.attackerDead) return;
-      if (d.victimGuid !== id) return; // a re-target names the *old* victim
-      rearmWanted = true;
-    });
-
-    const aimAt = (): Point3 | undefined => {
-      const obj = this.state.nearby.get(key);
-      return obj === undefined ? undefined : pointOf(obj)?.value;
-    };
-    const selfDead = (): boolean => this.state.self.health?.value.current === 0;
-    const targetDead = (): boolean => this.state.nearby.get(key)?.health?.value.current === 0;
-    /** Our health as a percent of max, or undefined while it is unobserved. */
-    const healthPct = (): number | undefined => {
-      const h = this.state.self.health?.value;
-      if (h === undefined || h.max <= 0) return undefined;
-      return (h.current / h.max) * 100;
-    };
-
-    let outcome: KillResult["status"] | undefined;
-    let note = "";
-    /**
-     * Walk to the target, recording what the walk did. A walk that never
-     * finishes is the clock running out, which the loop reports as `timeout` on
-     * its next tick — so it is folded into `note` rather than thrown out of a
-     * helper whose whole contract is a value per outcome.
-     */
-    const walkTo = async (at: Point3): Promise<void> => {
+  async killTarget(target: GuidOrUnit, options: KillTargetOptions = {}): Promise<WithResolved<KillResult>> {
+    return this.byName(target, "killTarget(guid)", async (raw) => {
+      // Canonicalised ("007" -> "7"), because it is used as the nearby-cache map
+      // key and the cache's own keys are canonical (guidSchema round-trips every
+      // wire guid). A raw string that does not parse names nothing and would
+      // otherwise earn an instant, false "lost" — reject it before any opcode.
+      let id: string;
       try {
-        const walk = await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
-        if (!walk.ok) note = ` (approach: ${walk.status})`;
-      } catch (e) {
-        if (!(e instanceof EventTimeoutError)) throw e;
-        note = " (approach never finished)";
+        id = guidKey(raw);
+      } catch {
+        throw new TypeError(
+          `killTarget(guid) got ${JSON.stringify(raw)}, which is not a decimal guid string — ` +
+            `pass unit.guid exactly as state.nearbyUnits() or state.closest(...) gave it`,
+        );
       }
-    };
-    const done = (status: KillResult["status"]): KillResult => {
-      outcome = status;
-      const armed = leavingArmed(status, options.disengage === true);
-      // A "lost" verdict on a guid the cache never held is not a target that
-      // left view — it is a guid that named nothing observable. Say so.
-      const base =
-        status === "lost" && !sawTarget
-          ? `target ${key} was never in view — a stale or mistyped guid, or a missed view update; ` +
-            `get guids from state.nearbyUnits() or state.closest(...)`
-          : KILL_DETAIL[status];
-      const facts: KillResultFacts = {
-        guid: id,
-        swings,
-        healthPct: healthPct(),
-        attacking: armed,
-        detail:
-          `${base}${note}; ` +
-          (armed
-            ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
-            : "auto-attack stopped"),
+      const key = id;
+      // Whether the cache has ever held the target while this fight ran: it is
+      // what separates "left view alive" from "was never in view at all".
+      let sawTarget = this.state.nearby.has(key);
+      const refaceMs = options.refaceIntervalMs ?? 1500;
+      const reapproachMs = options.reapproachIntervalMs ?? 6000;
+      const meleeRange = options.meleeRange ?? 5;
+      const pollMs = options.pollIntervalMs ?? 300;
+      const deadline = Date.now() + (options.timeout ?? 25_000);
+      const abortPct = options.abortBelowHealthPct;
+
+      let swings = 0;
+      const offSwing = this.events.on("SMSG_ATTACKERSTATEUPDATE", (e) => {
+        if (isDecodeError(e.data)) return;
+        if ((e.data as { attackerGuid: string }).attackerGuid === this.state.self.guid) swings++;
+      });
+      // The server cancelling our swing is observable, so react to it rather than
+      // assuming the opening `attack_start` holds for the whole fight. The
+      // handler only raises a flag; the loop decides, because by the time it runs
+      // the cache may already know the victim is dead.
+      let rearmWanted = false;
+      const offStop = this.events.on("SMSG_ATTACKSTOP", (e) => {
+        if (isDecodeError(e.data)) return;
+        const d = e.data as { attackerGuid: string; victimGuid: string; attackerDead: boolean };
+        if (d.attackerGuid !== this.state.self.guid || d.attackerDead) return;
+        if (d.victimGuid !== id) return; // a re-target names the *old* victim
+        rearmWanted = true;
+      });
+
+      const aimAt = (): Point3 | undefined => {
+        const obj = this.state.nearby.get(key);
+        return obj === undefined ? undefined : pointOf(obj)?.value;
       };
-      return status === "killed"
-        ? { ok: true, status, ...facts }
-        : { ok: false, status, ...facts };
-    };
+      const selfDead = (): boolean => this.state.self.health?.value.current === 0;
+      const targetDead = (): boolean => this.state.nearby.get(key)?.health?.value.current === 0;
+      /** Our health as a percent of max, or undefined while it is unobserved. */
+      const healthPct = (): number | undefined => {
+        const h = this.state.self.health?.value;
+        if (h === undefined || h.max <= 0) return undefined;
+        return (h.current / h.max) * 100;
+      };
 
-    try {
-      await this.setTarget(id);
-      // Close the distance before the first swing, so it is a swing and not a
-      // 25-second stare. A walk that runs out the clock is an answer too.
-      const opening = aimAt();
-      const from = this.state.self.position?.value;
-      if (opening && from && distance2d(from, opening) > meleeRange) await walkTo(opening);
-      const facing = aimAt();
-      if (facing) await this.faceQuietly(facing);
-      await this.attackStart(id);
+      let outcome: KillResult["status"] | undefined;
+      let note = "";
+      /**
+       * Walk to the target, recording what the walk did. A walk that never
+       * finishes is the clock running out, which the loop reports as `timeout` on
+       * its next tick — so it is folded into `note` rather than thrown out of a
+       * helper whose whole contract is a value per outcome.
+       */
+      const walkTo = async (at: Point3): Promise<void> => {
+        try {
+          const walk = await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
+          if (!walk.ok) note = ` (approach: ${walk.status})`;
+        } catch (e) {
+          if (!(e instanceof EventTimeoutError)) throw e;
+          note = " (approach never finished)";
+        }
+      };
+      const done = (status: KillResult["status"]): KillResult => {
+        outcome = status;
+        const armed = leavingArmed(status, options.disengage === true);
+        // A "lost" verdict on a guid the cache never held is not a target that
+        // left view — it is a guid that named nothing observable. Say so.
+        const base =
+          status === "lost" && !sawTarget
+            ? `target ${key} was never in view — a stale or mistyped guid, or a missed view update; ` +
+              `get guids from state.nearbyUnits() or state.closest(...)`
+            : KILL_DETAIL[status];
+        const facts: KillResultFacts = {
+          guid: id,
+          swings,
+          healthPct: healthPct(),
+          attacking: armed,
+          detail:
+            `${base}${note}; ` +
+            (armed
+              ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
+              : "auto-attack stopped"),
+        };
+        return status === "killed"
+          ? { ok: true, status, ...facts }
+          : { ok: false, status, ...facts };
+      };
 
-      let refaceAt = Date.now() + refaceMs;
-      let reapproachAt = Date.now() + reapproachMs;
-      let rearms = 0;
-      let rearmNotBefore = 0;
-      for (;;) {
-        this.throwIfAborted("killTarget's fight loop");
-        if (targetDead()) return done("killed");
-        if (selfDead()) return done("player_died");
-        if (this.state.nearby.has(key)) sawTarget = true;
-        else return done("lost");
-        if (abortPct !== undefined) {
-          const pct = healthPct();
-          if (pct !== undefined && pct < abortPct) {
-            note = ` (health ${pct.toFixed(0)}% below the ${abortPct}% floor)`;
-            return done("aborted_low_health");
-          }
-        }
-        if (Date.now() > deadline) return done("timeout");
+      try {
+        await this.setTarget(id);
+        // Close the distance before the first swing, so it is a swing and not a
+        // 25-second stare. A walk that runs out the clock is an answer too.
+        const opening = aimAt();
+        const from = this.state.self.position?.value;
+        if (opening && from && distance2d(from, opening) > meleeRange) await walkTo(opening);
+        const facing = aimAt();
+        if (facing) await this.faceQuietly(facing);
+        await this.attackStart(id);
 
-        const at = aimAt();
-        const now = Date.now();
-        if (rearmWanted) {
-          rearmWanted = false;
-          // Re-checked here, not in the handler: an ATTACKSTOP for a victim
-          // that is about to be reported dead must not re-arm into a corpse.
-          if (rearms < REARM_CAP && now >= rearmNotBefore && !targetDead()) {
-            rearms++;
-            rearmNotBefore = now + REARM_MIN_INTERVAL_MS;
-            if (at) await this.faceQuietly(at);
-            await this.attackStart(id);
+        let refaceAt = Date.now() + refaceMs;
+        let reapproachAt = Date.now() + reapproachMs;
+        let rearms = 0;
+        let rearmNotBefore = 0;
+        for (;;) {
+          this.throwIfAborted("killTarget's fight loop");
+          if (targetDead()) return done("killed");
+          if (selfDead()) return done("player_died");
+          if (this.state.nearby.has(key)) sawTarget = true;
+          else return done("lost");
+          if (abortPct !== undefined) {
+            const pct = healthPct();
+            if (pct !== undefined && pct < abortPct) {
+              note = ` (health ${pct.toFixed(0)}% below the ${abortPct}% floor)`;
+              return done("aborted_low_health");
+            }
           }
-        }
-        if (at && now >= refaceAt) {
-          refaceAt = now + refaceMs;
-          await this.faceQuietly(at);
-        }
-        if (at && now >= reapproachAt) {
-          reapproachAt = now + reapproachMs;
-          const pos = this.state.self.position?.value;
-          if (pos && distance2d(pos, at) > meleeRange) {
-            await walkTo(at);
-            const after = aimAt();
-            if (after) await this.faceQuietly(after);
-            await this.attackStart(id);
+          if (Date.now() > deadline) return done("timeout");
+
+          const at = aimAt();
+          const now = Date.now();
+          if (rearmWanted) {
+            rearmWanted = false;
+            // Re-checked here, not in the handler: an ATTACKSTOP for a victim
+            // that is about to be reported dead must not re-arm into a corpse.
+            if (rearms < REARM_CAP && now >= rearmNotBefore && !targetDead()) {
+              rearms++;
+              rearmNotBefore = now + REARM_MIN_INTERVAL_MS;
+              if (at) await this.faceQuietly(at);
+              await this.attackStart(id);
+            }
           }
+          if (at && now >= refaceAt) {
+            refaceAt = now + refaceMs;
+            await this.faceQuietly(at);
+          }
+          if (at && now >= reapproachAt) {
+            reapproachAt = now + reapproachMs;
+            const pos = this.state.self.position?.value;
+            if (pos && distance2d(pos, at) > meleeRange) {
+              await walkTo(at);
+              const after = aimAt();
+              if (after) await this.faceQuietly(after);
+              await this.attackStart(id);
+            }
+          }
+          await sleep(pollMs);
         }
-        await sleep(pollMs);
+      } finally {
+        offSwing();
+        offStop();
+        // Only disarm when the fight is over, or when the caller asked. Anything
+        // else — including an exception on the way out — leaves the server
+        // swinging, because a disarmed character in a live fight dies.
+        if (!leavingArmed(outcome, options.disengage === true)) {
+          await this.attackStop().catch(() => {});
+        }
       }
-    } finally {
-      offSwing();
-      offStop();
-      // Only disarm when the fight is over, or when the caller asked. Anything
-      // else — including an exception on the way out — leaves the server
-      // swinging, because a disarmed character in a live fight dies.
-      if (!leavingArmed(outcome, options.disengage === true)) {
-        await this.attackStop().catch(() => {});
-      }
-    }
+    });
   }
 
   /**
@@ -4365,63 +4426,64 @@ export class WrathClient {
    * is `{ ok: false, status: "empty" }` — an answer, not a failure. Silence is
    * neither, so it still throws `EventTimeoutError`.
    */
-  async lootCorpse(target: GuidOrUnit, options: LootOptions = {}): Promise<LootResult> {
-    const id = this.targetGuid(target, "lootCorpse(guid)");
-    const timeout = options.timeout ?? 10_000;
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    // Collected live from before the action goes out, so a push can never slip
-    // between the window arriving and a listener being registered.
-    const stored: StoredLootItem[] = [];
-    const offPush = this.events.on("SMSG_ITEM_PUSH_RESULT", (e: StreamEvent) => {
-      if (isDecodeError(e.data) || (sinceSeq !== undefined && e.seq <= sinceSeq)) return;
-      const d = e.data as ItemPushResultData;
-      if (d.looted) stored.push({ itemId: d.itemId, count: d.count });
-    });
-    try {
-      await this.lootAll(id);
-      const first = await this.waitEvent(
-        (e) =>
-          (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
-          !isDecodeError(e.data) &&
-          (sinceSeq === undefined || e.seq > sinceSeq),
-        { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
-      );
-      if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
-        return { ok: false, status: "empty", gold: 0, items: [] };
-      }
-      const window = first.data as LootResponseData;
-      // What the replay will try to store: slots free to loot (0, ALLOW_LOOT)
-      // or owned outright (4, OWNER — every slot of a solo loot). Group-only
-      // slot types are shown but never auto-stored.
-      const expected = window.items.filter((i) => i.slotType === 0 || i.slotType === 4).length;
-      const release = await this.waitEvent((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
-        timeout,
-        sinceSeq: first.seq + 1,
-        includeBuffered: true,
-        description: "the loot window closing (SMSG_LOOT_RELEASE_RESPONSE)",
+  async lootCorpse(target: GuidOrUnit, options: LootOptions = {}): Promise<WithResolved<LootResult>> {
+    return this.byName(target, "lootCorpse(guid)", async (id) => {
+      const timeout = options.timeout ?? 10_000;
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      // Collected live from before the action goes out, so a push can never slip
+      // between the window arriving and a listener being registered.
+      const stored: StoredLootItem[] = [];
+      const offPush = this.events.on("SMSG_ITEM_PUSH_RESULT", (e: StreamEvent) => {
+        if (isDecodeError(e.data) || (sinceSeq !== undefined && e.seq <= sinceSeq)) return;
+        const d = e.data as ItemPushResultData;
+        if (d.looted) stored.push({ itemId: d.itemId, count: d.count });
       });
-      // The pushes usually precede the release, but the ordering is not
-      // contractual; give stragglers a short grace rather than under-reporting.
-      const deadline = Date.now() + Math.min(timeout, LOOT_PUSH_GRACE_MS);
-      let graceSince = release.seq + 1;
-      while (stored.length < expected && Date.now() < deadline) {
-        try {
-          const push = await this.waitEvent(
-            (e) => isEvent(e, "SMSG_ITEM_PUSH_RESULT") && !isDecodeError(e.data),
-            { timeout: Math.max(1, deadline - Date.now()), sinceSeq: graceSince },
-          );
-          graceSince = push.seq + 1; // the on() listener above already recorded it
-        } catch {
-          break; // grace expired: report what was confirmed, nothing more
+      try {
+        await this.lootAll(id);
+        const first = await this.waitEvent(
+          (e) =>
+            (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
+            !isDecodeError(e.data) &&
+            (sinceSeq === undefined || e.seq > sinceSeq),
+          { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
+        );
+        if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
+          return { ok: false, status: "empty", gold: 0, items: [] };
         }
+        const window = first.data as LootResponseData;
+        // What the replay will try to store: slots free to loot (0, ALLOW_LOOT)
+        // or owned outright (4, OWNER — every slot of a solo loot). Group-only
+        // slot types are shown but never auto-stored.
+        const expected = window.items.filter((i) => i.slotType === 0 || i.slotType === 4).length;
+        const release = await this.waitEvent((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
+          timeout,
+          sinceSeq: first.seq + 1,
+          includeBuffered: true,
+          description: "the loot window closing (SMSG_LOOT_RELEASE_RESPONSE)",
+        });
+        // The pushes usually precede the release, but the ordering is not
+        // contractual; give stragglers a short grace rather than under-reporting.
+        const deadline = Date.now() + Math.min(timeout, LOOT_PUSH_GRACE_MS);
+        let graceSince = release.seq + 1;
+        while (stored.length < expected && Date.now() < deadline) {
+          try {
+            const push = await this.waitEvent(
+              (e) => isEvent(e, "SMSG_ITEM_PUSH_RESULT") && !isDecodeError(e.data),
+              { timeout: Math.max(1, deadline - Date.now()), sinceSeq: graceSince },
+            );
+            graceSince = push.seq + 1; // the on() listener above already recorded it
+          } catch {
+            break; // grace expired: report what was confirmed, nothing more
+          }
+        }
+        if (expected > 0 && stored.length === 0) {
+          return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items };
+        }
+        return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items };
+      } finally {
+        offPush();
       }
-      if (expected > 0 && stored.length === 0) {
-        return { ok: false, status: "none_stored", gold: window.gold, items: [], window: window.items };
-      }
-      return { ok: true, status: "looted", gold: window.gold, items: stored, window: window.items };
-    } finally {
-      offPush();
-    }
+    });
   }
 
   /**
@@ -4437,25 +4499,26 @@ export class WrathClient {
     npcGuid: GuidOrUnit,
     questId: number,
     options: QuestOptions = {},
-  ): Promise<QuestAcceptResult> {
-    const npc = this.targetGuid(npcGuid, "acceptQuestFrom(npcGuid, questId)");
-    const timeout = options.timeout ?? 10_000;
-    const inLog = this.state.quest(questId);
-    if (inLog) {
-      return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
-    }
+  ): Promise<WithResolved<QuestAcceptResult>> {
+    return this.byName(npcGuid, "acceptQuestFrom(npcGuid, questId)", async (npc) => {
+      const timeout = options.timeout ?? 10_000;
+      const inLog = this.state.quest(questId);
+      if (inLog) {
+        return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
+      }
 
-    const offered = await this.questOffer(npc, timeout);
-    const wanted = offered.find((q) => q.questId === questId);
-    if (!wanted) return { ok: false, status: "not_offered", questId, offered };
+      const offered = await this.questOffer(npc, timeout);
+      const wanted = offered.find((q) => q.questId === questId);
+      if (!wanted) return { ok: false, status: "not_offered", questId, offered };
 
-    await this.questAccept(npc, questId);
-    const quest = await this.waitForState(
-      () => this.state.quest(questId),
-      timeout,
-      `quest ${questId} to appear in the quest log after accept`,
-    );
-    return { ok: true, status: "accepted", questId, quest, title: wanted.title };
+      await this.questAccept(npc, questId);
+      const quest = await this.waitForState(
+        () => this.state.quest(questId),
+        timeout,
+        `quest ${questId} to appear in the quest log after accept`,
+      );
+      return { ok: true, status: "accepted", questId, quest, title: wanted.title };
+    });
   }
 
   /**
@@ -4474,10 +4537,11 @@ export class WrathClient {
   async questsAvailableFrom(
     npcGuid: GuidOrUnit,
     options: QuestOptions = {},
-  ): Promise<{ ok: true; quests: readonly OfferedQuest[] }> {
-    const npc = this.targetGuid(npcGuid, "questsAvailableFrom(npcGuid)");
-    const quests = await this.questOffer(npc, options.timeout ?? 10_000);
-    return { ok: true, quests };
+  ): Promise<WithResolved<{ ok: true; quests: readonly OfferedQuest[] }>> {
+    return this.byName(npcGuid, "questsAvailableFrom(npcGuid)", async (npc) => {
+      const quests = await this.questOffer(npc, options.timeout ?? 10_000);
+      return { ok: true, quests };
+    });
   }
 
   /**
@@ -4494,34 +4558,35 @@ export class WrathClient {
    * range, is not a trainer, or trains another class, so nothing distinguishes
    * those from a slow answer: they all surface as `EventTimeoutError`.
    */
-  async trainerList(npcGuid: GuidOrUnit, options: TrainerOptions = {}): Promise<TrainerListResult> {
-    const id = this.targetGuid(npcGuid, "trainerList(npcGuid)");
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.trainerListAsync(id);
-    const event = await this.waitEvent(
-      (e) =>
-        isEvent(e, "SMSG_TRAINER_LIST") &&
-        !isDecodeError(e.data) &&
-        (e.data as TrainerListData).guid === id &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      {
-        timeout: options.timeout ?? 10_000,
-        description:
-          `the SMSG_TRAINER_LIST for ${id} — the server stays silent when the NPC is out of ` +
-          `interact range (~5y), is not a trainer, or trains another class`,
-      },
-    );
-    const data = event.data as TrainerListData;
-    const money = this.state.money?.value;
-    return {
-      ok: true,
-      trainerType: data.trainerType,
-      spells: data.spells.map((s) => ({
-        ...s,
-        learnable: s.state === TRAINER_SPELL_STATE.learnable,
-        affordable: money === undefined ? undefined : money >= s.cost,
-      })),
-    };
+  async trainerList(npcGuid: GuidOrUnit, options: TrainerOptions = {}): Promise<WithResolved<TrainerListResult>> {
+    return this.byName(npcGuid, "trainerList(npcGuid)", async (id) => {
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.trainerListAsync(id);
+      const event = await this.waitEvent(
+        (e) =>
+          isEvent(e, "SMSG_TRAINER_LIST") &&
+          !isDecodeError(e.data) &&
+          (e.data as TrainerListData).guid === id &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        {
+          timeout: options.timeout ?? 10_000,
+          description:
+            `the SMSG_TRAINER_LIST for ${id} — the server stays silent when the NPC is out of ` +
+            `interact range (~5y), is not a trainer, or trains another class`,
+        },
+      );
+      const data = event.data as TrainerListData;
+      const money = this.state.money?.value;
+      return {
+        ok: true,
+        trainerType: data.trainerType,
+        spells: data.spells.map((s) => ({
+          ...s,
+          learnable: s.state === TRAINER_SPELL_STATE.learnable,
+          affordable: money === undefined ? undefined : money >= s.cost,
+        })),
+      };
+    });
   }
 
   /**
@@ -4578,8 +4643,8 @@ export class WrathClient {
 
   /**
    * Which talent `learnTalent` means: an id, or a talent's name anywhere in
-   * this class's tree (case-insensitive exact, else a unique substring),
-   * which needs the tree read once — `queryTalentTree()`. Two matches are two
+   * this class's tree (through the shared `resolveName`), which needs the tree
+   * read once — `queryTalentTree()`. Two matches are two
    * readings, so they are refused with both named rather than picked.
    */
   private resolveTalent(talent: number | string): { talentId: number } | { refusal: LearnTalentResult } {
@@ -4593,16 +4658,14 @@ export class WrathClient {
       return refuse("no_tree", `a talent name can only be resolved against the class tree — call queryTalentTree() once first, or pass the talent id`);
     }
     const all = tree.tabs.flatMap((tab) => tab.talents.map((t) => ({ ...t, tab: tab.name })));
-    const q = talent.trim().toLowerCase();
     const named = all.filter((t) => t.name !== undefined);
-    const exact = named.filter((t) => t.name!.toLowerCase() === q);
-    const matched = exact.length > 0 ? exact : named.filter((t) => t.name!.toLowerCase().includes(q));
-    const show = (rows: typeof matched) => rows.map((t) => `${t.talentId}:${JSON.stringify(t.name ?? "?")}${t.tab === undefined ? "" : ` (${t.tab})`}`).join(", ");
-    if (matched.length === 1) return { talentId: matched[0]!.talentId };
-    if (matched.length === 0) {
+    const hit = resolveName(talent, named, (t) => t.name);
+    const show = (rows: typeof named) => rows.map((t) => `${t.talentId}:${JSON.stringify(t.name ?? "?")}${t.tab === undefined ? "" : ` (${t.tab})`}`).join(", ");
+    if (hit.kind === "one") return { talentId: hit.value.talentId };
+    if (hit.kind === "none") {
       return refuse("unknown_talent", `no talent in your tree is named ${JSON.stringify(talent)} — state.talentTree().tabs[].talents lists them`);
     }
-    return refuse("ambiguous_talent", `${JSON.stringify(talent)} matches ${matched.length} talents (${show(matched)}) — pass the exact name or the talent id`);
+    return refuse("ambiguous_talent", `${JSON.stringify(talent)} matches ${hit.candidates.length} talents (${show(hit.candidates)}) — pass the exact name or the talent id`);
   }
 
   /**
@@ -4617,41 +4680,42 @@ export class WrathClient {
    * is a route or a fare; the way to learn whether two nodes connect is to
    * ask (`activateTaxi`).
    */
-  async showTaxiNodes(npcGuid: GuidOrUnit, options: TaxiOptions = {}): Promise<TaxiWindow> {
-    const id = this.targetGuid(npcGuid, "showTaxiNodes(npcGuid)");
-    const timeout = options.timeout ?? 10_000;
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    const after = (e: StreamEvent) => sinceSeq === undefined || e.seq > sinceSeq;
-    const isWindow = (e: StreamEvent) =>
-      isEvent(e, "SMSG_SHOWTAXINODES") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id;
-    const isMenu = (e: StreamEvent) =>
-      isEvent(e, "SMSG_GOSSIP_MESSAGE") && !isDecodeError(e.data) && guidKey((e.data as GossipMessageData).guid) === id;
-    await this.gossipHello(id);
-    const first = await this.waitEvent((e) => after(e) && (isWindow(e) || isMenu(e)), {
-      timeout,
-      description: `the flight master's window (SMSG_SHOWTAXINODES) or menu (SMSG_GOSSIP_MESSAGE) for ${id}`,
-    });
-    if (isMenu(first)) {
-      const menu = first.data as GossipMessageData;
-      const taxi = menu.options.filter((o) => o.icon === 2);
-      if (taxi.length !== 1) {
-        throw new Error(
-          `showTaxiNodes(${id}): the menu that opened has ${taxi.length === 0 ? "no" : taxi.length} taxi option(s) ` +
-            `(gossip icon 2) — is this NPC a flight master (state.units({ role: "flightMaster" }))? Options: ` +
-            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)} (icon ${o.icon})`).join(", "),
-        );
-      }
-      await this.gossipSelect(id, menu.menuId, taxi[0]!.optionId);
-      await this.waitEvent((e) => e.seq > first.seq && isWindow(e), {
+  async showTaxiNodes(npcGuid: GuidOrUnit, options: TaxiOptions = {}): Promise<WithResolved<TaxiWindow>> {
+    return this.byName(npcGuid, "showTaxiNodes(npcGuid)", async (id) => {
+      const timeout = options.timeout ?? 10_000;
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      const after = (e: StreamEvent) => sinceSeq === undefined || e.seq > sinceSeq;
+      const isWindow = (e: StreamEvent) =>
+        isEvent(e, "SMSG_SHOWTAXINODES") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id;
+      const isMenu = (e: StreamEvent) =>
+        isEvent(e, "SMSG_GOSSIP_MESSAGE") && !isDecodeError(e.data) && guidKey((e.data as GossipMessageData).guid) === id;
+      await this.gossipHello(id);
+      const first = await this.waitEvent((e) => after(e) && (isWindow(e) || isMenu(e)), {
         timeout,
-        description: `the flight master's window (SMSG_SHOWTAXINODES) for ${id} after choosing its taxi option`,
+        description: `the flight master's window (SMSG_SHOWTAXINODES) or menu (SMSG_GOSSIP_MESSAGE) for ${id}`,
       });
-    }
-    const window = this.state.lastTaxiNodes(id);
-    if (window === undefined) {
-      throw new Error(`showTaxiNodes(${id}): SMSG_SHOWTAXINODES arrived but the state cache holds no window for it`);
-    }
-    return window;
+      if (isMenu(first)) {
+        const menu = first.data as GossipMessageData;
+        const taxi = menu.options.filter((o) => o.icon === 2);
+        if (taxi.length !== 1) {
+          throw new Error(
+            `showTaxiNodes(${id}): the menu that opened has ${taxi.length === 0 ? "no" : taxi.length} taxi option(s) ` +
+              `(gossip icon 2) — is this NPC a flight master (state.units({ role: "flightMaster" }))? Options: ` +
+              menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)} (icon ${o.icon})`).join(", "),
+          );
+        }
+        await this.gossipSelect(id, menu.menuId, taxi[0]!.optionId);
+        await this.waitEvent((e) => e.seq > first.seq && isWindow(e), {
+          timeout,
+          description: `the flight master's window (SMSG_SHOWTAXINODES) for ${id} after choosing its taxi option`,
+        });
+      }
+      const window = this.state.lastTaxiNodes(id);
+      if (window === undefined) {
+        throw new Error(`showTaxiNodes(${id}): SMSG_SHOWTAXINODES arrived but the state cache holds no window for it`);
+      }
+      return window;
+    });
   }
 
   /**
@@ -4671,33 +4735,34 @@ export class WrathClient {
    * the ride and flips false on landing. The fare is charged by the server
    * and shows on `state.money`.
    */
-  async activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options: TaxiOptions = {}): Promise<ActivateTaxiResult> {
-    const id = this.targetGuid(npcGuid, "activateTaxi(npcGuid, dest)");
-    const window = this.state.lastTaxiNodes(id);
-    if (window === undefined) {
-      throw new Error(
-        `activateTaxi(${id}, ${JSON.stringify(dest)}): no flight master window has been observed for ${id} — ` +
-          `open one first with showTaxiNodes(guid) (gossipHello on a visible flight master), then fly.`,
+  async activateTaxi(npcGuid: GuidOrUnit, dest: string | number, options: TaxiOptions = {}): Promise<WithResolved<ActivateTaxiResult>> {
+    return this.byName(npcGuid, "activateTaxi(npcGuid, dest)", async (id) => {
+      const window = this.state.lastTaxiNodes(id);
+      if (window === undefined) {
+        throw new Error(
+          `activateTaxi(${id}, ${JSON.stringify(dest)}): no flight master window has been observed for ${id} — ` +
+            `open one first with showTaxiNodes(guid) (gossipHello on a visible flight master), then fly.`,
+        );
+      }
+      const to = resolveTaxiNode(window, dest);
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.raw("CMSG_ACTIVATETAXI", [{ guid: id }, { u32: window.current.nodeId }, { u32: to.nodeId }]);
+      const event = await this.waitEvent(
+        (e) => isEvent(e, "SMSG_ACTIVATETAXIREPLY") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
+        {
+          timeout: options.timeout ?? 10_000,
+          description: `the SMSG_ACTIVATETAXIREPLY answering activateTaxi(${id}, ${JSON.stringify(dest)})`,
+        },
       );
-    }
-    const to = resolveTaxiNode(window, dest);
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.raw("CMSG_ACTIVATETAXI", [{ guid: id }, { u32: window.current.nodeId }, { u32: to.nodeId }]);
-    const event = await this.waitEvent(
-      (e) => isEvent(e, "SMSG_ACTIVATETAXIREPLY") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
-      {
-        timeout: options.timeout ?? 10_000,
-        description: `the SMSG_ACTIVATETAXIREPLY answering activateTaxi(${id}, ${JSON.stringify(dest)})`,
-      },
-    );
-    const reply = (event.data as ActivateTaxiReplyData).reply;
-    if (reply === 0) {
-      return { ok: true, status: "accepted", reply: 0, from: window.current, to };
-    }
-    const named = TAXI_REPLY_HINTS[reply];
-    const hint = named === undefined ? `the server refused the flight with reply ${reply}, a code the SDK does not name` : named;
-    this.noteActionHint("activateTaxi", "refused", hint);
-    return { ok: false, status: "refused", reply, from: window.current, to, hint };
+      const reply = (event.data as ActivateTaxiReplyData).reply;
+      if (reply === 0) {
+        return { ok: true, status: "accepted", reply: 0, from: window.current, to };
+      }
+      const named = TAXI_REPLY_HINTS[reply];
+      const hint = named === undefined ? `the server refused the flight with reply ${reply}, a code the SDK does not name` : named;
+      this.noteActionHint("activateTaxi", "refused", hint);
+      return { ok: false, status: "refused", reply, from: window.current, to, hint };
+    });
   }
 
   /**
@@ -4712,51 +4777,52 @@ export class WrathClient {
    * NPC is not an innkeeper in range or the character is dead, which shows
    * as the confirm never arriving (`EventTimeoutError`).
    */
-  async bindAtInnkeeper(npcGuid: GuidOrUnit, options: BindOptions = {}): Promise<BindResult> {
-    const id = this.targetGuid(npcGuid, "bindAtInnkeeper(npcGuid)");
-    const timeout = options.timeout ?? 10_000;
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.gossipHello(id);
-    const menuEvent = await this.waitEvent(
-      (e) =>
-        isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
-        !isDecodeError(e.data) &&
-        guidKey((e.data as GossipMessageData).guid) === id &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      { timeout, description: `the innkeeper's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
-    );
-    const menu = menuEvent.data as GossipMessageData;
-    let choice: { menuId: number; optionId: number };
-    if (options.option !== undefined) {
-      choice = this.resolveGossipOption(id, options.option);
-    } else {
-      const home = menu.options.filter((o) => /home/i.test(o.text));
-      if (home.length !== 1) {
-        throw new Error(
-          `bindAtInnkeeper(${id}): the menu that opened has ${home.length === 0 ? "no" : home.length} option(s) mentioning ` +
-            `"home" — is this NPC an innkeeper (state.units({ role: "innkeeper" }))? Pass { option } to pick one of: ` +
-            menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", "),
-        );
+  async bindAtInnkeeper(npcGuid: GuidOrUnit, options: BindOptions = {}): Promise<WithResolved<BindResult>> {
+    return this.byName(npcGuid, "bindAtInnkeeper(npcGuid)", async (id) => {
+      const timeout = options.timeout ?? 10_000;
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.gossipHello(id);
+      const menuEvent = await this.waitEvent(
+        (e) =>
+          isEvent(e, "SMSG_GOSSIP_MESSAGE") &&
+          !isDecodeError(e.data) &&
+          guidKey((e.data as GossipMessageData).guid) === id &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        { timeout, description: `the innkeeper's menu (SMSG_GOSSIP_MESSAGE) for ${id}` },
+      );
+      const menu = menuEvent.data as GossipMessageData;
+      let choice: { menuId: number; optionId: number };
+      if (options.option !== undefined) {
+        choice = this.resolveGossipOption(id, options.option);
+      } else {
+        const home = menu.options.filter((o) => /home/i.test(o.text));
+        if (home.length !== 1) {
+          throw new Error(
+            `bindAtInnkeeper(${id}): the menu that opened has ${home.length === 0 ? "no" : home.length} option(s) mentioning ` +
+              `"home" — is this NPC an innkeeper (state.units({ role: "innkeeper" }))? Pass { option } to pick one of: ` +
+              menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)}`).join(", "),
+          );
+        }
+        choice = { menuId: menu.menuId, optionId: home[0]!.optionId };
       }
-      choice = { menuId: menu.menuId, optionId: home[0]!.optionId };
-    }
-    await this.gossipSelect(id, choice.menuId, choice.optionId);
-    const confirm = await this.waitEvent(
-      (e) =>
-        isEvent(e, "SMSG_BINDER_CONFIRM") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id && e.seq > menuEvent.seq,
-      { timeout, description: `the innkeeper's confirm (SMSG_BINDER_CONFIRM) from ${id}` },
-    );
-    await this.raw("CMSG_BINDER_ACTIVATE", [{ guid: id }]);
-    const bound = await this.waitEvent(
-      (e) => isEvent(e, "SMSG_BINDPOINTUPDATE") && !isDecodeError(e.data) && e.seq > confirm.seq,
-      { timeout, description: `the new bind point (SMSG_BINDPOINTUPDATE) after confirming with ${id}` },
-    );
-    const d = bound.data as BindPointUpdateData;
-    return {
-      ok: true,
-      status: "bound",
-      bindPoint: { map: d.map, x: d.x, y: d.y, z: d.z, area: { id: d.areaId, name: d.areaName } },
-    };
+      await this.gossipSelect(id, choice.menuId, choice.optionId);
+      const confirm = await this.waitEvent(
+        (e) =>
+          isEvent(e, "SMSG_BINDER_CONFIRM") && !isDecodeError(e.data) && guidKey((e.data as { guid: string }).guid) === id && e.seq > menuEvent.seq,
+        { timeout, description: `the innkeeper's confirm (SMSG_BINDER_CONFIRM) from ${id}` },
+      );
+      await this.raw("CMSG_BINDER_ACTIVATE", [{ guid: id }]);
+      const bound = await this.waitEvent(
+        (e) => isEvent(e, "SMSG_BINDPOINTUPDATE") && !isDecodeError(e.data) && e.seq > confirm.seq,
+        { timeout, description: `the new bind point (SMSG_BINDPOINTUPDATE) after confirming with ${id}` },
+      );
+      const d = bound.data as BindPointUpdateData;
+      return {
+        ok: true,
+        status: "bound",
+        bindPoint: { map: d.map, x: d.x, y: d.y, z: d.z, area: { id: d.areaId, name: d.areaName } },
+      };
+    });
   }
 
   /**
@@ -4771,36 +4837,37 @@ export class WrathClient {
     npcGuid: GuidOrUnit,
     spellId: number,
     options: TrainerOptions = {},
-  ): Promise<BuySpellResult> {
-    const id = this.targetGuid(npcGuid, "buySpell(npcGuid, spellId)");
-    const sinceSeq = this.events.recent(1)[0]?.seq;
-    await this.trainerBuySpellAsync(id, spellId);
-    const isFor = (e: StreamEvent, opcode: "SMSG_TRAINER_BUY_SUCCEEDED" | "SMSG_TRAINER_BUY_FAILED") =>
-      isEvent(e, opcode) &&
-      !isDecodeError(e.data) &&
-      (e.data as { spellId: number }).spellId === spellId;
-    const event = await this.waitEvent(
-      (e) =>
-        (isFor(e, "SMSG_TRAINER_BUY_SUCCEEDED") || isFor(e, "SMSG_TRAINER_BUY_FAILED")) &&
-        (sinceSeq === undefined || e.seq > sinceSeq),
-      {
-        timeout: options.timeout ?? 10_000,
-        description:
-          `the verdict for buying spell ${spellId} from ${id} ` +
-          `(SMSG_TRAINER_BUY_SUCCEEDED or SMSG_TRAINER_BUY_FAILED)`,
-      },
-    );
-    if (event.opcode === "SMSG_TRAINER_BUY_SUCCEEDED") {
-      return { ok: true, status: "learned", spellId };
-    }
-    const reason = (event.data as TrainerBuyFailedData).reason;
-    const named = TRAINER_BUY_FAIL_HINTS[reason];
-    const hint =
-      `the trainer refused (reason ${reason}${named ? `: ${named}` : ""}) — the usual causes are ` +
-      `too little money and a spell that is not learnable yet; sdk.trainerList(npcGuid) reports ` +
-      `each spell's cost, learnable and affordable`;
-    this.noteActionHint("buySpell", "buy_failed", hint);
-    return { ok: false, status: "buy_failed", spellId, reason, hint };
+  ): Promise<WithResolved<BuySpellResult>> {
+    return this.byName(npcGuid, "buySpell(npcGuid, spellId)", async (id) => {
+      const sinceSeq = this.events.recent(1)[0]?.seq;
+      await this.trainerBuySpellAsync(id, spellId);
+      const isFor = (e: StreamEvent, opcode: "SMSG_TRAINER_BUY_SUCCEEDED" | "SMSG_TRAINER_BUY_FAILED") =>
+        isEvent(e, opcode) &&
+        !isDecodeError(e.data) &&
+        (e.data as { spellId: number }).spellId === spellId;
+      const event = await this.waitEvent(
+        (e) =>
+          (isFor(e, "SMSG_TRAINER_BUY_SUCCEEDED") || isFor(e, "SMSG_TRAINER_BUY_FAILED")) &&
+          (sinceSeq === undefined || e.seq > sinceSeq),
+        {
+          timeout: options.timeout ?? 10_000,
+          description:
+            `the verdict for buying spell ${spellId} from ${id} ` +
+            `(SMSG_TRAINER_BUY_SUCCEEDED or SMSG_TRAINER_BUY_FAILED)`,
+        },
+      );
+      if (event.opcode === "SMSG_TRAINER_BUY_SUCCEEDED") {
+        return { ok: true, status: "learned", spellId };
+      }
+      const reason = (event.data as TrainerBuyFailedData).reason;
+      const named = TRAINER_BUY_FAIL_HINTS[reason];
+      const hint =
+        `the trainer refused (reason ${reason}${named ? `: ${named}` : ""}) — the usual causes are ` +
+        `too little money and a spell that is not learnable yet; sdk.trainerList(npcGuid) reports ` +
+        `each spell's cost, learnable and affordable`;
+      this.noteActionHint("buySpell", "buy_failed", hint);
+      return { ok: false, status: "buy_failed", spellId, reason, hint };
+    });
   }
 
   /**
@@ -4819,105 +4886,106 @@ export class WrathClient {
     questId: number,
     rewardIndex = 0,
     options: QuestOptions = {},
-  ): Promise<QuestTurnInResult> {
-    const npcId = this.targetGuid(npcGuid, "turnInQuest(npcGuid, questId)");
-    const timeout = options.timeout ?? 10_000;
-    const isFor = (e: StreamEvent, opcode: "SMSG_QUESTGIVER_OFFER_REWARD" | "SMSG_QUESTGIVER_REQUEST_ITEMS") =>
-      isEvent(e, opcode) &&
-      !isDecodeError(e.data) &&
-      (e.data as { questId: number }).questId === questId;
+  ): Promise<WithResolved<QuestTurnInResult>> {
+    return this.byName(npcGuid, "turnInQuest(npcGuid, questId)", async (npcId) => {
+      const timeout = options.timeout ?? 10_000;
+      const isFor = (e: StreamEvent, opcode: "SMSG_QUESTGIVER_OFFER_REWARD" | "SMSG_QUESTGIVER_REQUEST_ITEMS") =>
+        isEvent(e, opcode) &&
+        !isDecodeError(e.data) &&
+        (e.data as { questId: number }).questId === questId;
 
-    // Out-of-range quest_complete is silently ignored by the server and burns
-    // the whole timeout (roster-opus-20260822 turn ~28). Fail fast only when
-    // the cache can prove the NPC is *grossly* far away — the 40y threshold
-    // leaves cached-position staleness no room to reject a legitimate call;
-    // borderline cases still get the honest timeout.
-    const distance = distanceToUnit(this.state, npcId);
-    if (distance !== undefined && distance > 40) {
-      return {
-        ok: false,
-        status: "too_far",
-        questId,
-        distance: Math.round(distance),
-        hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`,
-      };
-    }
+      // Out-of-range quest_complete is silently ignored by the server and burns
+      // the whole timeout (roster-opus-20260822 turn ~28). Fail fast only when
+      // the cache can prove the NPC is *grossly* far away — the 40y threshold
+      // leaves cached-position staleness no room to reject a legitimate call;
+      // borderline cases still get the honest timeout.
+      const distance = distanceToUnit(this.state, npcId);
+      if (distance !== undefined && distance > 40) {
+        return {
+          ok: false,
+          status: "too_far",
+          questId,
+          distance: Math.round(distance),
+          hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`,
+        };
+      }
 
-    {
-      const sinceSeq = this.events.recent(1)[0]?.seq;
-      await this.questComplete(npcId, questId);
-      const answer = await this
-        .waitEvent(
-          (e) =>
-            (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
-            (sinceSeq === undefined || e.seq > sinceSeq),
-          {
-            timeout,
-            description:
-              `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS) — ` +
-              questgiverSilence(
-                distance,
-                `does not end quest ${questId}, or the objectives are not complete`,
-                `Check state.quest(${questId}).complete, and use the search_reference tool for who ends ` +
-                  `quest ${questId} — the giver of a quest is often not its ender. ` +
-                  `state.units({ questGiver: "reward" }) lists every NPC in view ready to take a turn-in.`,
-                questgiverMarkerOf(this.state, npcId, "reward", questId),
-              ),
-          },
-        )
-        .catch((e: unknown) => {
-          throw withDistance(e, distance);
-        });
-      if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
-        const req = answer.data as QuestGiverRequestItemsData;
-        if (!req.completable) {
-          const logComplete = this.state.quest(questId)?.complete === true;
-          if (logComplete) {
+      {
+        const sinceSeq = this.events.recent(1)[0]?.seq;
+        await this.questComplete(npcId, questId);
+        const answer = await this
+          .waitEvent(
+            (e) =>
+              (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
+              (sinceSeq === undefined || e.seq > sinceSeq),
+            {
+              timeout,
+              description:
+                `the turn-in answer for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD or _REQUEST_ITEMS) — ` +
+                questgiverSilence(
+                  distance,
+                  `does not end quest ${questId}, or the objectives are not complete`,
+                  `Check state.quest(${questId}).complete, and use the search_reference tool for who ends ` +
+                    `quest ${questId} — the giver of a quest is often not its ender. ` +
+                    `state.units({ questGiver: "reward" }) lists every NPC in view ready to take a turn-in.`,
+                  questgiverMarkerOf(this.state, npcId, "reward", questId),
+                ),
+            },
+          )
+          .catch((e: unknown) => {
+            throw withDistance(e, distance);
+          });
+        if (answer.opcode === "SMSG_QUESTGIVER_REQUEST_ITEMS") {
+          const req = answer.data as QuestGiverRequestItemsData;
+          if (!req.completable) {
+            const logComplete = this.state.quest(questId)?.complete === true;
+            if (logComplete) {
+              return {
+                ok: false,
+                status: "wrong_questgiver",
+                questId,
+                hint: "the quest log says the objectives are complete but this NPC refused — a different NPC ends this quest; check the quest text for who to return to",
+              };
+            }
             return {
               ok: false,
-              status: "wrong_questgiver",
+              status: "not_complete",
               questId,
-              hint: "the quest log says the objectives are complete but this NPC refused — a different NPC ends this quest; check the quest text for who to return to",
+              hint: "the questgiver refused and the quest log agrees the objectives are unfinished — check state.quest(questId).counts",
             };
           }
-          return {
-            ok: false,
-            status: "not_complete",
-            questId,
-            hint: "the questgiver refused and the quest log agrees the objectives are unfinished — check state.quest(questId).counts",
-          };
+          // completable REQUEST_ITEMS: fall through and choose the reward.
         }
-        // completable REQUEST_ITEMS: fall through and choose the reward.
+        await this.questChooseReward(npcId, questId, rewardIndex);
+        // Raced against the completion: a reward that does not fit answers the
+        // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
+        // this race, a full bag was indistinguishable from silence and burned
+        // the whole timeout (morning-opus-1).
+        const complete = await this.waitEvent(
+          (e) =>
+            (isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
+              !isDecodeError(e.data) &&
+              (e.data as QuestGiverQuestCompleteData).questId === questId) ||
+            (isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") && !isDecodeError(e.data)),
+          {
+            timeout,
+            sinceSeq: answer.seq + 1,
+            description: `SMSG_QUESTGIVER_QUEST_COMPLETE for quest ${questId} (or SMSG_INVENTORY_CHANGE_FAILURE)`,
+          },
+        );
+        if (complete.opcode === "SMSG_INVENTORY_CHANGE_FAILURE") {
+          const fail = complete.data as InventoryChangeFailureData;
+          const named = inventoryResultText(fail.result);
+          const hint =
+            `the reward could not be stored (InventoryResult ${fail.result}${named ? `: ${named}` : ""}) — ` +
+            `free a bag slot (sell or destroyItem), then turn in again`;
+          this.noteActionHint("turnInQuest", "inventory_full", hint);
+          return { ok: false, status: "inventory_full", questId, result: fail.result, hint };
+        }
+        const d = complete.data as QuestGiverQuestCompleteData;
+        return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
       }
-      await this.questChooseReward(npcId, questId, rewardIndex);
-      // Raced against the completion: a reward that does not fit answers the
-      // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
-      // this race, a full bag was indistinguishable from silence and burned
-      // the whole timeout (morning-opus-1).
-      const complete = await this.waitEvent(
-        (e) =>
-          (isEvent(e, "SMSG_QUESTGIVER_QUEST_COMPLETE") &&
-            !isDecodeError(e.data) &&
-            (e.data as QuestGiverQuestCompleteData).questId === questId) ||
-          (isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") && !isDecodeError(e.data)),
-        {
-          timeout,
-          sinceSeq: answer.seq + 1,
-          description: `SMSG_QUESTGIVER_QUEST_COMPLETE for quest ${questId} (or SMSG_INVENTORY_CHANGE_FAILURE)`,
-        },
-      );
-      if (complete.opcode === "SMSG_INVENTORY_CHANGE_FAILURE") {
-        const fail = complete.data as InventoryChangeFailureData;
-        const named = inventoryResultText(fail.result);
-        const hint =
-          `the reward could not be stored (InventoryResult ${fail.result}${named ? `: ${named}` : ""}) — ` +
-          `free a bag slot (sell or destroyItem), then turn in again`;
-        this.noteActionHint("turnInQuest", "inventory_full", hint);
-        return { ok: false, status: "inventory_full", questId, result: fail.result, hint };
-      }
-      const d = complete.data as QuestGiverQuestCompleteData;
-      return { ok: true, status: "complete", questId, xp: d.xp, money: d.money };
-    }
+    });
   }
 
   /**
@@ -4981,19 +5049,17 @@ export class WrathClient {
       }
       return { menuId: menu.menuId, optionId: found.optionId };
     }
-    const q = option.trim().toLowerCase();
-    const exact = menu.options.filter((o) => o.text.toLowerCase() === q);
-    const matched = exact.length > 0 ? exact : menu.options.filter((o) => o.text.toLowerCase().includes(q));
-    if (matched.length === 1) return { menuId: menu.menuId, optionId: matched[0]!.optionId };
-    if (matched.length === 0) {
+    const hit = resolveName(option, menu.options, (o) => o.text);
+    if (hit.kind === "one") return { menuId: menu.menuId, optionId: hit.value.optionId };
+    if (hit.kind === "none") {
       throw new TypeError(
         `gossipSelect(guid, ${JSON.stringify(option)}): no option on the menu currently open for ${guid} ` +
           `matches. Options are: ${list}. Pass the exact text, a unique substring, or the numeric optionId.`,
       );
     }
-    const both = matched.map((o) => `[${o.optionId}] ${JSON.stringify(o.text)}`).join(", ");
+    const both = hit.candidates.map((o) => `[${o.optionId}] ${JSON.stringify(o.text)}`).join(", ");
     throw new TypeError(
-      `gossipSelect(guid, ${JSON.stringify(option)}): matches ${matched.length} options on the menu open ` +
+      `gossipSelect(guid, ${JSON.stringify(option)}): matches ${hit.candidates.length} options on the menu open ` +
         `for ${guid}: ${both}. Use the exact text, a longer unique substring, or the numeric optionId.`,
     );
   }
