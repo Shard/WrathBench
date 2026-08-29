@@ -99,7 +99,8 @@ try {
   await client.waitForNearby((o) => o.entry?.value === KOBOLD_VERMIN, { timeout: 15_000 });
   const vermin = client.state.units({ entry: KOBOLD_VERMIN, alive: true })[0] ?? fail("no live Kobold Vermin in view");
   const sinceSeq = client.events.recent(1)[0]?.seq ?? 0;
-  await client.petAttack(vermin);
+  const ordered = await client.petAttack(vermin);
+  if (!ordered.ok) fail(`petAttack sent nothing: ${ordered.status} — ${ordered.hint}`);
   const verdict = await client.events.waitFor(
     (e) =>
       e.seq > sinceSeq &&
@@ -112,10 +113,12 @@ try {
   log(`PASS attack: the imp's ${verdict.opcode} at seq ${verdict.seq}`);
 
   // 3. Follow (ack-only; the core sets the command state without a packet), then dismiss.
-  await client.petFollow();
+  const followed = await client.petFollow();
+  if (!followed.ok) fail(`petFollow sent nothing: ${followed.status} — ${followed.hint}`);
   await Bun.sleep(1000);
   const removeSeq = client.events.recent(1)[0]?.seq ?? 0;
-  await client.petDismiss();
+  const dismissed = await client.petDismiss();
+  if (!dismissed.ok) fail(`petDismiss sent nothing: ${dismissed.status} — ${dismissed.hint}`);
   await client.events.waitFor((e) => e.seq > removeSeq && isEvent(e, "SMSG_PET_SPELLS") && !isDecodeError(e.data) && (e.data as any).removed === true, { timeout: 15_000 });
   if (client.state.pet() !== undefined) fail("state.pet() still set after the bar was removed");
   log("PASS dismiss: bar removed, state.pet() undefined");
