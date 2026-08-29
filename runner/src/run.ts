@@ -34,6 +34,7 @@ import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { archiveIfNoResponses } from "./archive";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { clearAccountCharacters } from "./hygiene";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
@@ -222,22 +223,37 @@ export interface Continuation {
  * on its predecessor's character. Everything that would make the lineage a
  * lie is refused here, before a directory exists: the launch must be
  * `freeplay` (a scored episode is a fresh character by definition), the
- * predecessor must exist, be a freeplay run on the SAME account (a character
+ * predecessor must be a freeplay run on the SAME account (a character
  * lives on one account; a continuation elsewhere would find nothing), and
  * must have recorded a character at all. Race and class are the
  * predecessor's — they are the character's, not the launch's.
+ *
+ * A predecessor that has been ARCHIVED is read from `<runs>/archive/<id>`:
+ * archiving parks a run so the listings stop counting it, and says nothing
+ * about whether its character is still standing on the account. The stream
+ * election reads archived facts too (`streamsFrom`, `includeArchived`), so
+ * refusing here would break exactly the continuation the archive was meant
+ * to leave alone.
+ *
+ * A predecessor found in NEITHER place returns null rather than throwing: the
+ * run degrades to a fresh start and says so (`continue-dropped`), the same
+ * answer as a character that turned out to be gone. A missing directory is
+ * not a lie about lineage, it is an absent one, and killing a launch over it
+ * costs the night's run.
  */
 export function loadContinuation(
   config: Pick<RunConfig, "episode" | "account" | "runsDir" | "continuedFrom">,
-): Continuation {
+): Continuation | null {
   const from = config.continuedFrom;
   if (from === undefined) throw new Error("no --continue-from");
   if (config.episode !== "freeplay") {
     throw new Error(`--continue-from is a freeplay continuation; --episode ${config.episode ?? "(none)"} starts a fresh character`);
   }
-  const dir = join(config.runsDir, from);
+  const live = join(config.runsDir, from);
+  const archived = join(config.runsDir, ARCHIVE_DIR, from);
+  const dir = readMeta(live) !== null ? live : archived;
   const meta = readMeta(dir);
-  if (meta === null) throw new Error(`--continue-from ${from}: no meta.json under ${config.runsDir}`);
+  if (meta === null) return null;
   const episode = meta.comparability?.episode ?? meta.config.episode;
   if (episode !== "freeplay") throw new Error(`--continue-from ${from}: that run is ${String(episode ?? "no episode")}, not freeplay`);
   const account = meta.config.account;
@@ -357,16 +373,29 @@ async function main(): Promise<void> {
   }
   /** The freeplay run this launch continues, once its predecessor checks out. */
   let continuation: Continuation | undefined;
+  /** A predecessor named on the command line that is on disk nowhere. */
+  let missingPredecessor: string | undefined;
   if (!resumed && config.continuedFrom !== undefined) {
+    let loaded: Continuation | null = null;
     try {
-      continuation = loadContinuation(config);
+      loaded = loadContinuation(config);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(2);
     }
-    // The character's identity is the predecessor's; the launch's race/class
-    // flags are the fleet restating the entry, and they must not disagree.
-    config = { ...config, character: continuation.character, race: continuation.race, class: continuation.class };
+    if (loaded === null) {
+      // Nothing to read: start fresh and record the drop once the trajectory
+      // exists. The lineage leaves the config here, before meta.json is
+      // written, so no record ever claims a predecessor that is not there.
+      missingPredecessor = config.continuedFrom;
+      console.error(`[wrathbench] --continue-from ${missingPredecessor}: no such run under ${config.runsDir} — starting fresh`);
+      config = { ...config, continuedFrom: undefined };
+    } else {
+      continuation = loaded;
+      // The character's identity is the predecessor's; the launch's race/class
+      // flags are the fleet restating the entry, and they must not disagree.
+      config = { ...config, character: loaded.character, race: loaded.race, class: loaded.class };
+    }
   }
   // Deliberately NOT registered with `trajectory.redact`: meta.json is scrubbed
   // with the same secret list, and a redacted token could never be read back by
@@ -460,6 +489,16 @@ async function main(): Promise<void> {
       comparability,
       ...(shakeout !== undefined ? { shakeout } : {}),
     });
+    // The lineage never reached meta.json or the run row (it left the config
+    // above), so the record is all there is to write — and it names the id, so
+    // an operator reading the trajectory knows which predecessor went missing.
+    if (missingPredecessor !== undefined) {
+      trajectory.append({
+        t: "harness",
+        kind: "continue-dropped",
+        detail: `--continue-from ${missingPredecessor}: no run directory, live or archived — starting a fresh character`,
+      });
+    }
   } else {
     trajectory.clearPause(config.runId);
     trajectory.append({
