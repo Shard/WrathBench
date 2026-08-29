@@ -152,15 +152,6 @@ status.
      silently across. Supersedes 8a's flat "no model summarization ever" for a future
      labelled engine, not for unlabelled changes to this one.
 
-32. **Dashboard parity gaps against the deleted pages** (2026-08-22; the
-    pages went in item 31). The cost estimate — (1) — shipped 2026-08-23 as
-    `runner/viewer/pricing.ts`, priced from dated, sourced rows rather than the old
-    hard-coded table. Left, each deliberate: (2) **Whole-feed expand preset** (Minimal /
-    Responses / Snippets / All, remembered in localStorage) — the SPA folds per block
-    only. (3) **Compact state samples and called-out harness notices** — rendered
-    through the generic-entry path, readable but unstyled. Unblocked by someone wanting
-    them; neither blocks release.
-
 35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
     The signal vector lists deaths, zones, spells learned and talents spent
     (docs/METHODOLOGY.md, "Scoring") and none is recorded (the `state` table has level, xp, map+xyz, money,
