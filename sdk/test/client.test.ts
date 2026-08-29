@@ -2172,8 +2172,8 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
         guid: CREATURE_GUID,
         currentNode: 6,
         currentNodeName: "Ironforge, Dun Morogh",
-        mask: [0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        known: [{ nodeId: 6, name: "Ironforge, Dun Morogh" }, { nodeId: 7, name: "Thelsamar, Loch Modan" }],
+        mask: [0xa0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        known: [{ nodeId: 6, name: "Ironforge, Dun Morogh" }, { nodeId: 8, name: "Thelsamar, Loch Modan" }],
       },
     });
   const reply = (seq: number, code: number): string =>
@@ -2190,7 +2190,7 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
     stub.push(window(301));
     const w = await pending;
     expect(w.current).toEqual({ nodeId: 6, name: "Ironforge, Dun Morogh" });
-    expect(w.known.map((n) => n.nodeId)).toEqual([6, 7]);
+    expect(w.known.map((n) => n.nodeId)).toEqual([6, 8]);
     client.close();
     await stub.stop();
   });
@@ -2230,14 +2230,14 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
     const pending = client.activateTaxi(CREATURE_GUID, "thelsamar", { timeout: 2000 });
     const at = await untilAction(stub, "raw");
     const guidHex = BigInt(CREATURE_GUID).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
-    expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_ACTIVATETAXI", payload: `${guidHex}0600000007000000` });
+    expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_ACTIVATETAXI", payload: `${guidHex}0600000008000000` });
     stub.push(reply(331, 0));
     expect(await pending).toEqual({
       ok: true,
       status: "accepted",
       reply: 0,
       from: { nodeId: 6, name: "Ironforge, Dun Morogh" },
-      to: { nodeId: 7, name: "Thelsamar, Loch Modan" },
+      to: { nodeId: 8, name: "Thelsamar, Loch Modan" },
     });
     client.close();
     await stub.stop();
@@ -2248,7 +2248,7 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
     const client = await inWorld(stub);
     stub.push(window(340));
     await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
-    const pending = client.activateTaxi(CREATURE_GUID, 7, { timeout: 2000 });
+    const pending = client.activateTaxi(CREATURE_GUID, 8, { timeout: 2000 });
     await untilAction(stub, "raw");
     stub.push(reply(341, 3));
     const result = await pending;
@@ -2273,7 +2273,7 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
     await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
     const unknown = await client.activateTaxi(CREATURE_GUID, "Stormwind").catch((e: unknown) => e);
     expect((unknown as Error).message).toContain("Thelsamar");
-    const notKnown = await client.activateTaxi(CREATURE_GUID, 8).catch((e: unknown) => e);
+    const notKnown = await client.activateTaxi(CREATURE_GUID, 9).catch((e: unknown) => e);
     expect((notKnown as Error).message).toContain("not in the window");
     const ambiguous = await client.activateTaxi(CREATURE_GUID, ", ").catch((e: unknown) => e);
     expect((ambiguous as Error).message).toContain("matches 2 nodes");
