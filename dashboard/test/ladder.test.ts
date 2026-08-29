@@ -452,6 +452,62 @@ describe("freeplay streams", () => {
     ]);
     expect(rows.map((r) => r.streamId)).toEqual(["hi", "lo", "zero", "none"]);
   });
+
+  /*
+   * "exclude free" applies here exactly as it does on the scored tiers
+   * (operator, 2026-08-29, reversing the same day's exemption). The page hands
+   * `StreamTable` and `StreamChart` the same filtered set, so the two cannot
+   * disagree; the filter itself is `filterRuns`, ahead of `streamRows`.
+   */
+  test("exclude free filters the field too, keeping the streams a viewer cannot answer for", () => {
+    const runs = [
+      fp({ runId: "paid", model: "sonnet", billing: "paid", maxLevel: 9, levels: [mark(9, 1, 1000)], playtimeMs: 1000 }),
+      fp({
+        runId: "gratis",
+        model: "qwen/qwen3:free",
+        billing: "free",
+        maxLevel: 12,
+        levels: [mark(12, 1, 1000)],
+        playtimeMs: 1000,
+      }),
+      fp({ runId: "unknown", model: "old", maxLevel: 7, levels: [mark(7, 1, 1000)], playtimeMs: 1000 }),
+    ];
+    expect(streamRows(runs).map((r) => r.streamId)).toEqual(["gratis", "paid", "unknown"]);
+    const kept = filterRuns(runs, { race: null, klass: null, harness: null, excludeFree: true });
+    expect(streamRows(kept).map((r) => r.streamId)).toEqual(["paid", "unknown"]);
+    // The chart reads the same filtered set, so it cannot show a dropped stream.
+    const chart = streamSeries(streamRows(kept), kept);
+    expect(chart.series.map((s) => s.streamId)).toEqual(["paid", "unknown"]);
+    expect(chart.omitted).toEqual([]);
+  });
+
+  test("a mixed-billing chain re-roots on its survivor — accepted, because billing follows the endpoint", () => {
+    // A stream is one character under one config, so this is not a shape the
+    // fleet produces; pinned so the consequence is stated rather than accidental.
+    const chain = [
+      fp({ runId: "m1", billing: "free", maxLevel: 3, levels: [mark(3, 1, 1000)], playtimeMs: 1000 }),
+      fp({
+        runId: "m2",
+        continuedFrom: "m1",
+        billing: "paid",
+        maxLevel: 6,
+        startedAt: 200,
+        levels: [mark(6, 1, 2000)],
+        playtimeMs: 2000,
+      }),
+    ];
+    expect(streamRows(chain)[0]!.attempts).toBe(2);
+    const kept = filterRuns(chain, { race: null, klass: null, harness: null, excludeFree: true });
+    expect(streamRows(kept).map((r) => ({ id: r.streamId, n: r.attempts }))).toEqual([
+      { id: "m2", n: 1 },
+    ]);
+    // The chart says the same thing the table does: the survivor is drawn and
+    // marked truncated, which is already the wording for "history before the
+    // oldest attempt served is not drawn" — true whether the ancestor was
+    // archived or filtered.
+    const drawn = streamSeries(streamRows(kept), kept).series;
+    expect(drawn.map((d) => [d.streamId, d.truncated])).toEqual([["m2", true]]);
+  });
 });
 
 /* ---------------------------------------------------------------- scatter */

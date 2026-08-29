@@ -100,14 +100,17 @@ export default function Ladder() {
    * Freeplay is a different page under the same address: an overview of the
    * top characters on freeplay right now, one row per durable stream
    * (operator, 2026-08-29). It reads no rungs, so it shows neither the scatter
-   * nor the rung table; "exclude free" does not apply to it — the field is the
-   * field, whoever is paying for it — and neither does the shell's series
-   * filter. That last one is not a convenience: a stream is durable *across*
-   * series, so cutting its older attempts would make the newest survivor the
-   * chain root and report a thirteen-attempt character as attempt 1, which is
-   * the one number this page exists to show. `useSeriesFilter` has the
-   * `active` hatch for exactly this — the map's replay mode uses it for the
-   * same reason.
+   * nor the rung table. The shell's series filter still does not apply, and
+   * that is not a convenience: a stream is durable *across* series, so cutting
+   * its older attempts would make the newest survivor the chain root and
+   * report a thirteen-attempt character as attempt 1, which is the one number
+   * this page exists to show. `useSeriesFilter` has the `active` hatch for
+   * exactly this — the map's replay mode uses it for the same reason.
+   *
+   * "exclude free" *does* apply, and did not at first (operator, 2026-08-29,
+   * reversing the same day's exemption): it is the same control, the same
+   * default, and the same predicate the episode ladders use, over both the
+   * table and the chart. Only the series exemption survives.
    */
   const freeplay = (): boolean => episode() === "freeplay";
   const seriesFilter = useSeriesFilter(served, () => !freeplay());
@@ -117,8 +120,13 @@ export default function Ladder() {
    * Race, class and harness narrow the set, and "exclude free" keeps only the
    * runs we paid for (`ResultRun.billing`, `runner/src/billing.ts` — a
    * `claude-code` subscription counts as paid there). All four are applied
-   * BEFORE `ladderRows`, so the ranking is computed over exactly the rows on
-   * screen; the order itself is untouched (highest rung, XP, gold).
+   * BEFORE the rows are derived — `ladderRows` on a scored tier, `streamRows`
+   * on freeplay — so the ranking is computed over exactly the rows on screen;
+   * the order itself is untouched (highest rung, XP, gold). On freeplay that
+   * ordering is before the lineage walk, so a chain whose ancestor the filter
+   * drops re-roots on its survivor; billing follows the endpoint and a stream
+   * is one character under one config, so a mixed chain is not a shape the
+   * fleet produces (`lib/ladder.ts` pins the behaviour anyway).
    *
    * None is a row key. A model's row is its best run whatever it was played
    * on, because the baseline character is the comparison set.
@@ -145,7 +153,7 @@ export default function Ladder() {
       race: resolveChoice(races(), race()),
       klass: resolveChoice(classes(), klass()),
       harness: resolveChoice(harnesses(), harness()),
-      excludeFree: !freeplay() && excludeFree(),
+      excludeFree: excludeFree(),
     }),
   );
   const streams = createMemo(() => streamRows(runs()));
@@ -153,7 +161,7 @@ export default function Ladder() {
   // that excludes nothing is worse than one that is obviously off (the rule
   // `SeriesFilterNote` states for the series filter).
   const billingUnknown = (): boolean =>
-    !freeplay() && excludeFree() && all().length > 0 && !billingKnown(all());
+    excludeFree() && all().length > 0 && !billingKnown(all());
   const rows = createMemo(() => ladderRows(runs()));
 
   return (
@@ -194,7 +202,6 @@ export default function Ladder() {
           onPick={pick(setHarness, HARNESS_KEY)}
           title="The harness tag. A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
         />
-        <Show when={!freeplay()}>
         <label class="filter check" title="Keep only the runs that cost money. A claude-code run counts as paid: a subscription is a bill (runner/src/billing.ts).">
           <input
             type="checkbox"
@@ -206,7 +213,6 @@ export default function Ladder() {
           />
           <span>exclude free</span>
         </label>
-        </Show>
       </div>
       <Show when={billingUnknown()}>
         <p class="dim">
