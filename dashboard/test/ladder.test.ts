@@ -34,6 +34,7 @@ import {
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
+import { familyOf, monogramOf } from "../src/lib/lineup";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
 
@@ -909,5 +910,47 @@ describe("streamSeries", () => {
     expect(layout.placed[0]!.d).toMatch(/^M[\d.]+,[\d.]+ (H[\d.]+ V[\d.]+ )*H[\d.]+$/);
     // The y axis is anchored at zero, so a two-level gain is not the whole chart.
     expect(layout.py(0)).toBe(box.y0);
+  });
+
+  /*
+   * The badge at each line's end (operator, 2026-08-29). `StreamChart` draws it
+   * from `series.model` through the same `familyOf` lookup `ModelIcon` and the
+   * scored scatter use, so what is testable without a DOM is the pair the
+   * component reads: one series per stream, each carrying the model whose
+   * family the badge is, and an id no family claims falling through to the
+   * monogram rather than to a hole. The glob behind `logoHrefOf` is a Vite
+   * feature, which is why the lookup and not the element is what is pinned —
+   * `dashboard/README.md` says why the components have no DOM harness.
+   */
+  test("every series carries the model its badge is drawn from, one per stream", () => {
+    const runs = [
+      fp({ runId: "s1", model: "anthropic/claude-sonnet-4-5", character: "Anvi", levels: [mark(9, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "s2", model: "z-ai/glm-5.2:free", character: "Bree", levels: [mark(7, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "s3", model: "stealth/ox-alpha", character: "Cass", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
+    ];
+    const { series } = seriesOf(runs);
+    expect(series.map((x) => [x.label, x.model])).toEqual([
+      ["Anvi", "anthropic/claude-sonnet-4-5"],
+      ["Bree", "z-ai/glm-5.2:free"],
+      ["Cass", "stealth/ox-alpha"],
+    ]);
+    // The logo each one resolves to — the `:free` suffix is stripped, not matched on.
+    expect(series.map((x) => familyOf(x.model)?.id ?? null)).toEqual(["claude", "glm", null]);
+    // …and the id nothing claims gets a letter instead, never an empty badge.
+    expect(monogramOf(series[2]!.model)).not.toBe("");
+    // One badge per stream, not one per attempt: a chain is still a single series.
+    const chained = seriesOf([
+      fp({ runId: "c1", model: "openai/gpt-5.6-luna", character: "Dex", levels: [mark(3, null, 0)], playtimeMs: 100_000 }),
+      fp({
+        runId: "c2",
+        continuedFrom: "c1",
+        startedAt: 200,
+        model: "openai/gpt-5.6-luna",
+        character: "Dex",
+        levels: [mark(4, null, 0)],
+        playtimeMs: 100_000,
+      }),
+    ]).series;
+    expect(chained.map((x) => familyOf(x.model)?.id)).toEqual(["openai"]);
   });
 });

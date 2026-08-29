@@ -19,13 +19,39 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import { type ChartBox, type StreamRow, type StreamStatus, streamChartLayout, streamSeries } from "../lib/ladder";
+import { MARK_R, type ChartBox, type StreamRow, type StreamStatus, streamChartLayout, streamSeries } from "../lib/ladder";
+import { logoHrefOf } from "./ModelIcon";
+import { monogramOf } from "../lib/lineup";
 import { fmtDuration } from "../lib/format";
 
 const VB_W = 1000;
 const VB_H = 380;
-const M = { top: 16, right: 156, bottom: 40, left: 52 };
+const M = { top: 16, right: 178, bottom: 40, left: 52 };
 const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
+
+/*
+ * The model's logo at the end of its line (operator, 2026-08-29): a reader
+ * looking at the field wants to know which character is which model, and the
+ * character label alone does not say. Exactly `LadderChart`'s mark — the same
+ * `logoHrefOf` over the same committed assets, the same puck radius, the same
+ * art size, the same white puck (a mono icon's `currentColor` resolves to black
+ * inside an image document, so it needs a light ground in both themes) — and
+ * the same `lib/lineup` monogram for an id no family claims, so a stream is
+ * never left with a hole where every other one has a badge. It sits between the
+ * status marker and the character label: the marker still carries status,
+ * the badge carries identity, and the label is untouched.
+ *
+ * It is anchored to the *marker*'s y, not the label's. `labelY` slides down to
+ * clear a label already placed, so a badge drawn against it would float free of
+ * its own line and sit between two of them, naming neither; on the line's end it
+ * always names the line it is on, and the label finds its own row as before.
+ */
+const LOGO_S = 7.5;
+/** Marker → badge, and badge → label. */
+const ICON_GAP = 8;
+const LABEL_GAP = 4;
+const iconCx = (endCx: number): number => endCx + ICON_GAP + MARK_R;
+const labelX = (endCx: number): number => endCx + ICON_GAP + MARK_R * 2 + LABEL_GAP;
 
 /** The colour of a stream's line: exactly the class the table's status cell takes. */
 function statusColour(status: StreamStatus): string {
@@ -156,7 +182,57 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
                     stroke={statusColour(p.series.status)}
                     stroke-width="1.5"
                   />
-                  <text x={p.endCx + 8} y={p.labelY} text-anchor="start" font-size="11" fill="var(--fg)">
+                  {/* The model, as its family's logo. `aria-label` names it in
+                      words; the anchor's own <title> above already reads
+                      "<character> (<model>)" for a pointer. */}
+                  <g class="streamchart-logo" role="img" aria-label={`model: ${p.series.model}`}>
+                    <Show
+                      when={logoHrefOf(p.series.model)}
+                      fallback={
+                        <>
+                          <circle
+                            cx={iconCx(p.endCx)}
+                            cy={p.endCy}
+                            r={MARK_R}
+                            fill="var(--panel)"
+                            stroke="var(--line)"
+                            stroke-width="1"
+                          />
+                          <text
+                            x={iconCx(p.endCx)}
+                            y={p.endCy + 3}
+                            text-anchor="middle"
+                            font-size="7"
+                            fill="var(--fg)"
+                          >
+                            {monogramOf(p.series.model)}
+                          </text>
+                        </>
+                      }
+                    >
+                      {(href) => (
+                        <>
+                          <circle
+                            cx={iconCx(p.endCx)}
+                            cy={p.endCy}
+                            r={MARK_R}
+                            fill="#ffffff"
+                            stroke={statusColour(p.series.status)}
+                            stroke-width="1"
+                          />
+                          <image
+                            href={href()}
+                            x={iconCx(p.endCx) - LOGO_S / 2}
+                            y={p.endCy - LOGO_S / 2}
+                            width={LOGO_S}
+                            height={LOGO_S}
+                            preserveAspectRatio="xMidYMid meet"
+                          />
+                        </>
+                      )}
+                    </Show>
+                  </g>
+                  <text x={labelX(p.endCx)} y={p.labelY} text-anchor="start" font-size="11" fill="var(--fg)">
                     <Show when={p.series.truncated}>
                       <tspan fill="var(--dim)">…</tspan>
                     </Show>
@@ -181,6 +257,8 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
         <span style={{ color: "var(--ok)" }}>●</span> live (the line ends at now){" "}
         <span style={{ color: "var(--warn)" }}>●</span> paused{" "}
         <span style={{ color: "var(--dim)" }}>●</span> ended (dashed), the same three the status column reads.
+        Each line ends with its model's family logo — the scatter's mark, and the same badge the table's
+        model column carries — because the character label does not say which model is playing it.
         <Show when={anyTruncated()}>
           {" "}
           A label with a leading … begins mid-history: that stream's oldest served attempt still names a
