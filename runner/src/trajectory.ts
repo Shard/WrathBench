@@ -96,15 +96,19 @@ export interface ItemSample {
  *   and a consumer counts level-ups as the marks that carry a `from`, never as
  *   the number of marks. `xp` is the reading at the moment the new level was
  *   first seen, which is what the client's bar showed.
- * - `death` / `release` / `resurrect`: the dead window opening (health at 0, the
- *   ghost flag, or a corpse the cache is holding — whichever the sample sees
- *   first), the spirit being released to a graveyard, and the ghost flag
- *   clearing again. `observedTs` on a `death` is the state cache's own
- *   timestamp for that evidence — the death's moment rather than the sample's,
- *   since the cache latches the corpse until the resurrect clears it. `zone` /
- *   `area` are the reading at first observation, which is the death site only
- *   when `released` is false; once the spirit is at the graveyard they are the
- *   graveyard's, and `released` is what says so.
+ * - `death` / `release` / `resurrect`: own health reaching zero, the spirit
+ *   being released to a graveyard, and the character being alive again.
+ *   Produced from the events themselves — the sandbox child latches each
+ *   transition as it arrives and the state sample drains what happened since
+ *   the last one — with the sampled window read kept as the fallback for a
+ *   process that opens on an already-dead character or a child that cannot
+ *   answer. `observedTs` on a `death` is the timestamp of the event that
+ *   carried it: the death's own moment, not the sample's. `zone` / `area` are
+ *   the reading at that moment, which is the death site unless `released` says
+ *   the spirit was already at the graveyard — on an event-driven death it
+ *   normally is not, and the `release` record a moment later is what says when
+ *   the spirit went; the field is absent when `playerFlags` had not been
+ *   observed at all, which is ordinary.
  */
 export type MilestoneLine =
   | {
@@ -133,7 +137,7 @@ export type MilestoneLine =
     }
   | {
       kind: "death";
-      /** The cache's timestamp for the death evidence, when it carried one. */
+      /** The death event's own timestamp (the sampled fallback uses the cache's). */
       observedTs?: number | undefined;
       /** Where the corpse is, and which packet said so; absent when unobserved. */
       position?:

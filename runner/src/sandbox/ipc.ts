@@ -20,6 +20,35 @@ export interface ActionHintNote {
   ts: number;
 }
 
+/**
+ * A death-window transition the child latched the moment the event carrying it
+ * arrived, rather than the moment the host next sampled.
+ *
+ * The host samples every `stateIntervalMs` (60s in the fleet); an entire death,
+ * release and spirit-healer resurrection fits inside 30 seconds, so the sampled
+ * window read misses whole deaths (run
+ * `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2`: three deaths, none
+ * recorded). The child sees every event, so the transition is latched there and
+ * drained from here; `ts` is the event's own timestamp, which is when the thing
+ * happened.
+ */
+export interface DeathSignal {
+  kind: "death" | "release" | "resurrect";
+  /** The timestamp of the event that carried the transition. */
+  ts: number;
+  /** That event's stream seq, for correlation with the event log. */
+  seq: number;
+  /** Death only: the corpse as the cache held it at that instant. */
+  position?: { map: number; x: number; y: number; z: number; source: "corpse_query" | "death_spot" };
+  /** Release only: the graveyard the spirit was released to. */
+  graveyard?: { map: number; x: number; y: number; z: number };
+  /** Death only: the zone/area ids at the moment of death. */
+  zone?: number;
+  area?: number;
+  /** Death only: the ghost flag as it read at that instant (usually false). */
+  released?: boolean;
+}
+
 export interface LogEntry {
   level: "log" | "info" | "warn" | "error" | "debug";
   ts: number;
@@ -39,7 +68,7 @@ export type HostToChild =
   | { t: "ping"; id: number }
   /** Abort the eval with this id: fires its `signal`, so SDK waits it left behind settle. */
   | { t: "abort"; id: number }
-  | { t: "rpc"; id: number; method: "recent_events" | "state_summary"; params: { limit?: number } }
+  | { t: "rpc"; id: number; method: "recent_events" | "state_summary" | "death_signals"; params: { limit?: number } }
   | { t: "shutdown" };
 
 export interface EvalResultMsg {

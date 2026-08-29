@@ -58,8 +58,8 @@ import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
-import { foldUiOpenWindows } from "../context";
-import type { ActionHintNote, ChildToHost, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -512,6 +512,125 @@ function abortEval(id: number): void {
 
 // --------------------------------------------------------------------- rpc
 
+// ------------------------------------------------------------ death watcher
+
+/**
+ * The death window, latched from the events that carry it.
+ *
+ * The host's state sample is the run's clock for milestones, and at 60s it is
+ * far coarser than a death: die, `repop()`, walk to the Spirit Healer,
+ * resurrect — the whole window closes in half a minute, and the state cache
+ * keeps no residue afterwards (`SMSG_DEATH_RELEASE_LOC` with `map: -1` clears
+ * the corpse, the graveyard and the reclaim delay). Three deaths in run
+ * `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2` were missed exactly that
+ * way, one of them by a single second. So the transitions are read here, where
+ * every event arrives, and the host drains what happened between its samples.
+ *
+ * The readings are the same ones the host's fallback window read uses, for the
+ * same reasons: own `health` off the raw field record (the derived gauge is
+ * withheld until `maxHealth` has been seen) and the ghost bit off `playerFlags`
+ * exactly as the HUD reads it. Release and resurrect additionally have a
+ * packet that says so outright — `SMSG_DEATH_RELEASE_LOC`, the graveyard on the
+ * way in and the clear marker on the way out — and that is the primary trigger,
+ * because `playerFlags` rides an update block that need not arrive with it.
+ *
+ * Registered after the client's own state fold (`onAny` runs in registration
+ * order), so every reading below is of a cache that already holds this event.
+ */
+const DEATH_SIGNAL_CAP = 64;
+const deathSignals: DeathSignal[] = [];
+/** Own health last read as zero. */
+let watchedDead = false;
+/** The spirit is released: the ghost flag, or the graveyard packet that made it one. */
+let watchedReleased = false;
+/**
+ * The ghost bit was actually seen set. Separate from `watchedReleased` because
+ * `playerFlags` need not ride the blocks that arrive during a death: a stale 0
+ * all the way through is ordinary, so only a bit that was seen *on* can be read
+ * as meaning anything when it goes off again.
+ */
+let watchedGhost = false;
+
+function pushDeathSignal(signal: DeathSignal): void {
+  deathSignals.push(signal);
+  if (deathSignals.length > DEATH_SIGNAL_CAP) deathSignals.splice(0, deathSignals.length - DEATH_SIGNAL_CAP);
+}
+
+/** Drain what the watcher latched since the last call. Host-only. */
+function drainDeathSignals(): DeathSignal[] {
+  return deathSignals.splice(0, deathSignals.length);
+}
+
+function point(v: unknown): { map: number; x: number; y: number; z: number } | undefined {
+  const p = v as { map?: unknown; x?: unknown; y?: unknown; z?: unknown } | undefined;
+  if (p === undefined || p === null) return undefined;
+  if (typeof p.map !== "number" || typeof p.x !== "number" || typeof p.y !== "number" || typeof p.z !== "number") {
+    return undefined;
+  }
+  return { map: p.map, x: p.x, y: p.y, z: p.z };
+}
+
+client.events.onAny((event) => {
+  const self = client.state.self;
+  const health = self.fields.get("health")?.value;
+  const flags = self.fields.get("playerFlags")?.value;
+  const ghost = typeof flags === "number" ? (flags & PLAYER_FLAGS_GHOST) !== 0 : undefined;
+  const releaseLoc =
+    event.opcode === "SMSG_DEATH_RELEASE_LOC" ? (event.data as { map?: unknown }) : undefined;
+  // The window as it stood *before* this event: a resurrect is only ever read
+  // against a window some earlier event opened, never against this one.
+  const wasDead = watchedDead;
+  const wasReleased = watchedReleased;
+  const wasGhost = watchedGhost;
+  const releasedTo = typeof releaseLoc?.map === "number" && releaseLoc.map >= 0;
+  const cleared = typeof releaseLoc?.map === "number" && releaseLoc.map < 0;
+
+  // The death: own health observed at zero, from a reading that was not.
+  if (health === 0 && !watchedDead) {
+    watchedDead = true;
+    const corpse = self.corpse?.value as { source?: unknown } | undefined;
+    const at = point(corpse);
+    const source = corpse?.source === "corpse_query" ? "corpse_query" : corpse?.source === "death_spot" ? "death_spot" : undefined;
+    const zone = (self.zone?.value as { id?: unknown } | undefined)?.id;
+    const area = (self.area?.value as { id?: unknown } | undefined)?.id;
+    pushDeathSignal({
+      kind: "death",
+      ts: event.ts,
+      seq: event.seq,
+      ...(at !== undefined && source !== undefined ? { position: { ...at, source } } : {}),
+      ...(typeof zone === "number" ? { zone } : {}),
+      ...(typeof area === "number" ? { area } : {}),
+      ...(ghost === undefined ? {} : { released: ghost }),
+    });
+  }
+
+  // The release: the graveyard packet, or the ghost flag turning on.
+  if (ghost === true) watchedGhost = true;
+  if (!watchedReleased && (releasedTo || ghost === true)) {
+    watchedReleased = true;
+    const grave = point(self.graveyard?.value);
+    pushDeathSignal({
+      kind: "release",
+      ts: event.ts,
+      seq: event.seq,
+      ...(grave === undefined ? {} : { graveyard: grave }),
+    });
+  }
+
+  // The resurrect: the clear marker, health back above the single point a
+  // released ghost carries, or the ghost flag turning off again. Read against
+  // the window as it stood before this event, so the event that opened the
+  // window cannot also close it — an unreleased corpse reads `ghost === false`
+  // too, and `playerFlags` is usually a stale 0 all through a death.
+  const alive = cleared || (typeof health === "number" && health > 1) || (ghost === false && wasGhost);
+  if ((wasDead || wasReleased) && alive) {
+    watchedDead = false;
+    watchedReleased = false;
+    watchedGhost = false;
+    pushDeathSignal({ kind: "resurrect", ts: event.ts, seq: event.seq });
+  }
+});
+
 function recentEvents(limit: number): EventSummary[] {
   return client.events.recent(limit).map((e) => ({
     seq: e.seq,
@@ -584,7 +703,11 @@ function handle(msg: HostToChild | HostcallResult): void {
     case "rpc": {
       try {
         const value =
-          msg.method === "recent_events" ? recentEvents(msg.params.limit ?? 50) : stateSnapshot();
+          msg.method === "recent_events"
+            ? recentEvents(msg.params.limit ?? 50)
+            : msg.method === "death_signals"
+              ? drainDeathSignals()
+              : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });
