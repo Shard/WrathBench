@@ -174,6 +174,18 @@ status.
     `RunDetail.tsx` ("continues <run>", linked) and a stream marker in the runs
     table, both off the `continuedFrom` field that now exists.
 
+93. **`fleet-update.sh graceful` cannot complete while a freeplay stream is live**
+    (2026-08-29). Graceful sets the pause switch and then waits for every live run
+    to "finish on its own clock" — an `idle: unlimited` freeplay session has no
+    clock, so the wait runs to its 8h ceiling. Observed on the 2026-08-29 recreate:
+    the switch paused the sonnet-low stream at once (55 min lost), the script sat on
+    "2 job(s) still live", and aborting it left the switch set, so `force --yes` had
+    to follow and then `resume` to clear it. Now that freeplay streams pause and
+    resume in place (98ed9f1), graceful should count a paused freeplay stream as
+    drained and proceed; and an aborted graceful should say the switch is still set.
+    Next action: teach the wait loop that `operator-pause`d freeplay runs are done,
+    and print the resume hint on Ctrl-C.
+
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
