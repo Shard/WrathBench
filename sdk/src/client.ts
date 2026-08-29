@@ -51,7 +51,12 @@ import {
   type ErrorBody,
   type FaceResponse,
   type GossipMessageData,
+  type GroupListData,
   type HealthResponse,
+  type MailListResultData,
+  type PartyCommandResultData,
+  type SendMailResultData,
+  type ShowFrameData,
   type InventoryChangeFailureData,
   type ItemPushResultData,
   type KnownMoveStatus,
@@ -69,6 +74,7 @@ import {
   type QuestGiverRequestItemsData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
+  type RawField,
   type RawPayload,
   type SessionResponse,
   type TalentsInfoData,
@@ -87,11 +93,17 @@ import {
   type WaitForOptions,
 } from "./events";
 import {
+  mailResultText,
+  partyResultText,
   pointOf,
   questGiverStatusName,
   StateCache,
+  type BankContents,
   type BindPoint,
   type ChatEntry,
+  type GroupState,
+  type MailboxState,
+  type PetSpellEntry,
   type CorpseLocation,
   type NearbyObject,
   type Point3,
@@ -1539,6 +1551,43 @@ export interface ResetTalentsOptions {
   option?: string | number;
 }
 
+/** The outcome of `inviteToGroup`: the server's `SMSG_PARTY_COMMAND_RESULT` on the invite. */
+export type InviteResult = { ok: true; status: "invited"; name: string } | { ok: false; status: "refused"; name: string; result: number; hint: string };
+
+export interface GroupOptions {
+  /** How long to wait for the server's answer. Default 10000. */
+  timeout?: number;
+}
+
+export interface MailOptions {
+  /** How long to wait for the server's answer. Default 10000. */
+  timeout?: number;
+}
+
+/** What `sendMail` attaches: carried items by the `bag`/`slot` `state.bag()` lists them under. */
+export interface SendMailOptions extends MailOptions {
+  /** Copper to enclose. */
+  money?: number;
+  /** Cash-on-delivery the recipient pays to take the items. */
+  cod?: number;
+  items?: readonly { bag: number; slot: number }[];
+}
+
+/** The outcome of a mail action, as the server's `SMSG_SEND_MAIL_RESULT` said it. */
+export type MailResult =
+  | { ok: true; status: "sent" | "money_taken" | "item_taken" | "deleted" | "returned"; mailId: number }
+  | { ok: false; status: "refused"; mailId: number; result: number; inventoryResult: number | undefined; hint: string };
+
+export interface BankOptions {
+  /** How long to wait for the item to move (or the server to refuse). Default 10000. */
+  timeout?: number;
+}
+
+/** The outcome of `bankDeposit` / `bankWithdraw`: the item's new place, or the server's `SMSG_INVENTORY_CHANGE_FAILURE`. */
+export type BankMoveResult =
+  | { ok: true; status: "moved"; guid: string; bag: number; slot: number }
+  | { ok: false; status: "refused"; guid: string; result: number; hint: string };
+
 /**
  * The outcome of `resetTalents`, as a value. `reset` is the server's
  * `SMSG_TALENTS_INFO` after the confirm with every rank gone and the points
@@ -2859,6 +2908,356 @@ export class WrathClient {
     const talents = this.state.talents();
     if (talents === undefined) throw new Error("resetTalents: SMSG_TALENTS_INFO arrived but the state cache holds no talent state");
     return { ok: true, status: "reset", cost: ask.cost, talents };
+  }
+
+  // ------------------------------------------------------------------ pets (item 98)
+
+  /**
+   * The pet the control bar is for, or a thrown explanation. Every pet
+   * helper starts here: the guid is what `CMSG_PET_ACTION` addresses.
+   */
+  private petGuidOrThrow(what: string): string {
+    const pet = this.state.pet();
+    if (pet === undefined) {
+      throw new Error(
+        `${what}: there is no pet — state.pet() is undefined. Summon one first (a warlock's Summon Imp, a hunter's Call Pet) ` +
+          `and wait for the control bar (SMSG_PET_SPELLS) to arrive.`,
+      );
+    }
+    return pet.guid;
+  }
+
+  /** `CMSG_PET_ACTION` with one action-bar button: `data` is `action | type << 24` as the wire packs it. */
+  private petAction(petGuid: string, action: number, type: number, targetGuid: string = "0"): Promise<RawActionResponse> {
+    return this.raw("CMSG_PET_ACTION", [{ guid: petGuid }, { u32: ((action & 0x00ffffff) | (type << 24)) >>> 0 }, { guid: targetGuid }]);
+  }
+
+  /**
+   * Order the pet to attack a unit (the "Attack" button: `CMSG_PET_ACTION`
+   * with `COMMAND_ATTACK`). Ack-only; the pet's swings show as
+   * `SMSG_ATTACKERSTATEUPDATE` from its guid, a refusal as
+   * `SMSG_PET_ACTION_FEEDBACK` (`petFeedbackText`).
+   */
+  petAttack(target: GuidOrUnit): Promise<RawActionResponse> {
+    const pet = this.petGuidOrThrow("petAttack(target)");
+    return this.petAction(pet, 2, 0x07, guidKey(guidOf(target, "petAttack(target)")));
+  }
+
+  /** Order the pet to follow you (the "Follow" button). Ack-only; `state.pet().command` follows the next `SMSG_PET_SPELLS`. */
+  petFollow(): Promise<RawActionResponse> {
+    return this.petAction(this.petGuidOrThrow("petFollow()"), 1, 0x07);
+  }
+
+  /** Order the pet to stay where it is (the "Stay" button). Ack-only. */
+  petStay(): Promise<RawActionResponse> {
+    return this.petAction(this.petGuidOrThrow("petStay()"), 0, 0x07);
+  }
+
+  /** Set the pet's react state: `"passive"`, `"defensive"` or `"aggressive"` (the react buttons). Ack-only. */
+  petReact(reaction: "passive" | "defensive" | "aggressive"): Promise<RawActionResponse> {
+    const state = { passive: 0, defensive: 1, aggressive: 2 }[reaction];
+    return this.petAction(this.petGuidOrThrow("petReact(reaction)"), state, 0x06);
+  }
+
+  /**
+   * Have the pet cast one of its own spells, by name (`state.pet().spells`,
+   * exact or unique substring) or id, at a unit or at nothing. The pet frame's
+   * button: `CMSG_PET_ACTION` with the spell. Ack-only; a refusal arrives as
+   * `SMSG_PET_CAST_FAILED`. Throws when the pet does not know the spell.
+   */
+  petCast(spell: string | number, target?: GuidOrUnit): Promise<RawActionResponse> {
+    const pet = this.petGuidOrThrow("petCast(spell, target?)");
+    const known: PetSpellEntry | undefined = this.state.petSpell(spell);
+    if (known === undefined) {
+      const names = (this.state.pet()?.spells ?? []).map((s) => `${s.spellId}:${JSON.stringify(s.name ?? "?")}`).join(", ");
+      throw new Error(`petCast(${JSON.stringify(spell)}): the pet does not know that spell — its book is [${names}]`);
+    }
+    if (known.passive) throw new Error(`petCast(${JSON.stringify(spell)}): ${known.name ?? known.spellId} is passive and cannot be cast`);
+    return this.petAction(pet, known.spellId, 0x81, target === undefined ? "0" : guidKey(guidOf(target, "petCast(spell, target)")));
+  }
+
+  /**
+   * Send the pet away the way a client does: a hunter casts Dismiss Pet
+   * (spell 2641, from the spellbook — the pet stays in the stable and can
+   * be called back), any other pet gets the "Abandon" command, which for a
+   * warlock's demon or a temporary summon just dismisses it. Ack-only; the
+   * bar removal is `SMSG_PET_SPELLS` with `removed: true`, after which
+   * `state.pet()` is undefined.
+   */
+  petDismiss(): Promise<ActionResponse> {
+    const pet = this.petGuidOrThrow("petDismiss()");
+    const dismiss = this.state.spell(2641);
+    if (dismiss !== undefined) return this.castSpell(2641);
+    return this.petAction(pet, 3, 0x07);
+  }
+
+  // ---------------------------------------------------------------- group (item 100)
+
+  /**
+   * Invite a player by name (`CMSG_GROUP_INVITE`) and return the server's
+   * verdict (`SMSG_PARTY_COMMAND_RESULT` for the invite). `invited` means the
+   * invitation was delivered, not accepted: the other side's answer shows up
+   * as `SMSG_GROUP_LIST` (accepted, `state.group().inGroup`) or
+   * `SMSG_GROUP_DECLINE` (`state.group().lastDecline`).
+   */
+  async inviteToGroup(name: string, options: GroupOptions = {}): Promise<InviteResult> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_GROUP_INVITE", [{ cstring: name }, { u32: 0 }]);
+    const event = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_PARTY_COMMAND_RESULT") &&
+        !isDecodeError(e.data) &&
+        (e.data as PartyCommandResultData).operation === 0 &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: `the SMSG_PARTY_COMMAND_RESULT answering inviteToGroup(${JSON.stringify(name)})` },
+    );
+    const d = event.data as PartyCommandResultData;
+    if (d.result === 0) return { ok: true, status: "invited", name };
+    const hint = `the server refused the invite: ${partyResultText(d.result)}`;
+    this.noteActionHint("inviteToGroup", "refused", hint);
+    return { ok: false, status: "refused", name, result: d.result, hint };
+  }
+
+  /**
+   * Accept the pending invitation (`CMSG_GROUP_ACCEPT`) and return the party
+   * once the server lists it (`SMSG_GROUP_LIST`). Throws when there is no
+   * pending invite in `state.group()`.
+   */
+  async acceptGroupInvite(options: GroupOptions = {}): Promise<GroupState> {
+    if (this.state.group()?.pendingInvite === undefined) {
+      throw new Error("acceptGroupInvite(): no invitation is pending (state.group()?.pendingInvite is undefined) — nobody has invited you, or the invite already expired");
+    }
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_GROUP_ACCEPT", [{ u32: 0 }]);
+    await this.waitEvent(
+      (e) => isEvent(e, "SMSG_GROUP_LIST") && !isDecodeError(e.data) && !(e.data as GroupListData).left && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: "the SMSG_GROUP_LIST after accepting the invite" },
+    );
+    return this.state.group()!;
+  }
+
+  /** Decline the pending invitation (`CMSG_GROUP_DECLINE`). Ack-only. */
+  declineGroupInvite(): Promise<RawActionResponse> {
+    return this.raw("CMSG_GROUP_DECLINE", "");
+  }
+
+  /**
+   * Leave the party (`CMSG_GROUP_DISBAND`, which is also what a leader's
+   * "leave" sends) and return the party state once the server confirms
+   * (`SMSG_GROUP_LIST` in its left form, or `SMSG_GROUP_DESTROYED`).
+   */
+  async leaveGroup(options: GroupOptions = {}): Promise<GroupState> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_GROUP_DISBAND", "");
+    await this.waitEvent(
+      (e) =>
+        (sinceSeq === undefined || e.seq > sinceSeq) &&
+        ((isEvent(e, "SMSG_GROUP_LIST") && !isDecodeError(e.data) && (e.data as GroupListData).left) || isEvent(e, "SMSG_GROUP_DESTROYED")),
+      { timeout: options.timeout ?? 10_000, description: "the SMSG_GROUP_LIST / SMSG_GROUP_DESTROYED after leaving the group" },
+    );
+    return this.state.group()!;
+  }
+
+  // ----------------------------------------------------------------- mail (item 100)
+
+  /** The mailbox the frame is open on, or a thrown explanation. */
+  private mailboxGuidOrThrow(what: string): string {
+    const guid = this.state.mailbox()?.guid;
+    if (guid === undefined) {
+      throw new Error(`${what}: no mailbox frame is open — openMailbox(mailbox) on a mailbox game object in view (state.units({ type: "gameObject" }) with goType "mailbox") first`);
+    }
+    return guid;
+  }
+
+  /** Open a mailbox (`CMSG_GAMEOBJ_USE` on it, as a client does) and wait for the frame (`SMSG_SHOW_MAILBOX`). */
+  async openMailbox(mailbox: GuidOrUnit, options: MailOptions = {}): Promise<MailboxState> {
+    const id = guidKey(guidOf(mailbox, "openMailbox(mailbox)"));
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.interact(id);
+    await this.waitEvent(
+      (e) => isEvent(e, "SMSG_SHOW_MAILBOX") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_MAILBOX for ${id} (is it a mailbox, and are you within reach?)` },
+    );
+    return this.state.mailbox()!;
+  }
+
+  private async waitMailResult(action: number, sinceSeq: number | undefined, timeout: number, what: string): Promise<MailResult> {
+    const event = await this.waitEvent(
+      (e) => isEvent(e, "SMSG_SEND_MAIL_RESULT") && !isDecodeError(e.data) && (e.data as SendMailResultData).action === action && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout, description: `the SMSG_SEND_MAIL_RESULT answering ${what}` },
+    );
+    const d = event.data as SendMailResultData;
+    if (d.result === 0) {
+      const status = (["sent", "money_taken", "item_taken", "returned", "deleted"] as const)[action] ?? "sent";
+      return { ok: true, status, mailId: d.mailId };
+    }
+    const hint =
+      `the server refused ${what}: ${mailResultText(d.result)}` +
+      (d.inventoryResult !== undefined ? ` (${inventoryResultText(d.inventoryResult) ?? `inventory result ${d.inventoryResult}`})` : "");
+    this.noteActionHint("mail", "refused", hint);
+    return { ok: false, status: "refused", mailId: d.mailId, result: d.result, inventoryResult: d.inventoryResult, hint };
+  }
+
+  /**
+   * Send a mail from the open mailbox (`CMSG_SEND_MAIL`): a recipient name,
+   * subject, body, optional money / COD and up to 12 carried items by
+   * `bag`/`slot`. Postage (30 copper) plus any money comes out of
+   * `state.money`. Returns the server's verdict; items to another account
+   * take an hour to deliver, money and text are immediate.
+   */
+  async sendMail(to: string, subject: string, body: string, options: SendMailOptions = {}): Promise<MailResult> {
+    const mailbox = this.mailboxGuidOrThrow("sendMail(to, subject, body)");
+    const items = options.items ?? [];
+    if (items.length > 12) throw new Error(`sendMail: at most 12 items per mail (got ${items.length})`);
+    const carried = this.state.bag().items;
+    const fields: RawField[] = [{ guid: mailbox }, { cstring: to }, { cstring: subject }, { cstring: body }, { u32: 41 }, { u32: 0 }, { u8: items.length }];
+    items.forEach((slot, i) => {
+      const row = carried.find((it) => it.bag === slot.bag && it.slot === slot.slot);
+      if (row === undefined) throw new Error(`sendMail: nothing is carried at bag ${slot.bag} slot ${slot.slot} (state.bag().items lists what is)`);
+      fields.push({ u8: i }, { guid: row.guid });
+    });
+    fields.push({ u32: options.money ?? 0 }, { u32: options.cod ?? 0 }, { u64: "0" }, { u8: 0 });
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_SEND_MAIL", fields);
+    return this.waitMailResult(0, sinceSeq, options.timeout ?? 10_000, `sendMail(${JSON.stringify(to)})`);
+  }
+
+  /** List the inbox at the open mailbox (`CMSG_GET_MAIL_LIST`) and return it (`SMSG_MAIL_LIST_RESULT`, also `state.mailbox()`). */
+  async mailList(options: MailOptions = {}): Promise<MailboxState> {
+    const mailbox = this.mailboxGuidOrThrow("mailList()");
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_GET_MAIL_LIST", [{ guid: mailbox }]);
+    await this.waitEvent(
+      (e) => isEvent(e, "SMSG_MAIL_LIST_RESULT") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: "the SMSG_MAIL_LIST_RESULT answering mailList()" },
+    );
+    void (undefined as MailListResultData | undefined);
+    return this.state.mailbox()!;
+  }
+
+  /** Take the money out of a mail (`CMSG_MAIL_TAKE_MONEY`) and return the verdict. */
+  async takeMailMoney(mailId: number, options: MailOptions = {}): Promise<MailResult> {
+    const mailbox = this.mailboxGuidOrThrow("takeMailMoney(mailId)");
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_MAIL_TAKE_MONEY", [{ guid: mailbox }, { u32: mailId }]);
+    return this.waitMailResult(1, sinceSeq, options.timeout ?? 10_000, `takeMailMoney(${mailId})`);
+  }
+
+  /** Take one attached item out of a mail (`CMSG_MAIL_TAKE_ITEM`; `itemGuidLow` from `state.mailbox().mails[].items[]`) and return the verdict. */
+  async takeMailItem(mailId: number, itemGuidLow: number, options: MailOptions = {}): Promise<MailResult> {
+    const mailbox = this.mailboxGuidOrThrow("takeMailItem(mailId, itemGuidLow)");
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_MAIL_TAKE_ITEM", [{ guid: mailbox }, { u32: mailId }, { u32: itemGuidLow }]);
+    return this.waitMailResult(2, sinceSeq, options.timeout ?? 10_000, `takeMailItem(${mailId}, ${itemGuidLow})`);
+  }
+
+  /** Delete a mail (`CMSG_MAIL_DELETE`) and return the verdict. */
+  async deleteMail(mailId: number, options: MailOptions = {}): Promise<MailResult> {
+    const mailbox = this.mailboxGuidOrThrow("deleteMail(mailId)");
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_MAIL_DELETE", [{ guid: mailbox }, { u32: mailId }]);
+    return this.waitMailResult(4, sinceSeq, options.timeout ?? 10_000, `deleteMail(${mailId})`);
+  }
+
+  // ----------------------------------------------------------------- bank (item 100)
+
+  /** Open the bank at a banker (`CMSG_BANKER_ACTIVATE`) and return it once the frame opens (`SMSG_SHOW_BANK`; also `state.bank()`). */
+  async openBank(npcGuid: GuidOrUnit, options: BankOptions = {}): Promise<BankContents> {
+    const id = guidKey(guidOf(npcGuid, "openBank(npcGuid)"));
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_BANKER_ACTIVATE", [{ guid: id }]);
+    await this.waitEvent(
+      (e) => isEvent(e, "SMSG_SHOW_BANK") && !isDecodeError(e.data) && guidKey((e.data as ShowFrameData).guid) === id && (sinceSeq === undefined || e.seq > sinceSeq),
+      { timeout: options.timeout ?? 10_000, description: `the SMSG_SHOW_BANK for ${id} (is it a banker — state.units({ role: "banker" }) — within reach?)` },
+    );
+    return this.state.bank();
+  }
+
+  /**
+   * One bank move: send the opcode, then wait for the item's guid to show up
+   * where `landed` says, or for the server's `SMSG_INVENTORY_CHANGE_FAILURE`.
+   */
+  private async bankMove(
+    opcode: "CMSG_AUTOBANK_ITEM" | "CMSG_AUTOSTORE_BANK_ITEM",
+    guid: string,
+    bag: number,
+    slot: number,
+    landed: () => { bag: number; slot: number } | undefined,
+    timeout: number,
+    what: string,
+  ): Promise<BankMoveResult> {
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw(opcode, [{ u8: bag }, { u8: slot }]);
+    let failure: InventoryChangeFailureData | undefined;
+    let place: { bag: number; slot: number } | undefined;
+    await this.waitEvent(
+      (e) => {
+        if (sinceSeq !== undefined && e.seq <= sinceSeq) return false;
+        if (isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") && !isDecodeError(e.data)) {
+          failure = e.data as InventoryChangeFailureData;
+          return true;
+        }
+        place = landed();
+        return place !== undefined;
+      },
+      { timeout, includeBuffered: false, description: `the item to move (or SMSG_INVENTORY_CHANGE_FAILURE) after ${what}` },
+    );
+    if (failure !== undefined) {
+      const f: InventoryChangeFailureData = failure;
+      const hint = `the server refused ${what}: ${inventoryResultText(f.result) ?? `inventory result ${f.result}`}`;
+      this.noteActionHint("bank", "refused", hint);
+      return { ok: false, status: "refused", guid, result: f.result, hint };
+    }
+    const at = place ?? landed()!;
+    return { ok: true, status: "moved", guid, bag: at.bag, slot: at.slot };
+  }
+
+  /**
+   * Put a carried item in the bank (`CMSG_AUTOBANK_ITEM`; `bag`/`slot` as
+   * `state.bag()` lists them) and return where it landed in `state.bank()`,
+   * or the server's refusal (bank full, not at a banker, ...). Needs the
+   * bank frame open (`openBank`).
+   */
+  async bankDeposit(bag: number, slot: number, options: BankOptions = {}): Promise<BankMoveResult> {
+    const row = this.state.bag().items.find((it) => it.bag === bag && it.slot === slot);
+    if (row === undefined) throw new Error(`bankDeposit(${bag}, ${slot}): nothing is carried there (state.bag().items lists what is)`);
+    const guid = row.guid;
+    return this.bankMove(
+      "CMSG_AUTOBANK_ITEM",
+      guid,
+      bag,
+      slot,
+      () => {
+        const hit = this.state.bank().items.find((it) => it.guid === guid);
+        return hit === undefined ? undefined : { bag: hit.bag, slot: hit.slot };
+      },
+      options.timeout ?? 10_000,
+      `bankDeposit(${bag}, ${slot})`,
+    );
+  }
+
+  /**
+   * Take an item out of the bank (`CMSG_AUTOSTORE_BANK_ITEM`; `bag`/`slot`
+   * as `state.bank()` lists them: 255 with 39-66 for the main bank, a bank
+   * bag's slot 67-73 with its inner slot) and return where it landed in
+   * `state.bag()`, or the server's refusal. Needs the bank frame open.
+   */
+  async bankWithdraw(bag: number, slot: number, options: BankOptions = {}): Promise<BankMoveResult> {
+    const row = this.state.bank().items.find((it) => it.bag === bag && it.slot === slot);
+    if (row === undefined) throw new Error(`bankWithdraw(${bag}, ${slot}): nothing is banked there (state.bank().items lists what is)`);
+    const guid = row.guid;
+    return this.bankMove(
+      "CMSG_AUTOSTORE_BANK_ITEM",
+      guid,
+      bag,
+      slot,
+      () => {
+        const hit = this.state.bag().items.find((it) => it.guid === guid);
+        return hit === undefined ? undefined : { bag: hit.bag, slot: hit.slot };
+      },
+      options.timeout ?? 10_000,
+      `bankWithdraw(${bag}, ${slot})`,
+    );
   }
 
   /**

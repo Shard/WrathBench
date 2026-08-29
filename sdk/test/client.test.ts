@@ -24,6 +24,9 @@ import {
   inventorySlotCleared,
   inventorySlotMove,
   ITEM_ENTRY,
+  ITEM_GUID,
+  ITEM_GUID_HI,
+  ITEM_GUID_LO,
   itemCreate,
   itemPushed,
   itemQuery,
@@ -3269,6 +3272,151 @@ describe("client: queryTalentTree and resetTalents (item 96)", () => {
     stub.push(menu(530, false));
     const err = await noOption.catch((e: unknown) => e);
     expect((err as Error).message).toContain("no option");
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
+  const TS = 1_700_000_000_000;
+  const PET_GUID = "17365880163140632999";
+  const frame = (seq: number, opcode: string, data: unknown): string => JSON.stringify({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
+  const guidHex = (g: string) => BigInt(g).toString(16).padStart(16, "0").match(/../g)!.reverse().join("");
+  const u32Hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0").match(/../g)!.reverse().join("");
+  const petBar = (seq: number) =>
+    frame(seq, "SMSG_PET_SPELLS", {
+      guid: PET_GUID,
+      removed: false,
+      family: 0,
+      durationMs: 0,
+      reactState: 1,
+      commandState: 1,
+      flags: 0,
+      actionBar: [],
+      spells: [{ spellId: 3110, active: 0xc1, autocast: true, rank: 1, name: "Firebolt" }],
+      cooldowns: [],
+    });
+
+  test("petAttack / petFollow / petCast build the CMSG_PET_ACTION button the pet frame sends; no pet throws", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    expect(() => client.petFollow()).toThrow(/no pet/);
+    stub.push(petBar(500));
+    await client.events.waitForOpcode("SMSG_PET_SPELLS", { timeout: 2000 });
+    await client.petAttack(CREATURE_GUID);
+    let at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({ action: "raw", opcode: "CMSG_PET_ACTION", payload: guidHex(PET_GUID) + u32Hex(2 | (0x07 << 24)) + guidHex(CREATURE_GUID) });
+    await client.petFollow();
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(1 | (0x07 << 24)) + guidHex("0") });
+    await client.petCast("fire", CREATURE_GUID);
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(3110 | (0x81 << 24)) + guidHex(CREATURE_GUID) });
+    expect(() => client.petCast("Growl")).toThrow(/does not know/);
+    await client.petDismiss();
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ payload: guidHex(PET_GUID) + u32Hex(3 | (0x07 << 24)) + guidHex("0") });
+    client.close();
+    await stub.stop();
+  });
+
+  test("inviteToGroup reads the party result; acceptGroupInvite and leaveGroup wait for the list", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const invite = client.inviteToGroup("Quilby", { timeout: 2000 });
+    let at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_GROUP_INVITE", payload: "5175696c62790000000000" });
+    stub.push(frame(510, "SMSG_PARTY_COMMAND_RESULT", { operation: 0, name: "Quilby", result: 5, value: 0 }));
+    expect(await invite).toMatchObject({ ok: false, status: "refused", result: 5 });
+    expect(client.drainActionHints()[0]?.hint).toContain("already in a group");
+
+    expect(client.acceptGroupInvite({ timeout: 2000 })).rejects.toThrow(/no invitation is pending/);
+    stub.push(frame(511, "SMSG_GROUP_INVITE", { canAccept: true, inviterName: "Ordrick" }));
+    await client.events.waitForOpcode("SMSG_GROUP_INVITE", { timeout: 2000 });
+    const accept = client.acceptGroupInvite({ timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_GROUP_ACCEPT", payload: "00000000" });
+    stub.push(
+      frame(512, "SMSG_GROUP_LIST", {
+        groupType: 0, left: false, raid: false, subGroup: 0, memberFlags: 0, roles: 0, groupGuid: "1", counter: 1,
+        members: [{ name: "Ordrick", guid: "9", online: true, subGroup: 0, flags: 0, roles: 0 }], leaderGuid: "9", lootMethod: 0,
+      }),
+    );
+    expect((await accept).inGroup).toBe(true);
+    const leave = client.leaveGroup({ timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_GROUP_DISBAND", payload: "" });
+    stub.push(frame(513, "SMSG_GROUP_LIST", { groupType: 0x10, left: true, raid: false, subGroup: 0, memberFlags: 0, roles: 0, groupGuid: "1", counter: 2, members: [], leaderGuid: "0" }));
+    expect((await leave).inGroup).toBe(false);
+    client.close();
+    await stub.stop();
+  });
+
+  test("openMailbox, sendMail, mailList and takeMailMoney: the frame first, then the bodies and verdicts", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    expect(() => client.mailList()).toThrow(/no mailbox frame/);
+    const open = client.openMailbox(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "interact");
+    stub.push(frame(520, "SMSG_SHOW_MAILBOX", { guid: CREATURE_GUID }));
+    expect((await open).guid).toBe(CREATURE_GUID);
+
+    const send = client.sendMail("Quilby", "hi", "text", { money: 100, timeout: 2000 });
+    let at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({
+      opcode: "CMSG_SEND_MAIL",
+      payload: guidHex(CREATURE_GUID) + "5175696c627900" + "686900" + "7465787400" + u32Hex(41) + u32Hex(0) + "00" + u32Hex(100) + u32Hex(0) + "0000000000000000" + "00",
+    });
+    stub.push(frame(521, "SMSG_SEND_MAIL_RESULT", { mailId: 0, action: 0, result: 0 }));
+    expect(await send).toMatchObject({ ok: true, status: "sent" });
+
+    const list = client.mailList({ timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_GET_MAIL_LIST", payload: guidHex(CREATURE_GUID) });
+    stub.push(
+      frame(522, "SMSG_MAIL_LIST_RESULT", {
+        total: 1, count: 1,
+        mails: [{ mailId: 7, type: 0, senderGuid: "9", cod: 0, stationery: 41, money: 100, flags: 0, read: false, daysLeft: 29, templateId: 0, subject: "hi", body: "text", items: [] }],
+      }),
+    );
+    expect((await list).mails[0]).toMatchObject({ mailId: 7, money: 100 });
+
+    const take = client.takeMailMoney(7, { timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_MAIL_TAKE_MONEY", payload: guidHex(CREATURE_GUID) + u32Hex(7) });
+    stub.push(frame(523, "SMSG_SEND_MAIL_RESULT", { mailId: 7, action: 1, result: 6 }));
+    expect(await take).toMatchObject({ ok: false, status: "refused", result: 6 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("openBank, bankDeposit (lands in a bank slot) and bankWithdraw (refused by the server)", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, inventorySlot, itemCreate, itemQuery]) });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const open = client.openBank(CREATURE_GUID, { timeout: 2000 });
+    let at = await untilAction(stub, "raw");
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_BANKER_ACTIVATE", payload: guidHex(CREATURE_GUID) });
+    stub.push(frame(530, "SMSG_SHOW_BANK", { guid: CREATURE_GUID }));
+    expect((await open).guid).toBe(CREATURE_GUID);
+
+    expect(() => client.bankDeposit(255, 30)).toThrow(/nothing is carried/);
+    const deposit = client.bankDeposit(255, BACKPACK_SLOT, { timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOBANK_ITEM", payload: "ff" + BACKPACK_SLOT.toString(16) });
+    stub.push(
+      frame(531, "SMSG_UPDATE_OBJECT", {
+        blocks: 1,
+        objects: [{ update: "values", guid: SELF_GUID, fields: { [`invSlot${BACKPACK_SLOT}Lo`]: 0, [`invSlot${BACKPACK_SLOT}Hi`]: 0, invSlot39Lo: ITEM_GUID_LO, invSlot39Hi: ITEM_GUID_HI } }],
+      }),
+    );
+    expect(await deposit).toMatchObject({ ok: true, status: "moved", bag: 255, slot: 39, guid: ITEM_GUID });
+
+    const withdraw = client.bankWithdraw(255, 39, { timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOSTORE_BANK_ITEM", payload: "ff27" });
+    stub.push(frame(532, "SMSG_INVENTORY_CHANGE_FAILURE", { result: 4 }));
+    expect(await withdraw).toMatchObject({ ok: false, status: "refused", result: 4 });
     client.close();
     await stub.stop();
   });
