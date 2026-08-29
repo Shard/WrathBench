@@ -478,6 +478,18 @@ What the supervisor does with it, per tick:
   account over the model's last run; if that account is busy the pick is
   **held** (`policy <ref>: waiting for RUNNER2 — its freeplay character
   Bromdir is there`), never started fresh elsewhere.
+- **One stream per model+effort.** A `unlimited` ref has exactly one character
+  at a time, and the freeplay ladder shows the live field, not every dead
+  character a model ever rolled (operator ask, 2026-08-29). The older ended
+  sessions of a stream are parked with `bun runner/src/archive.ts --run-ids`
+  ("Archiving runs"), which is a decision about listings and nothing else: the
+  character is untouched, the trajectories survive under `archive/`, and the
+  scheduler still reads them. A continuation whose predecessor has been
+  archived **stays valid** — `loadContinuation` reads it from
+  `<runs>/archive/<id>`, scratchpad and all, because the stream election reads
+  archived facts too. A predecessor that is on disk nowhere is not fatal
+  either: the launch drops the lineage (`continue-dropped`, naming the missing
+  id) and starts fresh rather than dying.
 - **Nothing else deletes it.** Every fresh launch on an account that holds
   another ref's stream character gets `--keep-characters`, so a scored run's
   hygiene leaves it standing (the model is told the name is taken, and the
@@ -854,11 +866,14 @@ but `run-fleet --status` and the scheduler do, because the defer ladder is made
 of launches that did not happen and because attempt numbers must stay unique on
 disk.
 
-The CLI parks runs for the other reason, the comparability floor:
+The CLI parks runs for the other two reasons — the comparability floor, and
+the operator's own judgement about what a listing should show:
 
 ```
 bun runner/src/archive.ts --pre-series 0.4 --dry-run            # everything below the harness-0.4 floor
 bun runner/src/archive.ts --pre-series 0.4 --release-paused     # ...including parked runs nobody holds
+bun runner/src/archive.ts --run-ids a,b,c --dry-run             # exactly these runs
+bun runner/src/archive.ts --run-ids @ids.txt --release-paused   # ...one id per line, # comments skipped
 ```
 
 `--pre-series` parks every run whose recorded harness version is not a clean
@@ -870,6 +885,15 @@ the dry-run first; a live run is the one thing this must not touch.
 `--release-paused` lets a run through the activity hold when its meta records a
 pause and no `run.ts` process names it: a supervisor retrying a paused run
 rewrites its files every few minutes, which would hold it forever.
+
+`--run-ids` parks exactly the runs you name, with the same three held guards in
+the same order, the same `--release-paused` and the same `--dry-run` — naming a
+run is not a licence to move a directory out from under a live writer. An id
+that names no movable run (a typo, a run already parked, a directory that is
+not a run) is **reported on its own line and counted separately**; it is never
+thrown and never silently skipped, so nineteen ids that produce eighteen moves
+say so. Dry-run first and check the count: `archiveRun` is a rename with no
+guard of its own, and the plan is the only filter in front of it.
 
 ### Subscription lanes
 
