@@ -146,6 +146,12 @@ export interface RosterSpec {
    * and must survive this launch's hygiene (`--keep-characters`).
    */
   keepCharacters?: string[];
+  /**
+   * A stream head this launch deliberately does not continue: the supervisor
+   * found its account occupied by another ref's stream and started fresh
+   * elsewhere (`--continue-dropped`, `--continue-dropped-reason`). Record only.
+   */
+  continueDropped?: { runId: string; reason: string };
 }
 
 export interface Resolved {
@@ -175,6 +181,7 @@ export interface Resolved {
   resumeOnPause: boolean;
   continueFrom: string | undefined;
   keepCharacters: string[];
+  continueDropped: { runId: string; reason: string } | undefined;
 }
 
 type Outcome =
@@ -471,6 +478,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
       continueFrom: s.continueFrom,
       keepCharacters: s.keepCharacters ?? [],
+      continueDropped: s.continueDropped,
     });
   }
   return out;
@@ -546,6 +554,9 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // identity and the account's hygiene does not run).
   if (spec.continueFrom !== undefined) argv.push("--continue-from", spec.continueFrom);
   if (spec.keepCharacters.length > 0) argv.push("--keep-characters", spec.keepCharacters.join(","));
+  if (spec.continueDropped !== undefined) {
+    argv.push("--continue-dropped", spec.continueDropped.runId, "--continue-dropped-reason", spec.continueDropped.reason);
+  }
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.

@@ -300,6 +300,15 @@ async function main(): Promise<void> {
     typeof args["keep-characters"] === "string"
       ? args["keep-characters"].split(",").map((n) => n.trim()).filter((n) => n.length > 0)
       : [];
+  /**
+   * `--continue-dropped <run-id> --continue-dropped-reason <why>`: the stream
+   * head the supervisor chose NOT to continue (its account is occupied by
+   * another ref's stream), so this launch is a fresh start by decision. A
+   * launch input for the record only — the run carries no lineage, exactly as
+   * a `continue-dropped` that the runner itself decides.
+   */
+  const droppedHead = typeof args["continue-dropped"] === "string" ? args["continue-dropped"] : undefined;
+  const droppedReason = typeof args["continue-dropped-reason"] === "string" ? args["continue-dropped-reason"] : "unspecified";
   if (typeof args["driver"] === "string" && !(DRIVERS as readonly string[]).includes(args["driver"])) {
     console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
     process.exit(2);
@@ -497,6 +506,15 @@ async function main(): Promise<void> {
         t: "harness",
         kind: "continue-dropped",
         detail: `--continue-from ${missingPredecessor}: no run directory, live or archived — starting a fresh character`,
+      });
+    }
+    // The supervisor's own drop (`--continue-dropped`): the head it left
+    // behind and why, so the trajectory says this fresh start was a decision.
+    if (droppedHead !== undefined) {
+      trajectory.append({
+        t: "harness",
+        kind: "continue-dropped",
+        detail: `${droppedHead} not continued (${droppedReason}) — starting a fresh character on ${config.account}`,
       });
     }
   } else {
