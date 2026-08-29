@@ -57,11 +57,17 @@ import {
   type PartyCommandResultData,
   type SendMailResultData,
   type ShowFrameData,
+  type SpellFailureData,
   type InventoryChangeFailureData,
+  type CastFailedData,
   type ItemPushResultData,
   type KnownMoveStatus,
   type LootItemData,
   type LootResponseData,
+  type LootRollData,
+  type ReadItemData,
+  type PageTextQueryResponseData,
+  type ItemTextQueryResponseData,
   type MoveResultData,
   type MoveUpdateData,
   type MoveStatus,
@@ -104,6 +110,10 @@ import {
   type GroupState,
   type MailboxState,
   type PetSpellEntry,
+  type PendingRoll,
+  type RollChoice,
+  ROLL_VOTE,
+  rollChoiceName,
   type CorpseLocation,
   type NearbyObject,
   type Point3,
@@ -217,9 +227,8 @@ export type GuidOrUnit = GuidArg | UnitView;
  * Resolve a helper's target to a guid string. A `UnitView` (or any object) has
  * its `.guid` taken; a missing or unusable one is rejected loudly with a
  * pointer back to where units come from. A non-object falls through
- * to `guidArg`, so a bare guid string keeps its exact existing validation — and
- * raw actions (`setTarget`, `attackStart`, `gossipSelect`) still take only that
- * string form, on purpose: referent selection is what this bench measures.
+ * to `guidArg`, so a bare guid string keeps its exact existing validation. A
+ * name is handled a step earlier, by `targetRef`.
  */
 function guidOf(target: GuidOrUnit, arg: string): string {
   if (target !== null && typeof target === "object") {
@@ -1330,6 +1339,29 @@ const REARM_CAP = 20;
 /** How long after the loot release a straggling `SMSG_ITEM_PUSH_RESULT` is still waited for. */
 const LOOT_PUSH_GRACE_MS = 1500;
 
+/**
+ * How a client opens a chest. `CMSG_GAMEOBJ_USE` does nothing to a chest-type
+ * game object (the core's `GameObject::Use` has no chest case and returns
+ * silently); the client instead casts the lock's "Opening" spell at it —
+ * `SPELL_EFFECT_OPEN_LOCK`, ~1s cast, interrupted by moving — and the server
+ * answers the cast with the loot window. Which spell is decided by the lock's
+ * type in `Lock.dbc`, which the SDK does not carry, so it tries the
+ * open-hand spells in order of how many spawned chests each one fits and
+ * takes the first the server accepts; a wrong one is refused before the cast
+ * starts (`SMSG_CAST_FAILED`, `SPELL_FAILED_BAD_TARGETS`), costing one round
+ * trip. Lock types: 13 Open Kneeling (6478), 5 Open (3365), 10 Quick Open
+ * (6247), 12 Open Tinkering (6477). Profession nodes (herbs, ore) need the
+ * gathering spell and are not chests to this helper.
+ */
+const CHEST_OPEN_SPELLS: readonly number[] = [6478, 3365, 6247, 6477];
+/** SpellCastResult: the lock does not fit the spell (or the target is no lock). */
+const SPELL_FAILED_BAD_TARGETS = 12;
+/** Loot slot types the auto-loot sequence stores: ALLOW_LOOT (0) and OWNER (4). */
+const isStorableSlot = (i: { slotType: number }): boolean => i.slotType === 0 || i.slotType === 4;
+
+/** `interact(guid)` on a chest: the opcode would be dropped, so it is refused with the way that works. */
+export type InteractResult = ActionResponse | { readonly ok: false; readonly status: "chest"; readonly hint: string };
+
 export interface LootOptions {
   /** How long to wait for the loot window / release. Default 10000. */
   timeout?: number;
@@ -1364,6 +1396,16 @@ export type LootResult =
       readonly window: readonly LootItemData[];
     }
   | { readonly ok: false; readonly status: "empty"; readonly gold: 0; readonly items: readonly [] }
+  | {
+      /** A chest none of the open spells could open: the server refused every cast. */
+      readonly ok: false;
+      readonly status: "not_opened";
+      readonly gold: 0;
+      readonly items: readonly [];
+      /** SpellCastResult code of the last refusal (12 = bad targets: no open-hand lock type fits). */
+      readonly reason: number;
+      readonly hint: string;
+    }
   | {
       readonly ok: false;
       readonly status: "none_stored";
@@ -1693,6 +1735,53 @@ export interface GroupOptions {
 
 export interface MailOptions {
   /** How long to wait for the server's answer. Default 10000. */
+  timeout?: number;
+}
+
+/** Why `lootRoll` sent nothing: what the SDK can see before dispatching, never a server verdict. */
+export type LootRollRefusalStatus = "no_pending_roll" | "ambiguous_roll" | "roll_not_allowed";
+
+/**
+ * The outcome of `lootRoll` (item 102). `rolled` is the server's echo of the
+ * counted vote (`SMSG_LOOT_ROLL` for this character): `roll` is the number
+ * rolled, undefined for a pass. Who won arrives later as `SMSG_LOOT_ROLL_WON`
+ * (or `SMSG_LOOT_ALL_PASSED`) on the stream; a won item lands as
+ * `SMSG_ITEM_PUSH_RESULT` like any loot.
+ */
+export type LootRollResult =
+  | {
+      readonly ok: true;
+      readonly status: "rolled";
+      readonly rollGuid: string;
+      readonly choice: RollChoice;
+      readonly roll: number | undefined;
+      readonly item: { readonly itemId: number; readonly name: string | undefined };
+    }
+  | { readonly ok: false; readonly status: LootRollRefusalStatus; readonly hint: string };
+
+export interface LootRollOptions {
+  /** How long to wait for the server to echo the vote. Default 10000. */
+  timeout?: number;
+}
+
+/**
+ * The outcome of `readItem` (item 103). `read` carries the pages in order and
+ * `text` as one string. `no_item` is a bag address or name that holds
+ * nothing; `not_readable` is the server's (or the template's) word that there
+ * is nothing to read on it.
+ */
+export type ReadItemResult =
+  | {
+      readonly ok: true;
+      readonly status: "read";
+      readonly item: { readonly bag: number; readonly slot: number; readonly guid: string; readonly itemId: number | undefined; readonly name: string | undefined };
+      readonly pages: readonly string[];
+      readonly text: string;
+    }
+  | { readonly ok: false; readonly status: "no_item" | "not_readable"; readonly hint: string };
+
+export interface ReadItemOptions {
+  /** How long to wait for each server answer (the read ack, the pages). Default 10000. */
   timeout?: number;
 }
 
@@ -2086,13 +2175,16 @@ export class WrathClient {
    * matched non-exactly. One place, so no helper drifts into reporting the
    * fuzz differently (or not at all).
    */
-  private async byName<T extends object>(
+  private byName<T extends object>(
     target: GuidOrUnit,
     arg: string,
     run: (guid: string) => Promise<T>,
   ): Promise<WithResolved<T>> {
+    // Deliberately not `async`: a bad referent must still throw where the
+    // caller stands, so a non-async method like `setTarget` keeps rejecting
+    // an object or a number synchronously as it always has.
     const ref = this.targetRef(target, arg);
-    return withResolved(ref, await run(ref.guid));
+    return run(ref.guid).then((out) => withResolved(ref, out));
   }
 
   /**
@@ -2386,8 +2478,8 @@ export class WrathClient {
   // ones that wait for a verdict.
 
   /** `CMSG_SET_SELECTION`. What the client shows as the current target. */
-  setTarget(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "set_target", guid: guidArg(guid, "setTarget(guid)") });
+  setTarget(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "setTarget(guid)", (guid) => this.action({ action: "set_target", guid }));
   }
 
   /** `CMSG_SET_SELECTION` with guid 0. */
@@ -2400,8 +2492,8 @@ export class WrathClient {
    * character is in range *and facing the victim*; see `killTarget` for why
    * that second condition needs help here.
    */
-  attackStart(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "attack_start", guid: guidArg(guid, "attackStart(guid)") });
+  attackStart(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "attackStart(guid)", (guid) => this.action({ action: "attack_start", guid }));
   }
 
   /** `CMSG_ATTACKSTOP`. */
@@ -2410,11 +2502,10 @@ export class WrathClient {
   }
 
   /** `CMSG_CAST_SPELL`. No target guid means self/auto-target. */
-  castSpell(spellId: number, targetGuid?: GuidArg): Promise<ActionResponse> {
-    return this.action(
-      targetGuid === undefined
-        ? { action: "cast_spell", spellId }
-        : { action: "cast_spell", spellId, targetGuid: guidArg(targetGuid, "castSpell(spellId, targetGuid)") },
+  castSpell(spellId: number, targetGuid?: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    if (targetGuid === undefined) return this.action({ action: "cast_spell", spellId });
+    return this.byName(targetGuid, "castSpell(spellId, targetGuid)", (guid) =>
+      this.action({ action: "cast_spell", spellId, targetGuid: guid }),
     );
   }
 
@@ -2424,16 +2515,66 @@ export class WrathClient {
   }
 
   /**
-   * `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. Takes the guid string or
-   * a unit from `state.units(...)` / `state.closest(...)`.
+   * `CMSG_GAMEOBJ_USE` — chests, doors, quest objects. Takes the guid string,
+   * a unit from `state.units(...)` / `state.closest(...)`, or its name.
    */
-  interact(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
-    return this.byName(target, "interact(guid)", (guid) => this.action({ action: "interact", guid }));
+  interact(target: GuidOrUnit): Promise<WithResolved<InteractResult>> {
+    return this.byName(target, "interact(guid)", async (guid) => {
+      if (this.isChest(guid)) {
+        return {
+          ok: false,
+          status: "chest",
+          hint:
+            "this is a chest: the server ignores CMSG_GAMEOBJ_USE on chests (a client opens one by casting its " +
+            "lock's Opening spell at it) — call lootCorpse(guid) instead, which casts, waits for the window and empties it",
+        };
+      }
+      return this.action({ action: "interact", guid });
+    });
+  }
+
+  /** Whether the state cache knows `guid` as a chest-type game object. */
+  private isChest(guid: string): boolean {
+    return this.state.units({ type: "gameObject" }).some((u) => u.guid === guid && u.goType === "chest");
+  }
+
+  /**
+   * Open a chest the way a client does: cast the lock's Opening spell at it
+   * (see `CHEST_OPEN_SPELLS`) and wait for the loot window the server sends
+   * on the cast landing. Returns the window event, or the refusal that ended
+   * the ladder. `since` bounds the events considered.
+   */
+  private async openChest(
+    guid: string,
+    since: number | undefined,
+    timeout: number,
+  ): Promise<{ window: StreamEvent } | { refused: number }> {
+    let from = since;
+    let lastResult = SPELL_FAILED_BAD_TARGETS;
+    for (const spellId of CHEST_OPEN_SPELLS) {
+      await this.castSpell(spellId, guid);
+      const verdict = await this.waitEvent(
+        (e) =>
+          (from === undefined || e.seq > from) &&
+          !isDecodeError(e.data) &&
+          ((isEvent(e, "SMSG_LOOT_RESPONSE") && guidKey((e.data as LootResponseData).guid) === guid) ||
+            (isEvent(e, "SMSG_CAST_FAILED") && (e.data as CastFailedData).spellId === spellId) ||
+            (isEvent(e, "SMSG_SPELL_FAILURE") && (e.data as SpellFailureData).spellId === spellId)),
+        { timeout, description: `the loot window or the cast verdict for Opening (${spellId}) on ${guid}` },
+      );
+      if (verdict.opcode === "SMSG_LOOT_RESPONSE") return { window: verdict };
+      lastResult = (verdict.data as CastFailedData | SpellFailureData).result;
+      from = verdict.seq;
+      // Only "wrong lock type" moves the ladder on; anything else (moving,
+      // interrupted, too far) would fail the next spell the same way.
+      if (verdict.opcode !== "SMSG_CAST_FAILED" || lastResult !== SPELL_FAILED_BAD_TARGETS) break;
+    }
+    return { refused: lastResult };
   }
 
   /** `CMSG_GOSSIP_HELLO` — opens the NPC menu (`SMSG_GOSSIP_MESSAGE`). */
-  gossipHello(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "gossip_hello", guid: guidArg(guid, "gossipHello(guid)") });
+  gossipHello(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "gossipHello(guid)", (guid) => this.action({ action: "gossip_hello", guid }));
   }
 
   /**
@@ -2444,8 +2585,8 @@ export class WrathClient {
    * visible `text` (case-insensitive exact, or a unique substring) or its
    * `optionId` — and resolves it against the menu last observed open for this
    * NPC (`state.lastGossip(guid)`), filling in the `menuId` from there. The
-   * guid itself is always the raw string form: no name resolution on the
-   * referent, only on the option within an already-open menu.
+   * guid itself takes the same three forms every other referent does — a guid,
+   * a unit, or a name in view.
    *
    * The convenience form throws (nothing is dispatched) when no menu is open
    * for the guid, when the text matches no option or more than one, or when a
@@ -2454,19 +2595,20 @@ export class WrathClient {
    * `SMSG_GOSSIP_MESSAGE`/`SMSG_GOSSIP_COMPLETE` fold; the server is not
    * queried.
    */
-  gossipSelect(guid: GuidArg, option: string | number): Promise<ActionResponse>;
-  gossipSelect(guid: GuidArg, menuId: number, optionId: number): Promise<ActionResponse>;
-  async gossipSelect(guid: GuidArg, a: string | number, b?: number): Promise<ActionResponse> {
-    const id = guidArg(guid, "gossipSelect(guid, ...)");
-    if (b !== undefined) {
-      // Raw form: caller supplied both menuId and optionId.
-      return this.action({ action: "gossip_select", guid: id, menuId: a as number, optionId: b });
-    }
-    // Convenience form: resolve against the last observed menu. `async`, so a
-    // bad option is a rejected promise like every other helper, not a
-    // synchronous throw.
-    const { menuId, optionId } = this.resolveGossipOption(id, a);
-    return this.action({ action: "gossip_select", guid: id, menuId, optionId });
+  gossipSelect(guid: GuidOrUnit, option: string | number): Promise<WithResolved<ActionResponse>>;
+  gossipSelect(guid: GuidOrUnit, menuId: number, optionId: number): Promise<WithResolved<ActionResponse>>;
+  async gossipSelect(guid: GuidOrUnit, a: string | number, b?: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(guid, "gossipSelect(guid, ...)", (id) => {
+      if (b !== undefined) {
+        // Raw form: caller supplied both menuId and optionId.
+        return this.action({ action: "gossip_select", guid: id, menuId: a as number, optionId: b });
+      }
+      // Convenience form: resolve against the last observed menu. `async`, so a
+      // bad option is a rejected promise like every other helper, not a
+      // synchronous throw.
+      const { menuId, optionId } = this.resolveGossipOption(id, a);
+      return this.action({ action: "gossip_select", guid: id, menuId, optionId });
+    });
   }
 
   /**
@@ -2474,28 +2616,36 @@ export class WrathClient {
    * on a gossip-flagged NPC, an `SMSG_GOSSIP_MESSAGE` with the quests embedded.
    * `acceptQuestFrom` handles both shapes.
    */
-  questList(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "quest_list", guid: guidArg(guid, "questList(guid)") });
+  questList(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questList(guid)", (guid) => this.action({ action: "quest_list", guid }));
   }
 
   /** `CMSG_QUESTGIVER_QUERY_QUEST` — quest text via `..._QUEST_DETAILS`. */
-  questDetails(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_details", guid: guidArg(guid, "questDetails(guid, questId)"), questId });
+  questDetails(target: GuidOrUnit, questId: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questDetails(guid, questId)", (guid) =>
+      this.action({ action: "quest_details", guid, questId }),
+    );
   }
 
   /** `CMSG_QUESTGIVER_ACCEPT_QUEST`. */
-  questAccept(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_accept", guid: guidArg(guid, "questAccept(guid, questId)"), questId });
+  questAccept(target: GuidOrUnit, questId: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questAccept(guid, questId)", (guid) =>
+      this.action({ action: "quest_accept", guid, questId }),
+    );
   }
 
   /** `CMSG_QUESTGIVER_COMPLETE_QUEST` — answered by REQUEST_ITEMS or OFFER_REWARD. */
-  questComplete(guid: GuidArg, questId: number): Promise<ActionResponse> {
-    return this.action({ action: "quest_complete", guid: guidArg(guid, "questComplete(guid, questId)"), questId });
+  questComplete(target: GuidOrUnit, questId: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questComplete(guid, questId)", (guid) =>
+      this.action({ action: "quest_complete", guid, questId }),
+    );
   }
 
   /** `CMSG_QUESTGIVER_CHOOSE_REWARD`; index into `choiceRewards`, 0 when none. */
-  questChooseReward(guid: GuidArg, questId: number, rewardIndex = 0): Promise<ActionResponse> {
-    return this.action({ action: "quest_choose_reward", guid: guidArg(guid, "questChooseReward(guid, ...)"), questId, rewardIndex });
+  questChooseReward(target: GuidOrUnit, questId: number, rewardIndex = 0): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questChooseReward(guid, ...)", (guid) =>
+      this.action({ action: "quest_choose_reward", guid, questId, rewardIndex }),
+    );
   }
 
   /**
@@ -2516,9 +2666,11 @@ export class WrathClient {
    * refreshes all of them when the quest log changes; pass no guid to refresh
    * everything in view now (`CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY`).
    */
-  questGiverStatusQuery(guid?: GuidArg): Promise<ActionResponse> {
-    if (guid === undefined) return this.action({ action: "questgiver_status_multiple_query" });
-    return this.action({ action: "questgiver_status_query", guid: guidArg(guid, "questGiverStatusQuery(guid?)") });
+  questGiverStatusQuery(target?: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    if (target === undefined) return this.action({ action: "questgiver_status_multiple_query" });
+    return this.byName(target, "questGiverStatusQuery(guid?)", (guid) =>
+      this.action({ action: "questgiver_status_query", guid }),
+    );
   }
 
   /** `CMSG_QUESTLOG_REMOVE_QUEST`; the module maps quest id to log slot. */
@@ -2527,16 +2679,16 @@ export class WrathClient {
   }
 
   /** `CMSG_LOOT` — opens the loot window (`SMSG_LOOT_RESPONSE`). */
-  loot(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot", guid: guidArg(guid, "loot(guid)") });
+  loot(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "loot(guid)", (guid) => this.action({ action: "loot", guid }));
   }
 
   /**
    * `CMSG_LOOT` plus the auto-loot follow-ups the client sends once the window
    * arrives. Fire-and-forget: prefer `lootCorpse`, which waits.
    */
-  lootAll(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot_all", guid: guidArg(guid, "lootAll(guid)") });
+  lootAll(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "lootAll(guid)", (guid) => this.action({ action: "loot_all", guid }));
   }
 
   /** `CMSG_AUTOSTORE_LOOT_ITEM`; `slot` from `SMSG_LOOT_RESPONSE.items[]`. */
@@ -2550,33 +2702,36 @@ export class WrathClient {
   }
 
   /** `CMSG_LOOT_RELEASE` — closes the loot window. */
-  lootRelease(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "loot_release", guid: guidArg(guid, "lootRelease(guid)") });
+  lootRelease(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "lootRelease(guid)", (guid) => this.action({ action: "loot_release", guid }));
   }
 
   /** `CMSG_LIST_INVENTORY` — `SMSG_LIST_INVENTORY` follows. */
-  vendorList(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "vendor_list", guid: guidArg(guid, "vendorList(guid)") });
+  vendorList(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "vendorList(guid)", (guid) => this.action({ action: "vendor_list", guid }));
   }
 
   /** `CMSG_BUY_ITEM`; `slot` is the 1-based vendor slot. */
-  buyItem(guid: GuidArg, itemId: number, slot: number, count?: number): Promise<ActionResponse> {
-    return this.action({ action: "buy_item", guid: guidArg(guid, "buyItem(guid, ...)"), itemId, slot, count });
+  buyItem(target: GuidOrUnit, itemId: number, slot: number, count?: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "buyItem(guid, ...)", (guid) =>
+      this.action({ action: "buy_item", guid, itemId, slot, count }),
+    );
   }
 
   /** `CMSG_SELL_ITEM`; omit `count` to sell the whole stack. */
-  sellItem(guid: GuidArg, itemGuid: GuidArg, count?: number): Promise<ActionResponse> {
-    return this.action({
-      action: "sell_item",
-      guid: guidArg(guid, "sellItem(guid, ...)"),
-      itemGuid: guidArg(itemGuid, "sellItem(..., itemGuid)"),
-      count,
-    });
+  sellItem(target: GuidOrUnit, itemGuid: GuidArg, count?: number): Promise<WithResolved<ActionResponse>> {
+    // The vendor is a unit in view and takes a name; `itemGuid` is an item's
+    // own guid, which is not in that namespace — there is no name-to-item-guid
+    // resolver, so it stays the strict guid string.
+    const item = guidArg(itemGuid, "sellItem(..., itemGuid)");
+    return this.byName(target, "sellItem(guid, ...)", (guid) =>
+      this.action({ action: "sell_item", guid, itemGuid: item, count }),
+    );
   }
 
   /** `CMSG_REPAIR_ITEM` with item guid 0 — repair everything. */
-  repairAll(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "repair_all", guid: guidArg(guid, "repairAll(guid)") });
+  repairAll(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "repairAll(guid)", (guid) => this.action({ action: "repair_all", guid }));
   }
 
   /**
@@ -2707,11 +2862,11 @@ export class WrathClient {
    * place of `bag` (the shared `resolveName`) — a name that names nothing
    * carried, or two things, throws with what is carried.
    */
-  async useItem(bagOrName: number | string, slot?: number | GuidArg, targetGuid?: GuidArg): Promise<WithResolved<ActionResponse>> {
+  async useItem(bagOrName: number | string, slot?: number | GuidOrUnit, targetGuid?: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
     // `useItem("Healing Potion", guid)`: with a name, the second argument
     // cannot be a slot, so the guid it holds is the target.
     if (typeof bagOrName === "string" && slot !== undefined) {
-      targetGuid = slot as GuidArg;
+      targetGuid = slot as GuidOrUnit;
       slot = undefined;
     }
     const where = resolveItemSlot(this.state.bag().items, bagOrName, slot as number | undefined, "useItem(bagOrName, slot?)", "state.bag()");
@@ -2723,7 +2878,7 @@ export class WrathClient {
         action: "use_item",
         bag,
         slot,
-        targetGuid: targetGuid === undefined ? undefined : guidArg(targetGuid, "useItem(..., targetGuid)"),
+        targetGuid: targetGuid === undefined ? undefined : this.targetGuid(targetGuid, "useItem(..., targetGuid)"),
       }));
     } catch (err) {
       // A bare item_not_usable cannot be told apart from "the slot shifted
@@ -2743,20 +2898,18 @@ export class WrathClient {
    * `CMSG_TRAINER_LIST` — ask a trainer what it teaches (`SMSG_TRAINER_LIST`).
    * Prefer `trainerList`, which waits for the answer.
    */
-  trainerListAsync(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "trainer_list", guid: guidArg(guid, "trainerList(npcGuid)") });
+  trainerListAsync(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "trainerList(npcGuid)", (guid) => this.action({ action: "trainer_list", guid }));
   }
 
   /**
    * `CMSG_TRAINER_BUY_SPELL` — learn one spell, paid for out of the
    * character's own money. Prefer `buySpell`, which waits for the verdict.
    */
-  trainerBuySpellAsync(guid: GuidArg, spellId: number): Promise<ActionResponse> {
-    return this.action({
-      action: "trainer_buy_spell",
-      guid: guidArg(guid, "buySpell(npcGuid, spellId)"),
-      spellId,
-    });
+  trainerBuySpellAsync(target: GuidOrUnit, spellId: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "buySpell(npcGuid, spellId)", (guid) =>
+      this.action({ action: "trainer_buy_spell", guid, spellId }),
+    );
   }
 
   /**
@@ -3048,8 +3201,10 @@ export class WrathClient {
    * when the corpse is unreachable. Costs durability and applies resurrection
    * sickness; the outcome arrives through ordinary events (health, auras).
    */
-  spiritHealerActivate(guid: GuidArg): Promise<ActionResponse> {
-    return this.action({ action: "spirit_healer_activate", guid: guidArg(guid, "spiritHealerActivate(guid)") });
+  spiritHealerActivate(target: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "spiritHealerActivate(guid)", (guid) =>
+      this.action({ action: "spirit_healer_activate", guid }),
+    );
   }
 
   /**
@@ -3637,6 +3792,161 @@ export class WrathClient {
    */
   learnTalentAsync(talentId: number, rank: number): Promise<ActionResponse> {
     return this.action({ action: "learn_talent", talentId, rank });
+  }
+
+  // ------------------------------------------- group loot rolls (item 102)
+
+  /**
+   * Vote on an open roll frame (`CMSG_LOOT_ROLL`): the need / greed / pass /
+   * disenchant button for one item on a group-looted corpse. `which` is the
+   * item's name as `state.pendingRolls()` lists it (exact, else a unique
+   * substring), its item id, or the roll guid. Refusals are values with a
+   * hint: nothing pending or nothing by that name (`no_pending_roll`), two
+   * frames match (`ambiguous_roll`), a button the server did not offer
+   * (`roll_not_allowed`). `rolled` is the server's echo of the counted vote.
+   */
+  async lootRoll(which: string | number, choice: RollChoice, options: LootRollOptions = {}): Promise<WithResolved<LootRollResult>> {
+    const timeout = options.timeout ?? 10_000;
+    const vote = ROLL_VOTE[choice];
+    if (vote === undefined) {
+      throw new TypeError(`lootRoll(which, choice): choice must be "need", "greed", "pass" or "disenchant", not ${JSON.stringify(choice)}`);
+    }
+    const pending = this.state.pendingRolls();
+    const show = (rows: readonly PendingRoll[]) =>
+      rows.map((r) => `${JSON.stringify(r.name ?? `item ${r.itemId}`)} (${r.allowed.join("/")}, roll ${r.rollGuid})`).join(", ");
+    if (pending.length === 0) {
+      return this.lootRollRefusal("no_pending_roll",
+        "no roll frame is open — a roll only appears (state.pendingRolls()) when a group-looted corpse holds an item at or " +
+        "above the group's loot threshold, and it closes after its countdown or once you have voted");
+    }
+    let roll: PendingRoll | undefined;
+    let resolved: ResolvedRef | undefined;
+    if (typeof which === "number") {
+      const hits = pending.filter((r) => r.itemId === which);
+      if (hits.length > 1) return this.lootRollRefusal("ambiguous_roll", `item ${which} is up for ${hits.length} rolls [${show(hits)}] — pass the roll guid`);
+      roll = hits[0];
+    } else {
+      roll = pending.find((r) => r.rollGuid === which);
+      if (roll === undefined) {
+        const hit = resolveName(which, pending, (r) => r.name);
+        if (hit.kind === "many") {
+          return this.lootRollRefusal("ambiguous_roll", `${JSON.stringify(which)} matches ${hit.candidates.length} open rolls [${show(hit.candidates)}] — pass the roll guid`);
+        }
+        if (hit.kind === "one") {
+          roll = hit.value;
+          if (isFuzzy(hit.tier)) resolved = { input: which, name: hit.name };
+        }
+      }
+    }
+    if (roll === undefined) {
+      return this.lootRollRefusal("no_pending_roll", `no open roll is for ${JSON.stringify(which)} — the open rolls are [${show(pending)}] (state.pendingRolls())`);
+    }
+    if (!roll.allowed.includes(choice)) {
+      return this.lootRollRefusal("roll_not_allowed",
+        `the server offered only ${roll.allowed.join(" / ")} on ${JSON.stringify(roll.name ?? `item ${roll.itemId}`)} — need is withheld when your class ` +
+        `cannot use the item, disenchant when nobody in the group can`);
+    }
+    const chosen = roll;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.raw("CMSG_LOOT_ROLL", [{ guid: chosen.rollGuid }, { u32: chosen.slot }, { u8: vote }]);
+    const echo = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_LOOT_ROLL") &&
+        !isDecodeError(e.data) &&
+        (sinceSeq === undefined || e.seq > sinceSeq) &&
+        (e.data as LootRollData).rollGuid === chosen.rollGuid &&
+        (e.data as LootRollData).playerGuid === this.state.self.guid,
+      { timeout, description: `the server counting the ${choice} vote (SMSG_LOOT_ROLL)` },
+    );
+    const d = echo.data as LootRollData;
+    const out: LootRollResult = {
+      ok: true,
+      status: "rolled",
+      rollGuid: chosen.rollGuid,
+      choice: rollChoiceName(d.rollType) ?? choice,
+      roll: d.roll > 100 ? undefined : d.roll,
+      item: { itemId: chosen.itemId, name: chosen.name },
+    };
+    return resolved === undefined ? out : { ...out, resolved };
+  }
+
+  private lootRollRefusal(status: LootRollRefusalStatus, hint: string): LootRollResult {
+    this.noteActionHint("lootRoll", status, hint);
+    return { ok: false, status, hint };
+  }
+
+  // ------------------------------------------------------ item text (item 103)
+
+  /**
+   * Read a carried book or letter and return its text. The item is the
+   * `bag`/`slot` pair `state.bag()` lists, or its name in place of `bag`.
+   * A page item (the template's `pageText`) goes the way a client reads it:
+   * `CMSG_READ_ITEM`, the server's `SMSG_READ_ITEM_OK`, then the client's
+   * `CMSG_PAGE_TEXT_QUERY` on the first page, which the core answers page by
+   * page down the chain. Anything else is asked for its player-written text
+   * (`CMSG_ITEM_TEXT_QUERY`, a mailed letter); an empty answer is
+   * `not_readable`. The pages stay in `state.itemTexts()` afterwards.
+   */
+  async readItem(bagOrName: number | string, slot?: number | ReadItemOptions, options: ReadItemOptions = {}): Promise<WithResolved<ReadItemResult>> {
+    if (slot !== null && typeof slot === "object") {
+      options = slot;
+      slot = undefined;
+    }
+    const timeout = options.timeout ?? 10_000;
+    const where = resolveItemSlot(this.state.bag().items, bagOrName, slot, "readItem(bagOrName, slot?)", "state.bag()");
+    if ("refusal" in where) {
+      this.noteActionHint("readItem", "no_item", where.refusal);
+      return { ok: false, status: "no_item", hint: where.refusal };
+    }
+    const row = this.state.bag().items.find((i) => i.bag === where.bag && i.slot === where.slot);
+    if (row === undefined) {
+      const hint = `readItem: nothing is carried at bag ${where.bag} slot ${where.slot} — state.bag() lists what is`;
+      this.noteActionHint("readItem", "no_item", hint);
+      return { ok: false, status: "no_item", hint };
+    }
+    const item = { bag: row.bag, slot: row.slot, guid: row.guid, itemId: row.itemId, name: row.name };
+    const label = JSON.stringify(row.name ?? `item ${row.itemId ?? "?"}`);
+    const firstPage = row.itemId === undefined ? undefined : this.state.items.get(row.itemId)?.value.pageText;
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    const after = (e: StreamEvent) => !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq);
+    if (firstPage !== undefined && firstPage !== 0) {
+      await this.raw("CMSG_READ_ITEM", [{ u8: row.bag }, { u8: row.slot }]);
+      const ack = await this.waitEvent(
+        (e) =>
+          after(e) &&
+          (((isEvent(e, "SMSG_READ_ITEM_OK") || isEvent(e, "SMSG_READ_ITEM_FAILED")) && (e.data as ReadItemData).guid === row.guid) ||
+            isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE")),
+        { timeout, description: `the server's answer to reading ${label} (SMSG_READ_ITEM_OK / _FAILED)` },
+      );
+      if (!isEvent(ack, "SMSG_READ_ITEM_OK")) {
+        const code = isEvent(ack, "SMSG_INVENTORY_CHANGE_FAILURE") ? (ack.data as InventoryChangeFailureData).result : undefined;
+        const why = code === undefined ? "the server refused the read" : (inventoryResultText(code) ?? `inventory error ${code}`);
+        const hint = `${label} cannot be read: ${why} — a level or class requirement on the item, or it is not a book`;
+        this.noteActionHint("readItem", "not_readable", hint);
+        return withResolved(where, { ok: false, status: "not_readable", hint });
+      }
+      await this.raw("CMSG_PAGE_TEXT_QUERY", [{ u32: firstPage }, { guid: row.guid }]);
+      await this.waitEvent(
+        (e) => after(e) && isEvent(e, "SMSG_PAGE_TEXT_QUERY_RESPONSE") && (e.data as PageTextQueryResponseData).nextPageId === 0,
+        { timeout, description: `the last page of ${label} (SMSG_PAGE_TEXT_QUERY_RESPONSE with nextPageId 0)` },
+      );
+      const text = this.state.itemTexts().find((t) => t.guid === row.guid);
+      const pages = text?.pages ?? [];
+      return withResolved(where, { ok: true, status: "read", item, pages, text: pages.join("\n\n") });
+    }
+    await this.raw("CMSG_ITEM_TEXT_QUERY", [{ guid: row.guid }]);
+    const reply = await this.waitEvent(
+      (e) => after(e) && isEvent(e, "SMSG_ITEM_TEXT_QUERY_RESPONSE") && ((e.data as ItemTextQueryResponseData).guid ?? row.guid) === row.guid,
+      { timeout, description: `the text of ${label} (SMSG_ITEM_TEXT_QUERY_RESPONSE)` },
+    );
+    const d = reply.data as ItemTextQueryResponseData;
+    if (!d.found || d.text === undefined || d.text.length === 0) {
+      const hint = `${label} has nothing to read: it is neither a book or letter with pages nor a mailed letter with text — ` +
+        `a readable item's tooltip (state.items.get(itemId)) carries a pageText`;
+      this.noteActionHint("readItem", "not_readable", hint);
+      return withResolved(where, { ok: false, status: "not_readable", hint });
+    }
+    return withResolved(where, { ok: true, status: "read", item, pages: [d.text], text: d.text });
   }
 
   /**
@@ -4470,6 +4780,17 @@ export class WrathClient {
    * A corpse with nothing on it releases without ever opening a window, which
    * is `{ ok: false, status: "empty" }` — an answer, not a failure. Silence is
    * neither, so it still throws `EventTimeoutError`.
+   *
+   * A chest-type game object is emptied the same way but opened differently:
+   * the server drops `CMSG_LOOT` on a game object guid and ignores
+   * `CMSG_GAMEOBJ_USE` on a chest, so the window has to be earned by casting
+   * the lock's Opening spell at it, as a client does (`CHEST_OPEN_SPELLS`).
+   * Once the window is open the auto-loot sequence is the client's own:
+   * `CMSG_AUTOSTORE_LOOT_ITEM` per storable slot, `CMSG_LOOT_MONEY` if there
+   * is gold, `CMSG_LOOT_RELEASE`. A chest no open-hand spell fits is
+   * `{ ok: false, status: "not_opened", reason, hint }`. Seen in two runs
+   * (opus-low a11/a12, sonnet-low a2, Coldridge Valley, 2026-08-29) as an
+   * `interact` that acked and a `lootCorpse` that timed out.
    */
   async lootCorpse(target: GuidOrUnit, options: LootOptions = {}): Promise<WithResolved<LootResult>> {
     return this.byName(target, "lootCorpse(guid)", async (id) => {
@@ -4484,14 +4805,35 @@ export class WrathClient {
         if (d.looted) stored.push({ itemId: d.itemId, count: d.count });
       });
       try {
-        await this.lootAll(id);
-        const first = await this.waitEvent(
-          (e) =>
-            (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
-            !isDecodeError(e.data) &&
-            (sinceSeq === undefined || e.seq > sinceSeq),
-          { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
-        );
+        const chest = this.isChest(id);
+        let first: StreamEvent;
+        if (chest) {
+          const opened = await this.openChest(id, sinceSeq, timeout);
+          if ("refused" in opened) {
+            return {
+              ok: false,
+              status: "not_opened",
+              gold: 0,
+              items: [],
+              reason: opened.refused,
+              hint:
+                opened.refused === SPELL_FAILED_BAD_TARGETS
+                  ? `the server refused every open-hand Opening spell (${CHEST_OPEN_SPELLS.join(", ")}) on this chest: ` +
+                    "its lock wants something else (a key item, lockpicking, or a gathering skill)"
+                  : `the Opening cast was refused with SpellCastResult ${opened.refused}: stand still within reach of the chest and retry`,
+            };
+          }
+          first = opened.window;
+        } else {
+          await this.lootAll(id);
+          first = await this.waitEvent(
+            (e) =>
+              (isEvent(e, "SMSG_LOOT_RESPONSE") || isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE")) &&
+              !isDecodeError(e.data) &&
+              (sinceSeq === undefined || e.seq > sinceSeq),
+            { timeout, description: "the loot window (SMSG_LOOT_RESPONSE or SMSG_LOOT_RELEASE_RESPONSE)" },
+          );
+        }
         if (first.opcode === "SMSG_LOOT_RELEASE_RESPONSE") {
           return { ok: false, status: "empty", gold: 0, items: [] };
         }
@@ -4499,7 +4841,14 @@ export class WrathClient {
         // What the replay will try to store: slots free to loot (0, ALLOW_LOOT)
         // or owned outright (4, OWNER — every slot of a solo loot). Group-only
         // slot types are shown but never auto-stored.
-        const expected = window.items.filter((i) => i.slotType === 0 || i.slotType === 4).length;
+        const expected = window.items.filter(isStorableSlot).length;
+        if (chest) {
+          // The module's auto-loot replay rides on `loot_all`, which a chest
+          // never goes through; send the client's sequence from here.
+          for (const item of window.items.filter(isStorableSlot)) await this.lootItem(item.slot);
+          if (window.gold > 0) await this.lootMoney();
+          await this.lootRelease(id);
+        }
         const release = await this.waitEvent((e) => isEvent(e, "SMSG_LOOT_RELEASE_RESPONSE"), {
           timeout,
           sinceSeq: first.seq + 1,

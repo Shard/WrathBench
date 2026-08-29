@@ -63,6 +63,10 @@ import {
   trainerBuyFailed,
   trainerBuySucceeded,
   trainerList,
+  CHEST_GUID,
+  castFailed,
+  chestCreate,
+  chestLootResponse,
 } from "./fixtures";
 import { startStub, type StubServer } from "./server";
 
@@ -1067,6 +1071,7 @@ async function untilAction(stub: StubServer, action: string, from = 0): Promise<
 }
 
 const combatWorld = () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery]);
+const chestWorld = () => frames([...loginSequence, selfCreate, chestCreate]);
 
 describe("client: killTarget", () => {
   test("targets, faces, swings, and settles when the target's health hits zero", async () => {
@@ -1433,6 +1438,79 @@ describe("client: killTarget", () => {
     expect(stub.actions.filter((a) => a.action === "attack_start")).toHaveLength(1);
     stub.push(JSON.stringify(creatureHealth(0, 97)));
     expect((await fight).ok).toBe(true);
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: chests", () => {
+  test("interact on a chest is refused with the way that works", async () => {
+    const stub = startStub({ onConnect: () => chestWorld() });
+    const client = await inWorld(stub);
+    await client.waitForNearby((o) => o.guid === CHEST_GUID, { timeout: 2000 });
+    const res = await client.interact(CHEST_GUID);
+    expect(res).toMatchObject({ ok: false, status: "chest" });
+    if (res.ok) throw new Error("unreachable");
+    expect(res.hint).toContain("lootCorpse");
+    expect(stub.actions.map((a) => a.action)).not.toContain("interact");
+    client.close();
+    await stub.stop();
+  });
+
+  test("lootCorpse on a chest casts the Opening ladder, then empties the window the client's way", async () => {
+    const stub = startStub({ onConnect: () => chestWorld() });
+    const client = await inWorld(stub);
+    await client.waitForNearby((o) => o.guid === CHEST_GUID, { timeout: 2000 });
+    const pending = client.lootCorpse(CHEST_GUID, { timeout: 2000 });
+    // Open Kneeling (6478) first; the lock is a plain "Open" (5), so the
+    // server refuses it before the cast starts and the ladder moves on.
+    const first = await untilAction(stub, "cast_spell");
+    expect(stub.actions[first]).toMatchObject({ action: "cast_spell", spellId: 6478, targetGuid: CHEST_GUID });
+    stub.push(JSON.stringify(castFailed(70, 6478)));
+    const second = await untilAction(stub, "cast_spell", first + 1);
+    expect(stub.actions[second]).toMatchObject({ action: "cast_spell", spellId: 3365, targetGuid: CHEST_GUID });
+    stub.push(JSON.stringify(chestLootResponse(71, 25)));
+    await untilAction(stub, "loot_release");
+    stub.push(JSON.stringify(itemPushed(72)));
+    stub.push(JSON.stringify(lootRelease(73)));
+    const loot = await pending;
+    expect(loot).toMatchObject({ ok: true, status: "looted", gold: 25, items: [{ itemId: ITEM_ENTRY, count: 1 }] });
+    // The auto-loot sequence is sent from the SDK: no loot_all (CMSG_LOOT is
+    // dropped for a game object guid), one store per slot, money, release.
+    const after = stub.actions.slice(second + 1).map((a) => a.action);
+    expect(after).toEqual(["loot_item", "loot_money", "loot_release"]);
+    expect(stub.actions.map((a) => a.action)).not.toContain("loot_all");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a chest no open-hand spell fits is not_opened, with the last refusal", async () => {
+    const stub = startStub({ onConnect: () => chestWorld() });
+    const client = await inWorld(stub);
+    await client.waitForNearby((o) => o.guid === CHEST_GUID, { timeout: 2000 });
+    const pending = client.lootCorpse(CHEST_GUID, { timeout: 2000 });
+    let from = 0;
+    for (const [i, spellId] of [6478, 3365, 6247, 6477].entries()) {
+      from = (await untilAction(stub, "cast_spell", from)) + 1;
+      stub.push(JSON.stringify(castFailed(80 + i, spellId)));
+    }
+    const loot = await pending;
+    expect(loot).toMatchObject({ ok: false, status: "not_opened", reason: 12, items: [] });
+    expect(stub.actions.filter((a) => a.action === "cast_spell")).toHaveLength(4);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a refusal other than bad-targets ends the ladder at once", async () => {
+    const stub = startStub({ onConnect: () => chestWorld() });
+    const client = await inWorld(stub);
+    await client.waitForNearby((o) => o.guid === CHEST_GUID, { timeout: 2000 });
+    const pending = client.lootCorpse(CHEST_GUID, { timeout: 2000 });
+    await untilAction(stub, "cast_spell");
+    stub.push(JSON.stringify(castFailed(70, 6478, 45))); // SPELL_FAILED_MOVING
+    const loot = await pending;
+    expect(loot).toMatchObject({ ok: false, status: "not_opened", reason: 45 });
+    expect(stub.actions.filter((a) => a.action === "cast_spell")).toHaveLength(1);
     client.close();
     await stub.stop();
   });
@@ -3667,8 +3745,32 @@ describe("client: a name in view is a referent", () => {
     const stub = startStub({ onConnect: () => namedWorld() });
     const client = await inWorld(stub);
     // "b" is in both "Thistlebore" and "Quilby".
-    await expect(client.interact("b")).rejects.toThrow(/matches 2 things in view.*does not choose between referents/s);
+    expect(() => client.interact("b")).toThrow(/matches 2 things in view.*does not choose between referents/s);
     expect(stub.actions).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
+  test("the raw tier takes a name too — setTarget reaches the wire as the guid", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    const ack = await client.setTarget("thistle");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "set_target", guid: CREATURE_GUID });
+    expect(ack.resolved).toEqual({ input: "thistle", name: "Thistlebore", guid: CREATURE_GUID });
+    client.close();
+    await stub.stop();
+  });
+
+  test("sellItem's itemGuid stays strict — an item guid is not a unit in view", async () => {
+    const stub = startStub({ onConnect: () => namedWorld() });
+    const client = await inWorld(stub);
+    // The vendor resolves by name; the item does not, because there is no
+    // name-to-item-guid namespace to resolve it against — so a name there
+    // goes to the module as typed (and is refused there), never rewritten
+    // into the guid of a unit standing nearby.
+    await client.sellItem("thistle", "thistle");
+    expect(stub.actions.at(-1)).toMatchObject({ action: "sell_item", guid: CREATURE_GUID, itemGuid: "thistle" });
+    expect(() => client.sellItem("thistle", undefined as never)).toThrow(/sellItem\(\.\.\., itemGuid\)/);
     client.close();
     await stub.stop();
   });
