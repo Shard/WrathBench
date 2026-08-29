@@ -71,11 +71,12 @@ pool, and the roster policy (claude models on the claude-code driver only —
 the claude-code harness; shared free pools carry free ids only) is
 enforced on every roster entry at every re-read.
 
-#### Config reference (`infra/fleet.next.json`)
+#### Config reference (`infra/fleet.json`)
 
-Shipped as a sibling file while 0.5 lands; whoever asks for `fleet.json` is
-handed `fleet.next.json` when one is beside it (`preferNextConfig`), so the
-running supervisor keeps its config until it restarts and the rename commutes.
+`infra/fleet.json` is the live config. (Through the 0.5 rollout it was staged
+beside the running one as `fleet.next.json`; that shim was removed once 0.5
+landed — see "Changing the config shape" below for the pattern, which is still
+how a shape change ships.)
 
 ```
 preflight   the gate (below): enabled, account, smokes [{script, account}], timeoutMs,
@@ -389,7 +390,7 @@ For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
   (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
 - **cooling** — a provider pause on the roster's defer ladder
   (`1m/3m/5m/10m/15m/30m/1h/3h/6h`), indexed by how many times *that run* has
-  paused. This is how FOLLOW-UPS 43 is answered: the roster retries a
+  paused. The two-stage retry answers the mid-episode pause question: the roster retries a
   mid-episode provider pause in place (2m/5m/10m) while its process lives;
   once it gives up and exits, the supervisor takes over on the longer ladder,
   resuming in place on the same run id. Past the ladder the run is listed,

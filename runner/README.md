@@ -53,9 +53,9 @@ for resume), `scratchpad.md`.
 ## Drivers
 
 `--driver` picks how the runner reaches the model; the **harness** — what owns
-the loop and the context — follows from it. `--adapter` is the old
-name for `--driver` and still works; so does `claude-subscription`, the old
-spelling of `claude-code`. Nothing new writes either.
+the loop and the context — follows from it. The former spellings `--adapter`
+and `claude-subscription` are now refused with a message naming the current
+one, rather than silently translated.
 
 | driver | harness | what runs the loop | scores? |
 | --- | --- | --- | --- |

@@ -1,9 +1,10 @@
 # mod-wrathbench wire protocol
 
 The module exposes a small HTTP/WebSocket surface inside the worldserver. The SDK
-is generated against this document, so shapes are exact. This is the Stage-2
-vertical slice (PHASE-0): session lifecycle, one action (`say`), and a filtered
-outbound event stream. It is not the full action set.
+is generated against this document, so shapes are exact. It covers the whole
+surface the module serves today: session lifecycle, the action set of
+`docs/CONTRACTS.md` (including the raw passthrough), and the filtered outbound
+event stream.
 
 Transport: plain HTTP/1.1 and RFC6455 WebSocket on `WrathBench.BindAddress:Port`
 (default `0.0.0.0:8086`), reachable only from inside the private compose network.
@@ -137,7 +138,7 @@ Errors:
   capability over `/action`, `/events` and `DELETE /session`, so a guessable one
   (the old run-id default was a second-granularity timestamp) lets one run drive
   another; length is a proxy for entropy until the module issues the secret
-  itself (FOLLOW-UPS 19). Checked before the session is registered. The
+  itself (FOLLOW-UPS item 19, open). Checked before the session is registered. The
   `/characters` and `/character-delete` utility surfaces are deliberately not
   gated: they park at character-select, never enter world, and take no actions.
 - `400 {"ok":false,"error":"invalid_race_class","token":...}` — the character
@@ -723,7 +724,7 @@ item 38 N1; the former undifferentiated `no_path` no longer exists):
 would render); `WB_MOVE_RESULT.pos` is read back from the live character, so an
 `arrived` result is proof the server accepted the synthesized movement.
 
-Transports (2026-08, FOLLOW-UPS 38 N1). A client standing on a tram car or
+Transports (2026-08, FOLLOW-UPS item 38, N1). A client standing on a tram car or
 boat sends movement packets flagged `MOVEMENTFLAG_ONTRANSPORT` with the
 transport guid and its transport-relative offset, because its physics put it
 on the transport's model; the server then carries it as a passenger and
@@ -749,7 +750,7 @@ therefore sees "Subway" standing at the platform or absent, and a `move_to`
 onto an empty rail bed still answers `target_off_mesh` — the SDK's hint
 names the docking car when one is known.
 
-Areatriggers (2026-08, FOLLOW-UPS 38 N1). A real client tests its own position
+Areatriggers (2026-08, FOLLOW-UPS item 38, N1). A real client tests its own position
 against the `AreaTrigger.dbc` volumes it ships and sends `CMSG_AREATRIGGER`
 the moment it enters one — the player never chooses to. The module does the
 same: it reads `AreaTrigger.dbc` from the server data volume (`DataDir/dbc`,
@@ -759,7 +760,7 @@ each heartbeat with the same sphere/oriented-box geometry as
 and never again while the mover lingers inside: the module keeps the set of
 volumes the character is in, fires only for ids newly inside, and forgets an
 id when the character leaves the volume, changes map or is teleported, so a
-re-entry fires again (FOLLOW-UPS 56). Because a client never reports a
+re-entry fires again (closed item 56, `../docs/worklogs/2026-08-23.md`). Because a client never reports a
 trigger from a position it has not sent, each entry packet is preceded by a
 `MSG_MOVE_HEARTBEAT` at the entry position (audited as a `move_pkt` with
 `cause: "areatrigger"`), so the server's applied position is the tested one
@@ -773,7 +774,7 @@ happen without an agent action, because they happen to a client without a
 player action. Triggers fire only while a `move_to` is in progress; the
 server's own radius check rejects any hit the interpolation got wrong.
 
-#### Zone and area (FOLLOW-UPS 38 N2)
+#### Zone and area (FOLLOW-UPS item 38, N2)
 
 No packet carries "Elwynn Forest / Northshire Valley" to a client. The client
 computes its current area id locally — from the area-id grid of the ADT it
@@ -927,7 +928,7 @@ Death:
 | `SMSG_DURABILITY_DAMAGE_DEATH` | 0x2BD | `{}` |
 | `MSG_CORPSE_QUERY` | 0x216 | `{ "found": <bool>, "map"?, "x"?, "y"?, "z"?, "corpseMap"? }` — the server's answer to the ghost's corpse query (`HandleCorpseQueryOpcode`); position fields only when `found`. `map`/`x`/`y`/`z` is where a client draws the corpse marker, `corpseMap` the map the corpse is actually on; they differ only for a corpse inside a dungeon, where the marker sits on the entrance. The trailing unused u32 is consumed |
 
-A ghost knows where its corpse is (2026-08-23, FOLLOW-UPS 53): a real client
+A ghost knows where its corpse is (2026-08-23, closed item 53 — `../docs/worklogs/2026-08-23.md`): a real client
 sends `MSG_CORPSE_QUERY` as soon as it is a ghost and the answer is the corpse
 marker on its map. The parked client has no map, so the module sends the same
 one query per death, once the repop teleport has been acked (the handler
@@ -955,7 +956,7 @@ spline path points the client receives are consumed and dropped, because
 serving them would hand the agent the server's route in machine-readable form.
 A client player only sees the animation.
 
-Map transfers (navigation, 2026-08, FOLLOW-UPS 38 N1):
+Map transfers (navigation, 2026-08, FOLLOW-UPS item 38, N1):
 
 | opcode | id | `data` fields |
 |---|---|---|
@@ -983,7 +984,7 @@ Served in `SMSG_UPDATE_OBJECT` `fields` alongside the existing set:
   item create blocks.
 - items and containers: `stackCount`, `durability`, `maxDurability`,
   `itemFlags`, `ownerLo`/`ownerHi`, `containedLo`/`containedHi`.
-- containers only (worn bags, FOLLOW-UPS 50): `numSlots`
+- containers only (worn bags, closed item 50 — `../docs/worklogs/2026-08-23.md`): `numSlots`
   (`CONTAINER_FIELD_NUM_SLOTS`) and the bag's contents as
   `bagSlot<n>Lo`/`bagSlot<n>Hi` u32 guid halves, n 0-35
   (`CONTAINER_FIELD_SLOT_1`, 36 guid pairs). PUBLIC fields every client in

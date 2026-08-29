@@ -233,7 +233,7 @@ world at all.
   paragraph, and one item of it can be the only later-world thing on the page. A
   bare mention of Deathwing, the Legion, Draenor or Garrosh is not a rule: all four
   are in this world. Precision on a hand-checked 33-paragraph sample is about 0.8;
-  the residue is FOLLOW-UPS 62.
+  the residue is closed item 62 (`docs/worklogs/2026-08-24.md`).
 - **Out-of-world sections.** A fixed set of headings is dropped, heading line and
   body together: `external links`, `references`, `see also`, `patch changes`,
   `patches and hotfixes`, `patch history`, `patch notes`, `changes`, `gallery`,

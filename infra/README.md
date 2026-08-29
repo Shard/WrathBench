@@ -38,13 +38,18 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 - **bootstrap** — one shot. See below.
 - **authserver** / **worldserver** — AzerothCore, built from
   `infra/docker/server.Dockerfile` with `module/` compiled in.
-- **runner** — placeholder today (`sleep infinity`). Becomes the agent loop.
+- **runner** — a long-lived `sleep infinity` container that everything else is
+  `exec`'d into: the smoke scripts, one-off episodes, the viewer. It carries the
+  repo and the `data/` mounts, not a loop of its own.
 - **fixtures** — one-off operator tool, behind the `tools` profile. Puts a
   logged-out smoke character into a named scenario. See "Scenario fixtures".
 - **fleet** — the fleet supervisor (`infra/run-fleet.ts`) as a long-lived
   service, same image and mounts as `runner`. Behind the `fleet` compose profile
   so it only starts when named. See `docs/OPERATIONS.md` ("Running the fleet as
   a service").
+- **publisher** — pushes the public dashboard's JSON to object storage on a
+  timer (`infra/publish-dashboard.ts --loop`), behind the `publish` profile.
+  See `docs/PUBLIC-DASHBOARD.md`.
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
 published to the host are 3724 (authserver) and 8085 (worldserver), bound
@@ -195,7 +200,7 @@ config and everything but `model` has a default, so an old bare
 | key | default | notes |
 | --- | --- | --- |
 | `model` | — | required, passed through verbatim |
-| `driver` | `openai` | or `claude-code` (the claude-code harness; `claude-subscription` is read as the old spelling) |
+| `driver` | `openai` | or `claude-code` (the claude-code harness; the former spelling `claude-subscription` is refused, not translated) |
 | `account` | runner default (`RUNNER`) | one live session per account |
 | `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
@@ -335,9 +340,9 @@ account with the job on it (run id, level/xp, elapsed, cooling), the models
 table with the scheduler's verdict, the paused runs it is not resuming and
 why, and — honestly — which run currently holds an account even when that run
 is a hand-started roster the fleet does not manage. The dashboard's fleet page
-carries the same indicators. `sub-opus-e90` ships `enabled: false` on purpose:
-it is the "burn subscription budget" switch. Flip it to true when there is
-budget to burn; flip it back and the job stops after the episode in flight.
+carries the same indicators. A job that ships `enabled: false` is a switch,
+not dead config: flip it to true when there is budget to spend on it, flip it
+back and the job stops after the episode in flight.
 
 ## Where data lives
 

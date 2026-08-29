@@ -1,5 +1,15 @@
 # Phase 0: Control Surface and Liftoff
 
+**Status (2026-08-29).** All four gates below passed on 2026-08-21 and every
+build-list box is checked. Work since then has followed this document's own
+rule — a capability enters when an organic run makes it the next obstacle — so
+several items in "Deferred" have returned on that basis: the results pipeline
+and dashboard, episode ids and the evidence ladder, the probe lane, and a
+harness version series (tags now run to `harness-0.5`). The record of what
+shipped when is `docs/WORKLOG.md`; what a run means is `docs/METHODOLOGY.md`.
+This page is kept as the statement of the gate that was met, not as the current
+task list — that is `docs/FOLLOW-UPS.md`.
+
 ## Goal
 
 A harness any model can plug into. Small capable models create a character, complete quests, and gain levels. Frontier models go as far as they can with no harness errors in their trajectories.
@@ -69,6 +79,9 @@ Roughly in order. Each item is small enough to be a day or two; the module is th
 6. Track the furthest level reached per model over time. That curve is the harness maturity metric.
 
 ## Deferred (do not build in Phase 0)
+
+As written on 2026-08-21. Several of these have since returned under the rule
+below; see the status note at the top.
 
 Character snapshots and mid-level starts. Multiple task definitions or level bands. Perturbed-twin tasks. Results pipeline, dashboards, leaderboard. Formal harness version scheme beyond git tags. Per-character credentials. Multi-agent anything. Scripted party (NPCBots or playerbots). Human ceiling scripts. Variance and latency studies. Skill library in the Voyager sense. Harbor image. Any public artefact.
 
