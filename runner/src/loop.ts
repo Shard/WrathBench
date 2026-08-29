@@ -9,6 +9,7 @@ import type { Database } from "bun:sqlite";
 import { AdapterError, type ChatAdapter } from "./adapter";
 import {
   CONTEXT_POLICY,
+  PLAYER_FLAGS_GHOST,
   assembleContext,
   formatStateSummary,
   messageWindow,
@@ -17,6 +18,7 @@ import {
 } from "./context";
 import { buildSystemPrompt } from "./prompt";
 import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
+import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -122,6 +124,19 @@ export class ContextBuilder {
    * progress, and calling that a takeoff would invent one.
    */
   private lastTaxiFlight: boolean | undefined;
+  /**
+   * The last level a milestone was written for; undefined until the first
+   * sample names one, which is written as a mark from `undefined`.
+   */
+  private lastLevel: number | undefined;
+  /**
+   * The dead window and the ghost flag as the last sample read them. Both are
+   * seeded silently by the first observation, for the reason `lastTaxiFlight`
+   * is: a process that opens on a character already dead joined the window in
+   * progress, and calling that a death would invent one.
+   */
+  private lastDead: boolean | undefined;
+  private lastGhost: boolean | undefined;
   /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
@@ -309,6 +324,93 @@ export class ContextBuilder {
         });
       }
       this.lastTaxiFlight = taxiFlight;
+    }
+    // Level (FOLLOW-UPS 35): `self.level` on change, with the XP reading at the
+    // moment the new level was first seen. The first observation is a mark from
+    // `undefined` for the same reason the first zone is one — a run's starting
+    // level belongs on the record — so a level-up is a mark that carries a
+    // `from`, never simply a mark, and a resumed process's own first mark
+    // (which also carries none) cannot be counted as a gain.
+    if (typeof level === "number" && level !== this.lastLevel) {
+      trajectory.recordMilestone({
+        kind: "level",
+        from: this.lastLevel,
+        to: level,
+        ...(typeof xp === "number" ? { xp } : {}),
+        ...turn,
+      });
+      this.lastLevel = level;
+    }
+    // Death (FOLLOW-UPS 35), read as a *window* rather than as a health edge.
+    // A sample lands every `stateIntervalMs`, so an edge detector would see
+    // almost no deaths at all; but the cache latches the corpse, the graveyard
+    // and the reclaim delay from the death until the resurrect clears them, so
+    // any sample inside the window still sees it and can stamp the death with
+    // the cache's own timestamp instead of the sample's. A death that opened
+    // and closed entirely between two samples leaves nothing — the same lower
+    // bound the zone and flight records carry.
+    //
+    // Health comes off the raw field, not the derived gauge: `deriveGauges`
+    // withholds the gauge until `maxHealth` has been seen, and the ghost bit is
+    // read off `playerFlags` exactly as the HUD reads it.
+    const playerFlags = snap.self?.fields?.["playerFlags"]?.value;
+    const ghost =
+      typeof playerFlags === "number" ? (playerFlags & PLAYER_FLAGS_GHOST) !== 0 : undefined;
+    const health = snap.self?.fields?.["health"]?.value;
+    const corpse = snap.self?.corpse;
+    const dead = ghost === true || health === 0 || corpse !== undefined;
+    if (this.lastDead === undefined) {
+      this.lastDead = dead;
+      this.lastGhost = ghost;
+    } else {
+      if (dead && !this.lastDead) {
+        const c = corpse?.value as
+          | { map?: number; x?: number; y?: number; z?: number; source?: unknown }
+          | undefined;
+        const source: "corpse_query" | "death_spot" | undefined =
+          c?.source === "corpse_query" ? "corpse_query" : c?.source === "death_spot" ? "death_spot" : undefined;
+        const site =
+          c !== undefined &&
+          source !== undefined &&
+          typeof c.map === "number" &&
+          typeof c.x === "number" &&
+          typeof c.y === "number" &&
+          typeof c.z === "number"
+            ? { map: c.map, x: c.x, y: c.y, z: c.z, source }
+            : undefined;
+        const observedTs = corpse?.ts ?? snap.self?.reclaimDelay?.ts;
+        trajectory.recordMilestone({
+          kind: "death",
+          ...(typeof observedTs === "number" ? { observedTs } : {}),
+          ...(site === undefined ? {} : { position: site }),
+          ...(typeof zone?.id === "number" ? { zone: { id: zone.id } } : {}),
+          ...(typeof area?.id === "number" ? { area: { id: area.id } } : {}),
+          ...(ghost === undefined ? {} : { released: ghost }),
+          ...turn,
+        });
+      }
+      if (ghost === true && this.lastGhost === false) {
+        const g = snap.self?.graveyard?.value as
+          | { map?: number; x?: number; y?: number; z?: number }
+          | undefined;
+        trajectory.recordMilestone({
+          kind: "release",
+          ...(g !== undefined &&
+          typeof g.map === "number" &&
+          typeof g.x === "number" &&
+          typeof g.y === "number" &&
+          typeof g.z === "number"
+            ? { graveyard: { map: g.map, x: g.x, y: g.y, z: g.z } }
+            : {}),
+          ...turn,
+        });
+      } else if (ghost === false && this.lastGhost === true) {
+        trajectory.recordMilestone({ kind: "resurrect", ...turn });
+      }
+      this.lastDead = dead;
+      // An unobserved flag leaves the last reading standing rather than
+      // erasing it: "we did not see playerFlags this sample" is not "not a ghost".
+      if (ghost !== undefined) this.lastGhost = ghost;
     }
     trajectory.recordState(config.runId, {
       level,
@@ -510,7 +612,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }
 
       const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(config.objective, config.episode) },
+        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver)) },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];

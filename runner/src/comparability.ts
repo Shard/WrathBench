@@ -16,9 +16,17 @@
  *   reports "not recorded" rather than recomputing a prompt hash against
  *   today's prompt, which would be a fabricated claim of comparability.
  * - **The prompt hash is of the rendered prompt**, the bytes the model actually
- *   saw. With no objective it equals the fixed prompt's hash by construction
- *   (both drivers render through `buildSystemPrompt`), so
- *   scored runs share one hash and a steered run visibly does not.
+ *   saw — including the one sentence of it that is the *harness's* rather than
+ *   a constant. Both drivers render through `buildSystemPrompt`, but each
+ *   passes its own harness, and `prompt.ts`'s `contextSentence` then states the
+ *   context regime that harness actually applies: the fixed loop's trim, or the
+ *   claude-code CLI's continuous history. So two runs alike in everything but
+ *   the driver hash differently *on purpose* — the tuple already puts them in
+ *   two comparability groups (`harness`), and now the prompt hash shows that
+ *   the text was not the same text either. `promptChars` gives the difference a
+ *   magnitude, and the claude-code driver record logs the same length as
+ *   `systemPromptChars` (`adapter-claude.ts`). Within one harness, scored runs
+ *   still share one hash and a steered run visibly does not.
  */
 
 import { z } from "zod";
@@ -222,12 +230,15 @@ export function comparabilityOf(
   serverBuild: ServerBuild = null,
   wikiBundle: WikiBundleMeta | null = null,
 ): Comparability {
-  const prompt = buildSystemPrompt(config.objective, config.episode);
+  const harness = harnessOf(config.driver);
+  // Rendered for THIS run's harness: the prompt's context sentence differs
+  // between them, so the hash below is per-harness by design.
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness);
   return {
     harnessVersion,
     promptHash: promptHash(prompt),
     promptChars: prompt.length,
-    harness: harnessOf(config.driver),
+    harness,
     effort: config.effort ?? null,
     budget: {
       maxTurns: config.maxTurns ?? null,

@@ -28,7 +28,7 @@ import {
   type Comparability, harnessSeries } from "../src/comparability";
 import { loadRunConfig } from "../src/config";
 import type { EpisodeTier } from "../src/episodes";
-import { SYSTEM_PROMPT } from "../src/prompt";
+import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT } from "../src/prompt";
 import { Trajectory, readMeta } from "../src/trajectory";
 import type { ComparabilityView, EpisodeTierView } from "../viewer/api-types";
 
@@ -125,6 +125,21 @@ describe("comparabilityOf", () => {
     const c = comparabilityOf(loadRunConfig({ driver: "claude-code" }), "v");
     expect(c.harness).toBe("claude-code");
     expect(comparabilityOf(loadRunConfig({ driver: "stub", stubScript: "x" }), "v").harness).toBe("wrathbench");
+  });
+
+  test("the prompt hash is per harness: the two drivers are not sent the same text", () => {
+    // The prompt's sentence about older conversation is the harness's own
+    // (item 8): the fixed loop trims, the CLI does not. The tuple has to show
+    // that the bytes differed, not just that the loop did — otherwise a
+    // cross-driver cost or score comparison looks like it is over one prompt.
+    const loop = comparabilityOf(loadRunConfig({ driver: "openai", model: "m" }), "v");
+    const cli = comparabilityOf(loadRunConfig({ driver: "claude-code", model: "m" }), "v");
+    expect(loop.promptHash).toBe(promptHash(SYSTEM_PROMPT));
+    expect(cli.promptHash).toBe(promptHash(CLAUDE_CODE_SYSTEM_PROMPT));
+    expect(cli.promptHash).not.toBe(loop.promptHash);
+    expect(cli.promptChars).toBe(CLAUDE_CODE_SYSTEM_PROMPT.length);
+    expect(cli.promptChars).not.toBe(loop.promptChars);
+    expect(sameComparability(loop, cli)).toBe(false);
   });
 
   test("a tuple without a harness is not recorded; a pre-0.4 contextEngine is not a harness", () => {

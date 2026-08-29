@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { SYSTEM_PROMPT, freshCharacterNote, resumeSessionNote } from "../src/prompt";
+import {
+  CLAUDE_CODE_SYSTEM_PROMPT,
+  SYSTEM_PROMPT,
+  contextSentence,
+  freshCharacterNote,
+  resumeSessionNote,
+} from "../src/prompt";
 
 /**
  * The prompt is harness surface, so the facts a run proved models
@@ -85,6 +91,64 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     // world is a world fact and belongs in the prompt.
     expect(SYSTEM_PROMPT).toContain("This is the complete, unmodified 3.3.5a world");
     expect(SYSTEM_PROMPT).toContain("nothing has been walled off for the benchmark");
+  });
+});
+
+describe("the context sentence is the harness's, and says what that harness does", () => {
+  // The prompt used to state the fixed loop's aggressive trim on both
+  // harnesses. On claude-code no trim happens at all (item 8) — one CLI
+  // conversation grows for the whole episode — so on that driver the prompt
+  // stated something false about the machinery the model was running under.
+  test("the fixed loop states the trim, and the scratchpad as the memory", () => {
+    expect(contextSentence("wrathbench")).toBe(
+      "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.",
+    );
+    expect(SYSTEM_PROMPT).toContain(contextSentence("wrathbench"));
+    expect(SYSTEM_PROMPT).not.toContain("does not trim");
+  });
+
+  test("claude-code states its own regime, and never the trim it does not apply", () => {
+    const s = contextSentence("claude-code");
+    expect(s).toContain("does not trim your conversation");
+    expect(s).toContain("one continuous conversation");
+    expect(CLAUDE_CODE_SYSTEM_PROMPT).toContain(s);
+    expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toContain("trimmed aggressively");
+    expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toContain("not the chat history");
+  });
+
+  test("the scratchpad survives on claude-code only with the reason it is true", () => {
+    // Kept because a pause and resume restores the scratchpad and no
+    // conversation (`resumeSessionNote`) — not as leftover advice.
+    const s = contextSentence("claude-code");
+    expect(s).toContain("paused and resumed");
+    expect(s).toContain("scratchpad");
+  });
+
+  test("the two prompts differ by exactly that sentence and nothing else", () => {
+    expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toBe(SYSTEM_PROMPT);
+    expect(CLAUDE_CODE_SYSTEM_PROMPT.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(
+      SYSTEM_PROMPT,
+    );
+    // Everything else the prompt promises is still there on both.
+    for (const p of [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT]) {
+      expect(p).toContain("This is the complete, unmodified 3.3.5a world");
+      expect(p).toContain("## The snippet runtime");
+      expect(p).toContain("Act through tools every turn");
+      expect(p).toContain("Every turn you receive the current state summary");
+    }
+  });
+
+  test("buildSystemPrompt renders per harness, defaulting to the fixed loop", () => {
+    const { buildSystemPrompt } = require("../src/prompt");
+    expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
+    expect(buildSystemPrompt(undefined, undefined, "wrathbench")).toBe(SYSTEM_PROMPT);
+    expect(buildSystemPrompt(undefined, undefined, "claude-code")).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
+    // The objective block is the same text on both; only the context sentence moves.
+    const a = buildSystemPrompt("walk to Ironforge", "e90", "wrathbench");
+    const b = buildSystemPrompt("walk to Ironforge", "e90", "claude-code");
+    expect(a).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
+    expect(b).toContain("--- Operator objective for this run ---\nwalk to Ironforge\n");
+    expect(b.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(a);
   });
 });
 
