@@ -66,6 +66,7 @@ import type {
   TokenTotals,
   TpsFacts,
   TrackPoint,
+  MoveIntentView,
   TrackResponse,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
@@ -385,6 +386,10 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // Verbatim game text; see the module comment.
         items: null,
         harnessVersion: a.harnessVersion,
+        // The destination and the verdict are the run's own coordinates and
+        // the module's status word, both publishable. The target's *name* is
+        // verbatim game text, so it is withheld like every other name.
+        move: a.move == null ? null : { ...a.move, target: null },
       }),
     ),
   };
@@ -725,5 +730,8 @@ export function projectTrack(t: TrackResponse): TrackResponse {
         turn: p.turn,
       }),
     ),
+    // As on the live feed: coordinates and the module's status word travel,
+    // the target's name (verbatim game text) does not.
+    moves: (t.moves ?? []).map((m: MoveIntentView): MoveIntentView => ({ ...m, target: null })),
   };
 }

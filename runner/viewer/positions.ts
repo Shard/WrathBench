@@ -16,8 +16,8 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentPosition } from "./api-types";
-import { listRuns } from "./runs";
+import type { AgentPosition, MoveIntentView } from "./api-types";
+import { listRuns, readMoves } from "./runs";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -92,6 +92,18 @@ export function readLatestPosition(
 }
 
 /**
+ * The newest movement intention a run recorded, or null.
+ *
+ * The whole table is read and the last row taken rather than a `LIMIT 1`
+ * query, because `readMoves` is the one place that knows the table may not
+ * exist at all; a run's intentions are a handful of rows an hour.
+ */
+export function readLatestMove(runsDir: string, runId: string): MoveIntentView | null {
+  const moves = readMoves(runsDir, runId);
+  return moves.length === 0 ? null : moves[moves.length - 1]!;
+}
+
+/**
  * Every agent worth drawing: unterminated, and standing somewhere recently.
  *
  * Trajectory mtime deliberately plays no part — that is the listing's notion of
@@ -123,6 +135,9 @@ export function readPositions(
       questsCompleted: run.questsCompleted,
       items: run.items,
       harnessVersion: run.harnessVersion,
+      // Where it is trying to get to. Not aged here: the map decides what a
+      // stale intention looks like, the same way it decides for a pip.
+      move: readLatestMove(runsDir, run.runId),
     });
   }
   out.sort((a, b) => b.ts - a.ts);

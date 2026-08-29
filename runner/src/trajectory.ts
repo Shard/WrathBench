@@ -60,6 +60,28 @@ export interface StateLine {
   items?: ItemSample[] | undefined;
 }
 
+/**
+ * One movement intention, as the sandbox watched it (`MoveIntentNote`): the
+ * destination a `move_to` was dispatched for, and the module's verdict once it
+ * arrived. Two rows per move in the normal case — the dispatch, then the
+ * verdict — so a replay can show a move in flight and then how it ended.
+ */
+export interface MoveLine {
+  /** When this happened: the dispatch, or the verdict. Defaults to now. */
+  ts?: number | undefined;
+  /** The module's move id; absent when the ack had not answered yet. */
+  moveId?: number | null | undefined;
+  /** The map the dispatch was made on. A destination is meaningless without it. */
+  map?: number | null | undefined;
+  x: number;
+  y: number;
+  z: number;
+  /** The unit the move was aimed at, when it was aimed at one. */
+  target?: string | null | undefined;
+  /** The module's verdict (`arrived`, `too_far`, `superseded`, …); absent while in flight. */
+  status?: string | null | undefined;
+}
+
 /** One item on a state sample. Client-cache names only, as the HUD shows them. */
 export interface ItemSample {
   name: string;
@@ -288,6 +310,23 @@ CREATE TABLE IF NOT EXISTS state (
   zone INTEGER,
   area INTEGER
 );
+-- Movement intention: where the character was trying to get to, one row per
+-- (dispatch, verdict). Its own table rather than columns on the state table,
+-- because state is what the scorer and every derivation in the viewer read,
+-- and an intention is not an observation of the world: it is this run's own
+-- last request. CREATE TABLE IF NOT EXISTS gives an older run.sqlite the
+-- table (empty) the first time this build opens it.
+CREATE TABLE IF NOT EXISTS move (
+  run_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  move_id INTEGER,
+  map INTEGER,
+  x REAL, y REAL, z REAL,
+  -- The unit the move was aimed at, when it was aimed at one.
+  target TEXT,
+  -- The module's verdict; NULL on the row that records the dispatch itself.
+  status TEXT
+);
 `;
 
 /**
@@ -346,6 +385,24 @@ export class Trajectory {
     for (const [name, type] of Object.entries(columns)) {
       if (!have.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
     }
+  }
+
+  /**
+   * One movement intention: a `move_to` dispatch, or the verdict that ended it.
+   *
+   * Written whenever the sandbox's watched intent changes — the state ticker
+   * samples every 5s, so a walk shorter than the state-row cadence still gets
+   * both of its rows. The caller owns the change detection (`MoveLine` is
+   * whatever it saw); this only records.
+   */
+  recordMove(runId: string, m: MoveLine): void {
+    this.append({ t: "move", ...m });
+    this.db
+      .query(
+        `INSERT INTO move (run_id, ts, move_id, map, x, y, z, target, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(runId, m.ts ?? this.now(), m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
   }
 
   /** One `milestone` record, the way `quest_complete` is written (item 35). */

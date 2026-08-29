@@ -36,6 +36,7 @@ import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../a
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
+import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
   clearReplayState,
@@ -87,6 +88,23 @@ const DOT_R = 8;
 const DOT_R_SEL = 11;
 /** The click radius, kept ahead of the puck it has to cover. */
 const PIP_HIT_R = 24;
+
+/**
+ * The destination marker: its radius, and how far from the pip it has to sit
+ * before it is worth drawing at all. Below that the character is standing on
+ * its destination — the normal end of a successful move — and a marker there
+ * would only be a ring around the pip. A move still walking clears a far
+ * smaller bar than one already over.
+ */
+const DEST_R = 6;
+const DEST_MIN_PX = 14;
+const DEST_MIN_PX_LIVE = 4;
+/**
+ * The one colour the map states rather than derives. A failed move is not a
+ * run's identity, it is a fact about the move, so it does not take the run's
+ * colour; the value is the stylesheet's own `--err`.
+ */
+let INTENT_FAIL = "#f7768e";
 
 interface TileEntry {
   img: HTMLImageElement;
@@ -222,6 +240,7 @@ export default function MapPage() {
       bg: get("--bg", "#14161a"),
       line: get("--line", "#2b3038"),
     };
+    INTENT_FAIL = get("--err", "#f7768e");
     needsDraw = true;
   }
 
@@ -347,6 +366,116 @@ export default function MapPage() {
     ctx.globalAlpha = 1;
   }
 
+  /**
+   * Where each agent is trying to get to: a dashed line from the pip to the
+   * destination of its current or last move, and a marker labelled with what
+   * the move was aimed at.
+   *
+   * Drawn under the pips, so a destination reached (the marker lands under the
+   * character) never hides the character. The tone is the intention's own —
+   * dashed and bright while it walks, faded once it is over, red when the
+   * module refused it or the walk broke down; `lib/mapintent.ts` owns that
+   * reading and the staleness bounds, and this only paints.
+   */
+  function drawIntents(ctx: CanvasRenderingContext2D, list: Pip[], mapId: number): boolean {
+    // The feed's own clock, not the wall clock: a replayed intention was
+    // recorded hours or months ago, and ageing it against `Date.now()` would
+    // drop every one of them as stale. Live, the two are the same thing.
+    const now = replayId() === undefined ? Date.now() : cursor();
+    let drew = false;
+    ctx.textBaseline = "middle";
+    ctx.font = "11px ui-monospace, monospace";
+    for (const pip of list) {
+      const move = intentToDraw(pip.data.move, mapId, now, feedClock);
+      if (move === null) continue;
+      const from = project(view, pip.x, pip.y);
+      const to = project(view, move.x, move.y);
+      const tone = intentTone(move.status);
+      // Nothing to say when the destination is under the character at this
+      // zoom: an arrived move is exactly that, and a marker on top of the pip
+      // is clutter, not information. A move still walking earns a much smaller
+      // separation — where an agent is *headed* is the live fact, and at the
+      // whole-world zoom a 250y walk is a handful of pixels.
+      if (Math.hypot(to.sx - from.sx, to.sy - from.sy) < (tone === "walking" ? DEST_MIN_PX_LIVE : DEST_MIN_PX)) {
+        continue;
+      }
+      if (to.sx < -80 || to.sy < -40 || to.sx > W + 80 || to.sy > H + 40) continue;
+      drew = true;
+      const color = tone === "failed" ? INTENT_FAIL : colorOf(pip.runId);
+      ctx.save();
+      ctx.globalAlpha = tone === "walking" ? 0.9 : 0.4;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = tone === "walking" ? 2 : 1;
+      ctx.setLineDash(tone === "walking" ? [7, 5] : [3, 5]);
+      ctx.beginPath();
+      ctx.moveTo(from.sx, from.sy);
+      ctx.lineTo(to.sx, to.sy);
+      ctx.stroke();
+      // The destination itself: a ring, crossed when the move failed there.
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(to.sx, to.sy, DEST_R, 0, Math.PI * 2);
+      ctx.stroke();
+      if (tone === "failed") {
+        ctx.beginPath();
+        ctx.moveTo(to.sx - DEST_R, to.sy - DEST_R);
+        ctx.lineTo(to.sx + DEST_R, to.sy + DEST_R);
+        ctx.moveTo(to.sx + DEST_R, to.sy - DEST_R);
+        ctx.lineTo(to.sx - DEST_R, to.sy + DEST_R);
+        ctx.stroke();
+      }
+      const label = intentLabel(move) + (move.status === null ? "" : ` · ${move.status}`);
+      const w = ctx.measureText(label).width;
+      ctx.globalAlpha = tone === "walking" ? 0.75 : 0.35;
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(to.sx + DEST_R + 3, to.sy - 8, w + 6, 16);
+      ctx.globalAlpha = tone === "walking" ? 1 : 0.55;
+      ctx.fillStyle = tone === "failed" ? INTENT_FAIL : theme.dim;
+      ctx.fillText(label, to.sx + DEST_R + 6, to.sy + 1);
+      ctx.restore();
+    }
+    return drew;
+  }
+
+  /**
+   * The legend for the above, bottom-left, and only while something is drawn.
+   *
+   * On the canvas rather than in the DOM because it explains marks the canvas
+   * makes: the swatches are the same strokes, drawn by the same code, so the
+   * legend cannot drift from what the map actually looks like.
+   */
+  function drawIntentLegend(ctx: CanvasRenderingContext2D): void {
+    const rows: [string, string, IntentTone][] = [
+      ["heading for", theme.dim, "walking"],
+      ["move ended", theme.dim, "ended"],
+      ["move failed", INTENT_FAIL, "failed"],
+    ];
+    const x = 12;
+    let y = H - 12 - rows.length * 16;
+    ctx.save();
+    ctx.textBaseline = "middle";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(x - 6, y - 10, 132, rows.length * 16 + 10);
+    for (const [text, color, tone] of rows) {
+      ctx.globalAlpha = tone === "walking" ? 0.9 : 0.45;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = tone === "walking" ? 2 : 1;
+      ctx.setLineDash(tone === "walking" ? [7, 5] : [3, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 24, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = tone === "failed" ? INTENT_FAIL : theme.dim;
+      ctx.fillText(text, x + 32, y);
+      y += 16;
+    }
+    ctx.restore();
+  }
+
   function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null): void {
     const now = Date.now();
     ctx.textBaseline = "middle";
@@ -438,6 +567,7 @@ export default function MapPage() {
             // Recomputing either per pointer-move frame is the one thing in this
             // loop that scales with the length of a run.
             drawRoute(ctx, drawnRoute());
+            if (drawIntents(ctx, list, map)) drawIntentLegend(ctx);
             drawPips(ctx, list, selected());
           } else {
             ctx.fillStyle = theme.grid;

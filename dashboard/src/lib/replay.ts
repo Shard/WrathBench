@@ -8,6 +8,7 @@
  */
 
 import type { AgentPosition, TrackPoint, TrackResponse } from "@viewer/api-types";
+import { intentAt } from "./mapintent";
 
 /** Index of the last point at or before `ts`, or -1 when the cursor precedes all. */
 export function indexAt(points: readonly TrackPoint[], ts: number): number {
@@ -54,6 +55,9 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       // Track points carry no inventory; the replay popout shows none.
       items: null,
       harnessVersion: track.harnessVersion,
+      // The intention standing at the cursor. Its own cadence, so it is looked
+      // up by time rather than taken from the track point beside it.
+      move: intentAt(track.moves, ts),
     },
   ];
 }
