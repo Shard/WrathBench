@@ -69,6 +69,7 @@ import {
   streamAffinity,
   planContinuations,
   pausesOnDrain,
+  resumesInPlace,
   policyJob,
   rosterModels,
   eligibleFrom,
@@ -102,6 +103,7 @@ import {
 } from "./run-fleet";
 import { FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2877,5 +2879,27 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(pausesOnDrain({ source: "policy", episode: "e90" })).toBe(false);
     expect(pausesOnDrain({ source: "queue", episode: "freeplay" })).toBe(false);
     expect(pausesOnDrain(undefined)).toBe(false);
+  });
+
+  test("resumesInPlace: the freeplay stream and a resume:true campaign come back; a scored run does not", () => {
+    // What `infra/fleet-update.sh graceful` reads off each job row to decide
+    // whether waiting on it buys anything (FOLLOW-UPS 93). The campaign's
+    // opt-in is the supervisor's to answer: the script must not re-derive it
+    // from a fleet.json the supervisor may not be running.
+    const campaigns = [
+      { name: "class-probe", resume: true },
+      { name: "nav-probe" },
+    ] as unknown as Campaign[];
+    const probe = (campaign: string) => ({ source: "policy" as const, episode: "probing" as const, probe: { campaign, cell: "gnome-mage" } });
+    expect(resumesInPlace(policyFreeplay("opuslo", 12), campaigns)).toBe(true);
+    expect(resumesInPlace(probe("class-probe"), campaigns)).toBe(true);
+    expect(resumesInPlace(probe("nav-probe"), campaigns)).toBe(false);
+    // The campaign was deleted from the file: nothing to resume under.
+    expect(resumesInPlace(probe("class-probe"), [])).toBe(false);
+    expect(resumesInPlace(probe("class-probe"), undefined)).toBe(false);
+    // A scored attempt is spent by a recreate, so it is never parked.
+    expect(resumesInPlace({ source: "policy", episode: "e90" }, campaigns)).toBe(false);
+    expect(resumesInPlace({ source: "pinned", episode: "e360" }, campaigns)).toBe(false);
+    expect(resumesInPlace(undefined, campaigns)).toBe(false);
   });
 });
