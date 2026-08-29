@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import type { Scratchpad } from "../scratchpad";
-import type { ActionHintNote, ChildToHost, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
   ok: boolean;
@@ -438,6 +438,25 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "recent_events rpc failed");
     return (res.value ?? []) as EventSummary[];
+  }
+
+  /**
+   * Drain the death-window transitions the child latched since the last call.
+   *
+   * The child sees every event; the host samples on a 60s clock, and a whole
+   * death fits between two samples (`ipc.ts`, `DeathSignal`). Draining is
+   * destructive by design: these are the record, so every drained signal must
+   * be written, and one caller (the loop's state sample) owns the drain.
+   */
+  async deathSignals(): Promise<DeathSignal[]> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "death_signals", params: {} },
+      5_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "death_signals rpc failed");
+    return (res.value ?? []) as DeathSignal[];
   }
 
   /** JSON-safe snapshot of the child's StateCache. */

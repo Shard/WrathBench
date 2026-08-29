@@ -21,6 +21,7 @@ import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext
 import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
+import type { DeathSignal } from "./sandbox/ipc";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
@@ -223,6 +224,66 @@ export class ContextBuilder {
 
   private inFlight: Promise<SnapshotLike | null> | null = null;
 
+  /**
+   * Write the death-window transitions the child latched since the last sample,
+   * in the order they happened, and leave the window read's latches holding
+   * what they left behind.
+   *
+   * The record shapes are exactly the ones the sampled read produces — the
+   * evidence is better, the record is the same — with `observedTs` the death
+   * event's own timestamp. `released` on an event-driven death is the ghost
+   * flag as it read at the instant of death, which is normally false: the
+   * spirit is released a moment later, and the `release` record is what says
+   * when. `zone` / `area` fall back to the sample's reading when the child's
+   * cache had not named one.
+   */
+  private async applyDeathSignals(
+    trajectory: Trajectory,
+    turn: { turn?: number },
+    zoneId: number | undefined,
+    areaId: number | undefined,
+  ): Promise<void> {
+    const sandbox = this.o.sandbox as SandboxHost & { deathSignals?: () => Promise<DeathSignal[]> };
+    if (typeof sandbox.deathSignals !== "function") return;
+    let signals: DeathSignal[];
+    try {
+      signals = await sandbox.deathSignals();
+    } catch {
+      // A child that cannot answer leaves the window read as the only producer,
+      // which is what it is there for.
+      return;
+    }
+    for (const s of signals) {
+      if (s.kind === "death") {
+        const zone = s.zone ?? zoneId;
+        const area = s.area ?? areaId;
+        trajectory.recordMilestone({
+          kind: "death",
+          observedTs: s.ts,
+          ...(s.position === undefined ? {} : { position: s.position }),
+          ...(typeof zone === "number" ? { zone: { id: zone } } : {}),
+          ...(typeof area === "number" ? { area: { id: area } } : {}),
+          ...(s.released === undefined ? {} : { released: s.released }),
+          ...turn,
+        });
+        this.lastDead = true;
+        if (s.released === true) this.lastGhost = true;
+      } else if (s.kind === "release") {
+        trajectory.recordMilestone({
+          kind: "release",
+          ...(s.graveyard === undefined ? {} : { graveyard: s.graveyard }),
+          ...turn,
+        });
+        this.lastDead = true;
+        this.lastGhost = true;
+      } else {
+        trajectory.recordMilestone({ kind: "resurrect", ...turn });
+        this.lastDead = false;
+        this.lastGhost = false;
+      }
+    }
+  }
+
   private async doSampleState(): Promise<SnapshotLike | null> {
     const { config, trajectory, watchdogs } = this.o;
     const snap = await this.snapshot();
@@ -341,6 +402,20 @@ export class ContextBuilder {
       });
       this.lastLevel = level;
     }
+    // Death (FOLLOW-UPS 35): the transitions the sandbox child latched off the
+    // events themselves, drained here and written as they happened. The child
+    // sees every event; this sample lands every `stateIntervalMs`, and a whole
+    // death — die, repop, walk to the Spirit Healer, resurrect — fits between
+    // two samples. Run `fleet-sonnet-low-freeplay-sonnet-low-20260827-a2` lost
+    // three deaths that way, one of them by a single second, which is what the
+    // window read below cannot fix by tuning: the cache keeps no residue once
+    // the resurrect clears it.
+    //
+    // Applied in order and updating the same latches the window read uses, so
+    // two complete cycles inside one gap are two deaths, and so the window read
+    // that follows sees the state these signals left and repeats nothing.
+    await this.applyDeathSignals(trajectory, turn, zone?.id, area?.id);
+    // The same window, still read from the sample, as the fallback it now is:
     // Death (FOLLOW-UPS 35), read as a *window* rather than as a health edge.
     // A sample lands every `stateIntervalMs`, so an edge detector would see
     // almost no deaths at all; but the cache latches the corpse, the graveyard
