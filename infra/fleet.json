@@ -150,7 +150,7 @@
     },
     "class-probe": {
       "enabled": true,
-      "models": ["muse-spark", "nemotron-super"],
+      "models": ["muse-spark"],
       "resume": true,
       "maxAttemptsPerCell": 3,
       "runsPerCell": 1,
