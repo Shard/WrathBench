@@ -17,7 +17,9 @@
  * which made the smoke a coin toss, not a gate. A Battered Chest (template
  * 2849) has `groupLootRules` set, so Player::SendLoot hands its window to
  * Group::GroupLoot like a corpse, and its loot group 1 is 332 equal-chanced
- * uncommon entries: every open yields exactly one green. The Lakeshire one
+ * uncommon entries: every open yields at least one green, and its other
+ * (non-grouped) loot references can add more — the 2026-08-30 run rolled two
+ * at once — so the arc below is written for N >= 1 rolls. The Lakeshire one
  * (guid 20651) is in no pool and respawns in 7200s. If it is not in view —
  * something opened it in the last two hours — the smoke reports SKIP and
  * exits 0: a respawn window, not a verdict on the build.
@@ -25,10 +27,13 @@
  * Arc: two level-30 Human Warriors (PROBE + MODULE_ACCOUNT2) placed by
  * `battered-chest-lakeshire`, facing the chest -> group up (group loot,
  * uncommon threshold by default) -> A opens the chest (lootCorpse casts the
- * lock's Opening spell) -> both see SMSG_LOOT_START_ROLL for the same roll
- * guid, a named uncommon, need/greed offered -> A needs by name, B greeds by
- * roll guid -> SMSG_LOOT_ROLL_WON names A, the item appears in A's bag -> B's
- * late vote is no_pending_roll with a hint -> leave, logout, delete both.
+ * lock's Opening spell) -> both see one SMSG_LOOT_START_ROLL per ROLL_ONGOING
+ * slot in the window, the same set on each, every one a named uncommon with
+ * need/greed offered -> A needs every roll (by name where the name is
+ * unambiguous, else by roll guid), B greeds every one by roll guid -> one
+ * SMSG_LOOT_ROLL_WON per roll names A with rollType 1, every item appears in
+ * A's bag and none in B's -> B's late vote is no_pending_roll with a hint ->
+ * leave, logout, delete both.
  *
  * Run from inside the network:
  *   docker compose -f infra/compose.yml exec -T -e MODULE_ACCOUNT=PROBE -e MODULE_ACCOUNT2=SMOKE2 runner bun infra/smoke/loot-roll.ts
@@ -117,7 +122,7 @@ try {
     if (!a.state.group()?.members.some((m) => m.name === NAME_B)) fail(`A's member list lacks ${NAME_B}`);
     log(`PASS group: ${group.members.map((m) => m.name).join(", ")} + self, lootMethod=${JSON.stringify(a.state.group()?.lootMethod)}`);
 
-    // 2. Open the chest as the group: the green stays in the window as ROLL_ONGOING and the roll frame opens on both.
+    // 2. Open the chest as the group: every over-threshold drop stays in the window as ROLL_ONGOING (slotType 1) and opens a roll frame on both.
     // The roll frame only opens on the chest's first fill (Player::SendLoot
     // rolls when the game object is GO_READY). A chest a failed run left
     // half-looted opens again with its leftovers and no roll; empty it so it
@@ -136,53 +141,108 @@ try {
       process.exitCode = 0;
       throw SKIPPED;
     }
-    const startB = await rollOnB;
+    await rollOnB;
     log(`SMSG_LOOT_START_ROLL: ${JSON.stringify(startA.data)}`);
-    if ((startA.data as any).rollGuid !== (startB.data as any).rollGuid) fail("the two characters see different rolls");
-    await Bun.sleep(1000); // the item query names it
+
+    // One roll per ROLL_ONGOING slot: the window names them, so the count is a
+    // fact off the server, not a sleep. A single open can put several items at
+    // or above the threshold (two on 2026-08-30), so nothing below assumes one.
+    const rolling = looted.window.filter((i) => i.slotType === 1);
+    if (rolling.length === 0) fail(`the window holds no ROLL_ONGOING slot: ${JSON.stringify(looted.window)}`);
+    const key = (r: { slot: number; itemId: number }) => `${r.slot}:${r.itemId}`;
+    const named = (c: WrathClient) => c.state.pendingRolls().filter((r) => r.name !== undefined);
+    const framesBy = Date.now() + 15_000;
+    while ((named(a!).length < rolling.length || named(b!).length < rolling.length) && Date.now() < framesBy) await Bun.sleep(200);
     const pendingA = a.state.pendingRolls();
     const pendingB = b.state.pendingRolls();
-    if (pendingA.length !== 1 || pendingB.length !== 1) fail(`pendingRolls: A ${pendingA.length}, B ${pendingB.length}, expected one each`);
-    const roll = pendingA[0]!;
-    if (roll.name === undefined || (roll.quality ?? 0) < 2) fail(`the roll is not a named uncommon: ${JSON.stringify(roll)}`);
-    if (!roll.allowed.includes("need") || !roll.allowed.includes("greed")) fail(`need/greed not offered: ${JSON.stringify(roll.allowed)}`);
-    log(`PASS frame: both see a roll on ${JSON.stringify(roll.name)} (quality ${roll.quality}), buttons ${roll.allowed.join("/")}`);
+    if (pendingA.length !== rolling.length || pendingB.length !== rolling.length) {
+      fail(`pendingRolls: A ${pendingA.length}, B ${pendingB.length}, expected ${rolling.length} (one per ROLL_ONGOING slot in ${JSON.stringify(rolling)})`);
+    }
+    const setA = pendingA.map(key).sort().join(", ");
+    const setB = pendingB.map(key).sort().join(", ");
+    if (setA !== setB) fail(`the two characters see different roll sets: A [${setA}], B [${setB}]`);
+    if (setA !== rolling.map(key).sort().join(", ")) fail(`the roll frames [${setA}] do not match the window's ROLL_ONGOING slots [${rolling.map(key).sort().join(", ")}]`);
+    for (const roll of pendingA) {
+      const mirror = pendingB.find((r) => key(r) === key(roll))!;
+      if (mirror.rollGuid !== roll.rollGuid) fail(`slot ${roll.slot} item ${roll.itemId} is roll ${roll.rollGuid} on A but ${mirror.rollGuid} on B`);
+    }
+    if (new Set(pendingA.map((r) => r.itemId)).size !== pendingA.length) {
+      // Two draws of the same green: the bag poll below cannot tell them apart.
+      // A roll of the chest's 332-entry group, not a build verdict.
+      console.log(`SKIP: loot-roll — this open rolled the same item twice (${JSON.stringify(pendingA.map((r) => r.itemId))}), which the bag check cannot tell apart: retry after the 7200s respawn (not a build verdict)`);
+      await a.leaveGroup({ timeout: 10_000 }).catch(() => {});
+      process.exitCode = 0;
+      throw SKIPPED;
+    }
+    for (const roll of pendingA) {
+      if (roll.name === undefined || (roll.quality ?? 0) < 2) fail(`a roll is not a named uncommon: ${JSON.stringify(roll)}`);
+      if (!roll.allowed.includes("need") || !roll.allowed.includes("greed")) {
+        fail(`need/greed not offered on ${JSON.stringify(roll.name)} (slot ${roll.slot}, item ${roll.itemId}): ${JSON.stringify(roll.allowed)}`);
+      }
+    }
+    log(`PASS frames: both see ${pendingA.length} roll(s) — ${pendingA.map((r) => `${JSON.stringify(r.name)} q${r.quality} slot ${r.slot} (${r.allowed.join("/")})`).join("; ")}`);
 
-    // 3. Vote by name on A (need) and by roll guid on B (greed); need beats greed.
-    const wonOnA = a.events.waitFor((e) => (isEvent(e, "SMSG_LOOT_ROLL_WON") || isEvent(e, "SMSG_LOOT_ALL_PASSED")) && !isDecodeError(e.data), { timeout: 70_000 });
-    wonOnA.catch(() => undefined); // an earlier failure closes the stream; the rejection must not escape the finally
-    const needed = await a.lootRoll(roll.name, "need", { timeout: 15_000 });
-    if (!needed.ok) fail(`A's need refused: ${needed.status} — ${needed.hint}`);
-    const greeded = await b.lootRoll(roll.rollGuid, "greed", { timeout: 15_000 });
-    if (!greeded.ok) fail(`B's greed refused: ${greeded.status} — ${greeded.hint}`);
+    // 3. Vote every frame: A needs (by name where the name is unambiguous, by
+    // roll guid otherwise — a duplicate name is ambiguous_roll, not a failure),
+    // B greeds by roll guid. Need beats greed on each.
+    for (const roll of pendingA) {
+      const unique = roll.name !== undefined && pendingA.filter((o) => o.name === roll.name).length === 1;
+      const which = unique ? roll.name! : roll.rollGuid;
+      const needed = await a.lootRoll(which, "need", { timeout: 15_000 });
+      if (!needed.ok || needed.status !== "rolled") fail(`A's need on ${JSON.stringify(which)} refused: ${needed.status} — ${(needed as any).hint}`);
+      log(`  A needed ${JSON.stringify(roll.name)} by ${unique ? "name" : "roll guid"}: ${needed.status}`);
+    }
+    for (const roll of pendingB) {
+      const greeded = await b.lootRoll(roll.rollGuid, "greed", { timeout: 15_000 });
+      if (!greeded.ok || greeded.status !== "rolled") fail(`B's greed on roll ${roll.rollGuid} refused: ${greeded.status} — ${(greeded as any).hint}`);
+      log(`  B greeded ${JSON.stringify(roll.name)} by roll guid: ${greeded.status}`);
+    }
     // Both acks are acknowledgements, not rolls: CountRollVote echoes need as
     // rollNumber 0 / rollType 0 and greed as 128, and the numbers actually
     // rolled only go out in CountTheRoll's batch. `rolled` is the assertion.
     // `choice` is the button passed in (the ack cannot be read back for it) and
     // `roll` is undefined on every ack, so neither is a server-sourced fact:
     // the verdict's rollType below is what proves need beat greed.
-    log(`rolled: A ${needed.status} ${needed.choice}, B ${greeded.status} ${greeded.choice}`);
     if (a.state.pendingRolls().length !== 0 || b.state.pendingRolls().length !== 0) fail("a voted roll is still pending");
-    const verdict = await wonOnA;
-    log(`${verdict.opcode}: ${JSON.stringify(verdict.data)}`);
-    if (!isEvent(verdict, "SMSG_LOOT_ROLL_WON")) fail("everyone passed?");
-    if ((verdict.data as any).winnerGuid !== a.state.self.guid) fail(`winner ${(verdict.data as any).winnerGuid}, expected ${NAME_A} (need over greed)`);
-    if ((verdict.data as any).itemId !== roll.itemId) fail(`the verdict is for item ${(verdict.data as any).itemId}, not ${roll.itemId}`);
-    if ((verdict.data as any).rollType !== 1) fail(`the verdict's rollType is ${(verdict.data as any).rollType}, expected 1 (need beating greed)`);
+
+    // One verdict per roll, matched by slot + item (the core sends
+    // ObjectGuid::Empty as the verdict's source). `waitFor` searches the
+    // retained buffer, so collecting after the votes cannot miss one.
+    for (const roll of pendingA) {
+      const verdict = await a.events
+        .waitFor(
+          (e) =>
+            (isEvent(e, "SMSG_LOOT_ROLL_WON") || isEvent(e, "SMSG_LOOT_ALL_PASSED")) &&
+            !isDecodeError(e.data) &&
+            (e.data as any).slot === roll.slot &&
+            (e.data as any).itemId === roll.itemId,
+          { timeout: 70_000 },
+        )
+        .catch(() => undefined);
+      if (verdict === undefined) fail(`no verdict for ${JSON.stringify(roll.name)} (slot ${roll.slot}, item ${roll.itemId}) within 70s of the votes`);
+      log(`${verdict.opcode}: ${JSON.stringify(verdict.data)}`);
+      if (!isEvent(verdict, "SMSG_LOOT_ROLL_WON")) fail(`everyone passed on ${JSON.stringify(roll.name)}?`);
+      if ((verdict.data as any).winnerGuid !== a.state.self.guid) fail(`winner ${(verdict.data as any).winnerGuid} on ${JSON.stringify(roll.name)}, expected ${NAME_A} (need over greed)`);
+      if ((verdict.data as any).rollType !== 1) fail(`the verdict's rollType on ${JSON.stringify(roll.name)} is ${(verdict.data as any).rollType}, expected 1 (need beating greed)`);
+    }
     // Group::CountTheRoll stores the won item with StoreNewItem and never
     // calls SendNewItem, so no SMSG_ITEM_PUSH_RESULT is ever sent for a roll
     // (verified against deps/azerothcore: Group.cpp has no SendNewItem call).
     // The item arrives only as the object update state.bag() folds — poll it.
+    const wonItems = pendingA.map((r) => r.itemId);
+    const holds = (c: WrathClient, itemId: number) => c.state.bag().items.some((i) => i.itemId === itemId);
     const bagBy = Date.now() + 15_000;
-    while (!a.state.bag().items.some((i) => i.itemId === roll.itemId) && Date.now() < bagBy) await Bun.sleep(200);
-    if (!a.state.bag().items.some((i) => i.itemId === roll.itemId)) {
-      fail(`${NAME_A} won item ${roll.itemId} but it is not in state.bag() 15s later: ${JSON.stringify(a.state.bag().items)}`);
+    while (!wonItems.every((id) => holds(a!, id)) && Date.now() < bagBy) await Bun.sleep(200);
+    const missing = wonItems.filter((id) => !holds(a!, id));
+    if (missing.length > 0) {
+      fail(`${NAME_A} won ${JSON.stringify(wonItems)} but ${JSON.stringify(missing)} is not in state.bag() 15s later: ${JSON.stringify(a.state.bag().items)}`);
     }
-    if (b.state.bag().items.some((i) => i.itemId === roll.itemId)) fail(`${NAME_B} lost the roll but holds item ${roll.itemId}`);
-    log(`PASS verdict: ${NAME_A} won ${JSON.stringify(roll.name)} (roll ${(verdict.data as any).roll}) and it is in the bag`);
+    const wrongBag = wonItems.filter((id) => holds(b!, id));
+    if (wrongBag.length > 0) fail(`${NAME_B} lost every roll but holds ${JSON.stringify(wrongBag)}`);
+    log(`PASS verdicts: ${NAME_A} won all ${wonItems.length} roll(s) (${pendingA.map((r) => JSON.stringify(r.name)).join(", ")}) and they are in the bag`);
 
     // 4. Nothing left to vote on: a value with a hint, nothing sent.
-    const late = await b.lootRoll(roll.name, "pass");
+    const late = await b.lootRoll(pendingA[0]!.name ?? pendingA[0]!.rollGuid, "pass");
     if (late.ok || late.status !== "no_pending_roll") fail(`late vote should be no_pending_roll: ${JSON.stringify(late)}`);
     if (!b.drainActionHints().some((h) => h.action === "lootRoll" && h.status === "no_pending_roll")) fail("no hint recorded for the late vote");
     log("PASS refusal: no_pending_roll with a hint");
