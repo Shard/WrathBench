@@ -108,8 +108,11 @@ const TRAM_MOUTH = { x: -4838.95, y: -1318.46, z: 501.87 };
 // in him.
 const GRYTH = { x: -4821.13, y: -1152.4, z: 502.3 };
 const GRYTH_FRONT = { x: -4825.5, y: -1158.5, z: 502.3 };
-// TaxiNodes.dbc: 6 = Ironforge, 7 = Thelsamar (Loch Modan), the shortest
-// hop out of the city (TaxiPath.dbc 6 -> 7 costs 330 copper at base price).
+// TaxiNodes.dbc (read off the shipped file, not assumed): 6 = Ironforge,
+// 7 = Menethil Harbor, 8 = Thelsamar (Loch Modan) — Thelsamar is the shortest
+// hop out of the city. The server also lights node 100 (Honor Hold) for every
+// Alliance character at any level (PlayerTaxi::InitTaxiNodesForLevel); that is
+// its word, not the fixture's.
 // Innkeeper Firebrew (entry 5111), The Stonefire Tavern in Ironforge's
 // Commons; spawn from the world DB (guid 1745), o 4.869 — the front is 3y
 // along his facing. The scenario plants the dwarf start as the homebind so a
@@ -120,7 +123,7 @@ const FIREBREW_FRONT = { x: -4840.2, y: -860.1, z: 502.0 };
 // areaId at login — a real bind there stores the subzone, 132 Coldridge Valley.
 const DWARF_START_BIND = { map: 0, zone: 132, x: -6240.32, y: 331.033, z: 382.758 };
 export const TAXI_IRONFORGE = 6;
-export const TAXI_THELSAMAR = 7;
+export const TAXI_THELSAMAR = 8;
 const TRAM_TRIGGER = { x: -4840.26, y: -1330.46, z: 508.17 };
 
 // Brother Sammuel, entry 925, Paladin trainer in Northshire Abbey. Spawn read
