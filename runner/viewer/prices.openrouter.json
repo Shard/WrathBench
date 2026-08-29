@@ -79,12 +79,6 @@
       "cacheRead": 0.05,
       "cacheWrite": 0.4
     },
-    "stealth/ox-alpha": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
     "z-ai/glm-4.7-flash": {
       "input": 0.06,
       "output": 0.4,

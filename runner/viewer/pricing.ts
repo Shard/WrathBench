@@ -154,7 +154,10 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  * falls back to the input rate, per its own quoting.
  *
  * A free slug never reaches here: `priceFor` answers it with `FREE_PRICE`
- * first, whatever the catalogue quotes.
+ * first, whatever the catalogue quotes. So a 0/0 row in this file is only ever
+ * reached for a `:free`/`-free` id — a *suffixless* id quoted at 0/0 would be
+ * a paid model reading as free, which is the one shape the table must not
+ * hold. `viewer-pricing.test.ts` asserts that invariant over the whole file.
  */
 export type SyncedRow = Pick<PriceRow, "input" | "output" | "cacheRead" | "cacheWrite">;
 
@@ -176,6 +179,25 @@ export function syncedPrice(model: string): PriceRow | null {
     note: `OpenRouter list price, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts); metered against the operator's OpenRouter balance`,
   };
 }
+
+/**
+ * Ids the provider's catalogue no longer carries, and why.
+ *
+ * A delisted model is unpriced in a way running the sync cannot fix — the
+ * catalogue has no row to copy, so a sync *removes* the id rather than
+ * updating it. That is a different problem from "the sync has not seen this
+ * yet", and telling the reader to run a script that cannot help is worse than
+ * telling them nothing, so `unpricedNote` answers these ids from here instead.
+ *
+ * This map is also the record of why a row is missing from
+ * `prices.openrouter.json`: the alternative was to hold a rate by hand, and a
+ * hand-held rate in a file whose whole point is that nobody types rates into
+ * it is a number with no source behind it.
+ */
+export const DELISTED_MODELS: Readonly<Record<string, string>> = {
+  "stealth/ox-alpha":
+    "delisted — the stealth listing was revealed as ZAI GLM-5.3-Flash on 2026-08-28 and left the OpenRouter catalogue, so no list price is on file and a sync cannot restore one; these runs were free while the preview window was open, and the provider's own per-response charge is the figure to read",
+};
 
 /** What a run needs to carry to be priced. A subset of `RunRow`, so tests can be small. */
 export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness">;
@@ -249,10 +271,14 @@ function none(note: string): CostFigure {
 /**
  * Why a run has no price row, in the words the reader can act on.
  *
- * A Claude model we do not carry and an OpenRouter model the sync has not seen
- * are different problems: the second is fixed by running the script.
+ * Three different problems wear the same blank: a Claude model we do not
+ * carry, an OpenRouter model the sync has not seen (fixed by running the
+ * script), and one the catalogue has dropped (which the script cannot fix, and
+ * `DELISTED_MODELS` says so in its own words).
  */
 function unpricedNote(run: PriceableRun): string {
+  const delisted = DELISTED_MODELS[run.model ?? ""];
+  if (delisted !== undefined) return delisted;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(run.model ?? "");
   if (claude) return "no price on file for this model — tokens only, never a guess";
   return "no synced price — run `bun infra/sync-prices.ts`";

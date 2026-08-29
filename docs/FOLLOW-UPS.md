@@ -103,31 +103,20 @@ status.
     and the dashboard's rung 4 and achievement-points derivations. Unblocked;
     the SDK derivation is in hand with another agent.
 
-88. **`prices.openrouter.json` still prices `stealth/ox-alpha` at 0/0**
-    (2026-08-28, with the allowlist fix). The stealth free window closed and the id
-    was revealed as ZAI GLM-5.3-Flash at paid rates, so it came out of
-    `FREE_SUFFIXLESS_ALLOWLIST` and the harness now schedules and bills it as paid.
-    The synced price table is the half that did not follow: the row still reads
-    0/0/0/0, so the viewer reports every run on that id — the whole 2026-08-20..26
-    corpus included — as costing nothing. Next action: a `sync-prices` run against
-    the revealed model, then decide whether the historical runs, which really were
-    free at the time, should keep the zero (the table has no as-of-run rates, so
-    this is a judgement call, not a sync). The id stays pinned in
-    `infra/sync-prices.ts` either way, so the corpus keeps resolving a price.
-    The `ox-alpha` roster entry the new policy refused was removed the same day
-    (roster refresh, below), so the shipped file parses and this item is now only
-    about the price table.
-
-    **Amended 2026-08-28**: the id has since left the OpenRouter catalogue entirely, so
-    a sync does not overwrite the zero with paid rates — it DROPS the row, and the
-    corpus then reads unpriced with a note pointing at a sync that cannot fix it. The
-    row is held by hand for now. The live options are: keep the hand-held zero, accept
-    the blank (actual cost still resolves from the provider's own per-response figures;
-    only the expected column goes), or give the synced table the `standardAfter`
-    as-of-rate treatment `CLAUDE_PRICES` already uses for Sonnet's introductory rate —
-    which `z-ai/glm-5.3-flash` will need anyway when its 50% launch discount ends around
-    2026-09-09.
-
+91. **The synced price table has no as-of-run rates, and `glm-5.3-flash`'s
+    discount ends ~2026-09-09** (2026-08-29, out of item 88). `prices.openrouter.json`
+    holds one rate per model and one `asOf` for the whole file, so a re-sync
+    re-prices every run already on disk at today's catalogue. That is fine while
+    rates hold still and wrong the moment one moves: `z-ai/glm-5.3-flash` is on a
+    50% launch discount ($0.075/$0.25) running to roughly 2026-09-09, after which
+    a sync silently bills August's runs at list ($0.15/$0.50). The mechanism
+    already exists for the Claude rows — `standardAfter` in `CLAUDE_PRICES`, which
+    `priceFor` switches on the run's own start date — and wants generalising to
+    the synced table, with the sync writing rate windows rather than replacing a
+    row. Trigger: the discount lapsing, or the next catalogue move on any id the
+    corpus has runs for. Until then the two 2026-08-28 movers (`deepseek-v4-flash`
+    +81%, `-0731` -25%) are the standing example that a cost comparison spanning
+    a sync is not comparing like with like.
 
 ## Episodes and results
 
