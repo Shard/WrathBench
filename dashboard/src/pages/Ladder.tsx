@@ -17,6 +17,9 @@
  *
  * Above the table, one scatter for the tier: average cost per run against
  * average XP earned, one point per roster entry (`components/LadderChart`).
+ * Freeplay gets its own graph in that place instead — `components/StreamChart`,
+ * one stepped series per stream, level against cumulative active playtime; the
+ * axis argument is in `lib/ladder.ts`.
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
  * derivation over recorded signals, versioned with `lib/ladder.ts`. The two
@@ -39,6 +42,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
+import { StreamChart } from "../components/StreamChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
@@ -214,6 +218,9 @@ export default function Ladder() {
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <Show when={freeplay()}>
+          {/* The same rows and the same runs the table reads, so the chart and
+              the table can never disagree about which streams are on screen. */}
+          <StreamChart rows={streams()} runs={runs()} />
           <StreamTable rows={streams()} />
         </Show>
         <Show when={!freeplay()}>

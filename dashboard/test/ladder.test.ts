@@ -28,7 +28,10 @@ import {
   resolveChoice,
   runCostReading,
   scored,
+  streamChartLayout,
   streamRows,
+  streamSeries,
+  timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
 import { resolvedSummary } from "../src/lib/models";
@@ -640,5 +643,215 @@ describe("costScale", () => {
 describe("fmtCostTick", () => {
   test("cents below a dollar, dollars at and above one", () => {
     expect([0.01, 0.1, 1, 10, 100].map(fmtCostTick)).toEqual(["1\u00a2", "10\u00a2", "$1", "$10", "$100"]);
+  });
+});
+
+/**
+ * The freeplay chart's series: one stepped line per stream, stitched across its
+ * attempts on a cumulative active-playtime axis.
+ *
+ * The rules worth pinning are the seams. A stream is the point of the page, and
+ * a stream is many runs; every way of getting the stitch wrong shows up as a
+ * plausible-looking line, so each of them gets a case.
+ */
+describe("timeTicks", () => {
+  test("a duration axis steps in minutes and hours, never in decimal milliseconds", () => {
+    // What `niceTicks` would do to 7h is a gridline every 1.39h: its 1/2/5×10^k
+    // step is decimal, and time is not.
+    const hour = 3_600_000;
+    expect(timeTicks(7 * hour)).toEqual([0, 2 * hour, 4 * hour, 6 * hour, 8 * hour]);
+    expect(timeTicks(50 * 60_000)).toEqual([0, 10, 20, 30, 40, 50].map((m) => m * 60_000));
+    expect(timeTicks(0)).toEqual([0]);
+    // Past the last named step, whole days.
+    const day = 24 * hour;
+    expect(timeTicks(5 * day)).toEqual([0, day, 2 * day, 3 * day, 4 * day, 5 * day]);
+  });
+});
+
+describe("streamSeries", () => {
+  const fp = (over: Partial<ResultRun> = {}): ResultRun =>
+    run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
+  const seriesOf = (runs: readonly ResultRun[]): ReturnType<typeof streamSeries> =>
+    streamSeries(streamRows(runs), runs);
+
+  test("a three-attempt chain draws one line, each attempt offset by the last one's playtime", () => {
+    const runs = [
+      fp({ runId: "a1", levels: [mark(1, null, 0), mark(2, null, 600_000)], playtimeMs: 1_000_000 }),
+      fp({
+        runId: "a2",
+        continuedFrom: "a1",
+        startedAt: 200,
+        levels: [mark(2, null, 0), mark(3, null, 300_000)],
+        playtimeMs: 500_000,
+      }),
+      fp({
+        runId: "a3",
+        continuedFrom: "a2",
+        startedAt: 300,
+        levels: [mark(3, null, 0), mark(4, null, 100_000)],
+        playtimeMs: 400_000,
+      }),
+    ];
+    const { series, omitted } = seriesOf(runs);
+    expect(omitted).toEqual([]);
+    expect(series).toHaveLength(1);
+    const s = series[0]!;
+    expect(s.attempts).toBe(3);
+    expect(s.latestRunId).toBe("a3");
+    // L1 and L2 on a1, L3 300s into a2 (offset 1_000_000), L4 100s into a3
+    // (offset 1_500_000). Nothing is placed at a seam-relative zero.
+    expect(s.points.map((p) => [p.level, p.x])).toEqual([
+      [1, 0],
+      [2, 600_000],
+      [3, 1_300_000],
+      [4, 1_600_000],
+    ]);
+    // The line runs on to the stream's total active time, not to its last ding.
+    expect(s.endX).toBe(1_900_000);
+    expect(s.endLevel).toBe(4);
+  });
+
+  test("a seam at an unchanged level draws no step — the first mark of an attempt is not a gain", () => {
+    const runs = [
+      fp({ runId: "b1", levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "b2", continuedFrom: "b1", startedAt: 200, levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "b3", continuedFrom: "b2", startedAt: 300, levels: [mark(5, null, 0)], playtimeMs: 100_000 }),
+    ];
+    const s = seriesOf(runs).series[0]!;
+    expect(s.attempts).toBe(3);
+    // One point, not three: two phantom rises would otherwise be drawn at L5.
+    expect(s.points.map((p) => p.level)).toEqual([5]);
+    expect(s.endX).toBe(300_000);
+  });
+
+  test("a level gained in the unobserved gap steps at the seam", () => {
+    const runs = [
+      fp({ runId: "c1", levels: [mark(4, null, 0)], playtimeMs: 100_000 }),
+      // The character came back at 6: the ding happened between the attempts,
+      // and the seam is the lower bound on when.
+      fp({ runId: "c2", continuedFrom: "c1", startedAt: 200, levels: [mark(6, null, 0)], playtimeMs: 50_000 }),
+    ];
+    const s = seriesOf(runs).series[0]!;
+    expect(s.points.map((p) => [p.level, p.x])).toEqual([
+      [4, 0],
+      [6, 100_000],
+    ]);
+  });
+
+  test("a prior attempt with no active time omits the stream rather than compressing the axis", () => {
+    const runs = [
+      fp({ runId: "d1", levels: [mark(3, null, null)], playtimeMs: null }),
+      fp({ runId: "d2", continuedFrom: "d1", startedAt: 200, levels: [mark(4, null, 60_000)], playtimeMs: 90_000 }),
+    ];
+    const { series, omitted } = seriesOf(runs);
+    expect(series).toEqual([]);
+    expect(omitted).toHaveLength(1);
+    expect(omitted[0]!.why).toBe("attempt 1 of 2 recorded no active time");
+  });
+
+  test("a last attempt with no active time never pulls the line back behind the attempts before it", () => {
+    const runs = [
+      fp({ runId: "p1", levels: [mark(3, null, 60_000)], playtimeMs: 100_000 }),
+      // No playtime and no placeable mark: the line must still run to the
+      // 100_000 the first attempt proves, not back to the 60_000 mark.
+      fp({ runId: "p2", continuedFrom: "p1", startedAt: 200, levels: [], playtimeMs: null }),
+    ];
+    expect(seriesOf(runs).series[0]!.endX).toBe(100_000);
+  });
+
+  test("an attempt with no total falls back to what its marks prove it played", () => {
+    const runs = [
+      // `playtimeMs` never landed, but a mark at 90s did: the successor's
+      // offset is that lower bound, not zero and not an omission.
+      fp({ runId: "q1", levels: [mark(2, null, 90_000)], playtimeMs: null }),
+      fp({ runId: "q2", continuedFrom: "q1", startedAt: 200, levels: [mark(3, null, 10_000)], playtimeMs: 20_000 }),
+    ];
+    const s = seriesOf(runs).series[0]!;
+    expect(s.points.map((p) => [p.level, p.x])).toEqual([
+      [2, 90_000],
+      [3, 100_000],
+    ]);
+    expect(s.endX).toBe(110_000);
+  });
+
+  test("the LAST attempt with no active time simply ends at its last mark", () => {
+    const runs = [
+      fp({ runId: "e1", levels: [mark(3, null, 0), mark(4, null, 120_000)], playtimeMs: null }),
+    ];
+    const s = seriesOf(runs).series[0]!;
+    // No `playtimeMs` on the run, so the marks are the only evidence of time:
+    // the line stops where the last one proves it got to.
+    expect(s.endX).toBe(120_000);
+    expect(s.endLevel).toBe(4);
+  });
+
+  test("a continuedFrom outside the set is a root, and says its history is truncated", () => {
+    const runs = [fp({ runId: "f2", continuedFrom: "f1", levels: [mark(9, null, 0)], playtimeMs: 60_000 })];
+    const s = seriesOf(runs).series[0]!;
+    expect(s.attempts).toBe(1);
+    expect(s.truncated).toBe(true);
+    expect(s.points.map((p) => p.level)).toEqual([9]);
+  });
+
+  test("a live stream's line ends at the run's own total, which the viewer computes against now", () => {
+    const runs = [
+      fp({ runId: "g1", live: true, levels: [mark(2, null, 10_000)], playtimeMs: 900_000 }),
+    ];
+    const s = seriesOf(runs).series[0]!;
+    expect(s.status).toBe("live");
+    expect(s.endX).toBe(900_000);
+  });
+
+  test("a stream with no placeable mark is omitted with its reason, never drawn flat at zero", () => {
+    // Two different nothings, and the caption says which.
+    expect(seriesOf([fp({ runId: "h1", levels: [], playtimeMs: 60_000 })]).omitted[0]!.why).toBe(
+      "no level recorded yet",
+    );
+    const unplaceable = seriesOf([fp({ runId: "h2", levels: [mark(3, null, null)], playtimeMs: 60_000 })]);
+    expect(unplaceable.series).toEqual([]);
+    expect(unplaceable.omitted[0]!.why).toBe("no level mark carries an active-time reading");
+  });
+
+  test("a repeated character name is disambiguated by its start date; a unique one is left alone", () => {
+    const runs = [
+      fp({ runId: "n1", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 23), levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n2", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 24), levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n3", character: "Alone", startedAt: Date.UTC(2026, 7, 25), levels: [mark(1, null, 0)], playtimeMs: 60_000 }),
+    ];
+    expect(seriesOf(runs).series.map((s) => s.label)).toEqual([
+      "Qwenlocal 2026-08-23",
+      "Qwenlocal 2026-08-24",
+      "Alone",
+    ]);
+  });
+
+  test("a viewer that predates continuedFrom does not report every stream as truncated", () => {
+    // The field is absent, not null, off an older viewer — and `undefined !==
+    // null` would have marked the whole fleet as missing history.
+    const older = fp({ runId: "m1", levels: [mark(3, null, 0)], playtimeMs: 60_000 });
+    delete (older as { continuedFrom?: string | null }).continuedFrom;
+    expect(seriesOf([older]).series[0]!.truncated).toBe(false);
+  });
+
+  test("series are ordered furthest first, and the layout keeps their end labels apart", () => {
+    const runs = [
+      fp({ runId: "i1", character: "Low", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "j1", character: "High", levels: [mark(2, null, 0), mark(8, null, 50_000)], playtimeMs: 200_000 }),
+      fp({ runId: "k1", character: "Same", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
+    ];
+    const { series } = seriesOf(runs);
+    expect(series.map((s) => s.label)).toEqual(["High", "Low", "Same"]);
+    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
+    const layout = streamChartLayout(series, box);
+    expect(layout.xMax).toBe(200_000);
+    expect(layout.yMax).toBeGreaterThanOrEqual(8);
+    // Two streams sitting at the same level still get two readable labels.
+    const [low, same] = [layout.placed[1]!, layout.placed[2]!];
+    expect(low.endCy).toBe(same.endCy);
+    expect(Math.abs(low.labelY - same.labelY)).toBeGreaterThanOrEqual(12);
+    // A step, not a slope: the path only ever moves horizontally then vertically.
+    expect(layout.placed[0]!.d).toMatch(/^M[\d.]+,[\d.]+ (H[\d.]+ V[\d.]+ )*H[\d.]+$/);
+    // The y axis is anchored at zero, so a two-level gain is not the whole chart.
+    expect(layout.py(0)).toBe(box.y0);
   });
 });

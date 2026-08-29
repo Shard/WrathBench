@@ -338,6 +338,14 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .ladderchart-pt:hover text { text-decoration: underline; }
 .ladderchart-caption { font-size: 12px; margin: 0 0 12px; }
 
+/* The freeplay field's graph reuses the scatter's frame and caption; only the
+   hover affordance differs, because the mark is a line and not a puck. */
+.streamchart-series { cursor: pointer; }
+/* The first path of the pair is the transparent hit target; the second is the
+   line, and it is the one that thickens. */
+.streamchart-series:hover path + path { stroke-width: 3; }
+.streamchart-series:hover text { text-decoration: underline; }
+
 /* The ladder's episode buttons: the axis the page turns on, so they are centred
    and a size larger than a chip row that merely narrows something. */
 .chips.episodes { justify-content: center; gap: 8px; margin: 14px 0 8px; }

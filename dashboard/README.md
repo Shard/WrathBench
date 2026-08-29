@@ -63,7 +63,7 @@ published artifact carries.
 | `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
 | `/episodes` | the tiers: what each id fixes, and how many runs sit against it; a tier's member count leads to its ladder |
 | `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
-| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached |
+| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached. `freeplay` is the exception — the active field, one stepped line and one row per durable stream, level against cumulative active playtime |
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models |
 | `/run/:id` | one run, turn by turn, following the file live |
