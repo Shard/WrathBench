@@ -833,6 +833,72 @@ export function parsePreflight(raw: unknown): FleetPreflight {
   return { enabled: o.enabled, account: o.account, smokes, timeoutMs, deploySmokes, deployTimeoutMs };
 }
 
+/**
+ * The keys a ROSTER ENTRY may carry, and the keys a QUEUE JOB may carry.
+ *
+ * An entry is a catalog card and a job is a scheduling instruction; anything
+ * else on either of them is a key the harness does not read. It used to be
+ * dropped in silence, which is how `"enabled": false` sat on a roster entry
+ * for a day while the stream it was meant to pause kept running (2026-08-30).
+ * A key outside these sets now REFUSES that entry or job by name — scheduling
+ * only, never a drain — so the operator's edit either takes effect or says why
+ * it did not. Whole-file rejection stays for shape errors, and the retired
+ * spellings (`tiers`, `runsPerEpisode`, `objective`, `character`, ...) keep
+ * their own `fail()`s ahead of this check: they meant something specific, and
+ * naming them is worth taking the file down for.
+ */
+export const ROSTER_ENTRY_KEYS = [
+  "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
+  "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
+] as const;
+
+export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;
+
+/**
+ * The nearest valid alternative, where there is an obvious one. Both entries
+ * are keys that LOOK like they would work and quietly would not: `enabled` is
+ * the queue job's word, not the entry's, and `tokenEnv` is the runner-side
+ * spelling of a lane that an entry states as `subscription`.
+ */
+const ROSTER_KEY_HINTS: Record<string, string> = {
+  enabled: 'roster entries have no `enabled`; to pause a stream set `idle: "none"`; to stop scheduling set tier/idle accordingly',
+  tokenEnv: "use `subscription`, the NAME of the env var holding the token",
+};
+
+/** The keys of `entry` that are outside `allowed`, in the file's own order. */
+export function unknownKeysOf(entry: object, allowed: readonly string[]): string[] {
+  return Object.keys(entry).filter((k) => !allowed.includes(k));
+}
+
+/** The refusal text for an entry or job carrying keys the harness does not read. */
+function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly string[], allowed: readonly string[]): string {
+  const named = keys.map((k) => `\`${k}\``).join(", ");
+  const hint = kind === "roster entry" ? keys.map((k) => ROSTER_KEY_HINTS[k]).find((h) => h !== undefined) : undefined;
+  return (
+    `unknown key ${named} on a ${kind} — ` +
+    (hint ?? `not a ${kind === "roster entry" ? "roster-entry" : "queue-job"} key`) +
+    ` (valid keys: ${allowed.join(", ")})`
+  );
+}
+
+/**
+ * Every job name a roster entry could spawn under: the file's own jobs that
+ * reference it, the policy's `<ref>-<episode>`, and a campaign's
+ * `<ref>-<campaign>-<cell>`. This is what a refusal of the ENTRY has to carry
+ * for the tick to spare a live run under it — the same value an account-rule
+ * refusal carries for a pin (item 66). A refusal suppresses scheduling; it
+ * never drains.
+ */
+function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonly Campaign[]): string[] {
+  const names = new Set<string>(jobs.filter((j) => j.refs.includes(name)).map((j) => j.name));
+  for (const ep of EPISODE_IDS) names.add(`${name}-${ep}`);
+  for (const c of campaigns) {
+    if (c.models !== "all" && !c.models.includes(name)) continue;
+    for (const cell of c.cells) names.add(`${name}-${c.name}-${cell.id}`);
+  }
+  return [...names];
+}
+
 /** Parse + validate a fleet config. Throws with a config-error message. */
 export function parseFleet(raw: unknown): FleetConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -869,8 +935,16 @@ export function parseFleet(raw: unknown): FleetConfig {
     names.add(job.name);
     jobs.push(job);
   };
-  for (const job of parseQueue(o.queue, roster)) add(job);
+  const strictJobKeys = new Map<string, string[]>();
+  for (const job of parseQueue(o.queue, roster, strictJobKeys)) add(job);
   const refusals: ConfigRefusal[] = [];
+  // Strict keys BEFORE the account rules, deliberately: a job the harness
+  // cannot read must not win an account off a well-formed one. A refused job
+  // is disabled, and a disabled pin is already allowed to park anywhere.
+  for (const [jobName, keys] of strictJobKeys) {
+    const pin = pinsOf(jobs, campaigns).find((p) => p.label === jobName);
+    if (pin !== undefined) refuse(pin, refusals, strictKeyWhy("queue job", keys, QUEUE_JOB_KEYS));
+  }
   applyPinAccountRules(pinsOf(jobs, campaigns), accounts, refusals);
   for (const pin of pinsOf(jobs, campaigns)) {
     if (pin.account === undefined) continue;
@@ -914,11 +988,34 @@ export function parseFleet(raw: unknown): FleetConfig {
   // An entry pinned to a subscription the file does not configure. Refused as
   // the ENTRY, not the file: the rest of the roster is fine, and a rejected
   // re-read would make every other flag in the file inert.
+  // A key the harness does not read. Same refusal shape: the entry stays in
+  // the catalog, nothing schedules it, and the line says which key and what to
+  // write instead.
   for (const [name, e] of Object.entries(roster)) {
+    const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
+    if (keys.length === 0) continue;
+    const why = strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS);
+    roster[name] = { ...e, refused: why };
+    refusals.push({
+      pin: `roster ${name}`,
+      why: `${why} — the entry is in the catalog and scheduled by nothing`,
+      jobs: refJobNames(name, jobs, campaigns),
+    });
+  }
+  for (const [name, e] of Object.entries(roster)) {
+    // One refusal line per entry: an entry already out of the catalog's
+    // scheduling has nothing left for a second one to suppress.
+    if (e.refused !== undefined) continue;
     if (e.subscription === undefined || policy.subscriptions.includes(e.subscription)) continue;
     const why = `subscription ${e.subscription} is not in policy.subscriptions (${policy.subscriptions.join(", ")})`;
     roster[name] = { ...e, refused: why, subscription: undefined };
-    refusals.push({ pin: `roster ${name}`, why: `${why} — the entry is in the catalog and scheduled by nothing`, jobs: [] });
+    // The jobs it could have spawned under, for the same reason a pin's
+    // refusal carries them: a live freeplay run under this entry is spared.
+    refusals.push({
+      pin: `roster ${name}`,
+      why: `${why} — the entry is in the catalog and scheduled by nothing`,
+      jobs: refJobNames(name, jobs, campaigns),
+    });
   }
   return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent, refusals };
 }
@@ -1159,7 +1256,12 @@ export function eligibleFrom(states: readonly ModelState[]): Eligible {
   return (ref, ep) => !isScoredEpisode(ep) || (by.get(ref)?.eligible.includes(ep) ?? false);
 }
 
-function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): FleetJob[] {
+function parseQueue(
+  raw: unknown,
+  roster: Record<string, FleetRosterEntry>,
+  /** Out: job name -> keys outside `QUEUE_JOB_KEYS`. The caller refuses the job. */
+  strictKeys?: Map<string, string[]>,
+): FleetJob[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) fail("fleet config: queue must be an array of jobs");
   const out: FleetJob[] = [];
@@ -1212,6 +1314,10 @@ function parseQueue(raw: unknown, roster: Record<string, FleetRosterEntry>): Fle
       }
       subscription = j.subscription;
     }
+    // Collected, not thrown: the job is refused by name below the parse, which
+    // suppresses its scheduling and leaves the rest of the file in effect.
+    const unknown = unknownKeysOf(j as object, QUEUE_JOB_KEYS);
+    if (unknown.length > 0) strictKeys?.set(name, unknown);
     out.push({
       refs: refs as string[],
       ref,
@@ -2696,7 +2802,7 @@ export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = tru
   // a whole-file failure. Saying "the rest IS in effect" under that banner
   // would contradict it at exactly the moment a board needs reading.
   return [
-    `! ${refusals.length} pin(s) refused by the account rules` +
+    `! ${refusals.length} pin(s) refused by the config rules` +
       (inForce ? " — the rest of the file IS in effect:" : " IN THE FILE — see the banner above for what is actually running:"),
     ...refusals.map((r) => `   ${r.pin} REFUSED and left disabled: ${r.why}`),
     "   a live run under a refused pin is left alone; it just will not respawn",
@@ -5396,7 +5502,7 @@ async function main(): Promise<void> {
     for (const name of actions.drain.filter((n) => refusedJobs.has(n))) {
       if (spared.has(name)) continue;
       spared.add(name);
-      say(`job ${name}: its pin was refused by the account rules — the live run is left alone, and will not respawn`);
+      say(`job ${name}: it was refused by the config rules — the live run is left alone, and will not respawn`);
       record({ job: name, event: "refusal-spared" });
     }
     actions.drain = actions.drain.filter((n) => !refusedJobs.has(n));
