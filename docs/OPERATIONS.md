@@ -212,9 +212,24 @@ reboot. Resumes do not care: the run id is read off disk.
 ./infra/fleet-update.sh status              # the switch, the heartbeat, the live jobs
 ```
 
-It sets the **pause switch**, waits for every live run to end on its own clock,
-recreates the container on the new code, waits for the new supervisor's first
-heartbeat, and clears the switch. Nothing is signalled and no attempt is spent.
+It sets the **pause switch**, waits for every run a recreate would *cost* to end
+on its own clock, recreates the container on the new code, waits for the new
+supervisor's first heartbeat, and clears the switch. Nothing is signalled and no
+attempt is spent.
+
+It does not wait for the runs that come back **where they left off**: the
+freeplay stream and a probe campaign with `resume: true`. Once the switch has
+put such a job in `draining` the wait counts it as drained and moves on — an
+`idle: "unlimited"` session has no clock to finish on, so waiting for one is
+waiting to the 8h ceiling (2026-08-29: the window had to become a `force`, and
+the stream then came back on the same run id and character anyway). The status
+lines name both halves each poll: `waiting on:` for the runs holding the window
+and `counted drained:` for the parked ones. Whether a job parks is the
+supervisor's own answer, published per job row as `resumesInPlace` in
+`fleet-state.json` — the script never re-reads `fleet.json` for a campaign's
+`resume` flag, because the switch has to work while that file is rejected. A
+supervisor older than that field does not write it, and the script falls back
+to the freeplay pair (`source: policy`, `episode: freeplay`).
 
 The switch is `data/runs/fleet-pause.json` (`{"paused": true, "why": "..."}`),
 read every tick beside the config. While it is set the fleet launches
@@ -229,7 +244,7 @@ which is when someone most wants it. Set it by hand if you prefer
 banner naming it, and distinguishes the switch on disk from the one the
 supervisor has picked up.
 
-Two costs, both printed by the script:
+Three costs, all printed by the script:
 
 - the drain race the supervisor has always had: an episode spawned in the
   instant between the idle check and the SIGTERM gets run-roster's graceful
@@ -242,6 +257,9 @@ Two costs, both printed by the script:
   a long wait with one of those on the board is a reason to clear the switch and
   update later. Waiting is bounded (`--timeout`, default 8h) and a timeout
   leaves the switch set and kills nothing.
+- a **parked** run (freeplay, or a `resume: true` campaign) is SIGTERMed by the
+  recreate wherever it happens to be, exactly as `force` would do it. It resumes
+  on the same run id, account and character; nothing scored is spent.
 
 A **refused pin** (the `!` block in `--status`) is deliberately spared from
 draining — its live run was overruled, not parked — so a refused pin that loops
@@ -255,7 +273,10 @@ supervisor's frozen rows both keep waiting rather than recreating over live
 episodes.
 
 Ctrl-C during the wait is safe: nothing has been signalled, the switch stays
-set, and `./infra/fleet-update.sh resume` puts the fleet back to work.
+set, and `./infra/fleet-update.sh resume` puts the fleet back to work — which
+the script now says, loudly, on the way out. An aborted window that looked like
+nothing happened is how a fleet ends up scheduling nothing until somebody
+notices.
 
 **The first time, the switch is not live yet.** It is supervisor code, so a
 supervisor started before this shipped does not read it — the graceful path
@@ -304,6 +325,14 @@ logs the character out. Nothing is corrupted. What it costs:
   caps to `null` on the resumed run while its run id, account, character,
   session token, trajectory and scratchpad are all the stored run's.
 - a preflight smoke in flight dies with the container; the gate re-runs it.
+
+If the switch is already **set** when `force` runs — the ordinary way to arrive
+here is an aborted `graceful` — force clears it after the recreate, once the new
+supervisor's heartbeat is in, and names the `why` it found on the way past.
+Force *starts* the container, so a switch left set behind it is a fleet that
+runs and schedules nothing; `drain` is the mode whose job is leaving it set, and
+that one stops the container instead. A supervisor that does not come back
+leaves the switch set, exactly as on the graceful path.
 
 `--no-deps` is not optional on either path: without it compose may decide the
 worldserver is out of date and recreate it under every live episode.
