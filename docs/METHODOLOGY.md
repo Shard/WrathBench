@@ -387,7 +387,7 @@ Goodhart pressure moves from the model to the derivation author, where it can
 be revised without re-running anything. The dashboard ladder's row ordering
 (highest rung, then the `(level, xp)` pair, then gold; missing readings sort
 last, never as zero) is one such derivation, versioned with the dashboard in
-`dashboard/src/lib/eval.ts` — three separate numbers, no aggregate score.
+`dashboard/src/lib/ladder.ts` — three separate numbers, no aggregate score.
 
 **A ladder belongs to a comparability group, so `probing` has none** (operator
 decision, 2026-08-29). A probe campaign varies its cells on purpose; a table
