@@ -194,3 +194,22 @@ describe("Trajectory", () => {
     expect(raw[0]!["text"]).toContain("[redacted]");
   });
 });
+
+describe("a freeplay continuation's lineage", () => {
+  test("continued_from lands in the run row and meta, and dropContinuation clears every copy", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({ runId: "run-a12", driver: "stub", episode: "freeplay", character: "Bromdir", race: 3, class: 2, continuedFrom: "run-a11" });
+    traj.writeMeta({ runId: "run-a12", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    expect(traj.runRow("run-a12")?.["continued_from"]).toBe("run-a11");
+    expect(readMeta(dir)?.config.continuedFrom).toBe("run-a11");
+    traj.dropContinuation("run-a12", "Bromdir is gone");
+    const row = traj.runRow("run-a12");
+    expect(row?.["continued_from"]).toBeNull();
+    expect(row?.["character"]).toBeNull();
+    expect(readMeta(dir)?.config.continuedFrom).toBeUndefined();
+    expect(readMeta(dir)?.config.character).toBeUndefined();
+    traj.close();
+    expect(readTrajectory(dir).some((r) => r["kind"] === "continue-dropped")).toBe(true);
+  });
+});

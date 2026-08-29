@@ -255,6 +255,10 @@ CREATE TABLE IF NOT EXISTS run (
   -- was on without replaying the trajectory.
   resolved_model TEXT,
   resolved_cli_version TEXT,
+  -- The freeplay run this one continues (RunConfig.continuedFrom): the
+  -- lineage of a freeplay stream, so a listing can follow a character across
+  -- the run ids the operator's disable/re-enable cycle gave it.
+  continued_from TEXT,
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
@@ -296,6 +300,8 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
   // launched by an older build (and any run resumed by this one) gains them here.
   resolved_model: "TEXT",
   resolved_cli_version: "TEXT",
+  // Added 2026-08-29: a freeplay continuation names its predecessor.
+  continued_from: "TEXT",
 };
 
 /**
@@ -365,8 +371,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, continued_from, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -381,9 +387,29 @@ export class Trajectory {
         platformOf(meta.config.apiBase, meta.config.driver),
         meta.resolved?.model ?? null,
         meta.resolved?.cliVersion ?? null,
+        meta.config.continuedFrom ?? null,
         this.scrub(jsonLine(meta.config)),
       );
     this.append({ t: "meta", ...meta });
+  }
+
+  /**
+   * A continuation whose character turned out to be gone: the run goes on as
+   * a fresh one, and every place that said "continues run X on character Y"
+   * — the run row, meta.json and the trajectory — is told so, because a
+   * lineage the character does not back is exactly the wrong record.
+   */
+  dropContinuation(runId: string, detail: string): void {
+    this.append({ t: "harness", kind: "continue-dropped", detail });
+    this.db.query(`UPDATE run SET continued_from = NULL, character = NULL WHERE run_id = ?`).run(runId);
+    const path = join(this.dir, "meta.json");
+    try {
+      const meta = JSON.parse(readFileSync(path, "utf8")) as RunMeta;
+      const { continuedFrom: _from, character: _name, ...config } = meta.config;
+      writeFileSync(path, `${JSON.stringify(toJsonSafe({ ...meta, config }), null, 2)}\n`, "utf8");
+    } catch {
+      // No meta.json (a test harness): the row and the record carry it.
+    }
   }
 
   /**

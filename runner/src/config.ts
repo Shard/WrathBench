@@ -211,6 +211,16 @@ export const runConfigSchema = z.object({
     .string()
     .refine(isValidCharacterName, { message: CHARACTER_NAME_RULE })
     .optional(),
+  /**
+   * The freeplay run this one CONTINUES (`--continue-from`): a new run id on
+   * the predecessor's account, character and scratchpad, stamped so the
+   * lineage is readable off the run record. A freeplay stream is the operator's
+   * to disable and re-enable at will, and its character must survive that
+   * (operator ask, 2026-08-29). Only `freeplay` may carry it — a scored
+   * episode is a fresh character by definition — and run.ts refuses anything
+   * else at launch. Identity on `--resume`, like `character`.
+   */
+  continuedFrom: z.string().min(1).optional(),
   /** Game account for this run's sessions. Parallel runs need distinct accounts
    * (the core allows one live session per account). Created via bootstrap. */
   account: z.string().min(2).max(16).default("RUNNER"),
