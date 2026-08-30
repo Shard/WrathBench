@@ -37,6 +37,7 @@ import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
+import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
 import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
 import {
@@ -106,6 +107,15 @@ const DEST_MIN_PX_LIVE = 4;
  * colour; the value is the stylesheet's own `--err`.
  */
 let INTENT_FAIL = "#f7768e";
+/**
+ * The rest glyph's colour: the stylesheet's own experience purple, the same
+ * token the reflection surface uses everywhere else in the dashboard, so
+ * "this character is thinking rather than acting" is one colour across the
+ * page rather than a canvas invention.
+ */
+let REST_TINT = "#7b3fd6";
+/** Whether the viewer asked for less motion; the glyph is drawn either way. */
+let reduceMotion = false;
 
 interface TileEntry {
   img: HTMLImageElement;
@@ -242,6 +252,7 @@ export default function MapPage() {
       line: get("--line", "#2b3038"),
     };
     INTENT_FAIL = get("--err", "#f7768e");
+    REST_TINT = get("--xp", "#7b3fd6");
     needsDraw = true;
   }
 
@@ -445,20 +456,23 @@ export default function MapPage() {
    * makes: the swatches are the same strokes, drawn by the same code, so the
    * legend cannot drift from what the map actually looks like.
    */
-  function drawIntentLegend(ctx: CanvasRenderingContext2D): void {
-    const rows: [string, string, IntentTone][] = [
-      ["heading for", theme.dim, "walking"],
-      ["move ended", theme.dim, "ended"],
-      ["move failed", INTENT_FAIL, "failed"],
-    ];
+  function drawIntentLegend(ctx: CanvasRenderingContext2D, intents: boolean, resting: boolean): void {
+    const rows: [string, string, IntentTone][] = intents
+      ? [
+          ["heading for", theme.dim, "walking"],
+          ["move ended", theme.dim, "ended"],
+          ["move failed", INTENT_FAIL, "failed"],
+        ]
+      : [];
+    const height = (rows.length + (resting ? 1 : 0)) * 16;
     const x = 12;
-    let y = H - 12 - rows.length * 16;
+    let y = H - 12 - height;
     ctx.save();
     ctx.textBaseline = "middle";
     ctx.font = "11px ui-monospace, monospace";
     ctx.globalAlpha = 0.75;
     ctx.fillStyle = theme.bg;
-    ctx.fillRect(x - 6, y - 10, 132, rows.length * 16 + 10);
+    ctx.fillRect(x - 6, y - 10, 132, height + 10);
     for (const [text, color, tone] of rows) {
       ctx.globalAlpha = tone === "walking" ? 0.9 : 0.45;
       ctx.strokeStyle = color;
@@ -474,6 +488,34 @@ export default function MapPage() {
       ctx.fillText(text, x + 32, y);
       y += 16;
     }
+    if (resting) {
+      // The same glyph the pips wear, drawn by the same call, so the legend
+      // cannot describe a mark the map does not make.
+      ctx.globalAlpha = 1;
+      drawRestGlyph(ctx, x + 12, y, { rise: 0, alpha: 0.9 });
+      ctx.fillStyle = theme.dim;
+      ctx.fillText("reflecting", x + 32, y);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * The rest mark: a small "Zz" above and right of a pip, the way the client
+   * marks a resting character. Purple rather than the run's colour — it says
+   * something about the harness's loop, not about which run this is.
+   */
+  function drawRestGlyph(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    sy: number,
+    phase: { rise: number; alpha: number },
+  ): void {
+    ctx.save();
+    ctx.globalAlpha = phase.alpha;
+    ctx.fillStyle = REST_TINT;
+    ctx.textBaseline = "middle";
+    ctx.font = "italic 700 13px ui-monospace, monospace";
+    ctx.fillText("Zz", sx, sy - phase.rise);
     ctx.restore();
   }
 
@@ -532,6 +574,15 @@ export default function MapPage() {
       ctx.fillStyle = theme.fg;
       ctx.fillText(name, p.sx + edge + 3, p.sy + 1);
       ctx.globalAlpha = 1;
+      if (pip.data.reflecting === true) {
+        const ph = restPhase(now, reduceMotion);
+        drawRestGlyph(ctx, p.sx + edge - 2, p.sy - 14, {
+          rise: ph.rise,
+          alpha: stale ? ph.alpha * 0.4 : ph.alpha,
+        });
+        // The label font is the loop's, and the glyph changed it.
+        ctx.font = "12px ui-monospace, monospace";
+      }
     }
   }
 
@@ -543,6 +594,14 @@ export default function MapPage() {
 
     const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
     mq?.addEventListener("change", readTheme);
+
+    const motionMq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const readMotion = (): void => {
+      reduceMotion = motionMq?.matches === true;
+      needsDraw = true;
+    };
+    readMotion();
+    motionMq?.addEventListener("change", readMotion);
 
     // A logo that decodes after the frame that wanted it has no signal to
     // invalidate, so it asks for a redraw the same way a tile does.
@@ -556,7 +615,11 @@ export default function MapPage() {
       if (ctx !== null) {
         const list = onMap();
         const moving = stepPips(list);
-        if (needsDraw || moving) {
+        // A drifting rest glyph is the one mark that changes with nothing else
+        // changing, so it has to keep the loop drawing; under reduced motion it
+        // is static and asks for nothing.
+        const resting = list.some((p) => p.data.reflecting === true);
+        if (needsDraw || moving || (resting && !reduceMotion)) {
           needsDraw = false;
           ctx.clearRect(0, 0, W, H);
           const map = activeMap();
@@ -568,7 +631,8 @@ export default function MapPage() {
             // Recomputing either per pointer-move frame is the one thing in this
             // loop that scales with the length of a run.
             drawRoute(ctx, drawnRoute());
-            if (drawIntents(ctx, list, map)) drawIntentLegend(ctx);
+            const intents = drawIntents(ctx, list, map);
+            if (intents || resting) drawIntentLegend(ctx, intents, resting);
             drawPips(ctx, list, selected());
           } else {
             ctx.fillStyle = theme.grid;
@@ -584,6 +648,7 @@ export default function MapPage() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
+      motionMq?.removeEventListener("change", readMotion);
       offLogo();
     });
   });
@@ -902,6 +967,22 @@ export default function MapPage() {
                 as controls. The replay link is absent rather than inert when it
                 would point at the run already on screen.
               */}
+              <Show when={p().status}>
+                {(st) => (
+                  <div class="side-status">
+                    <div class="k">
+                      status
+                      <Show when={p().reflecting === true}>
+                        <span class="reflecting" title="reflecting: thinking rather than acting">
+                          Zz
+                        </span>
+                      </Show>
+                    </div>
+                    <div class="stamp mono">{statusStamp(st())}</div>
+                    <div class="text">{st().text}</div>
+                  </div>
+                )}
+              </Show>
               <div class="side-controls">
                 <A class="btn" href={`/run/${encodeURIComponent(p().runId)}`}>
                   open run →
