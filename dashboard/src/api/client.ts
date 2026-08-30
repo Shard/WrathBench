@@ -16,6 +16,7 @@ import type {
   EpisodeIdView,
   EpisodesResponse,
   CampaignsResponse,
+  ToolsResponse,
   ResultsResponse,
   FleetResponse,
   HarnessView,
@@ -40,6 +41,8 @@ export type {
   EpisodeTierView,
   EpisodesResponse,
   CampaignsResponse,
+  ToolsResponse,
+  ToolView,
   CampaignRowView,
   ResultsResponse,
   ResultRun,
@@ -147,6 +150,8 @@ export function createClient(opts: ClientOptions = {}) {
     /** The episode tiers and how many runs sit against each. */
     episodes: (): Promise<EpisodesResponse> => get<EpisodesResponse>("/api/episodes", opts),
     campaigns: (): Promise<CampaignsResponse> => get<CampaignsResponse>("/api/campaigns", opts),
+    /** The model-facing tool list, read off the runner at request time (the homepage inspector). */
+    tools: (): Promise<ToolsResponse> => get<ToolsResponse>("/api/tools", opts),
     /**
      * Every run projected onto the results surface: level marks and comparability.
      *

@@ -49,6 +49,7 @@ import { campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
+import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./archive-dir";
@@ -950,6 +951,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
     if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
     if (path === "/api/episodes") return await episodesResponse();
+    /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
+    if (path === "/api/tools") return json(toolsResponse());
     if (path === "/api/campaigns") return await campaignsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own

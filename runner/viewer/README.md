@@ -247,6 +247,7 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/runs` | run listing, with per-run token totals and active playtime |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
+| `/api/tools` | the nine model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call each; harness text only, served in public mode too |
 | `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
