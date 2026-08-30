@@ -494,8 +494,8 @@ button.update:hover { background: var(--panel); }
 .home-bleed .ladderchart { background: var(--bg); }
 .home-bleed .ladder-controls { margin-bottom: 4px; }
 .home-ladder-title { display: inline; margin: 0 6px 0 0; }
-.home-title { font-size: 20px; margin: 4px 0 8px; font-weight: 700; }
-.home-intro p { margin: 0 0 8px; line-height: 1.6; }
+.home-title { font-size: 20px; margin: 4px 0 8px; font-weight: 700; text-align: center; }
+.home-intro p { margin: 0 auto 8px; line-height: 1.6; text-align: center; max-width: 720px; }
 .home-live { font-size: 13px; }
 .home-caption { margin: 6px 0 0; line-height: 1.5; }
 
