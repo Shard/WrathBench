@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -204,5 +204,33 @@ describe("resolvedLabel", () => {
     expect(resolvedLabel("sonnet", null)).toBeNull();
     expect(resolvedLabel("sonnet", undefined)).toBeNull();
     expect(resolvedLabel(null, "claude-sonnet-5")).toBe("claude-sonnet-5");
+  });
+});
+
+describe("fmtElapsed", () => {
+  test("m:ss before an hour, h:mm:ss after it", () => {
+    expect(fmtElapsed(0)).toBe("0:00");
+    expect(fmtElapsed(9_000)).toBe("0:09");
+    expect(fmtElapsed(754_000)).toBe("12:34");
+    expect(fmtElapsed(3_599_000)).toBe("59:59");
+    expect(fmtElapsed(3_600_000)).toBe("1:00:00");
+    expect(fmtElapsed(3_922_000)).toBe("1:05:22");
+    expect(fmtElapsed(36_000_000)).toBe("10:00:00");
+  });
+
+  test("truncated, never rounded: an entry 59.9s in belongs to 0:59", () => {
+    expect(fmtElapsed(59_900)).toBe("0:59");
+    expect(fmtElapsed(999)).toBe("0:00");
+  });
+
+  test("a span before the run's own start clamps to zero rather than printing a minus", () => {
+    expect(fmtElapsed(-1)).toBe("0:00");
+    expect(fmtElapsed(-90_000)).toBe("0:00");
+  });
+
+  test("nothing to measure is the dash, as everywhere else in this file", () => {
+    expect(fmtElapsed(null)).toBe("—");
+    expect(fmtElapsed(Number.NaN)).toBe("—");
+    expect(fmtElapsed(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
