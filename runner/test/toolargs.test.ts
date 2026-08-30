@@ -19,6 +19,8 @@ import {
   type ToolContext,
 } from "../src/tools";
 import type { ActionHintNote } from "../src/sandbox/ipc";
+import { EpisodicLog } from "../src/episodic";
+import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
 
@@ -29,6 +31,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     sandbox: undefined as unknown as SandboxHost,
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
     sessionLive: () => false,
+    reflect: new ReflectGate(),
+    episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+    turn: () => 1,
     ...overrides,
   };
 }
