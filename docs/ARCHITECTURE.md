@@ -35,7 +35,7 @@ The SDK is versioned. Its surface is part of the harness version.
 
 ### runner/ (Bun/TypeScript, MIT)
 
-- MCP server exposing tools to the model: run snippet, read recent events, query state summary, search reference bundle, read and write scratchpad.
+- MCP server exposing tools to the model: run snippet, read recent events, query state summary, search reference bundle, read and write scratchpad, reflect, log status, read log.
 - Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module. Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
@@ -43,6 +43,32 @@ The SDK is versioned. Its surface is part of the harness version.
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 
 **Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: run a11 (2026-08-29) took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short `--- harness ---` block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
+
+**Reflection, the episodic log, and the trim notices.** Three of the nine tools
+exist because of the message window rather than the world (docs/METHODOLOGY.md,
+"Reflection is the model's to take, and only at rest" and "An episodic log,
+written before each trim, read back at rest"). `log_status` appends one
+harness-stamped entry (turn, level, zone) to `data/runs/<id>/episodic.jsonl`,
+which is append-only and therefore not the scratchpad. `reflect` returns a
+fixed, content-free review prompt while the character's `resting` flag is set —
+one reflection per rest visit — and opens a reflection window in which
+`read_log` pages that log; the window closes when the character leaves the rest
+area, on a 30-turn circuit breaker, or at the end of the run, and every
+transition is a `reflect_window` record. The fixed loop asks for an entry
+(`trim_pending`) on the turn the block trim is expected and says so afterwards
+(`window_trimmed`); the estimate is the previous turn's message growth, which
+is exact while the model's tool-call count is steady, so the notice says the
+trim is *about to* happen rather than naming a turn the harness cannot
+guarantee.
+
+The asymmetry between harness groups is deliberate and follows from the policy:
+the claude-code driver runs no message window of ours, so it never raises
+either notice and is never asked for a status entry. Its tool list is
+identical — a tool that appeared on one harness and not the other would be a
+second, quieter difference between them — so `log_status`, `reflect` and
+`read_log` all work there; in practice its episodic log stays empty because
+nothing prompts for entries, and one CLI session is one driver turn, which puts
+the reflection breaker far out of reach.
 
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 
