@@ -29,7 +29,7 @@ export function SeriesSelect() {
   return (
     <label
       class="series"
-      title={'Harness version: runs are only comparable within one. "latest" follows the newest version rather than pinning to it.'}
+      title={'Harness series — the harness version line a run was played on; runs are only comparable within one. "latest" follows the newest version rather than pinning to it.'}
     >
       <span class="dim">series</span>
       {/*
