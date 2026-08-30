@@ -99,7 +99,10 @@ the SPA owns everything that is UI.
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  on 2026-08-22, the only UI: fleet overview, episodes (the tiers), runs (the
+  on 2026-08-22, the only UI: a homepage explainer at `/` (what the benchmark
+  is, the loop, the tools as served by `/api/tools` so the page cannot drift
+  from the runner), fleet at `/fleet`, about at `/about` (the tiers, the
+  harness groups, how to read a score; `/episodes` redirects there), runs (the
   per-run grain), ladder, models, run detail, and the map view — minimap
   tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
   drawn on plain canvas behind a position-feed interface so replay can later
@@ -114,7 +117,7 @@ the SPA owns everything that is UI.
   is running *now* and links to a run without listing them; `/runs` is the runs
   — one row per recorded run of every kind, opening on all of them newest
   first, every header sortable, the sort and every filter in the URL, and a
-  value in a cell the link that narrows to it; `/episodes` is the tiers, what
+  value in a cell the link that narrows to it; `/about` is the tiers, what
   each id fixes and how many runs sit against it, listing no runs of its own;
   `/ladder` is the aggregates. Runs had been listed in two places and neither
   was where all of them were, while the aggregate page had become a wall of
