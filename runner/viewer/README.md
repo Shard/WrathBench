@@ -197,6 +197,17 @@ coordinate transform lives on its own in `worldmap.ts` (`tile = 32 −
 coord/533.33325`, world X → tile row, world Y → tile column) with no imports,
 for the same reason, and the dashboard imports it rather than copying it.
 
+Each position also carries what the character last *said* it was doing and
+whether it is thinking rather than acting. `status` is the newest entry in the
+run's `episodic.jsonl` — the model's text under the harness's own turn/level/zone
+stamp — read as a file, because that log has no sqlite half and the viewer must
+not create the directory a writer would. `reflecting` is `run.reflecting_since`
+being non-null: the trajectory keeps the window's transitions, the column keeps
+the current answer, and a process boundary clears it, since a resumed run starts
+with a fresh gate. Both are withheld from a public snapshot except the flag —
+the entry is model prose about the world it is standing in, stamped with a
+client zone *name*.
+
 Tiles come from the minimap extraction in `minimap/`, which writes
 `data/minimap/<mapId>/<row>_<col>.png`; `/tiles/<mapId>/<row>_<col>.png` serves
 them straight from there, integers only and cached for a year since they never

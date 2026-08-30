@@ -14,9 +14,9 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentPosition, MoveIntentView } from "./api-types";
+import type { AgentPosition, CharacterStatus, MoveIntentView } from "./api-types";
 import { listRuns, readMoves } from "./runs";
 
 /**
@@ -124,6 +124,77 @@ export function readLatestPosition(
 }
 
 /**
+ * The newest entry in a run's episodic log (`data/runs/<id>/episodic.jsonl`),
+ * or null when it has none.
+ *
+ * Read as a file rather than through `runner/src/episodic.ts`: that class's
+ * constructor creates the directory, and the viewer only ever reads. The file
+ * is a handful of 600-char lines, so the whole of it is parsed and the last
+ * good line taken — the same tolerance the writer's own reader shows a
+ * half-written last line, for the same reason (the harness may be appending to
+ * it right now).
+ */
+export function readLatestStatus(runsDir: string, runId: string): CharacterStatus | null {
+  const path = join(runsDir, runId, "episodic.jsonl");
+  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let latest: CharacterStatus | null = null;
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      const e = JSON.parse(line) as Record<string, unknown>;
+      if (typeof e["text"] !== "string" || typeof e["turn"] !== "number") continue;
+      latest = {
+        turn: e["turn"],
+        level: typeof e["level"] === "number" ? e["level"] : null,
+        zone: typeof e["zone"] === "string" && e["zone"].length > 0 ? e["zone"] : null,
+        text: e["text"],
+        ts: typeof e["ts"] === "number" ? e["ts"] : 0,
+      };
+    } catch {
+      // A partial line is not a reason to lose the entries before it.
+    }
+  }
+  return latest;
+}
+
+/**
+ * Whether a reflection window is open on this run right now.
+ *
+ * `run.reflecting_since` is the writer's mirror of the gate's window
+ * (`runner/src/trajectory.ts`); non-null is the whole test. The column is
+ * asked for before it is selected, because an old run directory never gains a
+ * column it did not record — and a run that predates it was never reflecting.
+ */
+export function readReflecting(runsDir: string, runId: string): boolean {
+  const path = join(runsDir, runId, "run.sqlite");
+  if (!existsSync(path)) return false;
+  let db: Database;
+  try {
+    db = new Database(path, { readonly: true });
+  } catch {
+    return false;
+  }
+  try {
+    const cols = db.query(`PRAGMA table_info(run)`).all() as { name?: unknown }[];
+    if (!cols.some((c) => String(c.name) === "reflecting_since")) return false;
+    const r = db.query(`SELECT reflecting_since AS since FROM run WHERE run_id = ?`).get(runId) as
+      | { since?: unknown }
+      | null;
+    return typeof r?.since === "number";
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * The newest movement intention a run recorded, or null.
  *
  * The whole table is read and the last row taken rather than a `LIMIT 1`
@@ -180,6 +251,11 @@ export function readPositions(
       // Where it is trying to get to. Not aged here: the map decides what a
       // stale intention looks like, the same way it decides for a pip.
       move: readLatestMove(runsDir, run.runId),
+      // What the character last said it was doing, and whether it is thinking
+      // rather than acting right now. Neither is aged either, for the same
+      // reason: staleness is the reader's call, not the feed's.
+      status: readLatestStatus(runsDir, run.runId),
+      reflecting: readReflecting(runsDir, run.runId),
     });
   }
   out.sort((a, b) => b.ts - a.ts);

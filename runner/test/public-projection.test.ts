@@ -74,6 +74,8 @@ const POISON = {
   preflightTail: "poison-smoke-tail: Fixturely says hello",
   wikiSource: "poison-wowdump-20100901.xml.bz2",
   smuggled: "poison-smuggled-value",
+  statusText: "poison-status: turned in Kobold Camp Cleanup to Marshal McBride",
+  statusZone: "Poisonedzonename",
 } as const;
 
 /** A pid must not survive either; checked as its decimal string. */
@@ -616,6 +618,8 @@ describe("projectPositions and projectTrack", () => {
           powerType: 3,
           nextLevelXp: 2100,
           class: 4,
+          status: smuggle({ turn: 11, level: 3, zone: POISON.statusZone, text: POISON.statusText, ts: 1300 }),
+          reflecting: true,
           move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: null }),
         }),
       ],
@@ -641,6 +645,8 @@ describe("projectPositions and projectTrack", () => {
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
           "class",
           "move",
+          "status",
+          "reflecting",
         ]),
         ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
       ]),
@@ -648,6 +654,10 @@ describe("projectPositions and projectTrack", () => {
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBeNull();
     expect(out.positions[0]!.items).toBeNull();
+    // The model's own prose about the world it is standing in, and the client
+    // zone NAME stamped on it, are withheld whole; the harness's own flag is not.
+    expect(out.positions[0]!.status).toBeNull();
+    expect(out.positions[0]!.reflecting).toBe(true);
     // The player frame's numbers are public: what any onlooker's client shows.
     expect(out.positions[0]).toMatchObject({
       health: 140,

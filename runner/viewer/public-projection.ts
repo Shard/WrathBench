@@ -21,7 +21,10 @@
  *   dropped: `terminationDetail`, the operator `objective`, the model
  *   last-error `message` (its enum-ish `reason` stays), a run row's
  *   read-`error`, and the preflight scripts' output `tail`. `pauseReason`
- *   keeps only the fixed token `"paused"` (see `pausedToken`).
+ *   keeps only the fixed token `"paused"` (see `pausedToken`). The episodic
+ *   `status` on a position goes the same way — model prose about the world it
+ *   is standing in, stamped with a client zone *name*; the harness's own
+ *   `reflecting` flag stays.
  * - No local filesystem path leaves: `configPath`, the roster `path`, and the
  *   wiki bundle annotation (whose `source` is the operator's dump filename).
  * - Nothing host-like leaves: `apiBase` (a LAN base URL is topology), and the
@@ -419,6 +422,15 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // the module's status word, both publishable. The target's *name* is
         // verbatim game text, so it is withheld like every other name.
         move: a.move == null ? null : projectMove(a.move),
+        // The episodic entry is withheld whole. Its `text` is the model's own
+        // prose about the world it is standing in — quests, NPCs, places — and
+        // its `zone` is a client *name* string, which is why the state table
+        // records zone ids and not names. Both halves are withheld by rule; the
+        // stamps alone would publish a page nobody reads.
+        status: null,
+        // A harness fact about this run's own loop, with nothing of the world
+        // in it: whether the model is spending this turn thinking.
+        reflecting: a.reflecting ?? false,
       }),
     ),
   };

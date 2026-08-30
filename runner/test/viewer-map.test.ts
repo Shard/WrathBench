@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLatestPosition, readPositions } from "../viewer/positions";
+import { readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
 import { parseTilePath, resolveTilePath } from "../viewer/tiles";
@@ -171,6 +171,10 @@ interface FixtureRun {
   gauges?: (number | null)[];
   /** The class in meta.json's config, as a launch writes it. */
   klass?: number;
+  /** Raw lines for `episodic.jsonl`; absent writes no file at all. */
+  episodic?: string[];
+  /** `run.reflecting_since`: a number opens a window, null adds the column shut. */
+  reflectingSince?: number | null;
 }
 
 function fixture(runs: FixtureRun[]): string {
@@ -220,6 +224,12 @@ function fixture(runs: FixtureRun[]): string {
          next_level_xp = ? WHERE ts = (SELECT MAX(ts) FROM state)`,
       ).run(...(r.gauges as never[]));
     }
+    if (r.episodic !== undefined)
+      writeFileSync(join(dir, "episodic.jsonl"), r.episodic.map((l) => `${l}\n`).join(""));
+    if (r.reflectingSince !== undefined) {
+      db.exec(`ALTER TABLE run ADD COLUMN reflecting_since INTEGER`);
+      db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(r.reflectingSince, r.id);
+    }
     if (r.items !== undefined) {
       db.exec(`ALTER TABLE state ADD COLUMN items TEXT`);
       db.query(`UPDATE state SET items = ? WHERE ts = (SELECT MAX(ts) FROM state)`).run(r.items);
@@ -228,6 +238,83 @@ function fixture(runs: FixtureRun[]): string {
   }
   return runsDir;
 }
+
+
+/* ---------- the episodic status and the reflection window ---------- */
+
+describe("the character's last status", () => {
+  const NOW = 1_700_000_000_000;
+  const entry = (o: Record<string, unknown>): string => JSON.stringify(o);
+
+  test("the newest entry is served, with unobserved stamps as null", () => {
+    const runsDir = fixture([
+      {
+        id: "logged",
+        states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]],
+        episodic: [
+          entry({ ts: NOW - 9000, turn: 3, level: 2, zone: "Coldridge Valley", text: "killed a boar" }),
+          entry({ ts: NOW - 4000, turn: 11, text: "heading for the inn" }),
+        ],
+      },
+    ]);
+    expect(readLatestStatus(runsDir, "logged")).toEqual({
+      turn: 11,
+      // Neither stamp was observed when the entry was written: null, never
+      // back-filled from the entry before it.
+      level: null,
+      zone: null,
+      text: "heading for the inn",
+      ts: NOW - 4000,
+    });
+    expect(readPositions(runsDir, NOW)[0]?.status?.turn).toBe(11);
+  });
+
+  test("no log, an empty log and a half-written last line all read as what came before", () => {
+    const runsDir = fixture([
+      { id: "none", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]] },
+      { id: "empty", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]], episodic: [] },
+      {
+        id: "torn",
+        states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]],
+        episodic: [entry({ ts: NOW - 2000, turn: 1, level: 1, zone: "Anvilmar", text: "first" }), '{"ts":1,"tur'],
+      },
+    ]);
+    expect(readLatestStatus(runsDir, "none")).toBeNull();
+    expect(readLatestStatus(runsDir, "empty")).toBeNull();
+    expect(readLatestStatus(runsDir, "torn")?.text).toBe("first");
+  });
+
+  test("an entry with no text and no turn is not an entry", () => {
+    const runsDir = fixture([
+      {
+        id: "junk",
+        states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]],
+        episodic: [entry({ ts: NOW, level: 3, text: "no turn" }), entry({ ts: NOW, turn: 9 })],
+      },
+    ]);
+    expect(readLatestStatus(runsDir, "junk")).toBeNull();
+  });
+});
+
+describe("readReflecting", () => {
+  const NOW = 1_700_000_000_000;
+
+  test("a standing reflecting_since is an open window; NULL and no column are not", () => {
+    const runsDir = fixture([
+      { id: "open", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]], reflectingSince: NOW - 3000 },
+      { id: "shut", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]], reflectingSince: null },
+      // A run recorded before the column existed was never reflecting.
+      { id: "older", states: [[NOW - 1000, 1, 0, 0, 1, 2, 3, 0, 0]] },
+    ]);
+    expect(readReflecting(runsDir, "open")).toBe(true);
+    expect(readReflecting(runsDir, "shut")).toBe(false);
+    expect(readReflecting(runsDir, "older")).toBe(false);
+    expect(readReflecting(runsDir, "no-such-run")).toBe(false);
+    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
+    expect(byId.get("open")?.reflecting).toBe(true);
+    expect(byId.get("older")?.reflecting).toBe(false);
+  });
+});
 
 describe("readPositions", () => {
   const NOW = 1_700_000_000_000;
@@ -267,6 +354,9 @@ describe("readPositions", () => {
       class: null,
       // A fixture written before the move table existed records no intention.
       move: null,
+      // Nothing logged, and a run.sqlite without the column was never reflecting.
+      status: null,
+      reflecting: false,
     });
   });
 
