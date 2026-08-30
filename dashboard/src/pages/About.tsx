@@ -26,6 +26,7 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
+import { displayError } from "../lib/errors";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 
@@ -49,7 +50,7 @@ export default function About() {
   return (
     <div class="page">
       <Show when={tiers.error !== undefined}>
-        <div class="banner bad">{String(tiers.error)}</div>
+        <div class="banner bad">{displayError(tiers.error)}</div>
       </Show>
 
       <h2 class="section">reading a result</h2>
@@ -62,6 +63,42 @@ export default function About() {
         Claude Code CLI owns the conversation and its compaction. The group is a tag on every row, never a
         partition; claude-code rows sit in the same charts, visibly tagged. The claude-code group has no trim,
         so it gets neither the pre-trim status prompt nor the episodic log entries — a documented asymmetry.
+      </p>
+      {/*
+        Below was a list of repository filenames under "further reading",
+        moved here and rewritten on 2026-08-30: a reader who has the checkout
+        does not need the pointer and a reader who does not cannot follow it.
+        Every claim is `docs/METHODOLOGY.md` and `docs/EPISODES.md` in plainer
+        words — nothing here that those do not say, and a change to what a
+        result means is made there first.
+      */}
+      <p class="dim">
+        <strong>An episode is one run under one ruleset.</strong> The scored default is{" "}
+        <code>e90</code>: ninety minutes of wall clock, no objective, the same prompt for every
+        model. Nothing carries over between episodes, and a run that pauses is a spent attempt
+        rather than a shorter episode. <strong>A tier is an evidence budget</strong>, not a
+        difficulty: <code>t0</code> buys one e90, <code>t1</code> three, <code>t2</code> three plus
+        one six-hour <code>e360</code>. A probe campaign is steered by an operator, which is what
+        makes it unscored — it has no ladder.
+      </p>
+      <p class="dim">
+        <strong>Effort is a run dimension</strong>, not tuning: <code>opus (low)</code> and{" "}
+        <code>opus (high)</code> are two comparable rows, stamped at launch and never recomputed.{" "}
+        <strong>Cost has two bases.</strong> Where a provider reported a figure, that is the figure;
+        a run on a Claude subscription carries no metered bill, so it is priced as-if-metered at
+        list price and labelled an estimate.
+      </p>
+      <p class="dim">
+        <strong>n is small on purpose.</strong> A tier buys a handful of runs, so a mark on the
+        ladder is the mean of one to three episodes. The harness records signals and never a score;
+        every number here is a derivation over them, recomputable over past runs. Differences inside
+        that much noise are not results.
+      </p>
+      <p class="dim">
+        <strong>The reference bundle</strong> is the agent's only out-of-game knowledge: a search
+        tool over a 2020 wiki dump, stripped at build time of everything that is not patch 3.3.5,
+        and frozen per harness version. Exact coordinates are withheld on scored episodes, so a
+        model reads "in the inn at Goldshire" and then has to walk there and look.
       </p>
 
       <h2 class="section">episodes</h2>
@@ -166,13 +203,6 @@ export default function About() {
         </p>
       </Show>
 
-      <h2 class="section">further reading</h2>
-      <p class="dim">
-        The decisions behind all of this, and what a result may and may not be read as, are in the
-        repository's <code>docs/METHODOLOGY.md</code>; what the agent may see and do is{" "}
-        <code>docs/CONTRACTS.md</code>; the structure is <code>docs/ARCHITECTURE.md</code>. The{" "}
-        <A href="/">homepage</A> is the short version.
-      </p>
       <h2 class="section">legal</h2>
       <p class="dim">
         WrathBench is a fan-made research project and is not affiliated with or endorsed by Blizzard

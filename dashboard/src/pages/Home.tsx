@@ -22,6 +22,7 @@ import { poll } from "../lib/poll";
 import { paretoRuns } from "../lib/pareto";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
+import { displayError } from "../lib/errors";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -86,7 +87,20 @@ export default function Home() {
         <div class="home-bleed-inner">
           <div class="ladder-controls">
             <span class="dim">
-              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> latest harness series, paid models ·{" "}
+              {/*
+                This is where a newcomer lands, so the episode is spelled out
+                rather than named: `e90` means nothing to a first-time reader,
+                and the two facts that make the chart legible are how long a
+                run is and what it starts from (`docs/EPISODES.md`). "latest
+                harness series" stays — without it the chart would claim a
+                comparability across series it does not have — and the
+                exclusion is stated as the runner's own billing verdict
+                (`lib/homeladder.ts`), which is free endpoints *and* local
+                hardware, not free tiers alone.
+              */}
+              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play
+              from a fresh level-1 character · latest harness series · free endpoints and locally hosted
+              models excluded ·{" "}
               <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
             </span>
             <label class="filter check" title="Keep only the entries no other entry beats on both axes: cheaper per run and more XP earned.">
@@ -102,7 +116,7 @@ export default function Home() {
             </label>
           </div>
           <Show when={ladder.error !== undefined}>
-            <div class="banner bad">{String(ladder.error)}</div>
+            <div class="banner bad">{displayError(ladder.error)}</div>
           </Show>
           <Show when={ladder.latest !== undefined} fallback={<p class="dim">loading…</p>}>
             <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
@@ -127,7 +141,7 @@ export default function Home() {
         by the harness right now.
       </p>
       <Show when={tools.error !== undefined}>
-        <div class="banner bad">{String(tools.error)}</div>
+        <div class="banner bad">{displayError(tools.error)}</div>
       </Show>
       <Show when={tools.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <div class="tool-inspector">

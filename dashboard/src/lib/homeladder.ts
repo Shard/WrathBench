@@ -1,6 +1,7 @@
 /**
- * The homepage's fixed ladder: e90, the latest harness series present in the
- * served runs, and — by default — no free run.
+ * The homepage's fixed ladder: `e90` — ninety minutes of play from a fresh
+ * level-1 character (`docs/EPISODES.md`) — over the latest harness series
+ * present in the served runs, and — by default — no free run.
  *
  * Both rules are the ladder page's own, reused rather than restated: "latest"
  * is `latestSeries` over the series the runs carry (the shell's selector

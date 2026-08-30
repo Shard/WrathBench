@@ -69,6 +69,7 @@ import { poll } from "../lib/poll";
 import { useSeriesFilter } from "../components/SeriesSelect";
 import { useClock } from "../lib/clock";
 import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
+import { displayError, logError } from "../lib/errors";
 
 const POLL_MS = 5000;
 const PLAY_MS = 250;
@@ -701,7 +702,8 @@ export default function MapPage() {
         needsDraw = true;
       })
       .catch((e: unknown) => {
-        if (mine === trackToken) setReplayError(String(e));
+        logError("map replay", e);
+        if (mine === trackToken) setReplayError(displayError(e));
       });
   });
 
@@ -905,7 +907,7 @@ export default function MapPage() {
               replay of {track()!.runId} · {track()!.points.length} recorded positions · drag to pan
             </>
           ) : feed.error !== undefined ? (
-            <span class="err">{String(feed.error)}</span>
+            <span class="err">{displayError(feed.error)}</span>
           ) : (
             <>
               {count()} {count() === 1 ? "agent" : "agents"}
