@@ -98,6 +98,10 @@ the SPA owns everything that is UI.
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
   tiles — the three routes that carry verbatim game text or Blizzard bytes.
+  `WRATHBENCH_VIEWER_TILES_PUBLIC=1` opts tiles alone back in for a deployment
+  whose operator has decided it may serve them (off by default, no-op outside
+  public mode, private one-hour cache and `noindex` when on); the static public
+  snapshot never carries a tile either way.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
   on 2026-08-22, the only UI: a homepage explainer at `/` (what the benchmark
   is, the loop, the tools as served by `/api/tools` so the page cannot drift

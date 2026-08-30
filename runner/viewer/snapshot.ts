@@ -8,7 +8,9 @@
  * ARE the private viewer's, and nothing reaches an artifact without crossing
  * the projection. The routes that carry verbatim game text or Blizzard bytes
  * (entries, raw lines, scratchpads, tiles) are simply never requested, so no
- * artifact exists for them.
+ * artifact exists for them. Tiles are the emphatic case: `WRATHBENCH_VIEWER_TILES_PUBLIC`
+ * can open that route on a live viewer, and it reaches nothing here — the
+ * renderer's own handle never sets `tilesPublic`, and no pass asks for a tile.
  *
  * Layout (a publisher pushes these to a bucket; a static dashboard reads them):
  * - `v1/manifest.json` and `v1/live.json` are the two mutable keys, cached
@@ -149,8 +151,10 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     opts.api ??
     createApi({
       runsDir: opts.runsDir,
-      // Never read: public mode withholds /tiles before the path is resolved,
-      // and the renderer requests no tile anyway. A directory that need not exist.
+      // Never read: the renderer requests no tile, and this handle is built
+      // public with `tilesPublic` left off — so `/tiles/` is withheld here
+      // regardless of what the live viewer's env says. A directory that need
+      // not exist.
       tilesDir: join(opts.runsDir, "tiles-unused"),
       publicMode: true,
       // An unroutable loopback port by default, so a render on a machine with no
