@@ -38,9 +38,14 @@ const RUNS_POLL_MS = 10_000;
 
 /** Cells done out of cells wanted, when the config still says what was wanted. */
 function coverage(row: CampaignRowView): string {
-  if (row.config === null) return `${row.cells.length} cell(s) run`;
+  if (row.config === null) return `${row.cells.length} ${plural(row.cells.length, "cell")} run`;
   const want = row.config.cells.length * row.config.runsPerCell * row.config.models;
-  return `${row.runs}/${want} run(s)`;
+  return `${row.runs}/${want} ${plural(want, "run")}`;
+}
+
+/** `1 cell` / `3 cells`. The `(s)` form is a note to self and this page is read. */
+function plural(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`;
 }
 
 function stateOf(row: CampaignRowView): { label: string; cls: string } {
@@ -76,10 +81,10 @@ export default function Campaigns() {
       <h2 class="section">campaigns</h2>
       <p class="dim">
         Commissioned exploration: an objective swept over <em>cells</em> by a set of models, run once
-        to completion and then switched off. Every run is an unscored{" "}
-        <A href="/about">probing</A> episode, so nothing here reaches a chart or a target — a
-        harness bump never re-arms a campaign, which is exactly what separates a probe from an eval.
-        Coverage is what this page reports; there is no ranking to make.
+        to completion and then switched off. Every run is an unscored probe episode (see{" "}
+        <A href="/about">about</A>), so nothing here reaches a chart or a target — a harness bump
+        never re-arms a campaign, which is exactly what separates a probe from an eval. Coverage is
+        what this page reports; there is no ranking to make.
       </p>
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
@@ -112,7 +117,10 @@ export default function Campaigns() {
                 <>
                   {coverage(row)}
                   <Show when={row.live > 0}> · {row.live} live</Show>
-                  <Show when={row.config?.account != null}> · pinned to {row.config!.account}</Show>
+                  {/* The account NAME is operator detail and is being taken
+                      out of the public projection; that it is pinned at all is
+                      the fact a reader of this page needs. */}
+                  <Show when={row.config?.account != null}> · pinned to a dedicated account</Show>
                 </>
               }
               storageKey={`wrathbench.campaigns.${row.campaign}`}
@@ -128,8 +136,9 @@ export default function Campaigns() {
                     </>
                   }
                 >
-                  {row.config!.models} model(s) × {row.config!.cells.length} cell(s) ×{" "}
-                  {row.config!.runsPerCell} run(s) per cell.
+                  {row.config!.models} {plural(row.config!.models, "model")} ×{" "}
+                  {row.config!.cells.length} {plural(row.config!.cells.length, "cell")} ×{" "}
+                  {row.config!.runsPerCell} {plural(row.config!.runsPerCell, "run")} per cell.
                 </Show>
                 <Show when={row.newestRunId !== null}>
                   {" "}
@@ -147,8 +156,14 @@ export default function Campaigns() {
                 joined client-side (lib/campaigns); nothing here re-derives a
                 fleet row.
               */}
+              {/*
+                Both feeds, not just the runs one: the live rows are a join of
+                the runs feed with the shared fleet feed, and with the fleet
+                still in flight the join is legitimately empty — which would
+                have read as "No live runs" rather than "not known yet".
+              */}
               <Show
-                when={runs.latest !== undefined}
+                when={runs.latest !== undefined && fleet.latest !== undefined}
                 fallback={<p class="dim">live runs: loading…</p>}
               >
                 <Show
@@ -218,8 +233,8 @@ export default function Campaigns() {
 
         <Show when={body()!.orphans > 0}>
           <p class="banner warn">
-            {body()!.orphans} probing run(s) recorded no campaign. That should not be possible — a
-            probe is always launched stamped — so these are worth looking at rather than counting.
+            {body()!.orphans} probe {plural(body()!.orphans, "run")} recorded no campaign, so they
+            are excluded from the coverage counts above.
           </p>
         </Show>
       </Show>
@@ -266,7 +281,8 @@ function LiveRunRow(props: { row: CampaignRunRow }) {
       </td>
       <td class="dim">{r().cell ?? "—"}</td>
       <td>{r().character ?? "—"}</td>
-      <td class="dim" title={r().account === null ? "" : `on ${r().account}${r().attempt === null ? "" : `, attempt #${r().attempt}`}`}>
+      {/* The attempt only: the account name is operator detail, and this page is public. */}
+      <td class="dim" title={r().attempt === null ? "" : `attempt #${r().attempt}`}>
         {r().model ?? "—"}
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>

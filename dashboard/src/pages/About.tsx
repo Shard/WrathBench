@@ -4,18 +4,22 @@
  * 2026-08-30 (`/episodes` redirects here); the homepage is the explainer for
  * a newcomer, this is the page for someone who wants to know what a row means.
  *
- * One page per grain. The tier half of this page is the
- * *episodes* — the rulesets, how many runs sit against each and how they came
- * to (members, overridden, labeled), and a link to those runs. It lists no
- * runs of its own: a tier's id and its member count link to the ladder for
- * that tier — the members are exactly what the ladder compares — and the
- * overridden count, which the ladder has no view of, links to the runs table.
+ * One page per grain. The middle of this page is the *episodes* — the
+ * rulesets, how many runs sit against each and how they came to (members,
+ * overridden, labeled), and a link to those runs. It lists no runs of its own:
+ * an episode's id and its member count link to the ladder for that episode —
+ * the members are exactly what the ladder compares — and the overridden count,
+ * which the ladder has no view of, links to the runs table.
  *
- * Three counts per tier, kept apart on purpose. **Members** are runs stamped
- * with the id and given the leash the id describes — the only ones a chart may
- * compare. **Overridden** are stamped but were run on a different leash, which
- * is harness development rather than a result. **Labeled** are older runs the
- * reader recognises as looking like the tier; they are never back-labeled
+ * "Episode" here is the ruleset, never the evidence budget: a *tier* (t0/t1/t2)
+ * is how many runs a model is bought, and the two words are kept apart on this
+ * page because a reader who conflates them misreads every count on it.
+ *
+ * Three counts per episode, kept apart on purpose. **Members** are runs stamped
+ * with the id and run under the limits the id describes — the only ones a chart
+ * may compare. **Overridden** are stamped but were run under different limits,
+ * which is harness development rather than a result. **Labeled** are older runs
+ * the reader recognises as looking like the episode; they are never back-labeled
  * into membership, because they ran under the watchdog defaults of their
  * day.
  *
@@ -27,15 +31,18 @@ import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
 import { displayError } from "../lib/errors";
+import { useFeeds } from "../lib/feeds";
+import { COST_BASIS_NOTE } from "../lib/format";
+import { latestSeries } from "../lib/harness";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 
-/** The ladder for one tier — the page a tier's member count leads to. */
+/** The ladder for one episode — the page an episode's member count leads to. */
 function ladderHref(id: string): string {
   return `/ladder?episode=${encodeURIComponent(id)}`;
 }
 
-/** Tier definitions never move; the counts move when a run ends. */
+/** Episode definitions never move; the counts move when a run ends. */
 const POLL_MS = 30_000;
 
 function mins(m: number | null): string {
@@ -46,6 +53,11 @@ function mins(m: number | null): string {
 export default function About() {
   const tiers = poll(() => api.episodes(), POLL_MS);
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
+  // The series the shell already knows about (`/api/info`, via `lib/feeds.ts`).
+  // Hardcoding it here meant the status line went stale one bump after anyone
+  // last read this file; `—` while the info feed is still in flight.
+  const feeds = useFeeds();
+  const series = (): string => latestSeries(feeds.seriesAvailable()) ?? "—";
 
   return (
     <div class="page">
@@ -62,7 +74,7 @@ export default function About() {
       */}
       <h2 class="section">project status</h2>
       <p class="dim">
-        <span class="mono">status: pre-release · harness 0.5 · phase 0</span>
+        <span class="mono">status: pre-release · harness {series()} · phase 0</span>
       </p>
       <p class="dim">
         WrathBench is in phase 0: building the control surface and getting models to liftoff. The
@@ -70,8 +82,8 @@ export default function About() {
         semi-public release — and it is still being finished toward the point where a capable model
         could play a character to the level cap. The results here are exploratory: sample sizes are
         small, the roster changes, and the ladder is a working view rather than a paper-grade
-        leaderboard. One freeplay character runs at a time, access is by invitation, and what is on
-        these pages can change day to day.
+        leaderboard. One freeplay character runs per model, results here change day to day, and the
+        world is not open to the public.
       </p>
 
       <h2 class="section">reading a result</h2>
@@ -95,19 +107,18 @@ export default function About() {
       */}
       <p class="dim">
         <strong>An episode is one run under one ruleset.</strong> The scored default is{" "}
-        <code>e90</code>: ninety minutes of wall clock, no objective, the same prompt for every
+        <code>e90</code>: ninety minutes of play, no objective, the same prompt for every
         model. Nothing carries over between episodes, and a run that pauses is a spent attempt
         rather than a shorter episode. <strong>A tier is an evidence budget</strong>, not a
         difficulty: <code>t0</code> buys one e90, <code>t1</code> three, <code>t2</code> three plus
-        one six-hour <code>e360</code>. A probe campaign is steered by an operator, which is what
-        makes it unscored — it has no ladder.
+        one six-hour <code>e360</code>. A probe campaign is steered by a human running the benchmark
+        (the operator), which is what makes it unscored — it has no ladder.
       </p>
       <p class="dim">
         <strong>Effort is a run dimension</strong>, not tuning: <code>opus (low)</code> and{" "}
         <code>opus (high)</code> are two comparable rows, stamped at launch and never recomputed.{" "}
-        <strong>Cost has two bases.</strong> Where a provider reported a figure, that is the figure;
-        a run on a Claude subscription carries no metered bill, so it is priced as-if-metered at
-        list price and labelled an estimate.
+        <strong>Cost has two bases.</strong> Where a provider reported a figure, that is the
+        figure. {COST_BASIS_NOTE}, shown as an estimate.
       </p>
       <p class="dim">
         <strong>n is small on purpose.</strong> A tier buys a handful of runs, so a mark on the
@@ -126,7 +137,7 @@ export default function About() {
       <p class="dim">
         The rulesets a run can be launched under, with <code>--episode &lt;id&gt;</code>. An id is a
         comparability group: two runs may only be compared if they share an id <em>and</em> a
-        harness series. The id fixes the shape of the run — how long, which
+        harness version. The id fixes the shape of the run — how long, which
         watchdogs, whether the operator may steer — and nothing about the model. The runs
         themselves are the <A href="/runs">runs</A> page; aggregates over them are the{" "}
         <A href="/ladder">ladder</A>.
@@ -144,10 +155,10 @@ export default function About() {
                 <th class="right">tool calls</th>
                 <th>objective</th>
                 <th>scoring</th>
-                <th class="right" title="stamped with the id and never overridden; the number links to the tier's ladder">
+                <th class="right" title="stamped with the id and never overridden; the number links to the episode's ladder">
                   members
                 </th>
-                <th class="right" title="stamped with the id but run on another leash; never on the ladder, so the number links to the runs">
+                <th class="right" title="stamped with the id but run under different limits, so not a member of it; never on the ladder, so the number links to the runs">
                   overridden
                 </th>
                 <th class="right" title="stamped with the id but never a recorded episode: ended as a failed attempt, stale, cut or a harness defect">
@@ -157,6 +168,15 @@ export default function About() {
               </tr>
             </thead>
             <tbody>
+              {/* An API that answers with no episodes is a fact worth printing;
+                  an empty <tbody> reads as a page that failed to render. */}
+              <Show when={table().length === 0}>
+                <tr>
+                  <td colSpan={11} class="dim">
+                    No episodes defined.
+                  </td>
+                </tr>
+              </Show>
               <For each={table()}>
                 {(t) => (
                   <tr>
@@ -170,20 +190,20 @@ export default function About() {
                     <td class="dim">{t.objectiveAllowed ? "allowed" : "none"}</td>
                     <td class={t.scored ? "" : "warn"}>{t.scored ? "scored" : "unscored"}</td>
                     <td class="right mono">
-                      <A href={ladderHref(t.id)} title="the ladder for this tier">
+                      <A href={ladderHref(t.id)} title="the ladder for this episode">
                         {t.members}
                       </A>
                     </td>
                     <td class="right mono dim">
                       <Show when={t.overrides > 0} fallback={t.overrides}>
-                        <A href={runsHref({ episode: t.id })} title="every run stamped with this tier, overridden ones included">
+                        <A href={runsHref({ episode: t.id })} title="every run stamped with this episode, overridden ones included">
                           {t.overrides}
                         </A>
                       </Show>
                     </td>
                     <td class="right mono dim">
                       <Show when={t.lapsed > 0} fallback={t.lapsed}>
-                        <A href={runsHref({ episode: t.id })} title="attempts spent on this tier that never became episodes">
+                        <A href={runsHref({ episode: t.id })} title="attempts spent on this episode that never became episodes">
                           {t.lapsed}
                         </A>
                       </Show>
@@ -203,9 +223,18 @@ export default function About() {
               <p>{t.summary}</p>
               <p class="dim">
                 {t.members} member run{t.members === 1 ? "" : "s"}
-                <Show when={t.overrides > 0}> · {t.overrides} with an overridden leash</Show>
-                <Show when={t.lapsed > 0}> · {t.lapsed} spent attempt(s) that never became episodes</Show>
-                <Show when={t.derived > 0}> · {t.derived} older run(s) labeled, never enrolled</Show>
+                <Show when={t.overrides > 0}>
+                  {" · "}
+                  {t.overrides} run under different limits, so not a member of it
+                </Show>
+                <Show when={t.lapsed > 0}>
+                  {" · "}
+                  {t.lapsed} spent attempt{t.lapsed === 1 ? "" : "s"} that never became episodes
+                </Show>
+                <Show when={t.derived > 0}>
+                  {" · "}
+                  {t.derived} older run{t.derived === 1 ? "" : "s"} labeled, never enrolled
+                </Show>
                 {" · "}
                 <A href={runsHref({ episode: t.id })}>runs</A> ·{" "}
                 <A href={ladderHref(t.id)}>ladder</A>
@@ -214,7 +243,7 @@ export default function About() {
           )}
         </For>
 
-        <h2 class="section">runs that belong to no tier</h2>
+        <h2 class="section">runs that belong to no episode</h2>
         <p class="dim">
           {tiers.latest!.untiered} run{tiers.latest!.untiered === 1 ? "" : "s"} carry no episode id
           and cannot be given one. They ran before the ids existed, under the watchdog defaults of
@@ -231,7 +260,9 @@ export default function About() {
         here — are the intellectual property of Blizzard Entertainment, Inc. World of Warcraft, Warcraft
         and Blizzard Entertainment are trademarks or registered trademarks of Blizzard Entertainment, Inc.
         in the U.S. and/or other countries. The game server is AzerothCore, the community open-source
-        reconstruction of the 3.3.5a server; WrathBench's own code and documentation are MIT-licensed.
+        reconstruction of the 3.3.5a server, and it remains under its own GPL v2 licence.
+        WrathBench's own code and documentation are MIT-licensed, except the AzerothCore module
+        under <span class="mono">module/</span>, which is GPL-2.0-or-later.
       </p>
       <h2 class="section">cite</h2>
       <pre class="cite">{`@misc{beukers2026wrathbench,

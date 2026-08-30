@@ -57,6 +57,7 @@ import {
   fitTo,
   hitTest,
   latticeLines,
+  mapName,
   positionAgeMs,
   project,
   stepPips,
@@ -186,6 +187,11 @@ export default function MapPage() {
     const t = track();
     return t === undefined ? null : trackSpan(t.points);
   });
+  /** A replay is scrubbable only where its samples span some time. */
+  const scrubbable = (): boolean => {
+    const sp = span();
+    return sp !== null && sp.to > sp.from;
+  };
 
   let canvas!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
@@ -855,8 +861,12 @@ export default function MapPage() {
           <Show when={maps().length > 1}>
             <For each={maps()}>
               {([map, n]) => (
-                <button class={map === activeMap() ? "on" : ""} onClick={() => pickMap(map)}>
-                  map {map} · {n}
+                <button
+                  class={map === activeMap() ? "on" : ""}
+                  onClick={() => pickMap(map)}
+                  title={`map ${map}`}
+                >
+                  {mapName(map)} · {n}
                 </button>
               )}
             </For>
@@ -876,22 +886,32 @@ export default function MapPage() {
                 <A class="btn" href="/map" title="back to the live map">
                   live
                 </A>
-                <input
-                  type="range"
-                  min={span()?.from ?? 0}
-                  max={span()?.to ?? 0}
-                  value={cursor()}
-                  onInput={(e) => {
-                    setPlaying(false);
-                    const ts = Number(e.currentTarget.value);
-                    setCursor(ts);
-                    // Remembered at the two places the cursor is deliberately
-                    // moved, never from a signal effect: the route swap sets it
-                    // to 0 on the way out, and an effect would record that.
-                    cursorMemory.remember(t().runId, ts);
-                  }}
-                />
+                {/*
+                  A track with one sample has nothing to scrub: min === max
+                  leaves a slider pinned at one end that answers no drag, which
+                  reads as broken rather than as "there is only one reading".
+                */}
+                <Show when={scrubbable()}>
+                  <input
+                    type="range"
+                    min={span()?.from ?? 0}
+                    max={span()?.to ?? 0}
+                    value={cursor()}
+                    onInput={(e) => {
+                      setPlaying(false);
+                      const ts = Number(e.currentTarget.value);
+                      setCursor(ts);
+                      // Remembered at the two places the cursor is deliberately
+                      // moved, never from a signal effect: the route swap sets it
+                      // to 0 on the way out, and an effect would record that.
+                      cursorMemory.remember(t().runId, ts);
+                    }}
+                  />
+                </Show>
                 <span class="dim mono">{stamp(cursor())}</span>
+                <Show when={!scrubbable() && t().points.length > 0}>
+                  <span class="dim">one reading</span>
+                </Show>
               </div>
               <Show when={t().points.length === 0}>
                 <span class="dim">no recorded positions</span>
@@ -910,7 +930,7 @@ export default function MapPage() {
             <span class="err">{displayError(feed.error)}</span>
           ) : (
             <>
-              {count()} {count() === 1 ? "agent" : "agents"}
+              {count()} {count() === 1 ? "character" : "characters"}
               <Show when={seriesHidden() > 0}> · {seriesHidden()} hidden by series {liveSeries()}</Show>
               {" "}· drag to pan · scroll to zoom · click a pip
             </>
@@ -920,7 +940,11 @@ export default function MapPage() {
       <div class="side">
         <Show
           when={selected()}
-          fallback={<span class="dim">{count() > 0 ? "no agent selected" : "no agents on the map"}</span>}
+          fallback={
+            <span class="dim">
+              {count() > 0 ? "no character selected" : "no characters on the map"}
+            </span>
+          }
         >
           {(p) => (
             <>
@@ -952,13 +976,22 @@ export default function MapPage() {
               <div class="k">carrying</div>
               <div class="v">{fmtItems(p().items, false)}</div>
               <div class="k">map</div>
-              <div class="v mono">{p().map}</div>
+              <div class="v" title={`map ${p().map}`}>
+                {mapName(p().map)}
+              </div>
               <div class="k">position</div>
               <div class="v mono">
                 {p().x.toFixed(1)}, {p().y.toFixed(1)}
               </div>
               <div class="k">last update</div>
-              <div class="v">{fmtAge(ageTick() - p().ts)}</div>
+              {/*
+                The pips' own arithmetic (`positionAgeMs`), not the browser's:
+                on the public build a reading is already up to a publish cadence
+                old when it arrives, and the sidebar was reporting that delay as
+                the character standing still. Null clock in a replay and on the
+                private API, where the plain subtraction is right.
+              */}
+              <div class="v">{fmtAge(positionAgeMs(p().ts, ageTick(), feed.latest?.clock ?? null))}</div>
               <div class="k">harness</div>
               <div class="v">{shortHarness(p().harnessVersion)}</div>
               {/*

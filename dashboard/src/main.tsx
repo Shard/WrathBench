@@ -37,6 +37,12 @@ function ResultsRedirect() {
   return <Navigate href={`/runs${location.search}`} />;
 }
 
+/** `/episodes` became `/about`, and its query — the series pin — comes along. */
+function EpisodesRedirect() {
+  const location = useLocation();
+  return <Navigate href={`/about${location.search}`} />;
+}
+
 const root = document.getElementById("root");
 if (root === null) throw new Error("no #root");
 
@@ -53,7 +59,7 @@ render(
       <Route path="/ladder" component={Ladder} />
       <Route path="/about" component={About} />
       {/* The episodes page became the about page; old links still land. */}
-      <Route path="/episodes" component={() => <Navigate href="/about" />} />
+      <Route path="/episodes" component={EpisodesRedirect} />
       <Route path="/models" component={Models} />
       <Route path="/campaigns" component={Campaigns} />
       <Route path="*" component={NotFound} />
