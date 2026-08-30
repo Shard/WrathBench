@@ -227,7 +227,7 @@ describe("the rows", () => {
       ],
     });
     const row = fleetRows(f, [])!.find((r) => r.account === "RUNNER2")!;
-    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3-free", modelList: ["hy3-free"], runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
+    expect(row).toMatchObject({ state: "paused", job: null, models: "hy3 (free)", modelList: ["hy3-free"], runId: "fleet-hy3-e90-20260823-a5", elapsedMs: 1_410_000 });
     expect(row.note).toBe("rate-limited (pause 2) — waiting: account RUNNER2 is busy");
   });
 });
