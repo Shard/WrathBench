@@ -490,7 +490,10 @@ export default function RunDetail() {
                       The run's own clock, for every row's stamp. `startedAt`
                       is the run row's, so a resumed run still counts from when
                       the character first drew breath rather than restarting at
-                      zero — which is what the reader is comparing runs on.
+                      zero — which is what the reader is comparing runs on. It
+                      is wall time, not playtime: a run a rate limit paused for
+                      six hours shows that gap here, and the sidebar's
+                      `playtimeMs` is the figure that does not.
                     */}
                     <RunStart.Provider value={() => run().startedAt}>
                     <div class="feed">
