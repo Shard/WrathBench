@@ -11,6 +11,8 @@ import {
   achievementFactsFrom,
   deathFactsFrom,
   levelUpFactsFrom,
+  reflectMarkOf,
+  reflectionWindowsFrom,
   taxiFactsFrom,
   scanRunTotals,
   segmentsFrom,
@@ -1308,5 +1310,90 @@ describe("level and death milestones (FOLLOW-UPS 35)", () => {
     // A second scan of an unchanged file adds nothing.
     await tail.scan();
     expect(tail.deaths).toEqual(totals.deaths);
+  });
+});
+
+describe("reflection windows", () => {
+  const open = (turn: number): string => JSON.stringify({ t: "reflect_window", ts: turn, turn, event: "open" });
+  const close = (turn: number, reason: string): string =>
+    JSON.stringify({ t: "reflect_window", ts: turn, turn, event: "close", reason });
+
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+
+  test("only a reflect_window record with a turn and an event is a mark", () => {
+    expect(reflectMarkOf({ t: "reflect_window", turn: 4, event: "open" })).toEqual({
+      turn: 4,
+      event: "open",
+      reason: null,
+    });
+    expect(reflectMarkOf({ t: "reflect_window", turn: 9, event: "close", reason: "breaker" })).toEqual({
+      turn: 9,
+      event: "close",
+      reason: "breaker",
+    });
+    // Not one of ours, or missing the half that makes it usable.
+    expect(reflectMarkOf({ t: "milestone", kind: "zone", turn: 4 })).toBeNull();
+    expect(reflectMarkOf({ t: "reflect_window", event: "open" })).toBeNull();
+    expect(reflectMarkOf({ t: "reflect_window", turn: 4, event: "sideways" })).toBeNull();
+  });
+
+  test("a window is half-open: the close names the first turn spent acting again", () => {
+    expect(reflectionWindowsFrom([
+      { turn: 5, event: "open", reason: null },
+      { turn: 9, event: "close", reason: "left_rest" },
+    ])).toEqual([{ fromTurn: 5, toTurn: 9 }]);
+  });
+
+  test("a run_end close, and a window never closed, both run to the end", () => {
+    expect(reflectionWindowsFrom([
+      { turn: 3, event: "open", reason: null },
+      { turn: 40, event: "close", reason: "run_end" },
+    ])).toEqual([{ fromTurn: 3, toTurn: null }]);
+    expect(reflectionWindowsFrom([{ turn: 3, event: "open", reason: null }])).toEqual([
+      { fromTurn: 3, toTurn: null },
+    ]);
+  });
+
+  test("an unpaired close is dropped rather than guessed into a window from turn zero", () => {
+    expect(reflectionWindowsFrom([{ turn: 7, event: "close", reason: "left_rest" }])).toEqual([]);
+    expect(reflectionWindowsFrom([])).toEqual([]);
+  });
+
+  test("the tail accumulates them as it indexes, and a truncated file is re-read whole", async () => {
+    const path = fileWith([open(5), close(9, "left_rest"), open(12)]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    expect(tail.reflections).toEqual([
+      { fromTurn: 5, toTurn: 9 },
+      { fromTurn: 12, toTurn: null },
+    ]);
+    // A second scan of an unchanged file must not double-count.
+    await tail.scan();
+    expect(tail.reflections).toHaveLength(2);
+
+    // The live case: the close lands on the next poll.
+    appendFileSync(path, `${close(20, "breaker")}\n`);
+    await tail.scan();
+    expect(tail.reflections).toEqual([
+      { fromTurn: 5, toTurn: 9 },
+      { fromTurn: 12, toTurn: 20 },
+    ]);
+
+    truncateSync(path, 0);
+    writeFileSync(path, `${open(2)}\n`);
+    await tail.scan();
+    expect(tail.reflections).toEqual([{ fromTurn: 2, toTurn: null }]);
+  });
+
+  test("a run that recorded no window reads as an empty list, and accents nothing", async () => {
+    const path = fileWith([JSON.stringify({ t: "state", ts: 1, level: 1 })]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    expect(tail.reflections).toEqual([]);
   });
 });

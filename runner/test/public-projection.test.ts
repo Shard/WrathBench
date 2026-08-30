@@ -546,6 +546,7 @@ describe("projectRunDetail", () => {
       achievements: { earned: 2, points: 20, ids: [6, 12] },
       taxi: { flights: 1 },
       tps: { overall: 12.5, recent: 20, replies: 4, recentReplies: 2 },
+      reflections: [smuggle({ fromTurn: 5, toTurn: 9 }), smuggle({ fromTurn: 12, toTurn: null })],
     });
     const out = projectRunDetail(input);
     expect(keyPaths(out)).toEqual(
@@ -566,9 +567,17 @@ describe("projectRunDetail", () => {
         "taxi.flights",
         "tps",
         ...under("tps", TPS_KEYS),
+        "reflections",
+        ...under("reflections[]", ["fromTurn", "toTurn"]),
       ]),
     );
     assertClean(JSON.stringify(out));
+    // Turn indices are a fact about the harness's own loop, so they travel —
+    // unlike the episodic entry the same window is about.
+    expect(out.reflections).toEqual([
+      { fromTurn: 5, toTurn: 9 },
+      { fromTurn: 12, toTurn: null },
+    ]);
   });
 });
 
