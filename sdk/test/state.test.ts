@@ -2132,6 +2132,34 @@ describe("achievements and flight paths", () => {
     );
     expect(cache.self.taxiFlight).toEqual({ value: true, seq: 1, ts: 2001 });
   });
+
+  /** A self values block carrying `playerFlags`, the players-only field. */
+  const playerFlags = (seq: number, flags: number) => ({
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 2000 + seq,
+    data: {
+      blocks: 1,
+      objects: [{ update: "values", guid: SEED.guid, fields: { playerFlags: flags } }],
+    },
+  });
+
+  test("resting is the PLAYER_FLAGS_RESTING bit on self, and unobserved until a block carries it", () => {
+    expect(StateCache.replay([], { seed: SEED }).self.resting).toBeUndefined();
+    // 0x20 is PLAYER_FLAGS_RESTING; 0x10 (ghost) alone is not resting.
+    expect(
+      StateCache.replay(toEvents([playerFlags(1, 0x10)]), { seed: SEED }).self.resting,
+    ).toEqual({ value: false, seq: 1, ts: 2001 });
+    expect(
+      StateCache.replay(toEvents([playerFlags(1, 0x30)]), { seed: SEED }).self.resting,
+    ).toEqual({ value: true, seq: 1, ts: 2001 });
+  });
+
+  test("a block with no playerFlags leaves resting alone rather than reading it as false", () => {
+    const cache = StateCache.replay(toEvents([playerFlags(1, 0x20), selfProgress]), { seed: SEED });
+    expect(cache.self.resting).toEqual({ value: true, seq: 1, ts: 2001 });
+  });
 });
 
 describe("skills, talent tree, item stats, reputation (items 95-99)", () => {
