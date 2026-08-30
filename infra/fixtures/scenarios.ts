@@ -207,6 +207,13 @@ const KATHERINE_FRONT = { x: KATHERINE.x + 3 * Math.cos(KATHERINE.o), y: KATHERI
 const LAKESHIRE_CHEST = { x: -9405.47, y: -2786.26, z: 37.7474 };
 const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 
+// Ammen Vale, Azuremyst Isle (map 530): the spawn point of runt guid 61618,
+// with four more Infected Nightstalker Runts (level 7-8, faction 14) inside
+// 40y, each on a 5y wander. Level 20 is gray to them — no aggro — and still
+// slow to kill one with level-1 starter gear, which is why the smoke resumes
+// a timed-out fight.
+const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
+
 export const SCENARIOS = {
   "mcbride-report": {
     description: "level 5, no money, in front of Marshal McBride with the Northshire chain up to Skirmish at Echo Ridge (21) rewarded (for the read-item smoke: Report to Goldshire hands out a readable letter)",
@@ -394,6 +401,25 @@ export const SCENARIOS = {
       rewarded: [783],
       inProgress: [7],
     },
+  },
+  "ammen-vale-runts": {
+    description:
+      "level 20, no money, empty quest log, among a cluster of Infected Nightstalker Runts (17202) in Ammen Vale (for the quest-item-start smoke: every runt drops the Faintly Glowing Crystal (23678), which starts Strange Findings (9455) and has no on-use spell)",
+    level: 20,
+    xp: 0,
+    money: 0,
+    position: {
+      map: 530,
+      // 3524 = Azuremyst Isle (AreaTable); the runts stand in Ammen Vale.
+      zone: 3524,
+      ...AMMEN_RUNTS,
+      o: 0,
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+    // The crystal only drops for a character who can still take 9455
+    // (LootMgr: a start-quest item is hidden once the quest is in the log or
+    // rewarded), so the log is wiped every run.
+    clearQuests: true,
   },
   "vineyard-warlock": {
     description:
