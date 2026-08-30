@@ -569,17 +569,17 @@ describe("ladderPoints", () => {
     expect(low.basis).toBe("reported");
     // The label carries the sample size both means rest on — the runs with
     // both readings, not the larger of the two counts — and `single` flags it.
-    expect(low.label).toBe("sonnet (low) · n=1");
+    expect(low.label).toBe("sonnet (low)");
     expect(low.single).toBe(true);
     const solo = points.find((p) => p.key === "sonnet")!;
-    expect(solo.label).toBe("sonnet · n=1");
+    expect(solo.label).toBe("sonnet");
     expect(solo.single).toBe(true);
     const free = points.find((p) => p.key === "hy3-free")!;
     expect(free.x).toBe(0);
     expect(free.y).toBe(20);
     expect(free.basis).toBe("list-price");
     expect(free.asIfMetered).toBe(true);
-    expect(free.label).toBe("hy3-free · n=2");
+    expect(free.label).toBe("hy3-free");
     expect(free.single).toBe(false);
   });
 
