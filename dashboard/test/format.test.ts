@@ -277,3 +277,9 @@ describe("modelDisplay", () => {
     expect(modelDisplay("a/b/c-1")).toBe("c-1");
   });
 });
+
+test("modelDisplay: a baked-in -free suffix reads the same as :free", () => {
+  expect(modelDisplay("hy3-free")).toBe("hy3 (free)");
+  expect(modelDisplay("poolside/laguna-s-2.1-free")).toBe("laguna-s-2.1 (free)");
+  expect(modelDisplay("-free")).toBe("-free");
+});
