@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ToolView } from "../src/api/client";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../src/lib/tools";
 
-const tool = (name: string): ToolView => ({ name, description: `${name} does`, inputSchema: {}, example: "{}" });
+const tool = (name: string): ToolView => ({ name, description: `${name} does`, inputSchema: {}, example: null, returns: "x" });
 const TOOLS = [tool("run_snippet"), tool("reflect")];
 
 describe("selectedTool", () => {
