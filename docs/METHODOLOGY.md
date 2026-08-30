@@ -283,7 +283,9 @@ log is a record it cannot edit. It is read back only while reflecting:
 stays rested — many turns if the model wants them, with every other tool
 still usable, since the inn's vendors and trainers are part of the point —
 in which `read_log` pages the whole log on demand (the tool is always listed but refuses outside that
-window, so the tool list stays fixed for both harness groups). Looking back
+window, so the tool list stays fixed for both harness groups — eight tools since `read_scratchpad`
+was removed, the scratchpad being injected verbatim into every turn's context already; operator,
+2026-08-30). Looking back
 at where things went wrong is what resting is for. The trigger is the trim
 itself, not a cadence constant; the claude-code driver has no trim, so it
 gets neither the prompt nor the entries, a documented asymmetry between

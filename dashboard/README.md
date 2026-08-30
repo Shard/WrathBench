@@ -60,7 +60,7 @@ published artifact carries.
 
 | route | what |
 | --- | --- |
-| `/` | the homepage: what WrathBench is, the execution loop as a diagram, the nine model-facing tools as an inspector (read off `/api/tools`, never copied), the SDK families, and a live-now line off the positions feed |
+| `/` | the homepage: what WrathBench is, the execution loop as a diagram, the eight model-facing tools as an inspector (read off `/api/tools`, never copied), the SDK families, and a live-now line off the positions feed |
 | `/fleet` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
 | `/about` | the meta page: how to read a result, the two harness groups, the tiers (what each id fixes, how many runs sit against it; a member count leads to its ladder), pointers to the docs; `/episodes` redirects here |
 | `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
