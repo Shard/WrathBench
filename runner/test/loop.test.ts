@@ -11,6 +11,7 @@ import { parseEventFrame, StateCache } from "@wrathbench/sdk";
 import { loadRunConfig } from "../src/config";
 import { toJsonSafe } from "../src/jsonsafe";
 import { ContextBuilder, itemSample, runLoop } from "../src/loop";
+import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -51,6 +52,7 @@ function setup(
       adapter,
       sandbox: fakeSandbox(snapshot),
       scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
       sleep: () => Promise.resolve(),

@@ -91,6 +91,10 @@ export function renderTimeline(runDir: string, runId: string): string {
   // events per minute, snippet counts, errors from the JSONL
   const byType = new Map<string, number>();
   let eventsServed = 0;
+  // Reflections are ordinary turns and are counted as such above; this is only
+  // the separate reading of how many of them the model spent thinking.
+  let reflections = 0;
+  let episodicEntries = 0;
   let firstTs = Number.POSITIVE_INFINITY;
   let lastTs = 0;
   const errors: TrajectoryRecord[] = [];
@@ -101,6 +105,8 @@ export function renderTimeline(runDir: string, runId: string): string {
       lastTs = Math.max(lastTs, r.ts);
     }
     if (r.t === "events_served" && typeof r["count"] === "number") eventsServed += r["count"];
+    if (r.t === "tool_result" && r["reflect"] === true && r["isError"] !== true) reflections++;
+    if (r.t === "episodic") episodicEntries++;
     if ((r.t === "snippet_result" || r.t === "tool_result") && r["isError"] === true) errors.push(r);
     if (r.t === "harness") errors.push(r);
   }
@@ -111,6 +117,9 @@ export function renderTimeline(runDir: string, runId: string): string {
   lines.push(`tool calls:      ${(byType.get("tool_call") ?? 0)}`);
   lines.push(`events served:   ${eventsServed}${spanMin > 0 ? ` (${(eventsServed / spanMin).toFixed(1)}/min)` : ""}`);
   lines.push(`watchdog fires:  ${byType.get("watchdog") ?? 0}`);
+  if (reflections > 0 || episodicEntries > 0) {
+    lines.push(`reflections:     ${reflections} (${episodicEntries} episodic entries)`);
+  }
 
   const tail = errors.slice(-5);
   if (tail.length > 0) {

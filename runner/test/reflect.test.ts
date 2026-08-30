@@ -1,0 +1,348 @@
+/**
+ * The reflection gate, the episodic log, and the two notices the message
+ * window raises around a block trim. Fixture-driven: no live stack, no model.
+ *
+ * The decisions under test are docs/METHODOLOGY.md, "Reflection is the model's
+ * to take, and only at rest" and "An episodic log, written before each trim,
+ * read back at rest".
+ */
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { StubAdapter } from "../src/adapter";
+import { loadRunConfig } from "../src/config";
+import {
+  CONTEXT_POLICY,
+  assembleContext,
+  formatStateSummary,
+  lastTurnGrowth,
+  messageWindowRawCut,
+  trimExpected,
+  type ChatMessage,
+} from "../src/context";
+import { EpisodicLog, EPISODIC_TEXT_CHARS, capEntryText, formatEntry } from "../src/episodic";
+import { runLoop } from "../src/loop";
+import {
+  READ_LOG_CLOSED,
+  REFLECT_ALREADY_USED,
+  REFLECT_BREAKER_NOTICE,
+  REFLECT_MAX_TURNS,
+  REFLECT_NOT_RESTING,
+  REFLECTION_PROMPT,
+  ReflectGate,
+  restingOf,
+} from "../src/reflect";
+import { Scratchpad } from "../src/scratchpad";
+import { callTool, TOOLS, type ToolContext } from "../src/tools";
+import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { Trajectory, readTrajectory } from "../src/trajectory";
+import { Watchdogs } from "../src/watchdogs";
+
+/** A sandbox whose snapshot is whatever the test last set. */
+function fakeSandbox(state: { resting?: boolean; level?: number; zone?: string }): SandboxHost {
+  return {
+    evalSnippet: (code: string): Promise<SnippetResult> =>
+      Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 }),
+    recentEvents: () => Promise.resolve([]),
+    stateSnapshot: () =>
+      Promise.resolve({
+        self: {
+          ...(state.resting === undefined ? {} : { resting: { value: state.resting, seq: 1, ts: 1 } }),
+          ...(state.level === undefined ? {} : { level: { value: state.level, seq: 1, ts: 1 } }),
+          ...(state.zone === undefined ? {} : { zone: { value: { id: 1, name: state.zone }, seq: 1, ts: 1 } }),
+        },
+        lastSeq: -1,
+        eventCount: 0,
+      }),
+    totalRestarts: 0,
+    consecutiveRestarts: 0,
+    drainNotices: () => [],
+    stop: () => Promise.resolve(),
+  } as unknown as SandboxHost;
+}
+
+function makeCtx(state: { resting?: boolean; level?: number; zone?: string } = {}): {
+  ctx: ToolContext;
+  state: typeof state;
+  dir: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-"));
+  const ctx: ToolContext = {
+    sandbox: fakeSandbox(state),
+    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+    reflect: new ReflectGate(),
+    turn: () => 7,
+    sessionLive: () => true,
+  };
+  return { ctx, state, dir };
+}
+
+describe("the resting decode", () => {
+  test("restingOf reads the SDK's decoded flag, and nothing else", () => {
+    expect(restingOf({ self: { resting: { value: true } } })).toBe(true);
+    expect(restingOf({ self: { resting: { value: false } } })).toBe(false);
+    expect(restingOf({ self: {} })).toBeUndefined();
+    expect(restingOf(null)).toBeUndefined();
+  });
+
+  test("the HUD prints `resting` only when the flag is true", () => {
+    const base = { self: {}, lastSeq: 1, eventCount: 1 };
+    // Byte-stable for a snapshot that never carried playerFlags: no ui line.
+    expect(formatStateSummary(base, { sessionLive: true })).not.toContain("ui:");
+    expect(
+      formatStateSummary({ ...base, self: { resting: { value: false } } }, { sessionLive: true }),
+    ).not.toContain("resting");
+    expect(
+      formatStateSummary({ ...base, self: { resting: { value: true } } }, { sessionLive: true }),
+    ).toContain("ui: resting");
+  });
+});
+
+describe("the reflect gate", () => {
+  test("refuses when the character is not resting, with the world fact as the hint", async () => {
+    const { ctx } = makeCtx({ resting: false });
+    const res = await callTool(ctx, "reflect", {});
+    expect(res.isError).toBe(true);
+    expect(res.text).toBe(REFLECT_NOT_RESTING);
+  });
+
+  test("an unobserved resting flag reads as not resting", async () => {
+    const { ctx } = makeCtx({});
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECT_NOT_RESTING);
+  });
+
+  test("resting yields the fixed prompt; a second call in the same visit refuses", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    const first = await callTool(ctx, "reflect", {});
+    expect(first.isError).toBeUndefined();
+    expect(first.text).toBe(REFLECTION_PROMPT);
+    const second = await callTool(ctx, "reflect", {});
+    expect(second.isError).toBe(true);
+    expect(second.text).toBe(REFLECT_ALREADY_USED);
+  });
+
+  test("leaving the rest area and returning re-arms it", async () => {
+    const { ctx, state } = makeCtx({ resting: true });
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECTION_PROMPT);
+    // The context builder's sample sees the character leave; that is the only
+    // thing that re-arms, and it happens without any reflect call.
+    state.resting = false;
+    ctx.reflect.note(false);
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECT_NOT_RESTING);
+    state.resting = true;
+    ctx.reflect.note(true);
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECTION_PROMPT);
+  });
+
+  test("the reflect answer names the log's entry count only when there is one", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECTION_PROMPT);
+    ctx.reflect.note(false);
+    ctx.reflect.note(true);
+    ctx.episodic.append({ turn: 1, text: "still in the valley" });
+    const again = await callTool(ctx, "reflect", {});
+    expect(again.text).toContain(REFLECTION_PROMPT);
+    expect(again.text).toContain("1 status entry in your episodic log; read them with read_log.");
+  });
+
+  test("the breaker closes the window after REFLECT_MAX_TURNS and refuses after it", () => {
+    const gate = new ReflectGate();
+    gate.note(true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.drainEvents();
+    for (let i = 0; i < REFLECT_MAX_TURNS - 1; i++) {
+      gate.noteTurn();
+      expect(gate.isOpen).toBe(true);
+    }
+    gate.noteTurn();
+    expect(gate.isOpen).toBe(false);
+    expect(gate.drainEvents()).toEqual([{ event: "close", reason: "breaker" }]);
+    // Still the same rest visit: reflect stays spent until the character leaves.
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+    gate.note(false);
+    gate.note(true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+  });
+
+  test("leaving the rest area closes an open window", () => {
+    const gate = new ReflectGate();
+    gate.note(true);
+    gate.request();
+    gate.drainEvents();
+    gate.note(false);
+    expect(gate.isOpen).toBe(false);
+    expect(gate.drainEvents()).toEqual([{ event: "close", reason: "left_rest" }]);
+  });
+});
+
+describe("read_log", () => {
+  test("refuses outside a reflection window", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    ctx.episodic.append({ turn: 1, text: "one" });
+    const res = await callTool(ctx, "read_log", {});
+    expect(res.isError).toBe(true);
+    expect(res.text).toBe(READ_LOG_CLOSED);
+  });
+
+  test("is usable on every turn of an open window, and refused once rest ends", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    ctx.episodic.append({ turn: 1, level: 3, zone: "Elwynn Forest", text: "one" });
+    await callTool(ctx, "reflect", {});
+    for (let i = 0; i < 3; i++) {
+      ctx.reflect.noteTurn();
+      const res = await callTool(ctx, "read_log", {});
+      expect(res.isError).toBeUndefined();
+      expect(res.text).toContain("[turn 1, L3, Elwynn Forest] one");
+    }
+    ctx.reflect.note(false);
+    expect((await callTool(ctx, "read_log", {})).isError).toBe(true);
+  });
+
+  test("pages oldest first and clamps the page", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    for (let i = 1; i <= 5; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
+    await callTool(ctx, "reflect", {});
+    const page = await callTool(ctx, "read_log", { offset: 2, limit: 2 });
+    expect(page.text.split("\n")[0]).toBe("showing 3–4 of 5");
+    expect(page.text).toContain("entry 3");
+    expect(page.text).toContain("entry 4");
+    expect(page.text).not.toContain("entry 5");
+    // A limit past the cap is clamped, not refused.
+    const all = await callTool(ctx, "read_log", { limit: 999 });
+    expect(all.text.split("\n")[0]).toBe("showing 1–5 of 5");
+  });
+});
+
+describe("log_status", () => {
+  test("appends an entry stamped by the harness, not by the model", async () => {
+    const { ctx } = makeCtx({ resting: false, level: 4, zone: "Dun Morogh" });
+    const written: unknown[] = [];
+    ctx.onEpisodicEntry = (e) => written.push(e);
+    const res = await callTool(ctx, "log_status", { text: "  heading to Kharanos  " });
+    expect(res.isError).toBeUndefined();
+    expect(ctx.episodic.read()).toEqual([
+      expect.objectContaining({ turn: 7, level: 4, zone: "Dun Morogh", text: "heading to Kharanos" }),
+    ]);
+    expect(written).toHaveLength(1);
+  });
+
+  test("truncates deterministically at the cap", () => {
+    const long = "x".repeat(EPISODIC_TEXT_CHARS + 10);
+    const capped = capEntryText(long);
+    expect(capped.truncated).toBe(true);
+    expect(capped.text).toBe(`${"x".repeat(EPISODIC_TEXT_CHARS)}…[truncated 10 chars]`);
+    expect(capEntryText(long)).toEqual(capped);
+  });
+
+  test("an unobserved level or zone renders as ?", () => {
+    expect(formatEntry({ ts: 0, turn: 2, text: "hi" })).toBe("[turn 2, L?, ?] hi");
+  });
+
+  test("the log is append-only across reopenings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-episodic-"));
+    const path = join(dir, "episodic.jsonl");
+    new EpisodicLog(path).append({ turn: 1, text: "first" });
+    new EpisodicLog(path).append({ turn: 2, text: "second" });
+    expect(new EpisodicLog(path).read().map((e) => e.text)).toEqual(["first", "second"]);
+  });
+});
+
+describe("the window-trim notices", () => {
+  const assistant = (): ChatMessage => ({ role: "assistant", content: "x" });
+  const tool = (): ChatMessage => ({ role: "tool", content: "y", tool_call_id: "1" });
+
+  test("lastTurnGrowth counts the assistant message and its tool results", () => {
+    expect(lastTurnGrowth([])).toBe(1);
+    expect(lastTurnGrowth([assistant()])).toBe(1);
+    expect(lastTurnGrowth([assistant(), tool(), tool()])).toBe(3);
+  });
+
+  test("trimExpected fires on the turn whose growth crosses the block boundary", () => {
+    const { MESSAGE_WINDOW_MAX, MESSAGE_WINDOW_TRIM } = CONTEXT_POLICY;
+    // Two messages a turn: at 48 the next turn takes the history past the cap.
+    const history: ChatMessage[] = [];
+    const fired: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      if (trimExpected(history)) fired.push(history.length);
+      history.push(assistant(), tool());
+    }
+    expect(fired).toContain(MESSAGE_WINDOW_MAX);
+    expect(messageWindowRawCut(MESSAGE_WINDOW_MAX + 2)).toBe(MESSAGE_WINDOW_TRIM);
+  });
+
+  test("the loop raises trim_pending before the trim and window_trimmed at it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-trim-"));
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
+      runId: "run-trim",
+      token: "run-trim",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+    // One tool call a turn: growth is a steady 2, so the estimate is exact.
+    const script = Array.from({ length: 40 }, () => ({
+      content: "acting",
+      toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }],
+    }));
+    await runLoop({
+      config,
+      adapter: new StubAdapter(script),
+      sandbox: fakeSandbox({ resting: false }),
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+    });
+    const requests = readTrajectory(dir).filter((r) => r.t === "request");
+    const noticeTurn = (kind: string): number =>
+      requests.findIndex((r) => {
+        const msgs = r["messages"] as { role: string; content: string }[];
+        const last = msgs[msgs.length - 1]!;
+        return last.content.includes(`- ${kind}:`);
+      });
+    const pending = noticeTurn("trim_pending");
+    const trimmed = noticeTurn("window_trimmed");
+    expect(pending).toBeGreaterThan(0);
+    expect(trimmed).toBe(pending + 1);
+    const pendingText = (
+      (requests[pending]!["messages"] as { content: string }[]).slice(-1)[0]!.content
+    );
+    expect(pendingText).toContain("Record a short status entry");
+    expect(
+      (requests[trimmed]!["messages"] as { content: string }[]).slice(-1)[0]!.content,
+    ).toContain("your scratchpad is your memory");
+    trajectory.close();
+  });
+
+  test("the trim notices are ordinary context inputs — assembleContext stays pure", () => {
+    const inputs = {
+      stateSummary: "== state ==",
+      events: [],
+      scratchpad: "",
+      notices: [{ ts: 1, kind: "trim_pending" as const, text: "t" }],
+      turn: 3,
+    };
+    expect(assembleContext(inputs)).toBe(assembleContext(inputs));
+    expect(assembleContext(inputs)).toContain("- trim_pending: t");
+  });
+});
+
+describe("the tool list", () => {
+  test("carries the three new tools and their descriptions add no game knowledge", () => {
+    const names = TOOLS.map((t) => t.name);
+    expect(names).toContain("reflect");
+    expect(names).toContain("log_status");
+    expect(names).toContain("read_log");
+    for (const name of ["reflect", "log_status", "read_log"]) {
+      const d = TOOLS.find((t) => t.name === name)!.description;
+      // The refusal text names inns and cities because that is the world fact
+      // the gate is; a tool description must not go beyond it into advice.
+      expect(d).not.toMatch(/\bquests?\b|level up|\bkill\b|vendor|trainer/i);
+    }
+    expect(REFLECT_BREAKER_NOTICE).toContain(String(REFLECT_MAX_TURNS));
+  });
+});
