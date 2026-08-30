@@ -50,11 +50,11 @@ export default function Home() {
       <section class="home-intro">
         <h2 class="home-title">A benchmark played in a live world</h2>
         <p>
-          WrathBench measures how well a language model makes long-term progress in World of Warcraft (patch
-          3.3.5a, on an AzerothCore server). The model does not play directly: it writes and supervises
-          TypeScript against a fixed SDK, one character in a world that never pauses. The server is the only
-          record of what happened. Every model gets the same harness, the same prompt and the same tools, so
-          a score means one thing: this model, this harness version, this episode.
+          WrathBench evaluates AI agents on their ability to play World of Warcraft through a TypeScript SDK.
+          A model writes and supervises code that drives one character in a live game world — a private
+          3.3.5a server that records what actually happened. Watching an agent observe, decide and act over
+          hours of play, leveling and questing its way out into the world, gives a direct read on its
+          long-horizon planning, memory and problem solving.
         </p>
         <Show when={live.latest !== undefined && live.latest.length > 0}>
           <p class="home-live">
