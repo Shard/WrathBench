@@ -333,6 +333,8 @@ describe("readPositions", () => {
       runId: "live-1",
       character: "Brächt",
       model: "anthropic/claude",
+      // The fixture stamps no comparability, so the effort is "not recorded".
+      effort: null,
       map: 0,
       x: -6240,
       y: 380,
