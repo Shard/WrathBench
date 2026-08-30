@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
-import { ReflectGate } from "./reflect";
+import { ClosedWindowReflectGate } from "./reflect";
 import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
@@ -162,12 +162,9 @@ async function main(): Promise<void> {
     wiki,
     wikiCoords: config.wikiCoords,
     sessionLive: () => true, // MCP mode has no loop-side session tracking
-    // Standalone MCP has no context builder, so nothing samples the world on a
-    // clock: this gate is fed only by the snapshot each `reflect` call takes
-    // for itself, which sees a rest area being entered but not one being left.
-    // The operator drives this mode by hand; a scored episode always runs under
-    // a driver whose builder feeds the gate.
-    reflect: new ReflectGate(),
+    // No context builder here, so no window that could ever close: reflect
+    // answers, read_log refuses. See ClosedWindowReflectGate.
+    reflect: new ClosedWindowReflectGate(),
     episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
     turn: () => 0, // MCP mode has no driver turn to stamp
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
