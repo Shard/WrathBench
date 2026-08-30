@@ -580,8 +580,6 @@ export default function MapPage() {
           rise: ph.rise,
           alpha: stale ? ph.alpha * 0.4 : ph.alpha,
         });
-        // The label font is the loop's, and the glyph changed it.
-        ctx.font = "12px ui-monospace, monospace";
       }
     }
   }
