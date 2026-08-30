@@ -275,7 +275,8 @@ release.
 **An episodic log, written before each trim, read back at rest** (operator,
 2026-08-30). On the last turn before a block-trim the harness asks for a
 short status entry — what the model is doing and how it is going — via
-`log_status`. Entries are append-only, stamped with turn, level and zone,
+`log_status` — the trim is taken one turn after the window crosses its
+ceiling, so that turn is known rather than predicted. Entries are append-only, stamped with turn, level and zone,
 and are not the scratchpad: working memory is the model's to rewrite, the
 log is a record it cannot edit. It is read back only while reflecting:
 `reflect` opens a reflection window that lasts as long as the character
