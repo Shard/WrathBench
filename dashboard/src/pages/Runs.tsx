@@ -102,7 +102,7 @@ export default function Runs() {
       <p class="dim">
         Every recorded run, newest first. Click a header to sort; click a model, tier, character or
         kind to narrow to it. Aggregates are the <A href="/ladder">ladder</A>; what the tiers mean
-        is on <A href="/episodes">episodes</A>. A launch that never produced a model response is
+        is on <A href="/about">about</A>. A launch that never produced a model response is
         archived by the runner as it exits and never reaches this table.
       </p>
 

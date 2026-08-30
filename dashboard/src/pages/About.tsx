@@ -1,7 +1,10 @@
 /**
- * Episodes: the tiers a run can be launched under, and what each fixes.
+ * About: the meta page — the episode tiers a run can be launched under, the
+ * two harness groups, and how to read a score. Renamed from Episodes on
+ * 2026-08-30 (`/episodes` redirects here); the homepage is the explainer for
+ * a newcomer, this is the page for someone who wants to know what a row means.
  *
- * One page per grain. This page is the
+ * One page per grain. The tier half of this page is the
  * *episodes* — the rulesets, how many runs sit against each and how they came
  * to (members, overridden, labeled), and a link to those runs. It lists no
  * runs of its own: a tier's id and its member count link to the ladder for
@@ -39,7 +42,7 @@ function mins(m: number | null): string {
   return m % 60 === 0 && m >= 60 ? `${m / 60}h` : `${m}m`;
 }
 
-export default function Episodes() {
+export default function About() {
   const tiers = poll(() => api.episodes(), POLL_MS);
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
 
@@ -48,6 +51,18 @@ export default function Episodes() {
       <Show when={tiers.error !== undefined}>
         <div class="banner bad">{String(tiers.error)}</div>
       </Show>
+
+      <h2 class="section">reading a result</h2>
+      <p class="dim">
+        A score means "this harness series, this model, this episode" and nothing wider. The harness —
+        SDK, loop, prompt, context policy, reference bundle — is frozen per version and identical for every
+        model; a minor series bump restarts the evidence. Every scored episode starts from a freshly created
+        level-1 character. Two harness groups exist: <code>wrathbench</code>, the fixed loop that rebuilds
+        the model's context every turn and trims old conversation, and <code>claude-code</code>, where the
+        Claude Code CLI owns the conversation and its compaction. The group is a tag on every row, never a
+        partition; claude-code rows sit in the same charts, visibly tagged. The claude-code group has no trim,
+        so it gets neither the pre-trim status prompt nor the episodic log entries — a documented asymmetry.
+      </p>
 
       <h2 class="section">episodes</h2>
       <p class="dim">
@@ -150,6 +165,14 @@ export default function Episodes() {
           <A href="/runs">runs</A> table with a blank episode.
         </p>
       </Show>
+
+      <h2 class="section">further reading</h2>
+      <p class="dim">
+        The decisions behind all of this, and what a result may and may not be read as, are in the
+        repository's <code>docs/METHODOLOGY.md</code>; what the agent may see and do is{" "}
+        <code>docs/CONTRACTS.md</code>; the structure is <code>docs/ARCHITECTURE.md</code>. The{" "}
+        <A href="/">homepage</A> is the short version.
+      </p>
     </div>
   );
 }

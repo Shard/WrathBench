@@ -76,7 +76,7 @@ export default function Campaigns() {
       <p class="dim">
         Commissioned exploration: an objective swept over <em>cells</em> by a set of models, run once
         to completion and then switched off. Every run is an unscored{" "}
-        <A href="/episodes">probing</A> episode, so nothing here reaches a chart or a target — a
+        <A href="/about">probing</A> episode, so nothing here reaches a chart or a target — a
         harness bump never re-arms a campaign, which is exactly what separates a probe from an eval.
         Coverage is what this page reports; there is no ranking to make.
       </p>

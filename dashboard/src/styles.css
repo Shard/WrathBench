@@ -479,3 +479,41 @@ button.update:hover { background: var(--panel); }
                display: inline-flex; align-items: center; justify-content: center;
                font-size: 11px; font-weight: 700; color: var(--bar-text); background: var(--xp);
                border: 1px solid var(--bar-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
+
+/* --- the homepage (pages/Home.tsx) --- */
+/* Prose width for the explainer; the rest of the dashboard is tables and wants the full width. */
+.home { max-width: 860px; }
+.home-title { font-size: 20px; margin: 4px 0 8px; font-weight: 700; }
+.home-intro p { margin: 0 0 8px; line-height: 1.6; }
+.home-live { font-size: 13px; }
+.home-caption { margin: 6px 0 0; line-height: 1.5; }
+
+/* The loop diagram: theme through the same tokens as the panels. */
+.loop { width: 100%; height: auto; display: block; margin: 4px 0;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.loop-box { fill: var(--bg); stroke: var(--line); }
+.loop-label { font-size: 13px; font-weight: 700; }
+.loop-sub { font-size: 10px; fill: var(--dim); }
+.loop-edge { stroke: var(--dim); stroke-width: 1.2; }
+.loop-edge.dashed { stroke-dasharray: 4 3; }
+.loop-head { fill: var(--dim); }
+
+/* The tool inspector: a list on the left, the picked tool on the right. */
+.tool-inspector { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; }
+.tool-list { list-style: none; margin: 0; padding: 0; flex: none; display: flex; flex-direction: column; gap: 3px; }
+.tool-list button { width: 100%; text-align: left; font-size: 13px; padding: 3px 10px; }
+.tool-detail { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+               border-radius: 6px; padding: 10px 12px; }
+.tool-detail .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
+.tool-sig { font-weight: 700; margin-bottom: 6px; }
+.tool-desc { margin: 0; line-height: 1.55; }
+.tool-example { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 12px; }
+@media (max-width: 640px) {
+  .tool-inspector { flex-direction: column; }
+  .tool-list { flex-direction: row; flex-wrap: wrap; }
+  .tool-list button { width: auto; }
+}
+
+.sdk-families { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
+.sdk-families dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+.sdk-families dd { margin: 0; line-height: 1.5; }
