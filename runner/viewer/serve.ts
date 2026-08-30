@@ -48,6 +48,14 @@ const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
  */
 const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist";
 const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
+/*
+ * Public mode withholds minimap tiles, the only Blizzard-derived bytes the
+ * viewer serves. This opts one deployment back in — off by default, and a
+ * no-op without WRATHBENCH_VIEWER_PUBLIC=1, since a private viewer serves
+ * tiles anyway. It reaches the live viewer only: the static public snapshot
+ * contains no tile whatever this says.
+ */
+const tilesPublic = process.env["WRATHBENCH_VIEWER_TILES_PUBLIC"] === "1";
 /** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
 const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
 /*
@@ -76,6 +84,7 @@ const handle = createApi({
   tilesDir,
   dashboardDir: built ? dashboardDir : undefined,
   publicMode,
+  tilesPublic,
   moduleUrl,
   fleetConfigPath,
 });
@@ -93,5 +102,9 @@ const server = Bun.serve({
 console.log(
   `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
-    (publicMode ? "  [public mode: raw, scratchpads and tiles withheld]" : ""),
+    (publicMode
+      ? tilesPublic
+        ? "  [public mode: raw and scratchpads withheld; tiles served]"
+        : "  [public mode: raw, scratchpads and tiles withheld]"
+      : ""),
 );

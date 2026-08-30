@@ -53,7 +53,12 @@ import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./archive-dir";
-import { TILE_CACHE_CONTROL, resolveTilePath } from "./tiles";
+import {
+  TILE_CACHE_CONTROL,
+  TILE_PUBLIC_CACHE_CONTROL,
+  TILE_PUBLIC_ROBOTS,
+  resolveTilePath,
+} from "./tiles";
 import {
   SEGMENT_MARKS,
   TrajectoryTail,
@@ -82,6 +87,15 @@ export interface ApiOptions {
    * defaulting them off would break the working view.
    */
   publicMode?: boolean;
+  /**
+   * Serve `/tiles/` in public mode anyway. Off by default and meaningless on
+   * its own: it only ever loosens `publicMode`, never the operator's own
+   * loopback viewer, which serves tiles regardless. The operator opts in with
+   * `WRATHBENCH_VIEWER_TILES_PUBLIC=1` for a deployment they have decided may
+   * carry them; nothing else in the stack turns it on, and the static public
+   * snapshot never contains a tile either way (see `snapshot.ts`).
+   */
+  tilesPublic?: boolean;
   /**
    * Where the module answers /health, for the `worldserver` identity on
    * /api/info. Defaults to loopback; the compose network does not publish the
@@ -480,6 +494,7 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
 export function createApi(opts: ApiOptions): (req: Request) => Promise<Response> {
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
+  const tilesPublic = opts.tilesPublic === true;
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
@@ -1219,15 +1234,27 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     if (path.startsWith("/api")) return (await api(url, path)) ?? notFound("no such path");
 
     if (path.startsWith("/tiles/")) {
-      // The only Blizzard-derived bytes the viewer serves, and the reason a
-      // public deployment must not enable them until DATA-AND-LEGAL settles it.
-      if (publicMode) return withheld();
+      // The only Blizzard-derived bytes the viewer serves, so public mode
+      // withholds them unless the operator has explicitly opted this
+      // deployment in.
+      const asPublic = publicMode && tilesPublic;
+      if (publicMode && !asPublic) return withheld();
       const file = resolveTilePath(tilesDir, path);
       // A tile that was never extracted is a 404 the client expects and draws
-      // around; it is not an error worth a body.
-      if (file === null) return new Response("no such tile", { status: 404 });
+      // around; it is not an error worth a body. A miss is never cached: the
+      // extraction may write that tile a minute from now.
+      if (file === null) {
+        return new Response("no such tile", {
+          status: 404,
+          ...(asPublic ? { headers: { "x-robots-tag": TILE_PUBLIC_ROBOTS } } : {}),
+        });
+      }
       return new Response(Bun.file(file), {
-        headers: { "content-type": "image/png", "cache-control": TILE_CACHE_CONTROL },
+        headers: {
+          "content-type": "image/png",
+          "cache-control": asPublic ? TILE_PUBLIC_CACHE_CONTROL : TILE_CACHE_CONTROL,
+          ...(asPublic ? { "x-robots-tag": TILE_PUBLIC_ROBOTS } : {}),
+        },
       });
     }
 

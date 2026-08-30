@@ -20,6 +20,18 @@ import { GRID, tileName } from "./worldmap";
 /** Tiles are immutable once extracted: cache them for a year. */
 export const TILE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
+/**
+ * What a public-mode deployment sends instead, when the operator has opted
+ * tiles in with `WRATHBENCH_VIEWER_TILES_PUBLIC=1`.
+ *
+ * `private` keeps them out of any shared cache between the viewer and the
+ * browser that asked, and the hour is short enough that turning the flag back
+ * off is felt the same day rather than a year from now. `X-Robots-Tag` rides
+ * along on the response so a crawler that reaches one does not index it.
+ */
+export const TILE_PUBLIC_CACHE_CONTROL = "private, max-age=3600";
+export const TILE_PUBLIC_ROBOTS = "noindex";
+
 const TILE_PATH = /^\/tiles\/(\d+)\/(\d+)_(\d+)\.png$/;
 
 export interface TileRef {
