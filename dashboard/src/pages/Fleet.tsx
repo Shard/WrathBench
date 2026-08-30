@@ -45,7 +45,7 @@ import {
   type FleetRow,
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtTokens, fmtUsd, num, stamp } from "../lib/format";
+import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, stamp } from "../lib/format";
 import { iconModels } from "../lib/lineup";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
@@ -171,7 +171,7 @@ export default function Fleet() {
                         <li>
                           <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> —{" "}
                           <ModelIcon model={p.model} />
-                          {p.model}
+                          <span title={p.model}>{modelDisplay(p.model)}</span>
                           <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
                           {fmtDuration(p.elapsedMs)} elapsed
                           <Show when={p.budgetMs !== null}> of {fmtDuration(p.budgetMs)}</Show> — {p.why}

@@ -14,7 +14,7 @@
  */
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";
-import { fmtDuration, fmtTps } from "./format";
+import { fmtDuration, fmtTps, modelDisplay } from "./format";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -330,7 +330,7 @@ const MODELS_SHOWN = 2;
  * back to the ref itself, which is what it was called.
  */
 export function jobModelLabel(job: Pick<FleetJobView, "ref" | "models">): string {
-  const models = job.models;
+  const models = job.models.map(modelDisplay);
   if (models.length === 0) return job.ref;
   if (models.length <= MODELS_SHOWN) return models.join(", ");
   return `${models.slice(0, MODELS_SHOWN).join(", ")} +${models.length - MODELS_SHOWN}`;
@@ -449,7 +449,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
        * on this account was actually served — which for an alias is the only
        * place the strip says which Claude is in flight.
        */
-      modelsTitle: withServed(job.models.join(", "), run?.resolvedModel),
+      modelsTitle: withServed([job.ref, ...job.models].join(" · "), run?.resolvedModel),
       modelList: [...job.models],
       episode: job.episode ?? null,
       account: job.account,
@@ -483,7 +483,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       key: `account:${a.account}`,
       state: here === undefined ? "idle" : "paused",
       job: null,
-      models: here?.model ?? "—",
+      models: here === undefined ? "—" : modelDisplay(here.model),
       modelsTitle: withServed(here?.model ?? "", run?.resolvedModel),
       modelList: here === undefined ? [] : [here.model],
       episode: null,

@@ -24,6 +24,7 @@ import { paretoRuns } from "../lib/pareto";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
+import { modelDisplay } from "../lib/format";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -93,7 +94,7 @@ export default function Home() {
                   <Show when={i() > 0}>, </Show>
                   <A href={`/run/${encodeURIComponent(p.runId)}`}>
                     <ModelIcon model={p.model ?? ""} />
-                    {p.model ?? "unknown"}
+                    <span title={p.model ?? ""}>{p.model === null ? "unknown" : modelDisplay(p.model)}</span>
                     <Show when={p.level !== null}> L{p.level}</Show>
                   </A>
                 </>

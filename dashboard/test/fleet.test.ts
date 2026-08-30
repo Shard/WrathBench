@@ -103,7 +103,8 @@ describe("columns", () => {
 
 describe("the model cell", () => {
   test("one model reads as itself; a long rotation is truncated with the rest in the title", () => {
-    expect(jobModelLabel(job())).toBe("stealth/ox-alpha");
+    // The label is the short name; the full slug lives in the cell's title.
+    expect(jobModelLabel(job())).toBe("ox-alpha");
     expect(jobModelLabel(job({ models: ["a", "b", "c", "d"] }))).toBe("a, b +2");
     expect(jobModelLabel(job({ models: ["a", "b"] }))).toBe("a, b");
   });

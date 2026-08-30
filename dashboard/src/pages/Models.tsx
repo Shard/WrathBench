@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { fmtCost, fmtDuration, fmtWhen } from "../lib/format";
+import { fmtCost, fmtDuration, fmtWhen, modelDisplay } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
@@ -133,8 +133,8 @@ export default function Models() {
                             ↑{highestTierOf(row)}
                           </span>
                         </Show>
-                        <div class="dim">
-                          {row.model}
+                        <div class="dim" title={row.model}>
+                          {modelDisplay(row.model)}
                           <Show when={row.effort !== null}> · {row.effort}</Show>
                         </div>
                         {/* The row stays grouped by the roster's model string —
@@ -143,8 +143,8 @@ export default function Models() {
                             one id is an alias that moved under the entry. */}
                         <Show when={resolvedSummary(row.model, row.resolvedModels)}>
                           {(seen) => (
-                            <div class="dim" title="the id(s) the provider actually served">
-                              {seen().ids.join(", ")}
+                            <div class="dim" title={`${seen().ids.join(", ")} — the id(s) the provider actually served`}>
+                              {seen().ids.map(modelDisplay).join(", ")}
                               <Show when={seen().mixed}>
                                 {" "}
                                 <span class="warn" title="this entry's runs were not all on the same model">

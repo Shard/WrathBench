@@ -62,7 +62,7 @@ import {
   type StreamRow,
 } from "../lib/ladder";
 import { resolvedSummary } from "../lib/models";
-import { fmtMoney, fmtWhen } from "../lib/format";
+import { fmtMoney, fmtWhen, modelDisplay } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
 import { displayError } from "../lib/errors";
@@ -270,7 +270,7 @@ export default function Ladder() {
                   <tr>
                     <td>
                       <ModelIcon model={row.model} />
-                      {row.model}
+                      <span title={row.model}>{modelDisplay(row.model)}</span>
                       {/* The ids the row's runs actually resolved to. Two of
                           them is one alias that resolved two ways across the
                           row — drift the ladder must show, not average. */}
@@ -280,11 +280,11 @@ export default function Ladder() {
                             class="dim"
                             title={
                               seen().mixed
-                                ? "this row's runs were not all on the same model"
-                                : "the id the provider actually served"
+                                ? `${seen().ids.join(", ")} — this row's runs were not all on the same model`
+                                : `${seen().ids.join(", ")} — the id the provider actually served`
                             }
                           >
-                            {seen().ids.join(", ")}
+                            {seen().ids.map(modelDisplay).join(", ")}
                             <Show when={seen().mixed}>
                               {" "}
                               <span class="warn">mixed</span>
@@ -393,7 +393,8 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
               <tr>
                 <td>
                   <ModelIcon model={row.model} />
-                  {row.model}
+                  <span title={row.model}>{modelDisplay(row.model)}</span>
+                  <Show when={row.effort !== null}> · {row.effort}</Show>
                 </td>
                 <td>
                   {row.character ?? "—"}
