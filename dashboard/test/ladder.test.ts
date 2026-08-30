@@ -549,7 +549,7 @@ describe("ladderPoints", () => {
   const priced = (p: Partial<ResultRun>): ResultRun =>
     run({ actualCost: fig(null, "none"), expectedCost: fig(0, "list-price", true), xpEarned: 100, ...p });
 
-  test("one point per (model, effort), both coordinates means over the runs that carry them", () => {
+  test("one point per (model, effort), both coordinates means over the runs that carry both readings", () => {
     const { points, omitted } = ladderPoints([
       priced({ runId: "a", model: "sonnet", effort: "low", actualCost: fig(1, "reported"), xpEarned: 200 }),
       priced({ runId: "b", model: "sonnet", effort: "low", actualCost: fig(3, "reported"), xpEarned: null }),
@@ -560,16 +560,16 @@ describe("ladderPoints", () => {
     expect(omitted).toEqual([]);
     expect(points.map((p) => p.key)).toEqual(["hy3-free", "sonnet", "sonnet (low)"]);
     const low = points.find((p) => p.key === "sonnet (low)")!;
-    expect(low.x).toBe(2);
+    // Run b has a price and no xp: it feeds neither mean. Pairing its $3 with
+    // run a's xp would put the point nowhere a run was.
+    expect(low.x).toBe(1);
     expect(low.y).toBe(200);
     expect(low.runs).toBe(2);
-    expect(low.costRuns).toBe(2);
-    expect(low.xpRuns).toBe(1);
+    expect(low.n).toBe(1);
     expect(low.basis).toBe("reported");
-    // The label carries the sample size the means rest on, and `single` flags
-    // the thin ones — here the x mean is over two runs but the y mean is over
-    // one, which is exactly the case a "runs === 1" test would miss.
-    expect(low.label).toBe("sonnet (low) · n=2");
+    // The label carries the sample size both means rest on — the runs with
+    // both readings, not the larger of the two counts — and `single` flags it.
+    expect(low.label).toBe("sonnet (low) · n=1");
     expect(low.single).toBe(true);
     const solo = points.find((p) => p.key === "sonnet")!;
     expect(solo.label).toBe("sonnet · n=1");
@@ -590,12 +590,17 @@ describe("ladderPoints", () => {
       priced({ runId: "c", model: "nocost", actualCost: null, expectedCost: null }),
       priced({ runId: "d", model: "noxp", xpEarned: null }),
       priced({ runId: "e", model: "stub", unscored: "unscored (scripted stub)" }),
+      // The live sonnet (low) shape: one run priced without xp, two with xp and no price.
+      priced({ runId: "f", model: "split", actualCost: fig(1, "reported"), expectedCost: null, xpEarned: null }),
+      priced({ runId: "g", model: "split", actualCost: null, expectedCost: null, xpEarned: 500 }),
+      priced({ runId: "h", model: "split", actualCost: null, expectedCost: null, xpEarned: 700 }),
     ]);
     expect(points.map((p) => p.key)).toEqual(["m"]);
     expect(points[0]!.basis).toBe("mixed");
     expect(omitted).toEqual([
       { key: "nocost", why: "no cost reading" },
       { key: "noxp", why: "no xp reading" },
+      { key: "split", why: "no run with both cost and xp" },
     ]);
   });
 });
@@ -603,7 +608,7 @@ describe("ladderPoints", () => {
 describe("ladderChartLayout", () => {
   const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
   const pt = (key: string, x: number, y: number) => ({
-    key, label: `${key} · n=1`, single: true, model: key, effort: null, x, y, runs: 1, costRuns: 1, xpRuns: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
+    key, label: `${key} · n=1`, single: true, model: key, effort: null, x, y, runs: 1, n: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
   });
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {

@@ -493,10 +493,18 @@ export function projectTools(t: ToolsResponse): ToolsResponse {
   };
 }
 
-export function projectCampaigns(c: CampaignsResponse): CampaignsResponse {
+/** A campaign row whose config names no account: the pin is the lab's, the class the reader's. */
+export type PublicCampaignRowView = Omit<CampaignRowView, "config"> & {
+  config: Omit<NonNullable<CampaignRowView["config"]>, "account"> | null;
+};
+export interface PublicCampaignsResponse extends Omit<CampaignsResponse, "campaigns"> {
+  campaigns: PublicCampaignRowView[];
+}
+
+export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse {
   return {
     campaigns: c.campaigns.map(
-      (row: CampaignRowView): CampaignRowView => ({
+      (row: CampaignRowView): PublicCampaignRowView => ({
         campaign: row.campaign,
         config:
           row.config === null
@@ -507,7 +515,6 @@ export function projectCampaigns(c: CampaignsResponse): CampaignsResponse {
                 cells: [...row.config.cells],
                 models: row.config.models,
                 complete: row.config.complete,
-                account: row.config.account,
               },
         runs: row.runs,
         live: row.live,
@@ -679,12 +686,32 @@ function projectPreflight(p: FleetPreflightView): FleetPreflightView {
   };
 }
 
-function projectFleetJob(j: FleetJobView): PublicFleetJobView {
+/**
+ * Account names (`WB03`, `PROBE`, an operator's naming scheme) are the lab's
+ * and never public; the class is what a reader needs. The name is a join key
+ * the fleet page's row builder still needs — a job sits on an account, a
+ * paused run parks against one, an idle account is a row of its own — so each
+ * name becomes a per-response ordinal (`account-1`, `account-2`, …), the same
+ * one everywhere it appears in this response, and the real name is gone.
+ */
+function accountAlias(): (name: string) => string {
+  const seen = new Map<string, string>();
+  return (name: string): string => {
+    let alias = seen.get(name);
+    if (alias === undefined) {
+      alias = `account-${seen.size + 1}`;
+      seen.set(name, alias);
+    }
+    return alias;
+  };
+}
+
+function projectFleetJob(j: FleetJobView, alias: (name: string) => string): PublicFleetJobView {
   return {
     name: j.name,
     ref: j.ref,
     episode: j.episode,
-    account: j.account,
+    account: alias(j.account),
     accountClass: j.accountClass,
     ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
     ...(j.resuming !== undefined ? { resuming: j.resuming } : {}),
@@ -697,6 +724,7 @@ function projectFleetJob(j: FleetJobView): PublicFleetJobView {
 }
 
 export function projectFleet(f: FleetResponse): PublicFleetResponse {
+  const alias = accountAlias();
   return {
     present: f.present,
     server: projectServer(f.server),
@@ -710,15 +738,15 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
     // only the fact and the time survive, like lastError.message above.
     ...(f.configRejected !== undefined ? { configRejected: { since: f.configRejected.since, error: "" } } : {}),
     ...(f.preflight !== undefined ? { preflight: projectPreflight(f.preflight) } : {}),
-    jobs: f.jobs.map(projectFleetJob),
+    jobs: f.jobs.map((j) => projectFleetJob(j, alias)),
     accounts: f.accounts.map(
-      (a: FleetAccountView): FleetAccountView => ({ account: a.account, class: a.class, job: a.job }),
+      (a: FleetAccountView): FleetAccountView => ({ account: alias(a.account), class: a.class, job: a.job }),
     ),
     paused: f.paused.map(
       (p: FleetPausedView): FleetPausedView => ({
         runId: p.runId,
         model: p.model,
-        account: p.account,
+        account: p.account === null ? null : alias(p.account),
         reason: p.reason,
         since: p.since,
         pauseCount: p.pauseCount,

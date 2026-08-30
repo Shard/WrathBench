@@ -406,9 +406,10 @@ describe("scoreability projection", () => {
         }[];
       };
       const row = body.campaigns.find((campaign) => campaign.campaign === "scoreability")!;
-      expect(row).toMatchObject({ campaign: "scoreability", runs: 1, live: 1 });
-      // The ended environment-defect row reaches campaignComplete as counted:false
-      // through the production taintOf path; the live row remains visible separately.
+      // `runs` is the counted numerator: the ended environment-defect row reaches
+      // campaignComplete as counted:false through the production taintOf path and
+      // so counts for nothing here either; the live row remains visible separately.
+      expect(row).toMatchObject({ campaign: "scoreability", runs: 0, live: 1 });
       expect(row.config).toMatchObject({ complete: false });
       expect(row.cells).toHaveLength(1);
       expect(row.cells).toMatchObject([{ cell: "cell", runs: 2, models: ["m"] }]);

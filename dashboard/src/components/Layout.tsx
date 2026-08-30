@@ -27,7 +27,7 @@ import { StatusBadge } from "./StatusBadge";
  * one-second clock behind "Ns ago" are all created inside this branch rather
  * than sitting unused in the private one.
  */
-function snapshotShell(source: SnapshotSource): { banner: () => SnapshotBanner | null; attribution: () => string | null } {
+function snapshotShell(source: SnapshotSource): { banner: () => SnapshotBanner; attribution: () => string } {
   const [state, setState] = createSignal(source.state());
   onCleanup(source.subscribe((next) => setState(next)));
   const now = useClock();
@@ -87,6 +87,7 @@ export function Layout(props: ParentProps) {
           * three clocks the reader could conflate is exactly what the public
           * build must not ship (docs/PUBLIC-DASHBOARD.md).
           */}
+        {/* From the build's own constants first: the line is a fact about this build, not about a fetch. */}
         <Show when={snapshot?.banner()}>
           {(b) => (
             <span

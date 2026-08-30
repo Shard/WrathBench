@@ -72,7 +72,8 @@ export function XpChart(props: {
         <div class="xpchart empty dim">no xp recorded yet — the chart appears once the run reports progress</div>
       }
     >
-      <svg class="xpchart" viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="none" role="img" aria-label="cumulative xp with level bands">
+      {/* No preserveAspectRatio="none": stretching the viewBox to a fixed CSS height crushes the tick text. */}
+      <svg class="xpchart" viewBox={`0 0 ${VB_W} ${VB_H}`} role="img" aria-label="cumulative xp with level bands">
         <title>cumulative xp over time, level bands on the y-axis</title>
         {/* Axes */}
         <line x1={plot.x0} y1={plot.y0} x2={plot.x1} y2={plot.y0} stroke="var(--line)" />

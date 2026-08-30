@@ -46,7 +46,7 @@ import type {
   TokenTotals,
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
-import { campaignComplete, campaignModels } from "../src/campaigns";
+import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
@@ -826,6 +826,15 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         ),
       ];
       const newest = mine.reduce<ResultRun | null>((a, b) => ((a?.startedAt ?? 0) >= (b.startedAt ?? 0) ? a : b), null);
+      const ended = mine.filter((r) => r.terminationReason !== null);
+      // The scheduler's own reading of a finished probe, shared by the
+      // `complete` flag and the `runs` count below so the two cannot disagree.
+      const probeRuns = ended.map((r) => ({
+        campaign: r.campaign,
+        cell: r.cell,
+        ref: refOf(roster, r),
+        counted: !r.extra && !r.episodeOverride && taintOf(r) === null,
+      }));
       return {
         campaign: name,
         config:
@@ -857,24 +866,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
                 // report a cell swept while the scheduler was still relaunching
                 // it. `attempts` (`maxAttemptsPerCell`) reads every row here
                 // either way.
-                complete: campaignComplete(
-                  c,
-                  catalog,
-                  mine
-                    .filter((r) => r.terminationReason !== null)
-                    .map((r) => ({
-                      campaign: r.campaign,
-                      cell: r.cell,
-                      ref: refOf(roster, r),
-                      counted:
-                        !r.extra &&
-                        !r.episodeOverride &&
-                        taintOf(r) === null,
-                    })),
-                ),
+                complete: campaignComplete(c, catalog, probeRuns),
                 account: c.account ?? null,
               },
-        runs: mine.filter((r) => r.terminationReason !== null).length,
+        runs: countedProbeRuns(c, catalog, probeRuns),
         live: mine.filter((r) => r.terminationReason === null).length,
         models: [...new Set(mine.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
         cells: cellIds.map((cell) => {
@@ -899,6 +894,35 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       now: Date.now(),
     };
     return json(body);
+  }
+
+  /**
+   * The numerator of the page's `runs/want` progress, where `want` is
+   * `cells × runsPerCell × models`: the same `counted` runs `campaignComplete`
+   * credits, on a declared cell, by a model the sweep names, and never more per
+   * (model, cell) than the cell asks for. Every ended run — failed attempts,
+   * re-sweeps, models since dropped from the campaign — read 73/8 on a sweep
+   * the scheduler still owed cells on. Without a config there is no `want`, so
+   * the count is every counted run.
+   */
+  function countedProbeRuns(
+    c: Campaign | undefined,
+    catalog: readonly string[],
+    probeRuns: readonly { cell: string | null; ref: string | null; counted: boolean }[],
+  ): number {
+    const counted = probeRuns.filter((r) => r.counted);
+    if (c === undefined) return counted.length;
+    const models = new Set(campaignModels(c, catalog));
+    const cells = new Set(c.cells.map((x) => x.id));
+    const tally = new Map<string, number>();
+    for (const r of counted) {
+      if (r.ref === null || r.cell === null || !models.has(r.ref) || !cells.has(r.cell)) continue;
+      const k = `${r.ref}\u0000${r.cell}`;
+      tally.set(k, Math.min(c.runsPerCell, (tally.get(k) ?? 0) + 1));
+    }
+    let n = 0;
+    for (const v of tally.values()) n += v;
+    return n;
   }
 
   /** The roster name a probe run used, for the completion count. */

@@ -29,6 +29,7 @@
  * predating 2026-08-30 never published answers 404, and there is no stream URL.
  */
 
+import { PUBLIC_ATTRIBUTION } from "../lib/attribution";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
@@ -64,10 +65,13 @@ export const SNAPSHOT_TTL_MS = 30_000;
  *
  * Three clocks exist — the supervisor's heartbeat (30–60s), the publisher's
  * push (the publish cadence, 5 minutes since 2026-08-25) and the edge TTL
- * (≤60s) — and this one is about the publisher only: past a whole cadence with
- * nothing new the publisher has evidently stopped rather than run slow.
+ * (≤60s) — and this one is about the publisher only. Two cadences, not one:
+ * a snapshot is on average half a cadence old the moment it is fetched and a
+ * whole cadence old just before the next push lands, so a threshold equal to
+ * the cadence read a healthy publisher as stale for part of every cycle. Past
+ * two with nothing new, a push has actually been missed.
  */
-export const SNAPSHOT_STALE_MS = 300_000;
+export const SNAPSHOT_STALE_MS = 600_000;
 
 /** The server's own `?episode=` default, reproduced client-side. */
 const DEFAULT_EPISODE: EpisodeIdView = "e90";
@@ -107,8 +111,8 @@ interface LiveArtifact {
 export interface SnapshotState {
   /** The freshest `generatedAt` any artifact has carried; null before the first. */
   generatedAt: number | null;
-  /** The attribution statement the artifacts carry; null until one does. */
-  attribution: string | null;
+  /** The attribution statement: the build's own from the start, and whatever the artifacts carry after. */
+  attribution: string;
 }
 
 /** The shell's window onto the above: a value now, and a callback on change. */
@@ -128,7 +132,9 @@ export interface SnapshotBanner {
 }
 
 /**
- * The shell's "data as of" line, or null before anything has loaded.
+ * The shell's "data as of" line. Before the first artifact has answered the
+ * age is unknown, and the line still says this is a snapshot — the fact is a
+ * property of the build, not of a fetch that may have failed.
  *
  * This is the one place a server timestamp is aged against the *browser*
  * clock, and it has to be: the question is how long ago the publisher pushed,
@@ -137,9 +143,9 @@ export interface SnapshotBanner {
  * lie than the fleet verdict this rule exists to keep off the browser clock
  * (see `supervisorAlive`).
  */
-export function snapshotBanner(state: SnapshotState, now: number): SnapshotBanner | null {
+export function snapshotBanner(state: SnapshotState, now: number): SnapshotBanner {
   const at = state.generatedAt;
-  if (at === null) return null;
+  if (at === null) return { text: "public snapshot · data age unknown", tone: "dim" };
   const age = Math.max(0, now - at);
   return {
     text: `public snapshot · data as of ${fmtAge(age)}`,
@@ -227,7 +233,9 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   const cache = new Map<string, CacheEntry>();
 
   let generatedAt: number | null = null;
-  let attribution: string | null = null;
+  // The build's own copy until an artifact says otherwise: the footer is
+  // required of the page, not of a successful fetch.
+  let attribution: string = PUBLIC_ATTRIBUTION;
   const watchers = new Set<(state: SnapshotState) => void>();
   const state = (): SnapshotState => ({ generatedAt, attribution });
 
