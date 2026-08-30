@@ -14,6 +14,7 @@
 
 import type { AgentPosition } from "@viewer/api-types";
 import { GRID, TILE_PX, TILE_SIZE, worldToPixel } from "@viewer/worldmap";
+import { modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
 export const MAX_SCALE = 8;
@@ -371,4 +372,23 @@ export function chooseMap(
   if (cursor !== null) return cursor;
   if (prev !== null && has(prev)) return prev;
   return maps.length > 0 ? maps[0]![0] : null;
+}
+
+/**
+ * What to call a pip.
+ *
+ * The character's name when the run has made one — that is the thing on the
+ * map. Before it has, the map used to print the run id, which is mostly job
+ * bookkeeping (`fleet-sub-fable-none-freeplay-…`): a roster key and a date
+ * standing where a name belongs. The model, short, with its effort, is the
+ * honest answer to "who is that" — and two streams of one model are told apart
+ * by the effort rather than reading as the same character twice. The run id
+ * stays in the hover, which is where an id belongs.
+ */
+export function pipName(p: Pick<AgentPosition, "runId" | "character" | "model"> & { effort?: string | null }): string {
+  if (p.character !== null && p.character.length > 0) return p.character;
+  if (p.model === null || p.model.length === 0) return p.runId;
+  const model = modelDisplay(p.model);
+  const effort = p.effort ?? null;
+  return effort === null || effort.length === 0 ? model : `${model} · ${effort}`;
 }

@@ -598,6 +598,14 @@ export interface AgentPosition {
   runId: string;
   character: string | null;
   model: string | null;
+  /**
+   * The effort the run was launched at, off its comparability stamp — what
+   * tells two pips of the same model apart where a character has no name yet.
+   * Optional for the reason `move` is: a feed or a published snapshot from
+   * before this field carries none, and a reader must draw those as "no effort
+   * recorded" rather than inventing one.
+   */
+  effort?: string | null;
   map: number;
   x: number;
   y: number;

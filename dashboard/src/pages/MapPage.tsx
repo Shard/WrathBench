@@ -39,7 +39,7 @@ import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
-import { fmtAge, fmtItems, fmtMoney, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, stamp } from "../lib/format";
 import {
   clearReplayState,
   createLeftReplay,
@@ -58,6 +58,7 @@ import {
   hitTest,
   latticeLines,
   mapName,
+  pipName,
   positionAgeMs,
   project,
   stepPips,
@@ -569,7 +570,7 @@ export default function MapPage() {
           ctx.stroke();
         }
       }
-      const name = pip.data.character ?? pip.runId;
+      const name = pipName(pip.data);
       // Clear of whatever was drawn: the puck is wider than the dot it replaces.
       const edge = logo !== null ? (on ? PUCK_R_SEL + 2 : PUCK_R + 2) : DOT_R + 4;
       // The label chip takes the page's own background and foreground so it
@@ -950,12 +951,12 @@ export default function MapPage() {
             <>
               <h3>
                 <span class="swatch" style={{ background: colorOf(p().runId) }} />
-                {p().character ?? p().runId}
+                <span title={p().runId}>{pipName(p())}</span>
               </h3>
               <div class="k">model</div>
               <div class="v">
                 <ModelIcon model={p().model} />
-                {p().model ?? "—"}
+                <span title={p().model ?? ""}>{p().model === null ? "—" : modelDisplay(p().model!)}</span>
               </div>
               <div class="v">
                 <UnitFrame
