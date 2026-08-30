@@ -592,7 +592,7 @@ describe("ladderPoints", () => {
     expect(free.y).toBe(20);
     expect(free.basis).toBe("list-price");
     expect(free.asIfMetered).toBe(true);
-    expect(free.label).toBe("hy3-free");
+    expect(free.label).toBe("hy3 (free)");
     expect(free.single).toBe(false);
   });
 

@@ -170,6 +170,8 @@ caption and hover), `lib/format.ts` (`COST_BASIS_NOTE`), `lib/status.ts`
 footer line, pinned by test to `runner/viewer/public-projection.ts`
 `PUBLIC_ATTRIBUTION` — change both). Tool examples in the inspector come from
 `runner/viewer/tools.ts` via `/api/tools`, so the publisher needs a restart
-after editing them. To ship copy edits to the gated site:
-`VITE_WRATHBENCH_SNAPSHOT_BASE=/ bun run --cwd dashboard build && bunx wrangler deploy --config dashboard/wrangler.jsonc && bun run --cwd dashboard build`
-(the last build restores the private viewer's `dist`).
+after editing them. To ship copy edits to the gated site: `bun ship` (tests, snapshot-mode
+build, wrangler deploy, then restores the private viewer's `dist`); `bun ship
+--publisher` after `runner/viewer` changes, `bun ship --tiles` after a minimap
+extraction; `bun run viewer:restart` for the private viewer;
+`bun run deploy:worldserver` for the module (see `infra/deploy-worldserver.sh`).
