@@ -8,35 +8,37 @@
  * keys the type does not declare, so a copy-and-delete projection is unbounded
  * where this one cannot emit a field nobody wrote down.
  *
- * Character names are published (`character` passes through), alongside the
- * resolved race/class labels (`characterLabel`, `raceName`, `className`): the
- * runner generates the name at character creation, so it is not game text
- * (operator decision, 2026-08-30). Names of things the character looked at or
- * aimed for are a different matter — a move's `target` is a world name.
+ * The rule (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator 2026-08-30):
+ * published trajectories keep NAMES and IDS — items, quests, NPCs, zones,
+ * spells, the runner-generated character name and its race/class labels — and
+ * redact game PROSE: quest, gossip, item and mail body text. So `items[].name`,
+ * a move's `target`, a position's episodic `status` (the model's own words
+ * under a zone name) and `terminationDetail` pass through; entry summaries
+ * cross `projectEntry` (an allowlist per entry type) and `redactGameProse`
+ * (`redact-prose.ts`, the prose fields enumerated by opcode); the scratchpad
+ * is the model's own notes and ships whole.
  *
- * What is withheld, and why (docs/DATA-AND-LEGAL.md; issue #10):
- * - Verbatim game text must not be published. `ItemSample.name` is client
- *   game text, so the `items` array is dropped everywhere it appears; entry
- *   summaries, raw lines and scratchpads are never rendered into a snapshot at
- *   all (the renderer requests none of those routes); minimap tiles are
- *   Blizzard bytes and never leave.
- * - Free-text fields that can quote the world or the operator's machine are
- *   dropped: `terminationDetail`, the operator `objective`, the model
- *   last-error `message` (its enum-ish `reason` stays), a run row's
- *   read-`error`, and the preflight scripts' output `tail`. `pauseReason`
- *   keeps only the fixed token `"paused"` (see `pausedToken`). The episodic
- *   `status` on a position goes the same way — model prose about the world it
- *   is standing in, stamped with a client zone *name*; the harness's own
- *   `reflecting` flag stays.
- * - No local filesystem path leaves: `configPath`, the roster `path`, and the
- *   wiki bundle annotation (whose `source` is the operator's dump filename).
+ * What is still withheld, and why:
+ * - Wiki text is never published: a `search_reference` tool result goes whole.
+ * - Free text that can quote the operator's machine is dropped: the operator
+ *   `objective`, the model last-error `message` (its enum-ish `reason` stays),
+ *   a run row's read-`error`, the fleet `configRejected.error`, and the
+ *   preflight scripts' output `tail` (smoke output embeds paths).
+ *   `pauseReason` keeps only the fixed token `"paused"` (see `pausedToken`),
+ *   and the `pause` entry's `detail` goes with it.
+ * - No local filesystem path leaves: `configPath`, the roster `path`, the wiki
+ *   bundle annotation (whose `source` is the operator's dump filename), and
+ *   the `meta`/`driver`/`claude_system` entries' config, binaries and paths.
  * - Nothing host-like leaves: `apiBase` (a LAN base URL is topology), and the
  *   supervisor's pids.
+ * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
  * The rule when a field is arguable: withhold.
  */
 
 import type {
   AchievementFacts,
+  CharacterStatus,
+  ItemSample,
   AgentPosition,
   ApiInfoResponse,
   AreaFacts,
@@ -45,6 +47,8 @@ import type {
   ComparabilityView,
   CostFigure,
   CostView,
+  EntriesResponse,
+  EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
   FleetAccountView,
@@ -77,14 +81,15 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
+import { redactGameProse } from "./redact-prose";
 
 /**
  * The attribution line every published artifact carries.
- * Wording is the operator's to review (docs/DATA-AND-LEGAL.md, "Scale and
- * framing"): change it only with the operator's sign-off.
+ * Wording is the operator's (approved verbatim, 2026-08-30; docs/DATA-AND-LEGAL.md,
+ * "Scale and framing"): change it only with the operator's sign-off.
  */
 export const PUBLIC_ATTRIBUTION =
-  "WrathBench runs on AzerothCore, the community open-source reconstruction of the 3.3.5a server. Nothing Blizzard-owned is distributed by this site.";
+  "WrathBench is a fan-made research project, not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft is a trademark of Blizzard Entertainment, Inc.";
 
 /**
  * A fleet job without its process facts: pid, spawn time and exit code are the
@@ -223,6 +228,11 @@ function projectAreas(a: AreaFacts): AreaFacts {
   };
 }
 
+/** Item names are names (operator, 2026-08-30); each row is still built by hand. */
+function projectItems(items: ItemSample[] | null): ItemSample[] | null {
+  return items === null ? null : items.map((i) => ({ name: i.name, count: i.count, equipped: i.equipped }));
+}
+
 function projectRunRow(r: RunRow): RunRow {
   return {
     runId: r.runId,
@@ -254,9 +264,8 @@ function projectRunRow(r: RunRow): RunRow {
     startedAt: r.startedAt,
     endedAt: r.endedAt,
     terminationReason: r.terminationReason,
-    // Free-text detail can quote NPCs, quests and places; the enum-ish reason
-    // above is the public fact.
-    terminationDetail: null,
+    // Names of NPCs, quests and places, at most — never prose (operator, 2026-08-30).
+    terminationDetail: r.terminationDetail,
     pauseReason: pausedToken(r.pauseReason),
     // A run id, which every public listing already carries; the lineage is the
     // only thing that makes a freeplay stream legible as one character.
@@ -265,8 +274,7 @@ function projectRunRow(r: RunRow): RunRow {
     xp: r.xp,
     money: r.money,
     questsCompleted: r.questsCompleted,
-    // ItemSample.name is verbatim client game text: the whole array goes.
-    items: null,
+    items: projectItems(r.items),
     mtime: r.mtime,
     bytes: r.bytes,
     live: r.live,
@@ -380,15 +388,22 @@ export function projectRuns(r: RunsResponse): RunsResponse {
 }
 
 /**
- * One movement intention, field by field: the coordinates and the module's
- * status word travel, the target's *name* (verbatim game text) does not.
- *
- * Named and explicit rather than a spread with `target` overwritten — every
- * projection in this file is an allowlist, and a spread would carry whatever
- * a future field, or a smuggled key, happened to be sitting on the object.
+ * One movement intention, field by field. The target is a unit's NAME, which
+ * the rule keeps. Named and explicit rather than a spread — every projection
+ * in this file is an allowlist, and a spread would carry whatever a future
+ * field, or a smuggled key, happened to be sitting on the object.
  */
 function projectMove(m: MoveIntentView): MoveIntentView {
-  return { ts: m.ts, map: m.map, x: m.x, y: m.y, z: m.z, target: null, status: m.status };
+  return { ts: m.ts, map: m.map, x: m.x, y: m.y, z: m.z, target: m.target, status: m.status };
+}
+
+/**
+ * The episodic entry: the model's own words about what it is doing, under the
+ * harness's stamps and a zone NAME. Model-authored text is published as
+ * written (it may quote the world — the documented residual).
+ */
+function projectStatus(s: CharacterStatus): CharacterStatus {
+  return { turn: s.turn, level: s.level, zone: s.zone, text: s.text, ts: s.ts };
 }
 
 export function projectPositions(p: PositionsResponse): PositionsResponse {
@@ -406,8 +421,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         xp: a.xp,
         money: a.money,
         questsCompleted: a.questsCompleted,
-        // Verbatim game text; see the module comment.
-        items: null,
+        items: projectItems(a.items),
         harnessVersion: a.harnessVersion,
         // The player frame's numbers: what any onlooker's client would show
         // above a character it can see, and nothing about the host or the run.
@@ -419,16 +433,8 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         nextLevelXp: a.nextLevelXp ?? null,
         // Already public on the run row it comes from (`projectRunRow.class`).
         class: a.class ?? null,
-        // The destination and the verdict are the run's own coordinates and
-        // the module's status word, both publishable. The target's *name* is
-        // verbatim game text, so it is withheld like every other name.
         move: a.move == null ? null : projectMove(a.move),
-        // The episodic entry is withheld whole. Its `text` is the model's own
-        // prose about the world it is standing in — quests, NPCs, places — and
-        // its `zone` is a client *name* string, which is why the state table
-        // records zone ids and not names. Both halves are withheld by rule; the
-        // stamps alone would publish a page nobody reads.
-        status: null,
+        status: a.status == null ? null : projectStatus(a.status),
         // A harness fact about this run's own loop, with nothing of the world
         // in it: whether the model is spending this turn thinking.
         reflecting: a.reflecting ?? false,
@@ -765,9 +771,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       : {}),
     ...(d.taxi !== undefined ? { taxi: d.taxi === null ? null : projectTaxi(d.taxi) } : {}),
     ...(d.tps !== undefined ? { tps: d.tps === null ? null : projectTps(d.tps) } : {}),
-    // Turn indices about this harness's own loop, with nothing of the world in
-    // them — the same reason `AgentPosition.reflecting` travels while the
-    // episodic entry beside it does not.
+    // Turn indices about this harness's own loop.
     ...(d.reflections !== undefined
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
@@ -800,8 +804,88 @@ export function projectTrack(t: TrackResponse): TrackResponse {
         nextLevelXp: p.nextLevelXp ?? null,
       }),
     ),
-    // As on the live feed: coordinates and the module's status word travel,
-    // the target's name (verbatim game text) does not.
+    // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
   };
+}
+
+/* ------------------------------------------------------------- entries --- */
+
+/**
+ * The fields each entry type may carry into a public window, by name. Every
+ * list was read off the records the runner writes (`runner/src/*.ts`) and off
+ * what `summarize` (tail.ts) makes of them; a type not listed here ships as
+ * its skeleton — index, type, stamps — so the feed still shows a row where
+ * something happened without saying what the unlisted record held.
+ *
+ * Absent by decision, per type:
+ * - `meta`: the run config (`apiBase`, the objective, the operator's paths,
+ *   the wiki bundle source) — every public fact from it is on the run row.
+ * - `driver` / `claude_system`: the CLI binary, its args, cwd, config dirs,
+ *   socket and memory paths, session ids.
+ * - `pause` / `watchdog`: `detail` is free text (a provider's rate-limit
+ *   message, a process's stderr) — the same rule as `pauseReason`.
+ * - `claude_result`: `sessionId` and the raw usage block (the derived
+ *   `claudeTurn` carries the numbers).
+ * - `events_served`: the raw batch, which the summary never carries; the
+ *   opcode tally is the public fact.
+ */
+const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  request: ["adapter", "messageCount", "systemChars", "promptChars", "usage"],
+  events_served: ["via", "count", "opcodes", "ambient", "moreOpcodes", "folded"],
+  response: ["text", "tools", "outChars", "usage"],
+  snippet: ["code"],
+  tool_call: ["name", "args"],
+  snippet_result: ["name", "isError", "text", "reflect"],
+  tool_result: ["name", "isError", "text", "reflect"],
+  state: [
+    "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "money", "questsCompleted", "zone", "area",
+    "items", "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+  ],
+  move: ["moveId", "map", "x", "y", "z", "target", "status"],
+  milestone: [
+    "kind", "from", "to", "ids", "points", "xp", "observedTs", "position", "zone", "area", "graveyard", "released",
+    "id", "name", "categoryId",
+  ],
+  quest_complete: ["questId"],
+  episodic: ["level", "zone", "text"],
+  character: ["character"],
+  harness: ["kind", "cleared", "model", "cliVersion", "text", "leashChanged", "before", "after"],
+  reflect_window: ["event", "reason"],
+  termination: ["reason", "detail"],
+  pause: ["reason", "episodeElapsedMs"],
+  resume: ["harnessVersion", "after", "episodeElapsedMs"],
+  "wind-down": ["reason", "outcome", "graceMs", "waitedMs"],
+  watchdog: ["reason"],
+  claude_result: ["subtype", "isError", "numTurns", "durationMs", "durationApiMs", "costUsd", "usage", "claudeTurn", "text"],
+  claude_system: ["type", "subtype", "estimated_tokens", "estimated_tokens_delta"],
+  meta: ["runId", "harnessVersion", "startedAt", "resumedFresh"],
+  driver: ["driver", "harness", "systemPromptChars"],
+};
+
+/** A JSON deep copy: the value as parsed from the file, with nothing added. */
+function plain(v: unknown): unknown {
+  return v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as unknown);
+}
+
+/**
+ * One entry summary, projected then redacted. The skeleton is what
+ * `summarize` stamps on every record; the rest is the type's list above,
+ * copied by name; then `redactGameProse` replaces the game prose the copied
+ * fields can carry (tool result text).
+ */
+export function projectEntry(e: EntrySummary): EntrySummary {
+  const out: EntrySummary = { i: e.i, t: e.t, ts: e.ts, start: e.start, end: e.end };
+  if (typeof e["turn"] === "number") out["turn"] = e["turn"];
+  if (typeof e["call"] === "number") out["call"] = e["call"];
+  if (e.clipped === true) out.clipped = true;
+  for (const k of ENTRY_FIELDS[e.t] ?? []) {
+    if (!(k in e) || e[k] === undefined) continue;
+    out[k] = k === "items" && e.t === "state" ? projectItems(e[k] as ItemSample[] | null) : plain(e[k]);
+  }
+  return redactGameProse(out);
+}
+
+export function projectEntries(r: EntriesResponse): EntriesResponse {
+  return { from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] };
 }

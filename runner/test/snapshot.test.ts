@@ -5,10 +5,12 @@
  * value-based leak checks the projection suite makes, here against every
  * artifact body the render produces.
  *
- * The fixture is poisoned the way a real runs directory is dangerous: game-text
- * item names in the state samples, a move target name, free-text
- * termination/pause columns, a bearer token, a LAN api base, the operator's
- * paths in fleet-state.json, a smoke tail. None of it may appear in any body.
+ * The fixture is poisoned the way a real runs directory is dangerous: game
+ * prose in the trajectory's tool results (quest, gossip, item and mail text),
+ * a free-text pause column, a bearer token, a LAN api base, the operator's
+ * paths in fleet-state.json and in the driver record, a smoke tail. None of it
+ * may appear in any body — while the names beside it (an item, a quest, an
+ * NPC) must, since 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs").
  */
 
 import { describe, expect, test } from "bun:test";
@@ -33,9 +35,13 @@ const LIVE_RUN = "snap-run-live";
 
 const SECRET = "sentinel-bearer-9f31ab";
 const POISON = {
-  itemName: "Poisoned Worn Shortsword",
-  terminationDetail: "poison-termination-detail",
   pauseReason: "poison-pause-reason-text",
+  questDetails: "prose-quest-details: the kobolds have grown bold",
+  questObjectives: "prose-quest-objectives: slay ten of them",
+  gossipOption: "prose-gossip-option: tell me about the mine",
+  pageText: "prose-page-text: dear reader, beware",
+  mailBody: "prose-mail-body: your order is ready",
+  driverBin: "/home/operator/.bun/bin/claude",
   objective: "poison-objective-text",
   apiHost: "10.66.66.66",
   wikiSource: "poison-dump-20100901.xml.bz2",
@@ -45,6 +51,14 @@ const POISON = {
 } as const;
 /** Published, not withheld: the runner generates the name, it is not game text. */
 const CHARACTER_NAME = "Fixturely";
+/** Names and ids: every one must reach the artifact it is planted in. */
+const SURVIVES = {
+  itemName: "Worn Shortsword",
+  terminationDetail: "episode limit reached near Goldshire",
+  questTitle: "Kobold Camp Cleanup",
+  npcName: "Marshal McBride",
+  scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+} as const;
 
 const POISON_PID = 987654321;
 
@@ -102,9 +116,24 @@ function writeRun(
     { ts: 1000, t: "meta", runId, harnessVersion: "harness-0.5-1-gabc", config },
     { ts: 1100, t: "response", turn: 1, message: { role: "assistant", content: "hello" } },
     { ts: 1200, t: "snippet", turn: 1, code: "await sdk.moveTo(1, 2, 3);" },
-    ...(opts.terminated ? [{ ts: 2000, t: "termination", reason: "episode-limit" }] : []),
+    { ts: 1250, t: "driver", driver: "claude-code", harness: "wrathbench", bin: POISON.driverBin, args: [], cwd: "/x" },
+    {
+      ts: 1300, t: "tool_result", turn: 1, call: 1, name: "recent_events", isError: false,
+      text: [
+        `#1 SMSG_QUESTGIVER_QUEST_DETAILS ${JSON.stringify({ guid: "1", questId: 7, title: SURVIVES.questTitle, details: POISON.questDetails, objectives: POISON.questObjectives, choiceRewards: [], rewards: [], money: 0, xp: 0 })}`,
+        `#2 SMSG_GOSSIP_MESSAGE ${JSON.stringify({ guid: "1", menuId: 3, textId: 9, options: [{ optionId: 0, icon: 0, text: POISON.gossipOption }], quests: [] })}`,
+        `#3 SMSG_PAGE_TEXT_QUERY_RESPONSE ${JSON.stringify({ pageId: 1, text: POISON.pageText, nextPageId: 0 })}`,
+        `#4 SMSG_CREATURE_QUERY_RESPONSE ${JSON.stringify({ entry: 197, found: true, name: SURVIVES.npcName })}`,
+      ].join("\n"),
+    },
+    {
+      ts: 1400, t: "snippet_result", turn: 1, call: 2, name: "run_snippet", isError: false,
+      text: `ok (3ms)\n=> ${JSON.stringify({ mails: [{ mailId: 1, subject: SURVIVES.questTitle, body: POISON.mailBody, items: [] }] })}`,
+    },
+    ...(opts.terminated ? [{ ts: 2000, t: "termination", reason: "episode-limit", detail: SURVIVES.terminationDetail }] : []),
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n`);
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
@@ -121,7 +150,7 @@ function writeRun(
     1000,
     opts.terminated ? 2000 : null,
     opts.terminated ? "episode-limit" : null,
-    opts.terminated ? POISON.terminationDetail : null,
+    opts.terminated ? SURVIVES.terminationDetail : null,
     opts.terminated ? POISON.pauseReason : null,
     JSON.stringify(config),
   ]);
@@ -143,7 +172,7 @@ function writeRun(
     99,
     1234,
     2,
-    JSON.stringify([{ name: POISON.itemName, count: 1, equipped: true }]),
+    JSON.stringify([{ name: SURVIVES.itemName, count: 1, equipped: true }]),
   ]);
   db.close();
 
@@ -151,7 +180,7 @@ function writeRun(
     // Cold files: the run reads dead and the render is byte-stable, which is
     // what lets the version-key test re-render and land on the same address.
     const past = new Date(Date.now() - 60 * 60_000);
-    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite"]) {
+    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"]) {
       utimesSync(join(dir, name), past, past);
     }
   }
@@ -239,16 +268,18 @@ describe("renderSnapshot", () => {
     expect(paths).toContain("v1/manifest.json");
     expect(paths).toContain("v1/live.json");
     for (const name of SNAP_NAMES) expect(paths).toContain(`v1/snap/${out.gen}/${name}`);
-    // One detail and one track per run on disk, and nothing else.
+    // Detail, track, the entries window and the scratchpad per run on disk, and nothing else.
     const runPaths = paths.filter((p) => p.startsWith("v1/run/"));
-    expect(runPaths).toHaveLength(4);
+    expect(runPaths).toHaveLength(8);
     for (const id of [DEAD_RUN, LIVE_RUN]) {
       expect(runPaths.filter((p) => p.startsWith(`v1/run/${id}/`)).map((p) => p.split("/").at(-1)).sort()).toEqual([
         "detail.json",
+        "entries.json",
+        "scratchpad.json",
         "track.json",
       ]);
     }
-    expect(paths).toHaveLength(2 + SNAP_NAMES.length + 4);
+    expect(paths).toHaveLength(2 + SNAP_NAMES.length + 8);
 
     for (const a of out.artifacts) {
       expect(a.contentType).toBe("application/json");
@@ -261,7 +292,7 @@ describe("renderSnapshot", () => {
     const runs = fixture();
     const out = await render(runs, 111);
     for (const a of out.artifacts) {
-      expect(a.path).not.toMatch(/tiles|scratchpad|entries|raw/);
+      expect(a.path).not.toMatch(/tiles|raw/);
       expect(a.path.startsWith("/")).toBe(false);
     }
   });
@@ -317,6 +348,36 @@ describe("renderSnapshot", () => {
     }
   });
 
+  test("the entries window ships the names and the scratchpad ships whole; the prose beside them is gone", async () => {
+    const runs = fixture();
+    const out = await render(runs, 111);
+    const entries = out.artifacts.find((a) => a.path === `v1/run/${DEAD_RUN}/` + a.path.split("/")[3] + "/entries.json");
+    expect(entries).toBeDefined();
+    const body = JSON.parse(entries!.body) as { from: number; total: number; entries: { t: string; text?: string }[] };
+    expect(body.from).toBe(0);
+    expect(body.total).toBe(body.entries.length);
+    expect(body.entries.map((e) => e.t)).toEqual(["meta", "response", "snippet", "driver", "tool_result", "snippet_result", "termination"]);
+    const events = body.entries[4]!.text!;
+    expect(events).toContain(SURVIVES.questTitle);
+    expect(events).toContain(SURVIVES.npcName);
+    expect(events).toContain('"details":"[redacted]"');
+    expect(events).toContain('"options":[{"optionId":0,"icon":0,"text":"[redacted]"}]');
+    expect(body.entries[5]!.text).toContain('"body":"[redacted]"');
+    expect(body.entries[6]).toMatchObject({ reason: "episode-limit", detail: SURVIVES.terminationDetail });
+    // The `meta` entry is the skeleton plus the run's own stamps: no config.
+    expect(Object.keys(body.entries[0]!).sort()).toEqual(["end", "harnessVersion", "i", "runId", "start", "t", "ts"]);
+
+    const pad = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/scratchpad.json"));
+    expect(pad).toBeDefined();
+    expect((JSON.parse(pad!.body) as { text: string }).text).toBe(`${SURVIVES.scratchpad}\n`);
+
+    // The row's item names and the position feed's carry through too.
+    const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body) as {
+      positions: { positions: { items: { name: string; count: number; equipped: boolean }[] | null }[] };
+    };
+    expect(live.positions.positions[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
+  });
+
   test("runs.json rows point at the run artifacts; manifest gen addresses the snap set", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
@@ -327,20 +388,20 @@ describe("renderSnapshot", () => {
         character: string | null;
         pauseReason: string | null;
         terminationDetail: string | null;
-        snapshot?: { detail: string; track: string };
+        snapshot?: { detail: string; track: string; entries?: string; scratchpad?: string };
       }[];
     };
     expect(listed.runs).toHaveLength(2);
     const dead = listed.runs.find((r) => r.runId === DEAD_RUN)!;
     expect(dead.pauseReason).toBe("paused");
-    expect(dead.terminationDetail).toBeNull();
+    expect(dead.terminationDetail).toBe(SURVIVES.terminationDetail);
     expect(dead.character).toBe(CHARACTER_NAME);
     for (const row of listed.runs) {
       expect(row.snapshot).toBeDefined();
-      expect(row.snapshot!.detail).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/detail\\.json$`));
-      expect(row.snapshot!.track).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/track\\.json$`));
-      expect(paths.has(row.snapshot!.detail)).toBe(true);
-      expect(paths.has(row.snapshot!.track)).toBe(true);
+      for (const which of ["detail", "track", "entries", "scratchpad"] as const) {
+        expect(row.snapshot![which]).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/${which}\\.json$`));
+        expect(paths.has(row.snapshot![which]!)).toBe(true);
+      }
     }
     expect(out.gen).toMatch(/^[0-9a-f]{12}$/);
   });
@@ -455,7 +516,7 @@ describe("createRenderer", () => {
     for (const name of SNAP_NAMES) expect(paths).toContain(`v1/snap/${out.gen}/${name}`);
     // The archived run's artifacts are gone; the surviving run's are not.
     expect(paths.filter((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toEqual([]);
-    expect(paths.filter((p) => p.startsWith(`v1/run/${LIVE_RUN}/`))).toHaveLength(2);
+    expect(paths.filter((p) => p.startsWith(`v1/run/${LIVE_RUN}/`))).toHaveLength(4);
 
     /*
      * The row itself stays — the listing is the pass's, and rewriting it would

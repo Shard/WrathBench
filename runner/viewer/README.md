@@ -18,7 +18,9 @@ is created empty, and every page serves its labelled empty state.
 - `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).
 - `WRATHBENCH_DASHBOARD_DIR` overrides where the built SPA is looked for
   (default `dashboard/dist`).
-- `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and tiles.
+- `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles, and serves
+  `/entries` through the public projection and the game-prose redactor
+  (`public-projection.ts`, `redact-prose.ts`).
 - `WRATHBENCH_VIEWER_TILES_PUBLIC=1` serves minimap tiles in public mode
   anyway. Off by default, and a no-op on its own.
 
@@ -216,9 +218,9 @@ stamp — read as a file, because that log has no sqlite half and the viewer mus
 not create the directory a writer would. `reflecting` is `run.reflecting_since`
 being non-null: the trajectory keeps the window's transitions, the column keeps
 the current answer, and a process boundary clears it, since a resumed run starts
-with a fresh gate. Both are withheld from a public snapshot except the flag —
-the entry is model prose about the world it is standing in, stamped with a
-client zone *name*.
+with a fresh gate. Both publish: the entry is the model's own words under a
+zone *name*, and names and model-authored text are published since 2026-08-30
+(docs/DATA-AND-LEGAL.md, "Trajectory logs").
 
 Tiles come from the minimap extraction in `minimap/`, which writes
 `data/minimap/<mapId>/<row>_<col>.png`; `/tiles/<mapId>/<row>_<col>.png` serves
@@ -259,9 +261,9 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
 | `/api/tools` | the nine model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
 | `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows |
-| `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
-| `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
-| `/api/run/<id>/scratchpad` | the run's scratchpad.md |
+| `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |
+| `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry (withheld in public mode) |
+| `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |
 | `/api/run/<id>/stream` | SSE: new entries as they are appended |
 | `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted; withheld in public mode unless `WRATHBENCH_VIEWER_TILES_PUBLIC=1`) |
 | anything else | the built SPA, or the not-built notice when there is none |
@@ -275,12 +277,30 @@ at the two places a raw record can reach a client (`summarize` and
 `TrajectoryTail.raw`). `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
-`WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the three routes that carry
-verbatim game text or Blizzard-derived bytes — raw entries, scratchpads and
-minimap tiles. It is opt-in-to-public, not opt-in-to-raw: the run page depends on
-raw bodies, so a public deployment sets the flag rather than the developer
-clearing it. The legal question around public hosting is still open; see the
-viewer/dashboard section of `docs/ARCHITECTURE.md`.
+`WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the two routes that carry
+the unprojected record or Blizzard-derived bytes — raw entries and minimap
+tiles — and serves `/entries` the way the public snapshot does. It is
+opt-in-to-public, not opt-in-to-raw: the run page depends on raw bodies, so a
+public deployment sets the flag rather than the developer clearing it.
+
+What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator
+2026-08-30): names and ids stay, game prose goes. `projectEntry`
+(`public-projection.ts`) is an allowlist per entry type — the `meta` entry
+sheds the run config (api base, objective, paths), `driver` and `claude_system`
+their binaries, cwd and socket paths, `pause`/`watchdog` their free-text
+`detail`; an unlisted type ships as its skeleton. `redactGameProse`
+(`redact-prose.ts`) then replaces the prose fields enumerated from
+`sdk/src/protocol.ts` — quest `details`/`objectives`/`areaDescription`/
+`completedText` and objective `text`, questgiver and trainer `greeting`, the
+request-items and offer-reward `text`, gossip option `text`, item
+`description`, page and item `text`, mail `body`, chat `message` — wherever a
+decoded payload turns up in a tool result: an event batch, a JSON value, a
+`recent_events` line, a string holding JSON one or two levels down; a cut
+fragment is redacted from its first prose key to the end, and a
+`search_reference` result (wiki text) goes whole. Model-authored text — turn
+text, snippet code, the scratchpad, the episodic log, console lines and any
+result the model formatted as plain prose — is published as written; it can
+quote the world, and that residual is stated in `docs/PUBLIC-DASHBOARD.md`.
 
 Tiles alone can be opted back in with `WRATHBENCH_VIEWER_TILES_PUBLIC=1`, for a
 deployment whose operator has decided it may serve them. It settles nothing —

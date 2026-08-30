@@ -6,11 +6,18 @@
  * through `public-projection.ts` before it is serialized. That order is the
  * point: the public numbers cannot drift from the private viewer because they
  * ARE the private viewer's, and nothing reaches an artifact without crossing
- * the projection. The routes that carry verbatim game text or Blizzard bytes
- * (entries, raw lines, scratchpads, tiles) are simply never requested, so no
+ * the projection. Entries cross it twice — the public handle already projects
+ * and redacts its `/entries` window, and the renderer projects the parsed body
+ * again — because the invariant is "every body crosses the projection HERE",
+ * not "the handle was public". Raw lines and tiles are never requested, so no
  * artifact exists for them. Tiles are the emphatic case: `WRATHBENCH_VIEWER_TILES_PUBLIC`
  * can open that route on a live viewer, and it reaches nothing here — the
  * renderer's own handle never sets `tilesPublic`, and no pass asks for a tile.
+ *
+ * Per run, one entries window is published: the tail (`ENTRIES_WINDOW`
+ * entries), the same shape the run page's private path loads first. No
+ * "load earlier" publicly — a static set would otherwise have to carry every
+ * window of every run.
  *
  * Layout (a publisher pushes these to a bucket; a static dashboard reads them):
  * - `v1/manifest.json` and `v1/live.json` are the two mutable keys, cached
@@ -32,6 +39,7 @@ import { EPISODE_IDS } from "../src/episodes";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
+  EntriesResponse,
   ToolsResponse,
   EpisodesResponse,
   FleetResponse,
@@ -45,6 +53,7 @@ import type {
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
+  projectEntries,
   projectTools,
   projectEpisodes,
   projectFleet,
@@ -133,6 +142,9 @@ export interface RendererOptions {
  */
 const RUN_CONCURRENCY = 8;
 
+/** The one published entries window per run: the feed's tail, as the run page loads it. */
+export const ENTRIES_WINDOW = 200;
+
 /**
  * Build a renderer that can run pass after pass over one viewer handle.
  *
@@ -187,6 +199,14 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     return (await res.json()) as T;
   };
 
+  /** A per-run text route, with the same 404 rule as `getIfPresent`. */
+  const getTextIfPresent = async (path: string): Promise<string | null> => {
+    const res = await handle(new Request(`http://snapshot.local${path}`));
+    if (res.status === 404) return null;
+    if (res.status !== 200) throw new Error(`snapshot render: ${path} answered ${res.status}`);
+    return await res.text();
+  };
+
   return async function render(nowArg?: number): Promise<SnapshotResult> {
     const now = nowArg ?? Date.now();
 
@@ -232,21 +252,43 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
       for (let i = next++; i < rows.length; i = next++) {
         const row = rows[i]!;
         const id = encodeURIComponent(row.runId);
-        const [detail, track] = await Promise.all([
+        const [detail, track, entries, scratchpad] = await Promise.all([
           getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
           getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
+          getIfPresent<EntriesResponse>(`/api/run/${id}/entries?limit=${ENTRIES_WINDOW}`).then((b) =>
+            b === null ? null : projectEntries(b),
+          ),
+          // A run with no scratchpad.md is a 404 here and simply has no artifact.
+          getTextIfPresent(`/api/run/${id}/scratchpad`),
         ]);
-        // Either half missing means the run went away mid-pass; a row must
-        // never point at half a set, so both are dropped together.
-        if (detail === null || track === null) continue;
-        const ver = hash12(addressable(detail));
+        // Any of the three JSON halves missing means the run went away
+        // mid-pass; a row must never point at part of a set, so all are
+        // dropped together.
+        if (detail === null || track === null || entries === null) continue;
+        // The version covers everything the row points at, so a window that
+        // grew or a scratchpad rewritten between two identical details still
+        // lands on a new key rather than mutating an immutable one.
+        const ver = hash12([addressable(detail), addressable(entries), scratchpad ?? ""].join("\n"));
         // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
         // keys as-is; anything else never got a run directory to be listed from.
         const base = `v1/run/${row.runId}/${ver}`;
-        const paths = { detail: `${base}/detail.json`, track: `${base}/track.json` };
+        const paths: NonNullable<typeof row.snapshot> = {
+          detail: `${base}/detail.json`,
+          track: `${base}/track.json`,
+          entries: `${base}/entries.json`,
+          ...(scratchpad === null ? {} : { scratchpad: `${base}/scratchpad.json` }),
+        };
+        const immutable = (path: string, body: string): SnapshotArtifact => ({
+          path,
+          body,
+          contentType: "application/json",
+          cacheControl: IMMUTABLE_CACHE,
+        });
         perRun[i] = [
-          { path: paths.detail, body: envelope(detail), contentType: "application/json", cacheControl: IMMUTABLE_CACHE },
-          { path: paths.track, body: envelope(track), contentType: "application/json", cacheControl: IMMUTABLE_CACHE },
+          immutable(paths.detail, envelope(detail)),
+          immutable(paths.track, envelope(track)),
+          immutable(paths.entries!, envelope(entries)),
+          ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
         ];
         row.snapshot = paths;
       }

@@ -96,8 +96,9 @@ the SPA owns everything that is UI.
   from `data/minimap/`, and the built SPA as static files. Every database is
   opened readonly, so a run being written inside the container is never
   disturbed. Bearer tokens are stripped from anything that forwards a raw
-  record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and
-  tiles — the three routes that carry verbatim game text or Blizzard bytes.
+  record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles — the
+  unprojected record and Blizzard bytes — and serves entry summaries through
+  the public projection and the game-prose redactor (`runner/viewer/README.md`).
   `WRATHBENCH_VIEWER_TILES_PUBLIC=1` opts tiles alone back in for a deployment
   whose operator has decided it may serve them (off by default, no-op outside
   public mode, private one-hour cache and `noindex` when on); the static public

@@ -685,7 +685,22 @@ export interface RunListRow extends RunRow {
    * present only in published snapshots, never on the live API. Optional for
    * the reason `tps` is: consumers of either surface must render without it.
    */
-  snapshot?: { detail: string; track: string };
+  snapshot?: {
+    detail: string;
+    track: string;
+    /**
+     * The projected, prose-redacted tail window of the feed (`EntriesResponse`
+     * shape) and the run's scratchpad (`ScratchpadResponse`). Optional because
+     * a snapshot rendered before 2026-08-30 carries neither.
+     */
+    entries?: string;
+    scratchpad?: string;
+  };
+}
+
+/** The scratchpad route as a snapshot artifact: the file's text, whole. */
+export interface ScratchpadResponse {
+  text: string;
 }
 
 /**
