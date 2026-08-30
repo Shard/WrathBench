@@ -178,10 +178,14 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   redacted" — has no implementation yet. Publishing any of it is Phase 2,
   gated on that redactor and the operator's decision.
 - **Projected out of otherwise-safe shapes**: `state.items[].name` (verbatim
-  item names — a leak the current public mode does not cover),
-  `terminationDetail` and `pauseReason` free text, character names
-  (`characterLabel`, resolved from ids by our own tables, stays), model
-  last-error message text, and every local filesystem path.
+  item names — a leak the current public mode does not cover), a move's
+  `target` (the name of the thing aimed at), `terminationDetail` and
+  `pauseReason` free text, model last-error message text, and every local
+  filesystem path.
+- **Character names are shown** (operator decision, 2026-08-30). The runner
+  generates them at character creation, so they are not game text; the
+  `characterLabel` race/class pair, resolved from ids by our own tables, is
+  shown beside them.
 - **The safe core ships whole**: the `ResultRun` layer is ids, numbers and
   model identifiers — levels, XP, areas and achievements as ids, taxi facts,
   costs, tokens — and is what the runs, ladder, episodes, models and
@@ -351,8 +355,9 @@ what a result means is the operator's:
    it.
 2. **Entries and game text** (issue #10's "Legal, first and blocking"): are
    entry summaries ever publishable, and under what redaction standard?
-   Sub-decisions riding on it: character names, `terminationDetail` /
-   `pauseReason` free text, `items[].name`. Phase 2 is gated on this.
+   Sub-decisions riding on it: `terminationDetail` / `pauseReason` free text,
+   `items[].name`. Phase 2 is gated on this. (Character names rode on it once;
+   they were decided separately on 2026-08-30 and are shown.)
 3. **Domain and naming** for the app and data hostnames.
 4. **SKU**: free, or $5/month Workers Paid as cliff insurance.
 5. **Attribution wording** for the footer and artifact envelope.

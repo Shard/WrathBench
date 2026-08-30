@@ -8,15 +8,18 @@
  * keys the type does not declare, so a copy-and-delete projection is unbounded
  * where this one cannot emit a field nobody wrote down.
  *
+ * Character names are published (`character` passes through), alongside the
+ * resolved race/class labels (`characterLabel`, `raceName`, `className`): the
+ * runner generates the name at character creation, so it is not game text
+ * (operator decision, 2026-08-30). Names of things the character looked at or
+ * aimed for are a different matter — a move's `target` is a world name.
+ *
  * What is withheld, and why (docs/DATA-AND-LEGAL.md; issue #10):
  * - Verbatim game text must not be published. `ItemSample.name` is client
  *   game text, so the `items` array is dropped everywhere it appears; entry
  *   summaries, raw lines and scratchpads are never rendered into a snapshot at
  *   all (the renderer requests none of those routes); minimap tiles are
  *   Blizzard bytes and never leave.
- * - Character names are dropped (`character` reads null); the resolved
- *   race/class labels (`characterLabel`, `raceName`, `className`) stay — they
- *   are this repo's own tables, not game strings.
  * - Free-text fields that can quote the world or the operator's machine are
  *   dropped: `terminationDetail`, the operator `objective`, the model
  *   last-error `message` (its enum-ish `reason` stays), a run row's
@@ -234,8 +237,7 @@ function projectRunRow(r: RunRow): RunRow {
     campaign: r.campaign,
     cell: r.cell,
     extra: r.extra,
-    // Character names are withheld; the race/class labels below stand in.
-    character: null,
+    character: r.character,
     race: r.race,
     raceName: r.raceName,
     class: r.class,
@@ -331,8 +333,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     money: r.money,
     questsCompleted: r.questsCompleted,
     maps: [...r.maps],
-    // Character name withheld here as everywhere; the label fields stand in.
-    character: null,
+    character: r.character,
     playtimeMs: r.playtimeMs,
     tokens: r.tokens === null ? null : projectTokenTotals(r.tokens),
     actualCost: r.actualCost === null ? null : projectCostFigure(r.actualCost),
@@ -395,8 +396,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
     positions: p.positions.map(
       (a: AgentPosition): AgentPosition => ({
         runId: a.runId,
-        // The name is withheld; the map labels a pip by run id instead.
-        character: null,
+        character: a.character,
         model: a.model,
         map: a.map,
         x: a.x,
@@ -777,8 +777,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
 export function projectTrack(t: TrackResponse): TrackResponse {
   return {
     runId: t.runId,
-    // The name is withheld everywhere it appears; replay labels by run id.
-    character: null,
+    character: t.character,
     model: t.model,
     harnessVersion: t.harnessVersion,
     points: t.points.map(

@@ -7,7 +7,7 @@
  *   cannot ship — including keys smuggled through parsed-JSON objects that
  *   carry more than their declared type (the `EntrySummary` lesson).
  * - **Values, not key names.** Every poisoned value planted in the fixtures —
- *   game-text item names, character names, free-text details, filesystem
+ *   game-text item and target names, free-text details, filesystem
  *   paths, secrets, host URLs — is asserted absent from the *serialized*
  *   output, the same way viewer-api.test.ts checks its bearer token. A
  *   "no field called X" check would pass while the value sat under another key.
@@ -61,7 +61,7 @@ import {
 // somewhere in the fixtures below, and none may appear in any serialized output.
 const POISON = {
   itemName: "Poisoned Worn Shortsword",
-  character: "Poisonedcharname",
+  targetName: "Poisonednpcname",
   objective: "poison-objective: walk to Goldshire",
   apiBase: "http://10.66.66.66:1234/v1-poison",
   terminationDetail: "poison-termination-detail quoting an NPC",
@@ -77,6 +77,13 @@ const POISON = {
   statusText: "poison-status: turned in Kobold Camp Cleanup to Marshal McBride",
   statusZone: "Poisonedzonename",
 } as const;
+
+/**
+ * The character name is published, not withheld: the runner generates it at
+ * character creation, so it is not game text. It is a fixture value here, and
+ * the projections assert it survives.
+ */
+const CHARACTER_NAME = "Fixturely";
 
 /** A pid must not survive either; checked as its decimal string. */
 const POISON_PID = 987654321;
@@ -162,7 +169,7 @@ function runRowFixture(): RunRow {
     cell: "cell-a",
     continuedFrom: "fixture-run-0",
     extra: false,
-    character: POISON.character,
+    character: CHARACTER_NAME,
     race: 3,
     raceName: "Dwarf",
     class: 3,
@@ -281,7 +288,7 @@ function resultsFixture(): ResultsResponse {
         money: 1234,
         questsCompleted: 2,
         maps: [0, 1],
-        character: POISON.character,
+        character: CHARACTER_NAME,
         playtimeMs: 1000,
         tokens: tokensFixture(),
         actualCost: costFigureFixture(),
@@ -489,14 +496,14 @@ describe("projectRuns", () => {
 
   test("withholds by value, not by renaming: the fields read null", () => {
     const row = projectRuns({ runs: [runListRowFixture()] }).runs[0]!;
-    expect(row.character).toBeNull();
     expect(row.items).toBeNull();
     expect(row.objective).toBeNull();
     expect(row.apiBase).toBeNull();
     expect(row.terminationDetail).toBeNull();
     // The paused signal survives as a fixed token, never as the free text.
     expect(row.pauseReason).toBe("paused");
-    // What the label layer needs survives.
+    // What the label layer needs survives — and so does the name itself.
+    expect(row.character).toBe(CHARACTER_NAME);
     expect(row.characterLabel).toBe("Dwarf Hunter");
     expect(row.raceName).toBe("Dwarf");
     expect(row.terminationReason).toBe("episode-limit");
@@ -597,18 +604,18 @@ describe("projectResults", () => {
       ]),
     );
     assertClean(JSON.stringify(out));
-    expect(out.runs[0]!.character).toBeNull();
+    expect(out.runs[0]!.character).toBe(CHARACTER_NAME);
     expect(out.runs[0]!.pauseReason).toBe("paused");
   });
 });
 
 describe("projectPositions and projectTrack", () => {
-  test("positions: exactly the allowlist; names and items are gone", () => {
+  test("positions: exactly the allowlist; the character name survives, items and target names do not", () => {
     const input: PositionsResponse = smuggle<PositionsResponse>({
       positions: [
         smuggle({
           runId: "fixture-run-1",
-          character: POISON.character,
+          character: CHARACTER_NAME,
           model: "test/model",
           map: 0,
           x: -6240,
@@ -629,7 +636,7 @@ describe("projectPositions and projectTrack", () => {
           class: 4,
           status: smuggle({ turn: 11, level: 3, zone: POISON.statusZone, text: POISON.statusText, ts: 1300 }),
           reflecting: true,
-          move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: null }),
+          move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.targetName, status: null }),
         }),
       ],
     });
@@ -661,7 +668,7 @@ describe("projectPositions and projectTrack", () => {
       ]),
     );
     assertClean(JSON.stringify(out));
-    expect(out.positions[0]!.character).toBeNull();
+    expect(out.positions[0]!.character).toBe(CHARACTER_NAME);
     expect(out.positions[0]!.items).toBeNull();
     // The model's own prose about the world it is standing in, and the client
     // zone NAME stamped on it, are withheld whole; the harness's own flag is not.
@@ -681,10 +688,10 @@ describe("projectPositions and projectTrack", () => {
     expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: null, status: null });
   });
 
-  test("track: exactly the allowlist; the character name is gone", () => {
+  test("track: exactly the allowlist; the character name survives", () => {
     const input: TrackResponse = smuggle<TrackResponse>({
       runId: "fixture-run-1",
-      character: POISON.character,
+      character: CHARACTER_NAME,
       model: "test/model",
       harnessVersion: "harness-0.5-1-gabc",
       points: [
@@ -694,7 +701,7 @@ describe("projectPositions and projectTrack", () => {
         }),
       ],
       moves: [
-        smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.character, status: "arrived" }),
+        smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.targetName, status: "arrived" }),
       ],
     });
     const out = projectTrack(input);
@@ -714,7 +721,7 @@ describe("projectPositions and projectTrack", () => {
       ]),
     );
     assertClean(JSON.stringify(out));
-    expect(out.character).toBeNull();
+    expect(out.character).toBe(CHARACTER_NAME);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
   });
 });
