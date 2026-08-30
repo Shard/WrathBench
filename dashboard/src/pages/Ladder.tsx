@@ -191,7 +191,7 @@ export default function Ladder() {
           disagree about which runs are on screen. */}
       <div class="ladder-controls">
         <span class="dim">
-          <A href="/episodes">what these mean</A>
+          <A href="/about">what these mean</A>
         </span>
         <FilterSelect label="race" options={races()} value={resolveChoice(races(), race())} onPick={pick(setRace, RACE_KEY)} />
         <FilterSelect label="class" options={classes()} value={resolveChoice(classes(), klass())} onPick={pick(setKlass, CLASS_KEY)} />
