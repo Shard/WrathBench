@@ -295,11 +295,18 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         );
       case "character":
         return (
-          <td class="dim" title={r().character ?? "character name not recorded"}>
-            <Show when={r().characterLabel !== null} fallback={r().character ?? "—"}>
-              <A href={narrow({ character: r().characterLabel! })} title="narrow to this race and class">
-                {r().characterLabel}
-              </A>
+          <td>
+            <Show when={r().character !== null || r().characterLabel !== null} fallback="—">
+              <Show when={r().character !== null}>
+                <div>{r().character}</div>
+              </Show>
+              <Show when={r().characterLabel !== null}>
+                <div class="dim">
+                  <A href={narrow({ character: r().characterLabel! })} title="narrow to this race and class">
+                    {r().characterLabel}
+                  </A>
+                </div>
+              </Show>
             </Show>
           </td>
         );

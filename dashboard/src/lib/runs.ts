@@ -174,7 +174,9 @@ export function sortKey(r: ResultRun, column: RunColumn): number | string | null
     case "episode":
       return r.episode;
     case "character":
-      return r.characterLabel ?? r.character;
+      // Sorts the way the column reads: the name first, the race/class label
+      // beneath it (and alone when a run has no name recorded).
+      return r.character ?? r.characterLabel;
     case "status":
       return statusText(r);
     case "level":
