@@ -271,6 +271,18 @@ conversation, so it is never silently blind to its own memory. Both are
 patch changes; the 0.6 series bump is reserved for the first semi-public
 release.
 
+**An episodic log, written before each trim, read back at rest** (operator,
+2026-08-30). On the last turn before a block-trim the harness asks for a
+short status entry — what the model is doing and how it is going — via
+`log_status`. Entries are append-only, stamped with turn, level and zone,
+and are not the scratchpad: working memory is the model's to rewrite, the
+log is a record it cannot edit. It is read back only through `reflect`,
+which returns the entries above the reflection prompt, so looking back at
+where things went wrong is what resting is for. The trigger is the trim
+itself, not a cadence constant; the claude-code driver has no trim, so it
+gets neither the prompt nor the entries, a documented asymmetry between
+harness groups.
+
 ## Episodes, lanes, and evidence
 
 **Reset is a fresh character.** Every scored episode starts with a freshly
