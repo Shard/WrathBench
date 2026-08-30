@@ -256,9 +256,10 @@ part of the harness. Any constant in the policy is a harness version change.
 of acting. It works only while the character is in a rest area (the
 client-visible resting flag: inns and cities); elsewhere it refuses with
 that fact as the hint, so reflection never happens mid-combat and always
-happens among the NPCs a player would visit anyway. One reflection per
-rest visit — leaving the rested state re-arms it — which bounds chained
-thinking without a counter. The tool returns a fixed, content-free prompt
+happens among the NPCs a player would visit anyway. The window closes when the
+character leaves the rested state or after thirty turns, whichever comes
+first — the thirty is a circuit breaker against a thinking deadlock, not a
+hint — and reflection is available again on the next rest visit. The tool returns a fixed, content-free prompt
 (review the scratchpad against what has been observed and told; state
 beliefs and their evidence; what worked, what did not; what next) and the
 model writes the outcome into its own scratchpad. The harness summarizes
