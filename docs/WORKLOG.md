@@ -62,7 +62,7 @@ Convention:
   one stealth id was revealed and repriced; roster refresh (three dead slugs out, GLM
   Flash 5.3 in under its own name); the price table's lag is item 88.
 - [2026-08-29](worklogs/2026-08-29.md) — see the day file.
-- [2026-08-30](worklogs/2026-08-30.md) — the two smokes that failed on the first `:latest`
+- [2026-08-30](worklogs/2026-08-30.md) — reflect and the episodic log ship; quest-start items (build 310); the gated public site opens up (tiles, names, redacted feed, legal) and passes three review sweeps
   run (reputation, item-stats) were smoke bugs: a fold race and a chest piece the fixture
   never wears; both pass live, no module change owed.
 

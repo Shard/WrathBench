@@ -17,10 +17,8 @@ status.
 
 ## Next up
 
-1. **98, 100** — what is left of the basic player surface: the pet surface, and
-   the group/mail/bank/trade replies. Operator's decision 2026-08-29: complete it,
-   validated by smoke tests, before any 0.6 talk. 95/96/97/99 and 101 shipped
-   2026-08-29 (97f4e31, dc8c9aa; module built to `:next`, deploy owed).
+1. **Issue #41** — the scratchpad edit op (research edit-vs-rewrite across
+   harnesses first); the player surface itself is complete as of 2026-08-30.
 2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
 3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
