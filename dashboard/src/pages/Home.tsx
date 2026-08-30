@@ -170,7 +170,7 @@ export default function Home() {
 
       <h2 class="section">the tools</h2>
       <p class="dim">
-        Nine tools, identical for every model. Pick one to see the description the model is given, as served
+        Eight tools, identical for every model. Pick one to see the description the model is given, as served
         by the harness right now.
       </p>
       <Show when={tools.error !== undefined}>
@@ -314,10 +314,11 @@ function LoopDiagram() {
         model before a trim and paged back by the model while reflecting. No edge
         joins the two.
 
-        The scratchpad edge is one-directional on purpose. `read_scratchpad` is a
-        real tool, but it is not how the notes are actually read each turn — the
-        context injection is, and that is the edge already drawn along the left.
-        Drawing both would show two reads where the loop has one.
+        The scratchpad edge is one-directional on purpose. There is no read
+        tool — the notes are read by being injected into every turn's context,
+        which is the edge already drawn along the left. (`read_scratchpad` was
+        removed on 2026-08-30 for exactly that reason: it re-served text the
+        turn already carried.)
       */}
       {box(100, 166, 120, "scratchpad", "notes, markdown")}
       {box(240, 166, 120, "episodic log", "append-only")}

@@ -1,5 +1,5 @@
 /**
- * The nine Phase-0 tools, defined once and dispatched from two places: the MCP
+ * The eight Phase-0 tools, defined once and dispatched from two places: the MCP
  * server (external model drives them over stdio) and the agent loop (the
  * OpenAI-compatible adapter drives them in-process). Schemas are deliberately
  * tight — few parameters, all described — because a confused tool call costs a
@@ -124,11 +124,6 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: "read_scratchpad",
-    description: "Read your persistent markdown scratchpad for this run.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
     name: "write_scratchpad",
     description:
       "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
@@ -225,7 +220,6 @@ const argSchemas = {
       .transform((n) => Math.min(20, Math.max(1, Math.round(n))))
       .default(8),
   }),
-  read_scratchpad: z.strictObject({}).default({}),
   write_scratchpad: z.strictObject({ content: z.string() }),
   reflect: z.strictObject({}).default({}),
   log_status: z.strictObject({ text: z.string().min(1) }),
@@ -256,7 +250,6 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
   state_summary: "state_summary takes no parameters ({}).",
   search_reference:
     "search_reference expects { query: string, limit?: number } — title or keywords, and max results 1-20 (default 8).",
-  read_scratchpad: "read_scratchpad takes no parameters ({}).",
   write_scratchpad: "write_scratchpad expects { content: string } — the full new scratchpad markdown.",
   reflect: "reflect takes no parameters ({}).",
   log_status: "log_status expects { text: string } — one short status entry.",
@@ -783,10 +776,6 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         if (!ctx.reflect.isOpen) return { text: READ_LOG_CLOSED, isError: true };
         const { offset, limit } = parsed.data as { offset: number; limit: number };
         return { text: ctx.episodic.page(offset, limit) };
-      }
-      case "read_scratchpad": {
-        const content = ctx.scratchpad.read();
-        return { text: content.length === 0 ? "(scratchpad is empty)" : content };
       }
       case "write_scratchpad": {
         const { content } = parsed.data as { content: string };
