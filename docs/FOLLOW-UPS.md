@@ -201,7 +201,13 @@ worklogs/2026-08-29).
     rebuild with `VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.<zone>`, drop
     `main` and the `r2_buckets` binding from `dashboard/wrangler.jsonc`, delete
     `dashboard/worker/`, and remove `dashboard/worker` from the root typecheck
-    loop. Gated by issue #10 (entries/game-text) in the same breath, since
+    loop. One more step since 2026-08-30: the map page requests `/tiles/...`
+    same-origin, which only resolves while one Worker serves both the SPA and
+    the bucket. In the Open shape those requests need the data hostname (the
+    tiles are published under `tiles/` in the same bucket, so a
+    `VITE_WRATHBENCH_SNAPSHOT_BASE`-relative tile URL plus a cache rule and a
+    CORS entry for the prefix), and whatever replaces the gate has to keep them
+    behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
 19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;

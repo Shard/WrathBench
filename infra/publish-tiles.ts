@@ -176,6 +176,13 @@ export interface TilePublishReport {
   skipped: number;
   bytes: number;
   orphans: number;
+  /**
+   * Entries in the bucket's manifest, or null when there is no manifest object
+   * at all. The distinction is the whole trust of a `--dry-run`: "every tile
+   * would upload" means a first run when this is null and a problem when it is
+   * a number.
+   */
+  manifestEntries: number | null;
 }
 
 /**
@@ -188,14 +195,15 @@ export async function publishTiles(
   opts: { dryRun?: boolean; now?: number; concurrency?: number; log?: (line: string) => void } = {},
 ): Promise<TilePublishReport> {
   const log = opts.log ?? ((line: string): void => console.log(line));
-  const manifest = parseTileManifest(await store.getText(TILE_MANIFEST_KEY));
+  const raw = await store.getText(TILE_MANIFEST_KEY);
+  const manifest = parseTileManifest(raw);
 
+  // Hash-only first pass. The bytes are deliberately not kept: a full
+  // extraction is thousands of PNGs, and holding all of them to upload a
+  // handful would make the memory cost of a no-op run the same as a first one.
   const hashes = new Map<string, string>();
-  const bytesByKey = new Map<string, Uint8Array>();
   await pooled(local, opts.concurrency ?? TILE_CONCURRENCY, async (tile) => {
-    const bytes = await Bun.file(tile.file).bytes();
-    hashes.set(tile.key, hashBytes(bytes));
-    bytesByKey.set(tile.key, bytes);
+    hashes.set(tile.key, hashBytes(await Bun.file(tile.file).bytes()));
   });
 
   const plan = planTileUploads(local, manifest, hashes);
@@ -205,11 +213,12 @@ export async function publishTiles(
     skipped: plan.unchanged.length,
     bytes,
     orphans: plan.orphans.length,
+    manifestEntries: raw === null ? null : Object.keys(manifest).length,
   };
   if (opts.dryRun === true) return report;
 
   await pooled(plan.upload, opts.concurrency ?? TILE_CONCURRENCY, async (tile) => {
-    await store.put(tile.key, bytesByKey.get(tile.key) as Uint8Array, "image/png");
+    await store.put(tile.key, await Bun.file(tile.file).bytes(), "image/png");
   });
 
   // Manifest last: a run that dies mid-upload leaves the previous manifest
@@ -258,8 +267,13 @@ if (import.meta.main) {
     getText: async (key) => {
       try {
         return await s3.file(key).text();
-      } catch {
-        return null;
+      } catch (e) {
+        // Only a missing object is null. A 403, a wrong endpoint or a bad key
+        // pair must NOT read as "no manifest yet" — that would quietly turn an
+        // ops failure into a full re-upload of the whole extraction.
+        const code = (e as { code?: unknown }).code;
+        if (code === "NoSuchKey" || code === "ENOENT") return null;
+        throw e;
       }
     },
   };
@@ -267,6 +281,11 @@ if (import.meta.main) {
   console.log(`publish-tiles: ${local.length} tile(s) under ${root} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET}`);
   const report = await publishTiles(local, store, { dryRun });
   const verb = dryRun ? "would upload" : "uploaded";
+  console.log(
+    report.manifestEntries === null
+      ? `publish-tiles: no ${TILE_MANIFEST_KEY} in the bucket — this is a first run, everything uploads`
+      : `publish-tiles: ${TILE_MANIFEST_KEY} lists ${report.manifestEntries} tile(s)`,
+  );
   console.log(
     `publish-tiles: ${verb} ${report.uploaded}, skipped ${report.skipped} unchanged, ` +
       `${(report.bytes / 1024 / 1024).toFixed(2)} MiB, ${report.orphans} orphan(s)`,
