@@ -1641,8 +1641,10 @@ export interface ToolView {
   description: string;
   /** The tool's parameters, in JSON Schema, as the model is given them. */
   inputSchema: Record<string, unknown>;
-  /** One illustrative call, as the arguments would be sent. Harness text, not game text. */
-  example: string;
+  /** One illustrative call, as the arguments would be sent; null for a tool that takes none. Harness text. */
+  example: string | null;
+  /** For an argument-less tool, one line on what the call gives back; null otherwise. */
+  returns: string | null;
 }
 
 /** `/api/tools`: the model-facing tool list, in the order the model sees it. */

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { TOOLS } from "../src/tools";
 import { createApi } from "../viewer/api";
 import { projectTools } from "../viewer/public-projection";
-import { TOOL_EXAMPLES, toolsResponse } from "../viewer/tools";
+import { TOOL_EXAMPLES, TOOL_RETURNS, toolsResponse } from "../viewer/tools";
 import type { ToolsResponse } from "../viewer/api-types";
 
 function api(): (r: Request) => Promise<Response> {
@@ -27,11 +27,16 @@ describe("/api/tools", () => {
     expect(body.tools.map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
     expect(body.tools.map((t) => t.description)).toEqual(TOOLS.map((t) => t.description));
     expect(body.tools.map((t) => t.inputSchema)).toEqual(TOOLS.map((t) => t.inputSchema));
-    for (const t of body.tools) expect(t.example.length).toBeGreaterThan(0);
+    // Exactly one of the two per tool: an example where there are arguments, a returns line where there are none.
+    for (const t of body.tools) {
+      const hasArgs = Object.keys((t.inputSchema["properties"] as object) ?? {}).length > 0;
+      expect(t.example !== null).toBe(hasArgs);
+      expect(t.returns !== null).toBe(!hasArgs);
+    }
   });
 
-  test("every tool has an example and no example names a tool that is gone", () => {
-    expect(Object.keys(TOOL_EXAMPLES).sort()).toEqual(TOOLS.map((t) => t.name).sort());
+  test("examples and returns lines together cover every tool once, and name no tool that is gone", () => {
+    expect([...Object.keys(TOOL_EXAMPLES), ...Object.keys(TOOL_RETURNS)].sort()).toEqual(TOOLS.map((t) => t.name).sort());
   });
 
   test("the route serves in public mode, and the projection passes it through whole", async () => {
