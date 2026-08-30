@@ -39,6 +39,29 @@ export function fmtDuration(ms: number | null): string {
 }
 
 /**
+ * Time on the run's own clock, for the feed's per-row stamp: `0:00`, `12:34`,
+ * and `1:05:22` once past an hour.
+ *
+ * A wall-clock time answers "when did this happen" — a question nobody reading
+ * a trajectory has, and one that a run started at 03:41 answers unhelpfully.
+ * "How far into the run" is the question, and it is the one figure that reads
+ * the same across two runs the operator is comparing side by side.
+ *
+ * Truncated, not rounded: an entry 59.9 s in belongs to 0:59, and rounding it
+ * to 1:00 would put it a minute ahead of the entry that follows it. A negative
+ * span — an entry stamped before the run row's start, which a clock step can
+ * produce — clamps to zero rather than printing a minus.
+ */
+export function fmtElapsed(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return "—";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+/**
  * The tool-call half of the run page's episode-budget line. Null is no ceiling
  * at all — the policy's `idle: "unlimited"` freeplay lane — and it reads the
  * way the null `maxTurns` beside it already does, rather than as a blank or a 0
