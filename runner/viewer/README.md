@@ -19,6 +19,8 @@ is created empty, and every page serves its labelled empty state.
 - `WRATHBENCH_DASHBOARD_DIR` overrides where the built SPA is looked for
   (default `dashboard/dist`).
 - `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries, scratchpads and tiles.
+- `WRATHBENCH_VIEWER_TILES_PUBLIC=1` serves minimap tiles in public mode
+  anyway. Off by default, and a no-op on its own.
 
 ## This directory is the API; the UI is the dashboard
 
@@ -221,7 +223,8 @@ client zone *name*.
 Tiles come from the minimap extraction in `minimap/`, which writes
 `data/minimap/<mapId>/<row>_<col>.png`; `/tiles/<mapId>/<row>_<col>.png` serves
 them straight from there, integers only and cached for a year since they never
-change. Nothing extracted yet is a normal state, not an error: a missing tile
+change (public mode with `WRATHBENCH_VIEWER_TILES_PUBLIC=1` sends a private
+one-hour cache instead — see "What it will not serve"). Nothing extracted yet is a normal state, not an error: a missing tile
 draws as a labelled grid square, so the map works on a machine that has never
 run the extraction. `WRATHBENCH_MINIMAP_DIR` overrides the tile root.
 
@@ -253,7 +256,7 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md |
 | `/api/run/<id>/stream` | SSE: new entries as they are appended |
-| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted) |
+| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted; withheld in public mode unless `WRATHBENCH_VIEWER_TILES_PUBLIC=1`) |
 | anything else | the built SPA, or the not-built notice when there is none |
 
 ### What it will not serve
@@ -271,6 +274,19 @@ minimap tiles. It is opt-in-to-public, not opt-in-to-raw: the run page depends o
 raw bodies, so a public deployment sets the flag rather than the developer
 clearing it. The legal question around public hosting is still open; see the
 viewer/dashboard section of `docs/ARCHITECTURE.md`.
+
+Tiles alone can be opted back in with `WRATHBENCH_VIEWER_TILES_PUBLIC=1`, for a
+deployment whose operator has decided it may serve them. It settles nothing —
+the flag exists so the decision can be *acted on*, not so it can be skipped —
+and it is off unless deliberately set. It also only loosens public mode: on a
+private viewer it does nothing, since tiles are served there regardless. What
+changes when it is on: the route answers instead of 403, with
+`Cache-Control: private, max-age=3600` (short, so turning the flag off is felt
+the same day) and `X-Robots-Tag: noindex`; a miss stays an uncached 404 and no
+path lists a directory. The startup banner says which of the two public shapes
+is running. The static public snapshot is untouched by all of this: the
+renderer builds its own public handle without the flag and asks for no tile, so
+no bucket key can be one (`runner/test/snapshot.test.ts` pins it).
 
 Tail and summariser logic is tested in `runner/test/viewer-tail.test.ts`; the
 coordinate transform, the position feed and tile path validation in

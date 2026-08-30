@@ -264,6 +264,25 @@ describe("renderSnapshot", () => {
     }
   });
 
+  test("the tiles flag reaches no artifact", async () => {
+    // WRATHBENCH_VIEWER_TILES_PUBLIC can open /tiles on a LIVE public viewer.
+    // The static snapshot is a different surface: the renderer builds its own
+    // handle without `tilesPublic` and asks for no tile, so the flag being set
+    // in the publisher's environment must change nothing here.
+    const key = "WRATHBENCH_VIEWER_TILES_PUBLIC";
+    const before = process.env[key];
+    process.env[key] = "1";
+    try {
+      const runs = fixture();
+      const out = await render(runs, 111);
+      for (const a of out.artifacts) expect(a.path).not.toContain("tiles");
+      for (const a of out.artifacts) expect(a.contentType).toBe("application/json");
+    } finally {
+      if (before === undefined) delete process.env[key];
+      else process.env[key] = before;
+    }
+  });
+
   test("every body parses and carries the envelope", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
