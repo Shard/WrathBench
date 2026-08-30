@@ -116,6 +116,7 @@ footer.attribution .repo {
 }
 footer.attribution .repo:hover { color: var(--fg); }
 footer.attribution .legal { text-align: right; }
+pre.cite { font-size: 12px; color: var(--dim); overflow-x: auto; margin: 0 0 16px; }
 
 .dim { color: var(--dim); }
 .err { color: var(--err); }
