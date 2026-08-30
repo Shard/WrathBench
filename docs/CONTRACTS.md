@@ -34,7 +34,7 @@ Phase 0 action set:
 - Targeting: set target, clear target.
 - Combat: start and stop auto-attack, cast spell by id (with optional target), cancel cast.
 - Interaction: interact with object, open gossip with NPC, select gossip option.
-- Quests: accept quest from questgiver, complete and choose reward, abandon quest.
+- Quests: accept quest from questgiver, complete and choose reward, abandon quest. Quest-start items (2026-08-30): an item whose template starts a quest and has no on-use spell is not a `CMSG_USE_ITEM` — the core drops spell id 0 as unknown — so `use_item` on it sends what a client's right-click sends, `CMSG_QUESTGIVER_QUERY_QUEST` with the item's own guid as the questgiver, and the accept names the item guid the same way; the server offers with `SMSG_QUESTGIVER_QUEST_DETAILS`. The quest id is the item template's (client-cache knowledge, as the on-use spell id already is).
 - Loot: open loot, take item, take money, take all. Chests (2026-08-29): the core ignores `CMSG_GAMEOBJ_USE` on a chest and drops `CMSG_LOOT` on a game object guid, so a chest is opened as a client opens one — `CMSG_CAST_SPELL` of the lock's Opening spell (`SPELL_EFFECT_OPEN_LOCK`) at it, then the same store/money/release sequence; the SDK tries the open-hand Opening spells in turn because it does not carry `Lock.dbc`.
 - Vendor: list, buy, sell, repair.
 - Inventory: equip item, use item, destroy item.
