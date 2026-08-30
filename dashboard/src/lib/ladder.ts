@@ -473,9 +473,9 @@ export function pointKey(model: string, effort: string | null): string {
   return effort === null ? model : `${model} (${effort})`;
 }
 
-/** The drawn label: the key and how many runs the mark is the mean of. */
-export function pointLabel(key: string, runs: number): string {
-  return `${key} · n=${runs}`;
+/** The drawn label is the key alone; the run count lives in the hover text (operator, 2026-08-30). */
+export function pointLabel(key: string, _runs: number): string {
+  return key;
 }
 
 /**
