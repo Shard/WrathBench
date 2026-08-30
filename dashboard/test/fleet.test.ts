@@ -113,6 +113,16 @@ describe("the model cell", () => {
     expect(jobModelLabel(job({ ref: "a+b", models: [] }))).toBe("a+b");
   });
 
+  test("the hover leads with the roster key, and still says nothing twice", () => {
+    // The ref is what the fleet page calls the job's entry; the models follow.
+    // A provider that served exactly what was asked for adds no "served as" —
+    // prepending the ref must not defeat that suppression.
+    const same = fleetRows(fleet(), [run({ resolvedModel: "stealth/ox-alpha" } as Partial<RunListRow>)])[0]!;
+    expect(same.modelsTitle).toBe("ox-alpha · stealth/ox-alpha");
+    const drifted = fleetRows(fleet(), [run({ resolvedModel: "stealth/ox-alpha-2026" } as Partial<RunListRow>)])[0]!;
+    expect(drifted.modelsTitle).toBe("ox-alpha · stealth/ox-alpha · served as stealth/ox-alpha-2026");
+  });
+
   test("the ids travel beside the label, in roster order, for the cell's icons", () => {
     // The pre-joined string is the truncated *label*; identity is read from the
     // list, so a rotating job can show one mark per family.

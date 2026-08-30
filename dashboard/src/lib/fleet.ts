@@ -449,7 +449,13 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
        * on this account was actually served — which for an alias is the only
        * place the strip says which Claude is in flight.
        */
-      modelsTitle: withServed([job.ref, ...job.models].join(" · "), run?.resolvedModel),
+      /*
+       * The roster key leads, then the models, then what was actually served.
+       * The ref sits OUTSIDE `withServed` on purpose: that helper suppresses a
+       * "served as" that repeats the title, and folding the key into the string
+       * it compares would make the suppression never fire.
+       */
+      modelsTitle: `${job.ref} · ${withServed(job.models.join(", "), run?.resolvedModel)}`,
       modelList: [...job.models],
       episode: job.episode ?? null,
       account: job.account,
