@@ -158,3 +158,18 @@ loops would cost more than it pins.
 - Polling intervals are stated at each call site, not hidden in `poll()` —
   docs/ARCHITECTURE.md (dashboard section) names polling rate as a
   public-hosting constraint.
+
+## Where the copy lives
+
+All under `dashboard/src/`: `pages/Home.tsx` (intro, chart heading, loop
+diagram labels, can/can't lists, tools prose), `pages/About.tsx` (status,
+reading a result, legal, cite), the other `pages/*.tsx` for per-page
+headings, tooltips and empty states, `components/LadderChart.tsx` (chart
+caption and hover), `lib/format.ts` (`COST_BASIS_NOTE`), `lib/status.ts`
+(status popout), `components/SeriesSelect.tsx`, `lib/attribution.ts` (the
+footer line, pinned by test to `runner/viewer/public-projection.ts`
+`PUBLIC_ATTRIBUTION` — change both). Tool examples in the inspector come from
+`runner/viewer/tools.ts` via `/api/tools`, so the publisher needs a restart
+after editing them. To ship copy edits to the gated site:
+`VITE_WRATHBENCH_SNAPSHOT_BASE=/ bun run --cwd dashboard build && bunx wrangler deploy --config dashboard/wrangler.jsonc && bun run --cwd dashboard build`
+(the last build restores the private viewer's `dist`).
