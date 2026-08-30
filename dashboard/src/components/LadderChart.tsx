@@ -43,15 +43,18 @@ function harnessColour(harnesses: readonly string[]): string {
   return "var(--dim)";
 }
 
+/** The dash pattern that marks a mean resting on one run. Nothing else on the chart is dashed but the gridlines. */
+const SINGLE_DASH = "2 2";
+
 function hoverText(p: LadderPoint, episode: string): string {
   const priced =
     p.basis === "reported"
-      ? "provider-reported"
+      ? "reported"
       : p.basis === "list-price"
-        ? `list price${p.asIfMetered ? ", as-if-metered" : ""}`
-        : `provider-reported and list price mixed${p.asIfMetered ? ", some as-if-metered" : ""}`;
+        ? `list-price est.${p.asIfMetered ? ", as-if-metered" : ""}`
+        : `reported and list-price est. mixed${p.asIfMetered ? ", some as-if-metered" : ""}`;
   return [
-    p.key,
+    `${p.key} — mean of ${p.runs} counted run${p.runs === 1 ? "" : "s"}`,
     `avg cost per ${episode} run: ${fmtUsd(p.x)} (${priced}, over ${p.costRuns} of ${p.runs} runs)`,
     `avg xp earned: ${Math.round(p.y).toLocaleString()} (over ${p.xpRuns} of ${p.runs} runs)`,
   ].join("\n");
@@ -217,7 +220,15 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 <Show
                   when={logoHrefOf(d.point.model)}
                   fallback={
-                    <circle cx={d.cx} cy={d.cy} r={5} fill={harnessColour(d.point.harnesses)} stroke="var(--bg)" stroke-width="1.5" />
+                    <circle
+                      cx={d.cx}
+                      cy={d.cy}
+                      r={5}
+                      fill={d.point.single ? "var(--bg)" : harnessColour(d.point.harnesses)}
+                      stroke={d.point.single ? harnessColour(d.point.harnesses) : "var(--bg)"}
+                      stroke-width="1.5"
+                      stroke-dasharray={d.point.single ? SINGLE_DASH : undefined}
+                    />
                   }
                 >
                   {(href) => (
@@ -230,6 +241,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                         fill="#ffffff"
                         stroke={harnessColour(d.point.harnesses)}
                         stroke-width="1.5"
+                        stroke-dasharray={d.point.single ? SINGLE_DASH : undefined}
                       />
                       <image
                         href={href()}
@@ -243,7 +255,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                   )}
                 </Show>
                 <text x={d.labelX} y={d.labelY} text-anchor={d.anchor} font-size="11" fill="var(--fg)">
-                  {d.point.key}
+                  {d.point.label}
                 </text>
               </a>
               </g>
@@ -252,9 +264,21 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         </svg>
       </Show>
 
-      {/* One line, the axes only (operator, 2026-08-30): what a mark is and why one is missing is the hover text. */}
+      {/*
+        The caption was one line, the axes only (operator, 2026-08-30), on the
+        reading that the hover text carries the rest. Widened the same day, for
+        a reader arriving from outside who has no reason to hover: the sample
+        size behind a mark and the basis of its price are what a stranger would
+        otherwise assume, and assume wrongly. Why a mark is *missing* is still
+        the hover's job.
+      */}
       <p class="dim ladderchart-caption">
-        avg cost per {props.episode} run (USD, log) against avg xp earned, one mark per model.
+        avg cost per {props.episode} run (USD, log) against avg xp earned. Each mark is one model at
+        one effort — effort variants sit apart, labelled <span class="mono">sonnet (low)</span> — and
+        both coordinates are means over that entry's counted runs, with <span class="mono">n</span> on
+        the label. A dashed ring means at least one of the two means rests on a single run. Cost is
+        what the provider reported; a claude-code subscription run carries no metered bill and is
+        priced as-if-metered at list price.
       </p>
     </div>
   );

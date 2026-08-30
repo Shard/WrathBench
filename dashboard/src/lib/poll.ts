@@ -12,6 +12,7 @@
  */
 
 import { createSignal, onCleanup } from "solid-js";
+import { logError } from "./errors";
 
 /**
  * How many intervals may pass with no tick settling before the feed reads
@@ -73,6 +74,10 @@ export function poll<T>(fetcher: () => Promise<T>, intervalMs: number): Poll<T> 
         lastSettledAt = Date.now();
         setStalled(false);
         setError(e);
+        // The one place every polled feed's failure passes through, and not a
+        // render, so the public build's console keeps the detail its banner
+        // no longer prints.
+        logError("poll", e);
       },
     );
   };

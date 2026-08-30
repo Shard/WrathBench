@@ -44,6 +44,7 @@ import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtTokens, fmtUsd, num, stamp } from "../lib/format";
 import { iconModels } from "../lib/lineup";
 import { poll } from "../lib/poll";
+import { displayError } from "../lib/errors";
 
 export default function Fleet() {
   // Every run on disk — read for the job rows and the link to the episodes page, not to be listed here.
@@ -53,7 +54,7 @@ export default function Fleet() {
   return (
     <div class="page">
       <Show when={runs.error !== undefined}>
-        <div class="banner bad">{String(runs.error)}</div>
+        <div class="banner bad">{displayError(runs.error)}</div>
       </Show>
 
       <h2 class="section">fleet</h2>
@@ -87,7 +88,9 @@ export default function Fleet() {
               <Show when={f().configRejected}>
                 {(rej) => (
                   <div class="banner bad">
-                    fleet.json REJECTED since {stamp(rej().since)}: {rej().error} — running on config loaded at{" "}
+                    {/* The reason is projected out publicly; an empty one prints no colon. */}
+                    fleet.json REJECTED since {stamp(rej().since)}
+                    <Show when={rej().error !== ""}>: {rej().error}</Show> — running on config loaded at{" "}
                     {f().configLoadedAt === undefined ? "an unrecorded time" : stamp(f().configLoadedAt!)}; job enabled
                     flags in the file are NOT in effect. The supervisor retries every tick and clears this by itself.
                   </div>

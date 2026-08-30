@@ -17,13 +17,14 @@
 
 import { A } from "@solidjs/router";
 import { For, Show, createSignal, onMount } from "solid-js";
-import { api, type ModelRowView, type ModelsResponse } from "../api/client";
+import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
+import { displayError } from "../lib/errors";
 
 /** The roster moves when a run ends or an operator edits the config. */
 const POLL_MS = 30_000;
@@ -48,20 +49,25 @@ export default function Models() {
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
-        <div class="banner bad">{String(feed.error)}</div>
+        <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
       <h2 class="section">models</h2>
       <p class="dim">
         The fleet roster and what the scheduler makes of it. A model is eligible for{" "}
         <A href="/episodes">e90</A> from the moment it is listed and earns <code>e360</code> by
-        reaching level 5 in an un-overridden e90 run (see docs/EPISODES.md). Counts are <em>counted</em> runs —
+        reaching level 5 in an un-overridden e90 run. Counts are <em>counted</em> runs —
         launches that produced at least one model response; a launch that produced none is archived
         as it ends, and consecutive ones are what the defer ladder backs off from.
       </p>
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
-        <Show when={body()!.roster.shape !== "roster"}>
+        {/*
+          Operator-facing: a public reader cannot point a viewer at a config,
+          and the message names a host path and an env var. The public build
+          shows nothing rather than a repair instruction addressed to nobody.
+        */}
+        <Show when={!SNAPSHOT_MODE && body()!.roster.shape !== "roster"}>
           <div class="banner warn">
             <Show
               when={body()!.roster.shape === "unreadable"}
@@ -229,7 +235,12 @@ export default function Models() {
                 two numbers read as a contradiction rather than a ceiling and
                 a per-account share of it.
               */}
-              <Show when={Object.keys(body()!.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))}>
+              <Show
+                when={
+                  !SNAPSHOT_MODE &&
+                  Object.keys(body()!.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))
+                }
+              >
                 {" "}
                 A <code>claude-code:&lt;VAR&gt;</code> key is one Claude subscription (named by the env var
                 holding its token): a run needs a free slot on its own subscription <em>and</em> under the{" "}
@@ -277,7 +288,10 @@ function Detail(props: { row: ModelRowView }) {
           <A href={`/run/${encodeURIComponent(props.row.lastError!.runId)}`}>
             {props.row.lastError!.runId}
           </A>
-          : <span class="mono">{props.row.lastError!.message}</span>
+          {/* The message is projected out publicly; without one there is nothing to introduce. */}
+          <Show when={props.row.lastError!.message !== ""}>
+            : <span class="mono">{props.row.lastError!.message}</span>
+          </Show>
         </p>
       </Show>
       <Show
