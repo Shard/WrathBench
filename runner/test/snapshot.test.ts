@@ -6,7 +6,7 @@
  * artifact body the render produces.
  *
  * The fixture is poisoned the way a real runs directory is dangerous: game-text
- * item names in the state samples, a character name in the config, free-text
+ * item names in the state samples, a move target name, free-text
  * termination/pause columns, a bearer token, a LAN api base, the operator's
  * paths in fleet-state.json, a smoke tail. None of it may appear in any body.
  */
@@ -34,7 +34,6 @@ const LIVE_RUN = "snap-run-live";
 const SECRET = "sentinel-bearer-9f31ab";
 const POISON = {
   itemName: "Poisoned Worn Shortsword",
-  character: "Poisonedcharname",
   terminationDetail: "poison-termination-detail",
   pauseReason: "poison-pause-reason-text",
   objective: "poison-objective-text",
@@ -44,6 +43,9 @@ const POISON = {
   fleetConfig: "/home/operator/poison/fleet.json",
   preflightTail: "poison-smoke-tail",
 } as const;
+/** Published, not withheld: the runner generates the name, it is not game text. */
+const CHARACTER_NAME = "Fixturely";
+
 const POISON_PID = 987654321;
 
 /** A tuple `parseComparability` accepts, with the poisoned wiki-bundle source. */
@@ -80,7 +82,7 @@ function writeRun(
     runId,
     moduleUrl: "http://worldserver:8086",
     token: SECRET,
-    character: POISON.character,
+    character: CHARACTER_NAME,
     account: "RUNNER",
     model: "test/model",
     driver: "openai",
@@ -296,11 +298,11 @@ describe("renderSnapshot", () => {
     expect(manifest.gen).toBe(out.gen);
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body) as {
       fleet: { present: boolean; jobs: unknown[] };
-      positions: { positions: { runId: string; character: null }[] };
+      positions: { positions: { runId: string; character: string | null }[] };
     };
     expect(live.fleet.present).toBe(true);
     expect(live.positions.positions.map((p) => p.runId)).toEqual([LIVE_RUN]);
-    expect(live.positions.positions[0]!.character).toBeNull();
+    expect(live.positions.positions[0]!.character).toBe(CHARACTER_NAME);
   });
 
   test("no poisoned value reaches any artifact body", async () => {
@@ -332,7 +334,7 @@ describe("renderSnapshot", () => {
     const dead = listed.runs.find((r) => r.runId === DEAD_RUN)!;
     expect(dead.pauseReason).toBe("paused");
     expect(dead.terminationDetail).toBeNull();
-    expect(dead.character).toBeNull();
+    expect(dead.character).toBe(CHARACTER_NAME);
     for (const row of listed.runs) {
       expect(row.snapshot).toBeDefined();
       expect(row.snapshot!.detail).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/detail\\.json$`));
