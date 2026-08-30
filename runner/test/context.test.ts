@@ -7,6 +7,8 @@ import {
   formatStateSummary,
   messageWindow,
   messageWindowCut,
+  lastTurnGrowth,
+  trimExpected,
   type ChatMessage,
   type ContextInputs,
 } from "../src/context";
@@ -454,22 +456,66 @@ describe("messageWindow", () => {
     }
   });
 
-  test("one message past the ceiling drops exactly one block", () => {
-    const h = pairs(MESSAGE_WINDOW_MAX + 1);
-    expect(messageWindowCut(h)).toBe(MESSAGE_WINDOW_TRIM);
-    const w = messageWindow(h);
-    expect(w.length).toBe(FLOOR + 1);
-    expect(w).toEqual(h.slice(MESSAGE_WINDOW_TRIM));
-    expect(w[0]!.role).toBe("assistant");
+  test("the crossing turn keeps its whole window; the block drops one turn later", () => {
+    // The cut lags one turn behind the crossing on purpose, so the turn that
+    // takes the history past the ceiling can be *told* it is the last one
+    // before the trim (docs/METHODOLOGY.md, "An episodic log, written before
+    // each trim"). `pairs` is one assistant + one tool result a turn, so a turn
+    // boundary is an even length.
+    const h = pairs(4 * MESSAGE_WINDOW_MAX);
+    const crossing = h.slice(0, MESSAGE_WINDOW_MAX + 2);
+    expect(messageWindowCut(crossing)).toBe(0);
+    expect(messageWindow(crossing)).toEqual(crossing);
+    expect(trimExpected(crossing)).toBe(true);
+
+    const after = h.slice(0, MESSAGE_WINDOW_MAX + 4);
+    expect(messageWindowCut(after)).toBe(MESSAGE_WINDOW_TRIM);
+    expect(messageWindow(after)).toEqual(after.slice(MESSAGE_WINDOW_TRIM));
+    expect(messageWindow(after)[0]!.role).toBe("assistant");
+    expect(trimExpected(after)).toBe(false);
+  });
+
+  test("trimExpected is true on exactly one turn boundary per block", () => {
+    const h = pairs(8 * MESSAGE_WINDOW_MAX);
+    const announced: number[] = [];
+    const trimmed: number[] = [];
+    let lastCut = 0;
+    // Turn boundaries only, which is where the loop reads both.
+    for (let n = 0; n <= h.length; n += 2) {
+      const slice = h.slice(0, n);
+      if (trimExpected(slice)) announced.push(n);
+      const cut = messageWindowCut(slice);
+      if (cut > lastCut) {
+        trimmed.push(n);
+        lastCut = cut;
+      }
+    }
+    expect(announced.length).toBeGreaterThan(3);
+    // Every trim is preceded by exactly one announcement, on the turn before.
+    expect(trimmed).toEqual(announced.map((n) => n + 2));
   });
 
   test("the growing window is a stable prefix within a block", () => {
+    // Boundary-agnostic: whenever the cut holds still, every later window in
+    // that block must start with the first one byte for byte — that is the
+    // provider-cache property the block trim exists for.
     const h = pairs(4 * MESSAGE_WINDOW_MAX);
-    const base = messageWindow(h.slice(0, MESSAGE_WINDOW_MAX + 1));
-    for (let n = MESSAGE_WINDOW_MAX + 1; n <= MESSAGE_WINDOW_MAX + MESSAGE_WINDOW_TRIM; n++) {
-      const w = messageWindow(h.slice(0, n));
+    let cut = -1;
+    let base: ChatMessage[] = [];
+    let blocks = 0;
+    for (let n = 0; n <= h.length; n++) {
+      const slice = h.slice(0, n);
+      const c = messageWindowCut(slice);
+      const w = messageWindow(slice);
+      if (c !== cut) {
+        cut = c;
+        base = w;
+        blocks++;
+        continue;
+      }
       expect(w.slice(0, base.length)).toEqual(base); // appends only, prefix untouched
     }
+    expect(blocks).toBeGreaterThan(2);
   });
 
   test("the cut moves once per block, not once per turn", () => {
@@ -491,8 +537,11 @@ describe("messageWindow", () => {
   test("stays within the ceiling and never splits a tool-call pair", () => {
     const h = pairs(10 * MESSAGE_WINDOW_MAX);
     for (let n = 0; n <= h.length; n++) {
-      const w = messageWindow(h.slice(0, n));
-      expect(w.length).toBeLessThanOrEqual(MESSAGE_WINDOW_MAX);
+      const slice = h.slice(0, n);
+      const w = messageWindow(slice);
+      // The lag lets the window sit above the ceiling for one turn, by at most
+      // that turn's own growth and never more (see `laggedLength`).
+      expect(w.length).toBeLessThanOrEqual(MESSAGE_WINDOW_MAX + lastTurnGrowth(slice));
       expect(pairsIntact(w)).toBe(true);
       if (w.length > 0) expect(w[0]!.role).toBe("assistant");
     }
@@ -507,7 +556,7 @@ describe("messageWindow", () => {
     expect(cut).toBeGreaterThan(MESSAGE_WINDOW_TRIM);
     expect(h[cut]!.role).toBe("assistant");
     const w = messageWindow(h);
-    expect(w.length).toBeLessThanOrEqual(MESSAGE_WINDOW_MAX);
+    expect(w.length).toBeLessThanOrEqual(MESSAGE_WINDOW_MAX + lastTurnGrowth(h));
     expect(pairsIntact(w)).toBe(true);
   });
 

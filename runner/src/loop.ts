@@ -14,7 +14,6 @@ import {
   formatStateSummary,
   messageWindow,
   messageWindowCut,
-  messageWindowRawCut,
   trimExpected,
   type ChatMessage,
   type SnapshotLike,
@@ -786,11 +785,6 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * window shrank says so in its own `[harness notices]`.
    */
   let lastCut = 0;
-  /**
-   * The raw cut the pre-trim prompt has already been raised for, so an estimate
-   * that lands a turn early is not repeated every turn until the trim arrives.
-   */
-  let announcedForCut: number | null = null;
   // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn, and
   // that used to be this loop's only sampling — one 485s request left an
   // 8.1-minute blackout with no state row and no XP signal. Live for the whole
@@ -831,16 +825,16 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const cut = messageWindowCut(history);
       // The pre-trim prompt (METHODOLOGY, "An episodic log, written before each
       // trim"): the trigger is the trim itself, not a cadence. `trimExpected`
-      // is exact whenever the model's per-turn tool-call count is steady, and
-      // the once-per-block guard keeps an early estimate from repeating.
-      const rawCut = messageWindowRawCut(history.length);
-      if (announcedForCut !== rawCut && trimExpected(history)) {
-        announcedForCut = rawCut;
+      // is exact — the crossing has already happened and the cut lags one turn
+      // behind it — so this fires on exactly the last turn before each trim,
+      // once, whatever the model's per-turn message count does. No guard is
+      // needed and none is kept: a guard would only be able to hide a bug here.
+      if (trimExpected(history)) {
         pendingNotices.push({
           ts: o.now?.() ?? Date.now(),
           kind: "trim_pending",
           text:
-            "Older conversation is about to be trimmed. Record a short status entry — " +
+            "Older conversation will be trimmed after this turn. Record a short status entry — " +
             "what you are doing and how it is going — with log_status.",
         });
       }

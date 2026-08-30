@@ -17,7 +17,10 @@
  * point is prompt caching: providers cache by longest byte-identical prefix, so
  * a per-turn slide diverges the prefix right after the system prompt on every
  * turn and pays a full recompute each call. Block trimming keeps the prefix
- * byte-stable for a whole block and pays one deliberate miss per block.
+ * byte-stable for a whole block and pays one deliberate miss per block. The cut
+ * is applied one turn after the crossing that earns it (`laggedLength`), so the
+ * turn before a trim can be told that it is the last one; the window therefore
+ * sits at most one turn's growth above the ceiling, for that one turn.
  *
  * Older per-turn user context messages are dropped entirely — they are
  * regenerated, never accumulated. Determinism: `assembleContext` is a pure
@@ -629,9 +632,34 @@ export interface ChatMessage {
  * incrementally trimmed window and a rebuilt one would disagree.
  */
 export function messageWindowCut(history: ChatMessage[]): number {
-  let cut = messageWindowRawCut(history.length);
+  let cut = messageWindowRawCut(laggedLength(history));
   while (cut < history.length && history[cut]!.role !== "assistant") cut++;
   return cut;
+}
+
+/**
+ * The history length as of the start of the previous turn: the current length
+ * minus what that turn appended.
+ *
+ * The raw cut is taken here rather than at `history.length` so that the trim
+ * lags one turn behind the crossing. That lag is what makes the pre-trim prompt
+ * *exact* (docs/METHODOLOGY.md, "An episodic log, written before each trim":
+ * the harness asks for a status entry on the last turn before a block-trim).
+ * Predicting the crossing forward is impossible — a turn's message count is not
+ * known until the model has answered it — but once the answer is in the history
+ * the crossing is a fact, so the harness announces the trim on the turn after
+ * the crossing and applies it on the turn after that.
+ *
+ * The cost is bounded and small: the window is `length - rawCut(previous
+ * length)`, and the previous length was itself within the ceiling, so the
+ * window exceeds MESSAGE_WINDOW_MAX by at most one turn's growth, for exactly
+ * one turn per block. The prefix stays byte-stable — the cut is still a step
+ * function moving in whole blocks, still monotone non-decreasing (the lagged
+ * length is), and still a pure function of the stored history, so a rebuilt
+ * history cuts identically.
+ */
+function laggedLength(history: ChatMessage[]): number {
+  return history.length - lastTurnGrowth(history);
 }
 
 /**
@@ -661,18 +689,17 @@ export function lastTurnGrowth(history: ChatMessage[]): number {
 }
 
 /**
- * Whether the block trim is expected to land at the end of this turn.
+ * Whether the block trim lands at the end of this turn. Exact, not an estimate.
  *
- * The trim itself is exact in the message *count*, but the count this turn will
- * add is not known until the model has answered, so the estimate is the
- * previous turn's growth — exact whenever the model's tool-call count is steady
- * across the boundary, and off by one turn when it is not. That is why the
- * notice text says the trim is about to happen and not that it happens after
- * this turn: the harness must not state a turn it cannot guarantee.
+ * True on the turn whose *previous* turn took the history across a block
+ * boundary. Because `messageWindowCut` lags by the same one turn
+ * (`laggedLength`), this turn still sees the un-trimmed window and the next one
+ * sees the trim — so every block-trim is preceded by exactly one such turn,
+ * whatever the model's per-turn message count does. Nothing here predicts a
+ * turn that has not happened yet.
  */
 export function trimExpected(history: ChatMessage[]): boolean {
-  const len = history.length;
-  return messageWindowRawCut(len + lastTurnGrowth(history)) > messageWindowRawCut(len);
+  return messageWindowRawCut(history.length) > messageWindowRawCut(laggedLength(history));
 }
 
 /**
