@@ -108,7 +108,14 @@ main.flush { overflow: hidden; }
 footer.attribution {
   flex: none; padding: 6px 16px; border-top: 1px solid var(--line);
   background: var(--bg); color: var(--dim); font-size: 11px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
+footer.attribution .repo {
+  display: inline-flex; align-items: center; gap: 6px; color: var(--dim); text-decoration: none;
+  white-space: nowrap;
+}
+footer.attribution .repo:hover { color: var(--fg); }
+footer.attribution .legal { text-align: right; }
 
 .dim { color: var(--dim); }
 .err { color: var(--err); }
