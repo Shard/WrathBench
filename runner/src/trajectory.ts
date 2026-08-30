@@ -303,6 +303,12 @@ CREATE TABLE IF NOT EXISTS run (
   termination_reason TEXT,
   termination_detail TEXT,
   pause_reason TEXT,
+  -- When the run's reflection window opened, NULL whenever none is open. A
+  -- single nullable column rather than a table of transitions: the question
+  -- the viewer asks is "is this character reflecting right now", and a window
+  -- has no history worth keeping in sqlite: the reflect_window records in the
+  -- trajectory are that history.
+  reflecting_since INTEGER,
   config_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS state (
@@ -360,6 +366,8 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
   resolved_cli_version: "TEXT",
   // Added 2026-08-29: a freeplay continuation names its predecessor.
   continued_from: "TEXT",
+  // Added 2026-08-30: the open reflection window, for the viewer's live feed.
+  reflecting_since: "INTEGER",
 };
 
 /**
@@ -389,6 +397,15 @@ export class Trajectory {
   private readonly db: Database;
   private readonly secrets: string[] = [];
   private readonly now: () => number;
+  /**
+   * The run this file belongs to, latched at `writeMeta` — which every launch
+   * and every resume path calls before a turn is taken. It exists so `append`
+   * can mirror the one record kind that has a *current* answer worth querying
+   * (`reflect_window`) into the `run` row without every call site having to
+   * pass a run id it does not otherwise need. Null for the read-only openers
+   * (`classify.ts`, `timeline.ts`), which append none of those kinds.
+   */
+  private runId: string | null = null;
 
   constructor(dir: string, opts: { now?: () => number } = {}) {
     this.dir = dir;
@@ -449,9 +466,28 @@ export class Trajectory {
   append(record: { t: string; ts?: number; [key: string]: unknown }): void {
     const full = { ts: this.now(), ...record };
     appendFileSync(this.jsonlPath, `${this.scrub(jsonLine(full))}\n`, "utf8");
+    if (record.t === "reflect_window") this.mirrorReflectWindow(full.ts, record["event"]);
+  }
+
+  /**
+   * Keep `run.reflecting_since` equal to the gate's window, so a reader can ask
+   * whether a character is reflecting *now* without replaying the JSONL. The
+   * transitions themselves stay in the trajectory; this is only the current
+   * answer, and it is written from the same records rather than from a second
+   * call site, so the two cannot disagree.
+   */
+  private mirrorReflectWindow(ts: number, event: unknown): void {
+    if (this.runId === null || (event !== "open" && event !== "close")) return;
+    this.setReflectingSince(event === "open" ? ts : null);
+  }
+
+  private setReflectingSince(since: number | null): void {
+    if (this.runId === null) return;
+    this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, this.runId);
   }
 
   writeMeta(meta: RunMeta): void {
+    this.runId = meta.runId;
     const safe = JSON.parse(this.scrub(jsonLine(meta))) as RunMeta;
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
@@ -475,6 +511,14 @@ export class Trajectory {
         meta.config.continuedFrom ?? null,
         this.scrub(jsonLine(meta.config)),
       );
+    /*
+     * No window is open at a process boundary. `reflect.ts`: "A resumed run
+     * starts with a fresh gate — closed window, un-armed until the next
+     * false→true transition", and a pause is the same boundary. Clearing here
+     * is that in-memory truth's persistent half: a run killed mid-window would
+     * otherwise leave the column standing and read as reflecting forever.
+     */
+    this.setReflectingSince(null);
     this.append({ t: "meta", ...meta });
   }
 

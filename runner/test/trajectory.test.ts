@@ -222,6 +222,52 @@ describe("Trajectory", () => {
     traj.close();
   });
 
+  test("a reflection window is mirrored onto the run row, and a process boundary clears it", () => {
+    const dir = tempRunDir();
+    let t = 1000;
+    const traj = new Trajectory(dir, { now: () => t });
+    const config = loadRunConfig({ runId: "run-r", driver: "stub", model: "irrelevant" });
+    traj.writeMeta({ runId: "run-r", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    expect(traj.runRow("run-r")?.["reflecting_since"]).toBeNull();
+
+    // The loop's own record, written exactly as it writes it.
+    t = 2000;
+    traj.append({ t: "reflect_window", turn: 7, event: "open" });
+    expect(traj.runRow("run-r")?.["reflecting_since"]).toBe(2000);
+    t = 3000;
+    traj.append({ t: "reflect_window", turn: 12, event: "close", reason: "left_rest" });
+    expect(traj.runRow("run-r")?.["reflecting_since"]).toBeNull();
+
+    // The transitions themselves stay where they were: the column is a mirror,
+    // never the record.
+    expect(readTrajectory(dir).filter((r) => r.t === "reflect_window")).toHaveLength(2);
+
+    // A run killed mid-window must not read as reflecting when it comes back.
+    t = 4000;
+    traj.append({ t: "reflect_window", turn: 20, event: "open" });
+    expect(traj.runRow("run-r")?.["reflecting_since"]).toBe(4000);
+    traj.writeMeta({ runId: "run-r", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    expect(traj.runRow("run-r")?.["reflecting_since"]).toBeNull();
+    traj.close();
+  });
+
+  test("the reflecting column migrates into a run table written without it", () => {
+    const dir = tempRunDir();
+    const db = new Database(join(dir, "run.sqlite"));
+    db.exec(`CREATE TABLE run (run_id TEXT PRIMARY KEY, harness_version TEXT, started_at INTEGER,
+      ended_at INTEGER, driver TEXT, shakeout TEXT, model TEXT, objective TEXT,
+      termination_reason TEXT, termination_detail TEXT, pause_reason TEXT, config_json TEXT)`);
+    db.close();
+    let t = 500;
+    const traj = new Trajectory(dir, { now: () => t });
+    const config = loadRunConfig({ runId: "run-old", driver: "stub", model: "irrelevant" });
+    traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 1, config });
+    t = 600;
+    traj.append({ t: "reflect_window", turn: 1, event: "open" });
+    expect(traj.runRow("run-old")?.["reflecting_since"]).toBe(600);
+    traj.close();
+  });
+
   test("registered secrets are scrubbed from every line", () => {
     const dir = tempRunDir();
     const traj = new Trajectory(dir);
