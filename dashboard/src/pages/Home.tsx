@@ -309,21 +309,26 @@ function LoopDiagram() {
       <text x="385" y="19" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
       {/*
         The two memories, as the harness actually uses them (runner/src/context.ts,
-        tools.ts, reflect.ts): the scratchpad is read and rewritten by the model and
-        is in every turn's context; the log is appended by the model before a trim
-        and paged back by the model while reflecting. No edge joins the two.
+        tools.ts, reflect.ts): the model writes the scratchpad and the harness reads
+        it back by injecting it into every turn's context; the log is appended by the
+        model before a trim and paged back by the model while reflecting. No edge
+        joins the two.
+
+        The scratchpad edge is one-directional on purpose. `read_scratchpad` is a
+        real tool, but it is not how the notes are actually read each turn — the
+        context injection is, and that is the edge already drawn along the left.
+        Drawing both would show two reads where the loop has one.
       */}
       {box(100, 166, 120, "scratchpad", "notes, markdown")}
       {box(240, 166, 120, "episodic log", "append-only")}
-      {/* Two parallel verticals off the model turn, one per memory; the context edge hugs the left. */}
-      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
-      <text x="194" y="126" text-anchor="end" class="loop-sub">read_scratchpad</text>
-      <text x="194" y="137" text-anchor="end" class="loop-sub">write_scratchpad</text>
+      {/* Two parallel verticals off the model turn, one per memory — the scratchpad's is a write only; the read is the context edge hugging the left. */}
+      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-end="url(#loop-head)" />
+      <text x="194" y="132" text-anchor="end" class="loop-sub">write_scratchpad</text>
       <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
       <text x="278" y="126" class="loop-sub">log_status before a trim</text>
       <text x="278" y="137" class="loop-sub">read_log while reflecting, at an inn</text>
       <path d="M98,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="66" y="200" text-anchor="end" class="loop-sub">in every</text>
+      <text x="66" y="200" text-anchor="end" class="loop-sub">read into every</text>
       <text x="66" y="211" text-anchor="end" class="loop-sub">turn's context</text>
     </svg>
   );
