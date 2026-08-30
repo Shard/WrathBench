@@ -2739,14 +2739,20 @@ describe("client: questgiver status and quest query, issued the way a client doe
     await stub.stop();
   });
 
-  test("a quest-list silence names a `none` marker, and says nothing when no marker was observed", async () => {
+  test("a `none` marker answers a quest list before it is sent; no marker means the silence says nothing", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 91)));
     await Bun.sleep(20);
-    const err = (await client.questsAvailableFrom(CREATURE_GUID, { timeout: 150 }).catch((e: unknown) => e)) as Error;
-    expect(err).toBeInstanceOf(EventTimeoutError);
-    expect(err.message).toContain("questgiver status is `none`");
+    // 2026-08-30: the marker is the server's own answer, received before the
+    // call, so a 10s EventTimeoutError would only confirm it — a value instead.
+    const none = await client.questsAvailableFrom(CREATURE_GUID, { timeout: 150 });
+    expect(none).toMatchObject({ ok: false, status: "nothing_on_offer", quests: [] });
+    if (none.ok) throw new Error("unreachable");
+    expect(none.hint).toContain("questgiver status is `none`");
+    expect(none.hint).toContain("Nothing was sent");
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_list");
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "questsAvailableFrom", status: "nothing_on_offer" });
     const bare = (await client.questsAvailableFrom(PLAYER_GUID, { timeout: 150 }).catch((e: unknown) => e)) as Error;
     expect(bare.message).not.toContain("questgiver status");
     client.close();
@@ -3851,6 +3857,131 @@ describe("client: a name in view is a referent", () => {
     const ack = await client.interact(nearMiss);
     expect(stub.actions[0]?.guid).toBe(nearMiss);
     expect(ack).not.toHaveProperty("resolved");
+    client.close();
+    await stub.stop();
+  });
+});
+
+describe("client: quest-start items and the questgiver marker pre-check (2026-08-30)", () => {
+  const TS = 1_700_000_000_000;
+  const START_QUEST = 1646;
+  const frame = (seq: number, opcode: string, data: unknown): string => JSON.stringify({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });
+  /** The Gritstone Charm carried, with a tooltip that says it starts a quest. */
+  const tome = () =>
+    frames([
+      ...loginSequence,
+      selfCreate,
+      creatureCreate,
+      creatureQuery,
+      inventorySlot,
+      itemCreate,
+      { ...(itemQuery as object), data: { ...(itemQuery as { data: object }).data, name: "Tome of Divinity", startQuest: START_QUEST } },
+    ]);
+  const details = (seq: number, guid: string, questId: number) =>
+    frame(seq, "SMSG_QUESTGIVER_QUEST_DETAILS", {
+      guid,
+      questId,
+      title: "The Tome of Divinity",
+      details: "Read it.",
+      objectives: "Speak to someone.",
+      choiceRewards: [],
+      rewards: [],
+      money: 0,
+      xp: 0,
+    });
+
+  test("useItem on a quest-start item waits for the server's offer and names the item as the questgiver", async () => {
+    const stub = startStub({ onConnect: () => tome() });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const pending = client.useItem("Tome of Divinity", undefined, undefined, { timeout: 2000 });
+    const at = await untilAction(stub, "use_item");
+    expect(stub.actions[at]).toMatchObject({ action: "use_item", bag: 255, slot: BACKPACK_SLOT });
+    stub.push(details(90, ITEM_GUID, START_QUEST));
+    const used = await pending;
+    expect(used.ok).toBe(true);
+    expect(used.questOffer).toEqual({ questId: START_QUEST, title: "The Tome of Divinity", itemGuid: ITEM_GUID });
+
+    // Taking it: the item guid stands where an NPC guid would, and there is no
+    // quest list to ask for — the details query is the offer.
+    const accept = client.acceptQuestFrom(used.questOffer!.itemGuid, START_QUEST, { timeout: 2000 });
+    const q = await untilAction(stub, "quest_details");
+    expect(stub.actions[q]).toMatchObject({ action: "quest_details", guid: ITEM_GUID, questId: START_QUEST });
+    stub.push(details(91, ITEM_GUID, START_QUEST));
+    const a = await untilAction(stub, "quest_accept");
+    expect(stub.actions[a]).toMatchObject({ action: "quest_accept", guid: ITEM_GUID, questId: START_QUEST });
+    stub.push(frame(92, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields: { quest0Id: START_QUEST, quest0State: 0, quest0CountsLo: 0, quest0CountsHi: 0, quest0Time: 0, quest1Id: 0 } }] }));
+    const result = await accept;
+    expect(result).toMatchObject({ ok: true, status: "accepted", questId: START_QUEST, title: "The Tome of Divinity" });
+    expect(stub.actions.map((x) => x.action)).not.toContain("quest_list");
+    client.close();
+    await stub.stop();
+  });
+
+  test("acceptQuestFrom(itemGuid) refuses a quest the item's tooltip says it does not start", async () => {
+    const stub = startStub({ onConnect: () => tome() });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    await expect(client.acceptQuestFrom(ITEM_GUID, OTHER_QUEST_ID, { timeout: 200 })).rejects.toThrow(/starts quest 1646, not 909/);
+    expect(stub.actions.map((x) => x.action)).not.toContain("quest_details");
+    client.close();
+    await stub.stop();
+  });
+
+  test("useItem on an ordinary item is the plain ack: nothing is waited for", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, inventorySlot, itemCreate, itemQuery]) });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const used = await client.useItem("Gritstone Charm");
+    expect(used.ok).toBe(true);
+    expect(used).not.toHaveProperty("questOffer");
+    client.close();
+    await stub.stop();
+  });
+
+  test("item_not_usable says what is known: no spell and no quest, or a module build that predates quest-start items", async () => {
+    const refuse = (a: string) => (a === "use_item" ? json({ ok: false, error: "item_not_usable", action: a }, 400) : undefined);
+    const plain = startStub({ onConnect: () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, inventorySlot, itemCreate, itemQuery]), failAction: refuse });
+    const c1 = await inWorld(plain);
+    await c1.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const e1 = (await c1.useItem("Gritstone Charm").catch((e: unknown) => e)) as WrathRequestError;
+    expect(e1).toBeInstanceOf(WrathRequestError);
+    expect(e1.message).toContain("no on-use spell and no quest to start");
+    expect(e1.message).not.toContain("no on-use effect");
+    c1.close();
+    await plain.stop();
+
+    const start = startStub({ onConnect: () => tome(), failAction: refuse });
+    const c2 = await inWorld(start);
+    await c2.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const e2 = (await c2.useItem("Tome of Divinity").catch((e: unknown) => e)) as WrathRequestError;
+    expect(e2.message).toContain(`starts quest ${START_QUEST}`);
+    expect(e2.message).toContain("predates quest-start items");
+    c2.close();
+    await start.stop();
+  });
+
+  test("acceptQuestFrom on a turn-in-only NPC is nothing_on_offer at once, with the marker's hint and nothing sent", async () => {
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 6, 91))); // reward_rep
+    await Bun.sleep(20);
+    const before = Date.now();
+    const result = await client.acceptQuestFrom(CREATURE_GUID, QUEST_ID, { timeout: 10_000 });
+    expect(Date.now() - before).toBeLessThan(1000);
+    expect(result).toMatchObject({ ok: false, status: "nothing_on_offer", questId: QUEST_ID, offered: [] });
+    if (result.ok || result.status !== "nothing_on_offer") throw new Error("unreachable");
+    expect(result.hint).toContain("questgiver status is `reward_rep`");
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_list");
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "acceptQuestFrom", status: "nothing_on_offer" });
+
+    // An offering marker still asks, as before.
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 8, 92))); // available
+    await Bun.sleep(20);
+    const pending = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(questGiverList([QUEST_ID], 93)));
+    expect((await pending).quests.map((q) => q.questId)).toEqual([QUEST_ID]);
     client.close();
     await stub.stop();
   });
