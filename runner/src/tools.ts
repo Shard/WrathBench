@@ -753,8 +753,10 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         const answer = ctx.reflect.request();
         if (answer.isError === true) return answer;
         // The count only; the entries themselves come from `read_log`. Omitted
-        // when the log is empty so it never advertises a page that is not there.
-        const n = ctx.episodic.count;
+        // when the log is empty, and when this gate's window cannot open (the
+        // standalone MCP server), so the line never points at a page the caller
+        // would be refused.
+        const n = ctx.reflect.isOpen ? ctx.episodic.count : 0;
         return n === 0
           ? answer
           : {
