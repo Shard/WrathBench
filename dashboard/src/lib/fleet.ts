@@ -116,7 +116,9 @@ export function pausedLabel(p: FleetPausedView): string {
 }
 
 /** The fleet table, left to right. State leads: it is what an operator scans for. */
-export const FLEET_COLUMNS = ["state", "job", "model", "episode", "account", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"] as const;
+/* "account class" and not "account": the cell holds where a run may
+   physically execute (pool, paid, local, pinned), never the account name. */
+export const FLEET_COLUMNS = ["state", "job", "model", "episode", "account class", "attempt", "run", "lvl / xp", "tokens", "tok/s", "cost", "elapsed"] as const;
 
 /**
  * What a row is doing.
