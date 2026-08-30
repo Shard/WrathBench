@@ -575,6 +575,25 @@ export interface MoveIntentView {
 }
 
 /** One agent, at one moment (the map's position feed). */
+/**
+ * The newest entry in a run's episodic log (`runner/src/episodic.ts`): what the
+ * model last said it was doing, and the stamps the harness put on it.
+ *
+ * The stamps are `null` rather than absent when the sample that wrote the entry
+ * could not observe them, the way every other unobserved reading on this feed
+ * is null — `level` and `zone` are optional on the writer's own shape.
+ */
+export interface CharacterStatus {
+  /** The driver turn the entry was written on. */
+  turn: number;
+  level: number | null;
+  /** The zone name the client would have shown; null when unobserved. */
+  zone: string | null;
+  /** The model's own text, capped by the writer. */
+  text: string;
+  ts: number;
+}
+
 export interface AgentPosition {
   runId: string;
   character: string | null;
@@ -619,6 +638,18 @@ export interface AgentPosition {
    * power bar the way that class's bar is tinted.
    */
   class?: number | null;
+  /**
+   * The newest episodic entry, or null when the run has logged none. Optional
+   * for the reason `move` is: a snapshot published before this shipped carries
+   * none, and a reader must draw that as "nothing logged" rather than crash.
+   */
+  status?: CharacterStatus | null;
+  /**
+   * Whether a reflection window is open on this run right now
+   * (`runner/src/reflect.ts`). Optional and false-by-default for the same
+   * reason: an older feed says nothing, and nothing is not "reflecting".
+   */
+  reflecting?: boolean;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
