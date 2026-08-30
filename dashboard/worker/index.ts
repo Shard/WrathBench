@@ -64,6 +64,7 @@ function cacheControl(path: string): string {
   if (path.startsWith("/v1/snap/") || path.startsWith("/v1/run/")) {
     return "private, max-age=31536000, immutable";
   }
+  if (path.startsWith("/tiles/")) return TILE_CACHE_CONTROL;
   return "private, max-age=30";
 }
 
@@ -71,8 +72,26 @@ function cacheControl(path: string): string {
 function contentType(path: string): string {
   if (path.endsWith(".json")) return "application/json; charset=utf-8";
   if (path.endsWith(".txt")) return "text/plain; charset=utf-8";
+  if (path.endsWith(".png")) return "image/png";
   return "application/octet-stream";
 }
+
+/**
+ * Minimap tiles, uploaded by `infra/publish-tiles.ts` under the same path the
+ * private viewer serves them on, so the SPA asks for one URL in both shapes.
+ *
+ * The two constants are the viewer's own (`runner/viewer/tiles.ts`,
+ * `TILE_PUBLIC_CACHE_CONTROL` / `TILE_PUBLIC_ROBOTS`), copied rather than
+ * imported: that module reads the filesystem and cannot be bundled into a
+ * Worker. `gate.test.ts` imports it to pin that these two have not drifted.
+ *
+ * The pattern is bare integers only — `..`, a leading `-`, an encoded
+ * separator and `tiles/manifest.json` all fail it — so the only thing
+ * reachable under this prefix is a tile, and nothing here lists a bucket.
+ */
+const TILE_CACHE_CONTROL = "private, max-age=3600";
+const TILE_ROBOTS = "noindex";
+const TILE_PATH = /^\/tiles\/\d+\/\d+_\d+\.png$/;
 
 /**
  * Constant-time compare over UTF-8 bytes.
@@ -152,7 +171,10 @@ async function authorize(request: Request, url: URL, env: Env): Promise<"ok" | "
  */
 function challenge(request: Request, url: URL): Response {
   const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
-  if (wantsJson || url.pathname.startsWith("/v1/")) {
+  // `/tiles/` joins `/v1/` for the same reason: an <img> or a fetch handed an
+  // HTML login page fails confusingly, and the SPA already treats a tile that
+  // does not arrive as a tile it draws a grid square for instead.
+  if (wantsJson || url.pathname.startsWith("/v1/") || url.pathname.startsWith("/tiles/")) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401,
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -201,6 +223,7 @@ async function serveArtifact(request: Request, url: URL, env: Env): Promise<Resp
   headers.set("content-type", contentType(url.pathname));
   headers.set("cache-control", cacheControl(url.pathname));
   headers.set("etag", object.httpEtag);
+  if (url.pathname.startsWith("/tiles/")) headers.set("x-robots-tag", TILE_ROBOTS);
 
   // `onlyIf` matched, so R2 returned the metadata without a body.
   if (!("body" in object) || object.body === null) {
@@ -230,6 +253,20 @@ export default {
       });
     }
 
+    // Answered before the gate, because a crawler that gets a 401 login form
+    // instead of a robots.txt has been told nothing. Nothing here is meant to
+    // be indexed while the gate stands.
+    if (url.pathname === "/robots.txt") {
+      return new Response("User-agent: *\nDisallow: /tiles/\nDisallow: /\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+          "x-robots-tag": TILE_ROBOTS,
+        },
+      });
+    }
+
     const verdict = await authorize(request, url, env);
     if (verdict === "no") return challenge(request, url);
 
@@ -251,6 +288,19 @@ export default {
     }
 
     if (url.pathname.startsWith("/v1/")) return await serveArtifact(request, url, env);
+
+    // Tiles. Anything under the prefix that is not a tile path is a 404 and
+    // never the SPA's index.html: falling through would answer the manifest
+    // key, or a probe, with a 200 page.
+    if (url.pathname.startsWith("/tiles/")) {
+      if (!TILE_PATH.test(url.pathname)) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      return await serveArtifact(request, url, env);
+    }
 
     // Everything else is the SPA. `not_found_handling` gives deep links their
     // index.html without this Worker knowing the client router's shape.

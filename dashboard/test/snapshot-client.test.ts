@@ -536,11 +536,16 @@ describe("the public build's call sites", () => {
     );
   });
 
-  test("the map draws its labelled grid without asking for a tile", () => {
-    // Tiles are the only Blizzard-derived bytes in the stack and never leave
-    // the lab, so the public build must not spend a request per visible cell
-    // finding that out.
-    expect(read("../src/pages/MapPage.tsx")).toContain("useTiles = !SNAPSHOT_MODE &&");
+  test("the map asks for the same tile path in both builds", () => {
+    // Since 2026-08-30 the gated site publishes the tiles too, served only
+    // behind its password (infra/publish-tiles.ts, dashboard/worker/index.ts),
+    // so the public build asks for the same URL rather than skipping. A host
+    // with nothing behind the prefix answers 404 and the grid is drawn, which
+    // is the same path a lab machine without the extraction takes.
+    const src = read("../src/pages/MapPage.tsx");
+    expect(src).toContain("useTiles = g.size >= TILE_MIN_PX;");
+    expect(src).not.toContain("!SNAPSHOT_MODE &&");
+    expect(src).toContain("img.src = `/tiles/${map}/${row}_${col}.png`;");
   });
 });
 

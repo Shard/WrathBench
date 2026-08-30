@@ -54,6 +54,19 @@ persistent mtime/size memoisation the viewer already uses; a `--once` mode
 covers backfill and smoke tests. Credentials are one R2 key pair scoped to
 the one bucket, held only by the publisher.
 
+Minimap tiles are published to the gated site by a second, separate script
+(`infra/publish-tiles.ts`), decided by the operator 2026-08-30. It is never
+part of a snapshot pass: the loop above uploads JSON only, and the tiles are
+uploaded by an explicit operator run — `--dry-run` prints the plan, `--upload`
+performs it. It reads `data/minimap/<mapId>/<row>_<col>.png` and writes
+`tiles/<mapId>/<row>_<col>.png` in the same bucket, keyed by the path the
+viewer already serves so the SPA asks for one URL in either shape. Skip
+by content hash, held in `tiles/manifest.json` in the bucket and written after
+the objects it names, so a re-run with nothing re-extracted uploads nothing.
+Tiles are served only behind the gate, `private, max-age=3600` and
+`X-Robots-Tag: noindex`; the same headers the viewer sends under
+`WRATHBENCH_VIEWER_TILES_PUBLIC=1`.
+
 ### Bucket layout, atomicity, freshness
 
 ```
@@ -119,9 +132,11 @@ CORS-free posture (the bucket carries the project's first and only CORS
 policy, scoped to the app hostname).
 
 The public site includes the live fleet and map (operator's choice,
-2026-08-25): pips and fleet state at the push cadence (5 minutes), the map as
-the labelled grid that `WRATHBENCH_VIEWER_PUBLIC=1` already draws — tiles never
-leave the lab. Two clock fixes keep the staleness story honest, and both are
+2026-08-25): pips and fleet state at the push cadence (5 minutes), and the map
+over minimap tiles — since 2026-08-30 the tiles are published to the gated
+site as an explicit publisher step and served only behind the gate, so the SPA
+requests `/tiles/...` in snapshot mode too and falls back to the labelled grid
+square wherever a tile 404s. Two clock fixes keep the staleness story honest, and both are
 improvements for the private dashboard too:
 
 - Fleet-heartbeat staleness must be computed against the response's own
@@ -148,9 +163,14 @@ delete-fields-from-a-copy — `EntrySummary` has an open index signature, so a
 copy-and-delete projection is not statically bounded. The rules, mapped to
 `docs/DATA-AND-LEGAL.md`:
 
-- **Never**: minimap tiles (Blizzard textures), wiki content, raw trajectory
-  entries, scratchpads. All four are already withheld by
-  `WRATHBENCH_VIEWER_PUBLIC=1`; the publisher simply never renders them.
+- **Never**: wiki content, raw trajectory entries, scratchpads. All three are
+  withheld by `WRATHBENCH_VIEWER_PUBLIC=1`; the publisher simply never renders
+  them.
+- **Minimap tiles**: published to the gated site since 2026-08-30, by the
+  explicit `infra/publish-tiles.ts` step above and never by a snapshot pass.
+  The gate serves them only to an authenticated reader, `private,
+  max-age=3600` and `X-Robots-Tag: noindex`, and no snapshot artifact names
+  one (`runner/test/snapshot.test.ts` pins that).
 - **Not in v1, pending the operator's call** (issue #10's blocking item):
   entry summaries. `ResponseEntry.text`, `SnippetEntry.code` and
   `SnippetResultEntry.text` carry model output and verbatim game text, and
@@ -195,8 +215,12 @@ able to say no, and on a zoneless account the only thing that can is a Worker.
 The interim shape, called **Gated** in the runbook:
 
 - one Worker on `*.workers.dev` serving the SPA from Static Assets **and**
-  `/v1/*` from an R2 **binding**, with `run_worker_first: true` so the gate sees
-  the page load and not only the data;
+  `/v1/*` and `/tiles/*` from an R2 **binding**, with `run_worker_first: true`
+  so the gate sees the page load and not only the data. Only
+  `/tiles/<mapId>/<row>_<col>.png` is reachable under the tile prefix —
+  anything else there, `tiles/manifest.json` included, is a 404, and the Worker
+  never lists the bucket. It also answers `/robots.txt` ahead of the gate,
+  disallowing `/tiles/` and everything else;
 - the bucket private, its Public Development URL **disabled** — the binding is
   the only path to an object;
 - a shared password (`DASHBOARD_PASSWORD`, a Worker secret) accepted three ways:

@@ -228,6 +228,13 @@ one-hour cache instead — see "What it will not serve"). Nothing extracted yet 
 draws as a labelled grid square, so the map works on a machine that has never
 run the extraction. `WRATHBENCH_MINIMAP_DIR` overrides the tile root.
 
+The gated public dashboard serves the same path. `infra/publish-tiles.ts` is a
+separate, hand-run publisher step (never part of a snapshot pass) that uploads
+`data/minimap` to the R2 bucket under `tiles/<mapId>/<row>_<col>.png`; the gate
+Worker serves them to authenticated readers only, with this file's
+`TILE_PUBLIC_CACHE_CONTROL` and `TILE_PUBLIC_ROBOTS` headers. See
+`docs/PUBLIC-DASHBOARD.md`.
+
 ## How it handles big files
 
 `request` entries embed the whole model message array and `events_served`

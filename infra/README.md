@@ -49,7 +49,10 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
   a service").
 - **publisher** — pushes the public dashboard's JSON to object storage on a
   timer (`infra/publish-dashboard.ts --loop`), behind the `publish` profile.
-  See `docs/PUBLIC-DASHBOARD.md`.
+  See `docs/PUBLIC-DASHBOARD.md`. Minimap tiles are not part of that loop:
+  `infra/publish-tiles.ts --dry-run | --upload` is a separate, hand-run step
+  that uploads `data/minimap` to the same bucket under `tiles/`, skipping by
+  content hash, and it is the only thing that ever puts a tile there.
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
 published to the host are 3724 (authserver) and 8085 (worldserver), bound
