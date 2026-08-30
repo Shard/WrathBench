@@ -88,7 +88,7 @@ Measured against claude 2.1.238 with a local capture proxy (no model calls):
   only *driver* turns (context injections). For this driver that is not the
   control that matters — see below.
 
-What is *not* a gap: with `--tools ""` the request carries only our six tools,
+What is *not* a gap: with `--tools ""` the request carries only our nine tools,
 as `mcp__wrathbench__<tool>` — no built-in Bash/Read/Edit/Task at all. And the
 system prompt, tool implementations, sandbox, scratchpad, watchdogs, named
 termination/pause reasons and trajectory are the same objects the fixed loop
