@@ -19,9 +19,14 @@
  *   and those stay exactly as they are; ticks between snapshot refreshes
  *   resolve from memory rather than becoming a request per tick.
  *
- * What a bucket cannot serve is withheld rather than faked: entries and raw
- * bodies answer 403 the way `WRATHBENCH_VIEWER_PUBLIC=1` does, and there is no
- * stream URL.
+ * - **One entries window per run.** The publisher renders the feed's tail
+ *   (the last 200 entries, projected and prose-redacted — docs/DATA-AND-LEGAL.md,
+ *   "Trajectory logs") as one artifact; `from`/`limit` are accepted and
+ *   ignored, so "load earlier" has nothing to walk into and the page hides it.
+ *
+ * What a bucket cannot serve is withheld rather than faked: raw bodies answer
+ * 403 the way `WRATHBENCH_VIEWER_PUBLIC=1` does, an entries window a snapshot
+ * predating 2026-08-30 never published answers 404, and there is no stream URL.
  */
 
 import type {
@@ -305,7 +310,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    * the listing is the index, and a run it does not name is a 404 in the same
    * words the viewer uses.
    */
-  async function pointer(id: string, which: "detail" | "track"): Promise<string> {
+  async function pointer(id: string, which: "detail" | "track" | "entries" | "scratchpad"): Promise<string> {
     const artifact = await snap<RunsResponse>("runs.json");
     const row = artifact.runs.find((r) => r.runId === id);
     if (row === undefined) throw new ApiError(404, `no such run: ${id}`);
@@ -382,14 +387,18 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     run: async (id: string): Promise<RunDetailResponse> =>
       await memo<RunDetailResponse>(await pointer(id, "detail")),
     /*
-     * Entry summaries and raw trajectory lines carry model output and verbatim
-     * game text, which docs/DATA-AND-LEGAL.md does not let out of the lab. The
-     * publisher never renders them; these answer the way the viewer's public
-     * mode answers, which the pages already show as a banner over the rest.
+     * The published tail window, whatever `from`/`limit` asked for: the
+     * publisher renders exactly one window per run (see the module comment),
+     * so the page's first load is the whole surface and its "load earlier"
+     * never shows. A run whose row names no window (an older snapshot) is a
+     * 404 from `pointer`, which the page shows as the feed being unpublished.
      */
-    entries: async (): Promise<EntriesResponse> => {
-      throw new ApiError(403, `entries: ${WITHHELD}`);
-    },
+    entries: async (id: string): Promise<EntriesResponse> =>
+      await memo<EntriesResponse>(await pointer(id, "entries")),
+    /*
+     * Raw trajectory lines are the unprojected record — the run config, the
+     * whole message array, every packet — and stay in the lab.
+     */
     raw: async (): Promise<string> => {
       throw new ApiError(403, `raw: ${WITHHELD}`);
     },

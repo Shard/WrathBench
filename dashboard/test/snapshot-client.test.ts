@@ -162,6 +162,15 @@ const DETAIL = {
   playtimeMs: null,
 } as unknown as RunDetailResponse;
 
+/** The one published window: the tail, in the private route's shape. */
+const ENTRIES = {
+  generatedAt: GENERATED_AT,
+  attribution: ATTRIBUTION,
+  from: 40,
+  total: 240,
+  entries: [{ i: 40, t: "response", ts: 1, start: 0, end: 1, text: "hello" }],
+};
+
 const TRACK: TrackResponse = { runId: "r1", character: null, model: "m", harnessVersion: "harness-0.4", points: [] };
 
 /** The whole bucket a happy-path test reads, with the runs listing's pointers. */
@@ -172,8 +181,20 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
     [snapUrl("info.json")]: { ...INFO, generatedAt: GENERATED_AT, attribution: ATTRIBUTION },
     [snapUrl("runs.json")]: {
       generatedAt: GENERATED_AT,
-      runs: [{ runId: "r1", snapshot: { detail: "v1/run/r1/7/detail.json", track: "v1/run/r1/7/track.json" } },
-             { runId: "unpublished" }],
+      runs: [
+        {
+          runId: "r1",
+          snapshot: {
+            detail: "v1/run/r1/7/detail.json",
+            track: "v1/run/r1/7/track.json",
+            entries: "v1/run/r1/7/entries.json",
+            scratchpad: "v1/run/r1/7/scratchpad.json",
+          },
+        },
+        // A row from a snapshot predating the entries window: detail and track only.
+        { runId: "older", snapshot: { detail: "v1/run/older/3/detail.json", track: "v1/run/older/3/track.json" } },
+        { runId: "unpublished" },
+      ],
     },
     [snapUrl("results.json")]: resultsArtifact(runs),
     [snapUrl("episodes.json")]: EPISODES,
@@ -182,6 +203,9 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
     [snapUrl("ladder-e90.json")]: { ...resultsArtifact(runs), episode: "e90", includeOverrides: false },
     [`${BASE}/v1/run/r1/7/detail.json`]: DETAIL,
     [`${BASE}/v1/run/r1/7/track.json`]: TRACK,
+    [`${BASE}/v1/run/r1/7/entries.json`]: ENTRIES,
+    [`${BASE}/v1/run/older/3/detail.json`]: { ...DETAIL, run: { runId: "older" } },
+    [`${BASE}/v1/run/older/3/track.json`]: { ...TRACK, runId: "older" },
   });
 }
 
@@ -482,15 +506,36 @@ describe("per-run artifacts", () => {
   });
 });
 
-describe("what a bucket cannot serve", () => {
-  test("entries and raw are 403, the way the viewer's public mode answers", async () => {
+describe("the entries window", () => {
+  test("is the published tail whatever window was asked for, and carries the envelope", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    const first = await c.entries("r1", undefined, 200);
+    expect(first.from).toBe(40);
+    expect(first.total).toBe(240);
+    expect(first.entries).toHaveLength(1);
+    // `from`/`limit` name nothing the bucket holds: the same artifact answers.
+    const earlier = await c.entries("r1", 0, 40);
+    expect(earlier).toEqual(first);
+    expect(b.urls.filter((u) => u.endsWith("/entries.json"))).toHaveLength(1);
+  });
+
+  test("a row that names no window (an older snapshot) is a 404 naming the window", async () => {
     const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
-    for (const call of [c.entries("r1"), c.raw("r1", 0)]) {
-      const err = (await call.catch((e: unknown) => e)) as ApiError;
-      expect(err).toBeInstanceOf(ApiError);
-      expect(err.status).toBe(403);
-      expect(err.message).toContain("withheld in snapshot mode");
-    }
+    const err = (await c.entries("older").catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.message).toContain("no published entries");
+  });
+});
+
+describe("what a bucket cannot serve", () => {
+  test("raw is 403, the way the viewer's public mode answers", async () => {
+    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
+    const err = (await c.raw("r1", 0).catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(403);
+    expect(err.message).toContain("withheld in snapshot mode");
   });
 
   test("there is no stream URL, so nothing can open one by accident", () => {
@@ -499,11 +544,12 @@ describe("what a bucket cannot serve", () => {
 });
 
 /*
- * The 403 above is the backstop, not the design. A withheld route reached in
- * the public build would reject the continuation that asked for it — on the run
- * page that continuation also owns the summary, the charts and the live poll —
- * so the pages must not ask at all, and what they show instead is a statement
- * of what this build publishes rather than an error.
+ * The 403/404 above are backstops, not the design. A refused route awaited
+ * bare in the public build would reject the continuation that asked for it —
+ * on the run page that continuation also owns the summary, the charts and the
+ * live poll — so the page catches the window's absence and never opens a tail,
+ * and what it shows instead is a statement of what this build publishes rather
+ * than an error.
  *
  * Asserted against the source the way the fleet page's own shape is
  * (`status.test.ts`): this is component wiring with no pure seam to call, and a
@@ -512,18 +558,17 @@ describe("what a bucket cannot serve", () => {
 describe("the public build's call sites", () => {
   const read = (p: string): string => readFileSync(join(import.meta.dir, p), "utf8");
 
-  test("the run page asks for neither the entries nor the tail, and says why", () => {
+  test("the run page reads the window under a catch, never opens the tail, and hides load-earlier", () => {
     const src = read("../src/pages/RunDetail.tsx");
-    // The first window: taken only on the private path, with the entry count
-    // coming off the published detail instead.
-    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{[\s\S]{0,120}\} else \{[\s\S]{0,200}api\.entries\(/);
-    // "load earlier" needs no guard of its own: `from` never leaves 0 in the
-    // public build, so the `Show` window that renders the button never opens.
+    // The window: caught in the public build, so an older snapshot's 404
+    // costs the feed and nothing else.
+    expect(src).toMatch(/if \(SNAPSHOT_MODE\) \{\s*try \{\s*await loadWindow\(\);[\s\S]{0,120}\} catch \{/);
     // The tail: no EventSource is constructed in the public build.
     expect(src).toMatch(/if \(SNAPSHOT_MODE\) return;[\s\S]{0,400}subscribeTail\(/);
-    // The panel, stated plainly and not in the page's error styling.
-    expect(src).toContain("Trajectory entries are withheld on the public site.");
-    expect(src).toMatch(/fallback=\{<p class="dim">Trajectory entries are withheld/);
+    // "load earlier" has nothing to walk into: one window per run.
+    expect(src).toMatch(/<Show when=\{from\(\) > 0 && !SNAPSHOT_MODE\}>/);
+    // The panel for a run with no published window, stated plainly.
+    expect(src).toMatch(/fallback=\{<p class="dim">No trajectory window is published/);
   });
 
   test("a live run's summary poll advances the token card and entry count", () => {
@@ -532,7 +577,7 @@ describe("the public build's call sites", () => {
     // at the first load while the rest of the page keeps up.
     const src = read("../src/pages/RunDetail.tsx");
     expect(src).toMatch(
-      /detailPoll\.latest[\s\S]{0,700}if \(SNAPSHOT_MODE\) \{\s*setTokens\(next\.tokens\);\s*setTotal\(next\.total\);/,
+      /detailPoll\.latest[\s\S]{0,900}if \(SNAPSHOT_MODE\) \{\s*setTokens\(next\.tokens\);\s*setTotal\(next\.total\);\s*if \(feedPublished\(\)\) void loadWindow\(\)/,
     );
   });
 
