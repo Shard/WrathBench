@@ -182,6 +182,13 @@ export default function About() {
         in the U.S. and/or other countries. The game server is AzerothCore, the community open-source
         reconstruction of the 3.3.5a server; WrathBench's own code and documentation are MIT-licensed.
       </p>
+      <h2 class="section">cite</h2>
+      <pre class="cite">{`@misc{beukers2026wrathbench,
+  title  = {WrathBench: An Agent Workbench for World of Warcraft},
+  author = {Mark Beukers},
+  year   = {2026},
+  url    = {https://github.com/Shard/WrathBench}
+}`}</pre>
     </div>
   );
 }
