@@ -222,36 +222,36 @@ function LoopDiagram() {
     <line x1={x1} y1={y1} x2={x2} y2={y2} class={dashed ? "loop-edge dashed" : "loop-edge"} marker-end="url(#loop-head)" />
   );
   return (
-    <svg class="loop" viewBox="0 0 760 210" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
+    <svg class="loop" viewBox="0 0 760 236" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
       <defs>
         <marker id="loop-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" class="loop-head" />
         </marker>
       </defs>
-      {/* The loop, left to right and back. */}
-      {box(10, 20, 120, "context", "state · events · notes")}
-      {box(170, 20, 120, "model turn")}
-      {box(330, 20, 120, "run_snippet", "TypeScript")}
-      {box(490, 20, 120, "game server", "AzerothCore")}
-      {box(650, 20, 100, "events", "packets")}
-      {arrow(130, 42, 168, 42)}
-      {arrow(290, 42, 328, 42)}
-      {arrow(450, 42, 488, 42)}
-      {arrow(610, 42, 648, 42)}
+      {/* The loop, left to right; the feedback edge runs above the row so it never crosses the memories below. */}
+      {box(10, 46, 120, "context", "state · events · notes")}
+      {box(170, 46, 120, "model turn")}
+      {box(330, 46, 120, "run_snippet", "TypeScript")}
+      {box(490, 46, 120, "game server", "AzerothCore")}
+      {box(650, 46, 100, "events", "packets")}
+      {arrow(130, 68, 168, 68)}
+      {arrow(290, 68, 328, 68)}
+      {arrow(450, 68, 488, 68)}
+      {arrow(610, 68, 648, 68)}
       {/* Events fold back into the next turn's context. */}
-      <path d="M700,64 L700,90 L70,90 L70,66" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
-      <text x="385" y="104" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
+      <path d="M700,44 L700,24 L70,24 L70,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
+      <text x="385" y="19" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
       {/* The two memories under the loop. */}
-      {box(170, 140, 120, "scratchpad", "rewritten by the model")}
-      {box(490, 140, 120, "episodic log", "append-only")}
-      {arrow(230, 64, 230, 138, true)}
-      <text x="240" y="118" class="loop-sub">write_scratchpad</text>
-      {arrow(550, 64, 550, 138, true)}
-      <text x="560" y="118" class="loop-sub">log_status, before each trim</text>
+      {box(170, 166, 120, "scratchpad", "rewritten by the model")}
+      {box(490, 166, 120, "episodic log", "append-only")}
+      {arrow(230, 90, 230, 164, true)}
+      <text x="240" y="132" class="loop-sub">write_scratchpad</text>
+      {arrow(550, 90, 550, 164, true)}
+      <text x="560" y="132" class="loop-sub">log_status, before each trim</text>
       {/* Reflect: at rest, the log is read back into the turn. */}
-      <path d="M490,162 L300,162" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="395" y="156" text-anchor="middle" class="loop-sub">reflect · read_log, at an inn</text>
-      <text x="395" y="190" text-anchor="middle" class="loop-sub">old turns are trimmed; the two boxes below are what survives</text>
+      <path d="M490,188 L300,188" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
+      <text x="395" y="182" text-anchor="middle" class="loop-sub">reflect · read_log, at an inn</text>
+      <text x="395" y="228" text-anchor="middle" class="loop-sub">old turns are trimmed; the two boxes below are what survives</text>
     </svg>
   );
 }
