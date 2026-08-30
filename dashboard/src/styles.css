@@ -94,6 +94,8 @@ header.top .spacer { flex: 1; }
 .status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
 .status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
 .status-popout dd { margin: 0; overflow-wrap: anywhere; }
+/* The one action in the popout: the ops page the badge is about (operator, 2026-08-30). */
+.status-popout-link { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
 
 /* Public build only: how long ago the lab last pushed a snapshot. */
 .snapshot-age { align-self: center; font-size: 12px; }
