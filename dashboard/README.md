@@ -60,8 +60,9 @@ published artifact carries.
 
 | route | what |
 | --- | --- |
-| `/` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
-| `/episodes` | the tiers: what each id fixes, and how many runs sit against it; a tier's member count leads to its ladder |
+| `/` | the homepage: what WrathBench is, the execution loop as a diagram, the nine model-facing tools as an inspector (read off `/api/tools`, never copied), the SDK families, and a live-now line off the positions feed |
+| `/fleet` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
+| `/about` | the meta page: how to read a result, the two harness groups, the tiers (what each id fixes, how many runs sit against it; a member count leads to its ladder), pointers to the docs; `/episodes` redirects here |
 | `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
 | `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached. `freeplay` is the exception — the active field, one stepped line and one row per durable stream, level against cumulative active playtime |
 | `/models` | the roster with the scheduler's verdict on each entry |
