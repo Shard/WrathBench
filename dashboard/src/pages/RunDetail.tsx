@@ -365,7 +365,7 @@ export default function RunDetail() {
       })
       .catch((e: unknown) => {
         logError("run detail", e);
-        setError(displayError(e));
+        setError(displayError(e, { retries: false }));
       });
   });
 
@@ -383,7 +383,7 @@ export default function RunDetail() {
       // A button press that fails silently reads as a button that does nothing.
       .catch((e: unknown) => {
         logError("run entries", e);
-        setError(displayError(e));
+        setError(displayError(e, { retries: false }));
       });
   };
 
