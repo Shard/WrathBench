@@ -23,7 +23,20 @@
  */
 
 import { A, useLocation, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, getOwner, on, onCleanup, onMount, runWithOwner } from "solid-js";
+import {
+  For,
+  Show,
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  on,
+  onCleanup,
+  onMount,
+  runWithOwner,
+  useContext,
+} from "solid-js";
 import { subscribeTail } from "../api/live";
 import {
   api,
@@ -40,8 +53,9 @@ import {
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
+import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
@@ -472,16 +486,30 @@ export default function RunDetail() {
                     when={!SNAPSHOT_MODE}
                     fallback={<p class="dim">Trajectory entries are withheld on the public site.</p>}
                   >
+                    {/*
+                      The run's own clock, for every row's stamp. `startedAt`
+                      is the run row's, so a resumed run still counts from when
+                      the character first drew breath rather than restarting at
+                      zero — which is what the reader is comparing runs on.
+                    */}
+                    <RunStart.Provider value={() => run().startedAt}>
                     <div class="feed">
                       <For each={groups()}>
                         {(g) => {
+                          /*
+                           * The accent is asked of the run's windows, not of the
+                           * loaded entries: the `open` that starts a window can
+                           * sit far above whatever slice the feed has, and a
+                           * turn is either inside a window or it is not.
+                           */
+                          const rf = (): boolean => reflectingAt(d().reflections, groupTurn(g));
                           switch (g.kind) {
                             case "turn":
-                              return <TurnRow g={g} runId={run().runId} />;
+                              return <TurnRow g={g} runId={run().runId} reflecting={rf()} />;
                             case "response":
-                              return <ResponseRow g={g} runId={run().runId} preset={expand()} />;
+                              return <ResponseRow g={g} runId={run().runId} preset={expand()} reflecting={rf()} />;
                             case "call":
-                              return <CallCard g={g} runId={run().runId} preset={expand()} />;
+                              return <CallCard g={g} runId={run().runId} preset={expand()} reflecting={rf()} />;
                             default:
                               // The two records with a shape worth drawing rather
                               // than dumping; everything else is still generic.
@@ -496,6 +524,7 @@ export default function RunDetail() {
                         }}
                       </For>
                     </div>
+                    </RunStart.Provider>
                   </Show>
                 </div>
 
@@ -886,6 +915,7 @@ function RawLink(props: { runId: string; i: number; label?: string }) {
 /**
  * One formatter for every row's clock cell: `toLocaleTimeString` builds a
  * fresh `Intl.DateTimeFormat` per call, and this cell is on every row.
+ * Still used for the hover title, and for a run whose start is unknown.
  */
 const TIME_FMT = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -893,9 +923,31 @@ const TIME_FMT = new Intl.DateTimeFormat(undefined, {
   second: "2-digit",
 });
 
-/** The timestamp cell every head row ends with. */
+/**
+ * When the run began, for the feed's per-row clock.
+ *
+ * A context rather than a prop threaded through six row components: every row
+ * asks the same question of the same run, and the value changes only when the
+ * page swaps runs. Null is a run row with no `startedAt` — the cell falls back
+ * to the wall clock rather than counting from the epoch.
+ */
+const RunStart = createContext<() => number | null>(() => null);
+
+/**
+ * The timestamp cell every head row ends with: how far into the run this
+ * happened, with the absolute time on hover. Elapsed rather than wall clock
+ * because "03:41:22" is not a question anyone reading a trajectory has, and
+ * because it is the figure that reads the same across two runs compared side
+ * by side (`fmtElapsed`).
+ */
 function When(props: { ts: number }) {
-  return <span title={stamp(props.ts)}>{TIME_FMT.format(props.ts)}</span>;
+  const start = useContext(RunStart);
+  const from = (): number | null => start();
+  return (
+    <span title={stamp(props.ts)}>
+      {from() === null ? TIME_FMT.format(props.ts) : fmtElapsed(props.ts - from()!)}
+    </span>
+  );
 }
 
 function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset }) {
@@ -930,12 +982,17 @@ function Entry(props: { entry: FeedEntry; runId: string; preset: ExpandPreset })
  * the row carries only the counts — the full messages stay one click away
  * behind the raw links.
  */
-function TurnRow(props: { g: TurnGroup; runId: string }) {
+function TurnRow(props: { g: TurnGroup; runId: string; reflecting: boolean }) {
   const req = (): TurnGroup["request"] => props.g.request;
   return (
-    <div class="entry">
+    <div class={`entry ${props.reflecting ? "reflecting" : ""}`}>
       <div class="head">
         <span class="t">turn {req().turn ?? "?"}</span>
+        {/* The turn header is where the window is named; the rows under it
+            carry the border alone, or the word would repeat down the feed. */}
+        <Show when={props.reflecting}>
+          <span class="reflect-tag">Zz reflecting</span>
+        </Show>
         <span>
           {req().messageCount ?? "?"} msgs · {fmtTokens(req().promptChars ?? null)} chars
         </span>
@@ -954,10 +1011,10 @@ function TurnRow(props: { g: TurnGroup; runId: string }) {
 }
 
 /** The model's reply, with how long the model took to produce it. */
-function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset }) {
+function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPreset; reflecting: boolean }) {
   const e = (): ResponseGroup["entry"] => props.g.entry;
   return (
-    <div class="entry">
+    <div class={`entry ${props.reflecting ? "reflecting" : ""}`}>
       <div class="head">
         <span class="t">response</span>
         <Show when={e().turn !== undefined}>
@@ -989,7 +1046,7 @@ function ResponseRow(props: { g: ResponseGroup; runId: string; preset: ExpandPre
  * card exists to remove. The duration is `result.ts − call.ts` and only shown
  * when the writer recorded the call before running it (see lib/feedgroup.ts).
  */
-function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset }) {
+function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; reflecting: boolean }) {
   const g = (): CallGroup => props.g;
   /** The input text: the snippet's code, else the call's args. */
   const input = createMemo((): string => {
@@ -1004,9 +1061,16 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset }) 
   const turn = (): number | undefined => (g().call ?? g().snippet ?? g().result)?.turn;
   const anyTs = (): number => g().call?.ts ?? g().snippet?.ts ?? g().result?.ts ?? 0;
   return (
-    <div class={`entry ${g().result?.isError === true ? "bad" : ""}`}>
+    <div class={`entry ${g().result?.isError === true ? "bad" : ""} ${props.reflecting ? "reflecting" : ""}`}>
       <div class="head">
         <span class="t">{name()}</span>
+        {/* The surface's own three tools, named where a reader will look for
+            them: they are why a window exists, and they read as ordinary tool
+            calls otherwise. Independent of the accent — a `reflect` that was
+            refused opens no window and is still one of these. */}
+        <Show when={isReflectTool(name())}>
+          <span class="reflect-tag">reflection</span>
+        </Show>
         <Show when={turn() !== undefined}>
           <span>turn {turn()}</span>
         </Show>
