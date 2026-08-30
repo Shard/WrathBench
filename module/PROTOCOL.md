@@ -688,7 +688,10 @@ not need it, docs/CONTRACTS.md):
   `petNumber` (UNIT_FIELD_PETNUMBER; on first sight of a unit with a non-zero
   one the module issues the `CMSG_PET_NAME_QUERY` a client does, once per
   number per session)
-- players additionally: `playerFlags`
+- players additionally: `playerFlags` (served as the raw integer; the module
+  names no bit off it. The SDK decodes `PLAYER_FLAGS_GHOST` and, from
+  2026-08-30, `PLAYER_FLAGS_RESTING` runner-side — a naming of already-served
+  data, not a new tap)
 - game objects: `goDisplayId`, `goFlags`, `goFaction`, `goLevel`, `goState`,
   `goType`
 

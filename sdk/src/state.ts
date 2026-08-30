@@ -116,6 +116,15 @@ function only<T>(hit: Resolution<T>): T | undefined {
 /** `UNIT_FLAG_TAXI_FLIGHT` — the bit a client reads to know it is being flown. */
 const UNIT_FLAG_TAXI_FLIGHT = 0x0010_0000;
 
+/**
+ * `PLAYER_FLAGS_RESTING` on 3.3.5a (AzerothCore `Player.h`, `PlayerFlags`) —
+ * the bit the server sets while the character stands in a rest area, and the
+ * one a client reads to draw the resting icon on the XP bar. Decoded here,
+ * from the `playerFlags` integer the module already serves: nothing new is
+ * observed, only named.
+ */
+const PLAYER_FLAGS_RESTING = 0x0000_0020;
+
 /** A value together with the event that carried it. */
 export interface Observed<T> {
   readonly value: T;
@@ -335,6 +344,15 @@ export interface SelfState extends UnitFieldsState {
    * exactly as a client reads it.
    */
   taxiFlight: Observed<boolean> | undefined;
+  /**
+   * `PLAYER_FLAGS_RESTING` on our own `playerFlags`: true while the character
+   * is in a rest area — an inn or a city — which is what the client's own
+   * resting icon says. Read the same way `taxiFlight` reads `unitFlags`: only
+   * from a block that actually carried `playerFlags`, so an update that omits
+   * the field leaves the last observation standing rather than erasing it.
+   * `undefined` until a block has carried `playerFlags` at all.
+   */
+  resting: Observed<boolean> | undefined;
   /**
    * The last `SMSG_ACTIVATETAXIREPLY` (the answer to a raw `CMSG_ACTIVATETAXI`).
    * Kept because it is the only thing that says a flight was *accepted*; the
@@ -1590,6 +1608,7 @@ export class StateCache {
     targetGuid: undefined,
     achievements: undefined,
     taxiFlight: undefined,
+    resting: undefined,
     taxiReply: undefined,
     bindPoint: undefined,
     health: undefined,
@@ -3844,6 +3863,13 @@ export class StateCache {
       // keeps the provenance of the packet that made it.
       if (typeof fields.unitFlags === "number") {
         this.self.taxiFlight = { value: (fields.unitFlags & UNIT_FLAG_TAXI_FLIGHT) !== 0, seq, ts };
+      }
+      // `resting` is the same shape of reading off `playerFlags`, the players-
+      // only field the module whitelists (PROTOCOL.md). Guarded the same way:
+      // a delta that does not carry `playerFlags` says nothing about rest, and
+      // must not be read as "not resting".
+      if (typeof fields.playerFlags === "number") {
+        this.self.resting = { value: (fields.playerFlags & PLAYER_FLAGS_RESTING) !== 0, seq, ts };
       }
       const healthAfter = target.fields.get("health")?.value;
       const pos = this.self.position?.value;
