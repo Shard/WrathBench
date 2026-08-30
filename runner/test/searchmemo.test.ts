@@ -9,6 +9,8 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
 import { TOOLS, WIKI_COORDS_SENTENCE, callTool, normalizeSearchQuery, toolsFor, type ToolContext } from "../src/tools";
+import { EpisodicLog } from "../src/episodic";
+import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
 
@@ -51,6 +53,9 @@ function context(wiki?: Database): ToolContext {
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
     wiki,
     sessionLive: () => true,
+    reflect: new ReflectGate(),
+    episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+    turn: () => 1,
   };
 }
 

@@ -12,6 +12,7 @@ import { comparabilityOf } from "../src/comparability";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
+import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import { renderTimeline } from "../src/timeline";
 import { TOOLS } from "../src/tools";
@@ -85,6 +86,7 @@ function setupEpisode(
       runDir,
       sandbox: fakeSandbox(),
       scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
       sleep: () => Promise.resolve(),
@@ -143,7 +145,7 @@ describe("claude-code driver", () => {
     expect(record["systemPrompt"]).not.toBe(SYSTEM_PROMPT);
     expect(record["systemPrompt"]).toContain(contextSentence("claude-code"));
     expect(record["systemPrompt"]).not.toContain("trimmed aggressively");
-    // built-ins disabled; only our six tools granted
+    // built-ins disabled; only our nine tools granted
     expect(record["toolsFlag"]).toBe("");
     expect(record["allowedTools"]).toEqual(mcpToolNames());
     expect(record["strictMcpConfig"]).toBe(true);

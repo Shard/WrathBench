@@ -7,6 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "../src/mcp";
+import { EpisodicLog } from "../src/episodic";
+import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ToolContext } from "../src/tools";
@@ -43,6 +45,9 @@ function makeServer(): { server: McpServer; scratchpad: Scratchpad } {
     scratchpad,
     wiki: undefined,
     sessionLive: () => true,
+    reflect: new ReflectGate(),
+    episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+    turn: () => 1,
   };
   return { server: new McpServer(ctx, { serverVersion: "test" }), scratchpad };
 }
@@ -71,7 +76,7 @@ describe("McpServer", () => {
     expect(await call(server, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
   });
 
-  test("tools/list exposes exactly the six phase-0 tools", async () => {
+  test("tools/list exposes exactly the nine phase-0 tools", async () => {
     const { server } = makeServer();
     await initialized(server);
     const res = await call(server, { jsonrpc: "2.0", id: 2, method: "tools/list" });
@@ -83,6 +88,9 @@ describe("McpServer", () => {
       "search_reference",
       "read_scratchpad",
       "write_scratchpad",
+      "reflect",
+      "log_status",
+      "read_log",
     ]);
   });
 
@@ -197,7 +205,15 @@ describe("McpServer", () => {
   test("the recorded tool-call args are the parsed object, not the raw string", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
     const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
-    const ctx: ToolContext = { sandbox: fakeSandbox(), scratchpad, wiki: undefined, sessionLive: () => true };
+    const ctx: ToolContext = {
+      sandbox: fakeSandbox(),
+      scratchpad,
+      wiki: undefined,
+      sessionLive: () => true,
+      reflect: new ReflectGate(),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      turn: () => 1,
+    };
     let recorded: unknown;
     const server = new McpServer(ctx, {
       serverVersion: "test",
