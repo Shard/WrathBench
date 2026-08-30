@@ -53,7 +53,7 @@ import {
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
@@ -611,8 +611,14 @@ export default function RunDetail() {
                         <ModelIcon model={run().model} />
                         {/* The roster row this run's model belongs to, when it is on the roster:
                             a run records a model string, never the name that scheduled it. */}
-                        <Show when={rosterName(run())} fallback={run().model ?? "—"}>
-                          {(name) => <A href={modelsHref(name())}>{run().model}</A>}
+                        <Show when={run().model} fallback="—">
+                          {(full) => (
+                            <span title={full()}>
+                              <Show when={rosterName(run())} fallback={modelDisplay(full())}>
+                                {(name) => <A href={modelsHref(name())}>{modelDisplay(full())}</A>}
+                              </Show>
+                            </span>
+                          )}
                         </Show>
                       </div>
                       <div class="sub">
@@ -624,7 +630,7 @@ export default function RunDetail() {
                       <Show when={resolvedLabel(run().model, run().resolvedModel) ?? run().cliVersion}>
                         <div class="sub">
                           <Show when={resolvedLabel(run().model, run().resolvedModel)}>
-                            {(id) => <>served as {id()}</>}
+                            {(id) => <span title={id()}>served as {modelDisplay(id())}</span>}
                           </Show>
                           <Show when={run().cliVersion}>
                             {(v) => (
