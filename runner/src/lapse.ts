@@ -57,6 +57,9 @@ export const NOT_THE_MODELS_FAULT: ReadonlySet<string> = new Set([
   "harness-error",
   "stale-character",
   "environment-defect",
+  // A transport failure ends the episode early with the model's clock unspent;
+  // the evidence is tainted, not weak (operator, 2026-08-30).
+  "adapter-error",
   ...ATTEMPT_FAILURE_REASONS,
 ]);
 
