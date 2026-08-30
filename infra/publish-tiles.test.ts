@@ -130,7 +130,7 @@ describe("publishTiles", () => {
     const store = fakeStore();
     const report = await publishTiles(scanTiles(dir), store, { now: 7 });
 
-    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0 });
+    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0, manifestEntries: null });
     expect(store.puts.at(-1)).toBe(TILE_MANIFEST_KEY);
     expect(store.objects.get(`${TILE_PREFIX}0/43_31.png`)?.contentType).toBe("image/png");
     // Keys are the viewer's path verbatim: no hash in the key, because the SPA
@@ -145,7 +145,7 @@ describe("publishTiles", () => {
     store.puts.length = 0;
 
     const report = await publishTiles(scanTiles(dir), store, { now: 8 });
-    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0 });
+    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0, manifestEntries: 1 });
     // Not even the manifest is spared a re-read, but nothing is re-PUT except
     // it — the whole point is that a no-op run costs no class-A ops per tile.
     expect(store.puts).toEqual([TILE_MANIFEST_KEY]);
@@ -162,6 +162,17 @@ describe("publishTiles", () => {
     expect(report.uploaded).toBe(1);
     expect(report.skipped).toBe(1);
     expect(store.puts).toEqual([`${TILE_PREFIX}0/44_31.png`, TILE_MANIFEST_KEY]);
+  });
+
+  test("a first run is distinguishable from an unreadable manifest", async () => {
+    // The dry run's whole value is that "everything would upload" means a
+    // first run and nothing else; a manifest that exists but reads as empty
+    // must not look the same.
+    const dir = root({ "0/43_31.png": "a" });
+    const fresh = await publishTiles(scanTiles(dir), fakeStore(), { dryRun: true });
+    expect(fresh.manifestEntries).toBeNull();
+    const seeded = await publishTiles(scanTiles(dir), fakeStore({ [TILE_MANIFEST_KEY]: "{}" }), { dryRun: true });
+    expect(seeded.manifestEntries).toBe(0);
   });
 
   test("a dry run reports the plan and touches the bucket not at all", async () => {
