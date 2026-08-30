@@ -55,7 +55,7 @@ export const SDK_FAMILIES: readonly SdkFamily[] = [
   {
     name: "items",
     members: "lootCorpse, equipItem, useItem, destroyItem, state.bag()",
-    note: "bag and slot, or the item's name; a refusal says why, so resending will not help.",
+    note: "bag and slot, or the item's name; a refusal carries the game's reason and a hint.",
   },
   {
     name: "NPC windows",
@@ -65,6 +65,6 @@ export const SDK_FAMILIES: readonly SdkFamily[] = [
   {
     name: "raw escape hatch",
     members: "sdk.raw(opcode, payload), events.on/waitForOpcode, state.units()",
-    note: "the same opcodes a client sends and the packets it receives; helpers are earned from trajectories, never added on speculation.",
+    note: "the same opcodes a client sends and the packets it receives; helpers are added where trajectories show the need.",
   },
 ];
