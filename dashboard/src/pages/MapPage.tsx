@@ -32,7 +32,7 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
-import { api, SNAPSHOT_MODE, type AgentPosition, type TrackResponse } from "../api/client";
+import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
@@ -283,13 +283,14 @@ export default function MapPage() {
      * every frame would evict and re-request the lot. The threshold also keeps
      * the visible cell count inside the LRU.
      *
-     * The public build never asks at all. Tiles are the only Blizzard-derived
-     * bytes anywhere in the stack and they do not leave the lab, so there is
-     * nothing behind `/tiles/` on the public host: the labelled grid below is
-     * the map the public site draws, and asking first would only spend a
-     * request per visible cell to be told so.
+     * Snapshot mode asks for the same `/tiles/` path: the gated site publishes
+     * the tiles behind its password (infra/publish-tiles.ts, and the gate in
+     * dashboard/worker/index.ts serves them only to an authenticated reader).
+     * A host with nothing behind the prefix answers 404, which is the same
+     * miss a lab machine that has never run the extraction produces, and the
+     * labelled grid below is what gets drawn either way.
      */
-    const useTiles = !SNAPSHOT_MODE && g.size >= TILE_MIN_PX;
+    const useTiles = g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";

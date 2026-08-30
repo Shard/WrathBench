@@ -1204,10 +1204,31 @@ the bucket has no public hostname to `curl`, so read it with
 - `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
   (Objects carry no `Cache-Control` metadata — Bun's S3 writer cannot send
   it — which is why the TTLs are set at the edge or by the Worker instead.)
-- Nothing in the bucket is a minimap tile, a raw trajectory entry, a
-  scratchpad, or a filesystem path. The projection is an allowlist, so this
-  should be true by construction — check it once anyway, because it is the
-  legal boundary.
+- Nothing in the bucket is a raw trajectory entry, a scratchpad, or a
+  filesystem path. The projection is an allowlist, so this should be true by
+  construction — check it once anyway, because it is the legal boundary. A
+  snapshot pass writes no tile either; those arrive only from the separate
+  step below.
+
+### 7a. Minimap tiles (optional, and never automatic)
+
+The snapshot loop uploads JSON only. Tiles go up by hand, from a checkout with
+`data/minimap` populated by the extraction in `minimap/`, and only when the
+extraction has changed — the skip-unchanged check is a content hash kept in
+`tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
+
+```
+bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
+bun infra/publish-tiles.ts --upload
+```
+
+It reads only `data/minimap/<mapId>/<row>_<col>.png` and writes only
+`tiles/<mapId>/<row>_<col>.png` in the same bucket, with the same `S3_*`
+credentials as the snapshot publisher (`WRATHBENCH_MINIMAP_DIR` overrides the
+root). Both lines print uploaded / skipped / bytes. The gate serves what lands
+there to authenticated readers only, `private, max-age=3600` and
+`X-Robots-Tag: noindex`; nothing else under the prefix is reachable, and there
+is no listing.
 
 ### 8. Start the loop, then deploy the SPA
 
@@ -1288,8 +1309,11 @@ does not apply to the Gated shape and its absence there is not a fault.
   never negative. Three clocks are in play (fleet heartbeat 30–60s, push 60s,
   and a TTL ≤60s) and the banner reads only the last push, so hours means the
   publisher stopped, not that a cache is cold.
-- The map draws the labelled grid and no tiles, and a run detail page shows no
-  entries — the snapshot client answers `entries()` and `raw()` with the same
-  403 the viewer's public mode does, and there is no object in the bucket for
-  it to fetch either way. If either ever shows content, stop the publisher: the
-  content boundary has a hole.
+- A run detail page shows no entries — the snapshot client answers `entries()`
+  and `raw()` with the same 403 the viewer's public mode does, and there is no
+  object in the bucket for it to fetch either way. If it ever shows content,
+  stop the publisher: the content boundary has a hole.
+- The map draws tiles where they have been uploaded (see "Minimap tiles"
+  below) and the labelled grid everywhere else. Before that step has been run,
+  every cell is a grid square and the tile requests 404; that is the normal
+  state, not a fault.

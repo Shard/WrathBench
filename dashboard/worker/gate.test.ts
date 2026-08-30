@@ -10,19 +10,24 @@
 import { describe, expect, test } from "bun:test";
 
 import worker, { type Env, secretsMatch } from "./index.ts";
+import { TILE_PUBLIC_CACHE_CONTROL, TILE_PUBLIC_ROBOTS } from "../../runner/viewer/tiles.ts";
 
 const PASSWORD = "correct horse battery staple";
 const ORIGIN = "https://wrathbench-dashboard.example.workers.dev";
 
 /** The manifest body a caller must never see without the secret. */
 const MANIFEST = JSON.stringify({ gen: "g1", generatedAt: 1_700_000_000_000 });
+/** One tile in the bucket, stood in for by bytes no one has to look at. */
+const TILE_KEY = "tiles/0/43_31.png";
+const TILE_BODY = "PNG-BYTES";
 
 function env(overrides: Partial<Env> = {}): Env {
   const bucket = {
     get(key: string) {
-      if (key !== "v1/manifest.json") return null;
+      const body = key === "v1/manifest.json" ? MANIFEST : key === TILE_KEY ? TILE_BODY : null;
+      if (body === null) return null;
       return {
-        body: new Response(MANIFEST).body,
+        body: new Response(body).body,
         httpEtag: '"deadbeef"',
         writeHttpMetadata(_headers: Headers) {},
       };
@@ -148,6 +153,59 @@ describe("cache headers stand in for the zone's cache rules", () => {
     // Nothing the gate serves may be cached by a shared cache: every response
     // is behind a password, and `public` would let a proxy fan it out.
     expect(manifest.headers.get("cache-control")).toStartWith("private");
+  });
+});
+
+describe("tiles", () => {
+  const auth = { authorization: `Basic ${btoa(`:${PASSWORD}`)}` };
+
+  test("an unauthenticated tile request hits the gate, not the bucket", async () => {
+    const res = await call(`/${TILE_KEY}`);
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(body).not.toContain(TILE_BODY);
+    // A tile is a subresource: JSON, not a login page an <img> cannot render.
+    expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+  });
+
+  test("an authenticated tile is served as a private, unindexed PNG", async () => {
+    const res = await call(`/${TILE_KEY}`, auth);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(TILE_BODY);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("cache-control")).toBe(TILE_PUBLIC_CACHE_CONTROL);
+    expect(res.headers.get("x-robots-tag")).toBe(TILE_PUBLIC_ROBOTS);
+  });
+
+  test("the gate's tile headers are the viewer's own constants", () => {
+    // `runner/viewer/tiles.ts` cannot be bundled into a Worker (it reads the
+    // filesystem), so the literals are copied there and pinned here.
+    expect(TILE_PUBLIC_CACHE_CONTROL).toBe("private, max-age=3600");
+    expect(TILE_PUBLIC_ROBOTS).toBe("noindex");
+  });
+
+  test("a tile that was never extracted is a 404, not the SPA", async () => {
+    const res = await call("/tiles/0/1_2.png", auth);
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("SPA");
+  });
+
+  test("nothing under the prefix but a tile path is reachable — no manifest, no listing", async () => {
+    // `..` is not in the list: the URL parser resolves it before the Worker
+    // sees a pathname, so there is no traversal for the pattern to catch.
+    for (const path of ["/tiles/manifest.json", "/tiles/", "/tiles/0/", "/tiles/0/43_31.png/", "/tiles/0/43_31.PNG", "/tiles/-1/0_0.png"]) {
+      const res = await call(path, auth);
+      expect(`${path}: ${res.status}`).toBe(`${path}: 404`);
+      expect(await res.text()).not.toContain("SPA");
+    }
+  });
+
+  test("robots.txt is answered before the gate and disallows the tiles", async () => {
+    const res = await call("/robots.txt");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("Disallow: /tiles/");
+    expect(body).toContain("Disallow: /");
   });
 });
 
