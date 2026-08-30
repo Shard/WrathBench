@@ -216,6 +216,7 @@ const SNAP_NAMES = [
   "episodes.json",
   "models.json",
   "campaigns.json",
+  "tools.json",
 ];
 
 async function render(runs: string, now: number): Promise<SnapshotResult> {

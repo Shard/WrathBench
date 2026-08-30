@@ -27,6 +27,7 @@
 import type {
   ApiInfoResponse,
   CampaignsResponse,
+  ToolsResponse,
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
@@ -359,6 +360,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     },
     episodes: (): Promise<EpisodesResponse> => snap<EpisodesResponse>("episodes.json"),
     campaigns: (): Promise<CampaignsResponse> => snap<CampaignsResponse>("campaigns.json"),
+    tools: (): Promise<ToolsResponse> => snap<ToolsResponse>("tools.json"),
     results: async (
       episode?: EpisodeIdView | "all",
       includeOverrides = false,

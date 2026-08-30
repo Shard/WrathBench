@@ -67,6 +67,7 @@ import type {
   TaxiFacts,
   TierView,
   TokenTotals,
+  ToolsResponse,
   TpsFacts,
   TrackPoint,
   MoveIntentView,
@@ -467,6 +468,21 @@ export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
     })),
     untiered: e.untiered,
     now: e.now,
+  };
+}
+
+/**
+ * `/api/tools` is harness text by construction (runner/src/tools.ts and the
+ * examples beside the route); the projection still names every field.
+ */
+export function projectTools(t: ToolsResponse): ToolsResponse {
+  return {
+    tools: t.tools.map((x) => ({
+      name: x.name,
+      description: x.description,
+      inputSchema: x.inputSchema,
+      example: x.example,
+    })),
   };
 }
 
