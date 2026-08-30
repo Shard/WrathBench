@@ -266,17 +266,18 @@ function LoopDiagram() {
         is in every turn's context; the log is appended by the model before a trim
         and paged back by the model while reflecting. No edge joins the two.
       */}
-      {box(170, 166, 120, "scratchpad", "notes, markdown")}
-      {box(490, 166, 120, "episodic log", "append-only")}
-      <line x1="230" y1="92" x2="230" y2="162" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
-      <text x="238" y="132" class="loop-sub">read_scratchpad / write_scratchpad</text>
-      <path d="M168,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="76" y="180" class="loop-sub">in every</text>
-      <text x="76" y="191" class="loop-sub">turn's context</text>
-      <path d="M262,90 L262,126 L530,126 L530,164" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="396" y="122" text-anchor="middle" class="loop-sub">log_status — before a trim</text>
-      <path d="M570,164 L570,146 L282,146 L282,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="426" y="158" text-anchor="middle" class="loop-sub">read_log — while reflecting, at an inn</text>
+      {box(100, 166, 120, "scratchpad", "notes, markdown")}
+      {box(240, 166, 120, "episodic log", "append-only")}
+      {/* Two parallel verticals off the model turn, one per memory; the context edge hugs the left. */}
+      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
+      <text x="194" y="126" text-anchor="end" class="loop-sub">read_scratchpad</text>
+      <text x="194" y="137" text-anchor="end" class="loop-sub">write_scratchpad</text>
+      <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
+      <text x="278" y="126" class="loop-sub">log_status before a trim</text>
+      <text x="278" y="137" class="loop-sub">read_log while reflecting, at an inn</text>
+      <path d="M98,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
+      <text x="66" y="200" text-anchor="end" class="loop-sub">in every</text>
+      <text x="66" y="211" text-anchor="end" class="loop-sub">turn's context</text>
     </svg>
   );
 }
