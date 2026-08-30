@@ -16,6 +16,7 @@
 import type { ApiInfoResponse, FleetResponse } from "@viewer/api-types";
 import { HEARTBEAT_STALE_MS, deployWindowOpen, etaHours, heartbeatAge, supervisorAlive } from "./fleet";
 import { fmtAge, fmtDuration, stamp } from "./format";
+import { displayError } from "./errors";
 
 /** The dot's colour: the three the operator reads at a glance, and grey for "not known yet". */
 export type StatusTone = "green" | "yellow" | "red" | "grey";
@@ -102,13 +103,18 @@ const STALE_WORD = "stale";
  * build — appear only when they carry news.
  */
 export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined): StatusRow[] {
+  // The popout is on every page, so it is the widest path a bucket URL could
+  // leak down publicly — the same reading the pages take, through the same
+  // helper (`lib/errors.ts`). Privately it is still the url and the status.
   const f = input.fleet;
   const stalledRow = "stalled: no poll has settled for a while — the values below are frozen";
   if (f === undefined) {
-    return [{ label: "api", value: input.error !== undefined ? String(input.error) : input.stalled ? stalledRow : "loading" }];
+    return [
+      { label: "api", value: input.error !== undefined ? displayError(input.error) : input.stalled ? stalledRow : "loading" },
+    ];
   }
   const rows: StatusRow[] = [];
-  if (input.error !== undefined) rows.push({ label: "api", value: `unreachable: ${String(input.error)}` });
+  if (input.error !== undefined) rows.push({ label: "api", value: `unreachable: ${displayError(input.error)}` });
   else if (input.stalled) rows.push({ label: "api", value: stalledRow });
   if (!f.present) {
     rows.push({ label: "fleet", value: "no fleet-state.json — never run here" });

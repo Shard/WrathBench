@@ -92,10 +92,11 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           class="ladderchart"
           viewBox={`0 0 ${VB_W} ${VB_H}`}
           role="img"
-          aria-label={`average cost per ${props.episode} run, on a log scale, against average xp earned, one point per model`}
+          aria-label={`average cost per ${props.episode} run, on a log scale, against average xp earned, one point per model and effort, each the mean of that entry's counted runs`}
         >
           <title>
-            average cost per {props.episode} run (USD, log scale) against average xp earned, one point per model
+            average cost per {props.episode} run (USD, log scale) against average xp earned, one point per
+            model and effort, each the mean of that entry's counted runs
           </title>
 
           {/* Gridlines and ticks: the same px/py the points were placed with. */}
