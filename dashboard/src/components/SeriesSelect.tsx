@@ -29,7 +29,7 @@ export function SeriesSelect() {
   return (
     <label
       class="series"
-      title="Harness series: the comparability group every page filters to. `latest` follows the newest series rather than pinning to it."
+      title={'Harness version: runs are only comparable within one. "latest" follows the newest version rather than pinning to it.'}
     >
       <span class="dim">series</span>
       {/*

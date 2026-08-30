@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { fmtDuration, fmtUsd, fmtWhen } from "../lib/format";
+import { fmtCost, fmtDuration, fmtWhen } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
@@ -55,8 +55,8 @@ export default function Models() {
       <h2 class="section">models</h2>
       <p class="dim">
         The fleet roster and what the scheduler makes of it. A model is eligible for{" "}
-        <A href="/episodes">e90</A> from the moment it is listed and earns <code>e360</code> by
-        reaching level 5 in an un-overridden e90 run. Counts are <em>counted</em> runs —
+        <A href="/about">e90</A> from the moment it is listed, and a <code>t1</code> model earns{" "}
+        <code>e360</code> by reaching level 5 in an un-overridden e90 run. Counts are <em>counted</em> runs —
         launches that produced at least one model response; a launch that produced none is archived
         as it ends, and consecutive ones are what the defer ladder backs off from.
       </p>
@@ -94,6 +94,15 @@ export default function Models() {
               </tr>
             </thead>
             <tbody>
+              {/* A roster the API answered with no rows in: said in the table
+                  rather than as an empty body, which reads as a render failure. */}
+              <Show when={rows().length === 0}>
+                <tr>
+                  <td colSpan={MODEL_COLUMNS.length} class="dim">
+                    No models on the roster.
+                  </td>
+                </tr>
+              </Show>
               <For each={rows()}>
                 {(row) => (
                   <>
@@ -120,7 +129,7 @@ export default function Models() {
                         {row.name}
                         <Show when={isPromoted(row)}>
                           {" "}
-                          <span class="ok" title="climbed a rung: it earned this tier">
+                          <span class="ok" title="promoted: it earned this tier">
                             ↑{highestTierOf(row)}
                           </span>
                         </Show>
@@ -216,11 +225,11 @@ export default function Models() {
               .
             </Show>{" "}
             A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
-            an operator moves it, and the rung it earned still counts when they do. Rows are ordered by
-            tier, highest first; an episode cell links to that model's runs on the runs page, and the
-            row itself opens its runs below. Cooling is
-            the defer ladder ({body()!.ladderMs.length} rungs, ending at{" "}
-            {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}) — one more
+            an operator moves it, and the promotion it earned still counts when they do. Rows are
+            ordered by tier, highest first; an episode cell links to that model's runs on the runs
+            page, and the row itself opens its runs below. Cooling is the defer ladder — the
+            scheduler backs off over {body()!.ladderMs.length} steps, ending at{" "}
+            {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}; one more
             no-progress attempt at the ceiling retires the model until an operator clears it.
             <Show when={Object.keys(body()!.policy.maxConcurrent).length > 0}>
               {" "}
@@ -308,7 +317,7 @@ function Detail(props: { row: ModelRowView }) {
               <th>ended</th>
               <th class="right">wall clock</th>
               <th class="right" title="what the provider charged; blank when it reported none — the run page also carries the list-price estimate">
-                cost (actual)
+                cost
               </th>
               <th>termination</th>
               <th>counts</th>
@@ -335,11 +344,14 @@ function Detail(props: { row: ModelRowView }) {
                       a reconstruction and belongs on the run page next to the
                       tokens it was computed from, not in a column read as a
                       bill; a blank here means nobody billed us a number. */}
+                  {/* `fmtCost` rather than a bare figure: the number alone
+                      invites a reconstruction to be read as an invoice, and a
+                      subscription run's figure is as-if-metered. */}
                   <td
                     class="right mono dim"
                     title={r.cost?.actual.note ?? "provider reports no cost for this run"}
                   >
-                    {r.cost == null || r.cost.actual.basis === "none" ? "—" : fmtUsd(r.cost.actual.usd)}
+                    {fmtCost(r.cost?.actual, "—")}
                   </td>
                   <td class={r.terminationReason === "adapter-error" ? "err" : "dim"}>
                     {r.terminationReason ?? (r.live ? "—" : "no record")}

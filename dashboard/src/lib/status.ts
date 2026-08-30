@@ -117,7 +117,7 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
   if (input.error !== undefined) rows.push({ label: "api", value: `unreachable: ${displayError(input.error)}` });
   else if (input.stalled) rows.push({ label: "api", value: stalledRow });
   if (!f.present) {
-    rows.push({ label: "fleet", value: "no fleet-state.json — never run here" });
+    rows.push({ label: "fleet", value: "no data" });
   } else {
     const hb = f.heartbeatAt;
     const hbAge = heartbeatAge(f);
@@ -131,7 +131,7 @@ export function statusRows(input: StatusInput, info: ApiInfoResponse | undefined
     const owed = o === undefined ? "unknown" : o.upper === 0 ? "exhausted" : o.lower === o.upper ? `${o.lower}` : `${o.lower}–${o.upper}`;
     rows.push({ label: "jobs", value: `${live} / ${owed}`, labelTitle: "live now / outstanding scheduled runs, lower–upper bound" });
     rows.push({
-      label: "exhaust",
+      label: "queue drains in",
       value: o === undefined ? "unknown" : exhaustEta(o.etaLowerMs, o.etaUpperMs),
       labelTitle: "time until the outstanding work is exhausted at current concurrency, lower–upper",
     });

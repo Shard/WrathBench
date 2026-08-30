@@ -16,8 +16,12 @@
  * Two feeds, deliberately independent. `/api/fleet` is the supervisor's own
  * published view — jobs, accounts, a heartbeat, the gate — shared with the
  * badge through `lib/feeds.ts` so it is polled once. `/api/runs` is the
- * filesystem's view, read because the job rows carry the level, xp, tokens per
- * second and elapsed time of the run each job is driving.
+ * filesystem's view, read because `FleetJobView` carries no progress at all:
+ * the level, xp, tokens per second and elapsed time in the job rows come from
+ * the run directories and nowhere else. It is read on a slow cadence for that
+ * reason — the whole runs index is a large answer to a question that only
+ * decorates a row, and the per-run grain an operator actually watches is the
+ * run page, which polls its own run.
  */
 
 import { A, useNavigate } from "@solidjs/router";
@@ -46,9 +50,16 @@ import { iconModels } from "../lib/lineup";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
+/**
+ * The whole runs index, for the progress cells the fleet feed does not carry.
+ * A minute rather than ten seconds: it is the largest response the viewer
+ * serves, and nothing it feeds here changes faster than a level does.
+ */
+const RUNS_POLL_MS = 60_000;
+
 export default function Fleet() {
   // Every run on disk — read for the job rows and the link to the episodes page, not to be listed here.
-  const runs = poll(() => api.runs().then((r) => r.runs), 10_000);
+  const runs = poll(() => api.runs().then((r) => r.runs), RUNS_POLL_MS);
   const { fleet } = useFeeds();
 
   return (
@@ -72,9 +83,25 @@ export default function Fleet() {
           </Show>
         )}
       </Show>
+      {/*
+        Three states, not two. A feed still in flight and a feed that failed
+        both used to render as "the fleet has never run here", which is a claim
+        about the machine made out of not knowing anything about it yet.
+      */}
       <Show
         when={fleet.latest?.present === true}
-        fallback={<p class="dim">No fleet-state.json — the fleet has never run here.</p>}
+        fallback={
+          <Show
+            when={fleet.latest !== undefined}
+            fallback={
+              <Show when={fleet.error !== undefined} fallback={<p class="dim">loading…</p>}>
+                <div class="banner bad">{displayError(fleet.error)}</div>
+              </Show>
+            }
+          >
+            <p class="dim">The fleet has never run here — the supervisor has published no state.</p>
+          </Show>
+        }
       >
         {(() => {
           const f = (): FleetResponse => fleet.latest!;
@@ -89,10 +116,12 @@ export default function Fleet() {
                 {(rej) => (
                   <div class="banner bad">
                     {/* The reason is projected out publicly; an empty one prints no colon. */}
-                    fleet.json REJECTED since {stamp(rej().since)}
-                    <Show when={rej().error !== ""}>: {rej().error}</Show> — running on config loaded at{" "}
-                    {f().configLoadedAt === undefined ? "an unrecorded time" : stamp(f().configLoadedAt!)}; job enabled
-                    flags in the file are NOT in effect. The supervisor retries every tick and clears this by itself.
+                    configuration rejected since {stamp(rej().since)}
+                    <Show when={rej().error !== ""}>: {rej().error}</Show> — the fleet is still running
+                    the configuration it loaded at{" "}
+                    {f().configLoadedAt === undefined ? "an unrecorded time" : stamp(f().configLoadedAt!)}, so
+                    edits made since then are not in effect. The supervisor retries every tick and clears
+                    this by itself.
                   </div>
                 )}
               </Show>
@@ -100,7 +129,7 @@ export default function Fleet() {
               {/* The gate only when it blocks: a PASS is not news. */}
               <Show when={gateVerdict(f().preflight) === "FAIL"}>
                 <div class="banner bad">
-                  preflight FAIL — jobs blocked
+                  preflight failed — new runs are held
                   <For each={f().preflight?.results.filter((r) => !r.ok) ?? []}>
                     {(r) => <span title={r.tail}> · {r.script} ({Math.round(r.ms / 1000)}s)</span>}
                   </For>
@@ -230,9 +259,12 @@ function FleetRowView(props: { row: FleetRow }) {
       <td class="dim">
         {r().episode ?? (r().job === null ? "—" : "episode unknown")}
       </td>
-      <td class="dim">
-        {r().account} <span class="dim">({r().accountClass})</span>
-      </td>
+      {/*
+        The class, never the account name: where a run may physically execute is
+        the fact a reader of this table needs, and the name is an operator
+        credential the public projection is dropping.
+      */}
+      <td class="dim">{r().accountClass}</td>
       <td class="dim">{r().attempt === null ? "—" : `#${r().attempt}`}</td>
       <td class="dim" title={r().note ?? ""}>
         <Show when={href()} fallback={r().note ?? "—"}>

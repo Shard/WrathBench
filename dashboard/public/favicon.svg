@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="WrathBench">
+  <!--
+    Original mark, deliberately abstract: no Blizzard artwork, glyph or logo is
+    reproduced or evoked here (docs/DATA-AND-LEGAL.md). A shield outline for the
+    workbench and a rising three-step ladder inside it for the benchmark, in the
+    site's own accent over the dark ground the shell paints.
+  -->
+  <rect width="64" height="64" rx="12" fill="#14161a"/>
+  <path d="M32 9 L52 16 V33 C52 44 43 52 32 56 C21 52 12 44 12 33 V16 Z"
+        fill="none" stroke="#1f6feb" stroke-width="4" stroke-linejoin="round"/>
+  <g fill="#c9d1d9">
+    <rect x="20" y="38" width="7" height="8" rx="1.5"/>
+    <rect x="28.5" y="31" width="7" height="15" rx="1.5"/>
+    <rect x="37" y="22" width="7" height="24" rx="1.5"/>
+  </g>
+</svg>

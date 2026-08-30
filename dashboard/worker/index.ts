@@ -180,6 +180,16 @@ function challenge(request: Request, url: URL): Response {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });
   }
+  /*
+   * The form is a GET to the same path, so anything already in the query has
+   * to be carried across as hidden fields or the password step silently
+   * rewrites a deep link (`/runs?episode=e90&series=0.5`) down to `/runs?k=…`.
+   * `k` itself is excluded: it is the field the form is collecting.
+   */
+  const carried = [...url.searchParams.entries()]
+    .filter(([name]) => name !== "k")
+    .map(([name, value]) => `<input type="hidden" name="${escapeAttr(name)}" value="${escapeAttr(value)}">`)
+    .join("");
   const body = `<!doctype html><meta charset="utf-8"><title>WrathBench</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -193,6 +203,7 @@ function challenge(request: Request, url: URL): Response {
 </style>
 <form method="GET" action="">
   <h1>WrathBench &mdash; private preview</h1>
+  ${carried}
   <input type="password" name="k" placeholder="Password" autofocus aria-label="Password">
   <button type="submit">Enter</button>
 </form>`;
@@ -200,6 +211,20 @@ function challenge(request: Request, url: URL): Response {
     status: 401,
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+/**
+ * Attribute-safe text for the hidden fields above. The values come out of the
+ * request's own query string, so they are attacker-supplied by definition and
+ * are never interpolated into markup raw.
+ */
+function escapeAttr(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 /** Serve one published artifact out of the private bucket. */

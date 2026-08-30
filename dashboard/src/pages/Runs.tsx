@@ -9,7 +9,7 @@
  * so a view can be handed to someone else; a row links to the run page, which
  * links back here with the same query.
  *
- * Nothing is decided here. Scorability, tier membership and the series arrive
+ * Nothing is decided here. Scorability, episode membership and the series arrive
  * decided on each row from `/api/results`, asked for with every filter lifted
  * (`episode=all`, overrides included) because an inventory that hides a run is
  * not an inventory. The only narrowing left is the shell's series selector,
@@ -101,9 +101,9 @@ export default function Runs() {
 
       <h2 class="section">runs</h2>
       <p class="dim">
-        Every recorded run, newest first. Click a header to sort; click a model, tier, character or
-        kind to narrow to it. Aggregates are the <A href="/ladder">ladder</A>; what the tiers mean
-        is on <A href="/about">about</A>. A launch that never produced a model response is
+        Every recorded run, newest first. Click a header to sort; click a model, episode, character
+        or kind to narrow to it. Aggregates are the <A href="/ladder">ladder</A>; what the episodes
+        mean is on <A href="/about">about</A>. A launch that never produced a model response is
         archived by the runner as it exits and never reaches this table.
       </p>
 
@@ -119,7 +119,7 @@ export default function Runs() {
         </p>
       </Show>
 
-      <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+      <Show when={feed.latest !== undefined} fallback={<p class="dim loading-page">loading…</p>}>
         <p class="dim">
           {rows().length} run{rows().length === 1 ? "" : "s"}
           <Show when={live() > 0}> · {live()} live</Show>
@@ -134,15 +134,32 @@ export default function Runs() {
               <tr>
                 <For each={RUN_COLUMNS}>
                   {(c) => (
+                    /*
+                      `aria-sort` belongs on the cell and the control belongs
+                      inside it: a click handler on a bare <th> is unreachable
+                      from the keyboard and announces nothing, and a button is
+                      the one element that is both focusable and named without
+                      inventing roles for a table header.
+                    */
                     <th
                       class={`sortable ${columnClass(c)}${sort().column === c ? " sorted" : ""}`}
-                      title={COLUMN_TITLES[c] ?? `sort by ${c}`}
-                      onClick={() => setSort(c)}
+                      aria-sort={
+                        sort().column === c ? (sort().dir === "asc" ? "ascending" : "descending") : "none"
+                      }
                     >
-                      {c}
-                      <Show when={sort().column === c}>
-                        <span class="sortmark">{sort().dir === "asc" ? "▲" : "▼"}</span>
-                      </Show>
+                      <button
+                        type="button"
+                        class="sortbutton"
+                        title={COLUMN_TITLES[c] ?? `sort by ${c}`}
+                        onClick={() => setSort(c)}
+                      >
+                        {c}
+                        <Show when={sort().column === c}>
+                          <span class="sortmark" aria-hidden="true">
+                            {sort().dir === "asc" ? "▲" : "▼"}
+                          </span>
+                        </Show>
+                      </button>
                     </th>
                   )}
                 </For>
@@ -152,10 +169,15 @@ export default function Runs() {
               <For each={rows()}>
                 {(r) => <RunRowView row={r} query={query()} lineage={lineage().get(r.runId)} />}
               </For>
+              {/* "No runs match" is only true when something is doing the
+                  matching; with no filter set it is an empty record, not a
+                  narrow one. */}
               <Show when={rows().length === 0}>
                 <tr>
                   <td colSpan={RUN_COLUMNS.length} class="dim">
-                    No runs match.
+                    {isFiltered(filter()) || series() !== null
+                      ? "No runs match."
+                      : "No runs recorded yet."}
                   </td>
                 </tr>
               </Show>
@@ -281,14 +303,14 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         return (
           <td class="dim" title={r().episodeSource === "derived" ? "labeled by the reader, never enrolled" : ""}>
             <Show when={r().episode !== null} fallback="—">
-              <A href={narrow({ episode: r().episode! })} title="narrow to this tier">
+              <A href={narrow({ episode: r().episode! })} title="narrow to this episode">
                 {r().episode}
               </A>
             </Show>
             <Show when={r().episodeSource === "derived"}> (labeled)</Show>
             <Show when={r().episodeOverride}>
               {" "}
-              <span class="warn" title="stamped with this tier but given a leash it does not describe">
+              <span class="warn" title="stamped with this episode but run under different limits, so not a member of it">
                 overridden
               </span>
             </Show>

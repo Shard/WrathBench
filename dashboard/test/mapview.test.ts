@@ -28,6 +28,7 @@ import {
   latticeLines,
   STALE_MS,
   mapCounts,
+  mapName,
   positionAgeMs,
   project,
   stepPips,
@@ -725,5 +726,21 @@ describe("decimateRoute", () => {
     expect(decimateRoute([{ x: 1, y: 2 }], 1)).toEqual([{ x: 1, y: 2 }]);
     expect(decimateRoute(walk, 0)).toEqual(walk);
     expect(decimateRoute(walk, -1)).toEqual(walk);
+  });
+});
+
+describe("mapName", () => {
+  test("the four continents read as places, not ids", () => {
+    expect(mapName(0)).toBe("Eastern Kingdoms");
+    expect(mapName(1)).toBe("Kalimdor");
+    expect(mapName(530)).toBe("Outland");
+    expect(mapName(571)).toBe("Northrend");
+  });
+
+  test("anything else keeps its number rather than being guessed at", () => {
+    // An instance, a battleground, a map the tooling has never seen: a wrong
+    // name would be worse than the id, which is at least the server's answer.
+    expect(mapName(33)).toBe("map 33");
+    expect(mapName(-1)).toBe("map -1");
   });
 });
