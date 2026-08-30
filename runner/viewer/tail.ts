@@ -20,6 +20,7 @@ import type {
   EntrySummary,
   LevelUpFacts,
   LevelUpMark,
+  ReflectionWindowView,
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
@@ -48,6 +49,7 @@ export type {
   EntrySummary,
   LevelUpFacts,
   LevelUpMark,
+  ReflectionWindowView,
   ReportedUsage,
   TaxiFacts,
   TokenTotals,
@@ -1384,6 +1386,66 @@ export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: bool
   };
 }
 
+/**
+ * One `reflect_window` record (`runner/src/loop.ts`), projected to what a turn
+ * range needs: which turn it was written on, whether it opened or closed a
+ * window, and — for a close — why.
+ */
+export interface ReflectMark {
+  turn: number;
+  event: "open" | "close";
+  /** The close's `ReflectCloseReason`; null on an open, or when unrecorded. */
+  reason: string | null;
+}
+
+/** Read one trajectory record as a `ReflectMark`, or null when it is not one. */
+export function reflectMarkOf(rec: Record<string, unknown>): ReflectMark | null {
+  if (rec["t"] !== "reflect_window") return null;
+  const turn = rec["turn"];
+  const event = rec["event"];
+  if (typeof turn !== "number" || (event !== "open" && event !== "close")) return null;
+  const reason = rec["reason"];
+  return { turn, event, reason: typeof reason === "string" ? reason : null };
+}
+
+/**
+ * The turns a run spent reflecting, as half-open ranges.
+ *
+ * Half-open because of *when* the loop writes these records. Both are drained
+ * in the context builder, at the top of a turn and before the model answers it:
+ * the `open` therefore names the first turn whose context was assembled with
+ * the window open, and the `close` names the first turn assembled after it shut
+ * — which is a turn spent acting, not reflecting. `[from, to)` is that, exactly.
+ *
+ * The one exception is `run_end`, written from the driver's teardown rather
+ * than from a build: there is no turn after it, so the window runs to the end
+ * of the run and `toTurn` is null. A window still open on a live run reads the
+ * same way, for the same reason — nothing has closed it yet.
+ *
+ * An unpaired close (its open scrolled out of a re-read, or the run was resumed
+ * mid-window, which starts a fresh gate) is dropped rather than guessed into a
+ * window starting at turn zero.
+ */
+export type ReflectionWindow = ReflectionWindowView;
+
+export function reflectionWindowsFrom(marks: readonly ReflectMark[]): ReflectionWindow[] {
+  const out: ReflectionWindow[] = [];
+  let open: number | null = null;
+  for (const m of marks) {
+    if (m.event === "open") {
+      // A second open with none closed cannot happen (the gate is idempotent),
+      // and if it ever did the first window is the one that was real.
+      if (open === null) open = m.turn;
+      continue;
+    }
+    if (open === null) continue;
+    out.push({ fromTurn: open, toTurn: m.reason === "run_end" ? null : m.turn });
+    open = null;
+  }
+  if (open !== null) out.push({ fromTurn: open, toTurn: null });
+  return out;
+}
+
 /** What a run costs to list: token totals plus the wall clock the file spans. */
 export interface RunTotals {
   tokens: TokenTotals;
@@ -1648,6 +1710,8 @@ export class TrajectoryTail {
   private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
   private readonly levelUpMarks: LevelUpMark[] = [];
   private readonly deathMarks: DeathMark[] = [];
+  /** `reflect_window` transitions, for the run page's per-turn accent. */
+  private readonly reflectMarks: ReflectMark[] = [];
   /** Bytes consumed as complete lines. */
   private consumed = 0;
   /** Bytes after the last newline: an entry still being written. */
@@ -1684,6 +1748,7 @@ export class TrajectoryTail {
       this.taxiMarks.length = 0;
       this.levelUpMarks.length = 0;
       this.deathMarks.length = 0;
+      this.reflectMarks.length = 0;
     }
     if (size === this.size) return [];
 
@@ -1713,6 +1778,9 @@ export class TrajectoryTail {
           const death = deathMarkOf(rec);
           if (death !== null) this.deathMarks.push(death);
         }
+        // Not a milestone: its own record kind, written by the loop's builder.
+        const reflect = reflectMarkOf(rec);
+        if (reflect !== null) this.reflectMarks.push(reflect);
         summary = summarize(rec, i, start, end);
       } catch {
         summary = unparseable(text, i, start, end);
@@ -1743,6 +1811,16 @@ export class TrajectoryTail {
   /** Deaths, releases and resurrects; null when none of it was recorded. */
   get deaths(): DeathFacts | null {
     return deathFactsFrom(this.deathMarks, this.levelUpMarks.length > 0);
+  }
+
+  /**
+   * The turns this run spent reflecting. Empty when it wrote no window record,
+   * which a run that never reflected and a run from before the record shipped
+   * are both — there is no witness that tells them apart, and the accent this
+   * feeds draws nothing either way.
+   */
+  get reflections(): ReflectionWindow[] {
+    return reflectionWindowsFrom(this.reflectMarks);
   }
 
   /** The raw JSON text of one entry, read back from disk. */

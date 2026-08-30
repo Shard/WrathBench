@@ -730,6 +730,25 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * no turn has completed; optional for the reason `achievements` is.
    */
   tps?: TpsFacts | null;
+  /**
+   * The turns this run spent reflecting, as half-open `[fromTurn, toTurn)`
+   * ranges off its `reflect_window` records — `toTurn` null when the window ran
+   * to the end of the run. Empty when none was recorded; optional for the
+   * reason `achievements` is, so a dashboard built against an older viewer
+   * simply accents nothing.
+   */
+  reflections?: ReflectionWindowView[];
+}
+
+/**
+ * One stretch of turns spent reflecting rather than acting. Turn indices only:
+ * it is a fact about this harness's own loop, with nothing of the world in it.
+ * The derivation and the half-open convention are `tail.ts`
+ * (`reflectionWindowsFrom`), which is where the "why" lives.
+ */
+export interface ReflectionWindowView {
+  fromTurn: number;
+  toTurn: number | null;
 }
 
 export interface EntriesResponse {
