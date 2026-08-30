@@ -394,7 +394,10 @@ attempt spent rather than a member. Three counted failures on one model,
 episode and series stop the scheduler trying — evidence about a model's
 endpoint, not about the model — and what counts is the termination reason and
 nothing else. A fleet stop is the harness's own doing and an offline gap is
-harness weather, so both spend the attempt and neither is a strike. Reading a
+harness weather, so both spend the attempt and neither is a strike; a
+transport failure mid-episode (`adapter-error`) is the same — the run ended
+on the endpoint's clock, not the model's, so it is never scored (operator,
+2026-08-30). Reading a
 reason rather than parsing a detail string is what keeps that distinction from
 being rediscovered as a bug, and one shared list of the reasons that are not
 the model's fault is what keeps a run written off by the scheduler from still

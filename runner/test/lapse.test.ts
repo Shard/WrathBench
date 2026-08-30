@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { TAINT_AFTER, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
+import { NOT_THE_MODELS_FAULT, TAINT_AFTER, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
  * The whole of the lapse rule, as a table. Every row is a case an operator
@@ -125,4 +125,8 @@ describe("what happens to a lapsed run", () => {
   test("three strikes", () => {
     expect(TAINT_AFTER).toBe(3);
   });
+});
+
+test("adapter-error is not the model's fault (operator, 2026-08-30)", () => {
+  expect(NOT_THE_MODELS_FAULT.has("adapter-error")).toBe(true);
 });
