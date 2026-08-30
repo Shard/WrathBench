@@ -413,6 +413,8 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         runId: a.runId,
         character: a.character,
         model: a.model,
+        // Already public on the run row it comes from (`comparability.effort`).
+        effort: a.effort ?? null,
         map: a.map,
         x: a.x,
         y: a.y,

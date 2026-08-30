@@ -29,6 +29,7 @@ import {
   STALE_MS,
   mapCounts,
   mapName,
+  pipName,
   positionAgeMs,
   project,
   stepPips,
@@ -742,5 +743,23 @@ describe("mapName", () => {
     // name would be worse than the id, which is at least the server's answer.
     expect(mapName(33)).toBe("map 33");
     expect(mapName(-1)).toBe("map -1");
+  });
+});
+
+describe("pipName", () => {
+  const at = (over: Partial<AgentPosition>): AgentPosition =>
+    ({ runId: "fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2", character: null, model: null, map: 0, x: 0, y: 0, ts: 0, level: null, xp: null, money: null, questsCompleted: null, items: null, harnessVersion: null, ...over }) as AgentPosition;
+
+  test("the character's name is what the map calls a pip", () => {
+    expect(pipName(at({ character: "Thorgrima", model: "claude-fable-5" }))).toBe("Thorgrima");
+  });
+
+  test("before a name exists it is the short model and its effort, never the run id", () => {
+    expect(pipName(at({ model: "claude-fable-5", effort: "none" }))).toBe("claude-fable-5 · none");
+    expect(pipName(at({ model: "nvidia/nemotron-3-super-120b-a12b:free" }))).toBe("nemotron-3-super-120b-a12b (free)");
+  });
+
+  test("a feed that recorded no model at all still names the pip something", () => {
+    expect(pipName(at({}))).toBe("fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2");
   });
 });
