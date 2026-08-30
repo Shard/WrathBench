@@ -185,3 +185,17 @@ describe("the fleet page", () => {
     expect(readFileSync(join(import.meta.dir, "../src/styles.css"), "utf8")).not.toContain(".strip");
   });
 });
+
+describe("the popout's api row carries the error the way the pages do", () => {
+  /*
+   * The badge is on every page, so it is the widest path an error string
+   * takes. Privately that is still the url and the status; the public build's
+   * substitution is `errorText`'s, tested in `errors.test.ts`.
+   */
+  test("private: the row names what failed", () => {
+    const rows = statusRows({ fleet: undefined, error: new Error("/api/fleet: 502"), stalled: false }, undefined);
+    expect(rows[0]!.value).toContain("/api/fleet");
+    const withFleet = statusRows({ fleet: fleet(), error: new Error("/api/fleet: 502"), stalled: false }, undefined);
+    expect(withFleet.find((r) => r.label === "api")!.value).toBe("unreachable: Error: /api/fleet: 502");
+  });
+});
