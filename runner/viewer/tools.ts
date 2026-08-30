@@ -13,17 +13,25 @@
 import { TOOLS } from "../src/tools";
 import type { ToolsResponse, ToolView } from "./api-types";
 
-/** One example call per tool, by name. A tool with no entry is a test failure, not a blank. */
+/**
+ * One example call per tool that takes arguments, by name. A `{}` example says
+ * nothing, so an argument-less tool has a `TOOL_RETURNS` line instead; the
+ * test pins that every tool has exactly one of the two.
+ */
 export const TOOL_EXAMPLES: Readonly<Record<string, string>> = {
   run_snippet: `{ "code": "await sdk.killTarget(state.closest({ alive: true, maxDistance: 30 }))" }`,
   recent_events: `{ "limit": 20 }`,
-  state_summary: `{}`,
   search_reference: `{ "query": "Northshire quests" }`,
-  read_scratchpad: `{}`,
   write_scratchpad: `{ "content": "# Plan\\n- turn in the two finished quests\\n- train at level 4" }`,
   log_status: `{ "text": "L3, clearing the field south of the abbey; two quests ready to turn in" }`,
-  reflect: `{}`,
   read_log: `{ "offset": 0, "limit": 20 }`,
+};
+
+/** What an argument-less call gives back, one line each (see `callTool` in runner/src/tools.ts). */
+export const TOOL_RETURNS: Readonly<Record<string, string>> = {
+  state_summary: "the fixed-format client-HUD summary of the cached state: character, level, position, health, xp, money, bag, quests, target, nearby, open windows, stream continuity",
+  read_scratchpad: "the scratchpad's markdown as last written, or a note that it is empty",
+  reflect: "the fixed set of review questions, plus how many entries the episodic log holds (read with read_log) — or a refusal with why, when the character is not resting",
 };
 
 export function toolsResponse(): ToolsResponse {
@@ -31,7 +39,8 @@ export function toolsResponse(): ToolsResponse {
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,
-    example: TOOL_EXAMPLES[t.name] ?? "",
+    example: TOOL_EXAMPLES[t.name] ?? null,
+    returns: TOOL_RETURNS[t.name] ?? null,
   }));
   return { tools };
 }
