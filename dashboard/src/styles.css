@@ -482,7 +482,18 @@ button.update:hover { background: var(--panel); }
 
 /* --- the homepage (pages/Home.tsx) --- */
 /* Prose width for the explainer; the rest of the dashboard is tables and wants the full width. */
-.home { max-width: 860px; }
+/* A landing page: `.home` spans `main`, the prose sits in a centred column
+   (`.home-col`), and the ladder section is a sibling of the columns rather than
+   a child, so it is full width by construction — no viewport maths, and no
+   horizontal scroll from a 100vw that counts the scrollbar. */
+.home { padding: 24px 0 16px; }
+.home-col { max-width: 860px; margin: 0 auto; padding: 0 16px; }
+.home-bleed { margin: 12px 0 20px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+              background: var(--panel); }
+.home-bleed-inner { max-width: 1400px; margin: 0 auto; padding: 10px 16px 6px; }
+.home-bleed .ladderchart { background: var(--bg); }
+.home-bleed .ladder-controls { margin-bottom: 4px; }
+.home-ladder-title { display: inline; margin: 0 6px 0 0; }
 .home-title { font-size: 20px; margin: 4px 0 8px; font-weight: 700; }
 .home-intro p { margin: 0 0 8px; line-height: 1.6; }
 .home-live { font-size: 13px; }
