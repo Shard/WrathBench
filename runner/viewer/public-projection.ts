@@ -748,6 +748,12 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       : {}),
     ...(d.taxi !== undefined ? { taxi: d.taxi === null ? null : projectTaxi(d.taxi) } : {}),
     ...(d.tps !== undefined ? { tps: d.tps === null ? null : projectTps(d.tps) } : {}),
+    // Turn indices about this harness's own loop, with nothing of the world in
+    // them — the same reason `AgentPosition.reflecting` travels while the
+    // episodic entry beside it does not.
+    ...(d.reflections !== undefined
+      ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
+      : {}),
   };
 }
 

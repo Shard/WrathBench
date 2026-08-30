@@ -197,6 +197,16 @@ coordinate transform lives on its own in `worldmap.ts` (`tile = 32 −
 coord/533.33325`, world X → tile row, world Y → tile column) with no imports,
 for the same reason, and the dashboard imports it rather than copying it.
 
+`/api/run/<id>` also carries `reflections`: the turns the run spent reflecting,
+as half-open `[fromTurn, toTurn)` ranges off its `reflect_window` records, with
+`toTurn` null when the window ran to the end of the run. Half-open because both
+records are written at the top of a turn, before the model answers it, so the
+close names the first turn spent acting again — `tail.ts` owns the reasoning.
+It is served whole rather than derived by the reader, because the `open` that
+starts a window routinely sits above whatever slice of entries the run page has
+loaded. Turn indices carry nothing of the world, so they survive the public
+projection.
+
 Each position also carries what the character last *said* it was doing and
 whether it is thinking rather than acting. `status` is the newest entry in the
 run's `episodic.jsonl` — the model's text under the harness's own turn/level/zone
@@ -237,7 +247,7 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/runs` | run listing, with per-run token totals and active playtime |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
-| `/api/run/<id>` | run row, state series, entry count, token totals, playtime |
+| `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200) |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md |

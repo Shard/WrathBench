@@ -1120,6 +1120,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // Same incremental path again: a live run's rate advances with the tail
         // rather than waiting on the (size, mtime) totals cache to miss.
         tps: tokensPerSecond(entries),
+        // The turns spent reflecting, from the same pass: the feed accents them
+        // by turn, and the window that opens one can sit far above whatever
+        // slice of entries the page happens to have loaded.
+        reflections: tail.reflections,
       };
       return json(body);
     }
