@@ -68,7 +68,11 @@ identical — a tool that appeared on one harness and not the other would be a
 second, quieter difference between them — so `log_status`, `reflect` and
 `read_log` all work there; in practice its episodic log stays empty because
 nothing prompts for entries, and one CLI session is one driver turn, which puts
-the reflection breaker far out of reach.
+the reflection breaker far out of reach. The standalone MCP server (`runner/src/mcp.ts`,
+an operator's hand-driven mode) has no context builder at all, so nothing there
+could ever observe the character leaving or count a turn: it answers `reflect`
+and refuses `read_log` rather than serving the log through a window that could
+never close.
 
 ### runner/viewer/ + dashboard/ (Bun/TypeScript, MIT)
 

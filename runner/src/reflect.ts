@@ -159,6 +159,23 @@ export class ReflectGate {
   }
 }
 
+/**
+ * A gate whose window can never open: `reflect` still answers, `read_log`
+ * always refuses.
+ *
+ * For the standalone MCP server, which has no context builder — nothing samples
+ * the world on a clock and nothing counts turns there, so a window opened would
+ * never see the character leave the rest area and the breaker could never fire.
+ * Serving the log through a window that cannot close would be worse than not
+ * serving it at all; a scored episode always runs under a driver whose builder
+ * feeds this gate.
+ */
+export class ClosedWindowReflectGate extends ReflectGate {
+  override get isOpen(): boolean {
+    return false;
+  }
+}
+
 /** The resting reading off a state snapshot's `self.resting`, if it carried one. */
 export function restingOf(snapshot: { self?: { resting?: { value?: unknown } } } | null): boolean | undefined {
   const v = snapshot?.self?.resting?.value;

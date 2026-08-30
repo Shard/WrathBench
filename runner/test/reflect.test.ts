@@ -32,6 +32,7 @@ import {
   REFLECT_NOT_RESTING,
   REFLECTION_PROMPT,
   ReflectGate,
+  ClosedWindowReflectGate,
   restingOf,
 } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
@@ -283,7 +284,9 @@ describe("the window-trim notices", () => {
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
     // One tool call a turn: growth is a steady 2, so the estimate is exact.
-    const script = Array.from({ length: 40 }, () => ({
+    // Long enough to cross two block boundaries, which is the only way an
+    // arming guard that never re-arms would show up.
+    const script = Array.from({ length: 60 }, () => ({
       content: "acting",
       toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }],
     }));
@@ -298,23 +301,21 @@ describe("the window-trim notices", () => {
       sleep: () => Promise.resolve(),
     });
     const requests = readTrajectory(dir).filter((r) => r.t === "request");
-    const noticeTurn = (kind: string): number =>
-      requests.findIndex((r) => {
-        const msgs = r["messages"] as { role: string; content: string }[];
-        const last = msgs[msgs.length - 1]!;
-        return last.content.includes(`- ${kind}:`);
-      });
-    const pending = noticeTurn("trim_pending");
-    const trimmed = noticeTurn("window_trimmed");
-    expect(pending).toBeGreaterThan(0);
-    expect(trimmed).toBe(pending + 1);
-    const pendingText = (
-      (requests[pending]!["messages"] as { content: string }[]).slice(-1)[0]!.content
-    );
-    expect(pendingText).toContain("Record a short status entry");
-    expect(
-      (requests[trimmed]!["messages"] as { content: string }[]).slice(-1)[0]!.content,
-    ).toContain("your scratchpad is your memory");
+    const lastContent = (r: (typeof requests)[number]): string =>
+      (r["messages"] as { content: string }[]).slice(-1)[0]!.content;
+    const noticeTurns = (kind: string): number[] =>
+      requests.flatMap((r, i) => (lastContent(r).includes(`- ${kind}:`) ? [i] : []));
+    const pending = noticeTurns("trim_pending");
+    const trimmed = noticeTurns("window_trimmed");
+    // 60 turns at a steady growth of two is 120 messages, which crosses the
+    // block boundary at 48 and again every 24 after it. Every crossing must
+    // raise its own pair — a guard that armed once and never re-armed would
+    // leave the later blocks silent.
+    expect(pending.length).toBeGreaterThanOrEqual(2);
+    // The last prompt of the run has no following turn to carry its trim.
+    expect(trimmed).toEqual(pending.filter((t) => t + 1 < requests.length).map((t) => t + 1));
+    expect(lastContent(requests[pending[0]!]!)).toContain("Record a short status entry");
+    expect(lastContent(requests[trimmed[0]!]!)).toContain("your scratchpad is your memory");
     trajectory.close();
   });
 
@@ -328,6 +329,16 @@ describe("the window-trim notices", () => {
     };
     expect(assembleContext(inputs)).toBe(assembleContext(inputs));
     expect(assembleContext(inputs)).toContain("- trim_pending: t");
+  });
+});
+
+describe("the standalone MCP gate", () => {
+  test("reflect answers but read_log never opens", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    ctx.reflect = new ClosedWindowReflectGate();
+    ctx.episodic.append({ turn: 1, text: "one" });
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECTION_PROMPT);
+    expect((await callTool(ctx, "read_log", {})).text).toBe(READ_LOG_CLOSED);
   });
 });
 
