@@ -381,6 +381,19 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
                  margin-bottom: 10px; font-size: 12px; }
 .side-controls .dot { margin-right: 4px; }
 
+/*
+ * The last thing the character card says: what the model itself last logged
+ * (runner/src/episodic.ts), under the harness's stamp. Muted and ruled off
+ * rather than boxed — everything above it is observation, and this is the one
+ * block that is the model's own words.
+ */
+.side-status { margin: 2px 0 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.side-status .stamp { color: var(--dim); font-size: 11px; margin: 2px 0 3px; }
+.side-status .text { color: var(--dim); font-size: 12px; line-height: 1.45; word-break: break-word; }
+/* The same Zz the pip wears, in the same purple, so the two read as one mark. */
+.side-status .reflecting { margin-left: 6px; color: var(--xp); font-style: italic; font-weight: 700;
+                           text-transform: none; letter-spacing: 0; }
+
 @media (max-width: 900px) {
   .page.runview { height: auto; }
   .runview-cols { flex-direction: column; min-height: 0; }
