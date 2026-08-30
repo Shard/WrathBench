@@ -251,6 +251,26 @@ is signal, not bias. A growing conversation with model-driven summarization
 was rejected because the summarizer becomes an unversioned, model-dependent
 part of the harness. Any constant in the policy is a harness version change.
 
+**Reflection is the model's to take, and only at rest** (operator,
+2026-08-30). A `reflect` tool lets the model spend a turn thinking instead
+of acting. It works only while the character is in a rest area (the
+client-visible resting flag: inns and cities); elsewhere it refuses with
+that fact as the hint, so reflection never happens mid-combat and always
+happens among the NPCs a player would visit anyway. One reflection per
+rest visit — leaving the rested state re-arms it — which bounds chained
+thinking without a counter. The tool returns a fixed, content-free prompt
+(review the scratchpad against what has been observed and told; state
+beliefs and their evidence; what worked, what did not; what next) and the
+model writes the outcome into its own scratchpad. The harness summarizes
+nothing, which is what separates this from the rejected model-driven
+summarizer above. Reflect turns are recorded with a `reflect` marker and
+count toward turns-to-level like any other turn: choosing when to think is
+part of playing well, and a free turn would invite gaming. Separately, the
+model is now told in `[harness notices]` when a block-trim drops older
+conversation, so it is never silently blind to its own memory. Both are
+patch changes; the 0.6 series bump is reserved for the first semi-public
+release.
+
 ## Episodes, lanes, and evidence
 
 **Reset is a fresh character.** Every scored episode starts with a freshly
