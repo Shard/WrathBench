@@ -6,7 +6,7 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 - Client files, MPQ archives, DBC data, or anything derived from them (maps, vmaps, mmaps). The server data directory lives under `data/`, gitignored at the directory level and mounted into containers at run time. The repository does not document how to obtain a client or produce that directory.
 - The wiki dump or the bundle built from it. Each operator builds their own.
-- Trajectory logs. They contain verbatim game text. If any are ever published, it is as ids and coded names with prose redacted.
+- Trajectory logs. They contain verbatim game text. Where any are published, game prose — quest, gossip, item and mail body text — is redacted; names (items, quests, NPCs, zones) and ids are kept (operator, 2026-08-30).
 - The worldserver image never contains client data.
 
 ## Never a way for a human to play
