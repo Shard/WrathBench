@@ -241,14 +241,14 @@ function LoopDiagram() {
     <line x1={x1} y1={y1} x2={x2} y2={y2} class={dashed ? "loop-edge dashed" : "loop-edge"} marker-end="url(#loop-head)" />
   );
   return (
-    <svg class="loop" viewBox="0 0 760 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
+    <svg class="loop" viewBox="-28 0 788 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
       <defs>
         <marker id="loop-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" class="loop-head" />
         </marker>
       </defs>
       {/* The loop, left to right; the feedback edge runs above the row so it never crosses the memories below. */}
-      {box(10, 46, 120, "context", "state · events · notes")}
+      {box(10, 46, 120, "context", "state, events, notes")}
       {box(170, 46, 120, "model turn")}
       {box(330, 46, 120, "run_snippet", "TypeScript")}
       {box(490, 46, 120, "game server", "AzerothCore")}
