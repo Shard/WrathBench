@@ -508,6 +508,12 @@ button.update:hover { background: var(--panel); }
 .home-intro p { margin: 0 auto 8px; line-height: 1.6; text-align: center; max-width: 720px; }
 .home-live { font-size: 13px; }
 .home-caption { margin: 6px 0 0; line-height: 1.5; }
+/* Can and can't, side by side where there is room and stacked where there is not. */
+.home-surface { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 32px; }
+.home-surface-head { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.home-surface ul { margin: 0; padding-left: 18px; line-height: 1.5; }
+.home-surface li { margin: 0 0 4px; }
+@media (max-width: 720px) { .home-surface { grid-template-columns: 1fr; gap: 16px; } }
 
 /* The loop diagram: theme through the same tokens as the panels. */
 .loop { width: 100%; height: auto; display: block; margin: 4px 0;
