@@ -187,7 +187,9 @@ th.sortable { user-select: none; padding: 0; }
  */
 .sortbutton {
   font: inherit; color: inherit; background: none; border: none; cursor: pointer;
-  width: 100%; text-align: inherit; padding: 6px 8px; border-radius: 0;
+  /* Exactly the `th, td` padding it took over, so the header row keeps its
+     height and its left edge against the rest of the page. */
+  width: 100%; text-align: inherit; padding: 4px 10px 4px 0; border-radius: 0;
 }
 .sortbutton:hover { color: var(--fg); }
 .sortbutton:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
@@ -477,6 +479,12 @@ button.update:hover { background: var(--panel); }
   --bar-track: #0e1013;
   --bar-border: #000000;
   --bar-text: #f4f6f8;
+  /* The two states that opt out of `--bar-text` and its shadow: unobserved and
+     dead. They sit on the same dark track, so they are tokens rather than
+     `--dim`/`--err` directly — the light theme's versions of those are chosen
+     for the page's white ground and vanish here. */
+  --bar-text-dim: #8a94a3;
+  --bar-text-err: #f7768e;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -499,6 +507,11 @@ button.update:hover { background: var(--panel); }
     --bar-track: #59606c;
     --bar-border: #454b55;
     --bar-text: #ffffff;
+    /* Light versions, because the track above is dark here too: the page's
+       `--dim` (#5d6673) is the track's own value and `--err` (#b3283c) is
+       barely off it. */
+    --bar-text-dim: #ced4de;
+    --bar-text-err: #ff9aa8;
   }
 }
 .unit-frame { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 4px; }
@@ -514,9 +527,9 @@ button.update:hover { background: var(--panel); }
 .bar-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
             font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--bar-text);
             text-shadow: 0 1px 1px rgba(0,0,0,.7); pointer-events: none; }
-.bar.unobserved .bar-text { color: var(--dim); text-shadow: none; }
+.bar.unobserved .bar-text { color: var(--bar-text-dim); text-shadow: none; }
 .bar.dead { border-color: var(--err); }
-.bar.dead .bar-text { color: var(--err); text-shadow: none; }
+.bar.dead .bar-text { color: var(--bar-text-err); text-shadow: none; }
 .xp-row { display: flex; align-items: center; gap: 5px; }
 .xp-row .bar { flex: 1; min-width: 0; }
 .level-badge { flex: none; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 50%;
